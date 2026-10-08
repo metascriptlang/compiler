@@ -454,111 +454,13 @@ function derefablePointee(ptr: Type, pointee: Type): boolean {
 
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
-		NodeKind.NumberLiteral => {
-			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
-			reportLiteralRange(ctx, node);
-			if (expectedType != null && isIntegerType(expectedType)) {
-				if (literalFitsInType(node, expectedType, false)) {
-					node.nodeType = expectedType; return;
-				} else if (isNodeIntLit(node)) {
-					// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
-					const nd = node.data as NumberLiteralData;
-					const shown = nd.outOfRangeText != "" ? nd.outOfRangeText : int64ToDecimal(nd.intVal);
-					addError(ctx, "cannot convert " + shown + " to " + typeDisplayName(expectedType), node.location.line, node.location.column);
-					node.nodeType = expectedType; return;
-				} else {
-					node.nodeType = float64Type(); return;
-				}
-			} else if (expectedType != null && (expectedType.kind == TypeKind.Float64 || expectedType.kind == TypeKind.Float32
-					|| expectedType.kind == TypeKind.Number)) {
-				if (isNodeIntLit(node) && !intLiteralExactInFloat(node, expectedType)) {
-					node.nodeType = untypedIntegerLiteralType(ctx, node, false); return;
-				}
-				if (expectedType.kind == TypeKind.Float32) reportFloat32LiteralRange(ctx, node);
-				node.nodeType = expectedType.kind == TypeKind.Number ? numberType() : expectedType; return;
-			} else if (expectedType != null && expectedType.kind == TypeKind.Union) {
-				// Mirror the StringLiteral/BooleanLiteral arms below: a numeric
-				// member of the expected union types the literal, so `width: 400.0`
-				// fits `float32 | string | null`. An integer literal takes an
-				// integer member before a float one, whatever the member order.
-				if (isNodeIntLit(node)) {
-					for (const child of expectedType.typeChildren) {
-						if (child != null && isIntegerType(child) && literalFitsInType(node, child, false)) {
-							node.nodeType = child; return;
-						}
-					}
-				}
-				for (const child of expectedType.typeChildren) {
-					if (child == null) continue;
-					if (isIntegerType(child) && literalFitsInType(node, child, false)) {
-						node.nodeType = child; return;
-					}
-					if ((child.kind == TypeKind.Float64 || child.kind == TypeKind.Float32 || child.kind == TypeKind.Number)
-						&& (!isNodeIntLit(node) || intLiteralExactInFloat(node, child))) {
-						if (child.kind == TypeKind.Float32) reportFloat32LiteralRange(ctx, node);
-						node.nodeType = child; return;
-					}
-				}
-				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(ctx, node, false); return; }
-				node.nodeType = float64Type(); return;
-			} else {
-				// Default inference: integer literals → int32 (int64 past its range), float literals → float64
-				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(ctx, node, false); return; }
-				node.nodeType = float64Type(); return;
-			}
-		},
+		NodeKind.NumberLiteral => { checkNumberLiteral(ctx, node, expectedType); return; },
 		NodeKind.BigIntLiteral => {
 			node.nodeType = createPrimitive(TypeKind.BigInt);
 			return;
 		},
-		NodeKind.StringLiteral => {
-			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
-			// TypeScript parity: string literals get StringLiteral type when expectedType demands it
-			if (expectedType != null) {
-				const sd = node.data as StringLiteralData;
-				if (expectedType.kind == TypeKind.StringLiteral && expectedType.typeName == sd.value) {
-					node.nodeType = expectedType; return;
-				}
-				if (expectedType.kind == TypeKind.Union) {
-					for (const child of expectedType.typeChildren) {
-						if (child != null && child.kind == TypeKind.StringLiteral && child.typeName == sd.value) {
-							node.nodeType = child; return;
-						}
-					}
-					// All members are StringLiteral but value not found → type error
-					let allStrLit = true;
-					for (const child of expectedType.typeChildren) {
-						if (child == null || child.kind != TypeKind.StringLiteral) allStrLit = false;
-					}
-					if (allStrLit && expectedType.typeChildren.length > 0) {
-						addError(ctx, `Type '"${sd.value}"' is not assignable to type '${typeDisplayName(expectedType)}'`, node.location.line, node.location.column);
-						node.nodeType = stringType(); return;
-					}
-				}
-			}
-			node.nodeType = stringType(); return;
-		},
-		NodeKind.BooleanLiteral => {
-			if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
-			// TypeScript parity: boolean literals get BooleanLiteral type when expectedType demands it.
-			// Required for discriminated union narrowing on `ok: true | false` discriminants.
-			if (expectedType != null) {
-				const bd = node.data as BooleanLiteralData;
-				if (expectedType.kind == TypeKind.BooleanLiteral
-					&& booleanLiteralValue(expectedType) == bd.boolValue) {
-					node.nodeType = expectedType; return;
-				}
-				if (expectedType.kind == TypeKind.Union) {
-					for (const child of expectedType.typeChildren) {
-						if (child != null && child.kind == TypeKind.BooleanLiteral
-							&& booleanLiteralValue(child) == bd.boolValue) {
-							node.nodeType = child; return;
-						}
-					}
-				}
-			}
-			node.nodeType = booleanType(); return;
-		},
+		NodeKind.StringLiteral => { checkStringLiteral(ctx, node, expectedType); return; },
+		NodeKind.BooleanLiteral => { checkBooleanLiteral(ctx, node, expectedType); return; },
 		NodeKind.NullLiteral => nullType(),
 		NodeKind.QuoteExpr => {
 			if (tryConverterAtBoundary(ctx, node, expectedType)) { return; }
@@ -598,1717 +500,24 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.jsxSpreadArg, null);
 			node.nodeType = noneType(); return;
 		},
-		NodeKind.SpliceMany => {
-			if (node == ctx.stmtPosExpr) { node.nodeType = inferredType(); return; }
-			const splice = createNodeAt(NodeKind.SpliceMany, node.data, node.location);
-			const spliceValue = unwrapSpliceManyAtExpr(ctx, node, splice);
-			if (spliceValue == null) { node.nodeType = errorType(); return; }
-			node.kind = spliceValue.kind;
-			node.data = spliceValue.data;
-			if (spliceValue.location != null) node.location = spliceValue.location;
-			node.nodeType = null as unknown as Type;
-			node.resolvedSym = null;
-			node.flags = 0 as BitSet<NodeFlag>;
-			node.variantSlot = 0;
-			checkExpr(ctx, node, expectedType);
-			bindRefsToHoistedPrefix(node, splice);
-			node.nodeType = node.nodeType; return;
-		},
-		NodeKind.ComptimeBlock => {
-			// Eagerly fold @comptime block — mirrors Phase B+ macro eager
-			// expansion below. Without this, `const X = @comptime { ... }`
-			// fossilizes X's symbol type as `unknown`, emitting `void* X` in C
-			// codegen, because the post-check evaluateComptimeBlocks pass
-			// replaces the AST node AFTER the variable's symbol type is set.
-			markNamesUsed(ctx, node);
-			if (insideGenericTemplate(ctx)) {
-				node.nodeType = expectedType != null ? expectedType : inferredType();
-				return;
-			}
-			const expanded = callEvalComptimeBlock(node, ctx);
-			const staticType = expanded.nodeType;
-			let expandedValue = expanded;
-			const hoists = isHoistingSplice(ctx, node, expanded);
-			if (hoists) {
-				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
-				if (expandedValue == null) { node.nodeType = errorType(); return; }
-			}
-			node.kind = expandedValue.kind;
-			node.data = expandedValue.data;
-			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
-			if (expandedValue.location != null) node.location = expandedValue.location;
-			node.nodeType = null as unknown as Type;
-			node.resolvedSym = null;
-			node.flags = 0 as BitSet<NodeFlag>;
-			node.variantSlot = 0;
-			const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
-				|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
-				? expectedType : staticType;
-			checkExpr(ctx, node, valueType);
-			if (hoists) bindRefsToHoistedPrefix(node, expanded);
-			node.nodeType = node.nodeType; return;
-		},
-		NodeKind.Identifier => {
-			const d = node.data as IdentifierData;
-			// Phase 5: `super` resolves to parent class via enclosing `this`'s
-			// classType.typeExtra chain. Special-cased BEFORE lookupSymbol because
-			// `super` is never a regular declared symbol.
-			if (d.name == "super") {
-				node.nodeType = resolveSuper(ctx, node); return;
-			}
-			// Enum member access is rewritten to a mangled Identifier ("E_M")
-			// whose name is deliberately never bound in scope — its resolution
-			// lives only on the inline resolvedSym. A re-check of injected
-			// comptime/macro decls (resolvedSym preserved by cloneNodeForCheck)
-			// must trust it rather than look the mangled name up and fail. A
-			// normal identifier never arrives pre-tagged EnumMember.
-			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.EnumMember) {
-				node.nodeType = node.resolvedSym.symbolType; return;
-			}
-			// bindSym: the macro pre-bound this identifier in its own module's
-			// scope — the user's scope must not re-resolve (or hijack) it.
-			const sym = resolveCalleeIdent(ctx, node);
-			if (sym == null && ctx.jsxMacroArgDepth > 0) {
-				const builtin = builtinTypeNamed(ctx, d.name);
-				if (builtin != null) { node.nodeType = builtin; return; }
-			}
-			if (sym == null) {
-					addError(ctx, `Undefined variable '${d.name}'` + callLaterDeclarationNote(d.name), node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			if (node.flags.has(NodeFlag.BoundSym) && isFrameValue(sym) && !isVisibleSymbol(ctx.table, sym)) {
-				addError(ctx, `'${d.name}' is a local of another function: a macro placed it where that function's frame does not exist`, node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			// Demand-driven: ensure the symbol's signature is resolved before using its type
-			ensureShaped(sym, ctx);
-			node.resolvedSym = sym;
-			markUsedIn(ctx, sym);
-			if (sym.symbolKind == SymbolKind.Function || (sym.symbolKind == SymbolKind.Variable && sym.symbolType != null
-					&& sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn))) callDemandReturn(ctx, sym, node);
-			if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
-			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
-			if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr
-					&& !isEngineCheckMode() && ctx.compileTimeBodyDepth == 0) {
-				addError(ctx, `'${d.name}' is @comptime, so it runs only while compiling: call it with compile-time arguments; it has no run-time code to reference as a value`, node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
-				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			if (ctx.staticInitBoundary != null && isFrameValue(sym) && isCapturedAcross(ctx.table, d.name, sym, ctx.staticInitBoundary)) {
-				const what = sym.symbolKind == SymbolKind.Parameter ? "parameter" : "enclosing local";
-				addError(ctx, "a static initializer cannot read the " + what + " '" + d.name + "' — a class declared in a function body initializes its statics once, before any call runs", node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			if (capturesView(ctx, d.name, sym)) {
-				const useAt = node.location;
-				addError(ctx, viewCaptureRefusal(ctx, d.name, sym), useAt.line, useAt.column);
-			}
-			// PARALOCK Phase 1 R2/E3: affine-Promise bindings are single-use.
-			// Reuse check is keyed by symbolConsumeKey (name + declaration site) so
-			// shadowed bindings don't false-positive. First-await is OK because the
-			// AwaitExpr handler marks the key AFTER its inner checkExpr returns.
-			if (sym.symbolType != null && isAffineAwaitable(sym.symbolType)
-				&& isConsumedName(ctx.affineTracker, symbolConsumeKey(sym))
-				&& ctx.initTracker.leftPartOfAsgn <= 0) {
-				addError(ctx,
-					"affine Promise '" + d.name + "' has already been awaited and cannot be reused (PARALOCK R2/E3)",
-					node.location.line, node.location.column);
-			}
-			if (isConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym))) {
-				if (ctx.initTracker.leftPartOfAsgn > 0) removeConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym));
-				else addError(ctx, "'" + d.name + "' was moved into a spawn thunk and cannot be used afterwards — spawn(fn, { move: [" + d.name + "] }) transferred it (PARALOCK E24)", node.location.line, node.location.column);
-			}
-			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
-			// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
-			if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0
-				&& ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null
-				&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)) {
-				if (requiresInit(sym.symbolType)) {
-					addError(ctx, "'" + d.name + "' may be read before it is assigned: type '" + typeDisplayName(sym.symbolType) + "' has no default value", node.location.line, node.location.column);
-					markInitialized(ctx.initTracker, d.name);
-				} else if (ctx.strictDefs) {
-					addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
-					markInitialized(ctx.initTracker, d.name);
-				}
-			}
-			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
-			// Assignment LHS: return the declared type, not the flow-narrowed
-			// one. Inside `if (x === null) { x = {...} }` the RHS otherwise
-			// gets `null` as contextualType and falls through to anon-struct
-			// synthesis instead of widening to x's declared type.
-			const boundary = ctx.readonlyBoundary;
-			const capturedView = boundary != null && isCapturableValue(sym) && isCapturedAcross(ctx.table, d.name, sym, boundary);
-			let readType = sym.symbolType;
-			if (readType != null && (readType.kind == TypeKind.Var || readType.kind == TypeKind.Borrow) && readType.typeReturn != null) {
-				readType = readType.typeReturn;
-			}
-			if (ctx.initTracker.leftPartOfAsgn > 0) {
-				node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
-			}
-			const flowType = getFlowTypeOfReference(node, readType);
-			node.nodeType = capturedView ? propagateReadonlyView(flowType) : flowType;
-			return;
-		},
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			// Ref parity: leftPartOfAsgn
-			const isAsgn = d.operator == "=" || d.operator == "+=" || d.operator == "-=" ||
-				d.operator == "*=" || d.operator == "/=" || d.operator == "%=" ||
-				d.operator == "&&=" || d.operator == "||=" || d.operator == "??=" ||
-				isBitwiseCompoundOp(d.operator);
-			if (isAsgn && node != ctx.stmtPosExpr) {
-				addError(ctx, "assignment is a statement, not an expression - assign first, then use the variable: 'x = f(); while (x !== null) { ... }'", node.location.line, node.location.column);
-			}
-			if (d.operator == "=" && d.left.kind == NodeKind.ArrayAccess && (d.left.data as ArrayAccessData).array != null) {
-				const target = d.left.data as ArrayAccessData;
-				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
-				checkExpr(ctx, target.array, null);
-				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
-				if (target.array.nodeType != null && declaresSubscript(ctx, peelTransparentInstance(target.array.nodeType), "[]=")) {
-					const sargs: Node[] = [];
-					sargs.push(target.index);
-					sargs.push(d.right);
-					node.nodeType = rewriteAsMethodCall(ctx, node, target.array, "[]=", sargs); return;
-				}
-			}
-			if (isAsgn) {
-				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
-			}
-			if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
-				if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
-				checkAssignTarget(ctx, d.left);
-			} else {
-				checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
-			}
-			let leftType = d.left.nodeType;
-			if (isAsgn) {
-				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
-			}
-			if (isAsgn) { reportSharedWrite(ctx, d.left); }
-			if (isAsgn && !isLocation(d.left) && d.left.kind != NodeKind.ArrayLiteral && d.left.kind != NodeKind.ObjectLiteral
-					&& d.left.nodeType != null && d.left.nodeType.kind != TypeKind.Error) {
-				addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", d.left.location.line, d.left.location.column);
-			}
-			// Block assignment to read-only properties
-			if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
-				const md = d.left.data as MemberExprData;
-				reportReadonlyField(ctx, d.left);
-				// Built-in readonly: str.length, sized-array.length
-				if (md.property == "length" && md.object.nodeType != null) {
-					if (isStringLike(md.object.nodeType) || md.object.nodeType.kind == TypeKind.CString) {
-						addError(ctx, "cannot assign to 'length' on string (strings are immutable)", d.left.location.line, d.left.location.column);
-					} else if (md.object.nodeType.kind == TypeKind.SizedArray) {
-						addError(ctx, "cannot modify 'length' on fixed-size array", d.left.location.line, d.left.location.column);
-					} else if (md.object.nodeType.kind == TypeKind.Array && d.operator != "=") {
-						addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + d.operator.slice(0, d.operator.length - 1) + " n' instead", d.left.location.line, d.left.location.column);
-					}
-				}
-				const discUnion = literalDiscriminantOwner(md);
-				if (discUnion != null) {
-					addError(ctx, `cannot assign to '${md.property}': it is the discriminant of '${typeDisplayName(discUnion)}' — assign a whole value of the other variant instead`,
-						d.left.location.line, d.left.location.column);
-				}
-			}
-			const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
-			const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
-			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
-			if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
-			else checkExpr(ctx, d.right, rightExpected);
-			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
-			let rightType = d.right.nodeType;
-			if (!isAsgn && d.operator != "??") {
-				if (d.operator == "&&" || d.operator == "||") {
-					refuseFunctionTruthiness(ctx, d.left);
-					leftType = d.left.nodeType;
-				}
-				const leftConverted = operandConverter(ctx, d.operator, d.left, leftType, rightType, true);
-				if (leftConverted != null) { d.left = leftConverted; leftType = leftConverted.nodeType; }
-				const rightConverted = leftConverted != null ? null : operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
-				if (rightConverted != null) { d.right = rightConverted; rightType = rightConverted.nodeType; }
-				if (operandReadsValue(ctx, d.operator, leftType, rightType, true) && valueOfInPlace(ctx, d.left)) leftType = d.left.nodeType;
-				if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) rightType = d.right.nodeType;
-			} else if (isAsgn) {
-				const rightConverted = operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
-				if (rightConverted != null) {
-					d.right = rightConverted;
-					rightType = rightConverted.nodeType;
-				} else if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) {
-					rightType = d.right.nodeType;
-				}
-			}
-			// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
-			if (d.operator == "=" && leftType != null) {
-				d.right = fitNode(ctx, d.right, leftType, rightType);
-			}
-			// Null RHS routes through the same relation as literal-field init
-			// (semAsgn→fitNode→typeRel parity, scoped to Null: no flow-narrowing
-			// dependency, so the terminal fitNode scope is not re-opened).
-			if (d.operator == "=" && leftType != null && d.right.nodeType != null
-					&& d.right.nodeType.kind == TypeKind.Null
-					&& !isUnresolvedType(leftType)
-					&& leftType.kind != TypeKind.Error
-					&& !isAssignable(d.right.nodeType, leftType)) {
-				addError(ctx,
-					"Type 'null' is not assignable to type '" + typeDisplayName(leftType) + "'",
-					d.right.location.line, d.right.location.column);
-			}
-			if (isAsgn && d.left.kind == NodeKind.MemberExpr && d.left.nodeType != null && isUnresolvedType(d.left.nodeType)) {
-				const md = d.left.data as MemberExprData;
-				const recvType = md.object.nodeType;
-				if (recvType != null && findAccessor(ctx, recvType, "set_" + md.property) != null) {
-					node.nodeType = callSetter(ctx, node, d, md); return;
-				}
-				if (recvType != null && findAccessor(ctx, recvType, "get_" + md.property) != null) {
-					addError(ctx, `Cannot assign to '${md.property}' because it is a read-only property: it has a getter and no setter`, d.left.location.line, d.left.location.column);
-					node.nodeType = errorType(); return;
-				}
-			}
-			// Convention-based dynamic field write protocol:
-			//   obj.foo = x  →  obj.setDynamicField("foo", x)
-			// when:
-			//   - foo is not a real field of obj's declared type, AND
-			//   - obj's type has a registered extension `setDynamicField(this T, key: string, value: U): void`.
-			// Mirrors the getDynamicField synthesis for reads and the
-			// HashMap `m[k]=v` rewrite below. Compound ops (`+=`, etc.) are rejected
-			// with a clear error since they need a read-modify-write cycle that the
-			// protocol does not express.
-			if (isAsgn && d.left.kind == NodeKind.MemberExpr
-					&& d.left.nodeType != null
-					&& isUnresolvedType(d.left.nodeType)
-					&& ctx.extensionRegistry != null) {
-				const md = d.left.data as MemberExprData;
-				if (md.object.nodeType != null && md.property != "setDynamicField") {
-					// Receiver-match against the un-peeled type (preserves Ref<T>
-					// wrapping for reference types like JsonValue). Property-lookup
-					// mirrors `checkMember`'s full chain: peel Alias/Ref/Struct/Union,
-					// try `getProperty`, fall back to `lookupSymbol`+shape on the
-					// type's name (the same "class-aware field delegation" path).
-					// Skipping the fallback would mis-fire synthesis
-					// on real fields like `MacroInvocationData.macroArgs` whose
-					// alias isn't shaped until a read primes it.
-					const recvType = md.object.nodeType;
-					let probeType = recvType;
-					let _peelHops = 0;
-					while (_peelHops < 4) {
-						_peelHops = _peelHops + 1;
-						if (probeType.kind == TypeKind.Alias && probeType.typeReturn != null) {
-							probeType = probeType.typeReturn;
-							continue;
-						}
-						if (probeType.kind == TypeKind.Ref && probeType.typeReturn != null) {
-							probeType = probeType.typeReturn;
-							continue;
-						}
-						break;
-					}
-					const peeled = peelToStructOrUnion(probeType);
-					if (peeled != null) probeType = peeled;
-					let propertyExists = !isUnresolvedType(getProperty(probeType, md.property))
-						|| (probeType.typeNames != null && probeType.typeNames.indexOf(md.property) >= 0);
-					if (!propertyExists && probeType.typeName != "") {
-						const classSym = lookupSymbol(ctx.table, probeType.typeName);
-						if (classSym != null) {
-							ensureShaped(classSym, ctx);
-							let classStruct = classSym.symbolType;
-							if (classStruct != null && classStruct.kind == TypeKind.Alias && classStruct.typeReturn != null) {
-								classStruct = classStruct.typeReturn;
-							}
-							if (classStruct != null && classStruct.kind == TypeKind.Ref && classStruct.typeReturn != null) {
-								classStruct = classStruct.typeReturn;
-							}
-							if (classStruct != null && (classStruct.kind == TypeKind.Struct || classStruct.kind == TypeKind.Union)) {
-								if (!isUnresolvedType(getProperty(classStruct, md.property))) {
-									propertyExists = true;
-								}
-							}
-						}
-					}
-					// Last-resort fallback: shape the receiver's source symbol if reachable.
-					// `recvType.sym` carries the declaration site for alias parameters even
-					// when typeName was lost. This shapes `MacroInvocationData` to its inner
-					// record BEFORE we declare the field missing — matching how a prior read
-					// would have primed the alias on the same parameter.
-					if (!propertyExists && recvType.sym != null) {
-						ensureShaped(recvType.sym, ctx);
-						let symType = recvType.sym.symbolType;
-						let _h = 0;
-						while (symType != null && _h < 4) {
-							_h = _h + 1;
-							if (symType.kind == TypeKind.Alias && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
-							if (symType.kind == TypeKind.Ref && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
-							break;
-						}
-						if (symType != null && (symType.kind == TypeKind.Struct || symType.kind == TypeKind.Union)
-								&& !isUnresolvedType(getProperty(symType, md.property))) {
-							propertyExists = true;
-						}
-					}
-					if (!propertyExists) {
-						const setExts = findAllExtensionsByName(ctx.extensionRegistry, "setDynamicField");
-						// Stricter receiver match: a `setDynamicField` ext only matches
-						// when its declared `receiverTypeName` lines up with the actual
-						// receiver's name (or its un-peeled alias). The generic
-						// `findFirstMatchingExt` is too permissive — when the ext's
-						// receiver type is parameterized (Ref<...>), unification can bind
-						// against unrelated types and yield false positives that would
-						// route ordinary field writes through the protocol.
-						let extMatch = false;
-						if (setExts.length > 0) {
-							const recvNames: string[] = [];
-							if (recvType.typeName != "") recvNames.push(recvType.typeName);
-							if (probeType.typeName != "" && probeType.typeName != recvType.typeName) recvNames.push(probeType.typeName);
-							if (recvType.sym != null && recvType.sym.name != "") {
-								let alreadyIn = false;
-								for (const n of recvNames) { if (n == recvType.sym.name) alreadyIn = true; }
-								if (!alreadyIn) recvNames.push(recvType.sym.name);
-							}
-							for (const e of setExts) {
-								if (e.receiverTypeName == "") continue;
-								for (const rn of recvNames) {
-									if (e.receiverTypeName == rn) { extMatch = true; break; }
-								}
-								if (extMatch) break;
-							}
-						}
-						if (extMatch) {
-							if (d.operator != "=") {
-								const lhsRead = d.operator.slice(0, d.operator.length - 1);
-								addError(ctx,
-									`compound assignment '${d.operator}' is not supported on dynamic field '${md.property}'; rewrite as 'expr.${md.property} = expr.${md.property} ${lhsRead} value'`,
-									node.location.line, node.location.column);
-								node.nodeType = errorType(); return;
-							}
-							const keyLit = createNodeAt(NodeKind.StringLiteral, { value: md.property }, node.location);
-							const wargs: Node[] = [];
-							wargs.push(keyLit);
-							wargs.push(d.right);
-							node.nodeType = rewriteAsMethodCall(ctx, node, md.object, "setDynamicField", wargs); return;
-						}
-					}
-				}
-			}
-			// Strings are immutable at the surface (docs/STRING-CONTRACT.md);
-			// the byte-mutation story is the uint8[] buffer tier.
-			if (isAsgn && d.left.kind == NodeKind.ArrayAccess) {
-				const sad = d.left.data as ArrayAccessData;
-				let strObjType = sad.array.nodeType;
-				if (strObjType != null && strObjType.kind == TypeKind.Ref && strObjType.typeReturn != null) {
-					strObjType = strObjType.typeReturn;
-				}
-				if (strObjType != null && isStringLike(strObjType)) {
-					addError(ctx, "strings are immutable - mutate bytes via uint8[] (asBytes/asString) instead",
-						node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
-			}
-			// HashMap<K,V> subscript write: `m[k] = v` → `m.set(k, v)`. Mutate the
-			// whole BinaryExpr into a method call so the existing extension
-			// resolution + lowering path handles it. Counterpart of the read-case
-			// mutation in the ArrayAccess arm above.
-			if (d.operator == "=" && d.left.kind == NodeKind.ArrayAccess) {
-				const ad = d.left.data as ArrayAccessData;
-				let setObjType = ad.array.nodeType;
-				if (setObjType != null && setObjType.kind == TypeKind.Ref && setObjType.typeReturn != null) {
-					setObjType = setObjType.typeReturn;
-				}
-				// cstring is an immutable FFI bridge — caller must materialise a
-				// `string` before mutating bytes. Nim parity (jsgen.nim:1285).
-				if (setObjType != null && setObjType.kind == TypeKind.CString) {
-					addError(ctx, "cstring doesn't support `[]=` operator — convert to string first",
-						node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
-				if (setObjType != null && setObjType.kind == TypeKind.GenericInstance
-					&& isIndexableMapType(setObjType)) {
-					const wargs: Node[] = [];
-					wargs.push(ad.index);
-					wargs.push(d.right);
-					node.nodeType = rewriteAsMethodCall(ctx, node, ad.array, "set", wargs); return;
-				}
-			}
-			// Ref parity: initVar on assignment LHS
-			if (isAsgn && d.left.kind == NodeKind.Identifier) {
-				const lhsId = d.left.data as IdentifierData;
-				// Ref parity: nfFirstWrite — set when first assignment is in same block as declaration
-				if (!isInitialized(ctx.initTracker, lhsId.name)) {
-					if (getDeclBlock(ctx.initTracker, lhsId.name) == ctx.initTracker.currentBlock) {
-						node.flags = node.flags.incl(NodeFlag.FirstWrite);
-					}
-				}
-				markInitialized(ctx.initTracker, lhsId.name);
-				// Phase 4: reassignment invalidation now flows through the
-				// binder's FlowAssignment node — no fact stack to purge.
-			}
-			if (isAsgn && ctx.ctorExits != null && d.left.kind == NodeKind.MemberExpr) {
-				const lhsMember = d.left.data as MemberExprData;
-				let lhsObject = lhsMember.object;
-				if (lhsObject.kind == NodeKind.HiddenDeref) lhsObject = (lhsObject.data as HiddenDerefData).expr;
-				if (lhsObject.kind == NodeKind.Identifier && (lhsObject.data as IdentifierData).name == "this") {
-					markInitialized(ctx.initTracker, "this." + lhsMember.property);
-				}
-			}
-			// Post-hoc literal coercion: if one side is typed integer and other is integer literal that fits, coerce.
-			// Example: `h: int64; h * 33` — coerces literal 33 (default int32) to int64.
-			let effLeft = leftType != null ? peelTransparentInstance(leftType) : null;
-			let effRight = rightType != null ? peelTransparentInstance(rightType) : null;
-			const rightAsFloat32 = leftType != null && leftType.kind == TypeKind.Float32 ? constantAdoptsFloat32(d.right) : null as unknown as Node;
-			const leftAsFloat32 = rightAsFloat32 == null && !isAsgn && rightType != null && rightType.kind == TypeKind.Float32 ? constantAdoptsFloat32(d.left) : null as unknown as Node;
-			if (isIntegerType(leftType) && rightType != null
-				&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType!, false)) {
-				effRight = leftType;
-				d.right.nodeType = leftType;
-			} else if (isIntegerType(rightType) && leftType != null
-				&& isNodeIntLit(d.left) && literalFitsInType(d.left, rightType!, false)) {
-				effLeft = rightType;
-				d.left.nodeType = rightType;
-			} else if (leftType != null && leftType.kind == TypeKind.Float32 && literalAdoptsFloat32(d.right)) {
-				reportFloat32LiteralRange(ctx, d.right);
-				effRight = leftType;
-				d.right.nodeType = leftType;
-			} else if (rightType != null && rightType.kind == TypeKind.Float32 && literalAdoptsFloat32(d.left)) {
-				reportFloat32LiteralRange(ctx, d.left);
-				effLeft = rightType;
-				d.left.nodeType = rightType;
-			} else if (rightAsFloat32 != null) {
-				reportFloat32LiteralRange(ctx, rightAsFloat32);
-				d.right = rightAsFloat32;
-				effRight = leftType;
-			} else if (leftAsFloat32 != null) {
-				reportFloat32LiteralRange(ctx, leftAsFloat32);
-				d.left = leftAsFloat32;
-				effLeft = rightType;
-			} else {
-				const constRight = constantOperandAs(d.right, d.left, leftType);
-				const constLeft = constRight == null && !isAsgn ? constantOperandAs(d.left, d.right, rightType) : null as unknown as Node;
-				if (constRight != null) {
-					d.right = constRight;
-					effRight = leftType;
-				} else if (constLeft != null) {
-					d.left = constLeft;
-					effLeft = rightType;
-				}
-			}
-			if (d.operator == "instanceof" && d.right.resolvedSym != null
-				&& d.right.resolvedSym.symbolKind == SymbolKind.Class && symGenericParams(d.right.resolvedSym) != "") {
-				addError(ctx, "instanceof cannot test the generic class " + d.right.resolvedSym.name + " without its type arguments — each instance has its own identity; read it with `as " + d.right.resolvedSym.name + "<…>`", d.right.location.line, d.right.location.column);
-			}
-			// Bitwise ops require integer operands (reference parity: no float overloads)
-			// Insert implicit number → int32 cast for C backend
-			if ((isUnknownType(effLeft) || isUnknownType(effRight))
-				&& d.operator != "=" && d.operator != "===" && d.operator != "!=="
-				&& d.operator != "==" && d.operator != "!="
-				&& d.operator != "&&" && d.operator != "||" && d.operator != "??"
-				&& d.operator != "&&=" && d.operator != "||=" && d.operator != "??="
-				&& d.operator != "instanceof") {
-				addError(ctx, "operator '" + d.operator + "' cannot be applied to 'unknown' — narrow with an explicit cast", node.location.line, node.location.column);
-			}
-			const voidLeft = effLeft != null && effLeft.kind == TypeKind.Void;
-			const voidRight = effRight != null && effRight.kind == TypeKind.Void;
-			if ((voidLeft || voidRight) && d.operator != "=") {
-				const voidOther = voidLeft ? effRight : effLeft;
-				const isEqOp = d.operator == "===" || d.operator == "!=="
-					|| d.operator == "==" || d.operator == "!=";
-				const otherNullish = voidOther != null
-					&& (voidOther.kind == TypeKind.Null || voidOther.kind == TypeKind.Void);
-				const concatOk = d.operator == "+" && voidOther != null && isStringLike(voidOther);
-				const nullishOk = d.operator == "??" || d.operator == "??=";
-				if (d.operator == "&&" || d.operator == "||"
-					|| d.operator == "&&=" || d.operator == "||=") {
-					addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
-						node.location.line, node.location.column);
-				} else if (isEqOp && !otherNullish) {
-					addError(ctx, "comparison of 'void' and '" + typeDisplayName(voidOther!)
-						+ "' — the types have no overlap; a void result only equals null",
-						node.location.line, node.location.column);
-				} else if (!isEqOp && !concatOk && !nullishOk) {
-					addError(ctx, "operator '" + d.operator
-						+ "' cannot be applied to 'void' — a void call produces no value",
-						node.location.line, node.location.column);
-				}
-			}
-			if (isBitwiseBinaryOp(d.operator)) {
-				const userBitwise = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
-				if (userBitwise != null) {
-					node.flags = node.flags.incl(NodeFlag.UserOp);
-					node.nodeType = userBitwise; return;
-				}
-				checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
-				if (effLeft != null && effLeft.kind == TypeKind.Number) {
-					d.left = wrapInConv(d.left, createPrimitive(TypeKind.Int32));
-					effLeft = createPrimitive(TypeKind.Int32);
-				}
-				if (effRight != null && effRight.kind == TypeKind.Number) {
-					d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));
-					effRight = createPrimitive(TypeKind.Int32);
-				}
-			} else if (isBitwiseCompoundOp(d.operator)) {
-				const bitMark = ctx.errors.length;
-				checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
-				if (reportedErrorSince(ctx, bitMark)) { node.nodeType = errorType(); return; }
-				if (effRight != null && effRight.kind == TypeKind.Number) {
-					d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));
-					effRight = createPrimitive(TypeKind.Int32);
-				}
-			}
-			if (d.operator == "+" && effLeft != null && effRight != null) {
-				if (effLeft.kind == TypeKind.CString && isStringLike(effRight)) {
-					d.left = wrapInConv(d.left, stringType());
-					effLeft = stringType();
-				}
-				if (effRight.kind == TypeKind.CString && isStringLike(effLeft)) {
-					d.right = wrapInConv(d.right, stringType());
-					effRight = stringType();
-				}
-			}
-			if ((d.operator == "+" || d.operator == "+=") && effLeft != null && effRight != null) {
-				if (isStringLike(effLeft) && !isStringLike(effRight)) {
-					const convRight = synthStringify(ctx, d.right);
-					if (convRight != null) {
-						d.right = convRight;
-						effRight = stringType();
-					}
-				} else if (d.operator == "+" && isStringLike(effRight) && !isStringLike(effLeft)) {
-					const convLeft = synthStringify(ctx, d.left);
-					if (convLeft != null) {
-						d.left = convLeft;
-						effLeft = stringType();
-					}
-				}
-			}
-			const isArithmeticOp = d.operator == "+" || d.operator == "-" || d.operator == "*"
-				|| d.operator == "/" || d.operator == "%" || d.operator == "**";
-			if (isArithmeticOp || isComparisonOp(d.operator)) {
-				const userResult = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
-				if (userResult != null) {
-					node.flags = node.flags.incl(NodeFlag.UserOp);
-					node.nodeType = userResult; return;
-				}
-			}
-			const isRelational = d.operator == "<" || d.operator == ">" || d.operator == "<=" || d.operator == ">=";
-			const isConcat = d.operator == "+" && (isStringLike(effLeft) || isStringLike(effRight));
-			if ((isArithmeticOp || isRelational) && !isConcat
-				&& (isMaybeType(effLeft) || isMaybeType(effRight))) {
-				const maybeSide = isMaybeType(effLeft) ? effLeft : effRight;
-				const innerName = maybeSide.typeReturn != null ? typeDisplayName(maybeSide.typeReturn) : "T";
-				addError(ctx, "operand of '" + d.operator + "' is possibly null (" + innerName + " | null) — unwrap with '!', '??', or a null check first", node.location.line, node.location.column);
-				node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn != null) ? maybeSide.typeReturn : inferredType());
-				return;
-			}
-			const tplOpName = (d.operator == "!=" || d.operator == "!==") ? "!="
-				: ((d.operator == ">" || d.operator == ">=") ? d.operator : "");
-			if (tplOpName != "" && effLeft != null && effRight != null
-				&& !isMaybeType(effLeft) && !isMaybeType(effRight)
-				&& effLeft.kind != TypeKind.Null && effRight.kind != TypeKind.Null
-				&& !hasGenericParams(effLeft) && !hasGenericParams(effRight)
-				&& ((isStringLike(effLeft) && isStringLike(effRight))
-					|| (isStructOperand(effLeft) && isStructOperand(effRight) && typeNameOf(effLeft) == typeNameOf(effRight))
-					|| (effLeft.kind == TypeKind.Tuple && effRight.kind == TypeKind.Tuple)
-					|| (tplOpName == "!=" && effLeft.kind == TypeKind.SizedArray
-						&& effRight.kind == TypeKind.SizedArray)
-					|| (effLeft.kind == TypeKind.Ref && effRight.kind == TypeKind.Ref && typeNameOf(effLeft) == typeNameOf(effRight)))) {
-				const opConc = ctx.extensionRegistry != null
-					? resolveOperatorCall(ctx.table, ctx.extensionRegistry, tplOpName, [effLeft, effRight])
-					: null as unknown as ExtensionMethod;
-				if (opConc == null) {
-					const opSym = lookupSymbol(ctx.table, tplOpName);
-					if (opSym != null) {
-						const tplCands = [opSym];
-						for (const ov of opSym.overloads) tplCands.push(ov);
-						for (const cand of tplCands) {
-							if (!isTemplateSym(cand)) continue;
-							const synthCall = { callee: null as unknown as Node, arguments: [d.left, d.right], isDirectCall: false, resolvedOverloadIdx: -1 } as CallExprData;
-							node.nodeType = expandTemplate(ctx, cand, node, synthCall, expectedType);
-							return;
-						}
-					}
-				}
-			}
-			if (isRelational) checkRelationalOperands(ctx, d.operator, effLeft!, effRight!, node);
-			if (isComparisonOp(d.operator)) refuseMixedSignedCompare(ctx, d.operator, effLeft, effRight, node);
-			if (rejectBigIntMix(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
-			if (rejectLossyIntFloatMix(ctx, d.operator, d.left, d.right, effLeft, effRight)) { node.nodeType = errorType(); return; }
-			if (checkBinaryOperands(ctx, d.operator, effLeft!, effRight!, node)) { node.nodeType = errorType(); return; }
-			if (compoundOperandRefuses(d.operator, effLeft, effRight)) {
-				reportCompoundOperand(ctx, d.operator, d.left, d.right, effRight!, effLeft!);
-				node.nodeType = errorType();
-				return;
-			}
-			if (isBitwiseCompoundOp(d.operator) && effLeft != null && effRight != null) {
-				const base = d.operator.slice(0, d.operator.length - 1);
-				const stored = inferBinaryOp(base, effLeft, effRight);
-				if (stored != null && !isAssignable(stored, effLeft)) {
-					addError(ctx, "'" + d.operator + "' cannot store the '" + typeDisplayName(stored) + "' result of '" + base + "' in '"
-						+ typeDisplayName(effLeft) + "'", node.location.line, node.location.column);
-					node.nodeType = errorType();
-					return;
-				}
-			}
-			const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType, node == ctx.conversionOperand) : null;
-			if (nullishJoined != null) { node.nodeType = nullishJoined; return; }
-			node.nodeType = exactConstantType(ctx, node, inferBinaryOp(d.operator, effLeft!, effRight!));
-			if (d.operator == "??" && node.nodeType != null && isMaybeType(node.nodeType)) {
-				d.right = fitJoinedBranch(ctx, d.right, node.nodeType);
-			}
-			return;
-		},
-		NodeKind.UnaryExpr => {
-			const d = node.data as UnaryExprData;
-			// Propagate expectedType through unary +/- for literal coercion (e.g., -128 → int8)
-			const unaryExpected = (d.unaryOp == "-" || d.unaryOp == "+") ? expectedType : null;
-			if (d.unaryOp == "-" && isNodeIntLit(d.operand)
-				&& unaryExpected != null && isIntegerType(unaryExpected)) {
-				checkNegatedIntLiteral(ctx, d.operand, unaryExpected);
-				node.nodeType = unaryExpected;
-				return;
-			}
-			if (d.unaryOp == "-" && isNodeIntLit(d.operand) && unaryExpected == null) {
-				reportLiteralRange(ctx, d.operand);
-				d.operand.nodeType = untypedIntegerLiteralType(ctx, d.operand, true);
-				node.nodeType = d.operand.nodeType;
-				return;
-			}
-			checkExpr(ctx, d.operand, unaryExpected);
-			if (d.unaryOp == "!") {
-				refuseFunctionTruthiness(ctx, d.operand);
-			} else if ((d.unaryOp == "-" || d.unaryOp == "+") && unaryArithFails(ctx, d.unaryOp, d.operand.nodeType)
-				&& !valueOfInPlace(ctx, d.operand)) {
-				addError(ctx, "unary '" + d.unaryOp + "' needs a numeric operand, got '" + typeDisplayName(d.operand.nodeType!) + "'",
-					node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			} else if (d.unaryOp == "~" && d.operand.nodeType != null && d.operand.nodeType.kind != TypeKind.Number
-				&& !isBitwiseAllowed(d.operand.nodeType)) {
-				valueOfInPlace(ctx, d.operand);
-			}
-			const operandType = d.operand.nodeType;
-			if (d.unaryOp == "!" && operandType != null && operandType.kind == TypeKind.Void) {
-				addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
-					node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			if (d.unaryOp == "+" && operandType != null && operandType.kind == TypeKind.BigInt) {
-				addError(ctx, "unary '+' is not allowed on bigint — use Number(b) to convert", node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			// Bitwise NOT: integer/enum = ok, number = warn, other = error
-			if (d.unaryOp == "~") {
-				if (operandType != null && operandType.kind == TypeKind.Set) {
-					addError(ctx, "bitwise NOT '~' has no meaning on a set — use '.difference(other)' to remove members", node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
-				if (operandType != null && operandType.kind == TypeKind.Number) {
-					addWarning(ctx, "bitwise NOT '~' on 'number' implicitly casts to int32; prefer explicit integer type", node.location.line, node.location.column);
-					d.operand = wrapInConv(d.operand, createPrimitive(TypeKind.Int32));
-				} else if (!isBitwiseAllowed(operandType)) {
-					const name = operandType != null ? typeDisplayName(operandType) : "unknown";
-					addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
-				}
-			}
-			if ((d.unaryOp == "-" || d.unaryOp == "+" || d.unaryOp == "!" || d.unaryOp == "~")
-				&& operandType != null && !isStringLike(operandType)
-				&& !(d.unaryOp == "-" && d.operand.kind == NodeKind.NumberLiteral)
-				&& ctx.extensionRegistry != null) {
-				const unExt = resolveOperatorCall(ctx.table, ctx.extensionRegistry, d.unaryOp, [operandType]);
-				if (unExt != null) {
-					const unFnType = getExtFnType(unExt);
-					if (unFnType != null && unFnType.typeReturn != null) {
-						node.flags = node.flags.incl(NodeFlag.UserOp);
-						node.nodeType = unFnType.typeReturn; return;
-					}
-				}
-			}
-			if (d.unaryOp == "typeof" && operandType != null && operandType.kind == TypeKind.Union) {
-				const stored = declaredTagUnionOf(d.operand);
-				if (stored != null && stored != operandType) d.operand.nodeType = stored;
-			}
-			node.nodeType = inferUnaryOp(d.unaryOp, operandType!); return;
-		},
-		NodeKind.UpdateExpr => {
-			const d = node.data as UpdateExprData;
-			checkExpr(ctx, d.updateArg, null);
-			reportSharedWrite(ctx, d.updateArg);
-			if (d.updateArg.kind == NodeKind.MemberExpr) {
-				const umd = d.updateArg.data as MemberExprData;
-				if (umd.property == "length" && umd.object.nodeType != null &&
-					(umd.object.nodeType.kind == TypeKind.Array || umd.object.nodeType.kind == TypeKind.SizedArray || umd.object.nodeType.kind == TypeKind.Span || isStringLike(umd.object.nodeType) || umd.object.nodeType.kind == TypeKind.CString)) {
-					if (umd.object.nodeType.kind == TypeKind.SizedArray) {
-						addError(ctx, "cannot modify 'length' on fixed-size array", d.updateArg.location.line, d.updateArg.location.column);
-					} else {
-						addError(ctx, "cannot use increment/decrement on 'length'; use 'arr.length = n' instead", d.updateArg.location.line, d.updateArg.location.column);
-					}
-				}
-			}
-			const ut = d.updateArg.nodeType;
-			if (ut != null && (isNumeric(ut) || ut.kind == TypeKind.BigInt)) { node.nodeType = ut; return; }
-			if (ut != null && ut.kind != TypeKind.Error) {
-				addError(ctx, `increment/decrement needs a numeric operand, got '${typeDisplayName(ut)}'`, d.updateArg.location.line, d.updateArg.location.column);
-			}
-			node.nodeType = int32Type(); return;
-		},
+		NodeKind.SpliceMany => { checkSpliceMany(ctx, node, expectedType); return; },
+		NodeKind.ComptimeBlock => { checkComptimeBlock(ctx, node, expectedType); return; },
+		NodeKind.Identifier => { checkIdentifier(ctx, node, expectedType); return; },
+		NodeKind.BinaryExpr => { checkBinaryExpr(ctx, node, expectedType); return; },
+		NodeKind.UnaryExpr => { checkUnaryExpr(ctx, node, expectedType); return; },
+		NodeKind.UpdateExpr => { checkUpdateExpr(ctx, node, expectedType); return; },
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => {
 			node.nodeType = checkMemberExpr(ctx, node, expectedType);
 			return;
 		},
-		NodeKind.ArrayAccess => {
-			const d = node.data as ArrayAccessData;
-			// Defensive: malformed ArrayAccess may have null d.array (e.g. macro
-			// VM round-trip lost the field). Convert null deref into diagnostic.
-			if (d.array == null) {
-				addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			checkInTypeSlot(ctx, d.array);
-			const arrayIsFunction = isFunctionShaped(d.array.nodeType) && !valueOfInPlace(ctx, d.array);
-			let arrType = d.array.nodeType;
-			// The index is a READ even when the ArrayAccess is on an assignment
-			// LHS (`a[i] = v`). leftPartOfAsgn suppresses flow narrowing for the
-			// assignment target, but the index sub-expression must still narrow
-			// (else a value-Maybe index keeps its carrier type → codegen mixes
-			// struct and payload). Reset around the index check only.
-			if (d.index != null) {
-				const savedLpa = ctx.initTracker.leftPartOfAsgn;
-				ctx.initTracker.leftPartOfAsgn = 0;
-				checkExpr(ctx, d.index, null);
-				ctx.initTracker.leftPartOfAsgn = savedLpa;
-			}
-			if (arrayIsFunction) {
-				addError(ctx, "a function value cannot be indexed — call it first", node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			// Array sub-expr may have null nodeType when a macro expansion
-			// returns an Identifier whose lookup hasn't repopulated the
-			// symbol's type yet. Diagnostic instead of null deref.
-			if (arrType == null) {
-				addError(ctx, "internal: array type unresolved in ArrayAccess (child kind=" + d.array.kind + ")", node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			arrType = peelTransparentInstance(arrType);
-			// Enum reverse index E[v]: TS numeric-enum reverse mapping, value → member-name string.
-			// Base must be the enum TYPE symbol itself (not a value of enum type).
-			if (d.array.kind == NodeKind.Identifier && d.array.resolvedSym != null
-					&& d.array.resolvedSym.symbolKind == SymbolKind.Enum) {
-				const revIdxType = d.index != null ? d.index.nodeType : null;
-				if (revIdxType == null || !(isNumeric(revIdxType) || revIdxType.kind == TypeKind.Enum)) {
-					addError(ctx, "enum reverse index '" + typeDisplayName(arrType) + "[...]' expects a numeric or enum operand", node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
-				node.nodeType = stringType(); return;
-			}
-			// HashMap<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
-			// so the existing extension resolution (checkMemberExpr → checkCallExpr)
-			// sets up NodeFlag.ExtCall + resolvedSym, and extensionMethodLower later
-			// rewrites it to the flat UFCS form. This makes `{ [key: K]: V }` and
-			// HashMap<K,V> subscripts work transparently at runtime.
-			//
-			// Only handles READ here. Write case (`m[k] = v`) is handled in the
-			// BinaryExpr assignment check — see below — because we need to know if
-			// the ArrayAccess is on the LHS of an assignment to emit `.set` instead
-			// of `.get`. The leftPartOfAsgn counter tells us that.
-			let mapObjType = arrType;
-			if (mapObjType != null && mapObjType.kind == TypeKind.Ref && mapObjType.typeReturn != null) {
-				mapObjType = mapObjType.typeReturn;
-			}
-			if (mapObjType != null && mapObjType.kind == TypeKind.GenericInstance
-				&& isIndexableMapType(mapObjType)
-				&& ctx.initTracker.leftPartOfAsgn == 0) {
-				const loc = node.location;
-				const memberTok = createToken(TokenKind.Ident, "", loc.line);
-				const memberData: NodeData = { object: d.array, property: "get", isOptional: false };
-				const memberNode = createNode(NodeKind.MemberExpr, memberData, memberTok);
-				const callArgs: Node[] = [];
-				callArgs.push(d.index);
-				// Mutate in place — same node identity, different kind.
-				// Assign literal directly to node.data: NodeData (union) — typed
-				// intermediate confuses codegen variant handling.
-				node.kind = NodeKind.CallExpr;
-				node.data = {
-					callee: memberNode,
-					arguments: callArgs,
-					isDirectCall: true,
-					resolvedOverloadIdx: -1,
-				};
-				node.flags = node.flags.excl(NodeFlag.Sem);
-				node.nodeType = null;
-				node.nodeType = checkCallExpr(ctx, node, null); return;
-			}
-			const subscriptRecv = subscriptOperandOf(arrType);
-			if (subscriptRecv != null && (declaresSubscript(ctx, arrType, "[]") || declaresSubscript(ctx, arrType, "[]="))) {
-				if (ctx.initTracker.leftPartOfAsgn > 0) {
-					addError(ctx, "'[]' of '" + typeDisplayName(subscriptRecv) + "' returns a value, so this subscript cannot be assigned to — only 'x[i] = v' writes, through a declared '[]='", node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
-				if (!declaresSubscript(ctx, arrType, "[]")) {
-					addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
-				const sargs: Node[] = [];
-				sargs.push(d.index);
-				node.nodeType = rewriteAsMethodCall(ctx, node, d.array, "[]", sargs); return;
-			}
-			if (subscriptRecv != null && !hasGenericParams(subscriptRecv)
-					&& (subscriptRecv.kind == TypeKind.Struct || subscriptRecv.kind == TypeKind.Boolean || isNumeric(subscriptRecv))) {
-				addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
-			}
-			// reference array: deref Ref<Array> so element-type + nativeLower/codegen see the value array
-			if (arrType.kind == TypeKind.Ref && arrType.typeReturn != null && arrType.typeReturn.kind == TypeKind.Array) {
-				const drefTok = createToken(TokenKind.Ident, "", node.location.line);
-				const drefNode = createNode(NodeKind.HiddenDeref, { expr: d.array }, drefTok);
-				drefNode.nodeType = arrType.typeReturn;
-				d.array = drefNode;
-				arrType = arrType.typeReturn;
-			}
-			if (arrayIndexFails(arrType, d.index)) {
-				const lpaAtIndex = ctx.initTracker.leftPartOfAsgn;
-				ctx.initTracker.leftPartOfAsgn = 0;
-				const indexRead = valueOfInPlace(ctx, d.index);
-				ctx.initTracker.leftPartOfAsgn = lpaAtIndex;
-				if (!indexRead || arrayIndexFails(arrType, d.index)) {
-					addError(ctx, "an array index must be a number, got '" + typeDisplayName(d.index.nodeType!) + "'",
-						node.location.line, node.location.column);
-					node.nodeType = errorType(); return;
-				}
-			}
-			reportConstIndexBound(ctx, arrType, d.index, node);
-			const idxType = d.index.nodeType;
-			// Implicit number → int64 cast for array index (C requires integer subscript)
-			if (idxType != null && idxType.kind == TypeKind.Number && d.index.kind != NodeKind.BinaryExpr) {
-				d.index = wrapInConv(d.index, createPrimitive(TypeKind.Int64));
-			}
-			const rangeIndex = d.index.kind == NodeKind.BinaryExpr
-				&& ((d.index.data as BinaryExprData).operator == ".." || (d.index.data as BinaryExprData).operator == "...");
-			if (arrType.kind == TypeKind.Tuple && arrType.typeChildren != null && !rangeIndex) {
-				node.nodeType = tupleIndexType(ctx, arrType, d, node); return;
-			}
-			// Range access: arr[start..end] returns Span<elemType>
-			let accessType: Type = inferredType();
-			if (d.index.kind == NodeKind.BinaryExpr) {
-				const bd = d.index.data as BinaryExprData;
-				if (bd.operator == ".." || bd.operator == "...") {
-					accessType = arrType.kind == TypeKind.String ? createReadonlyView(createSpan(charType()))
-						: createSpan(getElementType(arrType));
-				} else if (arrType.kind == TypeKind.String) {
-					accessType = stringType();
-				} else {
-					accessType = getElementType(arrType);
-				}
-			} else if (arrType.kind == TypeKind.String) {
-				accessType = stringType();
-			} else {
-				accessType = getElementType(arrType);
-			}
-			node.nodeType = accessType;
-			node.nodeType = accessType; return;
-		},
-		NodeKind.ObjectLiteral => {
-			const d = node.data as ObjectLiteralData;
-			// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
-			// Reference parity: skipTypes({tySink, tyOwned})
-			let objExpected = skipModifier(expectedType);
-			// Union(Ref<T>, Null) — pick the Ref member for context propagation.
-			// Source-level nullable type is preserved on node.nodeType below; this
-			// only affects how field-types flow into the literal's properties.
-			if (objExpected != null) {
-				const refMember = unwrapRefNullUnion(objExpected);
-				if (refMember != null) objExpected = refMember;
-			}
-			if (objExpected != null && isAtomicRef(objExpected) && !isLockedRef(objExpected)
-				&& objExpected.typeReturn != null && !hasGenericParams(objExpected.typeReturn)) {
-				checkArcPointeeSendable(ctx, objExpected.typeReturn, node.location.line, node.location.column);
-			}
-			// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
-			if (objExpected != null && objExpected.kind == TypeKind.Ref && objExpected.typeReturn != null) {
-				objExpected = objExpected.typeReturn;
-			}
-			// Unwrap Maybe<T> for inner shape matching — `{ kind: 7 }` flowing into
-			// a `Token | null` slot matches Token's fields, not Maybe<Token>'s
-			// `{ value, present }` wrapper. fitNode at the call site inserts the
-			// wrap after this node is shape-checked. Mirrors the Ref/Union peels above.
-			if (objExpected != null && isMaybeType(objExpected) && objExpected.typeReturn != null) {
-				objExpected = objExpected.typeReturn;
-			}
-			// Map<K,V> literal (the insertion-ordered one — matches JS object literal
-			// key order): `{ "foo": 1 }` assigned to an ordered Map target is rewritten
-			// in-place to `mapFromPairs<K,V>([keys], [values])` — a call to a std
-			// helper that constructs a populated Map. The rewrite happens DURING
-			// checking so monomorphization (which runs after checking) sees the
-			// call with typed arguments and properly specializes it.
-			//
-			// This covers both `Map<K,V>` and `{ [key: K]: V }` — the index signature
-			// is normalized to Map<K,V> during resolveAnnotation. Also supports an
-			// explicit `HashMap<K,V>` target: the object literal provides keys/values
-			// in declared order; HashMap simply drops the ordering guarantee. The
-			// only difference is which builder we emit (mapFromPairs vs hashMapFromPairs).
-			if (objExpected != null && objExpected.kind == TypeKind.GenericInstance
-				&& isIndexableMapType(objExpected)
-				&& objExpected.typeChildren != null && objExpected.typeChildren.length == 2) {
-				const mapKeyType = objExpected.typeChildren[0];
-				const mapValType = objExpected.typeChildren[1];
-				// 1. Validate every value against V and emit errors on mismatch.
-				let mli = 0;
-				while (mli < d.properties.length) {
-					checkExpr(ctx, d.properties[mli], mapValType);
-					const vt = d.properties[mli].nodeType;
-					if (vt != null && mapValType != null && !isAssignable(vt, mapValType)) {
-						const keyName = mli < d.keys.length ? d.keys[mli] : "";
-						addError(ctx, "Map value for key '" + keyName + "' has type that is not assignable to V", node.location.line, node.location.column);
-					}
-					mli = mli + 1;
-				}
-				// 2. Build keys array — StringLiterals stamped with K.
-				const mtok = createToken(TokenKind.Ident, "", node.location.line);
-				const keyNodes: Node[] = [];
-				let ki = 0;
-				while (ki < d.keys.length) {
-					const kNode = createNode(NodeKind.StringLiteral, { value: d.keys[ki] }, mtok);
-					kNode.nodeType = mapKeyType;
-					kNode.flags = kNode.flags.incl(NodeFlag.Sem);
-					keyNodes.push(kNode);
-					ki = ki + 1;
-				}
-				const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, mtok);
-				keysArr.nodeType = createRef(createArray(mapKeyType));
-				keysArr.flags = keysArr.flags.incl(NodeFlag.Sem);
-				// 3. Build values array — reuse the already-checked property nodes.
-				const valNodes: Node[] = [];
-				let vi = 0;
-				while (vi < d.properties.length) {
-					valNodes.push(d.properties[vi]);
-					vi = vi + 1;
-				}
-				const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
-				valsArr.nodeType = createRef(createArray(mapValType));
-				valsArr.flags = valsArr.flags.incl(NodeFlag.Sem);
-				// 4. Build the builder callee (mapFromPairs for ordered Map,
-				// hashMapFromPairs for HashMap) + mutate this node into the call.
-				const builderName = objExpected.typeName == "HashMap" ? "hashMapFromPairs" : "mapFromPairs";
-				const calleeIdent = createNode(NodeKind.Identifier, { name: builderName }, mtok);
-				const mCallArgs: Node[] = [];
-				mCallArgs.push(keysArr);
-				mCallArgs.push(valsArr);
-				// Assign literal directly to node.data: NodeData (union) — typed
-				// intermediate confuses codegen variant handling.
-				node.kind = NodeKind.CallExpr;
-				node.data = {
-					callee: calleeIdent,
-					arguments: mCallArgs,
-					isDirectCall: true,
-					resolvedOverloadIdx: -1,
-				};
-				node.flags = node.flags.excl(NodeFlag.Sem);
-				node.nodeType = null;
-				// 5. Re-check as a call. Generic inference on mapFromPairs<K,V>
-				// binds K and V from the typed array arguments, and the #29 fix
-				// ensures the internal m.set(...) calls get monomorphized.
-				node.nodeType = checkCallExpr(ctx, node, objExpected); return;
-			}
-			// Unwrap GenericInstance (e.g., Result<T, E>) to inner Struct or Union.
-			// Walk through typeReturn (eagerly instantiated body) or typeExtra
-			// (unsubstituted base) until we reach a Struct or Union. Handle nested
-			// GenericInstance (e.g., MyResult<T, E> = Ref<MyData<T, E>> where MyData
-			// is itself generic) by recursing through GI/Ref wrappers.
-			const literalOwnerSym = declaringSymOf(objExpected);
-			const literalClassType = objExpected;
-			objExpected = peelToStructOrUnion(objExpected);
-			// A generic-containing expected type (un-instantiated formal like
-			// `{ v: T }` at a call site whose T is still unbound) must NOT be
-			// adopted: stamping it makes the literal's type identical to the
-			// formal, so unifyType's identity check derives zero bindings and
-			// the generic is never instantiated (loud missing-symbol C error),
-			// while the literal's fields emit as void*. Fall through to the
-			// self-synthesized anonymous struct — unification against the formal
-			// then binds T from the literal's own concrete field types.
-			if (objExpected != null && objExpected.kind == TypeKind.Struct
-				&& objExpected.typeChildren != null
-				&& !hasGenericParams(objExpected)) {
-				// Reference parity: stamp literal with expected type, propagate field types
-				// For class types, keep Ref wrapper so codegen knows to heap-allocate.
-				// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
-				let stampType = skipModifier(expectedType);
-				// Maybe<T> override: when expected is Maybe<T>, the literal's natural
-				// shape is the inner T (matched against T's fields above via the peel).
-				// Stamp the inner T so fitNode at the call site detects the T → Maybe<T>
-				// gap and inserts the wrap. Without this, node.nodeType = Maybe<T>
-				// short-circuits fitNode's same-kind check and no wrap is emitted —
-				// codegen then writes the literal's T-shape fields into Maybe<T>'s slot.
-				if (stampType != null && isMaybeType(stampType)) {
-					stampType = stampType.typeReturn != null ? stampType.typeReturn : objExpected;
-				}
-				node.nodeType = (stampType != null) ? stampType : objExpected;
-				// Pin to consts so the inner while-loop body sees non-null typeNames/
-				// typeChildren — flow narrowing on `let objExpected` doesn't reach
-				// inside nested loops via the binder's current narrowing rules.
-				const objE = objExpected;
-				const objNames = objE.typeNames;
-				const objChildren = objE.typeChildren;
-				const containerName = objE.typeName != null ? objE.typeName : "";
-				// Record the literal's own contextual type so the LSP can complete its
-				// fields wherever it sits — argument, return, nested — instead of
-				// climbing to an annotated VariableDecl that may not exist.
-				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + 1,
-					null, objE, SymbolKind.Interface, "", containerName, false);
-				let fi = 0;
-				while (fi < d.properties.length) {
-					// Name-based field lookup: match literal key against struct typeNames
-					let fieldExpected: Type | null = null;
-					const keyName = fi < d.keys.length ? d.keys[fi] : "";
-					if (keyName != "" && keyName != "..." && keyName != "__computed__"
-						&& objNames != null) {
-						let ni = 0;
-						while (ni < objNames.length) {
-							if (objNames[ni] == keyName) {
-								if (ni < objChildren.length) {
-									fieldExpected = objChildren[ni];
-								}
-								break;
-							}
-							ni = ni + 1;
-						}
-					}
-					// Fallback: positional match for spread/computed keys
-					if (fieldExpected == null && (keyName == "..." || keyName == "__computed__")
-						&& fi < objChildren.length) {
-						fieldExpected = objChildren[fi];
-					}
-					if (fieldExpected == null) {
-						fieldExpected = engineNodeVirtualKeyType(objE, keyName);
-					}
-					// Engine (macro-body) view of Node.nodeType, write position: macros
-					// stamp type-AST Nodes into emitted literals (`nodeType: ft`), so the
-					// slot expects a Node VALUE — Ref<Node>, matching the read override in
-					// checkMemberExpr — not the checker Type the class declares.
-					if (fieldExpected != null && isEngineCheckMode()
-							&& keyName == "nodeType" && containerName == "Node") {
-						fieldExpected = (expectedType != null && typeNameOf(expectedType) == "Node")
-							? expectedType
-							: objE;
-					}
-					checkExpr(ctx, d.properties[fi], fieldExpected);
-					if (fieldExpected != null) {
-						d.properties[fi] = fitNode(ctx, d.properties[fi], fieldExpected, d.properties[fi].nodeType);
-					}
-					refuseHiddenFieldInLiteral(ctx, literalOwnerSym != null ? literalOwnerSym : objE.sym, keyName, d.properties[fi], node, d, fi);
-					// Record property key as reference to struct field
-					if (fi < d.keys.length && d.keyLocations != null && fi < d.keyLocations.length && fieldExpected != null) {
-						const keyLoc = d.keyLocations[fi];
-						if (keyName != "..." && keyName != "__computed__" && keyLoc.line > 0) {
-							let fieldSym: Symbol | null = null;
-							if (containerName != "") {
-								fieldSym = lookupSymbol(ctx.table, containerName + "_" + keyName);
-								if (fieldSym != null) ensureShaped(fieldSym, ctx);
-							}
-							if (fieldSym == null) {
-								fieldSym = makeSymbolState(keyName, SymbolKind.Property, fieldExpected, false, SymbolState.Shaped);
-								inheritContainerInfo(fieldSym, ctx, containerName);
-							}
-							sgRecordSym(ctx, keyLoc.line, keyLoc.column, keyLoc.column + keyName.length, fieldSym, fieldExpected, SymbolKind.Property, keyName, containerName, false);
-						}
-					}
-					fi = fi + 1;
-				}
-				// Excess property + duplicate field check
-				if (objNames != null) {
-					let ki = 0;
-					while (ki < d.keys.length) {
-						const key = d.keys[ki];
-						if (key != "..." && key != "__computed__") {
-							let found = false;
-							let ni = 0;
-							while (ni < objNames.length) {
-								if (objNames[ni] == key) { found = true; break; }
-								ni = ni + 1;
-							}
-							if (!found && engineNodeHasVirtualKey(objE, key)) found = true;
-							if (!found) {
-								if (d.keyLocations != null && ki < d.keyLocations.length) {
-									const kl = d.keyLocations[ki];
-									addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
-								} else {
-									addError(ctx, "'" + key + "' does not exist in type '" + containerName + "'", node.location.line, node.location.column);
-								}
-							}
-							// Check duplicate: same key appeared earlier
-							let di = 0;
-							while (di < ki) {
-								if (d.keys[di] == key) {
-									if (d.keyLocations != null && ki < d.keyLocations.length) {
-										const kl = d.keyLocations[ki];
-										addErrorRange(ctx, "field initialized twice: '" + key + "'", kl.line, kl.column, kl.column + key.length);
-									} else {
-										addError(ctx, "field initialized twice: '" + key + "'", node.location.line, node.location.column);
-									}
-									break;
-								}
-								di = di + 1;
-							}
-						}
-						ki = ki + 1;
-					}
-				}
-				if (objNames != null && !(isEngineCheckMode() && containerName == "Node")) {
-					let hasDynamicKey = false;
-					for (const k of d.keys) {
-						if (k == "..." || k == "__computed__") hasDynamicKey = true;
-					}
-					if (!hasDynamicKey && d.keys.length == d.properties.length) {
-						for (let oi = 0; oi < objNames.length && oi < objChildren.length; oi += 1) {
-							if (objNames[oi].startsWith("__") || d.keys.includes(objNames[oi])) continue;
-							const init = literalFieldInitializer(ctx, literalClassType, objNames[oi], objChildren[oi], node.location);
-							if (init == null) continue;
-							d.keys.push(objNames[oi]);
-							d.properties.push(init);
-							if (d.keyLocations != null) d.keyLocations.push(makeLoc(0, 0));
-						}
-					}
-					if (!hasDynamicKey) {
-						let mi = 0;
-						while (mi < objNames.length) {
-							const wantT = mi < objChildren.length ? objChildren[mi] : null as unknown as Type;
-							if (wantT != null && requiresInit(wantT)) {
-								const want = objNames[mi];
-								let present = false;
-								for (const k of d.keys) { if (k == want) { present = true; break; } }
-								if (!present) {
-									addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value — give it in the literal or an initializer in the class, or declare the field optional with '?'`, node.location.line, node.location.column);
-								}
-							}
-							mi = mi + 1;
-						}
-					}
-				}
-				node.nodeType = node.nodeType; return;
-			} else if (objExpected != null && objExpected.kind == TypeKind.Union
-				&& isDiscriminatedUnion(objExpected)) {
-				// Discriminated union construction validation
-				// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
-				const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
-				node.nodeType = constructed; return;
-			} else if (objExpected != null && objExpected.kind == TypeKind.Union) {
-				// Non-discriminated union: resolve variant, propagate field types.
-				// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
-				// once per field. One pass, known types.
-				node.nodeType = objExpected;
-
-				// Tier 2: string-literal discriminant narrowing.
-				// When every variant is a struct with a shared field whose type is StringLiteral
-				// (the TypeScript pattern: type Shape = {kind:"a",...} | {kind:"b",...}),
-				// find the shared field, read the literal value from the object literal, and
-				// pick the variant that way. This catches wrong-field-in-variant bugs that
-				// pure name-based findUnionVariant misses.
-				let varIdx = -1;
-				const stringDiscName = findSharedStringDiscriminant(objExpected);
-				if (stringDiscName != "") {
-					// Look for the discriminant field in the literal
-					let litDiscIdx = -1;
-					for (let ki = 0; ki < d.keys.length; ki += 1) {
-						if (d.keys[ki] == stringDiscName) { litDiscIdx = ki; break; }
-					}
-					if (litDiscIdx >= 0 && litDiscIdx < d.properties.length) {
-						const discProp = d.properties[litDiscIdx];
-						if (discProp.kind == NodeKind.StringLiteral) {
-							const sd = discProp.data as StringLiteralData;
-							varIdx = findVariantByStringDiscriminant(objExpected, stringDiscName, sd.value);
-							if (varIdx < 0) {
-								addError(ctx, `No variant of union has ${stringDiscName} = "${sd.value}"`,
-									node.location.line, node.location.column);
-							}
-						}
-					} else {
-						addError(ctx, `Object literal missing discriminant field '${stringDiscName}' for union`,
-							node.location.line, node.location.column);
-					}
-				}
-				// Fallback: name-only matching (legacy path for non-string-discriminant unions)
-				if (varIdx < 0 && stringDiscName == "") {
-					varIdx = (d.keys.length > 0)
-						? findUnionVariant(objExpected, d.keys, [])
-						: -1;
-					// Ambiguous? (e.g. { value: X } matches both NumberLiteral and StringLiteral)
-					// Check property CLONES without expectedType to get actual types — purely
-					// for variant selection. Original properties stay unchecked so the
-					// contextual second pass (line ~795) types them cleanly with the
-					// variant's field expected type. Same `cloneNodeForCheck` pattern as
-					// `cloneDefaultNode` (line ~1356): exploratory check on a clone leaves
-					// the live AST untouched, avoiding double-insert of HiddenDeref /
-					// coercion nodes that `checkExpr` is not idempotent against.
-					if (varIdx >= 0 && d.keys.length > 0 && isAmbiguousVariant(objExpected, varIdx, d.keys)) {
-						const propTypes: Type[] = [];
-						let pi = 0;
-						while (pi < d.properties.length) {
-							const probe = cloneNodeForCheck(d.properties[pi]);
-							checkExpr(ctx, probe, null);
-							const probeType = probe.nodeType;
-							propTypes.push(probeType!);
-							pi = pi + 1;
-						}
-						const refined = findUnionVariant(objExpected, d.keys, propTypes);
-						if (refined >= 0) varIdx = refined;
-					}
-				}
-				// Single pass: check properties WITH variant field types as expectedType
-				// (reference: fitNode(field.typ, value) — proper literal coercion).
-				// Under Tier 2 string-discriminant mode, also report fields missing from the
-				// chosen variant as errors (caller asked for a specific variant, extra fields
-				// are wrong).
-				const variant = (varIdx >= 0 && objExpected.typeChildren != null
-					&& varIdx < objExpected.typeChildren.length)
-					? objExpected.typeChildren[varIdx]
-					: null;
-				if (variant != null && variant.kind == TypeKind.Ref) {
-					rearmLiteralForRecheck(node, variant);
-					checkExpr(ctx, node, variant);
-					return;
-				}
-				for (let fi = 0; fi < d.properties.length; fi += 1) {
-					const key = fi < d.keys.length ? d.keys[fi] : "";
-					const fieldExpected = (variant != null && key != "")
-						? findFieldInVariant(variant, key)
-						: null;
-					checkExpr(ctx, d.properties[fi], fieldExpected);
-					if (stringDiscName != "" && variant != null && key != "" && key != stringDiscName && fieldExpected == null) {
-						// Resolved to a specific variant via string discriminant, but this field
-						// doesn't belong to it — report.
-						addError(ctx, `Field '${key}' does not exist on the ${stringDiscName}-matched variant`,
-							node.location.line, node.location.column);
-					}
-				}
-				// +1 offset so 0 means "not set" (variant 0 becomes 1).
-				if (varIdx >= 0) {
-					node.variantSlot = varIdx + 1;
-				}
-				node.nodeType = objExpected; return;
-			} else {
-				// No expected type — synthesize anonymous struct from literal fields
-				const fieldNames: string[] = [];
-				const fieldTypes: Type[] = [];
-				let pi = 0;
-				let spreadSeen = false;
-				while (pi < d.properties.length) {
-					checkExpr(ctx, d.properties[pi], null);
-					const rawFt = d.properties[pi].nodeType;
-					const ft = rawFt != null ? closureStorageType(rawFt) : rawFt;
-					if (ft != rawFt) d.properties[pi] = fitNode(ctx, d.properties[pi], ft, rawFt);
-					const spreadFields = pi < d.keys.length && d.keys[pi] == "..." && d.properties[pi].kind == NodeKind.SpreadExpr
-						? spreadFieldsOf((d.properties[pi].data as SpreadExprData).spreadArg.nodeType) : null;
-					if (spreadFields != null) {
-						spreadSeen = true;
-						for (let fi = 0; fi < spreadFields.typeNames.length; fi += 1) {
-							const fname = spreadFields.typeNames[fi];
-							if (fname.startsWith("__") || fi >= spreadFields.typeChildren.length) continue;
-							const at = fieldNames.indexOf(fname);
-							if (at >= 0) fieldTypes[at] = spreadFields.typeChildren[fi];
-							else { fieldNames.push(fname); fieldTypes.push(spreadFields.typeChildren[fi]); }
-						}
-						pi = pi + 1;
-						continue;
-					}
-					const at = spreadSeen && pi < d.keys.length ? fieldNames.indexOf(d.keys[pi]) : -1;
-					if (at >= 0 && d.keys[pi] != "..." && d.keys[pi] != "__computed__") { fieldTypes[at] = ft!; pi = pi + 1; continue; }
-					if (pi < d.keys.length) { fieldNames.push(d.keys[pi]); }
-					fieldTypes.push(ft!);
-					pi = pi + 1;
-				}
-				const anonName = anonStructName(fieldNames, fieldTypes);
-				node.nodeType = createRef(createStruct(anonName, fieldNames, fieldTypes, false)); return;
-			}
-		},
-		NodeKind.ArrayLiteral => {
-			const d = node.data as ArrayLiteralData;
-			// Reference parity: semArrayConstr does expectedType.skipTypes(abstractRange)
-			// which strips Sink/Lent/Var wrappers before checking Array kind
-			const arrExpectedRaw = skipModifier(expectedType);
-			let arrExpected = arrExpectedRaw != null ? peelTransparentInstance(arrExpectedRaw) : null;
-			// `T[] | null` (TS nullable array): the literal checks against the array
-			// member and the surrounding fit wraps it — the union counterpart of the
-			// Ref<Array> peel below, so it runs first and hands that peel its member.
-			// Without it an empty [] keeps an inferred element type all the way into
-			// the emission gate.
-			if (arrExpected != null && arrExpected.kind == TypeKind.Union
-					&& arrExpected.typeChildren != null && arrExpected.typeChildren.length == 2) {
-				const ua = arrExpected.typeChildren[0];
-				const ub = arrExpected.typeChildren[1];
-				const uNonNull = (ua != null && ub != null && ub.kind == TypeKind.Null) ? ua
-					: ((ua != null && ub != null && ua.kind == TypeKind.Null) ? ub : null);
-				if (uNonNull != null
-						&& (uNonNull.kind == TypeKind.Array || uNonNull.kind == TypeKind.SizedArray
-							|| (uNonNull.kind == TypeKind.Ref && uNonNull.typeReturn != null
-								&& uNonNull.typeReturn.kind == TypeKind.Array))) {
-					arrExpected = uNonNull;
-				}
-			}
-			if (arrExpected != null && isMaybeType(arrExpected) && arrExpected.typeReturn != null) {
-				arrExpected = peelTransparentInstance(arrExpected.typeReturn);
-			}
-			if (arrExpected != null && arrExpected.kind == TypeKind.Union) {
-				const soleArr = soleUnionMember(arrExpected, isArrayShaped);
-				if (soleArr != null) arrExpected = soleArr;
-			}
-			// reference array: an expected Ref<Array<T>> checks the literal against the
-			// inner value array, but tags the result Ref so nativeLower boxes it onto the heap.
-			let refArrayWrap: Type | null = null;
-			if (arrExpected != null && arrExpected.kind == TypeKind.Ref && arrExpected.typeReturn != null
-					&& arrExpected.typeReturn.kind == TypeKind.Array) {
-				refArrayWrap = arrExpected;
-				arrExpected = arrExpected.typeReturn;
-			}
-			// Tuple context: a bracket literal in tuple position is a tuple, not an array.
-			// Type each element against its positional type and tag the node Tuple — else it
-			// defaults to Ref<Array> and mismatches the expected tuple (e.g. `return [a, b]`
-			// for a `[T, U]` return type errors "expected Tuple, got Array"). Sibling of the
-			// Array / SizedArray / Ref<Array> contextual cases below.
-			if (arrExpected != null && arrExpected.kind == TypeKind.Tuple && arrExpected.typeChildren != null) {
-				for (let ti = 0; ti < d.elements.length; ti += 1) {
-					const te = ti < arrExpected.typeChildren.length ? arrExpected.typeChildren[ti] : null;
-					checkExpr(ctx, d.elements[ti], te);
-					if (te != null) d.elements[ti] = fitNode(ctx, d.elements[ti], te, d.elements[ti].nodeType);
-				}
-				node.nodeType = arrExpected;
-				return;
-			}
-			const elemExpected = (arrExpected != null
-				&& (arrExpected.kind == TypeKind.Array || arrExpected.kind == TypeKind.SizedArray
-					|| arrExpected.kind == TypeKind.Span)
-				&& arrExpected.typeReturn != null)
-				? arrExpected.typeReturn
-				: null;
-			if (d.elements.length == 0) {
-				if (arrExpected != null && (arrExpected.kind == TypeKind.SizedArray || arrExpected.kind == TypeKind.Array)) {
-					node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
-				} else if (elemExpected != null) {
-					node.nodeType = createRef(createArray(elemExpected)); return;
-				} else {
-					node.nodeType = createRef(createArray(inferredType())); return;
-				}
-			} else {
-				for (let i = 0; i < d.elements.length; i += 1) {
-					checkExpr(ctx, d.elements[i], elemExpected);
-					if (elemExpected != null) {
-						d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
-					}
-				}
-				let elemType = d.elements[0].nodeType;
-				// PARALOCK: an array literal with affine-Promise identifier elements
-				// consumes those handles — the array is the new owner (typically
-				// passed to Promise.all or similar homogeneous consumer). The individual
-				// handles cannot be awaited again because the array itself will be.
-				// This covers the `await Promise.all([h1, h2])` pattern.
-				let ei = 0;
-				while (ei < d.elements.length) {
-					const el = d.elements[ei];
-					const elType = el.nodeType;
-					if (elType != null && isAffineAwaitable(elType) && el.kind == NodeKind.Identifier) {
-						const elSym = el.resolvedSym;
-						if (elSym != null) {
-							markConsumedName(ctx.affineTracker, symbolConsumeKey(elSym));
-							markConsumed(elSym);
-						}
-					}
-					ei = ei + 1;
-				}
-				// PARALOCK §5.4 — mixed awaitable elements: if the first element is an
-				// affine Promise (from spawn) but any other element is a plain Promise
-				// (from async function, actor CALL, etc.), unify the element type to the
-				// plain Promise — strip affine flags via implicit upcast. Without this,
-				// downstream lowering treats the array as affine-homogeneous and
-				// misinterprets the plain-Promise element (runtime misaligned-address
-				// crash observed in `[spawn(f), fetchData()]`). Only applies when no
-				// contextual element type is forcing a specific shape.
-				if (elemExpected == null && elemType != null && isAwaitable(elemType)) {
-					const inner0 = awaitedType(elemType);
-					let hasAffine = isAffineAwaitable(elemType);
-					let hasPlain = isAwaitable(elemType) && !hasAffine;
-					let ej = 1;
-					while (ej < d.elements.length) {
-						const ejType = d.elements[ej].nodeType;
-						if (ejType != null && isAwaitable(ejType)) {
-							if (isAffineAwaitable(ejType)) hasAffine = true;
-							else hasPlain = true;
-						}
-						ej = ej + 1;
-					}
-					if (hasAffine && hasPlain && inner0 != null) {
-						elemType = createPromise(inner0);
-						addWarning(ctx,
-							"affine Promise flags stripped in mixed array — affine tracking dropped (PARALOCK §5.4)",
-							node.location.line, node.location.column);
-					}
-				}
-				if (elemExpected == null && d.elements.length > 1
-					&& !(elemType != null && isAwaitable(elemType))) {
-					const elemJoinTypes: Type[] = [];
-					for (const el of d.elements) {
-						const elType = literalElemType(el);
-						elemJoinTypes.push(elType!);
-					}
-					const joinedElem = joinBranchTypes(elemJoinTypes);
-					if (!isUnresolvedType(joinedElem)) {
-						let fi = 0;
-						while (fi < d.elements.length) {
-							d.elements[fi] = fitJoinedBranch(ctx, d.elements[fi], joinedElem);
-							fi = fi + 1;
-						}
-						elemType = joinedElem;
-					}
-				}
-				if (elemExpected == null && isUnresolvedType(elemType)) {
-					const spreadTypes: Type[] = [];
-					for (const el of d.elements) {
-						const st = literalElemType(el);
-						if (st != null) spreadTypes.push(st);
-					}
-					const fromSpreads = joinBranchTypes(spreadTypes);
-					if (!isUnresolvedType(fromSpreads)) elemType = fromSpreads;
-				}
-				if (elemExpected == null && elemType != null && closureStorageType(elemType) != elemType) {
-					const storedElem = closureStorageType(elemType);
-					let si = 0;
-					while (si < d.elements.length) {
-						d.elements[si] = fitJoinedBranch(ctx, d.elements[si], storedElem);
-						si = si + 1;
-					}
-					elemType = storedElem;
-				}
-				for (const el of d.elements) {
-					if (el.kind == NodeKind.SpreadExpr) refuseSpreadElements(ctx, el, elemExpected != null ? elemExpected : elemType);
-				}
-				// Reference parity (semArrayConstr): error only on too-many elements.
-				// Too-few is allowed at literal level; type compatibility catches mismatches.
-				if (arrExpected != null && arrExpected.kind == TypeKind.SizedArray) {
-					const expectedLen = arrExpected.typeValue;
-					if (d.elements.length > expectedLen) {
-						addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
-					}
-					node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
-				} else if (arrExpected != null && arrExpected.kind == TypeKind.Array && !hasGenericParams(arrExpected)) {
-					node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
-				} else {
-					// No array context: a bare `[...]` literal is a reference array (T[] = Ref<Array>),
-					// so nativeLower boxes it and it matches T[] params/returns post-flip.
-					node.nodeType = refArrayWrap != null ? refArrayWrap : createRef(createArray(elemType)); return;
-				}
-			}
-		},
+		NodeKind.ArrayAccess => { checkArrayAccess(ctx, node, expectedType); return; },
+		NodeKind.ObjectLiteral => { checkObjectLiteral(ctx, node, expectedType); return; },
+		NodeKind.ArrayLiteral => { checkArrayLiteral(ctx, node, expectedType); return; },
 		NodeKind.ArrowFunction => checkArrowExpr(ctx, node, expectedType),
 		NodeKind.FunctionExpr => checkFuncExpr(ctx, node, expectedType),
-		NodeKind.ConditionalExpr => {
-			const d = node.data as ConditionalExprData;
-			checkExpr(ctx, d.ternaryCondition, null);
-			refuseFunctionTruthiness(ctx, d.ternaryCondition);
-			const ternCondT = d.ternaryCondition.nodeType;
-			if (ternCondT != null && ternCondT.kind == TypeKind.Void) {
-				addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
-					d.ternaryCondition.location.line, d.ternaryCondition.location.column);
-			}
-			ctx.condEvalDepth = ctx.condEvalDepth + 1;
-			checkExpr(ctx, d.ternaryConsequent, expectedType);
-			checkExpr(ctx, d.ternaryAlternate, expectedType);
-			ctx.condEvalDepth = ctx.condEvalDepth - 1;
-			node.nodeType = fitConditionalArms(ctx, d, expectedType, node == ctx.conversionOperand); return;
-		},
-		NodeKind.TypeAssertion => {
-			let d = node.data as TypeAssertionData;
-			// Non-null assertion `expr!` (sentinel asType "!"): strip the nullable
-			// from the operand type; nullableLower rule 1c reads `.value` at codegen.
-			if (d.asType == "!") {
-				checkExpr(ctx, d.asExpr, null);
-				const st0 = d.asExpr.nodeType;
-				if (st0 != null && isMaybeType(st0) && st0.typeReturn != null) {
-					node.nodeType = st0.typeReturn;
-				} else if (st0 != null && st0.kind == TypeKind.Union && unwrapRefNullUnion(st0) != null) {
-					node.nodeType = unwrapRefNullUnion(st0);
-				} else {
-					node.nodeType = st0 != null ? st0 : inferredType();
-				}
-				if (isReadonlyView(st0) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
-				node.flags = node.flags.incl(NodeFlag.Sem);
-				return;
-			}
-			const asLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
-			const targetType = (d.asType != "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : inferredType();
-			// TS parity: `expr as T` propagates T as contextual type to expr.
-			// Critical for object literals: `{ a: 1 } as Foo` must construct a Foo
-			// (not an anonymous struct that codegen then can't cast to Foo).
-			// `as unknown` is a type-system escape hatch — don't use it as context.
-			const asFnBody = distinctCallTarget(targetType);
-			const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : targetType) : null;
-			const operandMark = ctx.errors.length;
-			const prevConversion = ctx.conversionOperand;
-			ctx.conversionOperand = isNumeric(targetType) && targetType.kind != TypeKind.Char ? d.asExpr : null as unknown as Node;
-			checkExpr(ctx, d.asExpr, innerExpected);
-			ctx.conversionOperand = prevConversion;
-			reportConstCast(ctx, d.asExpr, targetType);
-			let srcType = d.asExpr.nodeType;
-			const operandType = srcType;
-			const operandNode = d.asExpr;
-			let viaConverter = false;
-			// Record type annotation position for LSP
-			resolveTypeExpr(node.typeExpr, ctx);
-			if (srcType != null && srcType.kind == TypeKind.Function && targetType.kind == TypeKind.Function) {
-				const smuggled = smuggledIntoUnknown(srcType, targetType);
-				if (smuggled != null) {
-					addError(ctx, "cannot cast " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + " — it would carry " + typeDisplayName(smuggled) + " through an unknown slot, and unknown holds objects", asLoc.line, asLoc.column);
-				}
-			}
-			const targetHeld = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : targetType;
-			if (isUnknownType(targetHeld) && srcType != null) {
-				const refusal = unknownRefusal(srcType);
-				if (refusal != UnknownRefusal.None) {
-					const onward = expectedType != null && !isUnresolvedType(expectedType) && !isUnknownType(expectedType) ? expectedType : null;
-					if (onward != null) {
-						addError(ctx, "cannot reinterpret " + typeDisplayName(srcType) + " as " + typeDisplayName(onward) + " through unknown — unknown holds objects; convert with `as " + typeDisplayName(onward) + "` or build the " + typeDisplayName(onward) + " value", asLoc.line, asLoc.column);
-					} else {
-						addError(ctx, unknownRefusalText(srcType, refusal), asLoc.line, asLoc.column);
-					}
-				}
-			}
-			const nullableMember = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : null;
-			const projectedMember = nullableMember != null ? nullableMember : targetType;
-			if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isStrLitSet(targetType) || nullableMember != null)
-				&& !isUnresolvedType(targetType) && (tagUnionMemberSlot(srcType, projectedMember) >= 0 || objectPathHolders(srcType, projectedMember).length > 0)) {
-				const projected = checkedProjection(d.asExpr, srcType, projectedMember);
-				if (projected.kind == NodeKind.TypeAssertion) {
-					node.data = { asExpr: (projected.data as TypeAssertionData).asExpr, asType: d.asType };
-					if (projected.flags.has(NodeFlag.ObjCheck)) node.flags = node.flags.incl(NodeFlag.ObjCheck);
-				} else {
-					node.data = { asExpr: projected, asType: d.asType };
-				}
-				node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
-				node.flags = node.flags.incl(NodeFlag.ConvCheck);
-				stampCheckedInstance(ctx, node, targetType);
-				return;
-			}
-			if (srcType != null && !reportedErrorSince(ctx, operandMark) && convertAsBetweenUnions(ctx, node, srcType, targetType, asLoc)) return;
-			if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
-				&& !hasGenericParams(srcType) && !hasGenericParams(targetType) && !reportedErrorSince(ctx, operandMark)) {
-				const carried = assertIntoNullable(d.asExpr, srcType, targetType);
-				if (carried != null as unknown as Node) {
-					node.data = { asExpr: carried, asType: d.asType };
-					node.nodeType = targetType;
-					return;
-				}
-			}
-			if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
-				&& !slotTakesValue(srcType, targetType)) {
-				const asCall = convertsWithoutRoutine(srcType, targetType) ? null : tryApplyConverter(ctx, d.asExpr, srcType, targetType);
-				if (asCall != null) {
-					viaConverter = true;
-					node.data = { asExpr: asCall, asType: d.asType };
-					d = node.data as TypeAssertionData;
-					srcType = asCall.nodeType;
-				} else if (valueOfInPlace(ctx, d.asExpr, ReadNeed.Slot, targetType)) {
-					srcType = d.asExpr.nodeType;
-				}
-			}
-			if (srcType != null && srcType.kind != TypeKind.Union) {
-				const projected = narrowUnionToVariant(d.asExpr, srcType);
-				if (projected != null as unknown as Node) {
-					node.data = { asExpr: projected, asType: d.asType };
-					d = node.data as TypeAssertionData;
-				}
-			}
-			// Nil typing: collapse `null as T` into typed NullLiteral.
-			if (srcType != null && dropsReadonlyView(srcType, targetType)) reportReadonlyWrite(ctx, srcType, "cast away", asLoc.line, asLoc.column);
-			if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
-				&& d.asExpr != null && d.asExpr.kind == NodeKind.NullLiteral) {
-				node.kind = NodeKind.NullLiteral;
-				node.data = { nullPlaceholder: true };
-				node.nodeType = targetType;
-				node.flags = node.flags.incl(NodeFlag.Sem);
-				node.nodeType = targetType; return;
-			}
-			// String↔CString needs runtime conversion at the FFI boundary, not erasure.
-			else if (srcType != null
-				&& ((targetType.kind == TypeKind.CString
-						&& (srcType.kind == TypeKind.String || srcType.kind == TypeKind.StringLiteral))
-					|| (targetType.kind == TypeKind.String && srcType.kind == TypeKind.CString))) {
-				node.kind = NodeKind.HiddenStdConv;
-				node.data = { convExpr: d.asExpr, convType: targetType };
-				node.nodeType = targetType;
-				node.flags = node.flags.incl(NodeFlag.Sem);
-				node.nodeType = targetType; return;
-			}
-			// Reference parity: when narrowing a Union, resolve to the actual variant type.
-			else if (srcType != null && srcType.kind == TypeKind.Union
-				&& targetType.kind == TypeKind.Struct && targetType.typeNames != null) {
-				const varIdx = findUnionVariant(srcType, targetType.typeNames, targetType.typeChildren);
-				if (varIdx >= 0 && varIdx < srcType.typeChildren.length) {
-					node.nodeType = srcType.typeChildren[varIdx];
-					if (isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[varIdx]), asType: d.asType };
-				} else {
-					node.nodeType = targetType;
-				}
-			} else if (srcType != null && srcType.kind == TypeKind.Union && targetType.kind == TypeKind.Ref
-				&& targetType.typeReturn != null) {
-				const refTarget = targetType.typeReturn;
-				const refIdx = refTarget.typeNames != null ? findUnionVariant(srcType, refTarget.typeNames, refTarget.typeChildren) : -1;
-				node.nodeType = refIdx >= 0 ? srcType.typeChildren[refIdx] : targetType;
-				if (refIdx >= 0 && isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[refIdx]), asType: d.asType };
-			} else {
-				node.nodeType = targetType;
-			}
-			if (srcType != null && (srcType.kind != TypeKind.Union || isStrLitSet(srcType)) && targetType.kind == TypeKind.Union) {
-				const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
-				if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
-			}
-			const castSrcUnknown =(srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
-			if (castSrcUnknown != null && isUnknownType(castSrcUnknown) && !isUnresolvedType(targetType)
-				&& !reportedErrorSince(ctx, operandMark)) {
-				const targetBare = skipModifier(targetType) ?? targetType;
-				if (unknownRefusal(targetType) == UnknownRefusal.Value) {
-					addError(ctx, "cannot cast unknown to the value type " + typeDisplayName(targetType) + " — unknown holds objects", asLoc.line, asLoc.column);
-				} else if (targetBare.kind == TypeKind.CString) {
-					addError(ctx, "cannot cast unknown to cstring — unknown holds objects, never a C string; keep a C string as cstring or Ptr<void>", asLoc.line, asLoc.column);
-				}
-			}
-			if (operandType != null && !viaConverter && !reportedErrorSince(ctx, operandMark)) {
-				const adopted = tryAdoptAnonStruct(ctx, operandNode, targetType, operandType);
-				if (adopted != null as unknown as Node) {
-					node.data = { asExpr: adopted, asType: d.asType };
-					node.nodeType = targetType;
-					return;
-				}
-				if (reportedErrorSince(ctx, operandMark)) return;
-				if (refuseUnrelatedStructAs(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
-				if (refuseContainerReinterpret(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
-				const viewed = srcType != null ? objectViewOf(ctx, d.asExpr, srcType, targetType, asLoc.line, asLoc.column) : null;
-				if (reportedErrorSince(ctx, operandMark)) return;
-				if (viewed != null) node.nodeType = viewed;
-			}
-			const objConv = reportedErrorSince(ctx, operandMark) ? ObjConv.None : objectConversion(srcType, targetType);
-			if (objConv == ObjConv.BadTarget) {
-				addError(ctx, "cannot check a conversion from unknown to " + typeDisplayName(targetType) + " — only a class has a runtime identity; convert to a class, or keep the value in a discriminated union", asLoc.line, asLoc.column);
-			} else if (objConv == ObjConv.Checked && !sameType(srcType, targetType)) {
-				node.flags = node.flags.incl(NodeFlag.ObjCheck);
-				stampCheckedInstance(ctx, node, targetType);
-			}
-			if (srcType != null && !isUnresolvedType(targetType) && !reportedErrorSince(ctx, operandMark)
-				&& assertionNarrows(srcType, targetType)) {
-				node.flags = node.flags.incl(NodeFlag.ConvCheck);
-				stampCheckedInstance(ctx, node, targetType);
-			}
-			if (node.kind == NodeKind.TypeAssertion && srcType != null && srcType.kind != TypeKind.Error
-				&& !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
-				&& targetType.kind != TypeKind.Error && !isUnknownType(targetType)
-				&& !reportedErrorSince(ctx, operandMark)
-				&& isPayloadCarrier(srcType) && isScalarPrimitive(targetType)
-				&& !narrowsToMember(srcType, targetType)) {
-				addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType)
-					+ " — a struct or union payload has no conversion to a primitive; read a field (e.g. .ok, .value) instead",
-					asLoc.line, asLoc.column);
-			}
-			if (node.kind == NodeKind.TypeAssertion && srcType != null && !viaConverter
-				&& !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
-				&& !reportedErrorSince(ctx, operandMark)) {
-				const refusal = textConversionRefusal(srcType, targetType);
-				if (refusal != "") addError(ctx, refusal, asLoc.line, asLoc.column);
-			}
-			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
-			if (!reportedErrorSince(ctx, operandMark)) checkPointerAddress(ctx, node, d.asExpr, targetType);
-			return;
-		},
+		NodeKind.ConditionalExpr => { checkConditionalExpr(ctx, node, expectedType); return; },
+		NodeKind.TypeAssertion => { checkTypeAssertion(ctx, node, expectedType); return; },
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
@@ -2320,67 +529,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.NewExpr => checkNewExpr(ctx, node, expectedType),
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
 		NodeKind.MatchExpr => checkMatchExpr(ctx, node, expectedType),
-		NodeKind.AwaitExpr => {
-			const d = node.data as AwaitExprData;
-			checkExpr(ctx, d.awaitArg, null);
-			const argType = d.awaitArg.nodeType;
-			if (argType != null && isAwaitable(argType)) {
-				const promiseInner = awaitedType(argType);
-				node.nodeType = promiseInner != null ? promiseInner : inferredType();
-				// PARALOCK Phase 1: consuming an affine-awaitable identifier records on
-				// TWO channels:
-				//   1. Branch-aware tracker (markConsumedName) — drives reuse detection
-				//      (R2/E3) path-sensitively, so `if { await h; return; } await h`
-				//      correctly sees h as free on the fall-through path.
-				//   2. Monotonic symbol flag (markConsumed) — ensures scope-exit check
-				//      passes for handles consumed on any branch, including exiting
-				//      branches whose tracker state gets rolled back by the merge.
-				if (isAffineAwaitable(argType) && d.awaitArg.kind == NodeKind.Identifier) {
-					const idSym = d.awaitArg.resolvedSym;
-					if (idSym != null) {
-						markConsumedName(ctx.affineTracker, symbolConsumeKey(idSym));
-						markConsumed(idSym);
-					}
-				}
-				node.nodeType = node.nodeType; return;
-			}
-			node.nodeType = inferredType(); return;
-		},
+		NodeKind.AwaitExpr => { checkAwaitExpr(ctx, node, expectedType); return; },
 		NodeKind.YieldExpr => {
 			checkYield(ctx, node);
 			node.nodeType = inferredType(); return;
 		},
-		NodeKind.MoveExpr => {
-			const d = node.data as MoveExprData;
-			// Validate operand: only identifiers, member access, array access, and calls allowed
-			if (d.moveArg.kind != NodeKind.Identifier
-				&& d.moveArg.kind != NodeKind.MemberExpr
-				&& d.moveArg.kind != NodeKind.ArrayAccess
-				&& d.moveArg.kind != NodeKind.CallExpr) {
-				addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression", node.location.line, node.location.column);
-			}
-			checkExpr(ctx, d.moveArg, null);
-			const roMove = readonlyRootType(d.moveArg);
-			if (roMove != null) {
-				addError(ctx, "cannot move out of " + typeDisplayName(roMove) + " — a read-only view is borrowed, not owned; to hand a value to a spawn thunk, list it in spawn(fn, { move: [x] }) (PARALOCK E24)", node.location.line, node.location.column);
-			} else if (d.moveArg.kind == NodeKind.MemberExpr || d.moveArg.kind == NodeKind.ArrayAccess) {
-				const refusal = writeRefusal(d.moveArg, WriteSite.Assign);
-				if (refusal != "") addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
-				if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
-			}
-			// PARALOCK Phase 1: `move h` on an affine Promise counts as consumption.
-			// Ownership transfers out of the current scope, so the binding must
-			// not be awaited again — same consumption semantics as `await h`.
-			const moveArgType = d.moveArg.nodeType;
-			if (moveArgType != null && isAffineAwaitable(moveArgType) && d.moveArg.kind == NodeKind.Identifier) {
-				const idSym = d.moveArg.resolvedSym;
-				if (idSym != null) {
-					markConsumedName(ctx.affineTracker, symbolConsumeKey(idSym));
-					markConsumed(idSym);
-				}
-			}
-			node.nodeType = d.moveArg.nodeType; return;
-		},
+		NodeKind.MoveExpr => { checkMoveExpr(ctx, node, expectedType); return; },
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
 			checkExpr(ctx, d.outArg, null);
@@ -2388,41 +542,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (roOut != null) reportReadonlyWrite(ctx, roOut, "pass an 'out' argument through", node.location.line, node.location.column);
 			node.nodeType = d.outArg.nodeType; return;
 		},
-		NodeKind.SizeofExpr => {
-			const d = node.data as SizeofExprData;
-			const resolved = resolveAnnotation(d.sizeofType, ctx, 0, 0);
-			resolveTypeExpr(node.typeExpr, ctx);
-			// Generic operand: leave unfolded so mono substitutes sizeofType→concrete, then the instance re-check folds the real size.
-			if (resolved.kind == TypeKind.GenericParam || hasGenericParams(resolved)) { node.nodeType = int32Type(); return; }
-			const size = sizeOfType(ctx.targetInfo, resolved);
-			if (size < 0) {
-				if (resolved.kind == TypeKind.Void || isUnresolvedType(resolved) || isUnknownType(resolved)) {
-					addError(ctx, `'sizeof' needs a type with a known layout — '${d.sizeofType}' has none here`,
-						node.location.line, node.location.column);
-					node.nodeType = int32Type(); return;
-				}
-				d.sizeofResolved = resolved;
-				node.nodeType = int32Type(); return;
-			}
-			node.kind = NodeKind.NumberLiteral;
-			node.data = { value: size as number, isFloat: false, intVal: size as int64 };
-			node.nodeType = int32Type(); return;
-		},
-		NodeKind.HiddenDeref => {
-			const d = node.data as HiddenDerefData;
-			checkExpr(ctx, d.expr, null);
-			if (node.flags.has(NodeFlag.ExplicitDeref)) {
-				checkExplicitDeref(ctx, node, d.expr);
-				return;
-			}
-			if (node.nodeType == null) {
-				const inner = d.expr.nodeType;
-				node.nodeType = (inner != null && inner.kind == TypeKind.Ref && inner.typeReturn != null)
-					? inner.typeReturn
-					: inner;
-			}
-			return;
-		},
+		NodeKind.SizeofExpr => { checkSizeofExpr(ctx, node, expectedType); return; },
+		NodeKind.HiddenDeref => { checkHiddenDeref(ctx, node, expectedType); return; },
 		NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
 			checkExpr(ctx, d.expr, null); node.nodeType = d.expr.nodeType; return;
@@ -2432,78 +553,2003 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.convExpr, isMaybeType(d.convType) ? d.convType.typeReturn : null);
 			node.nodeType = d.convType; return;
 		},
-		NodeKind.MacroInvocation => {
-			// Implementation parity: pragma/macro args are type-checked
-			const md = node.data as MacroInvocationData;
-			// reference parity: @emit backtick interpolation (reference emit processing)
-			if (md.macroName == "emit" && isDirectiveInvocation(node)) {
-				processEmitInterpolation(ctx, node);
-			}
-			// @import args are pure syntax (not evaluated) — skip type-checking
-			foldComptimeNodeAliasArgs(ctx, md.macroArgs);
-			if (md.macroName != "import") { checkJsxConsumed(ctx, md.macroArgs); }
-			// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
-			// with concrete types. After mono clones a generic body, replaceTypeVars
-			// substitutes T→concrete in arg.nodeType. The re-check then hits this
-			// MacroInvocation with concrete args and must expand — otherwise the
-			// surrounding ReturnStmt/VariableDecl gets voidType, breaking the
-			// declared-return-type assignability check.
-			//
-			// Mirrors the CallExpr eager path. Only fires for
-			// names that resolve to a macro; builtin directives (emit, include, ...)
-			// keep the voidType behavior. If args still contain GenericParam
-			// (defer convention), return inferredType — let the next mono level
-			// or post-mono expand pass handle it.
-			const macroSym = invokedMacroSym(ctx, node);
-			if (macroSym != null) {
-				node.resolvedSym = macroSym;
-				if (macroDepthExceeded(ctx, md.macroName, node)) return;
-				if (anyArgIsParametric(md.macroArgs)) { node.nodeType = inferredType(); return; }
-				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
-				const expanded = callExpandMacroInvocation(node, ctx, 0);
-				// When a user macro emits a sentinel error (or VM fails),
-				// expandMacroInvocation returns the SAME MacroInvocation node and
-				// has already called addError. Re-checking would route back into
-				// this same branch and re-fire the macro, multiplying the error
-				// up to the depth limit and finally emitting a misleading
-				// "possible recursive macro" warning. Detect by kind preservation.
-				if (expanded.kind == NodeKind.MacroInvocation) {
-					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-					node.nodeType = errorType(); return;
-				}
-				const friends = expansionOf(ctx, node, macroSym.modulePath);
-				const friendScope = befriend(ctx, friends);
-				let expandedValue = expanded;
-				const hoists = isHoistingSplice(ctx, node, expanded);
-				if (hoists) {
-					expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
-					if (expandedValue == null) {
-						unfriend(friendScope, friends);
-						ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-						node.nodeType = errorType(); return;
-					}
-				}
-				node.kind = expandedValue.kind;
-				node.data = expandedValue.data;
-				if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
-				if (expandedValue.location != null) node.location = expandedValue.location;
-				node.nodeType = null as unknown as Type;
-				node.resolvedSym = null;
-				node.flags = 0 as BitSet<NodeFlag>;
-				node.variantSlot = 0;
-				keepFoldedType(node, expandedValue);
-				if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
-				checkExpr(ctx, node, expectedType);
-				unfriend(friendScope, friends);
-				if (hoists) bindRefsToHoistedPrefix(node, expanded);
-				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
-				node.nodeType = node.nodeType; return;
-			}
-			node.nodeType = voidType(); return;
-		},
+		NodeKind.MacroInvocation => { checkMacroInvocation(ctx, node, expectedType); return; },
 		_ => inferredType(),
 	};
 	node.nodeType = result;
+}
+
+function checkNumberLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
+	reportLiteralRange(ctx, node);
+	if (expectedType != null && isIntegerType(expectedType)) {
+		if (literalFitsInType(node, expectedType, false)) {
+			node.nodeType = expectedType; return;
+		} else if (isNodeIntLit(node)) {
+			// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
+			const nd = node.data as NumberLiteralData;
+			const shown = nd.outOfRangeText != "" ? nd.outOfRangeText : int64ToDecimal(nd.intVal);
+			addError(ctx, "cannot convert " + shown + " to " + typeDisplayName(expectedType), node.location.line, node.location.column);
+			node.nodeType = expectedType; return;
+		} else {
+			node.nodeType = float64Type(); return;
+		}
+	} else if (expectedType != null && (expectedType.kind == TypeKind.Float64 || expectedType.kind == TypeKind.Float32
+			|| expectedType.kind == TypeKind.Number)) {
+		if (isNodeIntLit(node) && !intLiteralExactInFloat(node, expectedType)) {
+			node.nodeType = untypedIntegerLiteralType(ctx, node, false); return;
+		}
+		if (expectedType.kind == TypeKind.Float32) reportFloat32LiteralRange(ctx, node);
+		node.nodeType = expectedType.kind == TypeKind.Number ? numberType() : expectedType; return;
+	} else if (expectedType != null && expectedType.kind == TypeKind.Union) {
+		// Mirror the StringLiteral/BooleanLiteral arms below: a numeric
+		// member of the expected union types the literal, so `width: 400.0`
+		// fits `float32 | string | null`. An integer literal takes an
+		// integer member before a float one, whatever the member order.
+		if (isNodeIntLit(node)) {
+			for (const child of expectedType.typeChildren) {
+				if (child != null && isIntegerType(child) && literalFitsInType(node, child, false)) {
+					node.nodeType = child; return;
+				}
+			}
+		}
+		for (const child of expectedType.typeChildren) {
+			if (child == null) continue;
+			if (isIntegerType(child) && literalFitsInType(node, child, false)) {
+				node.nodeType = child; return;
+			}
+			if ((child.kind == TypeKind.Float64 || child.kind == TypeKind.Float32 || child.kind == TypeKind.Number)
+				&& (!isNodeIntLit(node) || intLiteralExactInFloat(node, child))) {
+				if (child.kind == TypeKind.Float32) reportFloat32LiteralRange(ctx, node);
+				node.nodeType = child; return;
+			}
+		}
+		if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(ctx, node, false); return; }
+		node.nodeType = float64Type(); return;
+	} else {
+		// Default inference: integer literals → int32 (int64 past its range), float literals → float64
+		if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(ctx, node, false); return; }
+		node.nodeType = float64Type(); return;
+	}
+}
+
+function checkStringLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
+	// TypeScript parity: string literals get StringLiteral type when expectedType demands it
+	if (expectedType != null) {
+		const sd = node.data as StringLiteralData;
+		if (expectedType.kind == TypeKind.StringLiteral && expectedType.typeName == sd.value) {
+			node.nodeType = expectedType; return;
+		}
+		if (expectedType.kind == TypeKind.Union) {
+			for (const child of expectedType.typeChildren) {
+				if (child != null && child.kind == TypeKind.StringLiteral && child.typeName == sd.value) {
+					node.nodeType = child; return;
+				}
+			}
+			// All members are StringLiteral but value not found → type error
+			let allStrLit = true;
+			for (const child of expectedType.typeChildren) {
+				if (child == null || child.kind != TypeKind.StringLiteral) allStrLit = false;
+			}
+			if (allStrLit && expectedType.typeChildren.length > 0) {
+				addError(ctx, `Type '"${sd.value}"' is not assignable to type '${typeDisplayName(expectedType)}'`, node.location.line, node.location.column);
+				node.nodeType = stringType(); return;
+			}
+		}
+	}
+	node.nodeType = stringType(); return;
+}
+
+function checkBooleanLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
+	// TypeScript parity: boolean literals get BooleanLiteral type when expectedType demands it.
+	// Required for discriminated union narrowing on `ok: true | false` discriminants.
+	if (expectedType != null) {
+		const bd = node.data as BooleanLiteralData;
+		if (expectedType.kind == TypeKind.BooleanLiteral
+			&& booleanLiteralValue(expectedType) == bd.boolValue) {
+			node.nodeType = expectedType; return;
+		}
+		if (expectedType.kind == TypeKind.Union) {
+			for (const child of expectedType.typeChildren) {
+				if (child != null && child.kind == TypeKind.BooleanLiteral
+					&& booleanLiteralValue(child) == bd.boolValue) {
+					node.nodeType = child; return;
+				}
+			}
+		}
+	}
+	node.nodeType = booleanType(); return;
+}
+
+function checkSpliceMany(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	if (node == ctx.stmtPosExpr) { node.nodeType = inferredType(); return; }
+	const splice = createNodeAt(NodeKind.SpliceMany, node.data, node.location);
+	const spliceValue = unwrapSpliceManyAtExpr(ctx, node, splice);
+	if (spliceValue == null) { node.nodeType = errorType(); return; }
+	node.kind = spliceValue.kind;
+	node.data = spliceValue.data;
+	if (spliceValue.location != null) node.location = spliceValue.location;
+	node.nodeType = null as unknown as Type;
+	node.resolvedSym = null;
+	node.flags = 0 as BitSet<NodeFlag>;
+	node.variantSlot = 0;
+	checkExpr(ctx, node, expectedType);
+	bindRefsToHoistedPrefix(node, splice);
+	node.nodeType = node.nodeType; return;
+}
+
+function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	// Eagerly fold @comptime block — mirrors Phase B+ macro eager
+	// expansion below. Without this, `const X = @comptime { ... }`
+	// fossilizes X's symbol type as `unknown`, emitting `void* X` in C
+	// codegen, because the post-check evaluateComptimeBlocks pass
+	// replaces the AST node AFTER the variable's symbol type is set.
+	markNamesUsed(ctx, node);
+	if (insideGenericTemplate(ctx)) {
+		node.nodeType = expectedType != null ? expectedType : inferredType();
+		return;
+	}
+	const expanded = callEvalComptimeBlock(node, ctx);
+	const staticType = expanded.nodeType;
+	let expandedValue = expanded;
+	const hoists = isHoistingSplice(ctx, node, expanded);
+	if (hoists) {
+		expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
+		if (expandedValue == null) { node.nodeType = errorType(); return; }
+	}
+	node.kind = expandedValue.kind;
+	node.data = expandedValue.data;
+	if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+	if (expandedValue.location != null) node.location = expandedValue.location;
+	node.nodeType = null as unknown as Type;
+	node.resolvedSym = null;
+	node.flags = 0 as BitSet<NodeFlag>;
+	node.variantSlot = 0;
+	const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
+		|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
+		? expectedType : staticType;
+	checkExpr(ctx, node, valueType);
+	if (hoists) bindRefsToHoistedPrefix(node, expanded);
+	node.nodeType = node.nodeType; return;
+}
+
+function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as UpdateExprData;
+	checkExpr(ctx, d.updateArg, null);
+	reportSharedWrite(ctx, d.updateArg);
+	if (d.updateArg.kind == NodeKind.MemberExpr) {
+		const umd = d.updateArg.data as MemberExprData;
+		if (umd.property == "length" && umd.object.nodeType != null &&
+			(umd.object.nodeType.kind == TypeKind.Array || umd.object.nodeType.kind == TypeKind.SizedArray || umd.object.nodeType.kind == TypeKind.Span || isStringLike(umd.object.nodeType) || umd.object.nodeType.kind == TypeKind.CString)) {
+			if (umd.object.nodeType.kind == TypeKind.SizedArray) {
+				addError(ctx, "cannot modify 'length' on fixed-size array", d.updateArg.location.line, d.updateArg.location.column);
+			} else {
+				addError(ctx, "cannot use increment/decrement on 'length'; use 'arr.length = n' instead", d.updateArg.location.line, d.updateArg.location.column);
+			}
+		}
+	}
+	const ut = d.updateArg.nodeType;
+	if (ut != null && (isNumeric(ut) || ut.kind == TypeKind.BigInt)) { node.nodeType = ut; return; }
+	if (ut != null && ut.kind != TypeKind.Error) {
+		addError(ctx, `increment/decrement needs a numeric operand, got '${typeDisplayName(ut)}'`, d.updateArg.location.line, d.updateArg.location.column);
+	}
+	node.nodeType = int32Type(); return;
+}
+
+function checkConditionalExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as ConditionalExprData;
+	checkExpr(ctx, d.ternaryCondition, null);
+	refuseFunctionTruthiness(ctx, d.ternaryCondition);
+	const ternCondT = d.ternaryCondition.nodeType;
+	if (ternCondT != null && ternCondT.kind == TypeKind.Void) {
+		addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
+			d.ternaryCondition.location.line, d.ternaryCondition.location.column);
+	}
+	ctx.condEvalDepth = ctx.condEvalDepth + 1;
+	checkExpr(ctx, d.ternaryConsequent, expectedType);
+	checkExpr(ctx, d.ternaryAlternate, expectedType);
+	ctx.condEvalDepth = ctx.condEvalDepth - 1;
+	node.nodeType = fitConditionalArms(ctx, d, expectedType, node == ctx.conversionOperand); return;
+}
+
+function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as AwaitExprData;
+	checkExpr(ctx, d.awaitArg, null);
+	const argType = d.awaitArg.nodeType;
+	if (argType != null && isAwaitable(argType)) {
+		const promiseInner = awaitedType(argType);
+		node.nodeType = promiseInner != null ? promiseInner : inferredType();
+		// PARALOCK Phase 1: consuming an affine-awaitable identifier records on
+		// TWO channels:
+		//   1. Branch-aware tracker (markConsumedName) — drives reuse detection
+		//      (R2/E3) path-sensitively, so `if { await h; return; } await h`
+		//      correctly sees h as free on the fall-through path.
+		//   2. Monotonic symbol flag (markConsumed) — ensures scope-exit check
+		//      passes for handles consumed on any branch, including exiting
+		//      branches whose tracker state gets rolled back by the merge.
+		if (isAffineAwaitable(argType) && d.awaitArg.kind == NodeKind.Identifier) {
+			const idSym = d.awaitArg.resolvedSym;
+			if (idSym != null) {
+				markConsumedName(ctx.affineTracker, symbolConsumeKey(idSym));
+				markConsumed(idSym);
+			}
+		}
+		node.nodeType = node.nodeType; return;
+	}
+	node.nodeType = inferredType(); return;
+}
+
+function checkMoveExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as MoveExprData;
+	// Validate operand: only identifiers, member access, array access, and calls allowed
+	if (d.moveArg.kind != NodeKind.Identifier
+		&& d.moveArg.kind != NodeKind.MemberExpr
+		&& d.moveArg.kind != NodeKind.ArrayAccess
+		&& d.moveArg.kind != NodeKind.CallExpr) {
+		addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression", node.location.line, node.location.column);
+	}
+	checkExpr(ctx, d.moveArg, null);
+	const roMove = readonlyRootType(d.moveArg);
+	if (roMove != null) {
+		addError(ctx, "cannot move out of " + typeDisplayName(roMove) + " — a read-only view is borrowed, not owned; to hand a value to a spawn thunk, list it in spawn(fn, { move: [x] }) (PARALOCK E24)", node.location.line, node.location.column);
+	} else if (d.moveArg.kind == NodeKind.MemberExpr || d.moveArg.kind == NodeKind.ArrayAccess) {
+		const refusal = writeRefusal(d.moveArg, WriteSite.Assign);
+		if (refusal != "") addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
+		if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
+	}
+	// PARALOCK Phase 1: `move h` on an affine Promise counts as consumption.
+	// Ownership transfers out of the current scope, so the binding must
+	// not be awaited again — same consumption semantics as `await h`.
+	const moveArgType = d.moveArg.nodeType;
+	if (moveArgType != null && isAffineAwaitable(moveArgType) && d.moveArg.kind == NodeKind.Identifier) {
+		const idSym = d.moveArg.resolvedSym;
+		if (idSym != null) {
+			markConsumedName(ctx.affineTracker, symbolConsumeKey(idSym));
+			markConsumed(idSym);
+		}
+	}
+	node.nodeType = d.moveArg.nodeType; return;
+}
+
+function checkSizeofExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as SizeofExprData;
+	const resolved = resolveAnnotation(d.sizeofType, ctx, 0, 0);
+	resolveTypeExpr(node.typeExpr, ctx);
+	// Generic operand: leave unfolded so mono substitutes sizeofType→concrete, then the instance re-check folds the real size.
+	if (resolved.kind == TypeKind.GenericParam || hasGenericParams(resolved)) { node.nodeType = int32Type(); return; }
+	const size = sizeOfType(ctx.targetInfo, resolved);
+	if (size < 0) {
+		if (resolved.kind == TypeKind.Void || isUnresolvedType(resolved) || isUnknownType(resolved)) {
+			addError(ctx, `'sizeof' needs a type with a known layout — '${d.sizeofType}' has none here`,
+				node.location.line, node.location.column);
+			node.nodeType = int32Type(); return;
+		}
+		d.sizeofResolved = resolved;
+		node.nodeType = int32Type(); return;
+	}
+	node.kind = NodeKind.NumberLiteral;
+	node.data = { value: size as number, isFloat: false, intVal: size as int64 };
+	node.nodeType = int32Type(); return;
+}
+
+function checkHiddenDeref(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as HiddenDerefData;
+	checkExpr(ctx, d.expr, null);
+	if (node.flags.has(NodeFlag.ExplicitDeref)) {
+		checkExplicitDeref(ctx, node, d.expr);
+		return;
+	}
+	if (node.nodeType == null) {
+		const inner = d.expr.nodeType;
+		node.nodeType = (inner != null && inner.kind == TypeKind.Ref && inner.typeReturn != null)
+			? inner.typeReturn
+			: inner;
+	}
+	return;
+}
+
+function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as BinaryExprData;
+	// Ref parity: leftPartOfAsgn
+	const isAsgn = d.operator == "=" || d.operator == "+=" || d.operator == "-=" ||
+		d.operator == "*=" || d.operator == "/=" || d.operator == "%=" ||
+		d.operator == "&&=" || d.operator == "||=" || d.operator == "??=" ||
+		isBitwiseCompoundOp(d.operator);
+	if (isAsgn && node != ctx.stmtPosExpr) {
+		addError(ctx, "assignment is a statement, not an expression - assign first, then use the variable: 'x = f(); while (x !== null) { ... }'", node.location.line, node.location.column);
+	}
+	if (d.operator == "=" && d.left.kind == NodeKind.ArrayAccess && (d.left.data as ArrayAccessData).array != null) {
+		const target = d.left.data as ArrayAccessData;
+		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
+		checkExpr(ctx, target.array, null);
+		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
+		if (target.array.nodeType != null && declaresSubscript(ctx, peelTransparentInstance(target.array.nodeType), "[]=")) {
+			const sargs: Node[] = [];
+			sargs.push(target.index);
+			sargs.push(d.right);
+			node.nodeType = rewriteAsMethodCall(ctx, node, target.array, "[]=", sargs); return;
+		}
+	}
+	if (isAsgn) {
+		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
+	}
+	if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
+		if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
+		checkAssignTarget(ctx, d.left);
+	} else {
+		checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
+	}
+	let leftType = d.left.nodeType;
+	if (isAsgn) {
+		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
+	}
+	if (isAsgn) { reportSharedWrite(ctx, d.left); }
+	if (isAsgn && !isLocation(d.left) && d.left.kind != NodeKind.ArrayLiteral && d.left.kind != NodeKind.ObjectLiteral
+			&& d.left.nodeType != null && d.left.nodeType.kind != TypeKind.Error) {
+		addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", d.left.location.line, d.left.location.column);
+	}
+	// Block assignment to read-only properties
+	if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
+		const md = d.left.data as MemberExprData;
+		reportReadonlyField(ctx, d.left);
+		// Built-in readonly: str.length, sized-array.length
+		if (md.property == "length" && md.object.nodeType != null) {
+			if (isStringLike(md.object.nodeType) || md.object.nodeType.kind == TypeKind.CString) {
+				addError(ctx, "cannot assign to 'length' on string (strings are immutable)", d.left.location.line, d.left.location.column);
+			} else if (md.object.nodeType.kind == TypeKind.SizedArray) {
+				addError(ctx, "cannot modify 'length' on fixed-size array", d.left.location.line, d.left.location.column);
+			} else if (md.object.nodeType.kind == TypeKind.Array && d.operator != "=") {
+				addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + d.operator.slice(0, d.operator.length - 1) + " n' instead", d.left.location.line, d.left.location.column);
+			}
+		}
+		const discUnion = literalDiscriminantOwner(md);
+		if (discUnion != null) {
+			addError(ctx, `cannot assign to '${md.property}': it is the discriminant of '${typeDisplayName(discUnion)}' — assign a whole value of the other variant instead`,
+				d.left.location.line, d.left.location.column);
+		}
+	}
+	const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
+	const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
+	if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
+	if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
+	else checkExpr(ctx, d.right, rightExpected);
+	if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
+	let rightType = d.right.nodeType;
+	if (!isAsgn && d.operator != "??") {
+		if (d.operator == "&&" || d.operator == "||") {
+			refuseFunctionTruthiness(ctx, d.left);
+			leftType = d.left.nodeType;
+		}
+		const leftConverted = operandConverter(ctx, d.operator, d.left, leftType, rightType, true);
+		if (leftConverted != null) { d.left = leftConverted; leftType = leftConverted.nodeType; }
+		const rightConverted = leftConverted != null ? null : operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
+		if (rightConverted != null) { d.right = rightConverted; rightType = rightConverted.nodeType; }
+		if (operandReadsValue(ctx, d.operator, leftType, rightType, true) && valueOfInPlace(ctx, d.left)) leftType = d.left.nodeType;
+		if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) rightType = d.right.nodeType;
+	} else if (isAsgn) {
+		const rightConverted = operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
+		if (rightConverted != null) {
+			d.right = rightConverted;
+			rightType = rightConverted.nodeType;
+		} else if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) {
+			rightType = d.right.nodeType;
+		}
+	}
+	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
+	if (d.operator == "=" && leftType != null) {
+		d.right = fitNode(ctx, d.right, leftType, rightType);
+	}
+	// Null RHS routes through the same relation as literal-field init
+	// (semAsgn→fitNode→typeRel parity, scoped to Null: no flow-narrowing
+	// dependency, so the terminal fitNode scope is not re-opened).
+	if (d.operator == "=" && leftType != null && d.right.nodeType != null
+			&& d.right.nodeType.kind == TypeKind.Null
+			&& !isUnresolvedType(leftType)
+			&& leftType.kind != TypeKind.Error
+			&& !isAssignable(d.right.nodeType, leftType)) {
+		addError(ctx,
+			"Type 'null' is not assignable to type '" + typeDisplayName(leftType) + "'",
+			d.right.location.line, d.right.location.column);
+	}
+	if (isAsgn && d.left.kind == NodeKind.MemberExpr && d.left.nodeType != null && isUnresolvedType(d.left.nodeType)) {
+		const md = d.left.data as MemberExprData;
+		const recvType = md.object.nodeType;
+		if (recvType != null && findAccessor(ctx, recvType, "set_" + md.property) != null) {
+			node.nodeType = callSetter(ctx, node, d, md); return;
+		}
+		if (recvType != null && findAccessor(ctx, recvType, "get_" + md.property) != null) {
+			addError(ctx, `Cannot assign to '${md.property}' because it is a read-only property: it has a getter and no setter`, d.left.location.line, d.left.location.column);
+			node.nodeType = errorType(); return;
+		}
+	}
+	// Convention-based dynamic field write protocol:
+	//   obj.foo = x  →  obj.setDynamicField("foo", x)
+	// when:
+	//   - foo is not a real field of obj's declared type, AND
+	//   - obj's type has a registered extension `setDynamicField(this T, key: string, value: U): void`.
+	// Mirrors the getDynamicField synthesis for reads and the
+	// HashMap `m[k]=v` rewrite below. Compound ops (`+=`, etc.) are rejected
+	// with a clear error since they need a read-modify-write cycle that the
+	// protocol does not express.
+	if (checkAssignmentWrite(ctx, node, d, isAsgn)) return;
+	// Ref parity: initVar on assignment LHS
+	if (isAsgn && d.left.kind == NodeKind.Identifier) {
+		const lhsId = d.left.data as IdentifierData;
+		// Ref parity: nfFirstWrite — set when first assignment is in same block as declaration
+		if (!isInitialized(ctx.initTracker, lhsId.name)) {
+			if (getDeclBlock(ctx.initTracker, lhsId.name) == ctx.initTracker.currentBlock) {
+				node.flags = node.flags.incl(NodeFlag.FirstWrite);
+			}
+		}
+		markInitialized(ctx.initTracker, lhsId.name);
+		// Phase 4: reassignment invalidation now flows through the
+		// binder's FlowAssignment node — no fact stack to purge.
+	}
+	if (isAsgn && ctx.ctorExits != null && d.left.kind == NodeKind.MemberExpr) {
+		const lhsMember = d.left.data as MemberExprData;
+		let lhsObject = lhsMember.object;
+		if (lhsObject.kind == NodeKind.HiddenDeref) lhsObject = (lhsObject.data as HiddenDerefData).expr;
+		if (lhsObject.kind == NodeKind.Identifier && (lhsObject.data as IdentifierData).name == "this") {
+			markInitialized(ctx.initTracker, "this." + lhsMember.property);
+		}
+	}
+	typeBinaryOperands(ctx, node, d, isAsgn, leftType, rightType, expectedType);
+}
+
+function checkAssignmentWrite(ctx: CheckerContext, node: Node, d: BinaryExprData, isAsgn: boolean): boolean {
+	if (isAsgn && d.left.kind == NodeKind.MemberExpr
+			&& d.left.nodeType != null
+			&& isUnresolvedType(d.left.nodeType)
+			&& ctx.extensionRegistry != null) {
+		const md = d.left.data as MemberExprData;
+		if (md.object.nodeType != null && md.property != "setDynamicField") {
+			// Receiver-match against the un-peeled type (preserves Ref<T>
+			// wrapping for reference types like JsonValue). Property-lookup
+			// mirrors `checkMember`'s full chain: peel Alias/Ref/Struct/Union,
+			// try `getProperty`, fall back to `lookupSymbol`+shape on the
+			// type's name (the same "class-aware field delegation" path).
+			// Skipping the fallback would mis-fire synthesis
+			// on real fields like `MacroInvocationData.macroArgs` whose
+			// alias isn't shaped until a read primes it.
+			const recvType = md.object.nodeType;
+			let probeType = recvType;
+			let _peelHops = 0;
+			while (_peelHops < 4) {
+				_peelHops = _peelHops + 1;
+				if (probeType.kind == TypeKind.Alias && probeType.typeReturn != null) {
+					probeType = probeType.typeReturn;
+					continue;
+				}
+				if (probeType.kind == TypeKind.Ref && probeType.typeReturn != null) {
+					probeType = probeType.typeReturn;
+					continue;
+				}
+				break;
+			}
+			const peeled = peelToStructOrUnion(probeType);
+			if (peeled != null) probeType = peeled;
+			let propertyExists = !isUnresolvedType(getProperty(probeType, md.property))
+				|| (probeType.typeNames != null && probeType.typeNames.indexOf(md.property) >= 0);
+			if (!propertyExists && probeType.typeName != "") {
+				const classSym = lookupSymbol(ctx.table, probeType.typeName);
+				if (classSym != null) {
+					ensureShaped(classSym, ctx);
+					let classStruct = classSym.symbolType;
+					if (classStruct != null && classStruct.kind == TypeKind.Alias && classStruct.typeReturn != null) {
+						classStruct = classStruct.typeReturn;
+					}
+					if (classStruct != null && classStruct.kind == TypeKind.Ref && classStruct.typeReturn != null) {
+						classStruct = classStruct.typeReturn;
+					}
+					if (classStruct != null && (classStruct.kind == TypeKind.Struct || classStruct.kind == TypeKind.Union)) {
+						if (!isUnresolvedType(getProperty(classStruct, md.property))) {
+							propertyExists = true;
+						}
+					}
+				}
+			}
+			// Last-resort fallback: shape the receiver's source symbol if reachable.
+			// `recvType.sym` carries the declaration site for alias parameters even
+			// when typeName was lost. This shapes `MacroInvocationData` to its inner
+			// record BEFORE we declare the field missing — matching how a prior read
+			// would have primed the alias on the same parameter.
+			if (!propertyExists && recvType.sym != null) {
+				ensureShaped(recvType.sym, ctx);
+				let symType = recvType.sym.symbolType;
+				let _h = 0;
+				while (symType != null && _h < 4) {
+					_h = _h + 1;
+					if (symType.kind == TypeKind.Alias && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
+					if (symType.kind == TypeKind.Ref && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
+					break;
+				}
+				if (symType != null && (symType.kind == TypeKind.Struct || symType.kind == TypeKind.Union)
+						&& !isUnresolvedType(getProperty(symType, md.property))) {
+					propertyExists = true;
+				}
+			}
+			if (!propertyExists) {
+				const setExts = findAllExtensionsByName(ctx.extensionRegistry, "setDynamicField");
+				// Stricter receiver match: a `setDynamicField` ext only matches
+				// when its declared `receiverTypeName` lines up with the actual
+				// receiver's name (or its un-peeled alias). The generic
+				// `findFirstMatchingExt` is too permissive — when the ext's
+				// receiver type is parameterized (Ref<...>), unification can bind
+				// against unrelated types and yield false positives that would
+				// route ordinary field writes through the protocol.
+				let extMatch = false;
+				if (setExts.length > 0) {
+					const recvNames: string[] = [];
+					if (recvType.typeName != "") recvNames.push(recvType.typeName);
+					if (probeType.typeName != "" && probeType.typeName != recvType.typeName) recvNames.push(probeType.typeName);
+					if (recvType.sym != null && recvType.sym.name != "") {
+						let alreadyIn = false;
+						for (const n of recvNames) { if (n == recvType.sym.name) alreadyIn = true; }
+						if (!alreadyIn) recvNames.push(recvType.sym.name);
+					}
+					for (const e of setExts) {
+						if (e.receiverTypeName == "") continue;
+						for (const rn of recvNames) {
+							if (e.receiverTypeName == rn) { extMatch = true; break; }
+						}
+						if (extMatch) break;
+					}
+				}
+				if (extMatch) {
+					if (d.operator != "=") {
+						const lhsRead = d.operator.slice(0, d.operator.length - 1);
+						addError(ctx,
+							`compound assignment '${d.operator}' is not supported on dynamic field '${md.property}'; rewrite as 'expr.${md.property} = expr.${md.property} ${lhsRead} value'`,
+							node.location.line, node.location.column);
+						node.nodeType = errorType(); return true;
+					}
+					const keyLit = createNodeAt(NodeKind.StringLiteral, { value: md.property }, node.location);
+					const wargs: Node[] = [];
+					wargs.push(keyLit);
+					wargs.push(d.right);
+					node.nodeType = rewriteAsMethodCall(ctx, node, md.object, "setDynamicField", wargs); return true;
+				}
+			}
+		}
+	}
+	// Strings are immutable at the surface (docs/STRING-CONTRACT.md);
+	// the byte-mutation story is the uint8[] buffer tier.
+	if (isAsgn && d.left.kind == NodeKind.ArrayAccess) {
+		const sad = d.left.data as ArrayAccessData;
+		let strObjType = sad.array.nodeType;
+		if (strObjType != null && strObjType.kind == TypeKind.Ref && strObjType.typeReturn != null) {
+			strObjType = strObjType.typeReturn;
+		}
+		if (strObjType != null && isStringLike(strObjType)) {
+			addError(ctx, "strings are immutable - mutate bytes via uint8[] (asBytes/asString) instead",
+				node.location.line, node.location.column);
+			node.nodeType = errorType(); return true;
+		}
+	}
+	// HashMap<K,V> subscript write: `m[k] = v` → `m.set(k, v)`. Mutate the
+	// whole BinaryExpr into a method call so the existing extension
+	// resolution + lowering path handles it. Counterpart of the read-case
+	// mutation in the ArrayAccess arm above.
+	if (d.operator == "=" && d.left.kind == NodeKind.ArrayAccess) {
+		const ad = d.left.data as ArrayAccessData;
+		let setObjType = ad.array.nodeType;
+		if (setObjType != null && setObjType.kind == TypeKind.Ref && setObjType.typeReturn != null) {
+			setObjType = setObjType.typeReturn;
+		}
+		// cstring is an immutable FFI bridge — caller must materialise a
+		// `string` before mutating bytes. Nim parity (jsgen.nim:1285).
+		if (setObjType != null && setObjType.kind == TypeKind.CString) {
+			addError(ctx, "cstring doesn't support `[]=` operator — convert to string first",
+				node.location.line, node.location.column);
+			node.nodeType = errorType(); return true;
+		}
+		if (setObjType != null && setObjType.kind == TypeKind.GenericInstance
+			&& isIndexableMapType(setObjType)) {
+			const wargs: Node[] = [];
+			wargs.push(ad.index);
+			wargs.push(d.right);
+			node.nodeType = rewriteAsMethodCall(ctx, node, ad.array, "set", wargs); return true;
+		}
+	}
+	return false;
+}
+
+function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, isAsgn: boolean, leftType: Type | null, rightType: Type | null, expectedType: Type | null): void {
+	// Post-hoc literal coercion: if one side is typed integer and other is integer literal that fits, coerce.
+	// Example: `h: int64; h * 33` — coerces literal 33 (default int32) to int64.
+	let effLeft = leftType != null ? peelTransparentInstance(leftType) : null;
+	let effRight = rightType != null ? peelTransparentInstance(rightType) : null;
+	const rightAsFloat32 = leftType != null && leftType.kind == TypeKind.Float32 ? constantAdoptsFloat32(d.right) : null as unknown as Node;
+	const leftAsFloat32 = rightAsFloat32 == null && !isAsgn && rightType != null && rightType.kind == TypeKind.Float32 ? constantAdoptsFloat32(d.left) : null as unknown as Node;
+	if (isIntegerType(leftType) && rightType != null
+		&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType!, false)) {
+		effRight = leftType;
+		d.right.nodeType = leftType;
+	} else if (isIntegerType(rightType) && leftType != null
+		&& isNodeIntLit(d.left) && literalFitsInType(d.left, rightType!, false)) {
+		effLeft = rightType;
+		d.left.nodeType = rightType;
+	} else if (leftType != null && leftType.kind == TypeKind.Float32 && literalAdoptsFloat32(d.right)) {
+		reportFloat32LiteralRange(ctx, d.right);
+		effRight = leftType;
+		d.right.nodeType = leftType;
+	} else if (rightType != null && rightType.kind == TypeKind.Float32 && literalAdoptsFloat32(d.left)) {
+		reportFloat32LiteralRange(ctx, d.left);
+		effLeft = rightType;
+		d.left.nodeType = rightType;
+	} else if (rightAsFloat32 != null) {
+		reportFloat32LiteralRange(ctx, rightAsFloat32);
+		d.right = rightAsFloat32;
+		effRight = leftType;
+	} else if (leftAsFloat32 != null) {
+		reportFloat32LiteralRange(ctx, leftAsFloat32);
+		d.left = leftAsFloat32;
+		effLeft = rightType;
+	} else {
+		const constRight = constantOperandAs(d.right, d.left, leftType);
+		const constLeft = constRight == null && !isAsgn ? constantOperandAs(d.left, d.right, rightType) : null as unknown as Node;
+		if (constRight != null) {
+			d.right = constRight;
+			effRight = leftType;
+		} else if (constLeft != null) {
+			d.left = constLeft;
+			effLeft = rightType;
+		}
+	}
+	if (d.operator == "instanceof" && d.right.resolvedSym != null
+		&& d.right.resolvedSym.symbolKind == SymbolKind.Class && symGenericParams(d.right.resolvedSym) != "") {
+		addError(ctx, "instanceof cannot test the generic class " + d.right.resolvedSym.name + " without its type arguments — each instance has its own identity; read it with `as " + d.right.resolvedSym.name + "<…>`", d.right.location.line, d.right.location.column);
+	}
+	// Bitwise ops require integer operands (reference parity: no float overloads)
+	// Insert implicit number → int32 cast for C backend
+	if ((isUnknownType(effLeft) || isUnknownType(effRight))
+		&& d.operator != "=" && d.operator != "===" && d.operator != "!=="
+		&& d.operator != "==" && d.operator != "!="
+		&& d.operator != "&&" && d.operator != "||" && d.operator != "??"
+		&& d.operator != "&&=" && d.operator != "||=" && d.operator != "??="
+		&& d.operator != "instanceof") {
+		addError(ctx, "operator '" + d.operator + "' cannot be applied to 'unknown' — narrow with an explicit cast", node.location.line, node.location.column);
+	}
+	const voidLeft = effLeft != null && effLeft.kind == TypeKind.Void;
+	const voidRight = effRight != null && effRight.kind == TypeKind.Void;
+	if ((voidLeft || voidRight) && d.operator != "=") {
+		const voidOther = voidLeft ? effRight : effLeft;
+		const isEqOp = d.operator == "===" || d.operator == "!=="
+			|| d.operator == "==" || d.operator == "!=";
+		const otherNullish = voidOther != null
+			&& (voidOther.kind == TypeKind.Null || voidOther.kind == TypeKind.Void);
+		const concatOk = d.operator == "+" && voidOther != null && isStringLike(voidOther);
+		const nullishOk = d.operator == "??" || d.operator == "??=";
+		if (d.operator == "&&" || d.operator == "||"
+			|| d.operator == "&&=" || d.operator == "||=") {
+			addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
+				node.location.line, node.location.column);
+		} else if (isEqOp && !otherNullish) {
+			addError(ctx, "comparison of 'void' and '" + typeDisplayName(voidOther!)
+				+ "' — the types have no overlap; a void result only equals null",
+				node.location.line, node.location.column);
+		} else if (!isEqOp && !concatOk && !nullishOk) {
+			addError(ctx, "operator '" + d.operator
+				+ "' cannot be applied to 'void' — a void call produces no value",
+				node.location.line, node.location.column);
+		}
+	}
+	if (isBitwiseBinaryOp(d.operator)) {
+		const userBitwise = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
+		if (userBitwise != null) {
+			node.flags = node.flags.incl(NodeFlag.UserOp);
+			node.nodeType = userBitwise; return;
+		}
+		checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
+		if (effLeft != null && effLeft.kind == TypeKind.Number) {
+			d.left = wrapInConv(d.left, createPrimitive(TypeKind.Int32));
+			effLeft = createPrimitive(TypeKind.Int32);
+		}
+		if (effRight != null && effRight.kind == TypeKind.Number) {
+			d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));
+			effRight = createPrimitive(TypeKind.Int32);
+		}
+	} else if (isBitwiseCompoundOp(d.operator)) {
+		const bitMark = ctx.errors.length;
+		checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
+		if (reportedErrorSince(ctx, bitMark)) { node.nodeType = errorType(); return; }
+		if (effRight != null && effRight.kind == TypeKind.Number) {
+			d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));
+			effRight = createPrimitive(TypeKind.Int32);
+		}
+	}
+	if (d.operator == "+" && effLeft != null && effRight != null) {
+		if (effLeft.kind == TypeKind.CString && isStringLike(effRight)) {
+			d.left = wrapInConv(d.left, stringType());
+			effLeft = stringType();
+		}
+		if (effRight.kind == TypeKind.CString && isStringLike(effLeft)) {
+			d.right = wrapInConv(d.right, stringType());
+			effRight = stringType();
+		}
+	}
+	if ((d.operator == "+" || d.operator == "+=") && effLeft != null && effRight != null) {
+		if (isStringLike(effLeft) && !isStringLike(effRight)) {
+			const convRight = synthStringify(ctx, d.right);
+			if (convRight != null) {
+				d.right = convRight;
+				effRight = stringType();
+			}
+		} else if (d.operator == "+" && isStringLike(effRight) && !isStringLike(effLeft)) {
+			const convLeft = synthStringify(ctx, d.left);
+			if (convLeft != null) {
+				d.left = convLeft;
+				effLeft = stringType();
+			}
+		}
+	}
+	const isArithmeticOp = d.operator == "+" || d.operator == "-" || d.operator == "*"
+		|| d.operator == "/" || d.operator == "%" || d.operator == "**";
+	if (isArithmeticOp || isComparisonOp(d.operator)) {
+		const userResult = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
+		if (userResult != null) {
+			node.flags = node.flags.incl(NodeFlag.UserOp);
+			node.nodeType = userResult; return;
+		}
+	}
+	const isRelational = d.operator == "<" || d.operator == ">" || d.operator == "<=" || d.operator == ">=";
+	const isConcat = d.operator == "+" && (isStringLike(effLeft) || isStringLike(effRight));
+	if ((isArithmeticOp || isRelational) && !isConcat
+		&& (isMaybeType(effLeft) || isMaybeType(effRight))) {
+		const maybeSide = isMaybeType(effLeft) ? effLeft : effRight;
+		const innerName = maybeSide.typeReturn != null ? typeDisplayName(maybeSide.typeReturn) : "T";
+		addError(ctx, "operand of '" + d.operator + "' is possibly null (" + innerName + " | null) — unwrap with '!', '??', or a null check first", node.location.line, node.location.column);
+		node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn != null) ? maybeSide.typeReturn : inferredType());
+		return;
+	}
+	const tplOpName = (d.operator == "!=" || d.operator == "!==") ? "!="
+		: ((d.operator == ">" || d.operator == ">=") ? d.operator : "");
+	if (tplOpName != "" && effLeft != null && effRight != null
+		&& !isMaybeType(effLeft) && !isMaybeType(effRight)
+		&& effLeft.kind != TypeKind.Null && effRight.kind != TypeKind.Null
+		&& !hasGenericParams(effLeft) && !hasGenericParams(effRight)
+		&& ((isStringLike(effLeft) && isStringLike(effRight))
+			|| (isStructOperand(effLeft) && isStructOperand(effRight) && typeNameOf(effLeft) == typeNameOf(effRight))
+			|| (effLeft.kind == TypeKind.Tuple && effRight.kind == TypeKind.Tuple)
+			|| (tplOpName == "!=" && effLeft.kind == TypeKind.SizedArray
+				&& effRight.kind == TypeKind.SizedArray)
+			|| (effLeft.kind == TypeKind.Ref && effRight.kind == TypeKind.Ref && typeNameOf(effLeft) == typeNameOf(effRight)))) {
+		const opConc = ctx.extensionRegistry != null
+			? resolveOperatorCall(ctx.table, ctx.extensionRegistry, tplOpName, [effLeft, effRight])
+			: null as unknown as ExtensionMethod;
+		if (opConc == null) {
+			const opSym = lookupSymbol(ctx.table, tplOpName);
+			if (opSym != null) {
+				const tplCands = [opSym];
+				for (const ov of opSym.overloads) tplCands.push(ov);
+				for (const cand of tplCands) {
+					if (!isTemplateSym(cand)) continue;
+					const synthCall = { callee: null as unknown as Node, arguments: [d.left, d.right], isDirectCall: false, resolvedOverloadIdx: -1 } as CallExprData;
+					node.nodeType = expandTemplate(ctx, cand, node, synthCall, expectedType);
+					return;
+				}
+			}
+		}
+	}
+	if (isRelational) checkRelationalOperands(ctx, d.operator, effLeft!, effRight!, node);
+	if (isComparisonOp(d.operator)) refuseMixedSignedCompare(ctx, d.operator, effLeft, effRight, node);
+	if (rejectBigIntMix(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
+	if (rejectLossyIntFloatMix(ctx, d.operator, d.left, d.right, effLeft, effRight)) { node.nodeType = errorType(); return; }
+	if (checkBinaryOperands(ctx, d.operator, effLeft!, effRight!, node)) { node.nodeType = errorType(); return; }
+	if (compoundOperandRefuses(d.operator, effLeft, effRight)) {
+		reportCompoundOperand(ctx, d.operator, d.left, d.right, effRight!, effLeft!);
+		node.nodeType = errorType();
+		return;
+	}
+	if (isBitwiseCompoundOp(d.operator) && effLeft != null && effRight != null) {
+		const base = d.operator.slice(0, d.operator.length - 1);
+		const stored = inferBinaryOp(base, effLeft, effRight);
+		if (stored != null && !isAssignable(stored, effLeft)) {
+			addError(ctx, "'" + d.operator + "' cannot store the '" + typeDisplayName(stored) + "' result of '" + base + "' in '"
+				+ typeDisplayName(effLeft) + "'", node.location.line, node.location.column);
+			node.nodeType = errorType();
+			return;
+		}
+	}
+	const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType, node == ctx.conversionOperand) : null;
+	if (nullishJoined != null) { node.nodeType = nullishJoined; return; }
+	node.nodeType = exactConstantType(ctx, node, inferBinaryOp(d.operator, effLeft!, effRight!));
+	if (d.operator == "??" && node.nodeType != null && isMaybeType(node.nodeType)) {
+		d.right = fitJoinedBranch(ctx, d.right, node.nodeType);
+	}
+}
+
+function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as ObjectLiteralData;
+	// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
+	// Reference parity: skipTypes({tySink, tyOwned})
+	let objExpected = skipModifier(expectedType);
+	// Union(Ref<T>, Null) — pick the Ref member for context propagation.
+	// Source-level nullable type is preserved on node.nodeType below; this
+	// only affects how field-types flow into the literal's properties.
+	if (objExpected != null) {
+		const refMember = unwrapRefNullUnion(objExpected);
+		if (refMember != null) objExpected = refMember;
+	}
+	if (objExpected != null && isAtomicRef(objExpected) && !isLockedRef(objExpected)
+		&& objExpected.typeReturn != null && !hasGenericParams(objExpected.typeReturn)) {
+		checkArcPointeeSendable(ctx, objExpected.typeReturn, node.location.line, node.location.column);
+	}
+	// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
+	if (objExpected != null && objExpected.kind == TypeKind.Ref && objExpected.typeReturn != null) {
+		objExpected = objExpected.typeReturn;
+	}
+	// Unwrap Maybe<T> for inner shape matching — `{ kind: 7 }` flowing into
+	// a `Token | null` slot matches Token's fields, not Maybe<Token>'s
+	// `{ value, present }` wrapper. fitNode at the call site inserts the
+	// wrap after this node is shape-checked. Mirrors the Ref/Union peels above.
+	if (objExpected != null && isMaybeType(objExpected) && objExpected.typeReturn != null) {
+		objExpected = objExpected.typeReturn;
+	}
+	// Map<K,V> literal (the insertion-ordered one — matches JS object literal
+	// key order): `{ "foo": 1 }` assigned to an ordered Map target is rewritten
+	// in-place to `mapFromPairs<K,V>([keys], [values])` — a call to a std
+	// helper that constructs a populated Map. The rewrite happens DURING
+	// checking so monomorphization (which runs after checking) sees the
+	// call with typed arguments and properly specializes it.
+	//
+	// This covers both `Map<K,V>` and `{ [key: K]: V }` — the index signature
+	// is normalized to Map<K,V> during resolveAnnotation. Also supports an
+	// explicit `HashMap<K,V>` target: the object literal provides keys/values
+	// in declared order; HashMap simply drops the ordering guarantee. The
+	// only difference is which builder we emit (mapFromPairs vs hashMapFromPairs).
+	if (objExpected != null && objExpected.kind == TypeKind.GenericInstance
+		&& isIndexableMapType(objExpected)
+		&& objExpected.typeChildren != null && objExpected.typeChildren.length == 2) {
+		const mapKeyType = objExpected.typeChildren[0];
+		const mapValType = objExpected.typeChildren[1];
+		// 1. Validate every value against V and emit errors on mismatch.
+		let mli = 0;
+		while (mli < d.properties.length) {
+			checkExpr(ctx, d.properties[mli], mapValType);
+			const vt = d.properties[mli].nodeType;
+			if (vt != null && mapValType != null && !isAssignable(vt, mapValType)) {
+				const keyName = mli < d.keys.length ? d.keys[mli] : "";
+				addError(ctx, "Map value for key '" + keyName + "' has type that is not assignable to V", node.location.line, node.location.column);
+			}
+			mli = mli + 1;
+		}
+		// 2. Build keys array — StringLiterals stamped with K.
+		const mtok = createToken(TokenKind.Ident, "", node.location.line);
+		const keyNodes: Node[] = [];
+		let ki = 0;
+		while (ki < d.keys.length) {
+			const kNode = createNode(NodeKind.StringLiteral, { value: d.keys[ki] }, mtok);
+			kNode.nodeType = mapKeyType;
+			kNode.flags = kNode.flags.incl(NodeFlag.Sem);
+			keyNodes.push(kNode);
+			ki = ki + 1;
+		}
+		const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, mtok);
+		keysArr.nodeType = createRef(createArray(mapKeyType));
+		keysArr.flags = keysArr.flags.incl(NodeFlag.Sem);
+		// 3. Build values array — reuse the already-checked property nodes.
+		const valNodes: Node[] = [];
+		let vi = 0;
+		while (vi < d.properties.length) {
+			valNodes.push(d.properties[vi]);
+			vi = vi + 1;
+		}
+		const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, mtok);
+		valsArr.nodeType = createRef(createArray(mapValType));
+		valsArr.flags = valsArr.flags.incl(NodeFlag.Sem);
+		// 4. Build the builder callee (mapFromPairs for ordered Map,
+		// hashMapFromPairs for HashMap) + mutate this node into the call.
+		const builderName = objExpected.typeName == "HashMap" ? "hashMapFromPairs" : "mapFromPairs";
+		const calleeIdent = createNode(NodeKind.Identifier, { name: builderName }, mtok);
+		const mCallArgs: Node[] = [];
+		mCallArgs.push(keysArr);
+		mCallArgs.push(valsArr);
+		// Assign literal directly to node.data: NodeData (union) — typed
+		// intermediate confuses codegen variant handling.
+		node.kind = NodeKind.CallExpr;
+		node.data = {
+			callee: calleeIdent,
+			arguments: mCallArgs,
+			isDirectCall: true,
+			resolvedOverloadIdx: -1,
+		};
+		node.flags = node.flags.excl(NodeFlag.Sem);
+		node.nodeType = null;
+		// 5. Re-check as a call. Generic inference on mapFromPairs<K,V>
+		// binds K and V from the typed array arguments, and the #29 fix
+		// ensures the internal m.set(...) calls get monomorphized.
+		node.nodeType = checkCallExpr(ctx, node, objExpected); return;
+	}
+	// Unwrap GenericInstance (e.g., Result<T, E>) to inner Struct or Union.
+	// Walk through typeReturn (eagerly instantiated body) or typeExtra
+	// (unsubstituted base) until we reach a Struct or Union. Handle nested
+	// GenericInstance (e.g., MyResult<T, E> = Ref<MyData<T, E>> where MyData
+	// is itself generic) by recursing through GI/Ref wrappers.
+	const literalOwnerSym = declaringSymOf(objExpected);
+	const literalClassType = objExpected;
+	objExpected = peelToStructOrUnion(objExpected);
+	// A generic-containing expected type (un-instantiated formal like
+	// `{ v: T }` at a call site whose T is still unbound) must NOT be
+	// adopted: stamping it makes the literal's type identical to the
+	// formal, so unifyType's identity check derives zero bindings and
+	// the generic is never instantiated (loud missing-symbol C error),
+	// while the literal's fields emit as void*. Fall through to the
+	// self-synthesized anonymous struct — unification against the formal
+	// then binds T from the literal's own concrete field types.
+	if (objExpected != null && objExpected.kind == TypeKind.Struct
+		&& objExpected.typeChildren != null
+		&& !hasGenericParams(objExpected)) {
+		// Reference parity: stamp literal with expected type, propagate field types
+		// For class types, keep Ref wrapper so codegen knows to heap-allocate.
+		// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
+		let stampType = skipModifier(expectedType);
+		// Maybe<T> override: when expected is Maybe<T>, the literal's natural
+		// shape is the inner T (matched against T's fields above via the peel).
+		// Stamp the inner T so fitNode at the call site detects the T → Maybe<T>
+		// gap and inserts the wrap. Without this, node.nodeType = Maybe<T>
+		// short-circuits fitNode's same-kind check and no wrap is emitted —
+		// codegen then writes the literal's T-shape fields into Maybe<T>'s slot.
+		if (stampType != null && isMaybeType(stampType)) {
+			stampType = stampType.typeReturn != null ? stampType.typeReturn : objExpected;
+		}
+		node.nodeType = (stampType != null) ? stampType : objExpected;
+		// Pin to consts so the inner while-loop body sees non-null typeNames/
+		// typeChildren — flow narrowing on `let objExpected` doesn't reach
+		// inside nested loops via the binder's current narrowing rules.
+		const objE = objExpected;
+		const objNames = objE.typeNames;
+		const objChildren = objE.typeChildren;
+		const containerName = objE.typeName != null ? objE.typeName : "";
+		// Record the literal's own contextual type so the LSP can complete its
+		// fields wherever it sits — argument, return, nested — instead of
+		// climbing to an annotated VariableDecl that may not exist.
+		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + 1,
+			null, objE, SymbolKind.Interface, "", containerName, false);
+		let fi = 0;
+		while (fi < d.properties.length) {
+			// Name-based field lookup: match literal key against struct typeNames
+			let fieldExpected: Type | null = null;
+			const keyName = fi < d.keys.length ? d.keys[fi] : "";
+			if (keyName != "" && keyName != "..." && keyName != "__computed__"
+				&& objNames != null) {
+				let ni = 0;
+				while (ni < objNames.length) {
+					if (objNames[ni] == keyName) {
+						if (ni < objChildren.length) {
+							fieldExpected = objChildren[ni];
+						}
+						break;
+					}
+					ni = ni + 1;
+				}
+			}
+			// Fallback: positional match for spread/computed keys
+			if (fieldExpected == null && (keyName == "..." || keyName == "__computed__")
+				&& fi < objChildren.length) {
+				fieldExpected = objChildren[fi];
+			}
+			if (fieldExpected == null) {
+				fieldExpected = engineNodeVirtualKeyType(objE, keyName);
+			}
+			// Engine (macro-body) view of Node.nodeType, write position: macros
+			// stamp type-AST Nodes into emitted literals (`nodeType: ft`), so the
+			// slot expects a Node VALUE — Ref<Node>, matching the read override in
+			// checkMemberExpr — not the checker Type the class declares.
+			if (fieldExpected != null && isEngineCheckMode()
+					&& keyName == "nodeType" && containerName == "Node") {
+				fieldExpected = (expectedType != null && typeNameOf(expectedType) == "Node")
+					? expectedType
+					: objE;
+			}
+			checkExpr(ctx, d.properties[fi], fieldExpected);
+			if (fieldExpected != null) {
+				d.properties[fi] = fitNode(ctx, d.properties[fi], fieldExpected, d.properties[fi].nodeType);
+			}
+			refuseHiddenFieldInLiteral(ctx, literalOwnerSym != null ? literalOwnerSym : objE.sym, keyName, d.properties[fi], node, d, fi);
+			// Record property key as reference to struct field
+			if (fi < d.keys.length && d.keyLocations != null && fi < d.keyLocations.length && fieldExpected != null) {
+				const keyLoc = d.keyLocations[fi];
+				if (keyName != "..." && keyName != "__computed__" && keyLoc.line > 0) {
+					let fieldSym: Symbol | null = null;
+					if (containerName != "") {
+						fieldSym = lookupSymbol(ctx.table, containerName + "_" + keyName);
+						if (fieldSym != null) ensureShaped(fieldSym, ctx);
+					}
+					if (fieldSym == null) {
+						fieldSym = makeSymbolState(keyName, SymbolKind.Property, fieldExpected, false, SymbolState.Shaped);
+						inheritContainerInfo(fieldSym, ctx, containerName);
+					}
+					sgRecordSym(ctx, keyLoc.line, keyLoc.column, keyLoc.column + keyName.length, fieldSym, fieldExpected, SymbolKind.Property, keyName, containerName, false);
+				}
+			}
+			fi = fi + 1;
+		}
+		// Excess property + duplicate field check
+		if (objNames != null) {
+			let ki = 0;
+			while (ki < d.keys.length) {
+				const key = d.keys[ki];
+				if (key != "..." && key != "__computed__") {
+					let found = false;
+					let ni = 0;
+					while (ni < objNames.length) {
+						if (objNames[ni] == key) { found = true; break; }
+						ni = ni + 1;
+					}
+					if (!found && engineNodeHasVirtualKey(objE, key)) found = true;
+					if (!found) {
+						if (d.keyLocations != null && ki < d.keyLocations.length) {
+							const kl = d.keyLocations[ki];
+							addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
+						} else {
+							addError(ctx, "'" + key + "' does not exist in type '" + containerName + "'", node.location.line, node.location.column);
+						}
+					}
+					// Check duplicate: same key appeared earlier
+					let di = 0;
+					while (di < ki) {
+						if (d.keys[di] == key) {
+							if (d.keyLocations != null && ki < d.keyLocations.length) {
+								const kl = d.keyLocations[ki];
+								addErrorRange(ctx, "field initialized twice: '" + key + "'", kl.line, kl.column, kl.column + key.length);
+							} else {
+								addError(ctx, "field initialized twice: '" + key + "'", node.location.line, node.location.column);
+							}
+							break;
+						}
+						di = di + 1;
+					}
+				}
+				ki = ki + 1;
+			}
+		}
+		if (objNames != null && !(isEngineCheckMode() && containerName == "Node")) {
+			let hasDynamicKey = false;
+			for (const k of d.keys) {
+				if (k == "..." || k == "__computed__") hasDynamicKey = true;
+			}
+			if (!hasDynamicKey && d.keys.length == d.properties.length) {
+				for (let oi = 0; oi < objNames.length && oi < objChildren.length; oi += 1) {
+					if (objNames[oi].startsWith("__") || d.keys.includes(objNames[oi])) continue;
+					const init = literalFieldInitializer(ctx, literalClassType, objNames[oi], objChildren[oi], node.location);
+					if (init == null) continue;
+					d.keys.push(objNames[oi]);
+					d.properties.push(init);
+					if (d.keyLocations != null) d.keyLocations.push(makeLoc(0, 0));
+				}
+			}
+			if (!hasDynamicKey) {
+				let mi = 0;
+				while (mi < objNames.length) {
+					const wantT = mi < objChildren.length ? objChildren[mi] : null as unknown as Type;
+					if (wantT != null && requiresInit(wantT)) {
+						const want = objNames[mi];
+						let present = false;
+						for (const k of d.keys) { if (k == want) { present = true; break; } }
+						if (!present) {
+							addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value — give it in the literal or an initializer in the class, or declare the field optional with '?'`, node.location.line, node.location.column);
+						}
+					}
+					mi = mi + 1;
+				}
+			}
+		}
+		node.nodeType = node.nodeType; return;
+	} else if (objExpected != null && objExpected.kind == TypeKind.Union
+		&& isDiscriminatedUnion(objExpected)) {
+		// Discriminated union construction validation
+		// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
+		const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
+		node.nodeType = constructed; return;
+	} else if (objExpected != null && objExpected.kind == TypeKind.Union) {
+		// Non-discriminated union: resolve variant, propagate field types.
+		// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
+		// once per field. One pass, known types.
+		node.nodeType = objExpected;
+
+		// Tier 2: string-literal discriminant narrowing.
+		// When every variant is a struct with a shared field whose type is StringLiteral
+		// (the TypeScript pattern: type Shape = {kind:"a",...} | {kind:"b",...}),
+		// find the shared field, read the literal value from the object literal, and
+		// pick the variant that way. This catches wrong-field-in-variant bugs that
+		// pure name-based findUnionVariant misses.
+		let varIdx = -1;
+		const stringDiscName = findSharedStringDiscriminant(objExpected);
+		if (stringDiscName != "") {
+			// Look for the discriminant field in the literal
+			let litDiscIdx = -1;
+			for (let ki = 0; ki < d.keys.length; ki += 1) {
+				if (d.keys[ki] == stringDiscName) { litDiscIdx = ki; break; }
+			}
+			if (litDiscIdx >= 0 && litDiscIdx < d.properties.length) {
+				const discProp = d.properties[litDiscIdx];
+				if (discProp.kind == NodeKind.StringLiteral) {
+					const sd = discProp.data as StringLiteralData;
+					varIdx = findVariantByStringDiscriminant(objExpected, stringDiscName, sd.value);
+					if (varIdx < 0) {
+						addError(ctx, `No variant of union has ${stringDiscName} = "${sd.value}"`,
+							node.location.line, node.location.column);
+					}
+				}
+			} else {
+				addError(ctx, `Object literal missing discriminant field '${stringDiscName}' for union`,
+					node.location.line, node.location.column);
+			}
+		}
+		// Fallback: name-only matching (legacy path for non-string-discriminant unions)
+		if (varIdx < 0 && stringDiscName == "") {
+			varIdx = (d.keys.length > 0)
+				? findUnionVariant(objExpected, d.keys, [])
+				: -1;
+			// Ambiguous? (e.g. { value: X } matches both NumberLiteral and StringLiteral)
+			// Check property CLONES without expectedType to get actual types — purely
+			// for variant selection. Original properties stay unchecked so the
+			// contextual second pass (line ~795) types them cleanly with the
+			// variant's field expected type. Same `cloneNodeForCheck` pattern as
+			// `cloneDefaultNode` (line ~1356): exploratory check on a clone leaves
+			// the live AST untouched, avoiding double-insert of HiddenDeref /
+			// coercion nodes that `checkExpr` is not idempotent against.
+			if (varIdx >= 0 && d.keys.length > 0 && isAmbiguousVariant(objExpected, varIdx, d.keys)) {
+				const propTypes: Type[] = [];
+				let pi = 0;
+				while (pi < d.properties.length) {
+					const probe = cloneNodeForCheck(d.properties[pi]);
+					checkExpr(ctx, probe, null);
+					const probeType = probe.nodeType;
+					propTypes.push(probeType!);
+					pi = pi + 1;
+				}
+				const refined = findUnionVariant(objExpected, d.keys, propTypes);
+				if (refined >= 0) varIdx = refined;
+			}
+		}
+		// Single pass: check properties WITH variant field types as expectedType
+		// (reference: fitNode(field.typ, value) — proper literal coercion).
+		// Under Tier 2 string-discriminant mode, also report fields missing from the
+		// chosen variant as errors (caller asked for a specific variant, extra fields
+		// are wrong).
+		const variant = (varIdx >= 0 && objExpected.typeChildren != null
+			&& varIdx < objExpected.typeChildren.length)
+			? objExpected.typeChildren[varIdx]
+			: null;
+		if (variant != null && variant.kind == TypeKind.Ref) {
+			rearmLiteralForRecheck(node, variant);
+			checkExpr(ctx, node, variant);
+			return;
+		}
+		for (let fi = 0; fi < d.properties.length; fi += 1) {
+			const key = fi < d.keys.length ? d.keys[fi] : "";
+			const fieldExpected = (variant != null && key != "")
+				? findFieldInVariant(variant, key)
+				: null;
+			checkExpr(ctx, d.properties[fi], fieldExpected);
+			if (stringDiscName != "" && variant != null && key != "" && key != stringDiscName && fieldExpected == null) {
+				// Resolved to a specific variant via string discriminant, but this field
+				// doesn't belong to it — report.
+				addError(ctx, `Field '${key}' does not exist on the ${stringDiscName}-matched variant`,
+					node.location.line, node.location.column);
+			}
+		}
+		// +1 offset so 0 means "not set" (variant 0 becomes 1).
+		if (varIdx >= 0) {
+			node.variantSlot = varIdx + 1;
+		}
+		node.nodeType = objExpected; return;
+	} else {
+		// No expected type — synthesize anonymous struct from literal fields
+		const fieldNames: string[] = [];
+		const fieldTypes: Type[] = [];
+		let pi = 0;
+		let spreadSeen = false;
+		while (pi < d.properties.length) {
+			checkExpr(ctx, d.properties[pi], null);
+			const rawFt = d.properties[pi].nodeType;
+			const ft = rawFt != null ? closureStorageType(rawFt) : rawFt;
+			if (ft != rawFt) d.properties[pi] = fitNode(ctx, d.properties[pi], ft, rawFt);
+			const spreadFields = pi < d.keys.length && d.keys[pi] == "..." && d.properties[pi].kind == NodeKind.SpreadExpr
+				? spreadFieldsOf((d.properties[pi].data as SpreadExprData).spreadArg.nodeType) : null;
+			if (spreadFields != null) {
+				spreadSeen = true;
+				for (let fi = 0; fi < spreadFields.typeNames.length; fi += 1) {
+					const fname = spreadFields.typeNames[fi];
+					if (fname.startsWith("__") || fi >= spreadFields.typeChildren.length) continue;
+					const at = fieldNames.indexOf(fname);
+					if (at >= 0) fieldTypes[at] = spreadFields.typeChildren[fi];
+					else { fieldNames.push(fname); fieldTypes.push(spreadFields.typeChildren[fi]); }
+				}
+				pi = pi + 1;
+				continue;
+			}
+			const at = spreadSeen && pi < d.keys.length ? fieldNames.indexOf(d.keys[pi]) : -1;
+			if (at >= 0 && d.keys[pi] != "..." && d.keys[pi] != "__computed__") { fieldTypes[at] = ft!; pi = pi + 1; continue; }
+			if (pi < d.keys.length) { fieldNames.push(d.keys[pi]); }
+			fieldTypes.push(ft!);
+			pi = pi + 1;
+		}
+		const anonName = anonStructName(fieldNames, fieldTypes);
+		node.nodeType = createRef(createStruct(anonName, fieldNames, fieldTypes, false)); return;
+	}
+}
+
+function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	let d = node.data as TypeAssertionData;
+	// Non-null assertion `expr!` (sentinel asType "!"): strip the nullable
+	// from the operand type; nullableLower rule 1c reads `.value` at codegen.
+	if (d.asType == "!") {
+		checkExpr(ctx, d.asExpr, null);
+		const st0 = d.asExpr.nodeType;
+		if (st0 != null && isMaybeType(st0) && st0.typeReturn != null) {
+			node.nodeType = st0.typeReturn;
+		} else if (st0 != null && st0.kind == TypeKind.Union && unwrapRefNullUnion(st0) != null) {
+			node.nodeType = unwrapRefNullUnion(st0);
+		} else {
+			node.nodeType = st0 != null ? st0 : inferredType();
+		}
+		if (isReadonlyView(st0) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
+		node.flags = node.flags.incl(NodeFlag.Sem);
+		return;
+	}
+	const asLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
+	const targetType = (d.asType != "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : inferredType();
+	// TS parity: `expr as T` propagates T as contextual type to expr.
+	// Critical for object literals: `{ a: 1 } as Foo` must construct a Foo
+	// (not an anonymous struct that codegen then can't cast to Foo).
+	// `as unknown` is a type-system escape hatch — don't use it as context.
+	const asFnBody = distinctCallTarget(targetType);
+	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : targetType) : null;
+	const operandMark = ctx.errors.length;
+	const prevConversion = ctx.conversionOperand;
+	ctx.conversionOperand = isNumeric(targetType) && targetType.kind != TypeKind.Char ? d.asExpr : null as unknown as Node;
+	checkExpr(ctx, d.asExpr, innerExpected);
+	ctx.conversionOperand = prevConversion;
+	reportConstCast(ctx, d.asExpr, targetType);
+	let srcType = d.asExpr.nodeType;
+	const operandType = srcType;
+	const operandNode = d.asExpr;
+	let viaConverter = false;
+	// Record type annotation position for LSP
+	resolveTypeExpr(node.typeExpr, ctx);
+	if (srcType != null && srcType.kind == TypeKind.Function && targetType.kind == TypeKind.Function) {
+		const smuggled = smuggledIntoUnknown(srcType, targetType);
+		if (smuggled != null) {
+			addError(ctx, "cannot cast " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + " — it would carry " + typeDisplayName(smuggled) + " through an unknown slot, and unknown holds objects", asLoc.line, asLoc.column);
+		}
+	}
+	const targetHeld = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : targetType;
+	if (isUnknownType(targetHeld) && srcType != null) {
+		const refusal = unknownRefusal(srcType);
+		if (refusal != UnknownRefusal.None) {
+			const onward = expectedType != null && !isUnresolvedType(expectedType) && !isUnknownType(expectedType) ? expectedType : null;
+			if (onward != null) {
+				addError(ctx, "cannot reinterpret " + typeDisplayName(srcType) + " as " + typeDisplayName(onward) + " through unknown — unknown holds objects; convert with `as " + typeDisplayName(onward) + "` or build the " + typeDisplayName(onward) + " value", asLoc.line, asLoc.column);
+			} else {
+				addError(ctx, unknownRefusalText(srcType, refusal), asLoc.line, asLoc.column);
+			}
+		}
+	}
+	const nullableMember = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : null;
+	const projectedMember = nullableMember != null ? nullableMember : targetType;
+	if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isStrLitSet(targetType) || nullableMember != null)
+		&& !isUnresolvedType(targetType) && (tagUnionMemberSlot(srcType, projectedMember) >= 0 || objectPathHolders(srcType, projectedMember).length > 0)) {
+		const projected = checkedProjection(d.asExpr, srcType, projectedMember);
+		if (projected.kind == NodeKind.TypeAssertion) {
+			node.data = { asExpr: (projected.data as TypeAssertionData).asExpr, asType: d.asType };
+			if (projected.flags.has(NodeFlag.ObjCheck)) node.flags = node.flags.incl(NodeFlag.ObjCheck);
+		} else {
+			node.data = { asExpr: projected, asType: d.asType };
+		}
+		node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
+		node.flags = node.flags.incl(NodeFlag.ConvCheck);
+		stampCheckedInstance(ctx, node, targetType);
+		return;
+	}
+	if (srcType != null && !reportedErrorSince(ctx, operandMark) && convertAsBetweenUnions(ctx, node, srcType, targetType, asLoc)) return;
+	if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
+		&& !hasGenericParams(srcType) && !hasGenericParams(targetType) && !reportedErrorSince(ctx, operandMark)) {
+		const carried = assertIntoNullable(d.asExpr, srcType, targetType);
+		if (carried != null as unknown as Node) {
+			node.data = { asExpr: carried, asType: d.asType };
+			node.nodeType = targetType;
+			return;
+		}
+	}
+	if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
+		&& !slotTakesValue(srcType, targetType)) {
+		const asCall = convertsWithoutRoutine(srcType, targetType) ? null : tryApplyConverter(ctx, d.asExpr, srcType, targetType);
+		if (asCall != null) {
+			viaConverter = true;
+			node.data = { asExpr: asCall, asType: d.asType };
+			d = node.data as TypeAssertionData;
+			srcType = asCall.nodeType;
+		} else if (valueOfInPlace(ctx, d.asExpr, ReadNeed.Slot, targetType)) {
+			srcType = d.asExpr.nodeType;
+		}
+	}
+	if (srcType != null && srcType.kind != TypeKind.Union) {
+		const projected = narrowUnionToVariant(d.asExpr, srcType);
+		if (projected != null as unknown as Node) {
+			node.data = { asExpr: projected, asType: d.asType };
+			d = node.data as TypeAssertionData;
+		}
+	}
+	// Nil typing: collapse `null as T` into typed NullLiteral.
+	if (srcType != null && dropsReadonlyView(srcType, targetType)) reportReadonlyWrite(ctx, srcType, "cast away", asLoc.line, asLoc.column);
+	if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
+		&& d.asExpr != null && d.asExpr.kind == NodeKind.NullLiteral) {
+		node.kind = NodeKind.NullLiteral;
+		node.data = { nullPlaceholder: true };
+		node.nodeType = targetType;
+		node.flags = node.flags.incl(NodeFlag.Sem);
+		node.nodeType = targetType; return;
+	}
+	// String↔CString needs runtime conversion at the FFI boundary, not erasure.
+	else if (srcType != null
+		&& ((targetType.kind == TypeKind.CString
+				&& (srcType.kind == TypeKind.String || srcType.kind == TypeKind.StringLiteral))
+			|| (targetType.kind == TypeKind.String && srcType.kind == TypeKind.CString))) {
+		node.kind = NodeKind.HiddenStdConv;
+		node.data = { convExpr: d.asExpr, convType: targetType };
+		node.nodeType = targetType;
+		node.flags = node.flags.incl(NodeFlag.Sem);
+		node.nodeType = targetType; return;
+	}
+	// Reference parity: when narrowing a Union, resolve to the actual variant type.
+	else if (srcType != null && srcType.kind == TypeKind.Union
+		&& targetType.kind == TypeKind.Struct && targetType.typeNames != null) {
+		const varIdx = findUnionVariant(srcType, targetType.typeNames, targetType.typeChildren);
+		if (varIdx >= 0 && varIdx < srcType.typeChildren.length) {
+			node.nodeType = srcType.typeChildren[varIdx];
+			if (isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[varIdx]), asType: d.asType };
+		} else {
+			node.nodeType = targetType;
+		}
+	} else if (srcType != null && srcType.kind == TypeKind.Union && targetType.kind == TypeKind.Ref
+		&& targetType.typeReturn != null) {
+		const refTarget = targetType.typeReturn;
+		const refIdx = refTarget.typeNames != null ? findUnionVariant(srcType, refTarget.typeNames, refTarget.typeChildren) : -1;
+		node.nodeType = refIdx >= 0 ? srcType.typeChildren[refIdx] : targetType;
+		if (refIdx >= 0 && isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[refIdx]), asType: d.asType };
+	} else {
+		node.nodeType = targetType;
+	}
+	if (srcType != null && (srcType.kind != TypeKind.Union || isStrLitSet(srcType)) && targetType.kind == TypeKind.Union) {
+		const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
+		if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
+	}
+	const castSrcUnknown =(srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
+	if (castSrcUnknown != null && isUnknownType(castSrcUnknown) && !isUnresolvedType(targetType)
+		&& !reportedErrorSince(ctx, operandMark)) {
+		const targetBare = skipModifier(targetType) ?? targetType;
+		if (unknownRefusal(targetType) == UnknownRefusal.Value) {
+			addError(ctx, "cannot cast unknown to the value type " + typeDisplayName(targetType) + " — unknown holds objects", asLoc.line, asLoc.column);
+		} else if (targetBare.kind == TypeKind.CString) {
+			addError(ctx, "cannot cast unknown to cstring — unknown holds objects, never a C string; keep a C string as cstring or Ptr<void>", asLoc.line, asLoc.column);
+		}
+	}
+	if (operandType != null && !viaConverter && !reportedErrorSince(ctx, operandMark)) {
+		const adopted = tryAdoptAnonStruct(ctx, operandNode, targetType, operandType);
+		if (adopted != null as unknown as Node) {
+			node.data = { asExpr: adopted, asType: d.asType };
+			node.nodeType = targetType;
+			return;
+		}
+		if (reportedErrorSince(ctx, operandMark)) return;
+		if (refuseUnrelatedStructAs(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
+		if (refuseContainerReinterpret(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
+		const viewed = srcType != null ? objectViewOf(ctx, d.asExpr, srcType, targetType, asLoc.line, asLoc.column) : null;
+		if (reportedErrorSince(ctx, operandMark)) return;
+		if (viewed != null) node.nodeType = viewed;
+	}
+	const objConv = reportedErrorSince(ctx, operandMark) ? ObjConv.None : objectConversion(srcType, targetType);
+	if (objConv == ObjConv.BadTarget) {
+		addError(ctx, "cannot check a conversion from unknown to " + typeDisplayName(targetType) + " — only a class has a runtime identity; convert to a class, or keep the value in a discriminated union", asLoc.line, asLoc.column);
+	} else if (objConv == ObjConv.Checked && !sameType(srcType, targetType)) {
+		node.flags = node.flags.incl(NodeFlag.ObjCheck);
+		stampCheckedInstance(ctx, node, targetType);
+	}
+	if (srcType != null && !isUnresolvedType(targetType) && !reportedErrorSince(ctx, operandMark)
+		&& assertionNarrows(srcType, targetType)) {
+		node.flags = node.flags.incl(NodeFlag.ConvCheck);
+		stampCheckedInstance(ctx, node, targetType);
+	}
+	if (node.kind == NodeKind.TypeAssertion && srcType != null && srcType.kind != TypeKind.Error
+		&& !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
+		&& targetType.kind != TypeKind.Error && !isUnknownType(targetType)
+		&& !reportedErrorSince(ctx, operandMark)
+		&& isPayloadCarrier(srcType) && isScalarPrimitive(targetType)
+		&& !narrowsToMember(srcType, targetType)) {
+		addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType)
+			+ " — a struct or union payload has no conversion to a primitive; read a field (e.g. .ok, .value) instead",
+			asLoc.line, asLoc.column);
+	}
+	if (node.kind == NodeKind.TypeAssertion && srcType != null && !viaConverter
+		&& !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
+		&& !reportedErrorSince(ctx, operandMark)) {
+		const refusal = textConversionRefusal(srcType, targetType);
+		if (refusal != "") addError(ctx, refusal, asLoc.line, asLoc.column);
+	}
+	if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
+	if (!reportedErrorSince(ctx, operandMark)) checkPointerAddress(ctx, node, d.asExpr, targetType);
+	return;
+}
+
+function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as ArrayLiteralData;
+	// Reference parity: semArrayConstr does expectedType.skipTypes(abstractRange)
+	// which strips Sink/Lent/Var wrappers before checking Array kind
+	const arrExpectedRaw = skipModifier(expectedType);
+	let arrExpected = arrExpectedRaw != null ? peelTransparentInstance(arrExpectedRaw) : null;
+	// `T[] | null` (TS nullable array): the literal checks against the array
+	// member and the surrounding fit wraps it — the union counterpart of the
+	// Ref<Array> peel below, so it runs first and hands that peel its member.
+	// Without it an empty [] keeps an inferred element type all the way into
+	// the emission gate.
+	if (arrExpected != null && arrExpected.kind == TypeKind.Union
+			&& arrExpected.typeChildren != null && arrExpected.typeChildren.length == 2) {
+		const ua = arrExpected.typeChildren[0];
+		const ub = arrExpected.typeChildren[1];
+		const uNonNull = (ua != null && ub != null && ub.kind == TypeKind.Null) ? ua
+			: ((ua != null && ub != null && ua.kind == TypeKind.Null) ? ub : null);
+		if (uNonNull != null
+				&& (uNonNull.kind == TypeKind.Array || uNonNull.kind == TypeKind.SizedArray
+					|| (uNonNull.kind == TypeKind.Ref && uNonNull.typeReturn != null
+						&& uNonNull.typeReturn.kind == TypeKind.Array))) {
+			arrExpected = uNonNull;
+		}
+	}
+	if (arrExpected != null && isMaybeType(arrExpected) && arrExpected.typeReturn != null) {
+		arrExpected = peelTransparentInstance(arrExpected.typeReturn);
+	}
+	if (arrExpected != null && arrExpected.kind == TypeKind.Union) {
+		const soleArr = soleUnionMember(arrExpected, isArrayShaped);
+		if (soleArr != null) arrExpected = soleArr;
+	}
+	// reference array: an expected Ref<Array<T>> checks the literal against the
+	// inner value array, but tags the result Ref so nativeLower boxes it onto the heap.
+	let refArrayWrap: Type | null = null;
+	if (arrExpected != null && arrExpected.kind == TypeKind.Ref && arrExpected.typeReturn != null
+			&& arrExpected.typeReturn.kind == TypeKind.Array) {
+		refArrayWrap = arrExpected;
+		arrExpected = arrExpected.typeReturn;
+	}
+	// Tuple context: a bracket literal in tuple position is a tuple, not an array.
+	// Type each element against its positional type and tag the node Tuple — else it
+	// defaults to Ref<Array> and mismatches the expected tuple (e.g. `return [a, b]`
+	// for a `[T, U]` return type errors "expected Tuple, got Array"). Sibling of the
+	// Array / SizedArray / Ref<Array> contextual cases below.
+	if (arrExpected != null && arrExpected.kind == TypeKind.Tuple && arrExpected.typeChildren != null) {
+		for (let ti = 0; ti < d.elements.length; ti += 1) {
+			const te = ti < arrExpected.typeChildren.length ? arrExpected.typeChildren[ti] : null;
+			checkExpr(ctx, d.elements[ti], te);
+			if (te != null) d.elements[ti] = fitNode(ctx, d.elements[ti], te, d.elements[ti].nodeType);
+		}
+		node.nodeType = arrExpected;
+		return;
+	}
+	const elemExpected = (arrExpected != null
+		&& (arrExpected.kind == TypeKind.Array || arrExpected.kind == TypeKind.SizedArray
+			|| arrExpected.kind == TypeKind.Span)
+		&& arrExpected.typeReturn != null)
+		? arrExpected.typeReturn
+		: null;
+	if (d.elements.length == 0) {
+		if (arrExpected != null && (arrExpected.kind == TypeKind.SizedArray || arrExpected.kind == TypeKind.Array)) {
+			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
+		} else if (elemExpected != null) {
+			node.nodeType = createRef(createArray(elemExpected)); return;
+		} else {
+			node.nodeType = createRef(createArray(inferredType())); return;
+		}
+	} else {
+		for (let i = 0; i < d.elements.length; i += 1) {
+			checkExpr(ctx, d.elements[i], elemExpected);
+			if (elemExpected != null) {
+				d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
+			}
+		}
+		let elemType = d.elements[0].nodeType;
+		// PARALOCK: an array literal with affine-Promise identifier elements
+		// consumes those handles — the array is the new owner (typically
+		// passed to Promise.all or similar homogeneous consumer). The individual
+		// handles cannot be awaited again because the array itself will be.
+		// This covers the `await Promise.all([h1, h2])` pattern.
+		let ei = 0;
+		while (ei < d.elements.length) {
+			const el = d.elements[ei];
+			const elType = el.nodeType;
+			if (elType != null && isAffineAwaitable(elType) && el.kind == NodeKind.Identifier) {
+				const elSym = el.resolvedSym;
+				if (elSym != null) {
+					markConsumedName(ctx.affineTracker, symbolConsumeKey(elSym));
+					markConsumed(elSym);
+				}
+			}
+			ei = ei + 1;
+		}
+		// PARALOCK §5.4 — mixed awaitable elements: if the first element is an
+		// affine Promise (from spawn) but any other element is a plain Promise
+		// (from async function, actor CALL, etc.), unify the element type to the
+		// plain Promise — strip affine flags via implicit upcast. Without this,
+		// downstream lowering treats the array as affine-homogeneous and
+		// misinterprets the plain-Promise element (runtime misaligned-address
+		// crash observed in `[spawn(f), fetchData()]`). Only applies when no
+		// contextual element type is forcing a specific shape.
+		if (elemExpected == null && elemType != null && isAwaitable(elemType)) {
+			const inner0 = awaitedType(elemType);
+			let hasAffine = isAffineAwaitable(elemType);
+			let hasPlain = isAwaitable(elemType) && !hasAffine;
+			let ej = 1;
+			while (ej < d.elements.length) {
+				const ejType = d.elements[ej].nodeType;
+				if (ejType != null && isAwaitable(ejType)) {
+					if (isAffineAwaitable(ejType)) hasAffine = true;
+					else hasPlain = true;
+				}
+				ej = ej + 1;
+			}
+			if (hasAffine && hasPlain && inner0 != null) {
+				elemType = createPromise(inner0);
+				addWarning(ctx,
+					"affine Promise flags stripped in mixed array — affine tracking dropped (PARALOCK §5.4)",
+					node.location.line, node.location.column);
+			}
+		}
+		if (elemExpected == null && d.elements.length > 1
+			&& !(elemType != null && isAwaitable(elemType))) {
+			const elemJoinTypes: Type[] = [];
+			for (const el of d.elements) {
+				const elType = literalElemType(el);
+				elemJoinTypes.push(elType!);
+			}
+			const joinedElem = joinBranchTypes(elemJoinTypes);
+			if (!isUnresolvedType(joinedElem)) {
+				let fi = 0;
+				while (fi < d.elements.length) {
+					d.elements[fi] = fitJoinedBranch(ctx, d.elements[fi], joinedElem);
+					fi = fi + 1;
+				}
+				elemType = joinedElem;
+			}
+		}
+		if (elemExpected == null && isUnresolvedType(elemType)) {
+			const spreadTypes: Type[] = [];
+			for (const el of d.elements) {
+				const st = literalElemType(el);
+				if (st != null) spreadTypes.push(st);
+			}
+			const fromSpreads = joinBranchTypes(spreadTypes);
+			if (!isUnresolvedType(fromSpreads)) elemType = fromSpreads;
+		}
+		if (elemExpected == null && elemType != null && closureStorageType(elemType) != elemType) {
+			const storedElem = closureStorageType(elemType);
+			let si = 0;
+			while (si < d.elements.length) {
+				d.elements[si] = fitJoinedBranch(ctx, d.elements[si], storedElem);
+				si = si + 1;
+			}
+			elemType = storedElem;
+		}
+		for (const el of d.elements) {
+			if (el.kind == NodeKind.SpreadExpr) refuseSpreadElements(ctx, el, elemExpected != null ? elemExpected : elemType);
+		}
+		// Reference parity (semArrayConstr): error only on too-many elements.
+		// Too-few is allowed at literal level; type compatibility catches mismatches.
+		if (arrExpected != null && arrExpected.kind == TypeKind.SizedArray) {
+			const expectedLen = arrExpected.typeValue;
+			if (d.elements.length > expectedLen) {
+				addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
+			}
+			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
+		} else if (arrExpected != null && arrExpected.kind == TypeKind.Array && !hasGenericParams(arrExpected)) {
+			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
+		} else {
+			// No array context: a bare `[...]` literal is a reference array (T[] = Ref<Array>),
+			// so nativeLower boxes it and it matches T[] params/returns post-flip.
+			node.nodeType = refArrayWrap != null ? refArrayWrap : createRef(createArray(elemType)); return;
+		}
+	}
+}
+
+function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as ArrayAccessData;
+	// Defensive: malformed ArrayAccess may have null d.array (e.g. macro
+	// VM round-trip lost the field). Convert null deref into diagnostic.
+	if (d.array == null) {
+		addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	checkInTypeSlot(ctx, d.array);
+	const arrayIsFunction = isFunctionShaped(d.array.nodeType) && !valueOfInPlace(ctx, d.array);
+	let arrType = d.array.nodeType;
+	// The index is a READ even when the ArrayAccess is on an assignment
+	// LHS (`a[i] = v`). leftPartOfAsgn suppresses flow narrowing for the
+	// assignment target, but the index sub-expression must still narrow
+	// (else a value-Maybe index keeps its carrier type → codegen mixes
+	// struct and payload). Reset around the index check only.
+	if (d.index != null) {
+		const savedLpa = ctx.initTracker.leftPartOfAsgn;
+		ctx.initTracker.leftPartOfAsgn = 0;
+		checkExpr(ctx, d.index, null);
+		ctx.initTracker.leftPartOfAsgn = savedLpa;
+	}
+	if (arrayIsFunction) {
+		addError(ctx, "a function value cannot be indexed — call it first", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	// Array sub-expr may have null nodeType when a macro expansion
+	// returns an Identifier whose lookup hasn't repopulated the
+	// symbol's type yet. Diagnostic instead of null deref.
+	if (arrType == null) {
+		addError(ctx, "internal: array type unresolved in ArrayAccess (child kind=" + d.array.kind + ")", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	arrType = peelTransparentInstance(arrType);
+	// Enum reverse index E[v]: TS numeric-enum reverse mapping, value → member-name string.
+	// Base must be the enum TYPE symbol itself (not a value of enum type).
+	if (d.array.kind == NodeKind.Identifier && d.array.resolvedSym != null
+			&& d.array.resolvedSym.symbolKind == SymbolKind.Enum) {
+		const revIdxType = d.index != null ? d.index.nodeType : null;
+		if (revIdxType == null || !(isNumeric(revIdxType) || revIdxType.kind == TypeKind.Enum)) {
+			addError(ctx, "enum reverse index '" + typeDisplayName(arrType) + "[...]' expects a numeric or enum operand", node.location.line, node.location.column);
+			node.nodeType = errorType(); return;
+		}
+		node.nodeType = stringType(); return;
+	}
+	// HashMap<K,V> subscript: mutate `m[k]` into the method-call form `m.get(k)`
+	// so the existing extension resolution (checkMemberExpr → checkCallExpr)
+	// sets up NodeFlag.ExtCall + resolvedSym, and extensionMethodLower later
+	// rewrites it to the flat UFCS form. This makes `{ [key: K]: V }` and
+	// HashMap<K,V> subscripts work transparently at runtime.
+	//
+	// Only handles READ here. Write case (`m[k] = v`) is handled in the
+	// BinaryExpr assignment check — see below — because we need to know if
+	// the ArrayAccess is on the LHS of an assignment to emit `.set` instead
+	// of `.get`. The leftPartOfAsgn counter tells us that.
+	let mapObjType = arrType;
+	if (mapObjType != null && mapObjType.kind == TypeKind.Ref && mapObjType.typeReturn != null) {
+		mapObjType = mapObjType.typeReturn;
+	}
+	if (mapObjType != null && mapObjType.kind == TypeKind.GenericInstance
+		&& isIndexableMapType(mapObjType)
+		&& ctx.initTracker.leftPartOfAsgn == 0) {
+		const loc = node.location;
+		const memberTok = createToken(TokenKind.Ident, "", loc.line);
+		const memberData: NodeData = { object: d.array, property: "get", isOptional: false };
+		const memberNode = createNode(NodeKind.MemberExpr, memberData, memberTok);
+		const callArgs: Node[] = [];
+		callArgs.push(d.index);
+		// Mutate in place — same node identity, different kind.
+		// Assign literal directly to node.data: NodeData (union) — typed
+		// intermediate confuses codegen variant handling.
+		node.kind = NodeKind.CallExpr;
+		node.data = {
+			callee: memberNode,
+			arguments: callArgs,
+			isDirectCall: true,
+			resolvedOverloadIdx: -1,
+		};
+		node.flags = node.flags.excl(NodeFlag.Sem);
+		node.nodeType = null;
+		node.nodeType = checkCallExpr(ctx, node, null); return;
+	}
+	const subscriptRecv = subscriptOperandOf(arrType);
+	if (subscriptRecv != null && (declaresSubscript(ctx, arrType, "[]") || declaresSubscript(ctx, arrType, "[]="))) {
+		if (ctx.initTracker.leftPartOfAsgn > 0) {
+			addError(ctx, "'[]' of '" + typeDisplayName(subscriptRecv) + "' returns a value, so this subscript cannot be assigned to — only 'x[i] = v' writes, through a declared '[]='", node.location.line, node.location.column);
+			node.nodeType = errorType(); return;
+		}
+		if (!declaresSubscript(ctx, arrType, "[]")) {
+			addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
+			node.nodeType = errorType(); return;
+		}
+		const sargs: Node[] = [];
+		sargs.push(d.index);
+		node.nodeType = rewriteAsMethodCall(ctx, node, d.array, "[]", sargs); return;
+	}
+	if (subscriptRecv != null && !hasGenericParams(subscriptRecv)
+			&& (subscriptRecv.kind == TypeKind.Struct || subscriptRecv.kind == TypeKind.Boolean || isNumeric(subscriptRecv))) {
+		addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	// reference array: deref Ref<Array> so element-type + nativeLower/codegen see the value array
+	if (arrType.kind == TypeKind.Ref && arrType.typeReturn != null && arrType.typeReturn.kind == TypeKind.Array) {
+		const drefTok = createToken(TokenKind.Ident, "", node.location.line);
+		const drefNode = createNode(NodeKind.HiddenDeref, { expr: d.array }, drefTok);
+		drefNode.nodeType = arrType.typeReturn;
+		d.array = drefNode;
+		arrType = arrType.typeReturn;
+	}
+	if (arrayIndexFails(arrType, d.index)) {
+		const lpaAtIndex = ctx.initTracker.leftPartOfAsgn;
+		ctx.initTracker.leftPartOfAsgn = 0;
+		const indexRead = valueOfInPlace(ctx, d.index);
+		ctx.initTracker.leftPartOfAsgn = lpaAtIndex;
+		if (!indexRead || arrayIndexFails(arrType, d.index)) {
+			addError(ctx, "an array index must be a number, got '" + typeDisplayName(d.index.nodeType!) + "'",
+				node.location.line, node.location.column);
+			node.nodeType = errorType(); return;
+		}
+	}
+	reportConstIndexBound(ctx, arrType, d.index, node);
+	const idxType = d.index.nodeType;
+	// Implicit number → int64 cast for array index (C requires integer subscript)
+	if (idxType != null && idxType.kind == TypeKind.Number && d.index.kind != NodeKind.BinaryExpr) {
+		d.index = wrapInConv(d.index, createPrimitive(TypeKind.Int64));
+	}
+	const rangeIndex = d.index.kind == NodeKind.BinaryExpr
+		&& ((d.index.data as BinaryExprData).operator == ".." || (d.index.data as BinaryExprData).operator == "...");
+	if (arrType.kind == TypeKind.Tuple && arrType.typeChildren != null && !rangeIndex) {
+		node.nodeType = tupleIndexType(ctx, arrType, d, node); return;
+	}
+	// Range access: arr[start..end] returns Span<elemType>
+	let accessType: Type = inferredType();
+	if (d.index.kind == NodeKind.BinaryExpr) {
+		const bd = d.index.data as BinaryExprData;
+		if (bd.operator == ".." || bd.operator == "...") {
+			accessType = arrType.kind == TypeKind.String ? createReadonlyView(createSpan(charType()))
+				: createSpan(getElementType(arrType));
+		} else if (arrType.kind == TypeKind.String) {
+			accessType = stringType();
+		} else {
+			accessType = getElementType(arrType);
+		}
+	} else if (arrType.kind == TypeKind.String) {
+		accessType = stringType();
+	} else {
+		accessType = getElementType(arrType);
+	}
+	node.nodeType = accessType;
+	node.nodeType = accessType; return;
+}
+
+function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as IdentifierData;
+	// Phase 5: `super` resolves to parent class via enclosing `this`'s
+	// classType.typeExtra chain. Special-cased BEFORE lookupSymbol because
+	// `super` is never a regular declared symbol.
+	if (d.name == "super") {
+		node.nodeType = resolveSuper(ctx, node); return;
+	}
+	// Enum member access is rewritten to a mangled Identifier ("E_M")
+	// whose name is deliberately never bound in scope — its resolution
+	// lives only on the inline resolvedSym. A re-check of injected
+	// comptime/macro decls (resolvedSym preserved by cloneNodeForCheck)
+	// must trust it rather than look the mangled name up and fail. A
+	// normal identifier never arrives pre-tagged EnumMember.
+	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.EnumMember) {
+		node.nodeType = node.resolvedSym.symbolType; return;
+	}
+	// bindSym: the macro pre-bound this identifier in its own module's
+	// scope — the user's scope must not re-resolve (or hijack) it.
+	const sym = resolveCalleeIdent(ctx, node);
+	if (sym == null && ctx.jsxMacroArgDepth > 0) {
+		const builtin = builtinTypeNamed(ctx, d.name);
+		if (builtin != null) { node.nodeType = builtin; return; }
+	}
+	if (sym == null) {
+			addError(ctx, `Undefined variable '${d.name}'` + callLaterDeclarationNote(d.name), node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	if (node.flags.has(NodeFlag.BoundSym) && isFrameValue(sym) && !isVisibleSymbol(ctx.table, sym)) {
+		addError(ctx, `'${d.name}' is a local of another function: a macro placed it where that function's frame does not exist`, node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	// Demand-driven: ensure the symbol's signature is resolved before using its type
+	ensureShaped(sym, ctx);
+	node.resolvedSym = sym;
+	markUsedIn(ctx, sym);
+	if (sym.symbolKind == SymbolKind.Function || (sym.symbolKind == SymbolKind.Variable && sym.symbolType != null
+			&& sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn))) callDemandReturn(ctx, sym, node);
+	if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
+	if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
+	if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr
+			&& !isEngineCheckMode() && ctx.compileTimeBodyDepth == 0) {
+		addError(ctx, `'${d.name}' is @comptime, so it runs only while compiling: call it with compile-time arguments; it has no run-time code to reference as a value`, node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
+		addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	if (ctx.staticInitBoundary != null && isFrameValue(sym) && isCapturedAcross(ctx.table, d.name, sym, ctx.staticInitBoundary)) {
+		const what = sym.symbolKind == SymbolKind.Parameter ? "parameter" : "enclosing local";
+		addError(ctx, "a static initializer cannot read the " + what + " '" + d.name + "' — a class declared in a function body initializes its statics once, before any call runs", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	if (capturesView(ctx, d.name, sym)) {
+		const useAt = node.location;
+		addError(ctx, viewCaptureRefusal(ctx, d.name, sym), useAt.line, useAt.column);
+	}
+	// PARALOCK Phase 1 R2/E3: affine-Promise bindings are single-use.
+	// Reuse check is keyed by symbolConsumeKey (name + declaration site) so
+	// shadowed bindings don't false-positive. First-await is OK because the
+	// AwaitExpr handler marks the key AFTER its inner checkExpr returns.
+	if (sym.symbolType != null && isAffineAwaitable(sym.symbolType)
+		&& isConsumedName(ctx.affineTracker, symbolConsumeKey(sym))
+		&& ctx.initTracker.leftPartOfAsgn <= 0) {
+		addError(ctx,
+			"affine Promise '" + d.name + "' has already been awaited and cannot be reused (PARALOCK R2/E3)",
+			node.location.line, node.location.column);
+	}
+	if (isConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym))) {
+		if (ctx.initTracker.leftPartOfAsgn > 0) removeConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym));
+		else addError(ctx, "'" + d.name + "' was moved into a spawn thunk and cannot be used afterwards — spawn(fn, { move: [" + d.name + "] }) transferred it (PARALOCK E24)", node.location.line, node.location.column);
+	}
+	// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
+	// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
+	if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0
+		&& ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null
+		&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)) {
+		if (requiresInit(sym.symbolType)) {
+			addError(ctx, "'" + d.name + "' may be read before it is assigned: type '" + typeDisplayName(sym.symbolType) + "' has no default value", node.location.line, node.location.column);
+			markInitialized(ctx.initTracker, d.name);
+		} else if (ctx.strictDefs) {
+			addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
+			markInitialized(ctx.initTracker, d.name);
+		}
+	}
+	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
+	// Assignment LHS: return the declared type, not the flow-narrowed
+	// one. Inside `if (x === null) { x = {...} }` the RHS otherwise
+	// gets `null` as contextualType and falls through to anon-struct
+	// synthesis instead of widening to x's declared type.
+	const boundary = ctx.readonlyBoundary;
+	const capturedView = boundary != null && isCapturableValue(sym) && isCapturedAcross(ctx.table, d.name, sym, boundary);
+	let readType = sym.symbolType;
+	if (readType != null && (readType.kind == TypeKind.Var || readType.kind == TypeKind.Borrow) && readType.typeReturn != null) {
+		readType = readType.typeReturn;
+	}
+	if (ctx.initTracker.leftPartOfAsgn > 0) {
+		node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
+	}
+	const flowType = getFlowTypeOfReference(node, readType);
+	node.nodeType = capturedView ? propagateReadonlyView(flowType) : flowType;
+	return;
+}
+
+function checkUnaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	const d = node.data as UnaryExprData;
+	// Propagate expectedType through unary +/- for literal coercion (e.g., -128 → int8)
+	const unaryExpected = (d.unaryOp == "-" || d.unaryOp == "+") ? expectedType : null;
+	if (d.unaryOp == "-" && isNodeIntLit(d.operand)
+		&& unaryExpected != null && isIntegerType(unaryExpected)) {
+		checkNegatedIntLiteral(ctx, d.operand, unaryExpected);
+		node.nodeType = unaryExpected;
+		return;
+	}
+	if (d.unaryOp == "-" && isNodeIntLit(d.operand) && unaryExpected == null) {
+		reportLiteralRange(ctx, d.operand);
+		d.operand.nodeType = untypedIntegerLiteralType(ctx, d.operand, true);
+		node.nodeType = d.operand.nodeType;
+		return;
+	}
+	checkExpr(ctx, d.operand, unaryExpected);
+	if (d.unaryOp == "!") {
+		refuseFunctionTruthiness(ctx, d.operand);
+	} else if ((d.unaryOp == "-" || d.unaryOp == "+") && unaryArithFails(ctx, d.unaryOp, d.operand.nodeType)
+		&& !valueOfInPlace(ctx, d.operand)) {
+		addError(ctx, "unary '" + d.unaryOp + "' needs a numeric operand, got '" + typeDisplayName(d.operand.nodeType!) + "'",
+			node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	} else if (d.unaryOp == "~" && d.operand.nodeType != null && d.operand.nodeType.kind != TypeKind.Number
+		&& !isBitwiseAllowed(d.operand.nodeType)) {
+		valueOfInPlace(ctx, d.operand);
+	}
+	const operandType = d.operand.nodeType;
+	if (d.unaryOp == "!" && operandType != null && operandType.kind == TypeKind.Void) {
+		addError(ctx, "an expression of type 'void' cannot be tested for truthiness",
+			node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	if (d.unaryOp == "+" && operandType != null && operandType.kind == TypeKind.BigInt) {
+		addError(ctx, "unary '+' is not allowed on bigint — use Number(b) to convert", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	// Bitwise NOT: integer/enum = ok, number = warn, other = error
+	if (d.unaryOp == "~") {
+		if (operandType != null && operandType.kind == TypeKind.Set) {
+			addError(ctx, "bitwise NOT '~' has no meaning on a set — use '.difference(other)' to remove members", node.location.line, node.location.column);
+			node.nodeType = errorType(); return;
+		}
+		if (operandType != null && operandType.kind == TypeKind.Number) {
+			addWarning(ctx, "bitwise NOT '~' on 'number' implicitly casts to int32; prefer explicit integer type", node.location.line, node.location.column);
+			d.operand = wrapInConv(d.operand, createPrimitive(TypeKind.Int32));
+		} else if (!isBitwiseAllowed(operandType)) {
+			const name = operandType != null ? typeDisplayName(operandType) : "unknown";
+			addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
+		}
+	}
+	if ((d.unaryOp == "-" || d.unaryOp == "+" || d.unaryOp == "!" || d.unaryOp == "~")
+		&& operandType != null && !isStringLike(operandType)
+		&& !(d.unaryOp == "-" && d.operand.kind == NodeKind.NumberLiteral)
+		&& ctx.extensionRegistry != null) {
+		const unExt = resolveOperatorCall(ctx.table, ctx.extensionRegistry, d.unaryOp, [operandType]);
+		if (unExt != null) {
+			const unFnType = getExtFnType(unExt);
+			if (unFnType != null && unFnType.typeReturn != null) {
+				node.flags = node.flags.incl(NodeFlag.UserOp);
+				node.nodeType = unFnType.typeReturn; return;
+			}
+		}
+	}
+	if (d.unaryOp == "typeof" && operandType != null && operandType.kind == TypeKind.Union) {
+		const stored = declaredTagUnionOf(d.operand);
+		if (stored != null && stored != operandType) d.operand.nodeType = stored;
+	}
+	node.nodeType = inferUnaryOp(d.unaryOp, operandType!); return;
+}
+
+function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	// Implementation parity: pragma/macro args are type-checked
+	const md = node.data as MacroInvocationData;
+	// reference parity: @emit backtick interpolation (reference emit processing)
+	if (md.macroName == "emit" && isDirectiveInvocation(node)) {
+		processEmitInterpolation(ctx, node);
+	}
+	// @import args are pure syntax (not evaluated) — skip type-checking
+	foldComptimeNodeAliasArgs(ctx, md.macroArgs);
+	if (md.macroName != "import") { checkJsxConsumed(ctx, md.macroArgs); }
+	// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
+	// with concrete types. After mono clones a generic body, replaceTypeVars
+	// substitutes T→concrete in arg.nodeType. The re-check then hits this
+	// MacroInvocation with concrete args and must expand — otherwise the
+	// surrounding ReturnStmt/VariableDecl gets voidType, breaking the
+	// declared-return-type assignability check.
+	//
+	// Mirrors the CallExpr eager path. Only fires for
+	// names that resolve to a macro; builtin directives (emit, include, ...)
+	// keep the voidType behavior. If args still contain GenericParam
+	// (defer convention), return inferredType — let the next mono level
+	// or post-mono expand pass handle it.
+	const macroSym = invokedMacroSym(ctx, node);
+	if (macroSym != null) {
+		node.resolvedSym = macroSym;
+		if (macroDepthExceeded(ctx, md.macroName, node)) return;
+		if (anyArgIsParametric(md.macroArgs)) { node.nodeType = inferredType(); return; }
+		ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
+		const expanded = callExpandMacroInvocation(node, ctx, 0);
+		// When a user macro emits a sentinel error (or VM fails),
+		// expandMacroInvocation returns the SAME MacroInvocation node and
+		// has already called addError. Re-checking would route back into
+		// this same branch and re-fire the macro, multiplying the error
+		// up to the depth limit and finally emitting a misleading
+		// "possible recursive macro" warning. Detect by kind preservation.
+		if (expanded.kind == NodeKind.MacroInvocation) {
+			ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+			node.nodeType = errorType(); return;
+		}
+		const friends = expansionOf(ctx, node, macroSym.modulePath);
+		const friendScope = befriend(ctx, friends);
+		let expandedValue = expanded;
+		const hoists = isHoistingSplice(ctx, node, expanded);
+		if (hoists) {
+			expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
+			if (expandedValue == null) {
+				unfriend(friendScope, friends);
+				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+				node.nodeType = errorType(); return;
+			}
+		}
+		node.kind = expandedValue.kind;
+		node.data = expandedValue.data;
+		if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+		if (expandedValue.location != null) node.location = expandedValue.location;
+		node.nodeType = null as unknown as Type;
+		node.resolvedSym = null;
+		node.flags = 0 as BitSet<NodeFlag>;
+		node.variantSlot = 0;
+		keepFoldedType(node, expandedValue);
+		if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
+		checkExpr(ctx, node, expectedType);
+		unfriend(friendScope, friends);
+		if (hoists) bindRefsToHoistedPrefix(node, expanded);
+		ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
+		node.nodeType = node.nodeType; return;
+	}
+	node.nodeType = voidType(); return;
 }
 
 
