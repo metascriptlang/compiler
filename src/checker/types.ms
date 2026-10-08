@@ -4172,6 +4172,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		TypeKind.Inferred => "<inferring>",
 		TypeKind.Function => "function",
 		TypeKind.GenericParam => t.typeName != "" ? t.typeName : "<T>",
+		TypeKind.BooleanLiteral => t.typeName,
 		_ => "<kind:" + t.kind.toString() + ">",
 	};
 }
