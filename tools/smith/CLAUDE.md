@@ -16,6 +16,7 @@ msc run tools/smith/main.ms gen 7                             # print the progra
 msc run tools/smith/main.ms run 1 30                          # seeds 1..30 through the corpus lanes
 msc run tools/smith/main.ms run 1 10 --plant=backend          # planted C↔JS divergence (opt: O0↔danger)
 msc run tools/smith/main.ms run 1 30 --features="types=int32,float64 depth=2"
+msc run tools/smith/main.ms run 1 3 --san                     # SAN lane (ASan + DRC ledger); bundle kind san, mode recorded
 msc run tools/smith/main.ms rerun out/smith/bundles/<name>    # VOID / NOT REPRODUCED / REPRODUCED
 msc test tools/smith/gen.ms                                   # generator, features and rng contracts
 ```
@@ -39,6 +40,11 @@ else the installed `msc`; the installed `msc` runs the harness. `MSCORPUS_LANES`
   raiser) plus the SAN ledger is the oracle; a digest alone never closes a case
   (collisions measured, CSMITH-STUDY §Oracle). Identical failure on every lane
   is UNRATED, not green.
+- **Evidence is write-once.** A bundle directory is named by a hash of its
+  metadata and program and is never rewritten; a rerun keeps its observation
+  under `out/smith/reruns/`. A rerun is VOID when the metadata is missing or
+  malformed, the lane set, support tree, corpus runner or compiler differ, or
+  the program no longer regenerates.
 - **A timeout is not a bug** until a longer deadline proves it
   (CSMITH-STUDY §Driver).
 - **Reduction predicates pin failure identity** — lane pair, symptom, and the
