@@ -42,7 +42,8 @@ function main(): void {
 	showN("codeSpace", s.charCodeAt(6));
 
 	showB("eq", "abc" == "abc");
-	showB("ne", "abc" == "abd");
+	const abc: string = "abc";
+	showB("ne", abc == "abd");
 	showB("lt", "apple" < "banana");
 	showB("gt", "banana" > "apple");
 	showB("le", "abc" <= "abc");
