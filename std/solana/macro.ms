@@ -31,7 +31,7 @@ import {
 	readArgs,
 	selectLiteralInstruction,
 } from "./typed";
-import { delegateAt } from "./delegation";
+import { DELEGATION_MAX_SEEDS, delegateAt } from "./delegation";
 import { createMintPdaAt } from "./mint";
 import {
 	bytesAddress,
@@ -995,6 +995,11 @@ export macro signed(call: Node, seeds: Node): Node {
 }
 
 export macro delegate(accounts: Node, seeds: Node, bump: Node, config: Node): Node {
+	if (seeds.kind === NodeKind.ArrayLiteral &&
+		(seeds.elements.length == 0 || (seeds.elements.length as uint64) > DELEGATION_MAX_SEEDS)) {
+		error("delegate(): the delegation program takes 1 to " + (DELEGATION_MAX_SEEDS as int32) +
+			" seeds, and this list has " + (seeds.elements.length as int32), seeds);
+	}
 	return {
 		kind: NodeKind.CallExpr,
 		line: accounts.line,

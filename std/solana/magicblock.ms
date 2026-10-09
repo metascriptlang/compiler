@@ -29,6 +29,8 @@ when (testBuild) {
 	} from "./delegation";
 	import { delegate, findProgramAddress } from "./macro";
 	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
+	import { delegateAt } from "./delegation";
+	import { SeedSlice, createAddressWithBump, seedBytes, seedText } from "./seed";
 }
 
 const MAX_COMMIT_ACCOUNTS: uint64 = 16;
@@ -399,6 +401,118 @@ when (testBuild) {
 		const misplaced = delegationAccounts();
 		misplaced[3] = holder(keyOf(3), Pubkey.zero(), []);
 		assert delegateRun(misplaced, 0) == ProgramError.invalidSeeds().code;
+		assert invocations().length == 0;
+	}
+
+	function heldSeedKey(): Pubkey {
+		const derived = findProgramAddressOf(programKey(), ["pet", [5, 6, 7, 8]]);
+		if (derived.ok) { return derived.value.key; }
+		return Pubkey.zero();
+	}
+
+	// pinned 0: one seed inside the delegated account's data; 1: the same bytes from a local; 2: nine seeds; 3: none.
+	function delegateHeldStep(): Result<uint64, ProgramError> {
+		const shape = try instructionData().readU8(0);
+		const delegation: DelegationAccounts = {
+			payer: try account(0),
+			delegated: try account(1),
+			ownerProgram: try account(2),
+			buffer: try account(3),
+			delegationRecord: try account(4),
+			delegationMetadata: try account(5),
+			systemProgram: try account(6),
+		};
+		const derived = try findProgramAddress(["pet", [5, 6, 7, 8]]);
+		const local: uint8[4] = [5, 6, 7, 8];
+		const held = delegation.delegated.data();
+		const inside: SeedSlice = { address: held.address, length: 4 };
+		const config = DelegationConfig.anyValidator();
+		if (shape == 0) { return delegateAt(delegation, [seedText("pet"), inside], derived.bump, config); }
+		if (shape == 1) { return delegateAt(delegation, [seedText("pet"), seedBytes(local)], derived.bump, config); }
+		if (shape == 2) {
+			const many: SeedSlice[9] = [
+				seedText("pet"), inside, inside, inside, inside, inside, inside, inside, inside,
+			];
+			return delegateAt(delegation, many, derived.bump, config);
+		}
+		const none: SeedSlice[0] = [];
+		return delegateAt(delegation, none, derived.bump, config);
+	}
+
+	function delegateHeldEntry(): void {
+		const result = delegateHeldStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function heldAccounts(buffer: Pubkey): HostAccount[] {
+		const pet: HostAccount = { ...holder(heldSeedKey(), programKey(), [5, 6, 7, 8]), lamports: 900 };
+		return [
+			payerAccount(),
+			pet,
+			programAccount(programKey()),
+			holder(buffer, Pubkey.zero(), []),
+			holder(keyOf(4), Pubkey.zero(), []),
+			holder(keyOf(5), Pubkey.zero(), []),
+			programAccount(Pubkey.zero()),
+		];
+	}
+
+	function heldBuffer(): Pubkey {
+		const derived = findProgramAddressOf(programKey(), ["buffer", heldSeedKey()]);
+		if (derived.ok) { return derived.value.key; }
+		return Pubkey.zero();
+	}
+
+	function heldBufferBump(): uint8 {
+		const derived = findProgramAddressOf(programKey(), ["buffer", heldSeedKey()]);
+		if (derived.ok) { return derived.value.bump; }
+		return 0;
+	}
+
+	function delegateHeldRun(accounts: HostAccount[], shape: uint8): uint64 {
+		const input: uint8[] = [shape];
+		return run(programKey(), accounts, input, delegateHeldEntry).result;
+	}
+
+	test "a seed read from the delegated account signs and is sent as it was before the account is zeroed" {
+		const pet = findProgramAddressOf(programKey(), ["pet", [5, 6, 7, 8]]);
+		assert pet.ok;
+		const heldBytes: uint8[] = [5, 6, 7, 8];
+		const seeds: uint8[] = [2, 0, 0, 0, 3, 0, 0, 0, 112, 101, 116, 4, 0, 0, 0, 5, 6, 7, 8];
+		for (const shape of [0, 1]) {
+			const accounts = heldAccounts(heldBuffer());
+			assert delegateHeldRun(accounts, shape as uint8) == 0;
+			const calls = invocations();
+			assert calls.length == 3;
+			if (pet.ok) {
+				const signed = [textBytes("pet"), heldBytes, [pet.value.bump]];
+				assert signerIs(calls[1], 0, signed) && signerIs(calls[2], 0, signed);
+			}
+			for (let index = 0; index < seeds.length; index++) {
+				assert calls[2].data[12 + index] == seeds[index];
+			}
+			assert accounts[1].data[0] == 0 && accounts[1].owner.equals(DELEGATION_PROGRAM_ID);
+		}
+	}
+
+	test "delegate refuses a buffer at a lower bump than the canonical one, before any call" {
+		const bufferSeeds: SeedSlice[2] = [seedText("buffer"), seedBytes(heldSeedKey().bytes)];
+		let lower = Pubkey.zero();
+		let bump = heldBufferBump();
+		while (bump > 0 && lower.isZero()) {
+			bump = bump - 1;
+			const candidate = createAddressWithBump(bufferSeeds, bump, bytesAddress(programKey().bytes));
+			if (candidate.ok) { lower = candidate.value; }
+		}
+		assert !lower.isZero();
+		assert delegateHeldRun(heldAccounts(lower), 1) == ProgramError.invalidSeeds().code;
+		assert invocations().length == 0;
+	}
+
+	test "delegate refuses nine seeds and none before any call: the delegation program takes 1 to 8" {
+		assert delegateHeldRun(heldAccounts(heldBuffer()), 2) == ProgramError.maxSeedLengthExceeded().code;
+		assert invocations().length == 0;
+		assert delegateHeldRun(heldAccounts(heldBuffer()), 3) == ProgramError.maxSeedLengthExceeded().code;
 		assert invocations().length == 0;
 	}
 
