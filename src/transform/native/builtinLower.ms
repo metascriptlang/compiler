@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -146,7 +146,7 @@ function memberToString(v: Node, loc: SourceLocation, ctx: TransformContext): No
 }
 
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
-	const base = literalBase(objType);
+	const base = isStringLike(objType) ? stringType() : literalBase(objType);
 	if (base != objType) return lowerToString(callNode, obj, base, loc, ctx);
 	// bigint is a primitive with no user-extensible toString, and the synthetic
 	// calls that interpolation and concat build carry no symbol for

@@ -1006,19 +1006,41 @@ export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
 		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
 	if (allStrLit) return hits;
+	if (isStringLike(exprType)) {
+		const slot = stringSlotOf(formal, exprType);
+		if (slot >= 0) hits.push(slot);
+		return hits;
+	}
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
-		if (!hit && stringCarried) {
-			hit = child.kind == TypeKind.String;
-		} else if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) {
-			hit = child.kind == ek
-				|| (child.kind == TypeKind.String && ek == TypeKind.StringLiteral);
-		}
+		if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) hit = child.kind == ek;
 		if (hit) hits.push(vi);
 		vi += 1;
 	}
 	return hits;
+}
+
+function stringSlotOf(formal: Type, value: Type): int32 {
+	let slot: int32 = -1;
+	let wide = false;
+	for (let i: int32 = 0; i < formal.typeChildren.length; i += 1) {
+		const child = formal.typeChildren[i];
+		if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral) continue;
+		if (slot < 0) slot = i;
+		if (child.kind == TypeKind.String) wide = true;
+	}
+	if (slot < 0 || wide) return slot;
+	if (value.kind == TypeKind.String) return -1;
+	const literals = value.kind == TypeKind.StringLiteral ? [value] : value.typeChildren;
+	for (const lit of literals) {
+		let held = false;
+		for (const child of formal.typeChildren) {
+			if (child.kind == TypeKind.StringLiteral && child.typeName == lit.typeName) held = true;
+		}
+		if (!held) return -1;
+	}
+	return slot;
 }
 
 export function variantIndexInUnion(formal: Type, exprType: Type): int32 {

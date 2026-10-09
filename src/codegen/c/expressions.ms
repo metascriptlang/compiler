@@ -2254,7 +2254,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Variant struct → discriminated union: construct with tag + variant slot.
 		// C layouts differ (variant = small struct, union = tagged union with all
 		// variant slots) — a raw cast silently misaligns fields.
-		if (d.convType.kind == TypeKind.Union && d.convType.typeChildren != null) {
+		if (isTagCarriedUnion(d.convType)) {
 			const srcType = d.convExpr.nodeType;
 			let vi = 0;
 			// Checker-stamped slot wins: union variants are frequently anonymous,
@@ -2314,7 +2314,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${payload}, .present=true} : (${targetC}){0})`);
 			return;
 		}
-		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind != TypeKind.Union) {
+		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && !isTagCarriedUnion(d.convType)) {
 			const pvi = projSlot - 1;
 			ctx.results.push(`(${inner}).v${pvi}`);
 			return;

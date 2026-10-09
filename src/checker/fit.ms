@@ -1751,7 +1751,7 @@ export function storesUnionTag(t: Type): boolean {
 	const seen: string[] = [];
 	for (const m of t.typeChildren) {
 		const kind = jsMemberKind(m);
-		if (kind == "class") continue;
+		if (kind == "class" || kind == "string") continue;
 		if (seen.indexOf(kind) >= 0) return true;
 		seen.push(kind);
 	}
@@ -1773,7 +1773,7 @@ function flatUnionTakesNull(t: Type): boolean {
 // directions apart by convType: union = inject, member = project.
 export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
 	const exprType = peelTransparentInstance(exprTypeRaw);
-	if (exprType.kind == TypeKind.Union) return null as unknown as Node;
+	if (exprType.kind == TypeKind.Union && !isStrLitSet(exprType)) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
 	const projected = projectTagUnionMember(expr, declared, exprType);
@@ -1783,6 +1783,7 @@ export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
 	if (exprType.kind == TypeKind.Union && !isStringLike(exprType)) return -1;
+	if (isStringLike(exprType)) return unionSlotOf(declared, exprType);
 	let ci: int32 = 0;
 	for (const child of declared.typeChildren) {
 		if (child == exprType) return ci;
@@ -1801,7 +1802,7 @@ export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type
 	}
 	if (vi < 0) return null as unknown as Node;
 	expr.nodeType = declared;
-	return hiddenSlotConv(expr, declared.typeChildren[vi], vi);
+	return hiddenSlotConv(expr, isStringLike(exprType) ? exprType : declared.typeChildren[vi], vi);
 }
 
 export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type, convert: boolean = false): Node {
@@ -2118,7 +2119,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			return expr;
 		}
 	}
-	if (formal.kind != TypeKind.Union && exprType.kind != TypeKind.Union) {
+	if ((formal.kind != TypeKind.Union || isStrLitSet(formal)) && (exprType.kind != TypeKind.Union || isStrLitSet(exprType))) {
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
 	}

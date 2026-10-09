@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
-import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
+import { narrowUnionToVariant, isSlotUnion, isStrLitSet, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
 import { isMaybeType, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -21,7 +21,7 @@ function projectNode(node: Node): Node {
 }
 
 function projectNarrowedRead(node: Node): Node {
-	if (node.nodeType == null || node.nodeType.kind == TypeKind.Union) return node;
+	if (node.nodeType == null || (node.nodeType.kind == TypeKind.Union && !isStrLitSet(node.nodeType))) return node;
 	const projected = narrowUnionToVariant(node, node.nodeType);
 	if (projected != null as unknown as Node) return projected;
 	return node;
@@ -80,7 +80,7 @@ function lowerUnionInstanceof(node: Node): Node {
 function checkedProjectionSource(n: Node, anySource: boolean = false): Type | null {
 	if (n == null || n.kind != NodeKind.HiddenSubConv || n.variantSlot <= 0) return null;
 	const d = n.data as HiddenStdConvData;
-	if (d.convType.kind == TypeKind.Union || isMaybeType(d.convType)) return null;
+	if ((d.convType.kind == TypeKind.Union && !isStrLitSet(d.convType)) || isMaybeType(d.convType)) return null;
 	const ut = d.convExpr.nodeType;
 	if (ut == null || isMaybeType(ut) || !isSlotUnion(ut) || (!anySource && !isLocation(d.convExpr))) return null;
 	return ut;
