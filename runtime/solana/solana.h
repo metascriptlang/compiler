@@ -427,6 +427,31 @@ static inline uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t
     return 1;
 }
 
+/* msSolFindAddress for a key the caller names: 0 and its bump when it is the canonical address, 1 when it is not.
+   The matching hash skips the curve check, because a key on the curve cannot sign: the runtime refuses the first
+   CPI signed with these seeds. Every bump above it is still checked, so a non-canonical key is refused. */
+static inline uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    uint8_t hash[32];
+    const uint64_t out = (uint64_t)(uintptr_t)hash;
+    uint8_t bump = 255;
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    input[count].address = (uint64_t)(uintptr_t)&bump;
+    input[count].length = 1;
+    const uint64_t total = msSolSeedTail(input, count + 1, program);
+    for (uint64_t attempt = 0; attempt < 255; attempt++) {
+        bump = (uint8_t)(255 - attempt);
+        msSolSha256((uint64_t)(uintptr_t)input, total, out);
+        if (msSolLoadU64(out) == msSolLoadU64(expected) && msSolLoadU64(out + 8) == msSolLoadU64(expected + 8) &&
+            msSolLoadU64(out + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(out + 24) == msSolLoadU64(expected + 24)) {
+            msSolStoreU8(bumpOut, bump);
+            return 0;
+        }
+        if (msSolCurveValidatePoint(0, out, 0) != 0) return 1;
+    }
+    return 1;
+}
+
 #define MS_SOL_MAX_CPI_ACCOUNTS 64
 
 typedef struct {

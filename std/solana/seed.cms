@@ -17,6 +17,7 @@ extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 
 extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
 extern function msSolHashAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
 extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
+extern function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
 
 const MAX_SEEDS: uint64 = 16;
 const MAX_SEED_LENGTH: uint64 = 32;
@@ -115,6 +116,18 @@ export function findAt(
 	if (code == 2) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
 	if (code != 0) { return Result.err(ProgramError.invalidSeeds()); }
 	return Result.ok(found);
+}
+
+export function findExpected(
+	seeds: Readonly<Span<SeedSlice>>,
+	program: uint64,
+	expected: uint64,
+): Result<uint8, ProgramError> {
+	let bump: uint8[1] = [0];
+	const code = msSolFindExpectedAddress(tableAddress(seeds), seeds.length as uint64, program, expected, msSolSpanAddress(bump));
+	if (code == 2) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	if (code != 0) { return Result.err(ProgramError.invalidSeeds()); }
+	return Result.ok(bump[0]);
 }
 
 export function createAddress(
