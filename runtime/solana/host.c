@@ -528,6 +528,24 @@ static uint64_t msSolHostSystem(const uint64_t* header) {
         memcpy(second + 40, data + 20, 32);
         return 0;
     }
+    case 13: {
+        if (first == NULL || header[4] < 52) return 3ULL << 32;
+        uint64_t length, space;
+        memcpy(&length, first + 80, 8);
+        memcpy(&space, data + 12, 8);
+        if (length != 0 || memcmp(first + 40, systemProgram, 32) != 0) return 1ULL << 32;
+        if (space > MS_SOL_MAX_PERMITTED_DATA_INCREASE) return 20ULL << 32;
+        if (amount != 0 && (second == NULL || second == first)) return 3ULL << 32;
+        if (amount != 0 && msSolHostLamports(second) < amount) return 1;
+        uint64_t current = msSolHostLamports(first);
+        if (amount > UINT64_MAX - current) return 24ULL << 32;
+        uint64_t status = msSolHostResize(first, space);
+        if (status != 0) return status;
+        if (amount != 0) msSolHostSetLamports(second, msSolHostLamports(second) - amount);
+        msSolHostSetLamports(first, current + amount);
+        memcpy(first + 40, data + 20, 32);
+        return 0;
+    }
     case 1:
         if (first == NULL || header[4] < 36) return 3ULL << 32;
         memcpy(first + 40, data + 4, 32);
