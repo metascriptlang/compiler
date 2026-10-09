@@ -453,15 +453,6 @@ export function hasStaticExtForReceiver(registry: ExtensionRegistry, receiverNam
 	return false;
 }
 
-export function filterStaticExtsByReceiverName(exts: ExtensionMethod[], receiverName: string): ExtensionMethod[] {
-	const results: ExtensionMethod[] = [];
-	if (receiverName == "") return results;
-	for (const e of exts) {
-		if (e.isStatic && e.receiverTypeName == receiverName) results.push(e);
-	}
-	return results;
-}
-
 // ===== Canonical Extension Type (Standard reference symbol type equivalent) =====
 // Standard reference: the symbol's type is the single source of truth.
 // ext.fnType is a registration-time snapshot that may be stale (noneType from collectPass).
@@ -1678,18 +1669,6 @@ test "extension name lookups keep registration order across truncation" {
 	registerExtension(r, c);
 	assert findAllExtensionsByName(r, "m").length == 1;
 	assert findAllExtensionsByName(r, "m")[0] == c;
-}
-
-test "static ext filter keeps only statics of that receiver" {
-	const stat: ExtensionMethod = { methodName: "m", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
-	const otherRecv: ExtensionMethod = { methodName: "m", receiverTypeName: "Buffer", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
-	const inst: ExtensionMethod = { methodName: "m", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const all: ExtensionMethod[] = [stat, otherRecv, inst];
-	const got = filterStaticExtsByReceiverName(all, "String");
-	assert got.length == 1;
-	assert got[0].receiverTypeName == "String";
-	assert got[0].isStatic;
-	assert filterStaticExtsByReceiverName(all, "").length == 0;
 }
 
 test "create empty registry" {
