@@ -1787,6 +1787,10 @@ test "an unsigned integer into a wider signed one ranks below a same-signedness 
 	const float = scoreCandidatePriority([createPrimitive(TypeKind.Float64)], [u8], 1);
 	assert cmpCandidates(unsigned, signed, null, null) > 0;
 	assert cmpCandidates(signed, float, null, null) > 0;
+	const i16 = createPrimitive(TypeKind.Int16);
+	const bothSigned = scoreCandidatePriority([i16, i16], [u8, u8], 2);
+	const unsignedThenFloat = scoreCandidatePriority([createPrimitive(TypeKind.Uint16), createPrimitive(TypeKind.Float32)], [u8, u8], 2);
+	assert cmpCandidates(bothSigned, unsignedThenFloat, null, null) > 0;
 }
 
 test "no match" { assert typeRelation(numberType(), stringType()) == TypeRelation.None; }
