@@ -3757,7 +3757,7 @@ function checkProgramCore(
 	runThreePasses(ctx, program);
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
-	stampHeaderPaths(ctx);
+	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
 	checkViewBorrows(ctx, program);
