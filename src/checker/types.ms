@@ -3982,17 +3982,22 @@ function getPropertyInner(t: Type | null, name: string): Type {
 		}
 		// Search variants for the field — return type if unambiguous across variants
 		let foundType: Type | null = null;
-		let ambiguous = false;
+		const literals: Type[] = [];
+		let allLiterals = true;
 		for (const variant of t.typeChildren) {
 			if (variant == null) continue;
 			const ft = findFieldInVariant(variant, name);
 			if (ft == null) continue;
-			if (foundType == null) {
-				foundType = ft;
-			} else if (foundType.kind != ft.kind) {
-				ambiguous = true;
+			if (foundType == null) foundType = ft;
+			if (ft.kind != TypeKind.StringLiteral) {
+				allLiterals = false;
+				continue;
 			}
+			let seen = false;
+			for (const l of literals) { if (l.typeName == ft.typeName) seen = true; }
+			if (!seen) literals.push(ft);
 		}
+		if (allLiterals && literals.length > 1) return createUnionInOrder(literals);
 		if (foundType != null) return foundType;
 	}
 	// Enum member access: Color.Red → returns the Enum type
