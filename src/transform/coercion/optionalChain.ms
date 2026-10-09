@@ -4,46 +4,50 @@
 // Uses bottom-up walk via walker.ms so chained a?.b?.c works naturally:
 // inner ?.b transforms first, outer ?.c sees the conditional result.
 
-import { Node, NodeKind, DeclKind, MemberExprData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
+import { Node, NodeKind, MemberExprData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { TransformContext, freshTempSym } from "../context";
-import { walkNode, walkExpandBlocks } from "../walker";
-import { makeMember, makeNull, makeBinary, makeConditional, makeVarDecl, makeAssign, makeIdentResolved } from "../util";
+import { TransformContext } from "../context";
+import { walkNode, walkExpandBlocks, walkWithinStatement } from "../walker";
+import { makeMember, makeNull, makeBinary, makeConditional, makeIdentResolved } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
-import { rereadOperand, asUnknown } from "./nullishCoalesce";
+import { rereadOperand, bindOnce, blockifyArrowsReading } from "./nullishCoalesce";
+import { cloneIfPure } from "./intArithJS";
 
 // ===== Main Entry Point =====
 
 export function lowerOptionalChain(program: Node, ctx: TransformContext): Node {
-	if (ctx.jsBackend) {
-		walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => bindReadProbes(stmt, c), ctx);
-	}
+	blockifyArrowsReading(program, (node: Node): boolean => sharedProbe(node) != null);
+	walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => bindReadProbes(stmt, c), ctx);
 	return walkNode(program, lowerOptionalNode);
 }
 
 function bindReadProbes(stmt: Node, ctx: TransformContext): Node[] {
 	const temps: Node[] = [];
-	const lowered = walkNode(stmt, (node: Node): Node => bindReadProbe(node, ctx, temps));
+	const lowered = walkWithinStatement(stmt, (node: Node): Node => bindReadProbe(node, ctx, temps));
 	temps.push(lowered);
 	return temps;
 }
 
 // The checker reads `x?.f` as `x !== null ? x.f : null` with one `x` node in both
-// places when `x` is not a name path; C hoists that call once, JS binds it here.
-function bindReadProbe(node: Node, ctx: TransformContext, temps: Node[]): Node {
-	if (node.kind != NodeKind.ConditionalExpr) return node;
+// places when `x` is not a name path.
+function sharedProbe(node: Node): Node | null {
+	if (node.kind != NodeKind.ConditionalExpr) return null;
 	const arms = node.data as ConditionalExprData;
-	if (arms.ternaryCondition.kind != NodeKind.BinaryExpr) return node;
+	if (arms.ternaryCondition.kind != NodeKind.BinaryExpr) return null;
 	const test = arms.ternaryCondition.data as BinaryExprData;
-	const read = test.left;
-	if (test.operator != "!==" || !reads(arms.ternaryConsequent, read)) return node;
+	if (test.operator != "!==" || cloneIfPure(test.left) != null || !reads(arms.ternaryConsequent, test.left)) return null;
+	return test.left;
+}
+
+function bindReadProbe(node: Node, ctx: TransformContext, temps: Node[]): Node {
+	const read = sharedProbe(node);
+	if (read == null) return node;
+	const arms = node.data as ConditionalExprData;
+	const test = arms.ternaryCondition.data as BinaryExprData;
 	const loc = node.location;
-	const sym = freshTempSym(ctx, "optional", read.nodeType);
-	const decl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Var, loc);
-	decl.resolvedSym = sym;
-	decl.nodeType = sym.symbolType;
-	temps.push(decl);
-	test.left = makeAssign(makeIdentResolved(sym, loc), asUnknown(read, loc), loc);
+	const bound = bindOnce(read, ctx, temps, loc);
+	const sym = (bound.data as BinaryExprData).left.resolvedSym!;
+	test.left = bound;
 	arms.ternaryConsequent = walkNode(arms.ternaryConsequent, (n: Node): Node => n == read ? makeIdentResolved(sym, loc) : n);
 	return node;
 }

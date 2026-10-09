@@ -92,7 +92,7 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		return makeIdentResolved(t, loc);
 	}
 	if (expr.kind == NodeKind.UpdateExpr) return hoistUpdate(expr, hoisted, ctx);
-	if (argDepth > 0 && expr.kind == NodeKind.BinaryExpr && (expr.data as BinaryExprData).operator == "=") return hoistArgAssign(expr, hoisted, ctx);
+	if ((argDepth > 0 || callsToStatements > 0) && expr.kind == NodeKind.BinaryExpr && (expr.data as BinaryExprData).operator == "=") return hoistArgAssign(expr, hoisted, ctx);
 	if (!ctx.jsBackend) {
 		if (expr.kind == NodeKind.ArrayLiteral || expr.kind == NodeKind.ObjectLiteral) return hoistLiteral(expr, hoisted, ctx);
 		if (expr.kind == NodeKind.SpreadExpr) return hoistSpreadOperand(expr, hoisted, ctx);
@@ -228,7 +228,8 @@ function hoistSpreadOperand(spread: Node, hoisted: Node[], ctx: TransformContext
 let argDepth = 0;
 
 // C leaves the order of call arguments unspecified: an argument that writes runs as
-// its own statement, in argument order.
+// its own statement, in argument order. A write in a condition does too, because the
+// ownership analysis reads an assignment only at statement level.
 function hoistArgAssign(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	const bd = expr.data as BinaryExprData;
 	bd.right = hoistTernaries(bd.right, hoisted, ctx);

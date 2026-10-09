@@ -3,12 +3,13 @@
 //
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 
-import { Node, NodeKind, BinaryExprData, MemberExprData, TypeAssertionData, ConditionalExprData, ExprStmtData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, ArrowFunctionData, TypeAssertionData, ConditionalExprData, ExprStmtData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
-import { TransformContext, freshTempSym } from "../context";
-import { walkNode, walkExpandBlocks } from "../walker";
-import { makeNull, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved } from "../util";
+import { TransformContext, freshOwnedSym } from "../context";
+import { walkNode, walkExpandBlocks, walkWithinStatement, isFuncBoundary } from "../walker";
+import { forEachChild } from "../../ast/visitor";
+import { makeNull, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved, makeBlock, makeReturn } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { cloneIfPure } from "./intArithJS";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -16,17 +17,55 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 // ===== Main Entry Point =====
 
 export function lowerNullishCoalesce(program: Node, ctx: TransformContext): Node {
-	if (ctx.jsBackend) {
-		walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => lowerNullishStmt(stmt, c), ctx);
-	}
+	blockifyArrowsReading(program, readsNullishOperandTwice);
+	walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => lowerNullishStmt(stmt, c), ctx);
 	return walkNode(program, (node: Node): Node => lowerNullishNode(node, ctx, null));
 }
 
 function lowerNullishStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const temps: Node[] = [];
-	const lowered = walkNode(stmt, (node: Node): Node => lowerNullishNode(node, ctx, temps));
+	const lowered = walkWithinStatement(stmt, (node: Node): Node => lowerNullishNode(node, ctx, temps));
 	temps.push(lowered);
 	return temps;
+}
+
+function readsNullishOperandTwice(node: Node): boolean {
+	if (node.kind != NodeKind.BinaryExpr) return false;
+	const d = node.data as BinaryExprData;
+	return d.operator == "??" && cloneIfPure(d.left) == null;
+}
+
+export function blockifyArrowsReading(program: Node, readsTwice: (node: Node) => boolean): void {
+	walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.ArrowFunction) return node;
+		const d = node.data as ArrowFunctionData;
+		const body = d.arrowBody;
+		if (body != null && body.kind != NodeKind.BlockStmt && containsInRoutine(body, readsTwice)) {
+			d.arrowBody = makeBlock([makeReturn(body, body.location)], body.location);
+		}
+		return node;
+	});
+}
+
+function containsInRoutine(node: Node, test: (node: Node) => boolean): boolean {
+	if (node == null || isFuncBoundary(node)) return false;
+	if (test(node)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && containsInRoutine(child, test)) found = true;
+	});
+	return found;
+}
+
+export function bindOnce(read: Node, ctx: TransformContext, temps: Node[], loc: SourceLocation): Node {
+	const sym = freshOwnedSym(ctx, "once", read.nodeType);
+	const decl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Let, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = sym.symbolType;
+	temps.push(decl);
+	const bound = makeAssign(makeIdentResolved(sym, loc), ctx.jsBackend ? asUnknown(read, loc) : read, loc);
+	bound.nodeType = read.nodeType;
+	return bound;
 }
 
 // ===== Visitor =====
@@ -52,13 +91,6 @@ function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext)
 	return makeBinary(checked, "!==", makeNull(loc), loc);
 }
 
-function isPlainPath(n: Node): boolean {
-	if (n.kind == NodeKind.Identifier) return true;
-	if (n.kind != NodeKind.MemberExpr) return false;
-	const d = n.data as MemberExprData;
-	return !d.isOptional && isPlainPath(d.object);
-}
-
 export function nullishLowered(left: Node, right: Node, loc: SourceLocation, resultType: Type | null, ctx: TransformContext): Node {
 	return lowerNullish(left, right, loc, resultType, ctx, null);
 }
@@ -75,14 +107,10 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 	// x ?? y → x !== null ? x : y
 	let cond = nullishPresence(left, loc, ctx);
 	let held = left;
-	if (temps != null && !isPlainPath(left)) {
-		const sym = freshTempSym(ctx, "nullish", leftType);
-		const decl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Var, loc);
-		decl.resolvedSym = sym;
-		decl.nodeType = sym.symbolType;
-		temps.push(decl);
-		cond = makeBinary(makeAssign(makeIdentResolved(sym, loc), asUnknown(left, loc), loc), "!==", makeNull(loc), loc);
-		held = makeIdentResolved(sym, loc);
+	if (temps != null && cloneIfPure(left) == null) {
+		const bound = bindOnce(left, ctx, temps, loc);
+		cond = ctx.jsBackend ? makeBinary(bound, "!==", makeNull(loc), loc) : nullishPresence(bound, loc, ctx);
+		held = makeIdentResolved((bound.data as BinaryExprData).left.resolvedSym!, loc);
 	} else {
 		held = rereadOperand(left);
 	}
@@ -154,6 +182,20 @@ test "a pure left operand is read again through its own node" {
 		if (arms != null) {
 			const tested = (arms.ternaryCondition.data as BinaryExprData).left;
 			assert arms.ternaryConsequent != tested && arms.ternaryConsequent.kind == tested.kind, input;
+		}
+	}
+}
+
+test "an impure operand's temp is declared inside the routine that reads it, on every backend" {
+	for (const js of [true, false]) {
+		for (const input of ["function f() { return g() ?? 1; }", "const h = () => g() ?? 1;"]) {
+			const parsed = parseInput(input);
+			assert parsed.ok, input;
+			if (parsed.ok) {
+				const ctx = makeCtx();
+				ctx.jsBackend = js;
+				assert getStmts(lowerNullishCoalesce(parsed.value, ctx)).length == 1, input;
+			}
 		}
 	}
 }

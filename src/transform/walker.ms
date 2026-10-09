@@ -497,6 +497,19 @@ export function walkChildren(node: Node, visitor: Visitor): void {
 	mapChildren(node, (child: Node): Node => walkNode(child, visitor));
 }
 
+export function walkWithinStatement(node: Node, visitor: Visitor): Node {
+	if (node == null) return null as unknown as Node;
+	if (opensStatementScope(node)) return node;
+	mapChildren(node, (child: Node): Node => walkWithinStatement(child, visitor));
+	return visitor(node);
+}
+
+function opensStatementScope(node: Node): boolean {
+	return isFuncBoundary(node) || node.kind == NodeKind.BlockStmt || node.kind == NodeKind.SwitchCase
+		|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl
+		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl;
+}
+
 // Check if a node is a function boundary (FunctionDecl, ArrowFunction, FunctionExpr)
 export function isFuncBoundary(node: Node): boolean {
 	return node.kind == NodeKind.FunctionDecl ||
