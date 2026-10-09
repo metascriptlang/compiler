@@ -4947,10 +4947,11 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 				// Tier 2: collect string literal patterns for exhaustiveness
 				if (patternKind == NodeKind.StringLiteral && !hasGuard) { coveredName = (p.data as StringLiteralData).value; covers = true; }
 				if (patternKind == NodeKind.BooleanLiteral && !hasGuard) { coveredName = (p.data as BooleanLiteralData).boolValue ? "true" : "false"; covers = true; }
+				const errorsBeforeCheck = ctx.errors.length;
 				callCheckExpr(ctx, p, discType);
 				const errorsBeforePattern = ctx.errors.length;
-				if (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
-					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral) {
+				if (errorsBeforePattern == errorsBeforeCheck && (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
+					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral)) {
 					checkSwitchCase(ctx, d.matchDisc, p);
 				}
 				if (covers && ctx.errors.length == errorsBeforePattern) coveredMembers.push(coveredName);

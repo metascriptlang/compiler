@@ -2590,6 +2590,24 @@ export function isTypeofTag(s: string): boolean {
 	return s == "string" || s == "number" || s == "boolean" || s == "function" || s == "bigint" || s == "object";
 }
 
+function isTypeofResult(s: string): boolean {
+	return isTypeofTag(s) || s == "symbol" || s == "undefined";
+}
+
+export function typeofResultType(): Type {
+	const members: Type[] = [];
+	for (const tag of ["bigint", "boolean", "function", "number", "object", "string", "symbol", "undefined"]) members.push(createStringLiteral(tag));
+	return createUnionInOrder(members);
+}
+
+export function isTypeofResultType(t: Type | null): boolean {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null || t.typeChildren.length == 0) return false;
+	for (const m of t.typeChildren) {
+		if (m == null || m.kind != TypeKind.StringLiteral || !isTypeofResult(m.typeName)) return false;
+	}
+	return true;
+}
+
 // ===== Min Arity (Default Parameters) =====
 // typeValue holds minArity + 1 so that 0 means "not set" = all params required.
 
