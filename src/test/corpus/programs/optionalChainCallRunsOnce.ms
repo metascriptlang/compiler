@@ -1,5 +1,4 @@
 // @stdout: call=4,0,0 calls=3
-// @xfail(raiser): the Raiser VM evaluates a call in front of `?.` and `??` once per read (calls=11 here; `n() ?? 0` alone calls n twice), inbox card 2026-10-08-raiser-evaluates-nullish-operand-twice
 // note: a call in front of `?.` runs once: its result is tested for null and the field is read from that same result, through every link of the chain and the `??` after it.
 
 interface Inline { inner: { v: int32 } | null }
