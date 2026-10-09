@@ -232,7 +232,7 @@ function hostSameType(args: RaiserValue[]): RaiserValue {
 	const a = typeArgOf(args[0]);
 	const b = typeArgOf(args[1]);
 	if (a == null || b == null) { queryError(ctx, "sameType needs two type nodes"); return raiserBool(false); }
-	return raiserBool(sameType(a, b));
+	return raiserBool(sameType(peelAlias(a), peelAlias(b)));
 }
 
 function hostSymKind(args: RaiserValue[]): RaiserValue {
