@@ -1007,11 +1007,12 @@ export function isAnonStructAdoption(sourceIn: Type | null, target: Type | null)
 export enum TypeRelation {
 	None,           // 0 - no match
 	Convertible,    // 1 - requires conversion
-	IntConv,        // 2 - int/float conversion
-	Subtype,        // 3 - inheritance/structural
-	Generic,        // 4 - generic param match / inference pending
-	FromLiteral,    // 5 - from literal (proven safe)
-	Exact,          // 6 - exact match
+	SignWidening,   // 2 - unsigned into a wider signed integer
+	IntConv,        // 3 - int/float conversion
+	Subtype,        // 4 - inheritance/structural
+	Generic,        // 5 - generic param match / inference pending
+	FromLiteral,    // 6 - from literal (proven safe)
+	Exact,          // 7 - exact match
 }
 
 // ===== Type identity =====
@@ -1321,7 +1322,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (refusesIntConv(actual, formal)) return TypeRelation.None;
 	if (isNumeric(actual) && isNumeric(formal) && actual.kind != formal.kind
 		&& integerRank(actual) <= integerRank(formal)) {
-		return TypeRelation.IntConv;
+		return isUnsignedIntegerType(actual) && isIntegerType(formal) && !isUnsignedIntegerType(formal)
+			? TypeRelation.SignWidening
+			: TypeRelation.IntConv;
 	}
 	// Null to nullable (mirrors isAssignableInner's null-source switch).
 	if (actual.kind == TypeKind.Null) {
@@ -1437,12 +1440,13 @@ export function foldTypeParamCandidates(candNames: string[], candTypes: Type[], 
 // ===== Standard-Aligned Overload Resolution (Priority-Based) =====
 
 // Candidate scoring with per-category counters (Standard reference pattern).
-// All 7 fields included upfront so struct never changes (DRC #32 safe).
+// All fields included upfront so struct never changes (DRC #32 safe).
 export interface CandidateScore {
 	exactMatches: number;       // isEqual matches
 	genericMatches: number;     // isGeneric / isInferred matches
 	subtypeMatches: number;     // isSubtype / isSubrange matches
 	intConvMatches: number;     // isIntConv + isFromIntLit (Standard weight: += 256)
+	signWideningMatches: number;
 	convMatches: number;        // isConvertible (converters — always 0 for now)
 	inheritancePenalty: number; // class hierarchy depth (-1 = inactive)
 	calleeScope: number;        // scope depth where candidate found (higher = inner)
@@ -1451,7 +1455,7 @@ export interface CandidateScore {
 export function emptyCandidateScore(): CandidateScore {
 	return {
 		exactMatches: 0, genericMatches: 0, subtypeMatches: 0,
-		intConvMatches: 0, convMatches: 0,
+		intConvMatches: 0, signWideningMatches: 0, convMatches: 0,
 		inheritancePenalty: -1, calleeScope: 0,
 	};
 }
@@ -1502,6 +1506,7 @@ export function countRelation(score: CandidateScore, rel: TypeRelation): void {
 		TypeRelation.Generic => { score.genericMatches = score.genericMatches + 1; },
 		TypeRelation.Subtype => { score.subtypeMatches = score.subtypeMatches + 1; },
 		TypeRelation.IntConv => { score.intConvMatches = score.intConvMatches + 1; },
+		TypeRelation.SignWidening => { score.signWideningMatches = score.signWideningMatches + 1; },
 		TypeRelation.Convertible => { score.convMatches = score.convMatches + 1; },
 		_ => {},
 	};
@@ -1533,6 +1538,8 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 	if (result != 0) return result;
 	// 4. Int conversion matches
 	result = a.intConvMatches - b.intConvMatches;
+	if (result != 0) return result;
+	result = a.signWideningMatches - b.signWideningMatches;
 	if (result != 0) return result;
 	// 5. Conversion matches
 	result = a.convMatches - b.convMatches;
@@ -1793,7 +1800,7 @@ test "two object types of the same shape relate exactly, a different shape does 
 
 test "exact args" {
 	const score = scoreCandidate([numberType(), stringType()], [numberType(), stringType()]);
-	assert score == 12; // 6 + 6
+	assert score == 14; // 7 + 7
 }
 
 test "arity mismatch" { assert scoreCandidate([numberType()], []) == -1; }
@@ -1802,7 +1809,7 @@ test "type mismatch" { assert scoreCandidate([numberType()], [stringType()]) == 
 
 test "mixed scoring" {
 	const score = scoreCandidate([numberType(), numberType()], [numberType(), createPrimitive(TypeKind.Int32)]);
-	assert score == 7; // 6 (exact) + 1 (convertible)
+	assert score == 8; // 7 (exact) + 1 (convertible)
 }
 
 test "source union all match" {

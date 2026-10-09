@@ -127,7 +127,7 @@ test "numeric lattice: a number goes into the one union member that holds it imp
 	assert errorCount("let i: int32 = 3;\nconst a: number | string = i;\nlet f: float32 = 1.5;\nlet b: number | string = \"x\";\nb = f;\n") == 0;
 	assert errorCount("let i: int32 = 3;\nconst a: int64 | number = i;\nfunction t(v: int64 | number): void {}\nt(i);\n") == 0;
 	assert hasError("let s: int16 = 2;\nconst a: float32 | number = s;\n", "implicit int16 conversion into 'float32 | number' fits both float32 and number — write an explicit 'as float32' or 'as number'");
-	assert hasError("let u: uint8 = 1;\nfunction t(v: int64 | uint32): void {}\nt(u);\n", "fits both int64 and uint32");
+	assert errorCount("let u: uint8 = 1;\nfunction t(v: int64 | uint32): void {}\nt(u);\n") == 0;
 	assert hasError("let d: float64 = 0.1;\nconst f: float32 | string = d;\n", "may lose precision");
 }
 
