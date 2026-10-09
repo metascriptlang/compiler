@@ -1,6 +1,6 @@
 // Route 15f: Checker — `typeof x === "..."` narrows by every runtime tag the backends emit, not only the primitives
 
-import { strictErrorCount } from "./helpers";
+import { strictErrorCount, hasError } from "./helpers";
 
 const APPLY = "function apply(v: int32 | ((prev: int32) => int32), cur: int32): int32 {\n"
 	+ "\tif (typeof v === \"function\") { return v(cur); }\n"
@@ -64,4 +64,48 @@ test "typeof compared against a non-literal does not narrow" {
 		+ "\tlet k = \"function\";\n"
 		+ "\tif (typeof v === k) { return v(cur); }\n"
 		+ "\treturn v;\n}") == 1;
+}
+
+// ===== a string that is not a tag =====
+
+const KINDS = "const a: uint8 = 3;\nconst u: int64 | uint64 = a as uint64;\n";
+const TAGS = "\"bigint\" | \"boolean\" | \"function\" | \"number\" | \"object\" | \"string\" | \"symbol\" | \"undefined\"";
+const NO_OVERLAP = "This comparison appears to be unintentional because the types '";
+const NAMED_VARIANTS = "use a union with named variants";
+
+test "typeof compared with a string that is no tag is refused with the named-variant hint" {
+	const refused = [
+		"if (typeof u === \"uint64\") {}",
+		"if (typeof u !== \"uint64\") {}",
+		"if (typeof u == \"int32\") {}",
+		"if (typeof u != \"int32\") {}",
+		"const t = typeof u;\nif (t === \"uint8\") {}",
+	];
+	for (const line of refused) {
+		assert hasError(KINDS + line, NO_OVERLAP + TAGS + "' and '\""), line;
+		assert hasError(KINDS + line, NAMED_VARIANTS), line;
+	}
+	assert hasError(KINDS + "if (\"uint8\" === typeof u) {}", NO_OVERLAP + "\"uint8\"' and '" + TAGS + "' have no overlap");
+}
+
+test "a switch case or match arm that is no tag is refused" {
+	assert hasError(KINDS + "switch (typeof u) { case \"uint8\": break; default: break; }", "case of type '\"uint8\"' is not comparable");
+	assert hasError(KINDS + "switch (typeof u) { case \"uint8\": break; default: break; }", NAMED_VARIANTS);
+	assert hasError(KINDS + "const r = match (typeof u) { \"float64\" => 1, _ => 2 };", NAMED_VARIANTS);
+	assert strictErrorCount(KINDS + "const r = match (typeof u) { \"float64\" => 1, _ => 2 };") == 1;
+}
+
+test "the eight tags compare and switch without an error" {
+	for (const tag of ["bigint", "boolean", "function", "number", "object", "string", "symbol", "undefined"]) {
+		const src = KINDS + "const t = typeof u;\nif (typeof u === \"" + tag + "\" || t !== \"" + tag + "\") {}\n"
+			+ "switch (typeof u) { case \"" + tag + "\": break; default: break; }";
+		assert strictErrorCount(src) == 0, tag;
+	}
+}
+
+test "a string literal union compared with a string outside it is refused" {
+	const PICK = "function pick(n: int32): \"a\" | \"b\" { return n > 0 ? \"a\" : \"b\"; }\nconst s = pick(1);\n";
+	assert hasError(PICK + "if (s === \"c\") {}", NO_OVERLAP + "\"a\" | \"b\"' and '\"c\"' have no overlap");
+	assert !hasError(PICK + "if (s === \"c\") {}", NAMED_VARIANTS);
+	assert strictErrorCount(PICK + "if (s === \"a\" || s !== \"b\") {}") == 0;
 }
