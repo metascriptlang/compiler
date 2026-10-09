@@ -1088,12 +1088,18 @@ function sameEnumMember(a: Type, b: Type): boolean {
 	return a.typeName == b.typeName;
 }
 
+function skipAliasWrapper(t: Type): Type {
+	let cur = t;
+	while (cur.kind == TypeKind.Alias && cur.typeReturn != null) cur = cur.typeReturn;
+	return cur;
+}
+
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
 	if (_sameTypeDepth > 12) return true;
 	_sameTypeDepth = _sameTypeDepth + 1;
-	const result = sameTypeInner(a, b);
+	const result = sameTypeInner(skipAliasWrapper(a), skipAliasWrapper(b));
 	_sameTypeDepth = _sameTypeDepth - 1;
 	return result;
 }
