@@ -17,7 +17,7 @@ import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranc
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
-import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
+import { bindFromExplicitTypeArgs, builtinTypeNamed, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
@@ -4935,6 +4935,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 						continue;
 					}
 				}
+				if (refusesTypeArm(ctx, p)) continue;
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
@@ -5138,6 +5139,15 @@ export function estimateExprEndCol(node: Node): int32 {
 		},
 		_ => col + 1,
 	};
+}
+
+export function refusesTypeArm(ctx: CheckerContext, p: Node): boolean {
+	const name = (p.data as IdentifierData).name;
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym == null ? builtinTypeNamed(ctx, name) == null : !isTypeSymbol(sym)) return false;
+	addError(ctx, `'${name}' only refers to a type, but is being used as a value here: a match arm compares values, so it cannot test which type a value holds`, p.location.line, p.location.column);
+	p.nodeType = errorType();
+	return true;
 }
 
 // Detect duplicate unguarded match patterns (reference parity: checkForOverlap).
