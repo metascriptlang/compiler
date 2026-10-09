@@ -1537,9 +1537,9 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 	result = a.subtypeMatches - b.subtypeMatches;
 	if (result != 0) return result;
 	// 4. Int conversion matches
-	result = a.intConvMatches - b.intConvMatches;
+	result = (a.intConvMatches + a.signWideningMatches) - (b.intConvMatches + b.signWideningMatches);
 	if (result != 0) return result;
-	result = a.signWideningMatches - b.signWideningMatches;
+	result = b.signWideningMatches - a.signWideningMatches;
 	if (result != 0) return result;
 	// 5. Conversion matches
 	result = a.convMatches - b.convMatches;
