@@ -2589,7 +2589,8 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)))) {
 		d.ternaryConsequent = fitArm(ctx, d.ternaryConsequent, expectedType, converting);
 		d.ternaryAlternate = fitArm(ctx, d.ternaryAlternate, expectedType, converting);
-		return d.ternaryConsequent.nodeType;
+		const fitted = d.ternaryConsequent.nodeType;
+		return fitted != null && sameType(fitted, d.ternaryAlternate.nodeType) ? fitted : expectedType;
 	}
 	retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 	retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
