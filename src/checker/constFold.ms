@@ -1,5 +1,5 @@
 import {
-	Node, NodeKind, NodeFlag, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Type, TypeKind, createNode,
+	Node, NodeKind, NodeFlag, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Symbol, Type, TypeKind, createNode,
 	BinaryExprData, UnaryExprData, VariableDeclData, PropertyDeclData, TypeAssertionData, HiddenStdConvData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
@@ -19,6 +19,11 @@ function isInlineConstantType(t: Type | null): boolean {
 	return isIntegerType(t) || isFloatType(t) || t.kind == TypeKind.Number || t.kind == TypeKind.Boolean;
 }
 
+function constDeclType(sym: Symbol | null): Type | null {
+	if (sym == null || sym.declNode == null) return null;
+	return sym.declNode.nodeType != null ? sym.declNode.nodeType : sym.symbolType;
+}
+
 function constInitializer(node: Node): Node {
 	const none = null as unknown as Node;
 	const sym = node.resolvedSym;
@@ -26,7 +31,7 @@ function constInitializer(node: Node): Node {
 	if (sym.symFlags.has(SymbolFlag.Mutable)) return none;
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.VariableDecl) return none;
-	if (!isInlineConstantType(decl.nodeType)) return none;
+	if (!isInlineConstantType(constDeclType(sym))) return none;
 	const d = decl.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const || d.initializer == null) return none;
 	return d.initializer;
@@ -292,7 +297,7 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 			if (initializer == null) return none;
 			const value = constantLiteralOf(initializer, depth + 1);
 			if (value == null) return none;
-			return retypedLiteral(value, expr.resolvedSym.declNode.nodeType, expr.location);
+			return retypedLiteral(value, constDeclType(expr.resolvedSym), expr.location);
 		},
 		NodeKind.MemberExpr => {
 			const initializer = readonlyStaticInitializer(expr);

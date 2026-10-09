@@ -67,3 +67,4 @@ import "./structFieldDecorators";
 import "./enumNames";
 import "./sizedArrayConstDimension";
 import "./sizedArrayLiteralCarriesSize";
+import "./sizedArrayDimensionExpression";

@@ -94,6 +94,7 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 
 // ===== Constructor Default Registry =====
 export function resetInstantiationState(): void {
+	_placedInstances = new HashMap<Symbol, Symbol>();
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
 	resetCtorRegistry();
@@ -243,22 +244,39 @@ export function instanceGenericOf(node: Node): Symbol | null {
 	return sym.instantiatedFrom;
 }
 
+let _placedInstances: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
+
 export function distinctInstances(order: Node[]): Node[] {
-	const seen = new HashMap<Symbol, string[]>();
+	const seen = new HashMap<Symbol, Node[]>();
 	const out: Node[] = [];
 	for (const node of order) {
 		const generic = instanceGenericOf(node);
 		if (generic == null) throw new Error(`internal: a generic instance of this build has no generic it was made from`);
-		const name = node.kind == NodeKind.ClassDecl ? (node.data as ClassDeclData).className : (node.data as FunctionDeclData).fnName;
-		let names: string[] = [];
+		const name = instanceDeclName(node);
+		let kept: Node[] = [];
 		const known = seen.get(generic);
-		if (known != null) names = known;
-		if (names.includes(name)) continue;
-		names.push(name);
-		seen.set(generic, names);
+		if (known != null) kept = known;
+		let placed: Node | null = null;
+		for (const held of kept) {
+			if (instanceDeclName(held) == name) { placed = held; break; }
+		}
+		if (placed != null) {
+			if (node.resolvedSym != null && placed.resolvedSym != null) _placedInstances.set(node.resolvedSym, placed.resolvedSym);
+			continue;
+		}
+		kept.push(node);
+		seen.set(generic, kept);
 		out.push(node);
 	}
 	return out;
+}
+
+function instanceDeclName(node: Node): string {
+	return node.kind == NodeKind.ClassDecl ? (node.data as ClassDeclData).className : (node.data as FunctionDeclData).fnName;
+}
+
+export function placedInstanceOf(sym: Symbol): Symbol {
+	return _placedInstances.get(sym) ?? sym;
 }
 
 function declaredClass(stmt: Node): Node | null {

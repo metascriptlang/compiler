@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { isSysType, peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createUnionInOrder, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
@@ -15,11 +15,13 @@ import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDup
 import { forEachChild } from "../ast/visitor";
 import { nestedViewType, ownedAlternativeOf, findViewType } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
-import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
+import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
+import { lex } from "../lexer/lexer";
+import { parseExpressionFromState } from "../parser/expressions/core";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -428,19 +430,37 @@ function isAllDigits(s: string): boolean {
 	return true;
 }
 
-function constArrayDimension(name: string, ctx: CheckerContext, line: int32, col: int32): int32 {
-	const sym = lookupSymbol(ctx.table, name);
-	if (sym != null) {
-		markUsedIn(ctx, sym);
-		const ident = createNodeAt(NodeKind.Identifier, { name }, makeLoc(line, col));
-		ident.resolvedSym = sym;
-		const folded = constantLiteralOf(ident, 0);
-		if (folded != null && folded.kind == NodeKind.NumberLiteral) {
-			const fd = folded.data as NumberLiteralData;
-			if (!fd.isFloat && fd.intVal >= 0 && fd.intVal <= 2147483647) return fd.intVal as int32;
-		}
-	}
-	return -1;
+function bindDimensionNames(expr: Node, ctx: CheckerContext): boolean {
+	return match (expr.kind) {
+		NodeKind.NumberLiteral => true,
+		NodeKind.Identifier => {
+			const sym = lookupSymbol(ctx.table, (expr.data as IdentifierData).name);
+			if (sym == null) return false;
+			ensureShaped(sym, ctx);
+			markUsedIn(ctx, sym);
+			expr.resolvedSym = sym;
+			return true;
+		},
+		NodeKind.BinaryExpr => {
+			const d = expr.data as BinaryExprData;
+			return bindDimensionNames(d.left, ctx) && bindDimensionNames(d.right, ctx);
+		},
+		NodeKind.UnaryExpr => bindDimensionNames((expr.data as UnaryExprData).operand, ctx),
+		_ => false,
+	};
+}
+
+function constArrayDimension(text: string, ctx: CheckerContext, line: int32, col: int32): int32 {
+	const tokens = lex(text);
+	if (!tokens.ok) return -1;
+	const state = createState(tokens.value);
+	const parsed = parseExpressionFromState(state);
+	if (!parsed.ok || !isAtEnd(state) || !bindDimensionNames(parsed.value, ctx)) return -1;
+	const folded = constantLiteralOf(parsed.value, 0);
+	if (folded == null || folded.kind != NodeKind.NumberLiteral) return -1;
+	const fd = folded.data as NumberLiteralData;
+	if (fd.isFloat || fd.intVal < 0 || fd.intVal > 2147483647) return -1;
+	return fd.intVal as int32;
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
