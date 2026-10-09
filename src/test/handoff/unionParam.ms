@@ -4,7 +4,7 @@
 // emits `void data` in C instead of the actual DocData struct.
 
 import { TypeKind } from "../../ast/node";
-import { checkSource } from "./helpers";
+import { checkSource, errorCount, hasError } from "./helpers";
 import { compileToC } from "../helpers";
 
 test "union type alias resolves to TypeKind.Union in checker" {
@@ -77,4 +77,10 @@ test "union type param in class factory" {
 	const cCode = r.value;
 	assert !cCode.contains("void data");
 	assert cCode.contains("DocData");
+}
+
+test "a union holding true and false takes a boolean, and a value two members match is refused" {
+	assert errorCount("function k(b: boolean): true | false { return b; }\nfunction j(b: boolean): true | false | int32 { return b; }\n") == 0;
+	assert hasError("function g(x: int32): \"a\" | \"b\" | int32 { if (x > 0) return \"b\"; return x; }\n",
+		"matches more than one member of '\"a\" | \"b\" | int32'");
 }
