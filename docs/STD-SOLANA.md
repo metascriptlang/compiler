@@ -68,13 +68,29 @@ export default config;
 
 `-d:programId=<base58>` on the command line overrides it. Every module of the program reads the same id; nothing is imported. With an id declared:
 
-- `instruction<Op>()` first compares the runtime's program id with it and answers `DeclaredProgramIdMismatch` (4100) on another, before it reads the instruction, as Anchor's entry does (`anchor-syn-0.31.1/src/codegen/program/entry.rs:51-53`).
+- `instruction<Op>()` checks no id at run time (Anchor's entry check, `anchor-syn-0.31.1/src/codegen/program/entry.rs:51-53`, was removed 2026-10-10, about 14 CU an instruction). The id the runtime executes the program under decides every owner check (`ownProgram()` is `msSolProgramId()`), every PDA derived at run time and every CPI signature, so a deploy at another address is a different program with its own state, not a hole in the declared one (evidence under "A program run at another id" below). `instruction<Op>()` still stops the build on a malformed id.
 - `createPda<T>` with seeds that are all strings or byte lists written in place derives the address and the bump at compile time and checks the target with one key compare instead of the run-time find (`examples/anchorBench/helloworld/program.ms`, `["counter"]`). Seeds that name an account or an argument are derived at run time.
 - `anchorIdl` writes the id as the IDL's `address`; a spec that names another address is a compile error.
 - `declaredProgramId()` is the id as a `Pubkey`, for the host-simulator tests (`run(declaredProgramId(), …)`); with no id declared it is a compile error that names both ways to declare one.
 - `programKeypair: "target/deploy/<name>-keypair.json"` (a path relative to `build.ms`, or absolute) names the deploy keypair; the build compares only its public half (bytes 32-63 of the `solana-keygen` JSON) and refuses an id that differs, naming the keypair's id, as `anchor keys sync` keeps them equal. Keep the keypair out of version control: name it with `-d:programKeypair=` on the deploy build, or in a `build.ms` that is not committed.
 
-A malformed id is a compile error at `instruction<Op>()` (`solanaProgramIdRefused.ms`), and so is a keypair of another id (`solanaDeployKeypairMismatch.ms`). Without a declared id, `instruction<Op>()` checks no id and every PDA is derived at run time. Measured with `msc build <program> --os=solana --danger`, LiteSVM 1.4.1 and `tools/solana/anchorBench.mjs`, the std before and after, each program at the id its bench deploys it to: helloworld 7,920 to 6,696 bytes and `init` 2,196 to 1,740 CU (the folded PDA, and the id check); vault, whose PDA names the user, 6,144 to 6,376 bytes, `deposit` 1,914 to 1,938 CU and `withdraw` 562 to 587 (the id check alone); helloworld deployed at another id answers 4100 in 120 CU. `@seeds` of literal seeds (strings and byte lists written in place) with a bare `@bump` folds the same way, as Anchor v2's `seeds = [b"…"], bump` (lang-v2 derive `parse.rs` `emit_seeds_check`, `pda.rs` `precompute_pda`): `accounts<T>()` compares the key with the folded address, four word compares, and answers 2006 off it; a stored bump (`@bump(account.field)`) keeps `create_program_address` at run time, as Anchor's `bump = expr` does. Measured on a program whose one instruction checks `@seeds("counter") @bump` on a `Mutable<Counter>` at helloworld's id, `msc build --os=solana --danger`, LiteSVM 1.4.1, the std before and after under the same compiler: 3,136 to 2,424 bytes, 571 to 183 CU, 2006 off the address in both. `src/test/guard/solanaSeedsFolded.ms` pins that the folded build calls neither `sol_sha256` nor `sol_curve_validate_point` while the build without an id and the stored-bump build call both, and runs the fixture's host tests (the canonical account accepted, an account one bit off and the address of other literal seeds refused with 2006). Not measured: the bench programs, none of which checks a literal-seed PDA with a bare `@bump`.
+A malformed id is a compile error at `instruction<Op>()` (`solanaProgramIdRefused.ms`), and so is a keypair of another id (`solanaDeployKeypairMismatch.ms`). Without a declared id, `instruction<Op>()` checks no id and every PDA is derived at run time. Measured with `msc build <program> --os=solana --danger`, LiteSVM 1.4.1 and `tools/solana/anchorBench.mjs`, the std before and after, each program at the id its bench deploys it to: helloworld 7,920 to 6,696 bytes and `init` 2,196 to 1,740 CU (the folded PDA, and the id check); vault, whose PDA names the user, 6,144 to 6,376 bytes, `deposit` 1,914 to 1,938 CU and `withdraw` 562 to 587 (the id check alone); the measurements of the `4100` check, removed since, are these. `@seeds` of literal seeds (strings and byte lists written in place) with a bare `@bump` folds the same way, as Anchor v2's `seeds = [b"…"], bump` (lang-v2 derive `parse.rs` `emit_seeds_check`, `pda.rs` `precompute_pda`): `accounts<T>()` compares the key with the folded address, four word compares, and answers 2006 off it; a stored bump (`@bump(account.field)`) keeps `create_program_address` at run time, as Anchor's `bump = expr` does. Measured on a program whose one instruction checks `@seeds("counter") @bump` on a `Mutable<Counter>` at helloworld's id, `msc build --os=solana --danger`, LiteSVM 1.4.1, the std before and after under the same compiler: 3,136 to 2,424 bytes, 571 to 183 CU, 2006 off the address in both. `src/test/guard/solanaSeedsFolded.ms` pins that the folded build calls neither `sol_sha256` nor `sol_curve_validate_point` while the build without an id and the stored-bump build call both, and runs the fixture's host tests (the canonical account accepted, an account one bit off and the address of other literal seeds refused with 2006). Not measured: the bench programs, none of which checks a literal-seed PDA with a bare `@bump`.
+
+#### A program run at another id
+
+The declared id is read at build time by the folded PDAs (`createPda<T>`, `@seeds` with a bare `@bump`), `anchorIdl` and `declaredProgramId()`; the runtime's id by everything else. Why the second is enough: the runtime lets a program change an account's data or debit its lamports only when the account's owner is the key of the program being executed (`solana-transaction-context-4.0.0` `instruction_accounts.rs:120-124, 331-349`), and derives a CPI's PDA signers with the caller's runtime key (`solana-program-runtime-4.0.0` `cpi.rs:886-888`). Pinocchio has no entry id check, and Anchor v2's lives under its default `guardrails` feature, which its own bench disables. A deploy keypair of another id is still a build error (`solanaDeployKeypairMismatch.ms`).
+
+`node tools/solana/foreignDeploy.mjs before=<dir> after=<dir>` loads one `.so` at its declared id D and at a fresh id X in one LiteSVM (LiteSVM 1.4.1, mainnet-inactive feature set; the 13 instructions of the five Anchor bench programs and the escrow's `take` and `refund`, 48 scenarios a build) and asserts each outcome; `before` is the build with the `4100` check, `after` this tree. Measured 2026-10-10, both labels: all assertions hold.
+
+| Scenario | before | after | D's accounts byte-identical, lamports unchanged |
+|---|---|---|---|
+| 1. instruction at D with D's accounts | ok | ok (14-17 CU less) | n/a |
+| 2. instruction at X with D's accounts (modify, withdraw, close, take, refund, rotate) | 4100 | 2006 (vault, multisig `create`), 3007 owner (nested, prop-amm, multisig, escrow) | yes, all 17 refused calls |
+| 3. init at X over D's folded PDAs (helloworld `init`, nested `initialize`), also with the PDA prefunded | 4100 | `PrivilegeEscalation` (the CPI signs with PDA(X), not PDA(D)); with PDA(X) accounts 2006 off the folded address | yes; no account at PDA(D) or PDA(X) |
+| 3b. prop-amm `initialize` over D's existing oracle | 4100 | system 0 (account in use) | yes |
+| 4. X with X-owned accounts | 4100 | runs as its own program (all but the two folded inits, which answer 2006) | yes |
+
+Scenario 4 shows the one outcome that changes beyond the code: a program at X now works on X-owned accounts. prop-amm `initialize` called at X on a fresh keypair account creates an X-owned oracle (before: 4100), which touches nothing of D's. Not verified: a literal `@seeds` attribute with a bare `@bump` on an untyped `Writable` at X (it compares with PDA(D), and the runtime rules above leave X no write or signature for it; only `solanaSeedsFolded.ms`'s host tests run it), other feature sets, mainnet.
 
 ## 3. Accounts and proofs
 
@@ -88,16 +104,40 @@ A verifier is the only way to get a proof, and a function that needs a property 
 | `SystemAccount` | `systemAccount(i)` | `SystemAccount` | present, owned by the System program (3011) |
 | `Account` | `unchecked(i)` | `UncheckedAccount` | present |
 | `Program<P>` | `program<P>(i)` | `Program<'info, P>` | present, key is `P.id()` (3008), executable (3009) |
-| `Owned<T>` | `owned<T>(i)` | `AccountLoader<T>` | present, owner is this program (3007), 8 bytes of data (3001), `T.discriminator()` (3002), `8 + sizeof(T)` bytes (3003) |
-| `Mutable<T>` | `mutable<T>(i)` | `#[account(mut)] AccountLoader<T>` | as `Owned<T>`, then writable (2000), then exclusive (builtin 12) |
+| `Owned<T>` | `owned<T>(i)` | `AccountLoader<T>` | present, owner is this program (3007), 8 bytes of data (3001), `T.discriminator()` (3002), `8 + sizeof(T)` bytes and valid bool/enum field values (3003) |
+| `Mutable<T>` | `mutable<T>(i)` | `#[account(mut)] AccountLoader<T>` | owner/discriminator/length as above, writable (2000), borrow available (builtin 12), valid field values (3003), then exclusive claim |
 | `External<T>` | `external<T>(i)` | `InterfaceAccount<T>` | present, then `T.verify(i)`: the owner is one `T` accepts (3007) and the data has the layout `T.decode` reads (3003), checked without building the value |
 | `ExternalMutable<T>` | `externalMutable<T>(i)` | `#[account(mut)] InterfaceAccount<T>` | as `External<T>`, then writable (2000), then exclusive (builtin 12) |
-| `Delegated<T>` | `delegated<T>(i)` | `UncheckedAccount` with `seeds`, then `T::try_deserialize` (MagicBlock `magic-actions` `UpdateLeaderboard`) | present, owner is the delegation program (3007), 8 bytes of data (3001), `T.discriminator()` (3002), `8 + sizeof(T)` bytes (3003); the address is checked by `pda`/`pdaWithBump` (2006) |
+| `Delegated<T>` | `delegated<T>(i)` | `UncheckedAccount` with `seeds`, then `T::try_deserialize` (MagicBlock `magic-actions` `UpdateLeaderboard`) | present, owner is the delegation program (3007), 8 bytes of data (3001), `T.discriminator()` (3002), `8 + sizeof(T)` bytes and valid field values (3003); the address is checked by `pda`/`pdaWithBump` (2006) |
 
 - **Exclusive.** A `Mutable` or `ExternalMutable` proof claims its account: the runtime marks a duplicated account in the input buffer as a pointer to the first record, and the claim writes the first record's marker byte, so a second mutable proof for the same account, through any index, is `AccountBorrowFailed`. This is Pinocchio's borrow state, which lives in the same byte. Anchor 0.31.1 accepts the duplicate unless the program writes a constraint; two `Ptr<T>` into one account is how a player fights their own pet.
 - **Weakening.** `asSigner()` and `asWritable()` turn a `WritableSigner` (or a `Mutable<T>`) into the weaker proof a callee asks for. There is no conversion the other way.
 - **Constraints** that need more than the field's type are decorators on the field (below). The calls they replace stay for code that decides at run time: `pda`/`pdaWithBump` (2006, seeds as in §4), `expectHasOne` (2001), `expectAddress` (2012), and in `token.ms` `expectAssociated` (3014), `expectTokenMint` (2014), `expectTokenOwner` (2015).
 - `Owned<T>.data()` and `Delegated<T>.data()` are read-only pointers, `Mutable<T>.data()` a writable one, all at offset 8 of the account data. A `Delegated<T>` is the last state the rollup committed to the base layer, and it is accepted only while delegated: an undelegated account is read as `Owned<T>`; `External<T>.read()` decodes the other program's layout (token layouts are packed, so they are read, not overlaid).
+
+### Field-value boundary
+
+Typed proofs validate raw bytes before exposing a pointer: bool is 0/1, enum is
+an exact declared member, including sparse/signed members, nested structs and
+fixed arrays. Invalid fields return 3003 without consuming the mutable claim.
+The compiler supplies layout; the generated validator uses bounded word loads,
+not a copy, heap allocation or runtime schema table.
+
+This is deliberately stricter than an unchecked zero-copy Pod contract. The
+source remains a normal boolean or enum instead of requiring wrapper types or
+rejecting the field. The bool rule is checked serialization's 0/1 rule rather
+than non-zero-is-true, avoiding an invalid C bool read while retaining repr(C)
+account bytes.
+
+On the std-solana candidate, LiteSVM 1.4.1/platform-tools v1.57, `--danger`:
+one nested bool/enum plus `Species[64]` was **387 CU unchecked, 458 CU checked**.
+The scalar per-byte prototype cost **803 vs 389 CU** (+414), so packed validation
+reduces that overhead to **+71**, not to zero. `accountValues.mjs` runs all 256
+values at each of 66 positions plus mixed/carry-boundary neighbours:
+**16,905 cases passed**, invalid data 3003, max valid **458 CU**, cap 465.
+The initial isolated consumer's `.so` was **3,192 → 3,816 B**; it is not a
+general size estimate for arbitrary enum arrays.
+
 
 ### Constraints on a field
 
@@ -249,8 +289,8 @@ const sent = invoke(
 
 - **Shapes.** `invoke(program, accounts, storage, length)` is `invokeSigned(program, accounts, storage, length, [])`; `signed(invoke(…), seeds)` signs it like any call, and a function that forwards its own `signers: Readonly<Span<SignerSeeds>>` calls `invokeSigned`. Both expand to `invokeCpi(program, accounts, <one zeroed CpiAccount per account>, storage, length, signers)`: each element of the list is evaluated once, and the core fills the `CpiAccount` of an `InstructionAccount` from the account record the key points into (the key is the address of the account's key, so the record is 8 bytes below it) with the account's own flags, while the `InstructionAccount` keeps the flags the call asked for. A count known only at run time is `invokeList(program, accounts, storage, length, signers)`, which keeps its `CpiAccount`s in its own frame.
 - **Writing data.** `putU8`, `putU16`, `putU32`, `putU64`, the signed ones, `putBool`, `putPubkey`, `putBytes` (a view of the input buffer) and `putSpan` are extensions of the storage, written `storage.putU32(at, value)` or `putU32(storage, at, value)`; each takes an offset and the value and answers the offset after the write. A write that does not fit writes nothing and answers `storage.length + 1`, which every later write answers again, so a chain needs no check until the CPI: it answers `InvalidArgument` before it sends when the length is past the storage (`requestRandomness` answers `InvalidInstructionData`, which the VRF SDK returns for a buffer that is too small, `ephemeral-rollups-sdk/rust/pinocchio/src/vrf/types.rs:78-81`; `scheduleTask` answers `InvalidArgument`). N is a capacity and the offset is the length. Sizes chosen: the delegation 625 bytes (the SDK's `MAX_DELEGATE_ACCOUNT_ARGS_SIZE` plus the 8-byte discriminator, `rust/pinocchio/src/types.rs:4-8`), a VRF request and a scheduled task 1,024. A function that embeds data it was given (`requestRandomness`'s callback arguments, `scheduleTask`'s target data) takes a `Readonly<Span<uint8>>`, as the SDK takes a `&[u8]`, and the author passes the array or `storage[0..length]`.
-- **Limits.** 64 accounts, Pinocchio's `MAX_CPI_ACCOUNTS` (`cpi.rs:15`) and the runtime's limit on the account infos a CPI takes when `increase_tx_account_lock_limit` is off (`agave-syscalls-3.0.0/src/cpi.rs:914-925`; 128 when it is on). A run-time list of 65 is `InvalidArgument`, Pinocchio's answer in `slice_invoke_signed` (`cpi.rs:229-250`). A list written at the call of more than 64 is a compile error that names the limit (`solanaCpiAccountLimit.ms`), the const assertion `invoke_signed` reaches through `inner_invoke_signed_with_bounds` (`cpi.rs:126-136,278-284`); the 4 KB frame stops it sooner, at 44 accounts beside a one-byte buffer, with clang's frame error that names the function and its size (`solanaCpiFrameOverflow.ms`). `commit` keeps the 16 of the ephemeral-rollups SDK (`ephemeral-rollups-sdk/rust/pinocchio/src/instruction/commit.rs:10,37-41` `MAX_LOCAL_CPI_ACCOUNTS`): its list is `InvalidArgument` past 16 in total with the payer, the context and the fee vault. `scheduleTask` keeps 16 task accounts: its 1,024-byte buffer holds at most 27, so a larger limit could not be reached. The CPI shapes at these limits build inside the frame: `solanaCpiFrame.ms`.
 - **Integration measurement, Windows x64, source tree `0e980314b095`, 2026-10-07.** A throwaway native consumer calls `storage.putU32`, free-function `putU64`, overflow `storage.putU8`, and `putSpan` with an immutable sized-array source. It prints `writers 12 13 18 52 86 120 1 0` and `span 2 9 10 86 0`: both call forms work, the 12-byte destination fills exactly, the next write refuses with 13 without changing its last byte, and the readonly source copies two bytes. `out/remote5730/msc.exe test std/solana/test.cms` passes 458/458 tests in 27 modules. The frame/account-count figures above are prior measurements, not reverified by these native consumers; the LTO boundary and the other writer widths are not measured by the throwaway probe.
+- **Limits.** 64 accounts, Pinocchio's `MAX_CPI_ACCOUNTS` (`cpi.rs:15`) and the runtime's limit on the account infos a CPI takes when `increase_tx_account_lock_limit` is off (`agave-syscalls-3.0.0/src/cpi.rs:914-925`; 128 when it is on). A run-time list of 65 is `InvalidArgument`, Pinocchio's answer in `slice_invoke_signed` (`cpi.rs:229-250`). A list written at the call of more than 64 is a compile error that names the limit (`solanaCpiAccountLimit.ms`), the const assertion `invoke_signed` reaches through `inner_invoke_signed_with_bounds` (`cpi.rs:126-136,278-284`); the account infos are built in the fixed 64-slot frame of `msSolInvokeMetas` (`runtime/solana/solana.h`), not in the caller's, so a 64-account list written at the call beside a one-byte buffer builds (`solanaCpiFrame.ms`, 2026-10-09). `commit` keeps the 16 of the ephemeral-rollups SDK (`ephemeral-rollups-sdk/rust/pinocchio/src/instruction/commit.rs:10,37-41` `MAX_LOCAL_CPI_ACCOUNTS`): its list is `InvalidArgument` past 16 in total with the payer, the context and the fee vault. `scheduleTask` keeps 16 task accounts: its 1,024-byte buffer holds at most 27, so a larger limit could not be reached. The CPI shapes at these limits build inside the frame: `solanaCpiFrame.ms`.
 - **What a program can hold.** A value an author can keep or return points only at memory that lives for the whole instruction: the input buffer (account records, instruction data, the program id), rodata, or the heap, which is never freed. A view into a frame is a parameter, never a value, as the reference's `openArray` is (`paper/NIM-REF.md` CK-139); that is why the writers are functions over a `Span<uint8>` and an offset and not a struct that holds the array's address. `Bytes` points into the input buffer (`instructionData`, `Account.data`, `argBytes` and the ranges of those), `Account` and `InstructionAccount` hold the address of a record in it, `Pda`, `AccountMeta` and `Clock` hold values, `ReturnData` owns its 1,024 bytes (`[u8; MAX_RETURN_DATA]` in Pinocchio's, `pinocchio-0.9.3/src/cpi.rs:488-530`), and `CpiAccount` holds the addresses of the input-buffer fields the runtime reads. `SeedSlice`, `SignerSeeds`, `Signing`, `SeedTable` and `CpiInstruction` hold frame addresses by design and are internals of the macros and of `invokeCpi`: they are not in the `std/solana` barrel, though `seed.cms` and `cpi.cms` export the functions that build them. `std/solana/test.cms` pins where each `Bytes` producer points.
 - **Why the core fills the `CpiAccount`s.** Building both arrays at the call site from the same list needs each account expression twice, so the macro would have to refuse an expression with a side effect or copy it; a probe of a 3-account CPI measured the call-site arrays at 912 bytes of `.text` and the core fill at 832. A core that keeps all 16 `CpiAccount`s in its frame for every CPI (`slice_invoke_signed`'s shape) measured 904 bytes, but puts the core's 944-byte frame under every CPI; at 64 the frame of `invokeList` is 3,648 bytes.
 - **Traps.** `invoke.ms` imports only `cpi.cms`, so `core.cms`, `mint.ms` and `delegation.ms` use the macros without importing `macro.ms` (§1, the cycle in §4 above). `signed` rebuilt its callee by name, which dropped the symbol a macro had bound and failed `signed(invoke(…), …)` with `Undefined variable 'invokeCpi'`; it keeps the callee as written. A sized array of length 0 (`AccountMeta[0]`) does not compile (`initializer for aggregate with no elements requires explicit braces`): pass `[]` where a view is wanted. A `this` receiver of type `Span<uint8>` does not take a `uint8[N]`, so the writers are free functions (`2026-10-04-extension-with-a-span-receiver-does-not-resolve-on-a-sized-array`). `try scheduleTask(…)` and `const sent = try requestRandomness(…)` over an overloaded function build under `--os=solana` (`src/test/guard/solanaOverloadedAggregateReturn.ms`).
@@ -275,6 +315,8 @@ Rejected: routing every signed division through a runtime helper with an SBF-spe
 ## 7. Clients and the IDL
 
 `anchorIdl<Op>(spec)` returns the program's IDL in Anchor's 0.1.0 spec as a string literal built at compile time: instructions with snake_case names, discriminators, accounts with their `writable`/`signer` flags and known program addresses, Borsh arguments (a last `Bytes` argument is `bytes`); account types with discriminators and `bytemuck`/`repr(C)` layouts, a nested struct as a `defined` type listed in `types`, `T[N]` as an `array`, `BitSet<E>` as the integer it is stored in (`u8`, `u16`, `u32`, `u64` up to 8, 16, 32, 64 members, `[u8; ⌈n/8⌉]` above, bit = ordinal); an enum as the integer it is stored in (`u8` when its values fit 0 to 255, `u16` up to 65535, `i32` otherwise, as `docs/LANG.md` sizes it; measured 2026-10-05 in `std/solana/test.cms`, `species: Species` of `{ Cat, Dog }` is `u8` and `Pet` is 4 bytes); events; the error enum from 6000. A nested struct must be imported where `anchorIdl` is called; any other field type is a compile error. `examples/escrow/idl.cms` prints it (`msc run examples/escrow/idl.cms > escrow.json`); its test parses the JSON on C, and `tools/solana/escrow.mjs` loads it in Anchor's TypeScript client (§8).
+
+Addresses and PDAs (2026-10-09): an account gets a fixed `address` for `Program<System|Token|Token2022|AssociatedToken>` and for `@address(CONST)` where `CONST` is a `pubkeyOf` constant visible at the `anchorIdl` call (otherwise a compile error). A field with `@seeds` gets `pda.seeds`: a string or byte list is `const`; an account or `account.key()` is `account`; `leBytes(x.f)` (uint16/32/64) or `[x.f]` (uint8) is `arg` for an instruction argument, or `account` with `path: "field.member"` for a member of an `Owned`/`Mutable`/`Delegated` field. `@bump` adds no seed. A seed outside these forms leaves the account with no `pda`, as Anchor's own IDL builder does, never a partial list; there is no `pda.program` and no associated-token PDA. Pins: `std/solana/idlTest.ms`; `tools/solana/codamaPdaCheck.mjs` (with `CODAMA_DIR` pointing at a `@codama/nodes-from-anchor` install) checks that Codama derives the PDA node and the account default.
 
 A MetaScript client compiles the program's layout module to JS and uses the same declarations, `Pubkey`, discriminators and `BorshWriter`.
 
@@ -322,8 +364,613 @@ Each figure is per field, from a program that lists 1 and 8 fields of the kind; 
 
 `table` is 24% smaller on the Hibernal-shaped program and 4% on the escrow, and costs 3.6% more compute units on the first and 0.5%, 2.2% and 1.6% on the escrow's three instructions: bytes down and compute units up past a few CU a field, so it is not adopted. A macro cannot declare a module `const` where `accounts<T>()` is called, and a `const` aggregate inside a function is built on the stack (the emitted C stores each element; Nim declares a proc's `const` as module data, `compiler/ccgexprs.nim:3497-3507,3555-3563`): with each table inside its handler (`--local-tables`) the Hibernal-shaped program is 52,440 bytes and 67,561 CU, the escrow 44,864 bytes and 27,539, 19,060, 15,611 CU. `chain` is smaller and cheaper than `std` on both programs (15.5% and 6.1% on the Hibernal-shaped one) and adds no fixed cost, but a decorator is dearer in it than today; the 3.2% and 0.4% to 0.8% it saves on the escrow are the per-field part only. Not measured: the JS backend (the modules are C-only), `--release` or an optimization flag, Hibernal's own program, a Token-2022 account, any platform-tools but v1.57.
 
+### Private proof chain — current candidate
+
+The figures above describe the historical prototype, whose raw-account-to-proof
+casts are now correctly refused. Current `--form chain` exercises the real std
+macro; comparison requires separate baseline/candidate compiler installations,
+not two labels over the same std.
+
+Matched `--danger` runs on 2026-10-07, LiteSVM 1.4.1/platform-tools v1.57,
+deployed std/compiler `369dbc18a` versus the `msc-stable` std-solana candidate:
+
+| Hibernal-shaped fixture: 26 instructions, 174 fields, 59 decorated | deployed std | candidate chain |
+|---|---|---|
+| `.so` bytes | 52,248 | 46,696 |
+| total CU over idle | 21,412 | 21,396 |
+
+Commands: `node tools/solana/accountTableCost.mjs --msc <baseline-or-candidate>
+--form std|chain --suite hibernal --danger --work <separate-directory>`.
+The 28 refusal scenarios retained every code. The escrow built at **30,160 B**;
+Anchor's IDL client replay passed make/take/refund and the seven malformed
+constraint scenarios. Heap replay also passed every check.
+
+Rejected intermediate implementations: the initial real chain was **48,936 B /
+21,752 CU** under `--danger` (bytes lower but CU higher); the one-field IIFE
+increased the field-value consumer beyond its 465-CU cap. Raw constraint cores
+and a direct expression for degenerate shapes restored the cap to **458 CU**.
+Default/no-LTO is not interchangeable with this comparison: the initial real
+chain there was **90,032 vs 72,336 B**, so these optimized numbers do not claim
+all-mode improvement.
+
+Integration is not complete: a hidden proof alias in an imported accounts shape
+still fails `Unresolved type 'Auth'`; the owning bound-annotation fix is on
+`name-to-symbol`. The full transitive JS codec suite waits for `sized-arrays`.
+No completed gate or installed-candidate claim follows from these SBF probes.
+
+### Matched v2 baseline — checked reference approved, measurements in progress
+
+The reference is anchor-next `ff0514b6042e3cf7345bf0cd58eb442542c93172`,
+Anchor v2 **2.0.0-rc.1**. The upstream prop-amm fixture is a specialized ASM
+entrypoint, not the ordinary checked dispatcher for its `update` instruction.
+`bench/programs/prop-amm/anchor-v2/src/asm/entrypoint.s` checks account count,
+exact48B data length, writable/signature flags and a constant authority, then
+loads8 bytes at `ix_data+1` and writes the price. It does not validate the account
+discriminator, declared program id or update argument length on that path.
+
+Measured from an immutable `git archive HEAD` snapshot, command:
+`cargo-build-sbf --manifest-path <snapshot>/bench/programs/prop-amm/anchor-v2/Cargo.toml
+--tools-version v1.57 --sbf-out-dir <snapshot>/deploy -- --offline`.
+Release uses the bench profile (opt3, fat LTO); platform rustc is1.95.0-dev
+`ae660768a` (2026-08-17). ELF is **9,808B**, SHA256
+`94cb4a4fa845524ea7e2f7308e8d64774daa1a632bc387ee2fe9d7ac26acb291`.
+LiteSVM and `mainnetInactiveFeatures.json` are the same ones the SDK harness uses.
+The probe `/tmp/std-solana-goal-audit/propReferenceRefusal.mjs` sends separate
+transactions with signer seed7, writable48B oracle and price1234:
+
+| input | upstream result | CU | resulting price |
+|---|---|---:|---:|
+| valid | accepted | 26 | 1234 |
+| zeroed account discriminator | accepted | 26 | 1234 |
+| deployed under another program id | accepted | 26 | 1234 |
+| one-byte instruction, missing price | accepted | 26 | 2028873312816101692 |
+
+A different stored authority also passes, but that is **not** a refusal gap:
+the upstream fixture intentionally authorizes a fixed key, not that stored field.
+These observations concern this specialized fixture, not all Anchor v2 programs.
+No safe matched comparison or SDK win follows from the26-CU path. Do not remove
+SDK checks to match it. The person approved a checked variant and explicitly
+prioritized best measured performance over early API/wire compatibility. Eight-byte
+hashes are a diagnostic control, not a mandatory final format.
+
+The checked prop-amm variant uses the ordinary `#[program]` dispatcher and a real
+update body, keeping the fixed-authority and exact48B policies. Only this benchmark
+snapshot changes: remove `no-entrypoint` from default features and replace the ASM
+include/allocator override and unreachable body. Rebuilt with the command/profile
+above, it is **9,688B**, SHA256
+`ec6277262ffd88691e70b5e07ad64773032187bbec226a91855c6aca592a7427`.
+The same probe now gives valid update **87CU**, wrong discriminator refused
+`InvalidAccountData`/175CU, alternate deployment refused `IllegalOwner`/62CU,
+missing price refused `InvalidInstructionData`/81CU; every refusal leaves price0.
+Stored-authority mismatch still succeeds, as the fixed-key policy requires.
+
+All five reference ELFs build: hello7,368B, vault6,296B, nested13,712B,
+checked prop-amm9,688B, multisig32,480B. `anchorBench.mjs` gives reference
+hello init1,444CU, vault deposit1,597/withdraw408. Actual current SDK under
+`./msc-integrated --os=solana --danger` at matching declared ids gives
+hello6,960B/init1,765CU; vault6,184B/deposit1,922/withdraw579. These are preliminary
+success measurements, **not** a completed matched matrix: vault's reference uses
+one-byte tags while that actual SDK build uses eight-byte hashes; refusal/state
+parity and the other ports remain to verify.
+
+A scratch SDK (`/tmp/std-solana-tag-probe`) reuses the existing project-define,
+macro table/selection, checked Borsh readers and IDL emission with
+`-d:instructionFormat=byte`. No actual SDK source was changed for this experiment.
+It restricts compact enums to at most256 ordinal members; account/event tags stay
+unchanged, scalar loads remain memcpy-safe at unaligned argument offsets. Host
+28files/391tests and seven real SBF success/refusal cases pass. A two-operation
+probe gives hash1,864B/186+191CU, byte-table1,968B/184+189CU, bounded byte1,952B/
+186+186CU: smaller wire alone does **not** prove smaller deployed code. The scratch
+vault with bounded byte dispatch gives5,800B/deposit1,923/withdraw624 versus the
+reference6,296B/1,597/408, so no CU target or final-format win is claimed. Repro
+commands/hashes/limitations are in `/tmp/std-solana-goal-audit/benchCheckpoint.json`;
+these temporary artifacts must become a durable runner before baseline completion.
+
+#### Reproducible checked v3/hash control
+
+The subsequent audit found an additional required refusal gap: upstream vault
+accepts an alternate deployed program-id for both instructions. Its
+`anchor_lang::check_program_id` helper is feature-gated and compiles away under
+the fixture's disabled guardrails policy. The checked snapshot now adds an
+explicit address comparison returning4100 to each vault handler; the SDK keeps
+its existing early declared-id check. This is the approved checked-reference
+policy, not a change to the upstream clone or a relaxed SDK check.
+
+`tools/solana/anchorReference.mjs <clone> <fresh-work> hash` archives the pinned
+revision, applies `checkedProp.rs` and that vault guard, builds all5 artifacts
+with platform-toolsv1.57/`--arch v3`/opt3/fat-LTO/cgu1 and records hashes, commands,
+profile and feature fingerprint. Earlier reference builds were defaultv0 while
+SDK emittedv3: their numbers above are provisional, **not the final matched ISA
+baseline**. The corrected comparison uses ELF flag3 on both sides, eight-byte
+instruction tags on both sides and unchanged account discriminators/layouts.
+
+SDK build: `./msc-integrated build examples/anchorBench/<suite>/program.ms
+--os=solana --danger -d:programId=<same-id> --output=<so>`.
+Replay: `BENCH_REFUSALS=1 BENCH_JSON=<matrix.json> node tools/solana/anchorBench.mjs
+<suite>:v2:anchor:<reference.so> <suite>:std:anchor:<sdk.so> …`.
+The runner uses identical keys, PDAs, funded accounts, wire payloads and
+`mainnetInactiveFeatures.json`; it compares every watched successful account's
+bytes/owner/lamports and requires refused transactions to leave business state
+unchanged. It records raw refusal codes rather than silently normalizing the
+frameworks' different error vocabularies. Inputs include3 stored multisig members,
+threshold2, two signed approvals,48B Oracle and398B MultisigConfig.
+
+Measured2026-10-07, hash control:
+
+| fixture | reference ELF B | SDK ELF B | instruction CU reference → SDK |
+|---|---:|---:|---|
+| hello | 6400 | 6960 | init1441 →1765 |
+| vault | 5632 | 6184 | deposit1602 →1922; withdraw418 →579 |
+| nested | 12256 | 11112 | initialize2840 →3348; increment866 →1202; reset861 →1202 |
+| checked prop-amm | 8448 | 8112 | update81 →198; initialize1398 →2815; rotate_authority93 →218 |
+| multisig | 30496 | 22168 | create2762 →3165; deposit2292 →2626; set_label621 →1088; execute_transfer2991 →3461 |
+
+All13 successful instruction pairs have exact watched account-state parity;
+**206 refusal probes pass**, including truncated arguments, malformed UTF-8,
+overlong labels, invalid threshold, missing accounts, owner/discriminator,
+signer/mutability, unknown tag and alternate deployment. Full LTO versus default
+SBF LTO produces identical vault6184B/1922/579, so an LTO flag alone is not a fix.
+The quantitative target remains unmet: hello/vault ELF larger and all13 SDK CU
+higher. This control closes benchmark reproduction, **not optimization or ship**.
+Default-byte policy, final optimized builds, all-mode/gate and installed consumer
+acceptance are not verified here. Installed binary/support advanced independently
+to0d83c4867; no SDK delivery/land/sync from this worktree follows from that.
+
+The multisig port required a fixed32-byte Borsh argument. `args<T>()` now admits
+literal `uint8[32]` through the existing bounds-checked memcpy-safe Pubkey reader
+and its byte-array member, preserving the author's array type. It neither treats
+labels as public keys nor requires a manual decoder. Native SDK28files/473tests
+pass; odd offsets, every truncation and invalid adjacent boolean are pinned in
+`test.cms`, and real set-label SBF success/bad-UTF8/overlength probes pass above.
+Other byte-array lengths, aliases and new IDL argument shapes have **not** been
+verified by this narrow gate extension.
+
+#### Existing System prefund instruction, measured optimization
+
+The creation reference read is `lang-v2/src/cpi.rs:453–490`: it uses the existing
+System `CreateAccountAllowPrefund` instruction13, not allocate+assign for a
+prefunded target. The SDK now uses that same established instruction through its
+existing checked CPI machinery; there is no new compiler pass, proof constructor
+or invented CPI protocol. Its52B payload is opcode13/lamports/space/owner, target
+first and optional funding payer second. Rent shortfall is computed without
+unsigned subtraction wrap, signer seeds forwarded unchanged and init's existing
+payer==target refusal/exclusive-claim ordering retained. Public legacy
+`createAccount` remains unchanged. This path requires the System prefund feature
+on the target cluster; an unsupported CPI fails, with no silent fallback.
+
+TDD: the two wire/seed regression cases fail against the prior SDK
+(471pass/2fail); candidate native28files/473tests pass, with exact payloads,
+zero/partial/full prefunding, balances, owner, zeroed data and signer forwarding.
+The native System model recognizes13 and checks allocation bounds, target owner,
+existing data and funding before mutation. The full five-fixture v3/hash replay
+still has13 exact-state instruction pairs and206 refusal probes/0failures.
+All103 SDK refusal records are identical to the prior candidate except CU,
+including raw error codes; no refusal-code normalization hides a change.
+
+| SDK artifact | before ELF B → after | before CU → after |
+|---|---:|---|
+| hello | 6960 →5504 | init1765 →1769 |
+| vault | 6184 →6184 | deposit1922 →1922; withdraw579 →579 |
+| nested | 11112 →9656 | initialize3348 →3356; increment/reset1202 →1202 |
+| checked prop-amm | 8112 →6656 | update198 →198; initialize2815 →1660; rotate218 →218 |
+| multisig | 22168 →20712 | create3165 →3169; deposit2626 →2626; label1088 →1088; transfer3461 →3461 |
+
+Prop init removes one real System CPI, saving1155CU; reachable legacy allocation
+and assignment helpers disappear, saving1456B in each creation artifact.
+Blank-target initialization retains one CPI and regresses4CU (nested's two
+creations8CU); this is explicitly **not** an across-instruction quantitative win.
+A vault optimizer-only probe, `--passC='-mllvm -inline-threshold=1000'`, gives
+6168B/deposit1922/withdraw578 rather than6184/1922/579; it is not a promoted SDK
+build policy and its refusal/full-field/all-mode lanes have not been run.
+That checkpoint left vault552B above matchedv3 reference5632B, with every
+SDK instruction CU higher. It is not a completed optimization or delivery.
+
+### Parser marker reuse — measured 2026-10-08
+
+`runtime/solana/solana.h:msSolParse` now reads each kept slot's duplicate
+marker once, resolves its lookup and advances its cursor in the same branch.
+The reference cursor's `next` uses the same resolve/advance ordering
+(`lang-v2/src/cursor.rs:135–179` in the archived reference). No entry ABI,
+account maximum, duplicate handling, claim marker or proof checks changed.
+LLVM previously reloaded the marker after the lookup-table write; removing
+that reload and duplicate branch saves48B in each of the five artifacts.
+
+Rebuilt immutable v3 controls and all five candidates with platform-tools
+v1.57 clang, `--danger`, identical IDs/features and existing hash encoding:
+
+| Fixture | Reference B → SDK B | Reference CU → SDK CU |
+|---|---:|---|
+| hello | 6400 →5456 | init1441 →1757 |
+| vault | 5632 →6136 | deposit1602 →1910; withdraw418 →571 |
+| nested | 12256 →9608 | initialize2840 →3340; increment866 →1190; reset861 →1190 |
+| checked prop-amm | 8448 →6608 | update81 →190; initialize1398 →1648; rotate93 →210 |
+| multisig | 30496 →20664 | create2762 →3145; deposit2292 →2610; label621 →1080; transfer2991 →3433 |
+
+Evidence is now in ignored, cache-preserving `out/solana/goalAudit/` rather
+than `/tmp` (the older temporary artifacts are no longer present):
+`parser-matched.{json,log}`, `reference-hashes.txt`, `parser-host-restored.log`,
+`parser-entry-guard.log` and `parser-host-table-guard.log`. The full replay
+has13 exact successful instruction-state pairs and206 refusal probes,
+0 failures; host28files/473tests and entry/host-table guards pass. The host
+CMS guard must run on C, not raiser. A guard-before-args AST prototype failed
+to compile and was fully removed; it is not a promoted change or root fix.
+
+Size passes4/5; CU passes0/13: the strict target is not met. Vault remains
+504B above reference. User resumed the already-approved deeper optimization after the
+premature checkpoint pause. `optimize-sdk` remains unfinished; final lanes,
+legitimate commit, queued gate/land/sync and installed acceptance are pending.
+
+### Argument bounds — measured 2026-10-08
+
+The low-level argument readers now reject offsets before pointer arithmetic:
+`offset <= available` and `width <= available - offset`. Previously,
+`offset + width` wrapped for maximal `uint64` offsets, allowing reads of the
+instruction prefix. `argBytesFit` validates its four-byte prefix before
+subtracting the offset/prefix from available bytes; an absent boolean now
+fails `argBoolValid` rather than validating the reader's zero sentinel.
+This follows bounded-slice reads: the matched reference's wincode0.6.1
+`src/io/slice.rs:29–36` checks the remaining slice before advancing it.
+Existing valid wire bytes, errors and raw bool checks are preserved; invalid
+wrapping offsets are now refused. This is a std reader fix, not compiler debt.
+
+Five separate uint8/uint16/uint64/Bytes/missing-bool pins fail on the old
+arithmetic (**473pass/5fail**) and pass on the candidate (**28files/478tests**).
+Logs: `out/solana/goalAudit/args-overflow-variants-{old,new}.log`.
+The nongeneric `argU64` reader is compiler-inline; generic proof/Result
+workarounds are unchanged. Without this annotation the safe bounds variant
+made vault5712B/deposit1909/withdraw617; annotation restores6136/1910/571.
+Inlining only `argumentAddress` made no improvement and was removed.
+This is measured optimizer behavior, not a reason to restore unsafe bounds.
+
+`safe-inline-matched.{json,log}` retains13 exact-state pairs and206 refusals,
+0failures; all103 SDK refusal error/state records match the parser checkpoint
+exactly (only their recorded CU is excluded from that equality). Latest SDK:
+hello5456B/init1757; vault6136B/deposit1910/withdraw571;
+nested9608B/initialize3340/increment1190/reset1190;
+checkedprop6632B/update190/initialize1648/rotate209;
+multisig20656B/create3145/deposit2610/label1079/transfer3433.
+Controls remain the same v3 artifacts. Size4/5,CU0/13 still miss the target.
+Fresh independent checks on the same newest source tree: codecC27files/395tests,
+codecJS15files/105tests; field replay16905cases, invalid3003, maxvalid460CU
+(cap465 unchanged). Logs `codec-safe-{c,js}.log`, `field-safe.log` under
+`out/solana/goalAudit/`. Five selected directive guards (proof forgery,
+private failure helper, readonly data, pointer field refusal and writable
+module binding) match all24 expected diagnostic substrings; logs
+`*-safe-build.log` and `proof-build-summary.log`. These are build/refusal
+guards, not runnable raiser programs; writable-binding refusal happens after
+typecheck, so `check` alone is insufficient. No NEW failures in these focused
+checks. Fresh `heap-safe.log` passes every fixed32KiB/named-exhaustion,
+oversized request and wrap-boundary check. Fresh escrow SBF replay through
+Anchor's client and newly generated IDL passes all make/take/refund and
+constraint-refusal scenarios (`escrow-safe.log`, `escrow-safe-idl.json`).
+The broader native escrow/IDL lane first exposed one obsolete token-test
+assertion requiring System opcode0. `token.ms` now pins opcode13, exact52B,
+token owner bytes, target-first/funder-second signer+writable metas and
+original PDA seed forwarding; no check was dropped. Old lane421pass/1fail,
+new30files/422tests pass (`escrow-idl-safe-tests{,-new}.log`).
+SDK `--danger --lto=off` also rebuilds all five fixtures and matches the
+LTO-on candidate's13 successful instruction states and206 refusal probes,
+0failures (`safe-nolto-parity.{json,log}`). This is functional SDK parity,
+not a quantitative comparison to the LTO-on reference. A nongeneric
+`keysEqual` compiler-inline probe matches vault6136B/1910/571 exactly and
+was removed; its four unaligned word comparisons already match the reference
+key-equality routine. Logs `vault-key-inline{,-build}.log`.
+Full queued gate, remaining all-mode/real consumers and installed acceptance
+remain pending; no delivery follows from this checkpoint.
+
+### R2 entry experiment — 2026-10-08, not gated or installed
+
+The person approved reference-backed R2/private-cursor exploration. The archived
+entry in `out/solana/v3Reference/source/lang-v2/derive/src/lib.rs:5824–5888`
+uses SIMD-0321's instruction-data pointer; it is not an account-pointer array.
+The cursor at `lang-v2/src/cursor.rs:135–179` informed two rejected prototypes:
+a private loaded-count/cursor walker produced prop8096B/update228/init1735/rotate247;
+always-inlining it produced8592B/234/1692/254, versus safe6632B/190/1648/209.
+The noinline build contained three walker copies (objdump); the inline version
+also increased size/CU. Both cursor prototypes and both extra context fields were
+removed, including their heap-layout change. Artifacts remain in ignored
+`out/solana/goalAudit/prop-lazy{,-inline}*`; no new lazy accessor is promoted.
+
+The smaller R2-only experiment keeps eager frame-table parsing and the legacy
+host parser. `msSolStart` in `runtime/solana/solana.h` uses the direct instruction
+pointer, with the emitted two-argument entry in `src/codegen/c/index.ms`.
+A missing R2 pointer is rejected before entering the program, not silently
+accepted through an alternate decoder. SIMD-0321 is required for this experiment;
+feature-disabled VM behavior is not established. An ignored copy of the harness
+explicitly deactivated `5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL`
+and printed `isActive=false`, but both old and R2-only prop artifacts still passed
+with unchanged CU (`r2-feature-disabled-{old,new}.log`). Thus that toggle did not
+exercise missing R2; it must not be reported as a demonstrated refusal.
+
+Builds use `./msc-entry-proto build examples/anchorBench/<fixture>/program.ms
+--os=solana --danger --cc=<v1.57-clang> -d:programId=<matched-id>
+--output=out/solana/goalAudit/<fixture>-r2.so`, followed by the existing harness
+with `BENCH_REFUSALS=1 BENCH_JSON=out/solana/goalAudit/r2-matched.json` and the
+same archived v3 reference artifacts. `r2-matched.{json,log}` records13 exact
+successful state pairs and206 refusal probes,0failures; all103 SDK refusal
+error/state records match `safe-inline-matched.json` exactly, excluding CU.
+
+| Fixture | SDK bytes | SDK CU, instruction order unchanged |
+|---|---:|---|
+| hello | 5368 | 1755 |
+| vault | 6048 | 1908 / 568 |
+| nested | 9520 | 3339 / 1188 / 1188 |
+| checked prop | 6544 | 187 / 1646 / 206 |
+| multisig | 20568 | 3146 / 2609 / 1076 / 3435 |
+
+Every artifact is88B smaller than the safe checkpoint. Most instructions save
+1–3CU, but multisig create regresses1CU and transfer regresses2CU; these are not
+hidden by totals. Size4/5,CU0/13 still miss the unchanged reference target;
+vault remains416B larger. The entry guard failed on the old builder and passed
+on this prototype; compiler check372modules and builder349modules pass.
+Renewed R2-only native host28files/478tests and both entry/host-table guards
+pass (`r2-host.log`, `r2-{entry,host-table}-guard.log`). Heap, field,
+full std/all-mode and real-consumer checks remain pending for this shape.
+Identity:293 std/runtime source files, sorted within `std` then within `runtime`,
+UTF8 relative path with uint64LE byte length plus raw32-byte content SHA256:
+`b047304ad9b1daed41b164fd558525e6f10847cd6c97b3c643ef9364a65bea4b`;
+prototype builder SHA256
+`3ee69b19e4fe17d9515484c57f190b122b571131f9a7ac9e5928e427db0eda5f`.
+The prior frozen d589 identity remains valid for its own snapshot, not this one.
+
+### Fixed context-base materialization — measured 2026-10-08
+
+The v1.57 SBF disassembly (`prop-r2.asm`, `entrypoint`) materializes a separate
+64-bit heap address for each context field. `runtime/manual.h`
+`msSolanaCurrentContext` now uses an empty, tied-register compiler hint: no
+instruction or memory operation, no pointer change, no context-layout or heap
+change. This makes one register base available for ordinary field offsets.
+It is target C optimization, not a new entry protocol or a language change.
+
+Same builder, clang, v3 references, ids and replay command as the preceding
+experiment, outputs `<fixture>-opaque.so`, `opaque-matched.{json,log}`:
+
+| Fixture | SDK bytes | SDK CU, instruction order unchanged |
+|---|---:|---|
+| hello | 5112 | 1739 |
+| vault | 5696 | 1889 / 553 |
+| nested | 9304 | 3323 / 1185 / 1185 |
+| checked prop | 6160 | 170 / 1629 / 200 |
+| multisig | 20024 | 3128 / 2589 / 1060 / 3422 |
+
+Compared with R2-only, every artifact is216–544B smaller and every instruction
+saves3–19CU. All13 success states and103 SDK refusal error/state records match
+R2-only exactly, excluding CU; full matched replay206refusals/0failures.
+Size4/5,CU0/13 still miss the target; vault is64B above the control.
+Fresh field16905cases/max443CU (cap465 unchanged), heap exhaustion/wrap checks,
+codecC395/JS105 pass; logs `field-opaque.log`, `heap-opaque.log`,
+`codec-opaque-{c,js}.log`. Compiler JavaScript ESM duplicate-equality-helper debt
+in actual consumers is not made green by the automatic CJS unit lane.
+Source identity293files, same explicit per-root recipe:
+`228e8836a589501c7ebed7a3e0c3a17a297e487bde6fc4554774d535765f8f77`;
+prototype builder remains `3ee69b19...eda5f`.
+Default O0, release O2 and danger O3/no-LTO rebuild all five fixtures and each
+match the optimized candidate's13 success states/206 refusal probes,0failures:
+`opaque-{debug,release,nolto}-parity.{json,log}`. These compare functional SDK
+modes, not quantitative results against a differently optimized reference.
+Renewed native lanes: std478, escrow421, hello392, vault394, escrowIDL422 tests
+pass (`opaque-native-*.log`). Fresh SBF escrow and freshly generated IDL pass
+every scenario through Anchor's real client (`escrow-opaque.log`,
+`escrow-opaque-idl.json`). The equivalent head-of-record cursor advance was also
+measured and rejected: vault5704/1890/554 and prop6168/171/1630/201 versus
+opaque5696/1889/553 and6160/170/1629/200. It was fully reverted; no checker or
+safety gate was weakened. Real consumer ESM/root-dependency acceptance,
+full queued gate and installed acceptance remain pending;
+this remains ungated and not installed.
+
+### Literal instruction selection — measured 2026-10-08
+
+`prop-opaque.asm` dispatch reconstructs56B of program-id/tag constants on its
+stack, then reads them again. The existing `instruction<Op>()` macro now emits
+literal conditional comparisons with the existing eight-byte discriminator;
+`core.cms` supplies scalar id/tag predicates and `typed.cms` supplies the typed
+Result boundary. No new compiler pass, context layout, wire policy or decoder.
+Program id is checked before instruction length, then the first matching enum
+member wins as before. Every tag read is length-guarded. The archived reference
+keeps a separate entry/internal-dispatch frame (`lang-v2/derive/src/lib.rs:5824–5888`);
+removing that frame is not claimed as the fix.
+
+Same matched commands/builders/settings, `<fixture>-literal.so`,
+`literal-matched.{json,log}`:
+
+| Fixture | SDK bytes | SDK CU, preceding instruction order |
+|---|---:|---|
+| hello | 5024 | 1730 |
+| vault | 5544 | 1878 / 535 |
+| nested | 9192 | 3309 / 1172 / 1164 |
+| checked prop | 6048 | 159 / 1611 / 181 |
+| multisig | 19928 | 3116 / 2575 / 1046 / 3405 |
+
+Size now5/5, CU still0/13 against matched v2: target remains unfinished.
+Compared with opaque base every artifact saves88–152B and every instruction
+saves9–21CU.13success states/206refusals/0failures; all103SDK refusal code/state
+records and success states match opaque exactly, excluding CU. Native29files/
+481tests pass (`literal-pins-restored-green.log`). Narrow selector negation
+terminates by signal6 with the minimum-int32 pin; widening before negation
+restores green. The other pins retain ordinal0 success and100/101/4100 errors.
+Cleanup removes the unused byte-literal builder and reads error codes from
+ProgramError instead of duplicating constants. These do not establish renewed all-mode,
+codec, heap/field, consumer ESM or installed acceptance on this new shape.
+Current293-file source `aff29c7d0651516c7b9dd8053a182c35c04db1a4e5547be40389cf890e279fbb`
+includes widening/cleanup/pins. Fresh `<fixture>-literal-pinned.so` /
+`literal-pinned-matched.{json,log}` reproduce every byte/CU entry above;
+103SDK refusal code/state records and all successful states again match opaque.
+Prototype builder remains3ee69. No commit/land/sync. Rejected `@inline dispatch` prop6184B/
+171/1630/201 versus opaque6160/170/1629/200 was removed; private bounds and
+selectedMember `@inline` gave no improvement and were removed as well.
+Skipping the final cursor advance only on R2 prop gave6072B/157/1612/179
+versus literal6048/159/1611/181: +24B/+1initializeCU, so it was fully removed
+(`skip-last.{json,log}`). Host parse/account-table behavior was not promoted
+from this probe.
+
+### Non-zeroing C helpers — measured 2026-10-09
+
+PDA derivation (`msSolDeriveAddress`, `msSolFindAddress`), the rent read (`sol_get_sysvar`, 16
+bytes) and the CPI account infos (`msSolInvokeMetas`, a fixed 64-slot frame) moved into
+`runtime/solana/solana.h` helpers that do not zero their scratch; `msSolanaEnter` no longer
+stores `err` and `currException` into the zeroed heap. UTF-8 validation of a fixed byte field is
+`isUtf8` in `std/solana/bytes.ms`. Same v3 reference, ids and replay as above; replay 0 failures,
+the SDK refusal records unchanged:
+
+| Fixture | reference B | SDK B | instruction CU reference → SDK |
+|---|---:|---:|---|
+| hello | 6400 | 4680 | 1441 → 1672 |
+| vault | 5632 | 4120 | 1602 → 1783; 418 → 535 |
+| nested | 12256 | 8160 | 2840 → 3195; 866 → 970; 861 → 962 |
+| prop-amm | 8448 | 5712 | 81 → 157; 1398 → 1564; 93 → 180 |
+| multisig | 30496 | 15328 | 2762 → 3004; 2292 → 2508; 621 → 802; 2991 → 3156 |
+
+Size 5/5, CU 0/13. Measured causes of the rest: the early program-id check (about 18 CU per
+instruction; removed, see below), the curve check on a stored-bump PDA (161 CU in nested increment/reset and multisig
+set_label/execute), the eager account table (about 35–60 CU against a lazy cursor) and
+by-value `Result`/`Pubkey` copies in create and transfer. `accountValues` 16,905 cases, max 446 CU.
+
+### Early program-id check removed — measured 2026-10-10
+
+`instruction<Op>()` no longer compares the runtime's program id with the declared one (§2 "A program run at another id"). Same v3 reference, ids, builder (`--os=solana --danger`) and replay command as above, before and after under one compiler; `BENCH_REFUSALS=1 anchorBench.mjs` over the five fixtures, 0 failures both ways, every success state identical, `accountValues.mjs` 16,905 cases, max valid 446 CU (cap 465):
+
+| Fixture | SDK B before to after | instruction CU before to after (reference) |
+|---|---|---|
+| hello | 4680 to 4552 | 1672 to 1657 (1441) |
+| vault | 4120 to 3992 | 1783 to 1769; 535 to 521 (1602; 418) |
+| nested | 8232 to 8088 | 3195 to 3181; 668 to 653; 660 to 645 (2840; 866; 861) |
+| prop-amm | 5712 to 5568 | 157 to 143; 1564 to 1550; 180 to 166 (81; 1398; 93) |
+| multisig | 15472 to 15336 | 3004 to 2987; 2508 to 2491; 651 to 634; 3011 to 2994 (2762; 2292; 621; 2991) |
+
+The `wrong-program-id` refusal changed meaning: it sent the instruction to a program deployed at another id with that id's own fresh accounts, which the reference refuses and the SDK now serves as an independent program. It now sends the declared id's accounts to the program at the other id. The 12 records that expected 4100 (SDK: helloworld `init` and nested `initialize` now `PrivilegeEscalation`, vault and multisig `create` 2006, the other seven 3007) keep "refused, state unchanged"; prop-amm `initialize` is skipped there (a plain keypair account, nothing of the declared id's to protect; `foreignDeploy.mjs` records it). The other 90 SDK refusal records are unchanged, 102 in all.
+
+A field declared `WritablePda` with a bare `@bump` keeps the canonical bump the declared seeds
+check found (`foundBump()`), and `createPda` on it signs with that bump without searching again:
+escrow `make` 20,620 / 19,621 CU and 26,544 B against 20,611 / 19,612 CU and 26,560 B with the
+hand derivation it replaced.
+
+### Dispatch-first account walk — measured 2026-10-10, rejected
+
+A port of the reference's account walk (lang-v2 `dispatch.rs:85-135` `run_handler`, `cursor.rs:100-175`
+`walk_n`): no walk at entry, `accounts<T>()` walks exactly its field count, and an index past it
+walks on lazily. Same build and bench as the table above:
+
+| variant | bytes | CU |
+|---|---|---|
+| inline walk + lazy continuation | +584 … +2192 | +2 … +83 |
+| noinline walk | +456 … +1104 | +7 … +89 |
+
+The entry walk was not the cost: the table stays on the stack in both shapes, so moving the walk
+saves nothing, and each `accounts<T>()` site pays its own walk code. The reference's gain comes
+from per-handler views with no table and no per-field index lookup, which would rewrite every
+`*ProofFailure`, `account(i)` and `signer(i)`; not attempted.
+
 ## 9. Compiler debt
 
 A workaround the toolkit carries for a compiler gap is a row here, with its card under `~/metascript/.inbox/compiler/`; paying it back removes the workaround.
 
-None is open.
+The toolkit carries no compiler workaround on this tree (2026-10-09). The last two rows
+were repaid:
+
+Repaid 2026-10-09 on `msc-int` (this tree plus the landed fix that copies an
+`@inline` generic's placed body into every caller module): `@inline` is back on the six
+generic proof kernels, `program`, `owned`, `mutable`, `delegated`, `external`,
+`externalMutable` and `readArgs`. `./msc-int test std/solana/test.cms` gives 29 files /
+499 tests, including a third direct-call consumer (`testDirectCalls.cms`);
+`accountValues.mjs` gives 16,905 cases, max valid 448 CU (was 464, cap 465); Hibernal std
+`--danger` gives 44,272B / 20,801CU (was 49,928B / 21,425CU). The three Solana refusal
+guards fire and the canonical IDL runs as real ESM. Not verified: anchorBench, escrow,
+`--release`.
+
+`singleAccountFailure` returns a bare replacement call: a macro replacement now owns its
+type arguments, and the SDK macros (`selectLiteralInstruction`, `createPdaAt`,
+`createPdaOf`, `readArgs`) pass explicit bound operands (`typExprArgs: [getTypeArg()]`).
+An operand is spelled by a name visible at the call site, its own or an alias of the same
+type; a private type with no visible name there is refused as an unresolved type. Same
+`test.cms` 29 files / 499 tests and 448 CU on the lane candidate.
+
+The bound VariableDecl gap (`name-to-symbol`, item2b) still exists in the
+compiler, but account expansion no longer declares locals using a hidden written
+proof alias: kernels fill the account holder's typed fields directly. This keeps
+checked field identity, avoids the unnecessary copy, and does not require an extra
+caller import. The imported `Auth` and singleton/guarded-expression pins now pass.
+Singleton shapes use a named generic Result routine, not an indirect closure call;
+larger undecorated shapes keep an IIFE that returns Result without propagating an
+internal `try` into a void caller. Failure code 0 remains failure through the
+separate rejection bit; no proof factory became public.
+
+Measured 2026-10-07 on `msc-stable`, branch base `a8c13b710` plus the pending SDK
+diff (`typed.cms` blob `56f5c7f2658a76b52cff504dd8e520dfc125ec9f`):
+`./msc-stable test std/solana/test.cms` gives **28 files / 472 tests passed**, including
+cross-module Program/Owned variants, hidden aliases, expression guards and zero-code
+failures. `./msc-stable build tools/solana/accountValuesProbe.ms --os=solana --danger
+--output=<program.so>` then `node tools/solana/accountValues.mjs <program.so>` gives
+**16,905 cases passed, max valid464 CU**, within unchanged cap465. That is +6 CU
+against the preceding458 candidate, not a free workaround. Removing generic inline
+annotations across the family is necessary for the repeated direct-call variants;
+a narrower scratch version reached444 CU but failed those variants and was rejected.
+Private-factory/forged-proof/pointer and layout refusal guards also passed their
+expected-diagnostic checks (`/tmp/borsh/verify-guards.mjs`).
+
+The actual Hibernal-shaped replay was then remeasured with separate work dirs:
+`node tools/solana/accountTableCost.mjs --msc <installed-or-candidate> --form
+std|chain --suite hibernal --danger --work <directory>`. Installed8506 std gives
+**52,248B / 21,412CU**; this SDK candidate **49,928B / 21,425CU** (idle93 in both).
+Against the preceding46,696B/21,396 candidate this adds3,232B/29CU, so the
+workaround restores correctness but gives back some size/CU progress; not a
+universal win or a matched Anchor-v2 comparison.
+
+Main's sized-array fixes (`08bc06a4f`, `97e90b7d8`) were integrated as their
+source hunks without rebasing the staged SDK. `./msc-integrated` was built from
+349 modules with `--gc=drc --danger --lto=off`; compiler check372 modules was clean.
+`./msc-integrated test std/solana/accountCodecTest.ms` passes **27 files/395 tests**;
+adding `--target=js` passes **15 files/105 tests**, including the ed25519 dependency
+that previously aborted. No dependency was skipped. A standalone C/JS matrix
+(`/tmp/std-solana-goal-audit/sizedRoots.ms`) for imported/local const dimensions,
+empty/partial arrays, independent struct defaults, Span reads and uint64 arrays
+prints the same `sized 4 7 7 4 2 0`, `structs 2 0 9 1 0`, `wide 3 true`.
+This integration does not implement general dimension expressions or prove the
+previously recorded module-level-let limitation fixed. The full sized-array language pins were not verified here: running main's
+files with `--target=js` used another tree's compiler/helper imports and reported79
+type errors. No passing language-lane claim follows; the final gate must run
+those pins on the integrated branch.
+
+Not remeasured for this change: escrow/hello/vault size and CU, no-LTO cost,
+Android devices, or the full gate. Installed BUILD8506eaf03 is unchanged; no
+installed-candidate claim follows from these local runs.
+The signed-division target-cost policy remains at `arithmetic.ms` and §6 (card
+`2026-09-27-solana-signed-division-is-a-170-cu-libcall.md`); it is separate from these
+new annotation/inline blockers, not a newly verified root-compiler fix.
+
+### Canonical IDL alias query — measured 2026-10-09
+
+`meta.sameType` now peels bound transparent aliases in `src/compiler/meta/typeQuery.ms`
+`hostSameType`; IDL classification compares canonical types, not user-written names.
+Measured on committed tree `31ab71acd190b9af4979b4da724ad13b849308da` plus the pending
+source inventory, with candidate SHA256
+`51345d7ab25a17eee85a198fd8fa333d4899f8fbeb105e03f05652c1ab787ce2`:
+`./msc-entry-proto build src/index.ms --gc=drc --danger --lto=off --output=msc-meta-alias`
+built 349 modules. `./msc-meta-alias test src/test/lang/metaTransparentAliasEqualityParked.ms`
+gives C **301 passed** and, with `--target=js`, **64 passed**, including three focused
+alias/scalar/nominal-boundary assertions. The prior compiler gave C300/1fail and
+JS63/1fail. `./msc-meta-alias test std/solana/test.cms` gives **29 files / 498 passed**;
+its logs name this checkout's std, not installed support.
+
+Building and running `src/test/guard/fixtures/solanaCanonicalArgumentIdl.ms` natively
+produces exact `pubkey`, `pubkey[0]`, `pubkey[1]`, hidden `pubkey[2]` and hidden `bytes`
+IDL fields. `./msc-meta-alias check --error-max=0 src/test/guard/solanaIdlTypeNamesRefused.ms`
+refuses all four same-named fake Pubkey/Bytes scalar/array declarations at lines15–18.
+Actual Node ESM of the canonical fixture still fails before execution:
+`SyntaxError: Identifier 'msSized_2qo35eEq' has already been declared`.
+
+This ESM failure is a source-baseline limit, not evidence of failed alias comparison:
+the candidate lacks landed fix `9603399aa`, which owns equality helpers program-wide
+in a bundle (`destructorLifting.ms` `claimEq`, `compile.ms` `cmdBuildJS`). A matched
+portable three-module control, both providers comparing `uint8[32]`, emits two helpers
+with this candidate and fails in Node; installed BUILD717769655, binary SHA256
+`79e1b8003c862a8cc556e7a6a1860d59a1a2fe96790e73d07f1aa5532f4d5c28`, emits one and
+prints `true true`. Both use `build --target=js --gendeps --output=<file.mjs>` followed
+by `node <file.mjs>`. This control does not establish installed SDK acceptance.
+
+Evidence: `out/solana/goalAudit/parallelInline/metaAlias/` `commands.json`,
+`resume-final-provenance.json`, `parent-root-trace.json`, `sized-control-inputs.json`
+and `parent-evidence-manifest.json`; parent verified all 4709 source inputs identical
+before/after/current, candidate/bootstrap hashes and named logs. No combined-green,
+known-red/gate, scalar-array SBF, annotation-restoration, installed canonical SDK,
+size/CU or delivery claim follows. Pins remain parked pending registration coordination;
+no output patch, consumer header, annotation removal or CJS fallback was used.

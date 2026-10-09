@@ -564,9 +564,9 @@ both produced **7,928 B** and completed the merge. Their compute units were not 
   `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`), and
   the emitted `MsMain` is `__attribute__((noinline))` under `--os=solana`, so the entry's frame is
   the account table alone: the escrow's `entrypoint` is the same 11 instructions with and without
-  LTO (the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). A CPI written beside
-  a one-byte buffer fits 51 accounts and fails the build at 52 (`solanaCpiFrame.ms`,
-  `solanaCpiFrameOverflow.ms`; 44 and 45 without LTO). `solanaGenericSize.ms` reads per-copy
+  LTO (the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). A CPI's account infos
+  live in the fixed 64-slot frame of `msSolInvokeMetas`, so a 64-account CPI written beside a
+  one-byte buffer builds (`solanaCpiFrame.ms`) and the 65th is the macro's error. `solanaGenericSize.ms` reads per-copy
   symbol sizes and builds with `--lto=off`.
 - **Measured** on tree `e5ba345dad02` with a compiler built from it, platform-tools v1.57,
   LiteSVM 1.4.1 with the features inactive on mainnet turned off
