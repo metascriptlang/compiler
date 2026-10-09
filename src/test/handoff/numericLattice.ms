@@ -131,6 +131,15 @@ test "numeric lattice: a number goes into the one union member that holds it imp
 	assert hasError("let d: float64 = 0.1;\nconst f: float32 | string = d;\n", "may lose precision");
 }
 
+test "numeric lattice: an unsigned integer takes the unsigned member over a wider signed one" {
+	const r = compileToC("const a: uint8 = 200;\nconst u: int64 | uint64 = a;\nconst b: uint16 = 300;\nconst w: int32 | uint64 = b;\nconst m: uint32 = 7;\nconst f: int64 | uint64 | float64 = m;\nconst n: int8 = -1;\nconst s: int64 | uint64 = n;\n");
+	assert r.ok, r.ok ? "" : r.error;
+	assert r.value.contains("=200ULL})"), r.value;
+	assert r.value.contains("=300ULL})"), r.value;
+	assert r.value.contains("=7ULL})"), r.value;
+	assert r.value.contains("=-1LL})"), r.value;
+}
+
 test "numeric lattice: a compound assignment converts its right operand as an assignment would" {
 	assert hasError("let i: int64 = 5000000000;\nlet x: int32 = 3;\nx += i;\n", "implicit int64 → int32 conversion in '+=' narrows — write an explicit 'as int32'");
 	assert hasError("let d: number = 0.1;\nlet x: float32 = 3;\nx *= d;\n", "implicit number → float32 conversion in '*=' may lose precision");

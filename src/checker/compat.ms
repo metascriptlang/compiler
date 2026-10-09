@@ -1777,6 +1777,18 @@ test "exact match" {
 	assert typeRelation(stringType(), stringType()) == TypeRelation.Exact;
 }
 
+test "an unsigned integer into a wider signed one ranks below a same-signedness widening" {
+	const u8 = createPrimitive(TypeKind.Uint8);
+	assert typeRelation(createPrimitive(TypeKind.Int64), u8) == TypeRelation.SignWidening;
+	assert typeRelation(createPrimitive(TypeKind.Uint64), u8) == TypeRelation.IntConv;
+	assert typeRelation(createPrimitive(TypeKind.Int64), createPrimitive(TypeKind.Int8)) == TypeRelation.IntConv;
+	const signed = scoreCandidatePriority([createPrimitive(TypeKind.Int64)], [u8], 1);
+	const unsigned = scoreCandidatePriority([createPrimitive(TypeKind.Uint64)], [u8], 1);
+	const float = scoreCandidatePriority([createPrimitive(TypeKind.Float64)], [u8], 1);
+	assert cmpCandidates(unsigned, signed, null, null) > 0;
+	assert cmpCandidates(signed, float, null, null) > 0;
+}
+
 test "no match" { assert typeRelation(numberType(), stringType()) == TypeRelation.None; }
 
 test "unknown = generic" {
