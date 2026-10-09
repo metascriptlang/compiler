@@ -34,7 +34,7 @@ import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
-import { projectTaggedMaybeReads } from "./coercion/maybeReadMaterialize";
+import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { liftDestructors } from "./lowering/destructorLifting";
@@ -64,6 +64,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerArraySpreadEager(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
+	result = materializeMaybeReads(result, ctx);
 	result = lowerTypeCoercion(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
@@ -89,7 +90,6 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerAggregateEquality(result, ctx);
 	result = lowerUserOperators(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
-	result = projectTaggedMaybeReads(result);
 	result = lowerUnionConversions(result, ctx);
 	result = lowerUnionTags(result, ctx);
 	result = unwrapMaybe(result, ctx);

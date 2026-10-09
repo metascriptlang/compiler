@@ -9,7 +9,9 @@
 //
 // A read qualifies when its DECLARED source type (symbol / struct field / array element)
 // is Maybe-carried but its narrowed nodeType is not. The node is retyped back to the
-// carrier and wrapped in a `.value` member typed at the payload.
+// carrier and wrapped in a `.value` member typed at the payload. That member is
+// checked (ConvCheck): narrowing survives calls and closure writes, so the carrier
+// can be absent at the read, which then stops like `as T` does.
 //
 // Assignment targets stay raw: the checker wraps the RHS into the carrier
 // (synthMaybeWrap), so the store writes the whole struct. Bottom-up walking wraps the
@@ -23,12 +25,8 @@ import { walkNode } from "../walker";
 import { makeMember } from "../util";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
-	const project = !ctx.jsBackend;
-	return walkNode(program, (n: Node): Node => visitMaybeRead(n, project, false));
-}
-
-export function projectTaggedMaybeReads(program: Node): Node {
-	return walkNode(program, (n: Node): Node => visitMaybeRead(n, false, true));
+	const project = !ctx.jsBackend && !ctx.raiserBackend;
+	return walkNode(program, (n: Node): Node => visitMaybeRead(n, project));
 }
 
 function carriesTaggedUnion(carrier: Type | null): boolean {
@@ -125,9 +123,8 @@ function qualifiesForTagged(node: Node): boolean {
 	return carriesTaggedUnion(declaredMaybeOf(node));
 }
 
-function visitMaybeRead(node: Node, projectAll: boolean, taggedOnly: boolean): Node {
-	if (taggedOnly && !qualifiesForTagged(node)) return node;
-	const project = projectAll || taggedOnly || qualifiesForTagged(node);
+function visitMaybeRead(node: Node, projectAll: boolean): Node {
+	const project = projectAll || qualifiesForTagged(node);
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (isAssignOp(d.operator)) d.left = unwrapIfMaterialized(d.left);
@@ -163,6 +160,7 @@ function visitMaybeRead(node: Node, projectAll: boolean, taggedOnly: boolean): N
 	const val = makeMember(node, "value", node.location);
 	const payload = unwrapMaybeType(carrier);
 	val.nodeType = payload;
+	val.flags = val.flags.incl(NodeFlag.ConvCheck);
 	if (project && nt != payload && isTagCarriedUnion(payload)) {
 		const projected = projectTagUnionMember(val, payload, nt);
 		if (projected != null as unknown as Node) return projected;
