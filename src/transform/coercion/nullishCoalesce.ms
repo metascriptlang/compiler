@@ -7,7 +7,7 @@ import { Node, NodeKind, BinaryExprData, ArrowFunctionData, TypeAssertionData, C
 import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, freshOwnedSym } from "../context";
-import { walkNode, walkExpandBlocks, walkWithinStatement, isFuncBoundary } from "../walker";
+import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import { makeNull, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved, makeBlock, makeReturn } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
@@ -19,7 +19,7 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 export function lowerNullishCoalesce(program: Node, ctx: TransformContext): Node {
 	blockifyArrowsReading(program, readsNullishOperandTwice);
 	walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => lowerNullishStmt(stmt, c), ctx);
-	return walkNode(program, (node: Node): Node => lowerNullishNode(node, ctx, null));
+	return walkOutsideInstanceFieldInits(program, (node: Node): Node => lowerNullishNode(node, ctx, null));
 }
 
 function lowerNullishStmt(stmt: Node, ctx: TransformContext): Node[] {

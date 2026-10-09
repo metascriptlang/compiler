@@ -81,6 +81,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = retargetJumps(result, ctx);
 	result = lowerGenerator(result, ctx);
 	result = lowerCtorInit(result, ctx);
+	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = lowerExtensionMethod(result, ctx);

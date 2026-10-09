@@ -7,7 +7,7 @@
 import { Node, NodeKind, MemberExprData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { TransformContext } from "../context";
-import { walkNode, walkExpandBlocks, walkWithinStatement } from "../walker";
+import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
 import { makeMember, makeNull, makeBinary, makeConditional, makeIdentResolved } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { rereadOperand, bindOnce, blockifyArrowsReading } from "./nullishCoalesce";
@@ -18,7 +18,7 @@ import { cloneIfPure } from "./intArithJS";
 export function lowerOptionalChain(program: Node, ctx: TransformContext): Node {
 	blockifyArrowsReading(program, (node: Node): boolean => sharedProbe(node) != null);
 	walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => bindReadProbes(stmt, c), ctx);
-	return walkNode(program, lowerOptionalNode);
+	return walkOutsideInstanceFieldInits(program, lowerOptionalNode);
 }
 
 function bindReadProbes(stmt: Node, ctx: TransformContext): Node[] {

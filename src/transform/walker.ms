@@ -507,7 +507,18 @@ export function walkWithinStatement(node: Node, visitor: Visitor): Node {
 function opensStatementScope(node: Node): boolean {
 	return isFuncBoundary(node) || node.kind == NodeKind.BlockStmt || node.kind == NodeKind.SwitchCase
 		|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl
-		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl;
+		|| node.kind == NodeKind.ActorDecl || isInstanceFieldInit(node);
+}
+
+export function walkOutsideInstanceFieldInits(node: Node, visitor: Visitor): Node {
+	if (node == null) return null as unknown as Node;
+	if (isInstanceFieldInit(node)) return node;
+	mapChildren(node, (child: Node): Node => walkOutsideInstanceFieldInits(child, visitor));
+	return visitor(node);
+}
+
+export function isInstanceFieldInit(node: Node): boolean {
+	return node.kind == NodeKind.PropertyDecl && !(node.data as PropertyDeclData).propIsStatic;
 }
 
 // Check if a node is a function boundary (FunctionDecl, ArrowFunction, FunctionExpr)
