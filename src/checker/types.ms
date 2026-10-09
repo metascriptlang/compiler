@@ -523,6 +523,7 @@ export function nullableUnionOf(members: Type[]): Type {
 		if (!dup) kept.push(p);
 	}
 	if (kept.length == 0) return nullType();
+	foldBooleanLiterals(kept);
 	if (kept.length == 1) {
 		const only = kept[0];
 		if (isMaybeWrappable(only) || only.kind == TypeKind.Union) return createMaybeType(only);
@@ -594,6 +595,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 		if (!dup) seen.push(k);
 	}
+	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
 	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
 	t.kind = TypeKind.Union;
@@ -641,6 +643,32 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 	}
 	return t;
+}
+
+// `true | false` is `boolean`: both literal members, and a `boolean` beside them, become one
+// `boolean` member at the first one's position. Returns whether it folded.
+function foldBooleanLiterals(members: Type[]): boolean {
+	let sawTrue = false;
+	let sawFalse = false;
+	for (const m of members) {
+		if (m.kind == TypeKind.BooleanLiteral) {
+			if (booleanLiteralValue(m)) sawTrue = true;
+			else sawFalse = true;
+		}
+	}
+	if (!sawTrue || !sawFalse) return false;
+	let kept = 0;
+	let placed = false;
+	for (let i = 0; i < members.length; i += 1) {
+		const m = members[i];
+		const isBoolean = m.kind == TypeKind.BooleanLiteral || m.kind == TypeKind.Boolean;
+		if (isBoolean && placed) continue;
+		members[kept] = isBoolean ? booleanType() : m;
+		if (isBoolean) placed = true;
+		kept += 1;
+	}
+	members.length = kept;
+	return true;
 }
 
 function extendsDeclaredSum(types: Type[]): boolean {
@@ -961,17 +989,23 @@ export function duVariantIndexOfType(unionType: Type | null, variantType: Type |
 // Maybe/nilable family — synthMaybeWrap and nullableLower own them, and their C
 // repr is not a tagged union) and all-string-literal unions (repr = msString).
 export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32 {
-	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
+	const hits = primitiveMemberHits(formal, exprType);
+	return hits.length == 1 ? hits[0] : -1;
+}
+
+// Every member a non-struct value matches; more than one is ambiguous.
+export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
+	const hits: int32[] = [];
+	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return hits;
 	const ek = exprType.kind;
 	const stringCarried = isAllStringLiteralUnion(exprType);
-	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !stringCarried) || ek == TypeKind.Null) return -1;
+	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !stringCarried) || ek == TypeKind.Null) return hits;
 	let allStrLit = true;
 	for (const child of formal.typeChildren) {
-		if (child == null || child.kind == TypeKind.Null) return -1;
+		if (child == null || child.kind == TypeKind.Null) return hits;
 		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
-	if (allStrLit) return -1;
-	let found: int32 = -1;
+	if (allStrLit) return hits;
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
@@ -981,13 +1015,10 @@ export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32
 			hit = child.kind == ek
 				|| (child.kind == TypeKind.String && ek == TypeKind.StringLiteral);
 		}
-		if (hit) {
-			if (found >= 0) return -1;
-			found = vi;
-		}
+		if (hit) hits.push(vi);
 		vi += 1;
 	}
-	return found;
+	return hits;
 }
 
 export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
