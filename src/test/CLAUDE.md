@@ -39,6 +39,7 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 | Same, under the cycle collector | `msc test src/index.ms --gc=orc` |
 | Touched codegen / DRC / runtime / transform | + `msc run src/test/corpus/run.ms` |
 | Touched DRC hooks, lifetimes, ownership | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` and `msc run --target=raiser src/test/guard/run.ms` |
+| Touched `std/solana`, `runtime/solana` or the compiler paths the SDK expands through | the gate's `solana` lane (about 150 s host-only; replays under `--release`), see `docs/TESTING.md` |
 | Touched `std/` or anything users compile against | rebuild + `tools/syncLocalBinary.ms` first, then re-run the above |
 
 - **A compiler reads `std/` and `runtime/` from beside its own binary** — `./msc` is the candidate with this repo's trees, `msc` on `PATH` is the last published build with `~/.metascript/`.

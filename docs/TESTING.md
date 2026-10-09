@@ -376,6 +376,22 @@ to build, an emit pass loses programs) have never fired, and no gate run has
 yet produced a JS-only set (`MSCORPUS_LANES` was exercised by hand on two
 programs: 8 pass, parity `js↔esm↔c`).
 
+The `solana` lane runs after `san`, offline, with the candidate: `msc test` on
+`std/solana/test.cms`, `idlTest.ms`, `accountCodecTest.ms` (C, then `--target=js`),
+`examples/escrow/program.ms`, `examples/escrow/idl.cms` and
+`examples/anchorBench/helloworld/program.ms`, one command per entry, each red named by its path.
+`std/solana`, `runtime/solana` and `tools/solana` changes also bring in the `guard` lane
+(every `solana*` guard lives there). It joins when a path under `std/{solana,crypto,meta,serialize/json}`,
+`runtime/solana`, `runtime/manual.h`, `tools/solana`, `examples/{escrow,anchorBench}` or
+`src/test/c/solana*` changes, or the compiler passes SDK expansion and `--os=solana` go through change:
+`src/{checker,codegen/c,monomorphize}/`, `src/compiler/meta/`,
+`src/compiler/{buildConfig,cc,compile,defines,options,toolchain}.ms`, `src/module/cparse/target.ms`.
+The LiteSVM replays (`accountValues`, `escrow`, `heapExhausted`, with their `--os=solana` builds, node
+and `tools/solana/node_modules` required) run under `--release` or when a `tools/solana` path changed.
+Measured 2026-10-09, one command at a time, on the lane-c candidate: host tests 21–31 s each, 150 s
+for the seven; replays ~30 s for `accountValues` plus `heapExhausted` (the escrow build was red on that
+tree and is unmeasured). NOT verified: a gate run of the lane end to end.
+
 Why not just run the corpus: the toolchain stamp content-hashes the msc
 binary + `runtime/` + `vendor/` (`src/compiler/cache.ms`), so EVERY new
 candidate binary starts cold — a full run never gets cheaper while
