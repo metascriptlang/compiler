@@ -17,6 +17,7 @@ import {
 	SeedTable,
 	SignerSeeds,
 	createAddressWithBump,
+	hashAddressWithBump,
 	fillWithBump,
 	findAt,
 	ownProgram,
@@ -437,14 +438,28 @@ export function createProgramAccount(
 ): Result<uint64, ProgramError> {
 	const required = minimumBalance(space);
 	const current = target.lamports();
-	if (current == 0) {
-		return createAccount(payer, target, required, space, newOwner, signers);
+	const funding = required > current ? required - current : 0;
+	let storage: uint8[52] = [];
+	let length = putU32(storage, 0, 13);
+	length = putU64(storage, length, funding);
+	length = putU64(storage, length, space);
+	length = putPubkey(storage, length, newOwner);
+	if (funding == 0) {
+		return invokeSigned(
+			Pubkey.zero(),
+			[InstructionAccount.writableSigner(target)],
+			storage,
+			length,
+			signers,
+		);
 	}
-	if (required > current) {
-		const _funded = try transfer(payer, target, required - current);
-	}
-	const _allocated = try allocate(target, space, signers);
-	return assignTo(target, newOwner, signers);
+	return invokeSigned(
+		Pubkey.zero(),
+		[InstructionAccount.writableSigner(target), InstructionAccount.writableSigner(payer)],
+		storage,
+		length,
+		signers,
+	);
 }
 
 export function createProgramAccountSeeded(
@@ -610,14 +625,21 @@ export function unchecked(index: int32): Result<Account, ProgramError> {
 	return Result.ok(found);
 }
 
-export function programAccount(index: int32, id: Pubkey): Result<Account, ProgramError> {
+@inline export function programFailure(index: int32, id: Pubkey, out found: Account): uint64 {
 	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
 	if (!keysEqual(address + 8, msSolSpanAddress(id.bytes))) {
-		return Result.err(ProgramError.invalidProgramId());
+		return ProgramError.invalidProgramId().code;
 	}
-	if (msSolLoadU8(address + 3) == 0) { return Result.err(ProgramError.invalidProgramExecutable()); }
-	const found: Account = { address: address };
+	if (msSolLoadU8(address + 3) == 0) { return ProgramError.invalidProgramExecutable().code; }
+	found = { address: address };
+	return 0;
+}
+
+export function programAccount(index: int32, id: Pubkey): Result<Account, ProgramError> {
+	let found: Account;
+	const failure = programFailure(index, id, found);
+	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found);
 }
 
@@ -648,7 +670,7 @@ export function delegatedFailure(
 	);
 }
 
-export function mutableFailure(
+export function mutableEnvelopeFailure(
 	index: int32,
 	discriminator: uint64,
 	size: uint64,
@@ -659,6 +681,18 @@ export function mutableFailure(
 	const failure = programDataFailure(found.address, msSolProgramId(), discriminator, size);
 	if (failure != 0) { return failure; }
 	if (msSolLoadU8(found.address + 2) == 0) { return ProgramError.constraintMut().code; }
+	if (msSolLoadU8(found.address) != 0xff) { return ProgramError.accountBorrowFailed().code; }
+	return 0;
+}
+
+export function mutableFailure(
+	index: int32,
+	discriminator: uint64,
+	size: uint64,
+	out found: Account,
+): uint64 {
+	const failure = mutableEnvelopeFailure(index, discriminator, size, found);
+	if (failure != 0) { return failure; }
 	if (!claimExclusive(found.address)) { return ProgramError.accountBorrowFailed().code; }
 	return 0;
 }
@@ -699,6 +733,12 @@ export function exclusiveWritable(found: Account): Result<Account, ProgramError>
 	return Result.ok(found);
 }
 
+export function instructionHasWord(word: uint64): boolean {
+	return msSolInstructionDataLength() >= 8 && msSolLoadU64(msSolInstructionData()) == word;
+}
+
+export function instructionHasDiscriminator(): boolean { return msSolInstructionDataLength() >= 8; }
+
 function selectedMember(base: uint64, count: int32): Result<int32, ProgramError> {
 	if (msSolInstructionDataLength() < 8) { return Result.err(ProgramError.instructionMissing()); }
 	const word = msSolLoadU64(msSolInstructionData());
@@ -712,17 +752,11 @@ export function selectedInstruction(table: Readonly<Span<uint8>>): Result<int32,
 	return selectedMember(msSolSpanAddress(table), table.length >> 3);
 }
 
-// The table opens with the program id build.ms declares; Anchor's entry refuses another id before
-// it reads the instruction (anchor-syn-0.31.1 codegen/program/entry.rs:51-53).
-export function selectedDeclaredInstruction(table: Readonly<Span<uint8>>): Result<int32, ProgramError> {
-	const base = msSolSpanAddress(table);
-	if (!keysEqual(msSolProgramId(), base)) { return Result.err(ProgramError.declaredProgramIdMismatch()); }
-	return selectedMember(base + 32, (table.length - 32) >> 3);
-}
-
 function argumentAddress(offset: uint64, width: uint64): uint64 {
 	const data = instructionData();
-	if (data.length < 8 || offset + width > data.length - 8) { return 0; }
+	if (data.length < 8) { return 0; }
+	const available = data.length - 8;
+	if (offset > available || width > available - offset) { return 0; }
 	return data.address + 8 + offset;
 }
 
@@ -746,14 +780,21 @@ export function argU32(offset: uint64): uint32 {
 	return at == 0 ? 0 : msSolLoadU32(at);
 }
 
+@inline
 export function argU64(offset: uint64): uint64 {
 	const at = argumentAddress(offset, 8);
 	return at == 0 ? 0 : msSolLoadU64(at);
 }
 
-export function argI8(offset: uint64): int8 { return argU8(offset) as int8; }
-export function argI16(offset: uint64): int16 { return argU16(offset) as int16; }
-export function argI32(offset: uint64): int32 { return argU32(offset) as int32; }
+export function argI8(offset: uint64): int8 {
+	return (((argU8(offset) as int16) ^ 128) - 128) as int8;
+}
+export function argI16(offset: uint64): int16 {
+	return (((argU16(offset) as int32) ^ 32768) - 32768) as int16;
+}
+export function argI32(offset: uint64): int32 {
+	return (((argU32(offset) as int64) ^ 2147483648) - 2147483648) as int32;
+}
 export function argI64(offset: uint64): int64 { return argU64(offset) as int64; }
 
 export function argBool(offset: uint64): boolean {
@@ -761,7 +802,8 @@ export function argBool(offset: uint64): boolean {
 }
 
 export function argBoolValid(offset: uint64): boolean {
-	return argU8(offset) <= 1;
+	const at = argumentAddress(offset, 1);
+	return at != 0 && msSolLoadU8(at) <= 1;
 }
 
 export function argPubkey(offset: uint64): Pubkey {
@@ -770,8 +812,11 @@ export function argPubkey(offset: uint64): Pubkey {
 }
 
 export function argBytesFit(offset: uint64): boolean {
-	if (!argsFit(offset + 4)) { return false; }
-	return argsFit(offset + 4 + (argU32(offset) as uint64));
+	const at = argumentAddress(offset, 4);
+	if (at == 0) { return false; }
+	const length = msSolLoadU32(at) as uint64;
+	const data = instructionData();
+	return length <= data.length - 8 - offset - 4;
 }
 
 export function argBytes(offset: uint64): Bytes {
@@ -874,6 +919,23 @@ export function givenBump(
 	return Result.ok(bump);
 }
 
+// An account owned by this program sits at an address that signed or that invoke_signed created, and neither
+// exists on the curve, so a hash match proves off-curve without sol_curve_validate_point.
+export function givenBumpOwned(
+	account: Account,
+	seeds: Readonly<Span<SeedSlice>>,
+	bump: uint8,
+): Result<uint8, ProgramError> {
+	if (!keysEqual(account.address + 40, ownProgram())) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	const derived = hashAddressWithBump(seeds, bump, ownProgram());
+	if (!derived.ok || derived.value != account.key()) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
+	return Result.ok(bump);
+}
+
 export function closedProgramAccount(
 	target: Account,
 	destination: Account,
@@ -919,51 +981,81 @@ export function expectHasOne(actual: Pubkey, expected: Pubkey): Result<void, Pro
 	return Result.ok(null);
 }
 
-export function keysMatch(
-	actual: uint64,
-	expected: uint64,
-	failure: uint64,
-): Result<void, ProgramError> {
-	if (!keysEqual(actual, expected)) { return Result.err({ code: failure }); }
+@inline export function keysFailure(actual: uint64, expected: uint64, failure: uint64): uint64 {
+	return keysEqual(actual, expected) ? 0 : failure;
+}
+
+export function keysMatch(actual: uint64, expected: uint64, failure: uint64): Result<void, ProgramError> {
+	const code = keysFailure(actual, expected, failure);
+	if (code != 0 || (failure == 0 && !keysEqual(actual, expected))) { return Result.err({ code: code }); }
 	return Result.ok(null);
 }
 
-export function holds(condition: boolean, failure: uint64): Result<void, ProgramError> {
-	if (!condition) { return Result.err({ code: failure }); }
+@inline export function conditionFailure(condition: boolean, failure: uint64): uint64 {
+	return condition ? 0 : failure;
+}
+
+@inline export function holds(condition: boolean, failure: uint64): Result<void, ProgramError> {
+	const code = conditionFailure(condition, failure);
+	if (!condition) { return Result.err({ code: code }); }
 	return Result.ok(null);
 }
 
-export function seedsGiven(
-	key: uint64,
-	seeds: Readonly<Span<SeedSlice>>,
-	bump: uint8,
-): Result<void, ProgramError> {
+export function seedsGivenFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>, bump: uint8): uint64 {
 	const derived = createAddressWithBump(seeds, bump, ownProgram());
 	if (!derived.ok || !keysEqual(msSolSpanAddress(derived.value.bytes), key)) {
-		return Result.err(ProgramError.constraintSeeds());
+		return ProgramError.constraintSeeds().code;
 	}
+	return 0;
+}
+
+export function seedsGivenOwnedFailure(account: Account, seeds: Readonly<Span<SeedSlice>>, bump: uint8): uint64 {
+	if (!keysEqual(account.address + 40, ownProgram())) {
+		return ProgramError.accountOwnedByWrongProgram().code;
+	}
+	const derived = hashAddressWithBump(seeds, bump, ownProgram());
+	if (!derived.ok || !keysEqual(msSolSpanAddress(derived.value.bytes), account.keyAddress())) {
+		return ProgramError.constraintSeeds().code;
+	}
+	return 0;
+}
+
+export function seedsGiven(key: uint64, seeds: Readonly<Span<SeedSlice>>, bump: uint8): Result<void, ProgramError> {
+	const code = seedsGivenFailure(key, seeds, bump);
+	if (code != 0) { return Result.err({ code: code }); }
 	return Result.ok(null);
+}
+
+export function seedsCanonicalFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>): uint64 {
+	const found = findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
+	if (!found.ok) { return found.error.code; }
+	if (!keysEqual(msSolSpanAddress(found.value.key.bytes), key)) {
+		return ProgramError.constraintSeeds().code;
+	}
+	return 0;
 }
 
 export function seedsCanonical(key: uint64, seeds: Readonly<Span<SeedSlice>>): Result<void, ProgramError> {
-	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
-	if (!keysEqual(msSolSpanAddress(found.key.bytes), key)) {
-		return Result.err(ProgramError.constraintSeeds());
-	}
+	const code = seedsCanonicalFailure(key, seeds);
+	if (code != 0) { return Result.err({ code: code }); }
 	return Result.ok(null);
 }
 
-export function seedsFolded(
-	key: uint64,
-	word0: uint64,
-	word1: uint64,
-	word2: uint64,
-	word3: uint64,
-): Result<void, ProgramError> {
+@inline export function seedsFoldedFailure(
+	key: uint64, word0: uint64, word1: uint64, word2: uint64, word3: uint64,
+): uint64 {
 	if (msSolLoadU64(key) != word0 || msSolLoadU64(key + 8) != word1 ||
 		msSolLoadU64(key + 16) != word2 || msSolLoadU64(key + 24) != word3) {
-		return Result.err(ProgramError.constraintSeeds());
+		return ProgramError.constraintSeeds().code;
 	}
+	return 0;
+}
+
+export function seedsFolded(
+	key: uint64, word0: uint64, word1: uint64, word2: uint64, word3: uint64,
+): Result<void, ProgramError> {
+	const code = seedsFoldedFailure(key, word0, word1, word2, word3);
+	if (code != 0) { return Result.err({ code: code }); }
 	return Result.ok(null);
 }
 

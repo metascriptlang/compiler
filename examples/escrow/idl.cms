@@ -29,6 +29,10 @@ test "the escrow IDL is Anchor's JSON with snake_case names and Anchor discrimin
 		assert idl.instructions.at(1).accounts.length() == 11;
 		assert idl.accounts.at(0).discriminator.at(0).asInt32() == 31;
 		assert idl.errors.at(0).code.asInt32() == 6000;
+		const seeds = idl.instructions.at(0).accounts.at(4).pda.seeds;
+		assert seeds.length() == 3;
+		assert seeds.at(1).path.asString() == "maker";
+		assert seeds.at(2).path.asString() == "seed";
 		assert idl.types.at(0).serialization.asString() == "bytemuck";
 	}
 }

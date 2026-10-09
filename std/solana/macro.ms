@@ -1,9 +1,10 @@
-import { DeclKind, Node, NodeKind, bindSym, define, getImpl, getType, stringValue } from "std/meta";
-import { eventDiscriminator, instructionDiscriminator, word } from "./discriminator";
-import { ProgramError } from "./error";
+import { Node, NodeKind, bindSym, define, getType, stringValue } from "std/meta";
+import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
+import { ProgramError } from "./error";
 import { readFile } from "std/fs";
+import { SEED_LIST_REQUIRED, seedTable } from "./accountSeeds";
 import {
 	argBool,
 	argBoolValid,
@@ -19,64 +20,28 @@ import {
 	argU64,
 	argU8,
 	argsFit,
-	holds,
-	keysEqual,
-	keysMatch,
+	instructionHasDiscriminator,
+	instructionHasWord,
 	logEvent,
-	seedsCanonical,
-	seedsFolded,
-	seedsGiven,
-	unchecked,
 } from "./core";
 import {
 	createPdaAt,
 	createPdaOf,
-	delegated,
-	external,
-	externalMutable,
-	mutable,
-	owned,
-	program,
+	createPdaProven,
 	readArgs,
-	selectDeclaredInstruction,
-	selectInstruction,
-	signer,
-	systemAccount,
-	writable,
-	writableSigner,
+	selectLiteralInstruction,
 } from "./typed";
 import { delegateAt } from "./delegation";
-import {
-	associatedMatches,
-	createMintPdaAt,
-	tokenAuthorityMatches,
-	tokenMintMatches,
-} from "./mint";
+import { createMintPdaAt } from "./mint";
 import {
 	bytesAddress,
 	createAddress,
 	findAddress,
 	ownProgram,
-	seedBytes,
-	seedKey,
-	seedText,
 	signerOf,
 } from "./seed";
 
 export macro instruction(): Node {
-	function byteLiteral(value: uint8, at: Node): Node {
-		return {
-			kind: NodeKind.NumberLiteral,
-			line: at.line,
-			column: at.column,
-			value: value as number,
-			isFloat: false,
-			intVal: value as int64,
-			outOfRangeText: "",
-			isBitPattern: false,
-		};
-	}
-
 	// The `programId` of the project's build.ms (`defines: { programId: "<base58>" }`), or no bytes.
 	function declaredProgramKey(at: Node): uint8[] {
 		const text = define("programId");
@@ -129,38 +94,43 @@ export macro instruction(): Node {
 		}
 	}
 
-	const bytes: Node[] = [];
-	checkDeployKeypair(decl);
-	const declared = declaredProgramKey(decl);
-	for (const b of declared) { bytes.push(byteLiteral(b, decl)); }
-	let member = 0;
-	while (member < decl.enumMembers.length) {
-		const discriminator = instructionDiscriminator(decl.enumMembers[member]);
-		let b = 0;
-		while (b < 8) {
-			bytes.push(byteLiteral(discriminator.bytes[b], decl));
-			b = b + 1;
-		}
-		member = member + 1;
+	function ordinal(value: int32): Node {
+		return { kind: NodeKind.NumberLiteral, line: decl.line, column: decl.column,
+			value: value as number, intVal: value as int64, isFloat: false, isBitPattern: false, outOfRangeText: "" };
 	}
-	const table: Node = {
-		kind: NodeKind.TypeAssertion,
-		line: decl.line,
-		column: decl.column,
-		asExpr: {
-			kind: NodeKind.ArrayLiteral,
-			line: decl.line,
-			column: decl.column,
-			elements: bytes,
-		},
-		asType: "uint8[" + (bytes.length as int32) + "]",
-	};
+	function word(bytes: Readonly<Span<uint8>>, offset: int32): Node {
+		let value: uint64 = 0;
+		for (let b = 0; b < 8; b++) { value |= (bytes[offset + b] as uint64) << ((b * 8) as uint64); }
+		return { kind: NodeKind.TypeAssertion, line: decl.line, column: decl.column, asType: "uint64",
+			asExpr: { kind: NodeKind.NumberLiteral, line: decl.line, column: decl.column,
+				value: (value as int64) as number, intVal: value as int64, isFloat: false, isBitPattern: true, outOfRangeText: "" } };
+	}
+	function call(callee: Node, arguments: Node[]): Node {
+		return { kind: NodeKind.CallExpr, line: decl.line, column: decl.column,
+			callee, arguments, isDirectCall: false, resolvedOverloadIdx: -1 };
+	}
+	function choose(condition: Node, yes: Node, no: Node): Node {
+		return { kind: NodeKind.ConditionalExpr, line: decl.line, column: decl.column,
+			ternaryCondition: condition, ternaryConsequent: yes, ternaryAlternate: no };
+	}
+	checkDeployKeypair(decl);
+	declaredProgramKey(decl);
+	let selected = ordinal(-(ProgramError.instructionFallbackNotFound().code as int32));
+	for (let member = decl.enumMembers.length - 1; member >= 0; member--) {
+		const tag = instructionDiscriminator(decl.enumMembers[member]);
+		selected = choose(call(bindSym("instructionHasWord"), [word(tag.bytes, 0)]), ordinal(member), selected);
+	}
+	selected = choose(call(bindSym("instructionHasDiscriminator"), []), selected, ordinal(-(ProgramError.instructionMissing().code as int32)));
 	return {
 		kind: NodeKind.CallExpr,
 		line: decl.line,
 		column: decl.column,
-		callee: declared.length > 0 ? bindSym("selectDeclaredInstruction") : bindSym("selectInstruction"),
-		arguments: [table],
+		callee: {
+			kind: NodeKind.TypeGeneric,
+			typExprBase: bindSym("selectLiteralInstruction")!,
+			typExprArgs: [getTypeArg()],
+		},
+		arguments: [selected],
 		isDirectCall: false,
 		resolvedOverloadIdx: -1,
 	};
@@ -180,6 +150,13 @@ export macro args(): Node {
 		let typeName = "";
 		if (written.kind === NodeKind.Identifier) { typeName = written.name; }
 		if (written.kind === NodeKind.TypeObject) { typeName = written.typExprTypeName; }
+		let count = -1;
+		if (written.kind === NodeKind.TypeArray && written.typExprSize >= 0) {
+			count = written.typExprSize as int32;
+			const element = written.typExprElement;
+			if (element.kind === NodeKind.Identifier) { typeName = element.name; }
+			if (element.kind === NodeKind.TypeObject) { typeName = element.typExprTypeName; }
+		}
 		let width = 0;
 		let reader: Node | null = null;
 		if (typeName == "uint8") { width = 1; reader = bindSym("argU8"); }
@@ -192,7 +169,9 @@ export macro args(): Node {
 		if (typeName == "uint64") { width = 8; reader = bindSym("argU64"); }
 		if (typeName == "int64") { width = 8; reader = bindSym("argI64"); }
 		if (typeName == "Pubkey") { width = 32; reader = bindSym("argPubkey"); }
-		if (typeName == "Bytes") {
+		const fixedPubkeyBytes = count == 32 && typeName == "uint8";
+		if (fixedPubkeyBytes) { reader = bindSym("argPubkey"); }
+		if (typeName == "Bytes" && count < 0) {
 			if (field != shape.typExprFieldNames.length - 1) {
 				error("args<T>(): Bytes field '" + shape.typExprFieldNames[field] +
 					"' must be the last field: Borsh prefixes it with its length", shape);
@@ -200,9 +179,9 @@ export macro args(): Node {
 			width = 4;
 			reader = bindSym("argBytes");
 		}
-		if (reader == null) {
+		if (reader == null || (count >= 0 && typeName == "Bytes")) {
 			error("args<T>(): field '" + shape.typExprFieldNames[field] +
-				"' is not a sized integer, boolean, Pubkey or a last Bytes field", shape);
+				"' is not a sized integer, boolean, Pubkey, a fixed array of those or a last Bytes field", shape);
 		}
 		const at: Node = {
 			kind: NodeKind.NumberLiteral,
@@ -214,7 +193,7 @@ export macro args(): Node {
 			outOfRangeText: "",
 			isBitPattern: false,
 		};
-		values.push({
+		let decoded: Node = {
 			kind: NodeKind.CallExpr,
 			line: shape.line,
 			column: shape.column,
@@ -222,8 +201,56 @@ export macro args(): Node {
 			arguments: [at],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
-		});
-		if (typeName == "boolean" || typeName == "Bytes") {
+		};
+		if (count >= 0 && !fixedPubkeyBytes) {
+			const elements: Node[] = [];
+			for (let i = 0; i < count; i++) {
+				elements.push({
+					kind: NodeKind.CallExpr,
+					line: shape.line,
+					column: shape.column,
+					callee: reader,
+					arguments: [{
+						kind: NodeKind.NumberLiteral,
+						line: shape.line,
+						column: shape.column,
+						value: (offset + i * width) as number,
+						intVal: (offset + i * width) as int64,
+						isFloat: false,
+						isBitPattern: false,
+						outOfRangeText: "",
+					}],
+					isDirectCall: false,
+					resolvedOverloadIdx: -1,
+				});
+				if (typeName == "boolean") {
+					checks.push({
+						kind: NodeKind.CallExpr,
+						callee: bindSym("argBoolValid"),
+						arguments: elements[i].arguments,
+						isDirectCall: false,
+						resolvedOverloadIdx: -1,
+					});
+				}
+			}
+			decoded = typeName == "Pubkey" ? {
+				kind: NodeKind.ArrayLiteral,
+				elements,
+			} : {
+				kind: NodeKind.TypeAssertion,
+				line: shape.line,
+				column: shape.column,
+				asType: typeName + "[" + String(count) + "]",
+				asExpr: { kind: NodeKind.ArrayLiteral, elements },
+			};
+		}
+		values.push(fixedPubkeyBytes ? {
+			kind: NodeKind.MemberExpr,
+			object: decoded,
+			property: "bytes",
+			isOptional: false,
+		} : decoded);
+		if (count < 0 && (typeName == "boolean" || typeName == "Bytes")) {
 			checks.push({
 				kind: NodeKind.CallExpr,
 				line: shape.line,
@@ -234,7 +261,7 @@ export macro args(): Node {
 				resolvedOverloadIdx: -1,
 			});
 		}
-		offset = offset + width;
+		offset = offset + width * (count >= 0 ? count : 1);
 		field = field + 1;
 	}
 	let fits: Node = {
@@ -271,7 +298,11 @@ export macro args(): Node {
 		kind: NodeKind.CallExpr,
 		line: shape.line,
 		column: shape.column,
-		callee: bindSym("readArgs"),
+		callee: {
+			kind: NodeKind.TypeGeneric,
+			typExprBase: bindSym("readArgs")!,
+			typExprArgs: [getTypeArg()],
+		},
 		arguments: [fits, {
 			kind: NodeKind.ObjectLiteral,
 			line: shape.line,
@@ -285,514 +316,6 @@ export macro args(): Node {
 	};
 }
 
-export macro accounts(): Node {
-	const shape = getTypeArg();
-	if (shape.kind !== NodeKind.TypeObject) {
-		error("accounts<T>(): T must be a struct of the instruction's accounts", shape);
-	}
-	const decl = getImpl(bindSym(shape.typExprTypeName))!;
-	const line = shape.line;
-	const column = shape.column;
-	const holder = "$accounts";
-	const names = decl.interfaceFields;
-
-	function ident(name: string, at: Node): Node {
-		return { kind: NodeKind.Identifier, line: at.line, column: at.column, name: name };
-	}
-
-	function member(object: Node, property: string, at: Node): Node {
-		return {
-			kind: NodeKind.MemberExpr,
-			line: at.line,
-			column: at.column,
-			object: object,
-			property: property,
-			isOptional: false,
-		};
-	}
-
-	function call(callee: Node, args: Node[], at: Node): Node {
-		return {
-			kind: NodeKind.CallExpr,
-			line: at.line,
-			column: at.column,
-			callee: callee,
-			arguments: args,
-			isDirectCall: false,
-			resolvedOverloadIdx: -1,
-		};
-	}
-
-	function whole(value: number, at: Node): Node {
-		return {
-			kind: NodeKind.NumberLiteral,
-			line: at.line,
-			column: at.column,
-			value: value,
-			isFloat: false,
-			intVal: value as int64,
-			outOfRangeText: "",
-			isBitPattern: false,
-		};
-	}
-
-	function attempt(expr: Node, at: Node): Node {
-		return {
-			kind: NodeKind.ExprStmt,
-			line: at.line,
-			column: at.column,
-			expr: {
-				kind: NodeKind.TryExpr,
-				line: at.line,
-				column: at.column,
-				tryArg: expr,
-				hasCatch: false,
-				catchVal: expr,
-			},
-		};
-	}
-
-	function fieldIndex(name: string): number {
-		let at = 0;
-		while (at < names.length) {
-			if (names[at] == name) { return at; }
-			at = at + 1;
-		}
-		return -1;
-	}
-
-	function dataFieldOf(owner: number, property: string, at: Node): boolean {
-		const written = decl.interfaceFieldTypes[owner];
-		const open = written.indexOf("<");
-		if (open < 0) { return false; }
-		const outer = written.slice(0, open);
-		if (outer != "Owned" && outer != "Mutable" && outer != "Delegated") { return false; }
-		const target = getImpl(bindSym(written.slice(open + 1, written.length - 1)));
-		if (target == null) {
-			error("accounts<" + decl.interfaceName + ">(): field '" + names[owner] +
-				"' holds '" + written + "', whose fields are not visible where accounts<T>() is " +
-				"called: import the struct", at);
-		}
-		let member = 0;
-		while (member < target!.interfaceFields.length) {
-			if (target!.interfaceFields[member] == property) { return true; }
-			member = member + 1;
-		}
-		return false;
-	}
-
-	function rewrite(n: Node): Node {
-		if (n.kind === NodeKind.Identifier) {
-			const owner = fieldIndex(n.name);
-			if (owner < 0) { return n; }
-			return member(ident(holder, n), n.name, n);
-		}
-		if (n.kind === NodeKind.MemberExpr) {
-			if (n.object.kind === NodeKind.Identifier) {
-				const owner = fieldIndex(n.object.name);
-				if (owner >= 0 && dataFieldOf(owner, n.property, n)) {
-					const proof = member(ident(holder, n), n.object.name, n);
-					return member(call(member(proof, "data", n), [], n), n.property, n);
-				}
-			}
-			return member(rewrite(n.object), n.property, n);
-		}
-		if (n.kind === NodeKind.CallExpr) {
-			const args: Node[] = [];
-			let position = 0;
-			while (position < n.arguments.length) {
-				args.push(rewrite(n.arguments[position]));
-				position = position + 1;
-			}
-			const rebuilt = call(rewrite(n.callee), args, n);
-			rebuilt.typeArg = n.typeArg;
-			return rebuilt;
-		}
-		if (n.kind === NodeKind.BinaryExpr) {
-			return {
-				kind: NodeKind.BinaryExpr,
-				line: n.line,
-				column: n.column,
-				operator: n.operator,
-				left: rewrite(n.left),
-				right: rewrite(n.right),
-			};
-		}
-		if (n.kind === NodeKind.UnaryExpr) {
-			return {
-				kind: NodeKind.UnaryExpr,
-				line: n.line,
-				column: n.column,
-				unaryOp: n.unaryOp,
-				operand: rewrite(n.operand),
-			};
-		}
-		if (n.kind === NodeKind.ConditionalExpr) {
-			return {
-				kind: NodeKind.ConditionalExpr,
-				line: n.line,
-				column: n.column,
-				ternaryCondition: rewrite(n.ternaryCondition),
-				ternaryConsequent: rewrite(n.ternaryConsequent),
-				ternaryAlternate: rewrite(n.ternaryAlternate),
-			};
-		}
-		if (n.kind === NodeKind.TypeAssertion) {
-			return {
-				kind: NodeKind.TypeAssertion,
-				line: n.line,
-				column: n.column,
-				asExpr: rewrite(n.asExpr),
-				asType: n.asType,
-			};
-		}
-		if (n.kind === NodeKind.ArrayLiteral) {
-			const elements: Node[] = [];
-			let position = 0;
-			while (position < n.elements.length) {
-				elements.push(rewrite(n.elements[position]));
-				position = position + 1;
-			}
-			return { kind: NodeKind.ArrayLiteral, line: n.line, column: n.column, elements: elements };
-		}
-		if (n.kind === NodeKind.NumberLiteral || n.kind === NodeKind.StringLiteral ||
-			n.kind === NodeKind.BooleanLiteral || n.kind === NodeKind.NullLiteral) {
-			return n;
-		}
-		error("accounts<" + decl.interfaceName + ">(): a decorator argument of this form is not " +
-			"supported; write an account, a field of its data, a call, an operator, a cast or a " +
-			"literal", n);
-	}
-
-	function keyOf(n: Node): Node {
-		return call(bindSym("keyAddressOf")!, [rewrite(n)], n);
-	}
-
-	function literalSeeds(seeds: Node[]): uint8[][] {
-		const out: uint8[][] = [];
-		for (const seed of seeds) {
-			const bytes: uint8[] = [];
-			if (seed.kind === NodeKind.StringLiteral) {
-				for (const byte of stringValue(seed).asBytes()) { bytes.push(byte); }
-			} else if (seed.kind === NodeKind.ArrayLiteral) {
-				for (const element of seed.elements) {
-					if (element.kind !== NodeKind.NumberLiteral || element.intVal < 0 || element.intVal > 255) return [];
-					bytes.push(element.intVal as uint8);
-				}
-			} else {
-				return [];
-			}
-			out.push(bytes);
-		}
-		return out;
-	}
-
-	function declaredProgramKey(at: Node): uint8[] {
-		const text = define("programId");
-		const bytes: uint8[] = [];
-		if (text == "") return bytes;
-		const parsed = Pubkey.parse(text);
-		if (!parsed.ok) {
-			error("the build declares programId '" + text + "' (build.ms `defines` or -d:programId), which is not a base58 public key", at);
-		}
-		for (const b of parsed.value.bytes) { bytes.push(b); }
-		return bytes;
-	}
-
-	// Anchor builds a custom error inside the failing branch (anchor-syn-0.31.1 constraints.rs:
-	// has_one 297-334, address 172-190, constraint 348-356); a success must not evaluate it.
-	function lazily(passed: Node, error: Node, at: Node): Node {
-		const refuse = attempt(call(bindSym("holds")!, [{
-			kind: NodeKind.BooleanLiteral,
-			line: at.line,
-			column: at.column,
-			boolValue: false,
-		}, member(rewrite(error), "code", at)], at), at);
-		return {
-			kind: NodeKind.IfStmt,
-			line: at.line,
-			column: at.column,
-			condition: {
-				kind: NodeKind.UnaryExpr,
-				line: at.line,
-				column: at.column,
-				unaryOp: "!",
-				operand: passed,
-			},
-			consequent: { kind: NodeKind.BlockStmt, line: at.line, column: at.column, statements: [refuse] },
-		};
-	}
-
-	const values: Node[] = [];
-	let field = 0;
-	while (field < decl.interfaceFields.length) {
-		const written = decl.interfaceFieldTypes[field];
-		const open = written.indexOf("<");
-		const base = open < 0 ? written : written.slice(0, open);
-		const inner = open < 0 ? "" : written.slice(open + 1, written.length - 1);
-		const index: Node = {
-			kind: NodeKind.NumberLiteral,
-			line: line,
-			column: column,
-			value: field as number,
-			isFloat: false,
-			intVal: field as int64,
-			outOfRangeText: "",
-			isBitPattern: false,
-		};
-		let callee: Node | null = null;
-		if (base == "Signer") { callee = bindSym("signer"); }
-		if (base == "WritableSigner") { callee = bindSym("writableSigner"); }
-		if (base == "Writable") { callee = bindSym("writable"); }
-		if (base == "SystemAccount") { callee = bindSym("systemAccount"); }
-		if (base == "Account") { callee = bindSym("unchecked"); }
-		if (base == "Program") { callee = bindSym("program"); }
-		if (base == "Owned") { callee = bindSym("owned"); }
-		if (base == "Mutable") { callee = bindSym("mutable"); }
-		if (base == "Delegated") { callee = bindSym("delegated"); }
-		if (base == "External") { callee = bindSym("external"); }
-		if (base == "ExternalMutable") { callee = bindSym("externalMutable"); }
-		let check: Node | null = null;
-		if (callee != null) {
-			check = {
-				kind: NodeKind.CallExpr,
-				line: line,
-				column: column,
-				callee: callee!,
-				arguments: [index],
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			};
-			check!.typeArg = inner;
-		}
-		if (check == null) {
-			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
-				written + "'; use Signer, WritableSigner, Writable, SystemAccount, Account, " +
-				"Program<P>, " +
-				"Owned<T>, Mutable<T>, Delegated<T>, External<T> or ExternalMutable<T>", shape);
-		}
-		values.push({
-			kind: NodeKind.TryExpr,
-			line: line,
-			column: column,
-			tryArg: check!,
-			hasCatch: false,
-			catchVal: check!,
-		});
-		field = field + 1;
-	}
-	const checks: Node[] = [];
-	let owner = 0;
-	while (owner < names.length) {
-		const self = names[owner];
-		const selfType = decl.interfaceFieldTypes[owner];
-		const isToken = selfType == "External<TokenAccount>" || selfType == "ExternalMutable<TokenAccount>";
-		const decorators = decl.interfaceFieldDecorators[owner];
-		let seeded: Node | null = null;
-		let bumped: Node | null = null;
-		const associated: Node[] = [];
-		const related: Node[] = [];
-		const required: Node[] = [];
-		const addressed: Node[] = [];
-		const authorized: Node[] = [];
-		const minted: Node[] = [];
-		let position = 0;
-		while (position < decorators.length) {
-			const d = decorators[position];
-			const name = d.macroName;
-			const args = d.macroArgs;
-			const where = "accounts<" + decl.interfaceName + ">(): @" + name + " on field '" + self + "'";
-			position = position + 1;
-			if (name == "seeds") {
-				if (seeded != null) { error(where + ": @seeds is written twice", d); }
-				if (args.length == 0) { error(where + " needs at least one seed", d); }
-				seeded = d;
-				continue;
-			}
-			if (name == "bump") {
-				if (bumped != null) { error(where + ": @bump is written twice", d); }
-				if (args.length > 1) { error(where + " takes the bump, or nothing for the canonical one", d); }
-				bumped = d;
-				continue;
-			}
-			if (name == "hasOne") {
-				if (args.length < 1 || args.length > 2 || args[0].kind !== NodeKind.Identifier) {
-					error(where + " takes the name of an account field and an optional error", d);
-				}
-				const target = args[0].name;
-				if (fieldIndex(target) < 0) {
-					error(where + ": '" + target + "' is not a field of " + decl.interfaceName, args[0]);
-				}
-				if (!dataFieldOf(owner, target, args[0])) {
-					error(where + ": '" + self + "' must be Owned<T>, Mutable<T> or Delegated<T> " +
-						"of a struct with a field '" + target + "'", d);
-				}
-				const stored = call(bindSym("keyAddressOf")!, [
-					member(call(member(member(ident(holder, d), self, d), "data", d), [], d), target, d),
-				], d);
-				if (args.length == 2) {
-					related.push(lazily(call(bindSym("keysEqual")!, [stored, keyOf(args[0])], d), args[1], d));
-					continue;
-				}
-				const failure = whole(ProgramError.constraintHasOne().code as number, d);
-				related.push(attempt(call(bindSym("keysMatch")!, [stored, keyOf(args[0]), failure], d), d));
-				continue;
-			}
-			if (name == "constraint") {
-				if (args.length < 1 || args.length > 2) {
-					error(where + " takes a condition and an optional error", d);
-				}
-				if (args.length == 2) {
-					required.push(lazily(rewrite(args[0]), args[1], d));
-					continue;
-				}
-				const failure = whole(ProgramError.constraintRaw().code as number, d);
-				required.push(attempt(call(bindSym("holds")!, [rewrite(args[0]), failure], d), d));
-				continue;
-			}
-			if (name == "address") {
-				if (args.length < 1 || args.length > 2) {
-					error(where + " takes a key and an optional error", d);
-				}
-				if (args.length == 2) {
-					addressed.push(lazily(call(bindSym("keysEqual")!, [keyOf(ident(self, d)), keyOf(args[0])], d), args[1], d));
-					continue;
-				}
-				const failure = whole(ProgramError.constraintAddress().code as number, d);
-				addressed.push(attempt(call(bindSym("keysMatch")!, [keyOf(ident(self, d)), keyOf(args[0]), failure], d), d));
-				continue;
-			}
-			if (name == "associated" || name == "tokenMint" || name == "tokenAuthority") {
-				if (!isToken) {
-					error(where + ": the field must be External<TokenAccount> or ExternalMutable<TokenAccount>", d);
-				}
-				if (name == "associated") {
-					if (args.length == 3) {
-						error(where + ": the token program is the mint's owner, so a third argument " +
-							"(associated_token::token_program) is not supported", d);
-					}
-					if (args.length != 2) { error(where + " takes the mint and the authority", d); }
-					associated.push(attempt(call(
-						bindSym("associatedMatches")!,
-						[keyOf(ident(self, d)), keyOf(args[1]), keyOf(args[0])],
-						d,
-					), d));
-					continue;
-				}
-				if (args.length != 1) { error(where + " takes one key", d); }
-				if (name == "tokenMint") {
-					minted.push(attempt(call(bindSym("tokenMintMatches")!, [keyOf(ident(self, d)), keyOf(args[0])], d), d));
-				} else {
-					authorized.push(attempt(call(bindSym("tokenAuthorityMatches")!, [keyOf(ident(self, d)), keyOf(args[0])], d), d));
-				}
-				continue;
-			}
-			error(where + ": accounts<T>() reads @seeds, @bump, @hasOne, @address, @associated, " +
-				"@constraint, @tokenMint and @tokenAuthority", d);
-		}
-		if (bumped != null && seeded == null) {
-			error("accounts<" + decl.interfaceName + ">(): @bump on field '" + self +
-				"' needs @seeds before it", bumped);
-		}
-		if (seeded != null) {
-			if (bumped == null) {
-				error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
-					"' needs @bump: write @bump(account.field) for a stored bump or a bare @bump " +
-					"for the canonical one", seeded);
-			}
-			const list: Node[] = [];
-			let seed = 0;
-			while (seed < seeded.macroArgs.length) {
-				list.push(rewrite(seeded.macroArgs[seed]));
-				seed = seed + 1;
-			}
-			const table = call(bindSym("seedTable")!, [{
-				kind: NodeKind.ArrayLiteral,
-				line: seeded.line,
-				column: seeded.column,
-				elements: list,
-			}], seeded);
-			const key = keyOf(ident(self, seeded));
-			if (bumped.macroArgs.length == 1) {
-				checks.push(attempt(call(
-					bindSym("seedsGiven")!,
-					[key, table, rewrite(bumped.macroArgs[0])],
-					seeded,
-				), seeded));
-			} else {
-				const declared = declaredProgramKey(seeded);
-				const literal = declared.length > 0 ? literalSeeds(seeded.macroArgs) : [];
-				if (literal.length > 0) {
-					let program = Pubkey.zero();
-					for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
-					const found = derivedAddressOf(literal, program);
-					if (!found.ok) {
-						error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
-							"' gives no program address for the programId of build.ms", seeded);
-					}
-					const words: Node[] = [key];
-					for (let w = 0; w < 4; w += 1) {
-						let word: uint64 = 0;
-						for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (found.value.key.bytes[w * 8 + b] as uint64); }
-						words.push({
-							kind: NodeKind.NumberLiteral,
-							line: seeded.line,
-							column: seeded.column,
-							value: word as number,
-							isFloat: false,
-							intVal: word as int64,
-							outOfRangeText: "",
-							isBitPattern: true,
-						});
-					}
-					checks.push(attempt(call(bindSym("seedsFolded")!, words, seeded), seeded));
-				} else {
-					checks.push(attempt(call(bindSym("seedsCanonical")!, [key, table], seeded), seeded));
-				}
-			}
-		}
-		const groups: Node[][] = [associated, related, required, addressed, authorized, minted];
-		let group = 0;
-		while (group < groups.length) {
-			let each = 0;
-			while (each < groups[group].length) {
-				checks.push(groups[group][each]);
-				each = each + 1;
-			}
-			group = group + 1;
-		}
-		owner = owner + 1;
-	}
-	const built: Node = {
-		kind: NodeKind.ObjectLiteral,
-		line: line,
-		column: column,
-		properties: values,
-		keys: decl.interfaceFields,
-		keyLocations: [],
-	};
-	const yes: Node = { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: true };
-	if (checks.length == 0) {
-		return call(bindSym("readArgs")!, [yes, built], shape);
-	}
-	const statements: Node[] = [{
-		kind: NodeKind.VariableDecl,
-		line: line,
-		column: column,
-		declName: holder,
-		declType: decl.interfaceName,
-		declKind: DeclKind.Const,
-		initializer: built,
-		nameLocation: { line: line, column: column },
-	}];
-	let step = 0;
-	while (step < checks.length) {
-		statements.push(checks[step]);
-		step = step + 1;
-	}
-	statements.push(call(bindSym("readArgs")!, [yes, ident(holder, shape)], shape));
-	return { kind: NodeKind.SpliceMany, line: line, column: column, spliceNodes: statements };
-}
 
 export macro seeds(use: Node): Node {
 	error("@seeds is a field decorator that accounts<T>() reads; it is not called", use);
@@ -993,164 +516,6 @@ export macro emit(value: Node): Node {
 	};
 }
 
-const SEED_LIST_REQUIRED = "seeds must be written as a list at the call: [\"pet\", mint, [bump]]";
-
-const KEY_REQUIRED = "a key is an account or a Pubkey";
-
-function namesAnAccount(name: string, inner: string): boolean {
-	return name == "Account" || (name == "Distinct" && inner == "Account") ||
-		name == "Signer" || name == "WritableSigner" || name == "Writable" || name == "SystemAccount" ||
-		name == "Program" || name == "Owned" || name == "Mutable" ||
-		name == "External" || name == "ExternalMutable" || name == "Delegated";
-}
-
-macro keyAddressOf(operand: Node): Node {
-	const line = operand.line;
-	const column = operand.column;
-	const written = getType(operand);
-	let name = "";
-	let inner = "";
-	if (written != null) {
-		if (written.kind === NodeKind.Identifier) { name = written.name; }
-		if (written.kind === NodeKind.TypeObject) { name = written.typExprTypeName; }
-		if (written.kind === NodeKind.TypeArray) { name = "an array"; }
-		if (written.kind === NodeKind.TypeGeneric) {
-			name = written.typExprBase.name;
-			const first = written.typExprArgs[0];
-			if (first.kind === NodeKind.TypeObject) { inner = first.typExprTypeName; }
-		}
-	}
-	if (name == "Pubkey") {
-		return {
-			kind: NodeKind.CallExpr,
-			line: line,
-			column: column,
-			callee: bindSym("bytesAddress"),
-			arguments: [{
-				kind: NodeKind.MemberExpr,
-				line: line,
-				column: column,
-				object: operand,
-				property: "bytes",
-				isOptional: false,
-			}],
-			isDirectCall: false,
-			resolvedOverloadIdx: -1,
-		};
-	}
-	if (namesAnAccount(name, inner)) {
-		return {
-			kind: NodeKind.CallExpr,
-			line: line,
-			column: column,
-			callee: {
-				kind: NodeKind.MemberExpr,
-				line: line,
-				column: column,
-				object: operand,
-				property: "keyAddress",
-				isOptional: false,
-			},
-			arguments: [],
-			isDirectCall: false,
-			resolvedOverloadIdx: -1,
-		};
-	}
-	error(KEY_REQUIRED + ", and this has " + (name == "" ? "no known type" : "type " + name +
-		(inner == "" ? "" : "<" + inner + ">")), operand);
-}
-
-macro seedTable(list: Node): Node {
-	if (list.kind !== NodeKind.ArrayLiteral) {
-		error(SEED_LIST_REQUIRED, list);
-	}
-	const slices: Node[] = [];
-	let position = 0;
-	while (position < list.elements.length) {
-		const element = list.elements[position];
-		const line = element.line;
-		const column = element.column;
-		const written = getType(element);
-		let builder: Node | null = null;
-		let argument: Node = element;
-		let description = "no known type";
-		if (element.kind === NodeKind.ArrayLiteral) {
-			builder = bindSym("seedBytes");
-			argument = {
-				kind: NodeKind.TypeAssertion,
-				line: line,
-				column: column,
-				asExpr: element,
-				asType: "uint8[" + (element.elements.length as int32) + "]",
-			};
-		}
-		if (builder == null && written != null) {
-			let name = "";
-			let inner = "";
-			if (written.kind === NodeKind.Identifier) { name = written.name; }
-			if (written.kind === NodeKind.TypeObject) { name = written.typExprTypeName; }
-			if (written.kind === NodeKind.TypeArray) { name = "an array"; }
-			if (written.kind === NodeKind.TypeGeneric) {
-				name = written.typExprBase.name;
-				const first = written.typExprArgs[0];
-				if (first.kind === NodeKind.TypeObject) { inner = first.typExprTypeName; }
-				if (first.kind === NodeKind.TypeArray) { inner = "an array"; }
-			}
-			description = "type " + name + (inner == "" ? "" : "<" + inner + ">");
-			if (name == "string") { builder = bindSym("seedText"); }
-			if (name == "an array" || (name == "Ref" && inner == "an array")) {
-				builder = bindSym("seedBytes");
-			}
-			if (name == "Pubkey") {
-				builder = bindSym("seedBytes");
-				argument = {
-					kind: NodeKind.MemberExpr,
-					line: line,
-					column: column,
-					object: element,
-					property: "bytes",
-					isOptional: false,
-				};
-			}
-			if (namesAnAccount(name, inner)) {
-				builder = bindSym("seedKey");
-				argument = {
-					kind: NodeKind.CallExpr,
-					line: line,
-					column: column,
-					callee: {
-						kind: NodeKind.MemberExpr,
-						line: line,
-						column: column,
-						object: element,
-						property: "keyAddress",
-						isOptional: false,
-					},
-					arguments: [],
-					isDirectCall: false,
-					resolvedOverloadIdx: -1,
-				};
-			}
-		}
-		if (builder == null) {
-			error("seed " + ((position + 1) as int32) + " has " + description +
-				": a seed is a string, a byte array, a Pubkey or an account; " +
-				"write an integer seed as bytes: `[x]` for a uint8, " +
-				"`leBytes(x)` for a wider integer", element);
-		}
-		slices.push({
-			kind: NodeKind.CallExpr,
-			line: line,
-			column: column,
-			callee: builder!,
-			arguments: [argument],
-			isDirectCall: false,
-			resolvedOverloadIdx: -1,
-		});
-		position = position + 1;
-	}
-	return { kind: NodeKind.ArrayLiteral, line: list.line, column: list.column, elements: slices };
-}
 
 export macro programAddress(seeds: Node): Node {
 	return {
@@ -1380,6 +745,33 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			return bytes;
 		}
 
+	const targetType = getType(target);
+	let targetName = "";
+	if (targetType != null && targetType.kind === NodeKind.Identifier) { targetName = targetType.name; }
+	if (targetType != null && targetType.kind === NodeKind.TypeObject) { targetName = targetType.typExprTypeName; }
+	if (targetName == "WritablePda") {
+		return {
+			kind: NodeKind.CallExpr,
+			line: payer.line,
+			column: payer.column,
+			callee: {
+				kind: NodeKind.TypeGeneric,
+				typExprBase: bindSym("createPdaProven")!,
+				typExprArgs: [getTypeArg()],
+			},
+			arguments: [payer, target, {
+				kind: NodeKind.CallExpr,
+				line: seeds.line,
+				column: seeds.column,
+				callee: bindSym("seedTable"),
+				arguments: [seeds],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+	}
 	const declared = declaredProgramKey(seeds);
 	const literal = declared.length > 0 ? literalSeeds(seeds) : [];
 	if (literal.length > 0) {
@@ -1396,7 +788,11 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: payer.line,
 			column: payer.column,
-			callee: bindSym("createPdaAt"),
+			callee: {
+				kind: NodeKind.TypeGeneric,
+				typExprBase: bindSym("createPdaAt")!,
+				typExprArgs: [getTypeArg()],
+			},
 			arguments: [payer, target, {
 				kind: NodeKind.CallExpr,
 				line: seeds.line,
@@ -1420,7 +816,11 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 		kind: NodeKind.CallExpr,
 		line: payer.line,
 		column: payer.column,
-		callee: bindSym("createPdaOf"),
+		callee: {
+			kind: NodeKind.TypeGeneric,
+			typExprBase: bindSym("createPdaOf")!,
+			typExprArgs: [getTypeArg()],
+		},
 		arguments: [payer, target, {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,

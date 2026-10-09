@@ -8,6 +8,7 @@ import {
 	ProgramError,
 	System,
 	Writable,
+	WritablePda,
 	WritableSigner,
 	accounts,
 	args,
@@ -39,7 +40,7 @@ export struct MakeAccounts {
 	mintA: External<Mint>;
 	mintB: External<Mint>;
 	@associated(mintA, maker) makerAtaA: ExternalMutable<TokenAccount>;
-	escrow: Writable;
+	@seeds("escrow", maker, leBytes(a.seed)) @bump escrow: WritablePda;
 	vault: Writable;
 	associatedTokenProgram: Program<AssociatedToken>;
 	tokenProgram: Account;
@@ -395,6 +396,13 @@ when (testBuild) {
 		const zero = makeAccounts(7);
 		assert run(programKey(), zero, makeData(7, 0, 300), entry).result ==
 			ProgramError.userError(0).code;
+	}
+
+	test "make refuses an escrow account off the PDA address with ConstraintSeeds" {
+		const wrong = makeAccounts(7);
+		wrong[4].key = keyOf(77);
+		assert run(programKey(), wrong, makeData(7, 600, 300), entry).result ==
+			ProgramError.constraintSeeds().code;
 	}
 
 	function takeAccounts(made: HostAccount[]): HostAccount[] {

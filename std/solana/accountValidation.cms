@@ -1,0 +1,171 @@
+@include("runtime/solana/solana.h");
+
+import { Node, NodeKind, bindSym } from "std/meta";
+import { AccountLayout, accountLayout, requireZeroAccountLayout } from "./accountLayout";
+
+extern function msSolLoadU8(address: uint64): uint8;
+extern function msSolLoadU16(address: uint64): uint16;
+extern function msSolLoadU32(address: uint64): uint32;
+extern function msSolLoadU64(address: uint64): uint64;
+
+@inline function accountByteBias8(address: uint64, bias: uint64): uint64 {
+	const word = msSolLoadU64(address);
+	return (word + bias) | word;
+}
+@inline function accountByteBias4(address: uint64, bias: uint64): uint64 {
+	const word = msSolLoadU32(address) as uint64;
+	return (word + bias) | word;
+}
+@inline function accountByteBias2(address: uint64, bias: uint64): uint64 {
+	const word = msSolLoadU16(address) as uint64;
+	return (word + bias) | word;
+}
+@inline function accountByteBias1(address: uint64, bias: uint64): uint64 {
+	const word = msSolLoadU8(address) as uint64;
+	return (word + bias) | word;
+}
+
+struct FieldCheck {
+	offset: int32;
+	width: int32;
+	max: int32;
+	values: int32[];
+}
+
+function ordinalMax(values: int32[]): int32 {
+	let max: int32 = -1;
+	const unique: int32[] = [];
+	for (const value of values) {
+		if (value < 0) { return -1; }
+		if (value > max) { max = value; }
+		let seen = false;
+		for (const prior of unique) { if (prior == value) { seen = true; break; } }
+		if (!seen) { unique.push(value); }
+	}
+	return max >= 0 && (max as int64) + 1 == (unique.length as int64) ? max : -1;
+}
+
+function fieldChecks(layout: AccountLayout, offset: int32): FieldCheck[] {
+	const checks: FieldCheck[] = [];
+	if (layout.kind == "boolean") {
+		checks.push({ offset: offset, width: layout.size, max: 1, values: [0, 1] });
+	} else if (layout.kind == "enum") {
+		const max = ordinalMax(layout.values);
+		if (!(layout.size == 1 && max == 255) && !(layout.size == 2 && max == 65535)) {
+			checks.push({ offset: offset, width: layout.size, max: max, values: layout.values });
+		}
+	} else if (layout.kind == "distinct") {
+		for (const check of fieldChecks(layout.children[0], offset)) { checks.push(check); }
+	} else if (layout.kind == "struct") {
+		for (let i = 0; i < layout.children.length; i += 1) {
+			for (const check of fieldChecks(layout.children[i], offset + layout.offsets[i])) { checks.push(check); }
+		}
+	} else if (layout.kind == "array") {
+		const element = fieldChecks(layout.children[0], 0);
+		if (element.length == 0) { return checks; }
+		for (let i = 0; i < layout.count; i += 1) {
+			for (const check of element) {
+				checks.push({ offset: offset + i * layout.children[0].size + check.offset,
+					width: check.width, max: check.max, values: check.values });
+			}
+		}
+	}
+	return checks;
+}
+
+macro rawAccountFieldsValid(address: Node): Node {
+	const shape = getTypeArg();
+	const layout = accountLayout(shape);
+	const checks = fieldChecks(layout, 0);
+	function integer(value: uint64): Node {
+		return { kind: NodeKind.TypeAssertion, line: shape.line, column: shape.column,
+			asType: "uint64", asExpr: {
+				kind: NodeKind.NumberLiteral, line: shape.line, column: shape.column,
+				value: value as number, isFloat: false, intVal: value as int64,
+				outOfRangeText: "", isBitPattern: true,
+			} };
+	}
+	function binary(operator: string, left: Node, right: Node): Node {
+		return { kind: NodeKind.BinaryExpr, line: shape.line, column: shape.column,
+			operator: operator, left: left, right: right };
+	}
+	function call(name: string, arguments: Node[]): Node {
+		return { kind: NodeKind.CallExpr, line: shape.line, column: shape.column,
+			callee: bindSym(name)!, arguments: arguments, isDirectCall: false, resolvedOverloadIdx: -1 };
+	}
+	function at(offset: int32): Node { return binary("+", address, integer(offset as uint64)); }
+	function load(width: int32, offset: int32): Node {
+		const name = match (width) { 1 => "msSolLoadU8", 2 => "msSolLoadU16", 4 => "msSolLoadU32", _ => "msSolLoadU64" };
+		return { kind: NodeKind.TypeAssertion, line: shape.line, column: shape.column,
+			asExpr: call(name, [at(offset)]), asType: "uint64" };
+	}
+	let invalid: Node = integer(0);
+	let valid: Node = { kind: NodeKind.BooleanLiteral, line: shape.line, column: shape.column, boolValue: true };
+	let i = 0;
+	while (i < checks.length) {
+		const first = checks[i];
+		if (first.width == 1 && first.max >= 0 && first.max <= 127) {
+			let run = 1;
+			while (run < 8 && i + run < checks.length) {
+				const next = checks[i + run];
+				if (next.offset != first.offset + run || next.width != 1 || next.max < 0 || next.max > 127) { break; }
+				run += 1;
+			}
+			const width = run >= 8 ? 8 : run >= 4 ? 4 : run >= 2 ? 2 : 1;
+			let bias: uint64 = 0;
+			let mask: uint64 = 0;
+			let high: uint64 = 0;
+			let powerRanges = true;
+			for (let lane = 0; lane < width; lane += 1) {
+				const max = checks[i + lane].max;
+				const shift = (lane * 8) as uint64;
+				bias |= ((127 - max) as uint64) << shift;
+				high |= (128 as uint64) << shift;
+				mask |= ((255 - max) as uint64) << shift;
+				if ((max & (max + 1)) != 0) { powerRanges = false; }
+			}
+			if (powerRanges) {
+				invalid = binary("|", invalid, binary("&", load(width, first.offset), integer(mask)));
+			} else {
+				const name = match (width) { 8 => "accountByteBias8", 4 => "accountByteBias4", 2 => "accountByteBias2", _ => "accountByteBias1" };
+				// Each loaded byte is constrained: valid lanes cannot carry into their neighbour.
+				invalid = binary("|", invalid, binary("&", call(name, [at(first.offset), integer(bias)]), integer(high)));
+			}
+			i += width;
+			continue;
+		}
+		const raw = load(first.width, first.offset);
+		let member: Node = { kind: NodeKind.BooleanLiteral, line: shape.line, column: shape.column, boolValue: false };
+		if (first.max >= 0) {
+			if (((first.max as uint64) & ((first.max as uint64) + 1)) == 0) {
+				const bits: uint64 = first.width == 1 ? 255 : first.width == 2 ? 65535 : 0xffffffff;
+				member = binary("==", binary("&", raw, integer(bits ^ (first.max as uint64))), integer(0));
+			} else {
+				member = binary("<=", raw, integer(first.max as uint64));
+			}
+		} else {
+			for (const value of first.values) {
+				const bits = first.width == 1 ? (value as uint8) as uint64 :
+					first.width == 2 ? (value as uint16) as uint64 : (value as uint32) as uint64;
+				member = binary("||", member, binary("==", raw, integer(bits)));
+			}
+		}
+		valid = binary("&&", valid, member);
+		i += 1;
+	}
+	return binary("&&", binary("==", invalid, integer(0)), valid);
+}
+
+macro rawZeroAccountFieldsValid(): Node {
+	const shape = getTypeArg();
+	requireZeroAccountLayout(accountLayout(shape));
+	return { kind: NodeKind.BooleanLiteral, line: shape.line, column: shape.column, boolValue: true };
+}
+
+@inline export function accountFieldsValid<T>(address: uint64): boolean {
+	return rawAccountFieldsValid<T>(address);
+}
+
+@inline export function zeroAccountFieldsValid<T>(): boolean {
+	return rawZeroAccountFieldsValid<T>();
+}

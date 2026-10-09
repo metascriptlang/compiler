@@ -33,13 +33,13 @@ when (testBuild) {
 	} from "./core";
 	import {
 		external,
+		accounts,
 		externalMutable,
 		writable,
 		writableSigner,
 	} from "./typed";
 	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 	import {
-		accounts,
 		associated,
 		findProgramAddressOf,
 		signed,
@@ -1065,8 +1065,13 @@ when (testBuild) {
 		assert accounts[1].owner.equals(TOKEN_PROGRAM_ID) && accounts[1].data.length == 82;
 		assert accounts[1].lamports > 0;
 		const created = invocations()[0];
-		assert created.program.equals(Pubkey.zero()) && created.data[0] == 0;
+		assert created.program.equals(Pubkey.zero()) && created.data[0] == 13;
+		assert created.data.length == 52 && created.data[1] == 0 && created.data[2] == 0 && created.data[3] == 0;
 		assert created.data[12] == 82 && created.signers == 1;
+		for (let i = 0; i < 32; i++) { assert created.data[20 + i] == TOKEN_PROGRAM_ID.bytes[i]; }
+		assert created.accounts.length == 2;
+		assert created.accounts[0].key.equals(mintKey()) && created.accounts[0].writable && created.accounts[0].signer;
+		assert created.accounts[1].key.equals(accounts[0].key) && created.accounts[1].writable && created.accounts[1].signer;
 		const mintBump = findProgramAddressOf(keyOf(9), ["mint"]);
 		assert mintBump.ok;
 		if (mintBump.ok) { assert signerIs(created, 0, [textBytes("mint"), [mintBump.value.bump]]); }

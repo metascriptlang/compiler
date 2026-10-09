@@ -74,9 +74,6 @@ export function incorrectAuthority(this typeof ProgramError): ProgramError {
 	return builtinError(26);
 }
 
-export function declaredProgramIdMismatch(this typeof ProgramError): ProgramError {
-	return ProgramError.custom(4100);
-}
 export function instructionMissing(this typeof ProgramError): ProgramError {
 	return ProgramError.custom(100);
 }

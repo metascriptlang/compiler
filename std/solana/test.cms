@@ -1,5 +1,16 @@
 @include("runtime/solana/solana.h");
 
+import { External, Signer as ChainAuth, accounts, external, externalMutable } from "./typed";
+import { argBoolValid, argBytesFit, argU8, argU16, argU64 } from "./core";
+import { scopedKeysResult } from "./testArgumentScope";
+import {
+	directDelegated, directExternal, directExternalMutable, directMutable, directOwned, directProgram,
+} from "./testDirectCalls";
+import {
+	ScopedByteArgs as ForeignByteInput,
+	ScopedChainAccounts, ScopedPet, ScopedProgramAccounts, scopedChainResult,
+	scopedDirectProgram, scopedOwnedResult, scopedProgramResult,
+} from "./testChainScope";
 import {
 	Account,
 	DELEGATION_PROGRAM_ID,
@@ -16,6 +27,7 @@ import {
 	writable,
 	instructionDiscriminator,
 	account,
+	accountCount,
 	allocate,
 	assignTo,
 	createAccount,
@@ -35,6 +47,7 @@ import {
 	Program,
 	Signer,
 	Writable,
+	WritablePda,
 	WritableSigner,
 	Delegated,
 	delegated,
@@ -65,10 +78,12 @@ import {
 	invokeList,
 	invokeSigned,
 } from "./index";
-import { SignerSeeds } from "./seed";
+import { SignerSeeds, hashAddressWithBump } from "./seed";
+import { seedTable } from "./accountSeeds";
+import { seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
+import { verifiedPdaWithBump } from "./typed";
 import { HostAccount, invocations, logs, run, setClock, signerIs, textBytes } from "./host";
 import {
-	accounts,
 	address,
 	args,
 	bump,
@@ -88,6 +103,8 @@ import { Node, NodeKind, bindSym } from "std/meta";
 
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolProgramId(): uint64;
+extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
+extern function msSolStoreU8(address: uint64, value: uint8): void;
 
 
 export struct Counter {
@@ -328,6 +345,318 @@ test "instruction dispatch reads Anchor discriminators and Borsh arguments" {
 	assert taken.result == 0;
 }
 
+let wrappedByte: uint8 = 0;
+let wrappedWord: uint16 = 0;
+let wrappedWide: uint64 = 0;
+let wrappedBytesFit = false;
+let missingBoolValid = false;
+
+function wrappingArgsEntry(): void {
+	wrappedByte = argU8(0xffffffffffffffff);
+	wrappedWord = argU16(0xfffffffffffffffe);
+	wrappedWide = argU64(0xfffffffffffffff8);
+	wrappedBytesFit = argBytesFit(0xffffffffffffffff);
+	missingBoolValid = argBoolValid(64);
+}
+
+function wrappingArgsProbe(): void {
+	const data: uint8[] = [1, 1, 1, 1, 1, 1, 1, 1];
+	for (let i = 0; i < 64; i++) { data.push(0); }
+	run(programKey(), [], data, wrappingArgsEntry);
+}
+
+test "wrapping uint8 argument offset cannot read the instruction prefix" {
+	wrappingArgsProbe();
+	assert wrappedByte == 0;
+}
+
+test "wrapping uint16 argument offset cannot read the instruction prefix" {
+	wrappingArgsProbe();
+	assert wrappedWord == 0;
+}
+
+test "wrapping uint64 argument offset cannot read the instruction prefix" {
+	wrappingArgsProbe();
+	assert wrappedWide == 0;
+}
+
+test "wrapping Bytes argument cannot pass raw validation" {
+	wrappingArgsProbe();
+	assert !wrappedBytesFit;
+}
+
+test "missing bool argument cannot pass raw validation" {
+	wrappingArgsProbe();
+	assert !missingBoolValid;
+}
+
+export struct FixedArrayArgs {
+	flag: boolean;
+	bytes: uint8[32];
+	last: uint8;
+}
+
+function fixedArrayStep(): Result<uint64, ProgramError> {
+	const input = try args<FixedArrayArgs>();
+	const flag: uint32 = input.flag ? 1 : 0;
+	return Result.err(ProgramError.custom(flag + (input.bytes[0] as uint32) +
+		(input.bytes[31] as uint32) + (input.last as uint32)));
+}
+
+function fixedArrayEntry(): void { codeOf(fixedArrayStep()); }
+
+test "args<T>() reads fixed32 byte arrays at odd offsets and refuses every truncation or invalid boolean" {
+	const tail: uint8[] = [1];
+	for (let i = 1; i <= 32; i++) { tail.push(i as uint8); }
+	tail.push(8);
+	const complete = instructionBytes("Fixed", tail);
+	assert run(programKey(), [], complete, fixedArrayEntry).result == ProgramError.custom(42).code;
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, fixedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+	tail[0] = 2;
+	assert run(programKey(), [], instructionBytes("Fixed", tail), fixedArrayEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+}
+
+type FourArgBytes = uint8[4];
+
+struct MixedArrayArgs {
+	prefix: boolean;
+	empty: uint8[0];
+	one: uint8[1];
+	four: FourArgBytes;
+	eight: uint8[8];
+	nearKey: uint8[31];
+	pastKey: uint8[33];
+	last: boolean;
+}
+
+function mixedArrayStep(): Result<uint64, ProgramError> {
+	const input = try args<MixedArrayArgs>();
+	let sum: uint32 = input.prefix ? 1 : 0;
+	sum += (input.last ? 1000 : 0) as uint32;
+	sum += input.empty.length as uint32;
+	let weight: uint32 = 1;
+	for (const byte of input.one) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.four) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.eight) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.nearKey) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.pastKey) { sum += (byte as uint32) * weight; weight++; }
+	return Result.err(ProgramError.custom(sum));
+}
+
+function mixedArrayEntry(): void { codeOf(mixedArrayStep()); }
+
+function mixedArrayTail(): uint8[] {
+	const tail: uint8[] = [1];
+	for (let i = 1; i <= 77; i++) { tail.push(i as uint8); }
+	tail.push(1);
+	return tail;
+}
+
+test "args<T>() reads zero, one, aliased four, eight, thirty-one and thirty-three bytes" {
+	const data = instructionBytes("Mixed", mixedArrayTail());
+	assert run(programKey(), [], data, mixedArrayEntry).result == ProgramError.custom(156156).code;
+}
+
+test "args<T>() refuses every truncation of mixed fixed byte arrays" {
+	const complete = instructionBytes("Mixed", mixedArrayTail());
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, mixedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+test "args<T>() refuses invalid boolean neighbours of fixed byte arrays" {
+	for (const bad of [0, 78]) {
+		const tail = mixedArrayTail();
+		tail[bad] = 2;
+		assert run(programKey(), [], instructionBytes("Mixed", tail), mixedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+function scopedArrayScore(input: ForeignByteInput): uint32 {
+	if (input.tail != 0x0102030405060708 as uint64) { return 99; }
+	return (input.prefix ? 1 : 0) as uint32 + (input.bytes[0] as uint32) +
+		(input.bytes[1] as uint32) * 2 + (input.bytes[2] as uint32) * 3 +
+		(input.bytes[3] as uint32) * 4;
+}
+
+function importedArrayStep(): Result<uint64, ProgramError> {
+	const input = try args<ForeignByteInput>();
+	return Result.err(ProgramError.custom(scopedArrayScore(input)));
+}
+function importedArrayEntry(): void { codeOf(importedArrayStep()); }
+
+test "args<T>() preserves imported aliases of private records and fixed-byte field aliases" {
+	const data = instructionBytes("Scoped", [1, 2, 3, 5, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+	assert run(programKey(), [], data, importedArrayEntry).result == ProgramError.custom(52).code;
+}
+
+test "args<T>() refuses every truncation of an imported private record alias" {
+	const complete = instructionBytes("Scoped", [1, 2, 3, 5, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, importedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+test "args<T>() validates raw booleans before reading imported private record aliases" {
+	for (let bad = 2; bad < 256; bad++) {
+		const data = instructionBytes("Scoped", [bad as uint8, 2, 3, 5, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+		assert run(programKey(), [], data, importedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+let scopedKeyChecksum: uint64 = 0;
+function scopedKeysEntry(): void {
+	const result = scopedKeysResult();
+	if (result.ok) { scopedKeyChecksum = result.value; }
+	codeOf(result);
+}
+
+test "imported private Pubkey arrays need no caller Pubkey import" {
+	const tail: uint8[] = [];
+	for (let byte = 0; byte < 96; byte++) { tail.push(byte as uint8); }
+	assert run(programKey(), [], instructionBytes("Keys", tail), scopedKeysEntry).result == 0;
+	assert scopedKeyChecksum == 4560;
+}
+
+test "imported private Pubkey arrays reject every truncated wire" {
+	const tail: uint8[] = [];
+	for (let size = 0; size < 96; size++) {
+		scopedKeyChecksum = 42;
+		assert run(programKey(), [], instructionBytes("Keys", tail), scopedKeysEntry).result == 102;
+		assert scopedKeyChecksum == 42;
+		tail.push(size as uint8);
+	}
+}
+
+struct SignedBoundaryArgs {
+	one: int8;
+	two: int16;
+	four: int32;
+	eight: int64;
+}
+let signedOne: int64 = 0;
+let signedTwo: int64 = 0;
+let signedFour: int64 = 0;
+let signedEight: int64 = 0;
+
+function signedBoundaryStep(): Result<uint64, ProgramError> {
+	const x = try args<SignedBoundaryArgs>();
+	signedOne = x.one as int64;
+	signedTwo = x.two as int64;
+	signedFour = x.four as int64;
+	signedEight = x.eight;
+	return Result.ok(0);
+}
+function signedBoundaryEntry(): void { codeOf(signedBoundaryStep()); }
+
+test "signed instruction readers preserve minima and maxima at odd Borsh offsets" {
+	for (const high of [false, true]) {
+		const tail: uint8[] = [];
+		for (const width of [1, 2, 4, 8]) {
+			for (let byte = 0; byte < width - 1; byte++) { tail.push(high ? 255 : 0); }
+			tail.push(high ? 127 : 128);
+		}
+		assert run(programKey(), [], instructionBytes("Signed", tail), signedBoundaryEntry).result == 0;
+		assert signedOne == (high ? 127 : -128);
+		assert signedTwo == (high ? 32767 : -32768);
+		assert signedFour == (high ? 2147483647 : -2147483648);
+		const maximum: int64 = 9223372036854775807;
+		const minimum: int64 = -maximum - 1;
+		assert signedEight == (high ? maximum : minimum);
+	}
+}
+
+test "signed instruction readers preserve all narrow wire values" {
+	for (let byte = 0; byte < 256; byte++) {
+		const tail: uint8[] = [byte as uint8];
+		for (let i = 1; i < 15; i++) { tail.push(0); }
+		assert run(programKey(), [], instructionBytes("Signed", tail), signedBoundaryEntry).result == 0;
+		assert signedOne == (byte < 128 ? byte : byte - 256) as int64;
+		assert signedTwo == 0 && signedFour == 0 && signedEight == 0;
+	}
+}
+
+struct ScalarArrayArgs {
+	prefix: uint8;
+	u8: uint8[2];
+	u16: uint16[2];
+	u32: uint32[2];
+	u64: uint64[2];
+	i8: int8[2];
+	i16: int16[2];
+	i32: int32[2];
+	i64: int64[2];
+	flags: boolean[2];
+	last: uint8;
+}
+
+function scalarArrayStep(): Result<uint64, ProgramError> {
+	const x = try args<ScalarArrayArgs>();
+	if (x.u8[0] != 1 || x.u8[1] != 2 || x.u16[0] != 1 || x.u16[1] != 2 ||
+		x.u32[0] != 1 || x.u32[1] != 2 || x.u64[0] != 1 || x.u64[1] != 2 ||
+		x.i8[0] != -1 || x.i8[1] != 2 || x.i16[0] != -1 || x.i16[1] != 2 ||
+		x.i32[0] != -1 || x.i32[1] != 2 || x.i64[0] != -1 || x.i64[1] != 2 ||
+		!x.flags[0] || x.flags[1] || x.prefix != 5 || x.last != 7) {
+		return Result.err(ProgramError.custom(99));
+	}
+	return Result.err(ProgramError.custom(29));
+}
+function scalarArrayEntry(): void { codeOf(scalarArrayStep()); }
+
+function scalarArrayTail(): uint8[] {
+	const tail: uint8[] = [5];
+	for (const negative of [false, true]) {
+		for (const width of [1, 2, 4, 8]) {
+			for (let byte = 0; byte < width; byte++) {
+				tail.push(negative ? 255 : byte == 0 ? 1 : 0);
+			}
+			tail.push(2);
+			for (let byte = 1; byte < width; byte++) { tail.push(0); }
+		}
+	}
+	tail.push(1); tail.push(0); tail.push(7);
+	return tail;
+}
+
+test "args<T>() decodes signed and unsigned fixed integer arrays and boolean arrays without padding" {
+	assert run(programKey(), [], instructionBytes("Scalar", scalarArrayTail()), scalarArrayEntry).result ==
+		ProgramError.custom(29).code;
+}
+
+test "args<T>() refuses every truncation of fixed scalar arrays" {
+	const complete = instructionBytes("Scalar", scalarArrayTail());
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, scalarArrayEntry).result == ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+test "args<T>() validates every raw boolean array element before typed reads" {
+	for (const index of [61, 62]) {
+		for (let bad = 2; bad < 256; bad++) {
+			const tail = scalarArrayTail();
+			tail[index] = bad as uint8;
+			assert run(programKey(), [], instructionBytes("Scalar", tail), scalarArrayEntry).result ==
+				ProgramError.instructionDidNotDeserialize().code;
+		}
+	}
+}
+
 export struct UploadArgs {
 	index: uint16;
 	chunk: Bytes;
@@ -473,6 +802,39 @@ test "createPda accepts only the canonical address and records its bump" {
 		ProgramError.constraintSeeds().code;
 }
 
+export struct DeclaredCounter {
+	payer: WritableSigner;
+	@seeds("counter", payer) @bump target: WritablePda;
+}
+
+function declaredCreateStep(): Result<uint64, ProgramError> {
+	const x = try accounts<DeclaredCounter>();
+	const made = try createPda<Counter>(x.payer, x.target, ["counter", x.payer]);
+	if (made.bump != x.target.foundBump()) { return Result.err(ProgramError.invalidSeeds()); }
+	made.account.data().value = made.bump as uint64;
+	const _grown = try realloc(made.account, 148, x.payer);
+	return Result.ok(0);
+}
+
+function declaredCreateEntry(): void { codeOf(declaredCreateStep()); }
+
+test "a declared @seeds @bump keeps the canonical bump in the proof, createPda signs with it and a realloc after it keeps its length" {
+	const payer = wallet(1, 10000000);
+	const derived = findProgramAddressOf(programKey(), ["counter", payer.key]);
+	assert derived.ok;
+	if (derived.ok) {
+		const accounts = [payer, blank(derived.value.key)];
+		assert run(programKey(), accounts, [], declaredCreateEntry).result == 0;
+		assert accounts[1].data[8] == derived.value.bump && accounts[1].data.length == 148;
+		const calls = invocations();
+		assert calls.length == 2 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [...payer.key.bytes], [derived.value.bump]]);
+	}
+	const wrong = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), wrong, [], declaredCreateEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
 test "close refunds every lamport, hands the account to the System program and empties it" {
 	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
 	counter.lamports = 700;
@@ -534,6 +896,40 @@ test "accounts<T>() verifies each field by its proof type, in declaration order"
 	const short = [owner, counter];
 	assert run(programKey(), short, [], bumpAccountsEntry).result ==
 		ProgramError.accountNotEnoughKeys().code;
+}
+
+function trailingAccountsStep(): Result<uint64, ProgramError> {
+	const declared = try accounts<BumpAccounts>();
+	if (!declared.owner.key().equals(keyOf(1))) { return Result.err(ProgramError.custom(1)); }
+	let score: uint32 = 0;
+	for (let index = 4; index < accountCount(); index++) {
+		const tail = try account(index);
+		if (!tail.key().equals(keyOf((index + 1) as uint8))) { return Result.err(ProgramError.custom(2)); }
+		score += tail.dataLength() as uint32;
+	}
+	if (account(accountCount()).ok) { return Result.err(ProgramError.custom(3)); }
+	return Result.err(ProgramError.custom(100 + score));
+}
+function trailingAccountsEntry(): void { codeOf(trailingAccountsStep()); }
+
+test "declared account proofs leave empty and ordered trailing raw accounts accessible" {
+	for (let count = 0; count <= 3; count++) {
+		const given = [
+			holder(1, keyOf(9), [], true, false),
+			holder(2, programKey(), counterBytes(counterTag(), 3, 48), false, true),
+			wallet(3, 0),
+			systemProgramAccount(),
+		];
+		let score: uint32 = 100;
+		for (let i = 0; i < count; i++) {
+			const bytes: uint8[] = [];
+			for (let b = 0; b <= i; b++) { bytes.push(7); }
+			given.push(holder((i + 5) as uint8, keyOf(9), bytes, false, false));
+			score += bytes.length as uint32;
+		}
+		assert run(programKey(), given, [], trailingAccountsEntry).result == ProgramError.custom(score).code;
+		assert given[1].data[8] == 3;
+	}
 }
 
 export struct Made {
@@ -1004,6 +1400,75 @@ test "anchorIdl describes nested structs as defined types and fixed arrays as ar
 		assert types.at(1).name.asString() == "Gauge";
 		assert types.at(1).serialization.asString() == "bytemuck";
 		assert types.at(1).type.fields.at(1).type.asString() == "u16";
+	}
+}
+
+struct NoArrayAccounts {}
+struct KeyAndArrayArgs { key: Pubkey; bytes: uint8[32]; }
+
+test "anchorIdl keeps Pubkey distinct from a fixed32 instruction byte array" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "keys_and_bytes",
+		address: "",
+		Bump: [NoArrayAccounts, KeyAndArrayArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = parsed.value.instructions.at(0).args;
+		assert given.at(0).type.asString() == "pubkey";
+		assert given.at(1).type.array.at(0).asString() == "u8";
+		assert given.at(1).type.array.at(1).asInt32() == 32;
+	}
+}
+
+test "anchorIdl describes fixed-byte instruction arguments including zero and local aliases" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "byte_arrays",
+		address: "",
+		Bump: [NoArrayAccounts, MixedArrayArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = parsed.value.instructions.at(0).args;
+		assert given.length() == 8;
+		assert given.at(0).type.asString() == "bool";
+		assert given.at(7).type.asString() == "bool";
+		const lengths: int32[] = [0, 1, 4, 8, 31, 33];
+		for (let i = 0; i < lengths.length; i++) {
+			const array = given.at(i + 1).type.array;
+			assert array.at(0).asString() == "u8";
+			assert array.at(1).asInt32() == lengths[i];
+		}
+	}
+}
+
+test "anchorIdl describes all fixed integer and boolean instruction arrays" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "scalar_arrays",
+		address: "",
+		Bump: [NoArrayAccounts, ScalarArrayArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = parsed.value.instructions.at(0).args;
+		const names = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "bool"];
+		assert given.length() == 11;
+		for (let i = 0; i < names.length; i++) {
+			assert given.at(i + 1).type.array.at(0).asString() == names[i];
+			assert given.at(i + 1).type.array.at(1).asInt32() == 2;
+		}
 	}
 }
 
@@ -1504,16 +1969,20 @@ test "create without seeds records no signer, and an explicit type argument unde
 	assert second[1].data[8] == 9;
 }
 
-test "createProgramAccount signs the create, or the allocate and the assign of a prefunded account" {
-	signingRun(4, blank(keyOf(2)));
-	let calls = invocations();
-	assert calls.length == 1 && signerIs(calls[0], 0, vaultSigner());
-	signingRun(4, wallet(2, 1));
-	calls = invocations();
-	assert calls.length == 3;
-	assert calls[0].signers == 0 && calls[0].signerSeeds.length == 0;
-	assert calls[1].signers == 1 && signerIs(calls[1], 0, vaultSigner());
-	assert calls[2].signers == 1 && signerIs(calls[2], 0, vaultSigner());
+test "createProgramAccount forwards signer seeds in one CPI for blank and prefunded targets" {
+	for (const funded of [0, 1, 10000000]) {
+		const accounts = signingRun(4, wallet(2, funded as uint64));
+		const required: uint64 = 1002240;
+		const before = funded as uint64;
+		const expected = before < required ? required : before;
+		assert accounts[1].lamports == expected && accounts[1].owner.equals(keyOf(9));
+		assert accounts[0].lamports == 10000000 - (expected - before);
+		assert accounts[1].data.length == 16;
+		for (const byte of accounts[1].data) { assert byte == 0; }
+		const calls = invocations();
+		assert calls.length == 1 && signerIs(calls[0], 0, vaultSigner());
+		assert calls[0].data[0] == 13;
+	}
 }
 
 test "an instruction is invoked with one signer, with two, or with none" {
@@ -1621,25 +2090,32 @@ test "assign, transfer and allocate send the System program their accounts and d
 	assert sameBytes(sent.data, allocateBytes);
 }
 
-test "createProgramAccount creates a blank target in one call and tops up, allocates and assigns a funded one" {
+test "createProgramAccount emits a single exact prefund creation with target first and optional funding" {
 	assert recordedRun(4, blank(keyOf(2))) == 0;
 	let calls = invocations();
 	assert calls.length == 1;
-	const createHead: uint8[] = [0, 0, 0, 0, 0, 75, 15, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	const createHead: uint8[] = [13, 0, 0, 0, 0, 75, 15, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
 	assert sameBytes(calls[0].data, joined(createHead, owner9()));
+	assert calls[0].accounts[0].key.equals(keyOf(2)) && calls[0].accounts[0].signer;
+	assert calls[0].accounts[1].key.equals(keyOf(1)) && calls[0].accounts[1].signer;
 
 	assert recordedRun(4, wallet(2, 1)) == 0;
 	calls = invocations();
-	assert calls.length == 3;
-	const topUp: uint8[] = [2, 0, 0, 0, 255, 74, 15, 0, 0, 0, 0, 0];
-	assert sameBytes(calls[0].data, topUp);
-	assert calls[0].accounts.length == 2 && calls[0].accounts[0].key.equals(keyOf(1));
-	assert calls[0].accounts[1].key.equals(keyOf(2)) && calls[0].accounts[1].writable;
-	const allocateBytes: uint8[] = [8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
-	assert sameBytes(calls[1].data, allocateBytes) && calls[1].accounts.length == 1;
-	const assignHead: uint8[] = [1, 0, 0, 0];
-	assert sameBytes(calls[2].data, joined(assignHead, owner9())) && calls[2].accounts.length == 1;
-	assert calls[2].accounts[0].key.equals(keyOf(2)) && calls[2].accounts[0].signer;
+	assert calls.length == 1;
+	const fundedHead: uint8[] = [13, 0, 0, 0, 255, 74, 15, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, joined(fundedHead, owner9()));
+	assert calls[0].accounts.length == 2 && calls[0].accounts[0].key.equals(keyOf(2));
+	assert calls[0].accounts[1].key.equals(keyOf(1));
+
+	const richAccounts = [wallet(1, 10000000), wallet(2, 10000000)];
+	const richInput: uint8[] = [4];
+	assert run(programKey(), richAccounts, richInput, recordedEntry).result == 0;
+	const rich = richAccounts[1];
+	calls = invocations();
+	assert calls.length == 1 && calls[0].accounts.length == 1;
+	const richHead: uint8[] = [13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, joined(richHead, owner9()));
+	assert rich.lamports == 10000000 && rich.data.length == 16 && rich.owner.equals(keyOf(9));
 }
 
 function forwarded(first: Account, signers: Readonly<Span<SignerSeeds>> = []): Result<uint64, ProgramError> {
@@ -2140,4 +2616,461 @@ test "a seed names an instruction argument through the local that holds it where
 		assert run(programKey(), [ownerWallet(), safe], wrong, bySeedEntry).result ==
 			ProgramError.constraintSeeds().code;
 	}
+}
+
+export enum WireSpecies { Cat, Dog, Fox }
+export enum WireSparse { Zero = 0, Two = 2, Nine = 9 }
+export enum WireSigned { Minus = -7, Zero = 0, Plus = 70000 }
+export enum WireWide { Zero = 0, Large = 300 }
+export enum WireFour { Zero, One, Two, Three }
+export struct WireFlags { alive: boolean; kind: WireSpecies; }
+export struct WirePet { flags: WireFlags; kinds: WireSpecies[64]; }
+export struct WireSparseAccount { kind: WireSparse; }
+export struct WireSignedAccount { kind: WireSigned; }
+export struct WireWideAccount { kind: WireWide; }
+export struct WireMaskedAccount { alive: boolean; kind: WireFour; }
+export struct WireNumericGap { alive: boolean; ignored: uint8; kind: WireSpecies; }
+
+export function discriminator(this typeof WirePet): Discriminator {
+	return @comptime { return accountDiscriminator("WirePet"); };
+}
+export function discriminator(this typeof WireSparseAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireSparseAccount"); };
+}
+export function discriminator(this typeof WireSignedAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireSignedAccount"); };
+}
+export function discriminator(this typeof WireWideAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireWideAccount"); };
+}
+export function discriminator(this typeof WireMaskedAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireMaskedAccount"); };
+}
+export function discriminator(this typeof WireNumericGap): Discriminator {
+	return @comptime { return accountDiscriminator("WireNumericGap"); };
+}
+
+function wireBytes<T>(payload: uint8[]): uint8[] {
+	const bytes: uint8[] = [];
+	for (const b of T.discriminator().bytes) { bytes.push(b); }
+	for (const b of payload) { bytes.push(b); }
+	while (bytes.length < 8 + (sizeof(T) as int32)) { bytes.push(0); }
+	return bytes;
+}
+
+function wirePetBytes(): uint8[] {
+	const payload: uint8[] = [1, 2];
+	for (let i = 0; i < 64; i += 1) { payload.push((i % 3) as uint8); }
+	return wireBytes<WirePet>(payload);
+}
+
+function wireOwnedEntry(): void { codeOf(owned<WirePet>(0)); }
+function wireMutableEntry(): void { codeOf(mutable<WirePet>(0)); }
+function wireDelegatedEntry(): void { codeOf(delegated<WirePet>(0)); }
+function wireSparseEntry(): void { codeOf(owned<WireSparseAccount>(0)); }
+function wireSignedEntry(): void { codeOf(owned<WireSignedAccount>(0)); }
+function wireWideEntry(): void { codeOf(owned<WireWideAccount>(0)); }
+function wireMaskedEntry(): void { codeOf(owned<WireMaskedAccount>(0)); }
+function wireNumericGapEntry(): void { codeOf(owned<WireNumericGap>(0)); }
+
+export struct WireOwnedAccounts { pet: Owned<WirePet>; }
+function wireAccountsResult(): Result<WireOwnedAccounts, ProgramError> {
+	return accounts<WireOwnedAccounts>();
+}
+function wireAccountsEntry(): void { codeOf(wireAccountsResult()); }
+
+function wireProofResults(bytes: uint8[]): uint64[] {
+	return [
+		run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireOwnedEntry).result,
+		run(programKey(), [holder(1, programKey(), bytes, false, true)], [], wireMutableEntry).result,
+		run(programKey(), [holder(1, DELEGATION_PROGRAM_ID, bytes, false, false)], [], wireDelegatedEntry).result,
+		run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireAccountsEntry).result,
+	];
+}
+
+test "typed proof families validate raw nested booleans and fixed enum arrays" {
+	for (const code of wireProofResults(wirePetBytes())) { assert code == 0; }
+	for (const offset of [0, 1, 2, 65]) {
+		for (const invalid of [3, 128, 255]) {
+			const bytes = wirePetBytes();
+			bytes[8 + offset] = invalid as uint8;
+			for (const code of wireProofResults(bytes)) { assert code == ProgramError.accountDidNotDeserialize().code; }
+		}
+	}
+	const badBool = wirePetBytes();
+	badBool[8] = 2;
+	for (const code of wireProofResults(badBool)) { assert code == ProgramError.accountDidNotDeserialize().code; }
+	const zero = wireBytes<WirePet>([]);
+	for (const code of wireProofResults(zero)) { assert code == 0; }
+}
+
+test "raw enum validation checks exact sparse signed and wide membership" {
+	for (const value of [0, 2, 9]) {
+		const bytes = wireBytes<WireSparseAccount>([value as uint8]);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSparseEntry).result == 0;
+	}
+	for (const value of [1, 3, 8, 10, 255]) {
+		const bytes = wireBytes<WireSparseAccount>([value as uint8]);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSparseEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+	const minus = wireBytes<WireSignedAccount>([249, 255, 255, 255]);
+	const zero = wireBytes<WireSignedAccount>([0, 0, 0, 0]);
+	const plus = wireBytes<WireSignedAccount>([112, 17, 1, 0]);
+	for (const bytes of [minus, zero, plus]) {
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSignedEntry).result == 0;
+	}
+	for (const payload of [[250, 255, 255, 255] as uint8[], [111, 17, 1, 0] as uint8[], [1, 0, 0, 0] as uint8[]]) {
+		const bytes = wireBytes<WireSignedAccount>(payload);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSignedEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+	for (const payload of [[0, 0] as uint8[], [44, 1] as uint8[]]) {
+		const bytes = wireBytes<WireWideAccount>(payload);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireWideEntry).result == 0;
+	}
+	const wideHole = wireBytes<WireWideAccount>([43, 1]);
+	assert run(programKey(), [holder(1, programKey(), wideHole, false, false)], [], wireWideEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+}
+
+test "power-of-two byte masks validate every lane and ignore plain numeric fields" {
+	for (const flag of [0, 1]) {
+		for (const kind of [0, 1, 2, 3]) {
+			const bytes = wireBytes<WireMaskedAccount>([flag as uint8, kind as uint8]);
+			assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireMaskedEntry).result == 0;
+		}
+	}
+	for (const payload of [[2, 0] as uint8[], [0, 4] as uint8[], [128, 3] as uint8[], [1, 255] as uint8[]]) {
+		const bytes = wireBytes<WireMaskedAccount>(payload);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireMaskedEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+	const bytes = wireBytes<WireNumericGap>([1, 255, 2]);
+	assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireNumericGapEntry).result == 0;
+}
+
+function wireRetryEntry(): void {
+	const rejected = mutable<WirePet>(0);
+	if (rejected.ok) { failWith(ProgramError.custom(51)); return; }
+	if (rejected.error.code != ProgramError.accountDidNotDeserialize().code) { failWith(rejected.error); return; }
+	const raw = account(0);
+	if (!raw.ok) { failWith(raw.error); return; }
+	msSolStoreU8(raw.value.address + 96, 0);
+	codeOf(mutable<WirePet>(0));
+}
+
+function wireBorrowPrecedenceEntry(): void {
+	const first = mutable<WirePet>(0);
+	if (!first.ok) { failWith(first.error); return; }
+	const raw = first.value.asAccount();
+	msSolStoreU8(raw.address + 96, 2);
+	const second = mutable<WirePet>(0);
+	if (second.ok) { failWith(ProgramError.custom(52)); return; }
+	if (second.error.code != ProgramError.accountBorrowFailed().code) { failWith(second.error); }
+}
+
+test "invalid field rejection does not claim mutable ownership and preserves envelope precedence" {
+	const bytes = wirePetBytes();
+	bytes[8] = 2;
+	assert run(programKey(), [holder(1, programKey(), bytes, false, true)], [], wireRetryEntry).result == 0;
+	assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireMutableEntry).result ==
+		ProgramError.constraintMut().code;
+	assert run(programKey(), [holder(1, keyOf(9), bytes, false, true)], [], wireMutableEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const mismatch = wirePetBytes();
+	mismatch[0] ^= 1;
+	mismatch[8] = 2;
+	assert run(programKey(), [holder(1, programKey(), mismatch, false, true)], [], wireMutableEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	assert run(programKey(), [holder(1, programKey(), wirePetBytes(), false, true)], [], wireBorrowPrecedenceEntry).result == 0;
+}
+
+function wireCreateStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const made = try create<WirePet>(payer, target);
+	if (made.data().flags.alive || (made.data().flags.kind as uint8) != 0) {
+		return Result.err(ProgramError.custom(53));
+	}
+	return Result.ok(0);
+}
+function wireCreateEntry(): void { codeOf(wireCreateStep()); }
+
+test "creating zero-initialized boolean and zero-containing enum fields returns a valid proof" {
+	const accounts = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), accounts, [], wireCreateEntry).result == 0;
+	assert accounts[1].data.length == 8 + (sizeof(WirePet) as int32);
+}
+
+export struct WireFlagArray { items: WireFlags[3]; }
+type WireAmount = uint16 & { __brand: "WireAmount" };
+export struct WirePlainWrapped { bits: BitSet<WireFour>; amount: WireAmount; }
+
+export function discriminator(this typeof WireFlagArray): Discriminator {
+	return @comptime { return accountDiscriminator("WireFlagArray"); };
+}
+export function discriminator(this typeof WirePlainWrapped): Discriminator {
+	return @comptime { return accountDiscriminator("WirePlainWrapped"); };
+}
+function wireFlagArrayEntry(): void { codeOf(owned<WireFlagArray>(0)); }
+function wirePlainWrappedEntry(): void { codeOf(owned<WirePlainWrapped>(0)); }
+
+test "raw validation walks arrays of nested structs without loading beyond the payload" {
+	const good = wireBytes<WireFlagArray>([1, 2, 0, 1, 1, 0]);
+	assert run(programKey(), [holder(1, programKey(), good, false, false)], [], wireFlagArrayEntry).result == 0;
+	for (let i = 0; i < 6; i += 1) {
+		const bytes = wireBytes<WireFlagArray>([1, 2, 0, 1, 1, 0]);
+		bytes[8 + i] = 255;
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireFlagArrayEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+}
+
+test "bit masks and branded numeric fields remain safe unconstrained wire storage" {
+	const bytes = wireBytes<WirePlainWrapped>([255, 0, 52, 18]);
+	assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wirePlainWrappedEntry).result == 0;
+}
+
+export struct WireChainConstraints {
+	@constraint(false, counted(12)) first: Account;
+	pet: Mutable<WirePet>;
+}
+
+function wireChainConstraintsResult(): Result<WireChainConstraints, ProgramError> {
+	return accounts<WireChainConstraints>();
+}
+function wireChainConstraintsEntry(): void { codeOf(wireChainConstraintsResult()); }
+
+export struct WireChainSkip {
+	first: Signer;
+	pet: Mutable<WirePet>;
+}
+
+function wireChainSkipEntry(): void {
+	const rejected = accounts<WireChainSkip>();
+	if (rejected.ok) { failWith(ProgramError.custom(53)); return; }
+	if (rejected.error.code != ProgramError.accountNotSigner().code) { failWith(rejected.error); return; }
+	codeOf(mutable<WirePet>(1));
+}
+
+test "the account chain rejects raw fields before lazy constraints and skips later claims after failure" {
+	const first = holder(2, keyOf(9), [], false, false);
+	const bytes = wirePetBytes();
+	bytes[8] = 2;
+	builtErrors = 0;
+	assert run(programKey(), [first, holder(1, programKey(), bytes, false, true)], [], wireChainConstraintsEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+	assert builtErrors == 0;
+	assert run(programKey(), [first, holder(1, programKey(), wirePetBytes(), false, true)], [], wireChainConstraintsEntry).result ==
+		ProgramError.userError(12).code;
+	assert builtErrors == 1;
+	assert run(programKey(), [first, holder(1, programKey(), wirePetBytes(), false, true)], [], wireChainSkipEntry).result == 0;
+}
+
+function wireChainConditionalEntry(): void {
+	const skipped = false && accounts<WireOwnedAccounts>().ok;
+	if (skipped) { failWith(ProgramError.custom(54)); return; }
+	const selected = true ? accounts<WireOwnedAccounts>() : accounts<WireOwnedAccounts>();
+	codeOf(selected);
+}
+
+test "an undecorated account chain retains guarded expression use" {
+	assert run(programKey(), [holder(1, programKey(), wirePetBytes(), false, false)], [], wireChainConditionalEntry).result == 0;
+}
+
+export struct WireAliasedChain { owner: ChainAuth; }
+function wireAliasedChainEntry(): void {
+	codeOf(accounts<WireAliasedChain>());
+}
+test "account chains retain the written proof import alias" {
+	assert run(programKey(), [holder(1, keyOf(9), [], true, false)], [], wireAliasedChainEntry).result == 0;
+	assert run(programKey(), [holder(1, keyOf(9), [], false, false)], [], wireAliasedChainEntry).result ==
+		ProgramError.accountNotSigner().code;
+}
+
+function wireScopedChainEntry(): void {
+	codeOf(scopedChainResult());
+	codeOf(accounts<ScopedChainAccounts>());
+}
+test "account chains infer their error type and retain proof annotations across module scopes" {
+	assert run(programKey(), [holder(1, keyOf(9), [], true, false)], [], wireScopedChainEntry).result == 0;
+	assert run(programKey(), [holder(1, keyOf(9), [], false, false)], [], wireScopedChainEntry).result ==
+		ProgramError.accountNotSigner().code;
+}
+
+function wireModuleProgramResult(): Result<uint64, ProgramError> {
+	const local = try accounts<ScopedProgramAccounts>();
+	const imported = try scopedProgramResult();
+	const direct = try program<System>(1);
+	const remote = try scopedDirectProgram();
+	return Result.ok(local.owner.key().bytes[0] as uint64);
+}
+function wireModuleProgramEntry(): void { codeOf(wireModuleProgramResult()); }
+function wireModuleOwnedEntry(): void {
+	const local = owned<ScopedPet>(0);
+	const remote = scopedOwnedResult();
+	if (local.ok || remote.ok) { failWith(ProgramError.custom(56)); return; }
+	if (local.error.code != remote.error.code) { failWith(ProgramError.custom(57)); return; }
+	failWith(remote.error);
+}
+
+test "proof kernels and result wrappers retain checked types across module consumers" {
+	const owner = holder(1, keyOf(9), [], true, false);
+	assert run(programKey(), [owner, systemProgramAccount()], [], wireModuleProgramEntry).result == 0;
+	let refused = systemProgramAccount();
+	refused.executable = false;
+	assert run(programKey(), [owner, refused], [], wireModuleProgramEntry).result ==
+		ProgramError.invalidProgramExecutable().code;
+	assert run(programKey(), [], [], wireModuleOwnedEntry).result == ProgramError.accountNotEnoughKeys().code;
+}
+
+function wireThirdModuleEntry(): void {
+	const first = directOwned();
+	const second = directMutable();
+	const third = directDelegated();
+	const fourth = directExternal();
+	const fifth = directExternalMutable();
+	if (first.ok || second.ok || third.ok) { failWith(ProgramError.custom(58)); return; }
+	if (first.error.code != second.error.code || first.error.code != third.error.code) { failWith(ProgramError.custom(59)); return; }
+	if (fourth.ok || fifth.ok) { failWith(ProgramError.custom(60)); return; }
+	if (fourth.error.code != 77 || fifth.error.code != 77) { failWith(ProgramError.custom(61)); return; }
+	codeOf(directProgram());
+}
+
+test "repeated direct proof calls in a third consumer module keep their checked results" {
+	const owner = holder(1, keyOf(9), [], true, false);
+	assert run(programKey(), [owner, systemProgramAccount()], [], wireThirdModuleEntry).result == 0;
+	let refused = systemProgramAccount();
+	refused.executable = false;
+	assert run(programKey(), [owner, refused], [], wireThirdModuleEntry).result ==
+		ProgramError.invalidProgramExecutable().code;
+}
+
+export struct ZeroCodeVerifier { unused: uint8; }
+export function verify(this typeof ZeroCodeVerifier, index: int32): Result<Account, ProgramError> {
+	return Result.err({ code: 0 });
+}
+
+export struct ZeroCodeExternalChain {
+	@constraint(zeroCodePassed()) first: Account;
+	value: External<ZeroCodeVerifier>;
+	pet: Mutable<WirePet>;
+}
+
+export struct ZeroCodeConstraintChain {
+	@constraint(false, zeroCodeError()) first: Account;
+	@constraint(zeroCodePassed()) last: Account;
+}
+
+function zeroCodeError(): ProgramError { return { code: 0 }; }
+function zeroCodePassed(): boolean { builtErrors += 1; return true; }
+
+function zeroCodeExternalResult(): Result<ZeroCodeExternalChain, ProgramError> {
+	return accounts<ZeroCodeExternalChain>();
+}
+function zeroCodeConstraintResult(): Result<ZeroCodeConstraintChain, ProgramError> {
+	return accounts<ZeroCodeConstraintChain>();
+}
+
+function zeroCodeVerifierEntry(): void {
+	const single = external<ZeroCodeVerifier>(0);
+	if (single.ok) { failWith(ProgramError.custom(55)); return; }
+	if (single.error.code != 0) { failWith(ProgramError.custom(56)); return; }
+	const mutableSingle = externalMutable<ZeroCodeVerifier>(0);
+	if (mutableSingle.ok) { failWith(ProgramError.custom(57)); return; }
+	if (mutableSingle.error.code != 0) { failWith(ProgramError.custom(58)); return; }
+	const chain = zeroCodeExternalResult();
+	if (chain.ok) { failWith(ProgramError.custom(59)); return; }
+	if (chain.error.code != 0) { failWith(ProgramError.custom(60)); return; }
+	codeOf(mutable<WirePet>(2));
+}
+
+function zeroCodeConstraintEntry(): void {
+	const chain = zeroCodeConstraintResult();
+	if (chain.ok) { failWith(ProgramError.custom(61)); return; }
+	if (chain.error.code != 0) { failWith(ProgramError.custom(62)); }
+}
+
+test "a zero-valued arbitrary verifier or custom constraint error stays a failed Result without exposing proofs" {
+	const found = [
+		holder(1, keyOf(9), [], false, true),
+		holder(2, keyOf(9), [], false, true),
+		holder(3, programKey(), wirePetBytes(), false, true),
+	];
+	builtErrors = 0;
+	assert run(programKey(), found, [], zeroCodeVerifierEntry).result == 0;
+	assert builtErrors == 0;
+	assert run(programKey(), found, [], zeroCodeConstraintEntry).result == 0;
+	assert builtErrors == 0;
+}
+
+function ownerFirstEntry(): void {
+	const found = safeAddress(keyOf(2));
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const code = seedsGivenOwnedFailure(slot.value, seedTable(["safe", keyOf(2)]), found.bump);
+	if (code != 0) { failWith({ code: code }); }
+}
+
+test "the hash-only given-bump check refuses the owner before it looks at the seeds" {
+	const found = safeAddress(keyOf(2));
+	const owned = atKey(holder(1, programKey(), [], false, false), found.key);
+	assert run(programKey(), [owned], [], ownerFirstEntry).result == 0;
+	const system = atKey(holder(1, Pubkey.zero(), [], false, false), found.key);
+	assert run(programKey(), [system], [], ownerFirstEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const foreign = atKey(holder(1, keyOf(77), [], false, false), found.key);
+	assert run(programKey(), [foreign], [], ownerFirstEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+}
+
+function ownedWrongBumpEntry(): void {
+	const found = safeAddress(keyOf(2));
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const code = seedsGivenOwnedFailure(slot.value, seedTable(["safe", keyOf(2)]), found.bump - 1);
+	if (code != 0) { failWith({ code: code }); }
+}
+
+test "the hash-only given-bump check answers ConstraintSeeds for another bump or another address" {
+	const found = safeAddress(keyOf(2));
+	const owned = atKey(holder(1, programKey(), [], false, false), found.key);
+	assert run(programKey(), [owned], [], ownedWrongBumpEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const elsewhere = atKey(holder(1, programKey(), [], false, false), keyOf(77));
+	assert run(programKey(), [elsewhere], [], ownerFirstEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+function onCurveEntry(): void {
+	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	const slot = unchecked(0);
+	const hashed = hashAddressWithBump(seeds, 255, msSolProgramId());
+	if (!slot.ok || !hashed.ok) { failWith(ProgramError.invalidSeeds()); return; }
+	msSolCopy(slot.value.address + 8, msSolSpanAddress(hashed.value.bytes), 32);
+	if (seedsGivenOwnedFailure(slot.value, seeds, 255) != 0) { failWith(ProgramError.userError(1)); return; }
+	if (seedsGivenFailure(slot.value.keyAddress(), seeds, 255) != ProgramError.constraintSeeds().code) {
+		failWith(ProgramError.userError(2));
+	}
+}
+
+test "an account not proven owned keeps the curve check, an owned one does not need it" {
+	const onCurve = holder(1, hostProgram(), [], false, false);
+	assert run(hostProgram(), [onCurve], [], onCurveEntry).result == 0;
+}
+
+function mutableBumpEntry(): void {
+	const found = safeAddress(keyOf(2));
+	const safe = mutable<Safe>(0);
+	if (!safe.ok) { failWith(safe.error); return; }
+	const checked = safe.value.verifiedPdaWithBump(seedTable(["safe", keyOf(2)]), found.bump);
+	if (!checked.ok) { failWith(checked.error); return; }
+	const wrong = safe.value.verifiedPdaWithBump(seedTable(["safe", keyOf(2)]), found.bump - 1);
+	if (wrong.ok) { failWith(ProgramError.userError(1)); return; }
+	if (wrong.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); }
+}
+
+test "verifiedPdaWithBump on a Mutable accepts the stored bump and refuses another with ConstraintSeeds" {
+	assert run(programKey(), [pinnedSafe(9)], [], mutableBumpEntry).result == 0;
 }
