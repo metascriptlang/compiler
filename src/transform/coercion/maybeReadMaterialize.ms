@@ -23,6 +23,7 @@ import { projectTagUnionMember, narrowMaybePayload, checkedProjection, storesUni
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember } from "../util";
+import { unwrapRefusesNull } from "../native/nullableLower";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
 	const project = !ctx.jsBackend && !ctx.raiserBackend;
@@ -160,7 +161,7 @@ function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	const val = makeMember(node, "value", node.location);
 	const payload = unwrapMaybeType(carrier);
 	val.nodeType = payload;
-	val.flags = val.flags.incl(NodeFlag.ConvCheck);
+	if (unwrapRefusesNull(nt)) val.flags = val.flags.incl(NodeFlag.ConvCheck);
 	if (project && nt != payload && isTagCarriedUnion(payload)) {
 		const projected = projectTagUnionMember(val, payload, nt);
 		if (projected != null as unknown as Node) return projected;
