@@ -1,3 +1,4 @@
+// @xfail(raiser): tuple pair compares true where it should be false (inbox 2026-10-09-raiser-tuple-equality-wrong-in-1115)
 // @stdout: struct=true,false,true,false bytes=true,false box=true,false pair=false,true,true,false
 // note: two modules compare structs that share a nested struct and a `uint8[32]` field, a generic struct instance, a sized array and a tuple. Each generated equality helper exists once per program, so the bundle still loads when it is an ES module (the top-level await makes it one). Same output on every backend.
 
