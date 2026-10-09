@@ -57,3 +57,30 @@ test "a type reached through a namespace import is a type, not a value" {
 	const member = namespaceErrors("const r = L.Color.Red;");
 	assert member.length == 0, member.join(" | ");
 }
+
+const unions = "struct Holder { v: int64 | uint64; }\nconst u: int64 | uint64 = 3 as uint64;\nconst w: int32 | uint32 = 7 as uint32;\nconst f: int32 | float64 = 2.5;\nconst h: Holder = { v: 3 as uint64 };\n";
+
+test "a type name as a match arm is refused instead of binding every value" {
+	const refused = [
+		"const s = match (u) { int64 => \"int64\", uint64 => \"uint64\" };",
+		"const s = match (u) { uint64 => \"uint64\", int64 => \"int64\" };",
+		"const s = match (w) { int32 => \"int32\", uint32 => \"uint32\" };",
+		"const s = match (f) { int32 => \"int32\", float64 => \"float64\" };",
+		"const s = match (h.v) { int64 => \"int64\", _ => \"other\" };",
+		"match (u) { uint64 => { take(1); }, _ => {} }",
+		"const s = match (u) { Pet => 1, _ => 2 };",
+		"const s = match (u) { Kind => 1, _ => 2 };",
+		"const s = match (u) { Alias => 1, _ => 2 };",
+	];
+	for (const line of refused) {
+		assert hasError(decls + unions + line, "a match arm compares values"), line;
+	}
+}
+
+test "value arms beside the type-arm refusal keep compiling on C and JS" {
+	const src = decls + unions + "const lim = 3 as int64;\nconst t = 3 as int64;\nconst a = match (t) { lim => 1, other => 2 };\nconst k: Kind = Kind.B;\nconst b = match (k) { Kind.A => 1, Kind.B => 2 };\nmatch (t) { 3 => { take(1); }, _ => {} }\n";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+	const js = compileToJS(src);
+	assert js.ok, js.error;
+}
