@@ -69,3 +69,7 @@ import "./enumNames";
 import "./sizedArrayConstDimension";
 import "./sizedArrayLiteralCarriesSize";
 import "./sizedArrayDimensionExpression";
+import "./genericArgumentAliasRelation";
+import "./aliasStaticReceiver";
+import "./metaTransparentAliasEquality";
+import "./macroTypeArgumentReplacement";

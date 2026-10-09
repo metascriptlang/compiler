@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
 import { adoptLiteralArms, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
@@ -21,7 +21,7 @@ import { bindFromExplicitTypeArgs, builtinTypeNamed, checkExplicitTypeArgArity, 
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
+import { SymbolFlag, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
@@ -475,6 +475,31 @@ function genericArgOrder(ctx: CheckerContext, args: Node[], isGeneric: boolean):
 		if (isShapedByContext(ctx, args[ai])) order.push(ai as int32);
 	}
 	return order;
+}
+
+// A static extension names its receiver by text, and an alias of a struct or enum is a
+// transparent wrapper, as in the reference's type identity, so the receiver written at the
+// call and the receiver an extension declares match when both reach the same canonical type.
+function canonicalReceiverName(ctx: CheckerContext, ownerModule: string, name: string): string {
+	const sym = lookupSymbol(pickBodyCtx(ownerModule, ctx).table, name);
+	let t = sym != null ? sym.symbolType : null;
+	if (t == null) return name;
+	while (t.kind == TypeKind.Alias || t.kind == TypeKind.Ref) {
+		if (t.typeReturn == null) throw new Error("internal: '" + t.typeName + "' has no target for static extension receiver '" + name + "'");
+		t = t.typeReturn;
+	}
+	return (t.kind == TypeKind.Struct || t.kind == TypeKind.Enum) && t.typeName != "" ? t.typeName : name;
+}
+
+function staticExtsOfReceiver(ctx: CheckerContext, exts: ExtensionMethod[], receiverName: string): ExtensionMethod[] {
+	const want = canonicalReceiverName(ctx, ctx.modulePath, receiverName);
+	const results: ExtensionMethod[] = [];
+	for (const e of exts) {
+		if (!e.isStatic) continue;
+		const owner = e.sym != null ? e.sym.modulePath : "";
+		if (canonicalReceiverName(ctx, owner, e.receiverTypeName) == want) results.push(e);
+	}
+	return results;
 }
 
 function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
@@ -1176,8 +1201,47 @@ export function keepFoldedType(node: Node, expanded: Node): void {
 	node.flags = node.flags.incl(NodeFlag.Folded);
 	node.nodeType = expanded.nodeType;
 }
+function isBareName(text: string): boolean {
+	return text != "" && text.indexOf("<", 0) < 0 && text.indexOf("[", 0) < 0 && text.indexOf(" ", 0) < 0 && text.indexOf(".", 0) < 0;
+}
+
+// The name a module-scope type symbol gives `bound` (a private type reached through an exported alias).
+function visibleNameOf(ctx: CheckerContext, bound: Type): string {
+	for (const entry of moduleScopeNamed(ctx.table)) {
+		if (!isTypeSymbol(entry.sym)) continue;
+		ensureShaped(entry.sym, ctx);
+		if (entry.sym.symbolType != null && sameType(entry.sym.symbolType, bound)) return entry.name;
+	}
+	return "";
+}
+
+// A macro replacement owns its type arguments as bound typed operands: the callee
+// `base<operands>` is lowered here to the ordinary explicit generic call `base<T>(...)`.
+function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boolean {
+	const callee = d.callee;
+	if (callee.kind != NodeKind.TypeGeneric) return true;
+	const g = callee.data as TypeGenericData;
+	const spelled: string[] = [];
+	for (const operand of g.typExprArgs) {
+		const bound = operand.nodeType;
+		if (bound == null) {
+			addError(ctx, "a generic callee's type operand carries no bound type (a macro must pass getTypeArg())", operand.location.line, operand.location.column);
+			return false;
+		}
+		const written = monoConcreteTypeName(bound);
+		const seen = isBareName(written) && lookupSymbol(ctx.table, written) == null ? visibleNameOf(ctx, bound) : "";
+		const name = seen != "" ? seen : written;
+		spelled.push(name);
+	}
+	d.callee = g.typExprBase;
+	d.callee.location = callee.location;
+	node.typeArg = spelled.join(", ");
+	return true;
+}
+
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
+	if (!lowerTypedCallee(ctx, node, d)) return errorType();
 	if (d.callee == null) {
 		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
 		return errorType();
@@ -1321,7 +1385,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			node.kind = expandedValue.kind;
 			node.data = expandedValue.data;
-			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+			node.typeArg = expandedValue.typeArg;
 			if (expandedValue.location != null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;
@@ -1378,8 +1442,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object);
 				let filtered = filterExtsByReceiverType(allByName, objType);
-				if (filtered.length == 0 && isStaticAccess && me.object.resolvedSym != null) {
-					filtered = filterStaticExtsByReceiverName(allByName, me.object.resolvedSym.name);
+				if (isStaticAccess && me.object.resolvedSym != null) {
+					for (const ext of staticExtsOfReceiver(ctx, allByName, me.object.resolvedSym.name)) {
+						if (filtered.indexOf(ext) < 0) filtered.push(ext);
+					}
 				}
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
@@ -4502,9 +4568,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// where Buffer is `type Buffer = string` — objType resolves to string, but
 		// the extension is registered as `this typeof Buffer`).
 		if (ext == null && isStaticClassAccess && d.object.resolvedSym != null) {
-			const symName = d.object.resolvedSym.name;
-			const aliasType = createTypeRef(symName);
-			ext = findFirstMatchingExt(allByName, aliasType);
+			const sameReceiver = staticExtsOfReceiver(ctx, allByName, d.object.resolvedSym.name);
+			if (sameReceiver.length > 0) ext = sameReceiver[0];
 		}
 		if (ext != null) {
 			// Direct sym link — no name-based lookup needed

@@ -706,7 +706,7 @@ function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	node.kind = expandedValue.kind;
 	node.data = expandedValue.data;
-	if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+	node.typeArg = expandedValue.typeArg;
 	if (expandedValue.location != null) node.location = expandedValue.location;
 	node.nodeType = null as unknown as Type;
 	node.resolvedSym = null;
@@ -2626,7 +2626,7 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 		}
 		node.kind = expandedValue.kind;
 		node.data = expandedValue.data;
-		if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+		node.typeArg = expandedValue.typeArg;
 		if (expandedValue.location != null) node.location = expandedValue.location;
 		node.nodeType = null as unknown as Type;
 		node.resolvedSym = null;
