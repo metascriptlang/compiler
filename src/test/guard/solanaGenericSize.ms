@@ -1,8 +1,11 @@
 // A generic std/solana function costs one thin wrapper per account type, not one body: the checks
 // live in shared cores that take the type's constants (discriminator word, size), and the wrapper
-// only passes them and keeps the typed result. This builds a program that instantiates every
-// generic for nine account types and reads each copy's size from the `.debug` copy's symbol table.
-// The probe builds with --lto=off: the default LTO link inlines the wrappers and leaves no copies.
+// only passes them and keeps the typed result. The proof kernels and wrappers marked @inline
+// (owned, delegated, external, externalMutable, readArgs) are copied into each caller as
+// `static inline`, so no out-of-line copy of them may remain. This builds a program that
+// instantiates every generic for nine account types and reads each copy's size from the `.debug`
+// copy's symbol table. The probe builds with --lto=off: the default LTO link inlines the
+// wrappers and leaves no copies.
 //
 // WHY A SUBPROCESS: the observable is the size of linked functions, which only the SBF toolchain
 // produces. The compiler under test is $MSC, else `./msc`; the symbols are read with the
@@ -10,8 +13,13 @@
 // runner reports as unscored.
 //
 // RED MEANS: a wrapper grew past its bound (a check moved back into the generic body, or the body
-// of a shared core was inlined into the wrappers), a family lost its copies, the input parser is
-// inlined into more than one function, or dispatch pulled in a signed division.
+// of a shared core was inlined into the wrappers), a family lost its copies, an @inline family
+// left an out-of-line copy (its @inline was dropped, or the caller no longer sees the placed body),
+// the input parser is inlined into more than one function, or dispatch pulled in a signed division.
+// `mutable` is @inline too, but its probe call is the one direct use of a body that holds the
+// envelope check, the field check and the exclusive claim, and LLVM may keep it out of line: up to
+// nine copies of at most 320 bytes (296 measured, calls into shared cores), zero when inlined.
+// `selectInstruction` is not @inline and has one caller: zero or one copy.
 // RED PRE-FIX: createPdaOf 920 bytes a copy, realloc 824, close 752, verifiedPda 512 and 520,
 // selectInstruction 688, ownProgram 600, __divdi3 linked; a pass-through wrapper (close, realloc,
 // verifiedPda of a Delegated) that takes its result through a temporary measured 112 bytes, 16
@@ -194,34 +202,35 @@ entry();
 
 struct Bound {
 	family: string;
+	least: int32;
 	copies: int32;
 	most: int32;
 }
 
 const BOUNDS: Bound[] = [
-	{ family: "close", copies: TYPES, most: 16 },
-	{ family: "realloc", copies: TYPES, most: 16 },
-	{ family: "Delegated_verifiedPda", copies: TYPES, most: 16 },
-	{ family: "Delegated_verifiedPdaWithBump", copies: TYPES, most: 16 },
-	{ family: "owned", copies: TYPES, most: 224 },
-	{ family: "mutable", copies: TYPES, most: 224 },
-	{ family: "delegated", copies: TYPES, most: 224 },
-	{ family: "create", copies: TYPES, most: 256 },
-	{ family: "Mutable_verifiedPda", copies: TYPES, most: 256 },
-	{ family: "Mutable_verifiedPdaWithBump", copies: TYPES, most: 256 },
-	{ family: "createPdaOf", copies: TYPES, most: 352 },
-	{ family: "readArgs", copies: TYPES * 2, most: 288 },
-	{ family: "selectInstruction", copies: 1, most: 224 },
-	{ family: "External_read", copies: 2, most: 192 },
-	{ family: "ExternalMutable_read", copies: 2, most: 192 },
-	{ family: "external", copies: 2, most: 176 },
-	{ family: "externalMutable", copies: 2, most: 248 },
+	{ family: "close", least: TYPES, copies: TYPES, most: 16 },
+	{ family: "realloc", least: TYPES, copies: TYPES, most: 16 },
+	{ family: "Delegated_verifiedPda", least: TYPES, copies: TYPES, most: 16 },
+	{ family: "Delegated_verifiedPdaWithBump", least: TYPES, copies: TYPES, most: 16 },
+	{ family: "owned", least: 0, copies: 0, most: 0 },
+	{ family: "mutable", least: 0, copies: TYPES, most: 320 },
+	{ family: "delegated", least: 0, copies: 0, most: 0 },
+	{ family: "create", least: TYPES, copies: TYPES, most: 256 },
+	{ family: "Mutable_verifiedPda", least: TYPES, copies: TYPES, most: 256 },
+	{ family: "Mutable_verifiedPdaWithBump", least: TYPES, copies: TYPES, most: 256 },
+	{ family: "createPdaOf", least: TYPES, copies: TYPES, most: 352 },
+	{ family: "readArgs", least: 0, copies: 0, most: 0 },
+	{ family: "selectInstruction", least: 0, copies: 1, most: 224 },
+	{ family: "External_read", least: 2, copies: 2, most: 192 },
+	{ family: "ExternalMutable_read", least: 2, copies: 2, most: 192 },
+	{ family: "external", least: 0, copies: 0, most: 0 },
+	{ family: "externalMutable", least: 0, copies: 0, most: 0 },
 ];
 
 const ONE_COPY: Bound[] = [
-	{ family: "ownProgram", copies: 1, most: 160 },
-	{ family: "instructionData", copies: 0, most: 160 },
-	{ family: "account", copies: 0, most: 256 },
+	{ family: "ownProgram", least: 0, copies: 1, most: 160 },
+	{ family: "instructionData", least: 0, copies: 0, most: 160 },
+	{ family: "account", least: 0, copies: 0, most: 256 },
 ];
 
 const TEXT_MOST = 90000;
@@ -293,7 +302,7 @@ function largest(list: int32[]): int32 {
 for (const bound of BOUNDS) {
 	const list = sizes.get(`generic ${bound.family}`) ?? [];
 	console.log(`GUARD-INFO ${bound.family}: ${list.length} copies, largest ${largest(list)} bytes (bound ${bound.most})`);
-	if (list.length != bound.copies) report(`${bound.family}: ${list.length} copies, want ${bound.copies}`);
+	if (list.length < bound.least || list.length > bound.copies) report(`${bound.family}: ${list.length} copies, want ${bound.least} to ${bound.copies}`);
 	if (largest(list) > bound.most) report(`${bound.family}: a copy is ${largest(list)} bytes, bound ${bound.most}`);
 }
 

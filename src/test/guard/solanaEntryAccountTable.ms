@@ -52,14 +52,14 @@ if (emitted.exitCode != 0) {
 }
 
 const text = dispatcher();
-const entry = text.indexOf("uint64_t entrypoint(const uint8_t* input) {");
+const entry = text.indexOf("uint64_t entrypoint(const uint8_t* input, const uint8_t* instructionData) {");
 if (entry < 0) {
 	report("the emitted dispatcher has no entrypoint");
 	exit(1);
 }
 const body = text.slice(entry, text.length);
 const declared = body.indexOf("uint64_t accounts[MS_SOL_MAX_ACCOUNTS];");
-const parsed = body.indexOf("msSolParse(accounts);");
+const parsed = body.indexOf("msSolStart(accounts, instructionData);");
 const started = body.indexOf("MsMain();");
 if (declared < 0) report("the entry does not declare the account table in its frame");
 if (parsed < 0) report("the entry does not parse the input into the table");

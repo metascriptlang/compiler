@@ -1,8 +1,9 @@
 // `@seeds` of literal seeds with a bare `@bump` checks one address folded at compile time
 // against the declared program id, as Anchor v2 folds `seeds = [b"…"], bump` (lang-v2 derive
 // parse.rs `emit_seeds_check`, pda.rs `precompute_pda`): the deployed program derives nothing.
-// A stored bump (`@bump(account.field)`) and a build without a programId keep the run-time
-// derivation, as Anchor's `bump = expr` and an undiscoverable `declare_id!` do.
+// A build without a programId keeps the run-time derivation, as an undiscoverable `declare_id!`
+// does; a stored bump (`@bump(account.field)`) on a `Mutable` hashes only, because the owner check
+// has already proved the address off the curve.
 //
 // WHY A SUBPROCESS: the observable is which syscalls the linked SBF program calls, which no
 // unit test reaches. A static syscall is `call imm` with src 0 and imm = murmur3 of its name:
@@ -54,7 +55,7 @@ function calls(path: string, instruction: Readonly<Span<uint8>>): boolean {
 	return false;
 }
 
-function program(label: string, source: string, defines: string[], derives: boolean): void {
+function program(label: string, source: string, defines: string[], wantSha: boolean, wantCurve: boolean): void {
 	const output = `${dir}/${label}.so`;
 	const args: string[] = ["build"];
 	for (const d of defines) args.push(d);
@@ -69,8 +70,7 @@ function program(label: string, source: string, defines: string[], derives: bool
 	}
 	const sha = calls(output, SHA256);
 	const curve = calls(output, CURVE);
-	if (derives && (!sha || !curve)) report(`${label}: expected the run-time derivation, sol_sha256 ${sha}, sol_curve_validate_point ${curve}`);
-	if (!derives && (sha || curve)) report(`${label}: expected a folded address, but calls sol_sha256 ${sha}, sol_curve_validate_point ${curve}`);
+	if (sha != wantSha || curve != wantCurve) report(`${label}: expected sol_sha256 ${wantSha} and sol_curve_validate_point ${wantCurve}, got ${sha} and ${curve}`);
 }
 
 removeAll(dir);
@@ -83,9 +83,9 @@ if (!text.ok) {
 const stored = `${dir}/storedBump.ms`;
 writeFile(stored, text.value.replace("@seeds(\"counter\", [7, 9]) @bump counter", "@seeds(\"counter\", [7, 9]) @bump(counter.bump) counter"));
 
-program("folded", fixture, [declared], false);
-program("undeclared", fixture, [], true);
-program("storedBump", stored, [declared], true);
+program("folded", fixture, [declared], false, false);
+program("undeclared", fixture, [], true, true);
+program("storedBump", stored, [declared], true, false);
 
 const tested = run(["test", declared, fixture]);
 if (tested.exitCode != 0) report(`host tests of the folded seeds failed: ${tested.output}${tested.errorOutput}`);
