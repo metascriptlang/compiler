@@ -14,7 +14,31 @@ export function Number(v: float64): float64 {
 	return v;
 }
 
+export function Number(v: int8): float64 {
+	return v as float64;
+}
+
+export function Number(v: int16): float64 {
+	return v as float64;
+}
+
+export function Number(v: int32): float64 {
+	return v as float64;
+}
+
 export function Number(v: int64): float64 {
+	return v as float64;
+}
+
+export function Number(v: uint8): float64 {
+	return v as float64;
+}
+
+export function Number(v: uint16): float64 {
+	return v as float64;
+}
+
+export function Number(v: uint32): float64 {
 	return v as float64;
 }
 
