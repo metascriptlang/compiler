@@ -14,13 +14,13 @@ export function projectNarrowedUnions(program: Node, ctx: TransformContext): Nod
 
 function projectNode(node: Node): Node {
 	if (node == null) return node;
-	if (node.kind == NodeKind.Identifier) return projectIdentifier(node);
+	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.MemberExpr) return projectNarrowedRead(node);
 	if (node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) return unnestProjection(node);
 	if (node.kind == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "instanceof") return lowerUnionInstanceof(node);
 	return node;
 }
 
-function projectIdentifier(node: Node): Node {
+function projectNarrowedRead(node: Node): Node {
 	if (node.nodeType == null || node.nodeType.kind == TypeKind.Union) return node;
 	const projected = narrowUnionToVariant(node, node.nodeType);
 	if (projected != null as unknown as Node) return projected;
@@ -137,7 +137,7 @@ function guardVariantReads(node: Node, ctx: TransformContext, jsBackend: boolean
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
-		if (jsBackend && md.object.kind == NodeKind.Identifier) md.object = projectIdentifier(md.object);
+		if (jsBackend && md.object.kind == NodeKind.Identifier) md.object = projectNarrowedRead(md.object);
 		guardProjection(md.object, md.property, ctx, jsBackend, false);
 	}
 	if (!jsBackend) guardProjection(node, "", ctx, jsBackend, node.flags.has(NodeFlag.ConvCheck));
