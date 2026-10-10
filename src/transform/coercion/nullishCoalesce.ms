@@ -84,7 +84,7 @@ function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext)
 	let checked = left;
 	if (ctx.jsBackend) {
 		checked = asUnknown(left, loc);
-	} else if (left.nodeType != null && isStringLike(left.nodeType)) {
+	} else if (!ctx.raiserBackend && left.nodeType != null && isStringLike(left.nodeType)) {
 		checked = makeMember(left, "p", loc);
 		checked.nodeType = createPtr(voidType());
 	}
