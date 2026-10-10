@@ -2573,7 +2573,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		const hasGuard = cd.caseGuard != null;
 		for (const p of cd.casePatterns) {
 			if (p.kind == NodeKind.Identifier) {
-				if (refusesTypeArm(ctx, p)) continue;
+				if (refusesTypeArm(ctx, p, d.matchStmtDisc)) continue;
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {

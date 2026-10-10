@@ -24,7 +24,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
+import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
@@ -4935,7 +4935,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 						continue;
 					}
 				}
-				if (refusesTypeArm(ctx, p)) continue;
+				if (refusesTypeArm(ctx, p, d.matchDisc)) continue;
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
@@ -5143,13 +5143,25 @@ export function estimateExprEndCol(node: Node): int32 {
 	};
 }
 
-export function refusesTypeArm(ctx: CheckerContext, p: Node): boolean {
+export function refusesTypeArm(ctx: CheckerContext, p: Node, disc: Node): boolean {
 	const name = (p.data as IdentifierData).name;
 	const sym = lookupSymbol(ctx.table, name);
 	if (sym == null ? builtinTypeNamed(ctx, name) == null : !isTypeSymbol(sym)) return false;
-	addError(ctx, `'${name}' only refers to a type, but is being used as a value here: a match arm compares values, so it cannot test which type a value holds`, p.location.line, p.location.column);
+	const kindTest = sym == null && (isPrimitiveKindName(name) || isTypeofTag(name))
+		? `; test the kind with typeof ${referenceText(disc)} === "${name}"` : "";
+	addError(ctx, `'${name}' only refers to a type, but is being used as a value here: a match arm compares values, so it cannot test which type a value holds${kindTest}`, p.location.line, p.location.column);
 	p.nodeType = errorType();
 	return true;
+}
+
+function referenceText(n: Node): string {
+	if (n.kind == NodeKind.Identifier) return (n.data as IdentifierData).name;
+	if (n.kind == NodeKind.MemberExpr) {
+		const md = n.data as MemberExprData;
+		const head = referenceText(md.object);
+		return head == "x" ? "x" : head + "." + md.property;
+	}
+	return "x";
 }
 
 // Detect duplicate unguarded match patterns (reference parity: checkForOverlap).
