@@ -824,6 +824,29 @@ function genericOps(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function genericIdentity(): void {
+	const tag = "hcrGenericIdentity";
+	const dir = freshDir(`${TMP}/genericIdentity`);
+	for (const f of readDir(`${FIXTURES}/genericIdentity`)) copy(`${FIXTURES}/genericIdentity/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("IDENT ")) seen.push(line);
+	}
+	const want = [
+		"IDENT 2 3 4x t v1 given 7 peek 1.5",
+		"IDENT 2 3 4x t v1 given 7 peek 1.5",
+		"IDENT 2 3 4x t v2 given 7 peek 1.5",
+		"IDENT 2 3 4x t v3 given 7 peek 1.5",
+		"IDENT layout restart required: the layout of type 'Box' in module 'box' changed",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a generic class instance must keep one TypeInfo across images and reloads, and a layout edit must still require a restart");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function exitDestroy(): void {
 	const tag = "hcrExitDestroy";
 	const dir = freshDir(`${TMP}/exitDestroy`);
@@ -1337,6 +1360,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCrossImageNew", run: crossImageNew },
 	{ name: "hcrGenericCtor", run: genericCtor },
 	{ name: "hcrGenericOps", run: genericOps },
+	{ name: "hcrGenericIdentity", run: genericIdentity },
 	{ name: "hcrExitDestroy", run: exitDestroy },
 	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
