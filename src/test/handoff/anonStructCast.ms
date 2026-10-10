@@ -24,7 +24,7 @@ test "a value union reached through unknown is refused" {
 
 // ===== null as unknown as T (general unwrap covers null collapse) =====
 
-test "null as unknown as struct compiles to zero-init" {
+test "null as unknown as an interface compiles without a void* cast" {
 	const src = "interface Point { x: number; y: number; }\nfunction makeNull(): Point {\n\treturn null as unknown as Point;\n}";
 	const result = compileToC(src);
 	assert result.ok;
@@ -39,6 +39,73 @@ test "null cast to a value type that holds no null is refused" {
 		const result = compileToC("const a = " + cast + ";\nconsole.log(a);");
 		assert !result.ok;
 		assert result.error.contains("holds no null");
+	}
+}
+
+test "null through unknown is refused where the slot is not a pointer and open where it is" {
+	const prelude = "struct Pt { x: int32; }\nclass K { v: int32 = 1; }\n";
+	const refused = ["Pt", "int32[4]", "Span<int32>", "string", "int32"];
+	for (const t of refused) {
+		const result = compileToC(prelude + "const a = null as unknown as " + t + ";\nconsole.log(a);");
+		assert !result.ok;
+		assert result.error.contains("holds no null");
+	}
+	const open = ["K", "string[]", "(() => void)"];
+	for (const t of open) {
+		const result = compileToC(prelude + "const a = null as unknown as " + t + ";\nconsole.log(a == null);");
+		assert result.ok;
+	}
+}
+
+test "a direct null cast is refused for every type that holds no null" {
+	const prelude = "struct Pt { x: int32; }\nclass K { v: int32 = 1; }\n";
+	const targets = ["Pt", "K", "string[]", "int32[4]", "Span<int32>", "string", "(() => void)"];
+	for (const t of targets) {
+		for (const literal of ["null", "undefined"]) {
+			const result = compileToC(prelude + "const a = " + literal + " as " + t + ";\nconsole.log(a);");
+			assert !result.ok;
+			assert result.error.contains("holds no null");
+		}
+	}
+}
+
+test "null into a type that holds no null is refused at every entry" {
+	const prelude = "struct Pt { x: int32; }\nclass K { v: int32 = 1; }\n";
+	const entries = [
+		"const v: T = null;",
+		"const v: T = undefined;",
+		"function g(v: T): void { let w = v; w = null; }",
+		"function g(): T { return null; }",
+		"function h(v: T): void {}\nh(null);",
+		"class Holder { f: T = null; }",
+		"const e: T[] = [null];",
+		"const o: { f: T } = { f: null };",
+	];
+	const types = ["Pt", "number[]", "string[]", "int32[4]", "Span<int32>", "K"];
+	for (const t of types) {
+		for (const entry of entries) {
+			const borrowOnly = t == "Span<int32>" && (entry.contains("return") || entry.contains("class Holder"));
+			if (borrowOnly) continue;
+			const result = compileToC(prelude + entry.replaceAll("T", t));
+			assert !result.ok;
+			assert result.error.contains("not assignable") || result.error.contains("mismatch");
+		}
+	}
+}
+
+test "the ways to hold null still compile" {
+	const sources = [
+		"struct Pt { x: int32; }\nconst x: Pt | null = null;\nconsole.log(x == null);",
+		"const y: string[] | null = null;\nconsole.log(y == null);",
+		"const z: int32[4] | null = null;\nconsole.log(z == null);",
+		"class K { v: int32 = 1; }\nconst k = null as unknown as K;\nconsole.log(k == null);",
+		"const a = null as unknown as string[];\nconsole.log(a == null);",
+		"const f = null as unknown as (() => void);\nconsole.log(f == null);",
+		"function f(): Result<void, string> { return Result.ok(null); }\nconsole.log(f().ok);",
+	];
+	for (const src of sources) {
+		const result = compileToC(src);
+		assert result.ok;
 	}
 }
 
