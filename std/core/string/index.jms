@@ -73,8 +73,10 @@ export function equals(this s: string, other: string): boolean {
 	return msStringEquals(s, other);
 }
 
-export function substring(this s: string, start: int32, end: int32): string {
-	return s.slice(start, end);
+export function substring(this s: string, start: int32, end: int32 = 2147483647): string {
+	const a = clampIndex(start, s.length);
+	const b = clampIndex(end, s.length);
+	return a <= b ? s.slice(a, b) : s.slice(b, a);
 }
 
 export function padStart(this s: string, targetLen: int32, pad: string): string {
@@ -209,4 +211,5 @@ export function msStringByteAt(s: string, idx: int32): int32 {
 }
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
+import { clampIndex } from "./shared";
 export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";

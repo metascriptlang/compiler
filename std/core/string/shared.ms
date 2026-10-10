@@ -36,6 +36,10 @@ export function endsWith(this s: string, suffix: string): boolean {
 	return true;
 }
 
+export function clampIndex(i: int32, len: int32): int32 {
+	return i < 0 ? 0 : i > len ? len : i;
+}
+
 export function includes(this s: string, sub: string): boolean {
 	return s.contains(sub);
 }
