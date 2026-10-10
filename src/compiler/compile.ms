@@ -2062,11 +2062,11 @@ function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], s
 	return Result.ok(modules);
 }
 
-function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi {
+function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi | null {
 	for (const manifest of manifests) {
 		if (manifest.moduleId == moduleId) return manifest;
 	}
-	return null as unknown as HcrModuleAbi;
+	return null;
 }
 function hcrBundlesMatch(current: HcrModuleAbi[], candidate: HcrModuleAbi[]): boolean {
 	if (current.length != candidate.length) return false;
