@@ -1,6 +1,6 @@
 // Anonymous struct cast to union type tests
 
-import { compileToC } from "../helpers";
+import { compileToC, compileToJS } from "../helpers";
 
 test "object literal into a union slot compiles" {
 	const src = "type MyData = | { value: number } | { name: string };\nfunction setVal(out d: MyData): void {\n\td = { value: 42 };\n}";
@@ -44,16 +44,38 @@ test "null cast to a value type that holds no null is refused" {
 
 test "null through unknown is refused where the slot is not a pointer and open where it is" {
 	const prelude = "struct Pt { x: int32; }\nclass K { v: int32 = 1; }\n";
-	const refused = ["Pt", "int32[4]", "Span<int32>", "string", "int32"];
+	const refused = ["Pt", "int32[4]", "Span<int32>", "string", "int32", "string[]", "int32[]", "K[]"];
 	for (const t of refused) {
 		const result = compileToC(prelude + "const a = null as unknown as " + t + ";\nconsole.log(a);");
 		assert !result.ok;
 		assert result.error.contains("holds no null");
 	}
-	const open = ["K", "string[]", "(() => void)"];
+	const open = ["K", "(() => void)"];
 	for (const t of open) {
 		const result = compileToC(prelude + "const a = null as unknown as " + t + ";\nconsole.log(a == null);");
 		assert result.ok;
+	}
+}
+
+test "null through unknown is refused for a dynamic array on both backends" {
+	const prelude = "class K { v: int32 = 1; }\n";
+	for (const t of ["int32[]", "string[]", "K[]"]) {
+		const src = prelude + "const a = null as unknown as " + t + ";\nconsole.log(a);";
+		const c = compileToC(src);
+		assert !c.ok;
+		assert c.error.contains("holds no null");
+		const js = compileToJS(src);
+		assert !js.ok;
+		assert js.error.contains("holds no null");
+	}
+}
+
+test "a nullable dynamic array holds null and narrows on both backends" {
+	const prelude = "class K { v: int32 = 1; }\n";
+	for (const t of ["int32[]", "string[]", "K[]"]) {
+		const src = prelude + "let a: " + t + " | null = null;\nconsole.log(a == null);\nif (a != null) { console.log(a.length); }";
+		assert compileToC(src).ok;
+		assert compileToJS(src).ok;
 	}
 }
 
@@ -99,7 +121,6 @@ test "the ways to hold null still compile" {
 		"const y: string[] | null = null;\nconsole.log(y == null);",
 		"const z: int32[4] | null = null;\nconsole.log(z == null);",
 		"class K { v: int32 = 1; }\nconst k = null as unknown as K;\nconsole.log(k == null);",
-		"const a = null as unknown as string[];\nconsole.log(a == null);",
 		"const f = null as unknown as (() => void);\nconsole.log(f == null);",
 		"function f(): Result<void, string> { return Result.ok(null); }\nconsole.log(f().ok);",
 	];

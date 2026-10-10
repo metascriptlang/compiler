@@ -1859,7 +1859,7 @@ function nullCastAllowed(target: Type, throughUnknown: boolean): boolean {
 	const refusal = unknownRefusal(target);
 	const bare = skipModifier(target) ?? target;
 	if (throughUnknown) {
-		return refusal != UnknownRefusal.Value || bare.kind == TypeKind.Array || isFunctionKind(target);
+		return (refusal != UnknownRefusal.Value && !isArrayShaped(bare)) || isFunctionKind(target);
 	}
 	return refusal != UnknownRefusal.Value && refusal != UnknownRefusal.Builtin && bare.kind != TypeKind.Ref;
 }
