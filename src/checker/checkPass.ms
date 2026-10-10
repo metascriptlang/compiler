@@ -2681,7 +2681,7 @@ function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Typ
 	noteDefaultCheckedAtDeclaration(def);
 }
 
-export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[], defaults: Node[] | null = null): Symbol[] {
+export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null, defaults: Node[] | null = null): Symbol[] {
 	const paramSyms: Symbol[] = [];
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
@@ -3884,7 +3884,7 @@ export function checkProgramWithRegistryCancellable(
 
 // Register callbacks at module load time
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
-registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
+registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
 registerSelfReadType(selfReadType);
 registerLaterDeclarationNote(laterDeclarationNote);
