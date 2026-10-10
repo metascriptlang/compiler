@@ -340,7 +340,10 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		return;
 	}
 
-	if (node.nodeType != null && hasGenericParams(node.nodeType)) return;
+	if (node.nodeType != null && hasGenericParams(node.nodeType)) {
+		genStaticFieldGlobals(g, d, node.resolvedSym);
+		return;
+	}
 
 	const name = mangledTypeName(declTypeSym(node), d.className);
 
