@@ -663,9 +663,22 @@ function launchCell(c: Cell): void {
 	c.launched = true;
 }
 
+function clearDone(c: Readonly<Cell>): void {
+	const deadline = performance.now() + 5000;
+	while (exists(c.dir + "done")) {
+		remove(c.dir + "done");
+		if (!exists(c.dir + "done")) { return; }
+		if (performance.now() >= deadline) {
+			writeStderr(`  !! cannot remove ${c.dir}done — a stale exit code will be read as this run's verdict\n`);
+			return;
+		}
+		pollSleep("0.05", 50);
+	}
+}
+
 function startCellProcess(c: Readonly<Cell>): string {
 	ensureDir(c.dir);
-	if (exists(c.dir + "done")) { remove(c.dir + "done"); }
+	clearDone(c);
 	if (!IS_WIN) {
 		const inner = cellInner(c, posixQuote);
 		return shellOut("set -m; ( " + inner + "; echo $? > " + c.dir + "done.tmp; mv " + c.dir + "done.tmp " + c.dir + "done ) > /dev/null 2>&1 & echo $!");
@@ -701,7 +714,7 @@ function runsOnBuildWorker(c: Readonly<Cell>): boolean {
 
 function runCellOnWorker(c: Readonly<Cell>): void {
 	ensureDir(c.dir);
-	if (exists(c.dir + "done")) { remove(c.dir + "done"); }
+	clearDone(c);
 	if (exists(c.dir + "aborted")) { remove(c.dir + "aborted"); }
 	const r = execFileResult(winPath(WINTIME), ["--wait-ms", `${CELL_TIMEOUT_MS as int64}`, "cmd", "/d", "/s", "/c", writeCellBat(c)]);
 	if (r.exitCode == 124) {
@@ -1004,8 +1017,6 @@ function planJobs(specs: Spec[]): BuildJob[] {
 const BUILD_OK: int32 = 0;
 const BUILD_OK_RETRIED: int32 = 1;
 const BUILD_FAILED: int32 = 2;
-
-const BUILD_PENDING: int32 = -1;
 const CLAIM_DIR = OUT_DIR + "claims/";
 
 function builtMarker(job: Readonly<BuildJob>): string {
@@ -1036,10 +1047,6 @@ function publishMarker(path: string, text: string): void {
 	}
 }
 
-function ranOnWorker(job: BuildJob): boolean {
-	return readFileOr(builtMarker(job), "").contains("ran");
-}
-
 function buildWorker(jobs: Readonly<BuildJob[]>, first: int32): number {
 	let built = 0;
 	for (let i: int32 = first; i < jobs.length; i += 1) {
@@ -1050,11 +1057,10 @@ function buildWorker(jobs: Readonly<BuildJob[]>, first: int32): number {
 	return built;
 }
 
-function builtCode(job: BuildJob): int32 {
-	if (!exists(builtMarker(job))) { return BUILD_PENDING; }
+function builtText(job: BuildJob): string {
+	if (!exists(builtMarker(job))) { return ""; }
 	const text = readFileOr(builtMarker(job), "");
-	if (!text.endsWith("\n")) { return BUILD_PENDING; }
-	return text.trim().split(" ")[0].parseInt() as int32;
+	return text.endsWith("\n") ? text : "";
 }
 
 function prepareClaims(jobs: BuildJob[]): void {
@@ -1271,12 +1277,13 @@ function main(): void {
 	}
 	let ci = 0;
 	while (ci < jobs.length) {
-		const code = builtCode(jobs[ci]);
-		if (code == BUILD_PENDING) {
+		const marker = builtText(jobs[ci]);
+		if (marker == "") {
 			launchQueued(running, queued, t, parityDone);
 			pollSleep("0.05", 50);
 			continue;
 		}
+		const code = marker.trim().split(" ")[0].parseInt() as int32;
 		const job = jobs[ci];
 		ci = ci + 1;
 		if (code == BUILD_FAILED) {
@@ -1290,7 +1297,7 @@ function main(): void {
 			progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilt");
 		}
 		if (job.cmd != "") { progress("  · built " + job.spec.name + " [" + job.lane + "]"); }
-		if (ranOnWorker(job)) {
+		if (marker.contains("ran")) {
 			job.cell.launched = true;
 			job.cell.launchedAtMs = performance.now();
 			running.push(job.cell);
