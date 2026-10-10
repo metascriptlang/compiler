@@ -51,6 +51,29 @@ function isExternFlag(flags: string): boolean {
 	return false;
 }
 
+function isGenericRoutine(node: Node, flags: string): boolean {
+	return isGenericFn(flags) || (node.nodeType != null && hasGenericParams(node.nodeType));
+}
+
+function isGenericClass(node: Node): boolean {
+	return node.nodeType != null && hasGenericParams(node.nodeType);
+}
+
+function isStaticClassState(member: Node): boolean {
+	if (member.kind == NodeKind.BlockStmt) return true;
+	return member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic;
+}
+
+// A generic class's instances are emitted per instantiation; the declaration itself
+// keeps only what is shared by every instance: its static state, as a class that holds it.
+function classEmitsShell(node: Node): boolean {
+	if (!isGenericClass(node)) return true;
+	for (const member of (node.data as ClassDeclData).classBody) {
+		if (isStaticClassState(member)) return true;
+	}
+	return false;
+}
+
 export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 	// Skip extern functions — they're type declarations, not runtime code.
 	// The actual implementation comes from @import (e.g., node:process).
@@ -58,7 +81,7 @@ export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 	if (isExternFlag(d.fnFlags)) return;
 	// Tier 1: body-less overload signatures are typecheck-only, skip emission
 	if (d.fnFlags.indexOf("overload", 0) >= 0) return;
-	if (isGenericFn(d.fnFlags) || (node.nodeType != null && hasGenericParams(node.nodeType))) return;
+	if (isGenericRoutine(node, d.fnFlags)) return;
 	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return;
 	emitIndent(gen);
 	emitFunctionDeclInner(gen, node);
@@ -128,6 +151,13 @@ export function classEmitsNoJs(node: Node): boolean {
 function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as ClassDeclData;
 	if (classEmitsNoJs(node)) return;
+	if (!classEmitsShell(node)) {
+		for (const member of d.classBody) {
+			if (member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic) emitStaticMethodFn(gen, d.className, member);
+		}
+		return;
+	}
+	const generic = isGenericClass(node);
 	emit(gen, "class ");
 	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
 	if (d.classExtends != "") {
@@ -141,6 +171,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	emit(gen, `static [globalThis.Symbol.for("metascript.typeDisplayName")] = "${escapeJSString(d.classDisplayName)}";\n`);
 	const staticMethods: Node[] = [];
 	for (const member of d.classBody) {
+		if (generic && !isStaticClassState(member) && !(member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic)) continue;
 		match (member.kind) {
 			NodeKind.MethodDecl => {
 				if ((member.data as MethodDeclData).methodIsStatic) { staticMethods.push(member); }
@@ -205,6 +236,7 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 	const d = member.data as MethodDeclData;
 	if (isExternFlag(d.methodFlags)) return;
 	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	if (isGenericRoutine(member, d.methodFlags)) return;
 	emitIndent(gen);
 	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
 	match (routineKindFlag(d.methodFlags)) {
@@ -282,6 +314,7 @@ export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as MethodDeclData;
 	if (isExternFlag(d.methodFlags)) return;
 	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	if (isGenericRoutine(node, d.methodFlags)) return;
 	emitIndent(gen);
 	if (d.methodIsStatic) { emit(gen, "static "); }
 	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
@@ -411,6 +444,8 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	if (inner.kind == NodeKind.FunctionDecl && inner.resolvedSym != null && hasFlag(inner.resolvedSym, SymbolFlag.CompileTime)) return;
 	// Skip extern functions — imported via @import, not compiled
 	if (inner.kind == NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
+	if (inner.kind == NodeKind.FunctionDecl && isGenericRoutine(inner, (inner.data as FunctionDeclData).fnFlags)) return;
+	if (inner.kind == NodeKind.ClassDecl && !classEmitsShell(inner)) { emitClassDecl(gen, inner); return; }
 	if (gen.bundleMode) {
 		// Bundle mode: emit declaration without `export`, track exported name
 		let exportName = "";
