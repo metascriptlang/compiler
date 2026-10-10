@@ -1095,6 +1095,10 @@ export function projectCacheChanged(
 	return false;
 }
 
+function dropStaleRecord(record: string): void {
+	if (exists(record)) { const gone = remove(record); }
+}
+
 // Write the project cache after a successful build.
 // Reference-aligned: writeJsonBuildInstructions.
 export function writeProjectCache(
@@ -1114,15 +1118,15 @@ export function writeProjectCache(
 	for (let i = 0; i < depPaths.length; i++) {
 		const path = depPaths[i];
 		const hash = hashFile(path);
-		if (_projectInputKey == record && (i >= _projectInputHashes.length || hash != _projectInputHashes[i])) return;
-		if (_buildStartedSeconds > 0 && (!exists(path) || modifiedTime(path) >= Math.floor(_buildStartedSeconds))) return;
+		if (_projectInputKey == record && (i >= _projectInputHashes.length || hash != _projectInputHashes[i])) return dropStaleRecord(record);
+		if (_buildStartedSeconds > 0 && (!exists(path) || modifiedTime(path) >= Math.floor(_buildStartedSeconds))) return dropStaleRecord(record);
 		if (seen.has(path)) continue;
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hash}\n`;
 	}
 	for (const path of _nativeProjectDeps) {
 		if (seen.has(path)) continue;
-		if (_buildStartedSeconds > 0 && modifiedTime(path) >= Math.floor(_buildStartedSeconds)) return;
+		if (_buildStartedSeconds > 0 && modifiedTime(path) >= Math.floor(_buildStartedSeconds)) return dropStaleRecord(record);
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hashFile(path)}\n`;
 	}
