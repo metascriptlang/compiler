@@ -584,6 +584,13 @@ function setNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64,
 	heapObjectSetField(objHeap, h, name, v);
 }
 
+// Parameter defaults are one slot per parameter, null where the parameter has none.
+function setDefaults(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, defaults: Node[], includeTypeAst: boolean): void {
+	const handle = heapAllocArray(arrHeap);
+	for (const def of defaults) heapArrayPush(arrHeap, handle, def == null ? raiserNil() : nodeToValue(def, objHeap, arrHeap, includeTypeAst));
+	heapObjectSetField(objHeap, h, name, raiserArray(handle));
+}
+
 function setStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, strs: string[]): void {
 	const v = serializeStrings(strs, arrHeap);
 	heapObjectSetField(objHeap, h, name, v);
@@ -1049,9 +1056,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setNode(objHeap, arrHeap, handle, "fnBody", d.fnBody);
 			setStr(objHeap, handle, "fnFlags", d.fnFlags);
 			setStr(objHeap, handle, "fnReturnType", d.fnReturnType);
-			const defaults = heapAllocArray(arrHeap);
-			for (const def of d.fnDefaults) heapArrayPush(arrHeap, defaults, def == null ? raiserNil() : nodeToValue(def, objHeap, arrHeap, includeTypeAst));
-			heapObjectSetField(objHeap, handle, "fnDefaults", raiserArray(defaults));
+			setDefaults(objHeap, arrHeap, handle, "fnDefaults", d.fnDefaults, includeTypeAst);
 		},
 		NodeKind.ImportDecl => {
 			const d = node.data as ImportDeclData;
@@ -1117,12 +1122,14 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setBool(objHeap, handle, "methodIsStatic", d.methodIsStatic);
 			setStr(objHeap, handle, "methodFlags", d.methodFlags);
 			setStr(objHeap, handle, "methodReturnType", d.methodReturnType);
+			setDefaults(objHeap, arrHeap, handle, "methodDefaults", d.methodDefaults, includeTypeAst);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
 			setStrs(objHeap, arrHeap, handle, "ctorParams", d.ctorParams);
 			setStrs(objHeap, arrHeap, handle, "ctorParamTypes", d.ctorParamTypes);
 			setNode(objHeap, arrHeap, handle, "ctorBody", d.ctorBody);
+			setDefaults(objHeap, arrHeap, handle, "ctorDefaults", d.ctorDefaults, includeTypeAst);
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;
@@ -1314,6 +1321,17 @@ function readNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64,
 	const v = heapObjectGetField(objHeap, h, name);
 	if (v.kind == RaiserValueKind.Nil) return null as unknown as Node;
 	return valueToNode(v, objHeap, arrHeap, fallbackLoc);
+}
+
+function readDefaults(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, fallbackLoc: SourceLocation): Node[] {
+	const v = heapObjectGetField(objHeap, h, name);
+	const result: Node[] = [];
+	if (v.kind != RaiserValueKind.Array) return result;
+	for (let i = 0; i < heapArrayLen(arrHeap, v.intVal); i += 1) {
+		const def = heapArrayGet(arrHeap, v.intVal, i);
+		result.push(def.kind == RaiserValueKind.Nil ? null as unknown as Node : valueToNode(def, objHeap, arrHeap, fallbackLoc));
+	}
+	return result;
 }
 
 function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, fallbackLoc: SourceLocation): Node[] {
@@ -1930,14 +1948,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const fnFlags = readStr(objHeap, h, "fnFlags");
 			const fnReturnType = readStr(objHeap, h, "fnReturnType");
 			rebindRedeclaredLocals(fnBody, params);
-			const fnDefaults: Node[] = [];
-			const defaults = heapObjectGetField(objHeap, h, "fnDefaults");
-			if (defaults.kind == RaiserValueKind.Array) {
-				for (let i = 0; i < heapArrayLen(arrHeap, defaults.intVal); i += 1) {
-					const def = heapArrayGet(arrHeap, defaults.intVal, i);
-					fnDefaults.push(def.kind == RaiserValueKind.Nil ? null as unknown as Node : valueToNode(def, objHeap, arrHeap, loc));
-				}
-			}
+			const fnDefaults = readDefaults(objHeap, arrHeap, h, "fnDefaults", loc);
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
 				fnDefaults, nativeName: "", nameLocation: loc,
@@ -2041,7 +2052,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.MethodDecl, {
 				methodName, methodParams, methodParamTypes, methodBody,
 				methodIsStatic, methodFlags, methodVisibility, methodReturnType,
-				methodDefaults: [], nativeName: "", nameLocation: loc,
+				methodDefaults: readDefaults(objHeap, arrHeap, h, "methodDefaults", loc), nativeName: "", nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ConstructorDecl => {
@@ -2049,7 +2060,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const ctorParamTypes = readStrs(objHeap, arrHeap, h, "ctorParamTypes");
 			const ctorBody = readNode(objHeap, arrHeap, h, "ctorBody", loc);
 			return createNodeAt(NodeKind.ConstructorDecl, {
-				ctorParams, ctorParamTypes, ctorBody, ctorDefaults: [],
+				ctorParams, ctorParamTypes, ctorBody, ctorDefaults: readDefaults(objHeap, arrHeap, h, "ctorDefaults", loc),
 			}, loc);
 		},
 		NodeKind.ExternDecl => {
