@@ -293,6 +293,7 @@ export enum NodeFlag {
 	WhenDeferred,  // parser: a `when` chain kept as nested IfStmt because a condition asks a type trait; the checker picks the branch per instance
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
+	OptionalChainEnd, // parser: last link of a run that starts at `?.` — the null test covers every link from the `?.` to here
 }
 
 // ===== Node Kind Enum =====

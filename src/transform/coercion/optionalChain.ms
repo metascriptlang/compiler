@@ -4,7 +4,7 @@
 // Uses bottom-up walk via walker.ms so chained a?.b?.c works naturally:
 // inner ?.b transforms first, outer ?.c sees the conditional result.
 
-import { Node, NodeKind, MemberExprData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, MemberExprData, CallExprData, TypeAssertionData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
@@ -98,3 +98,29 @@ test "a pure object is read again through its own node" {
 		}
 	}
 }
+
+function chainEnds(input: string): string {
+	let marks = "";
+	const parsed = parseInput(input);
+	if (!parsed.ok) return "parse error";
+	let link: Node | null = (getStmts(parsed.value)[0].data as ExprStmtData).expr;
+	while (link != null) {
+		marks = marks + (link.flags.has(NodeFlag.OptionalChainEnd) ? "E" : "-");
+		if (link.kind == NodeKind.MemberExpr) link = (link.data as MemberExprData).object;
+		else if (link.kind == NodeKind.CallExpr) link = (link.data as CallExprData).callee;
+		else if (link.kind == NodeKind.TypeAssertion) link = (link.data as TypeAssertionData).asExpr;
+		else link = null;
+	}
+	return marks;
+}
+
+test "an optional chain ends at its last link" { assert chainEnds("a?.b.c(1).d;") == "E----"; }
+
+test "each ?. closes the run before it" { assert chainEnds("a?.b.c?.d;") == "EE--"; }
+
+test "parentheses and a cast end the chain" {
+	assert chainEnds("(a?.b).c;") == "-E-";
+	assert chainEnds("a?.b as int32;") == "-E-";
+}
+
+test "a plain member chain carries no chain end" { assert chainEnds("a.b.c(1);") == "----"; }

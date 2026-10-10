@@ -57,6 +57,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 	let left = try parsePrimary(state);
 
 	// Postfix operators: call, member access, optional chaining, array indexing, update
+	let chainOpen = false;
 	while (!isAtEnd(state)) {
 		const token = current(state);
 
@@ -104,11 +105,17 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 				optPropName = prop.value;
 				advance(state);
 			}
+			if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
 			left = createNode(NodeKind.MemberExpr, { object: left, property: optPropName, isOptional: true }, token);
+			chainOpen = true;
 			continue;
 		}
 
 		if (token.kind == TokenKind.LBracket) {
+			if (chainOpen && peek(state, 1).kind == TokenKind.RBracket) {
+				left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
+				chainOpen = false;
+			}
 			advance(state);
 			if (current(state).kind == TokenKind.RBracket) {
 				advance(state);
@@ -137,6 +144,8 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 
 		// Postfix increment/decrement
 		if (token.kind == TokenKind.PlusPlus || token.kind == TokenKind.MinusMinus) {
+			if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
+			chainOpen = false;
 			advance(state);
 			left = createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: left, isPrefix: false }, token);
 			continue;
@@ -144,6 +153,8 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 
 		// Type assertion: expr as Type
 		if (token.kind == TokenKind.As) {
+			if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
+			chainOpen = false;
 			advance(state);
 			const asStart = state.position;
 			skipTypeAnnotation(state);
@@ -169,6 +180,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 
 		break;
 	}
+	if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
 
 	// Binary operators with Pratt precedence climbing
 	while (!isAtEnd(state) && isBinaryOperator(current(state))) {
