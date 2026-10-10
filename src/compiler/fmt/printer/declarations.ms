@@ -14,7 +14,7 @@ import {
 } from "../doc";
 import { Token } from "../../../lexer/token";
 import { callPrintNode } from "./callbacks";
-import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
+import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
@@ -284,12 +284,6 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 		docHardLine(),
 		docText("}"),
 	]);
-}
-
-function unoptionalized(type: string): string {
-	const suffix = ") | null";
-	if (type.startsWith("(") && type.endsWith(suffix)) return type.byteSlice(1, type.byteLength - suffix.byteLength);
-	return type;
 }
 
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {

@@ -259,6 +259,7 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	const feNode = createNode(NodeKind.FunctionExpr, { funcExprParams, funcExprParamTypes, funcExprBody: feBody, funcExprFlags: feFlags, funcExprReturnType }, token);
 	feNode.typeExpr = funcExprRetTypeExpr;
 	feNode.typeExprs = feParamTypeExprs;
+	feNode.paramLocations = feParamLocs;
 	return Result.ok(feNode);
 }
 

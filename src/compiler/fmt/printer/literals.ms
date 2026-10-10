@@ -245,6 +245,12 @@ export function rawGenericsAt(source: string, line: int32, column: int32, name: 
 	return "";
 }
 
+export function unoptionalized(type: string): string {
+	const suffix = ") | null";
+	if (type.startsWith("(") && type.endsWith(suffix)) return type.byteSlice(1, type.byteLength - suffix.byteLength);
+	return type;
+}
+
 export function writtenOptional(source: string, line: int32, column: int32, name: string): boolean {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return false;
