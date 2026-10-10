@@ -1049,6 +1049,9 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setNode(objHeap, arrHeap, handle, "fnBody", d.fnBody);
 			setStr(objHeap, handle, "fnFlags", d.fnFlags);
 			setStr(objHeap, handle, "fnReturnType", d.fnReturnType);
+			const defaults = heapAllocArray(arrHeap);
+			for (const def of d.fnDefaults) heapArrayPush(arrHeap, defaults, def == null ? raiserNil() : nodeToValue(def, objHeap, arrHeap, includeTypeAst));
+			heapObjectSetField(objHeap, handle, "fnDefaults", raiserArray(defaults));
 		},
 		NodeKind.ImportDecl => {
 			const d = node.data as ImportDeclData;
@@ -1927,9 +1930,17 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const fnFlags = readStr(objHeap, h, "fnFlags");
 			const fnReturnType = readStr(objHeap, h, "fnReturnType");
 			rebindRedeclaredLocals(fnBody, params);
+			const fnDefaults: Node[] = [];
+			const defaults = heapObjectGetField(objHeap, h, "fnDefaults");
+			if (defaults.kind == RaiserValueKind.Array) {
+				for (let i = 0; i < heapArrayLen(arrHeap, defaults.intVal); i += 1) {
+					const def = heapArrayGet(arrHeap, defaults.intVal, i);
+					fnDefaults.push(def.kind == RaiserValueKind.Nil ? null as unknown as Node : valueToNode(def, objHeap, arrHeap, loc));
+				}
+			}
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
-				fnDefaults: [], nativeName: "", nameLocation: loc,
+				fnDefaults, nativeName: "", nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ImportDecl => {
