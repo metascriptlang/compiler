@@ -1,5 +1,6 @@
 // @xfail(raiser): cannot compile node kind BigIntLiteral at comptime (inbox 2026-10-09-raiser-bigint-literal-at-comptime-in-1117)
 // @stdout: last=true,false first=true,false le=true gt=true ge=false nested=false,true deep=true,false big=false,true
+// @xfail(raiser): raiser runtime error: cannot compile node kind BigIntLiteral at comptime: unsupported by the Raiser bytecode compiler
 // note: tuple `<`, `<=`, `>`, `>=` walk the fields in order and compare each by its own type: a string by its text, a bigint by its value, a nested tuple by its own ordering. Same output on every backend.
 
 function lastIsText(x: [int32, string], y: [int32, string]): boolean { return x < y; }

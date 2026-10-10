@@ -23,6 +23,7 @@ LADDER="build boundary suite hcr tests fmt corpus san guard"
 KNOWN_LANES="boundary suite hcr tests fmt corpus san guard"
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
+SELECT_STD='^std/.*\.(ms|cms|jms)$'
 
 usage() {
   cat <<'USAGE'
@@ -152,7 +153,7 @@ control_key() {
   local tree support emit
   [ -n "$CONTROL_SUPPORT" ] || return 1
   tree=$(tree_key "$1") && support=$(git ls-tree "$1" runtime vendor) || return 1
-  emit=$(declare -f emit_one emit_side hash_files digest | digest) || return 1
+  emit=$(declare -f emit_one emit_many emit_side hash_files digest | digest) || return 1
   { printf 'stable-emit-v2\n%s\n%s\n%s\n%s\n%s\n' "$(uname -sm)" "$tree" "$support" "$emit" "$CONTROL_SUPPORT"; } | digest
 }
 
@@ -239,7 +240,7 @@ inert_range() {
   ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep . >/dev/null
 }
 
-digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
+digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 tree_key() {
   local t
   t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std; } 2>/dev/null)
@@ -374,25 +375,63 @@ bounded() {
   wait "$pid"
 }
 
-hash_files() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$@"; else sha256sum "$@"; fi; }
+hash_files() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
-emit_one() {
-  local bin=$1 name=$3 entry=$4 d="$GATE_EMIT_DIR/$2" c_rc js_rc c js cs
-  rm -rf "$d"; mkdir -p "$d" && cd "$d" || exit 1
-  "$bin" build "$entry" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
-  "$bin" build "$entry" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
-  mapfile -t cs < <(find out -name '*.c' 2>/dev/null | LC_ALL=C sort)
-  c=$({ echo "rc=$c_rc"; [ "$c_rc" -eq 0 ] || cat c.log; [ "${#cs[@]}" -eq 0 ] || hash_files "${cs[@]}"; } | digest)
-  "$bin" build "$entry" --target=js --output=out.js >js.log 2>&1; js_rc=$?
-  js=$({ echo "rc=$js_rc"; if [ "$js_rc" -eq 0 ]; then cat out.js; else cat js.log; fi; } 2>/dev/null | digest)
-  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$c" "$js" "$c_rc" "${#cs[@]}"
+emit_many() {
+  local bin=$1 root=$GATE_EMIT_DIR work i n h p c_rc js_rc text
+  local -a args dirs files
+  local -A sum crc jrc count ctext
+  shift; args=("$@")
+  for ((i = 0; i < ${#args[@]}; i += 3)); do dirs+=("$root/${args[i]}"); done
+  work="$root/.sig.$$"
+  rm -rf "${dirs[@]}" "$work"; mkdir -p "${dirs[@]}" "$work" || exit 1
+  for ((i = 0; i < ${#args[@]}; i += 3)); do
+    n=${args[i]}
+    cd "$root/$n" || exit 1
+    "$bin" build "${args[i + 2]}" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
+    "$bin" build "${args[i + 2]}" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
+    "$bin" build "${args[i + 2]}" --target=js --output=out.js >js.log 2>&1; js_rc=$?
+    [ -f out.js ] || : >out.js
+    crc[$n]=$c_rc jrc[$n]=$js_rc count[$n]=0 ctext[$n]=""
+  done
+  cd "$root" || exit 1
+  shopt -s globstar nullglob dotglob
+  for ((i = 0; i < ${#args[@]}; i += 3)); do n=${args[i]}; files+=("$n"/out/**/*.c "$n/c.log" "$n/js.log" "$n/out.js"); done
+  hash_files "${files[@]}" | LC_ALL=C sort -k2 >"$work/sums" || exit 1
+  while read -r h p; do
+    p=${p#\*}; sum[$p]=$h; n=${p%%/*}
+    case "$p" in "$n"/out/*.c) count[$n]=$((${count[$n]} + 1)); ctext[$n]+="$h ${p#*/}"$'\n' ;; esac
+  done <"$work/sums"
+  for ((i = 0; i < ${#args[@]}; i += 3)); do
+    n=${args[i]}
+    text="rc=${crc[$n]}"$'\n'
+    [ "${crc[$n]}" -eq 0 ] || text+="log ${sum[$n/c.log]}"$'\n'
+    printf '%s%s' "$text" "${ctext[$n]}" >"$work/$n.c"
+    if [ "${jrc[$n]}" -eq 0 ]; then h=${sum[$n/out.js]}; else h=${sum[$n/js.log]}; fi
+    printf 'rc=%s\n%s\n' "${jrc[$n]}" "$h" >"$work/$n.js"
+  done
+  cd "$work" && hash_files ./*.c ./*.js >sigs || exit 1
+  while read -r h p; do p=${p#\*}; sum[sig:${p#./}]=$h; done <sigs
+  for ((i = 0; i < ${#args[@]}; i += 3)); do
+    n=${args[i]}
+    printf '%s\t%s\t%s\t%s\t%s\n' "${args[i + 1]}" "${sum[sig:$n.c]}" "${sum[sig:$n.js]}" "${crc[$n]}" "${count[$n]}"
+  done
+  cd "$root" && rm -rf "$work"
 }
 
-if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}" "${5:?}"; exit 0; fi
+emit_one() (emit_many "$@")
+
+if [ "${1:-}" = --emit-one ]; then
+  bin=${2:?}; shift 2
+  [ $# -ge 3 ] && [ $(($# % 3)) -eq 0 ] || { echo "--emit-one takes a compiler and index/name/entry triples" >&2; exit 2; }
+  emit_many "$bin" "$@"
+  exit 0
+fi
 if [ "${1:-}" = --tree-key ]; then tree_key "${2:?--tree-key needs a rev}"; exit $?; fi
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git checkout"
 cd "$TOP" || die "cannot enter $TOP"
+GATE_SH="$TOP/tools/gate.sh"
 KNOWN="$TOP/src/test/known-red.json"
 OUT="$TOP/out/gate"
 CAND="$OUT/msc"
@@ -750,6 +789,8 @@ queue_self_test() {
   return $bad
 }
 
+restamp() { find "$@" -type f -exec touch {} +; }
+
 prepare_emit_workspace() {
   local part
   mkdir -p "$CTL_WORK/bin/ctrl" "$CTL_WORK/bin/cand" || return 1
@@ -757,7 +798,7 @@ prepare_emit_workspace() {
     rm -rf "$CTL_WORK/$part"
     cp -aL "$TOP/$part" "$CTL_WORK/$part" || return 1
   done
-  [ -f "$CTL_WORK/std/core/system/index.ms" ]
+  restamp "$CTL_WORK/std" "$CTL_WORK/src" && [ -f "$CTL_WORK/std/core/system/index.ms" ]
 }
 
 stage_emit_compiler() {
@@ -792,12 +833,21 @@ emit_width() {
   cap_jobs "$(share_of_cores "$share")" "${GATE_PAR:-}"
 }
 
+emit_batch() {
+  local per=$((($1 + $2 * 2 - 1) / ($2 * 2)))
+  [ "$per" -le 20 ] || per=20
+  echo "$per"
+}
+
 emit_side() {
-  local jobs scrub
+  local jobs scrub rows
   jobs=$(emit_width) || return $?
   mkdir -p "$2"
   mapfile -t scrub < <(compgen -e | grep '^MSC' | sed 's/^/--unset=/')
-  awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
+  mapfile -t rows < <(awk '{ print NR, $0 }')
+  [ "${#rows[@]}" -gt 0 ] || return 0
+  printf '%s\n' "${rows[@]}" | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 \
+    xargs -r -P "$jobs" -n "$(($(emit_batch "${#rows[@]}" "$jobs") * 3))" "$GATE_SH" --emit-one "$1"
 }
 
 reusable_programs() (
@@ -863,6 +913,94 @@ emit_candidate() {
     emit_side "$1" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
   fi
 }
+
+std_narrowable() {
+  ! git diff --name-only --no-renames "$1" HEAD -- std | grep -Ev "$SELECT_STD|$INERT" >/dev/null \
+    && ! git diff -U0 "$1" HEAD -- std | grep -E '^[+-].*@(compile|link|define)' >/dev/null
+}
+
+stage_std() {
+  rm -rf "$CTL_WORK/std" || return 1
+  if [ -n "$1" ]; then git archive "$1" std | tar -x -C "$CTL_WORK"; else cp -aL "$TOP/std" "$CTL_WORK/std"; fi \
+    && restamp "$CTL_WORK/std" && [ -f "$CTL_WORK/std/core/system/index.ms" ]
+}
+
+emit_sides() {
+  local sha=$1 key ctl_dir ctl cand swap=0
+  if [ -n "$(git status --porcelain -- std runtime vendor)" ] \
+    || [ "$(git ls-tree "$sha" runtime vendor)" != "$(git ls-tree HEAD runtime vendor)" ]; then
+    select_whole "control and candidate support trees differ"; return 1
+  fi
+  if [ "$(git ls-tree "$sha" std)" != "$(git ls-tree HEAD std)" ]; then
+    std_narrowable "$sha" || { select_whole "the std change reaches native sources or a file no emit shows"; return 1; }
+    swap=1
+  fi
+  prepare_emit_workspace || { select_whole "cannot snapshot emission inputs"; return 1; }
+  [ "$swap" -eq 0 ] || stage_std "$sha" || { select_whole "cannot stage the control std"; return 1; }
+  CONTROL_SUPPORT=$(control_support "$CTL_WORK") || { select_whole "cannot fingerprint support snapshot"; return 1; }
+  key=$(build_ctl "$sha") || { select_whole "no control compiler at $(printf '%s' "$sha" | cut -c1-8), log: $OUT/ctl.log"; return 1; }
+  ctl_dir=$(control_dir "$key")
+  ctl=$(stage_emit_compiler "$(control_binary "$ctl_dir")" ctrl) \
+    && cand=$(stage_emit_compiler "$CAND" cand) || { select_whole "cannot stage emission compilers"; return 1; }
+  rm -rf "$EMIT"
+  mkdir -p "$EMIT"
+  stable_programs >"$EMIT/programs"
+  emit_cached "$ctl" "$ctl_dir" ctl || { select_whole "control emit or cache publication failed"; return 1; }
+  if [ "$swap" -eq 1 ]; then
+    stage_std "" && CONTROL_SUPPORT=$(control_support "$CTL_WORK") || { select_whole "cannot stage the candidate std"; return 1; }
+  fi
+  emit_candidate "$cand" || { select_whole "candidate emit failed"; return 1; }
+  adopt_candidate || { select_whole "candidate cache publication failed"; return 1; }
+  trim_controls "$key" "$(control_key HEAD)"
+}
+
+std_swap_self_test() (
+  local d bad=0 whole="" sha fake TOP CTL_CACHE CTL_WORK EMIT OUT CAND cand_key="" CONTROL_SUPPORT="" EXE_SUFFIX="" g="git -c user.name=t -c user.email=t@t"
+  d=$(mktemp -d) || return 1
+  TOP="$d/repo" CTL_CACHE="$d/cache" CTL_WORK="$d/cache/work" EMIT="$d/emit" OUT="$d/out" CAND="$d/cand" fake="$d/fake"
+  mkdir -p "$TOP/src/test/corpus/programs" "$TOP/std/core/system" "$TOP/runtime" "$TOP/vendor" "$CTL_CACHE/entries" "$OUT"
+  cat >"$fake" <<'FAKE'
+#!/usr/bin/env bash
+std="$(cd "$(dirname "$0")/../.." && pwd)/std/probe.ms"
+case " $* " in *" --emit=c "*) mkdir -p out && cp "$std" out/p.c ;; esac
+for a; do case $a in --output=*) cp "$std" "${a#--output=}" ;; esac; done
+FAKE
+  chmod +x "$fake"; cp "$fake" "$CAND"
+  printf 'x\n' >"$TOP/src/test/corpus/programs/p.ms"; printf 'x\n' >"$TOP/std/core/system/index.ms"
+  printf 'old\n' >"$TOP/std/probe.ms"; printf 'x\n' >"$TOP/runtime/a.h"; printf 'x\n' >"$TOP/vendor/a.h"
+  cd "$TOP" && git init -q && $g add . && $g commit -qm base || { cd /; rm -rf "$d"; return 1; }
+  sha=$(git rev-parse HEAD)
+  select_whole() { whole=$1; }
+  build_ctl() {
+    local key dir tmp
+    key=$(control_key "$1") && dir=$(control_dir "$key") || return 1
+    if ! control_ready "$dir" "$key"; then
+      tmp=$(mktemp -d "$CTL_CACHE/entries/.build.XXXXXX") && mkdir -p "$tmp/std/core/system" && cp "$fake" "$(control_binary "$tmp")" \
+        && printf 'x\n' >"$tmp/std/core/system/index.ms" && publish_control "$tmp" "$dir" "$key" || return 1
+    fi
+    printf '%s' "$key"
+  }
+  printf 'new\n' >std/probe.ms; $g commit -qam std
+  touch -d '1 hour ago' std/probe.ms src/test/corpus/programs/p.ms; : >"$d/mark"
+  emit_sides "$sha" >/dev/null 2>&1 || { printf 'FAIL std swap: a plain std source change was not narrowed (%s)\n' "$whole"; bad=1; }
+  [ -z "$(find "$CTL_WORK/std" "$CTL_WORK/src" -type f ! -newer "$d/mark")" ] \
+    || { printf 'FAIL std swap: staged sources kept a change stamp an earlier staging could share\n'; bad=1; }
+  [ "$(cut -f2 "$EMIT/ctl.sig" 2>/dev/null)" != "$(cut -f2 "$EMIT/cand.sig" 2>/dev/null)" ] \
+    || { printf 'FAIL std swap: control and candidate emitted against the same std\n'; bad=1; }
+  [ "$(cat "$CTL_WORK/std/probe.ms" 2>/dev/null)" = new ] || { printf 'FAIL std swap: the workspace was not left on the candidate std\n'; bad=1; }
+  rm -rf "$EMIT"; whole=""
+  emit_sides HEAD >/dev/null 2>&1
+  [ -z "$whole" ] && [ "$(cut -f2 "$EMIT/ctl.sig" 2>/dev/null)" = "$(cut -f2 "$EMIT/cand.sig" 2>/dev/null)" ] \
+    || { printf 'FAIL std swap: an unchanged std gave different signatures (%s)\n' "$whole"; bad=1; }
+  sha=$(git rev-parse HEAD); printf 'x\n' >std/probe.rms; $g add . && $g commit -qm rms; whole=""
+  if emit_sides "$sha" >/dev/null 2>&1 || [ -z "$whole" ]; then printf 'FAIL std swap: a std file no emit shows was narrowed\n'; bad=1; fi
+  sha=$(git rev-parse HEAD); printf '@compile("x.c")\nnew\n' >std/probe.ms; $g commit -qam native; whole=""
+  if emit_sides "$sha" >/dev/null 2>&1 || [ -z "$whole" ]; then printf 'FAIL std swap: a std change to native sources was narrowed\n'; bad=1; fi
+  sha=$(git rev-parse HEAD); printf 'y\n' >runtime/a.h; $g commit -qam runtime; whole=""
+  if emit_sides "$sha" >/dev/null 2>&1 || [ -z "$whole" ]; then printf 'FAIL std swap: a runtime change was narrowed\n'; bad=1; fi
+  cd / && rm -rf "$d"
+  return $bad
+)
 
 shared_cache_self_test() (
   local d bad=0 key dir tmp got EMIT CTL_CACHE EXE_SUFFIX=""
@@ -1020,7 +1158,7 @@ control_key_self_test() (
   CONTROL_SUPPORT=support2
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: support identity change kept the key\n'; bad=1; }
   CONTROL_SUPPORT=support
-  eval "$(declare -f emit_one | sed 's/--emit=c --gc=drc --danger/--emit=c --gc=orc --danger/')"
+  eval "$(declare -f emit_many | sed 's/--emit=c --gc=drc --danger/--emit=c --gc=orc --danger/')"
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: changed emit definition kept the key\n'; bad=1; }
   cd / && rm -rf "$d"
   return $bad
@@ -1078,6 +1216,32 @@ emit_env_self_test() (
   got=$(cat "$d/e/1/out.js" 2>/dev/null)
   [ -f "$d/e/1/out.js" ] || { printf 'FAIL emit env: probe emit did not run\n'; bad=1; }
   [ -z "$got" ] || { printf 'FAIL emit env: emits saw %s\n' "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+emit_many_self_test() (
+  local d bad=0 both one GATE_EMIT_DIR
+  d=$(mktemp -d) || return 1
+  GATE_EMIT_DIR="$d/e"
+  cat >"$d/fake" <<'FAKE'
+#!/usr/bin/env bash
+case "$2" in */broken.ms) echo "error in $2"; exit 1 ;; esac
+case " $* " in *" --emit=c "*) mkdir -p out/debug && cp "$2" out/debug/p.c && cp "$2" out/q.c ;; esac
+for a; do case $a in --output=*) cp "$2" "${a#--output=}" ;; esac; done
+FAKE
+  chmod +x "$d/fake"
+  printf 'a\n' >"$d/a.ms"; printf 'b\n' >"$d/b.ms"; printf 'x\n' >"$d/broken.ms"
+  both=$(emit_one "$d/fake" 1 a "$d/a.ms" 2 b "$d/b.ms" 3 broken "$d/broken.ms")
+  one=$(emit_one "$d/fake" 9 a "$d/a.ms")
+  [ "$(sed -n 1p <<<"$both")" = "$one" ] || { printf 'FAIL emit batch: a program signed differently beside others\n'; bad=1; }
+  awk -F'\t' 'NR == 1 { c = $2; j = $3 } NR == 2 && ($2 == c || $3 == j) { bad = 1 } END { exit bad }' <<<"$both" \
+    || { printf 'FAIL emit batch: two programs shared a signature\n'; bad=1; }
+  [ "$(cut -f1,4,5 <<<"$both" | tr '\t\n' ' |')" = "a 0 2|b 0 2|broken 1 0|" ] \
+    || { printf 'FAIL emit batch: names, exit codes or C file counts are off: %s\n' "$(cut -f1,4,5 <<<"$both" | tr '\t\n' ' |')"; bad=1; }
+  mkdir "$d/other"; printf 'x\n' >"$d/other/broken.ms"
+  [ "$(emit_one "$d/fake" 3 broken "$d/other/broken.ms" | cut -f2)" != "$(sed -n 3p <<<"$both" | cut -f2)" ] \
+    || { printf 'FAIL emit batch: two different failures shared a signature\n'; bad=1; }
   rm -rf "$d"
   return $bad
 )
@@ -1195,8 +1359,8 @@ CASES
     BEGIN { n = split(ENVIRON["GOT"], g, "\n"); for (i = 1; i <= n; i++) { k = index(g[i], "|"); m[substr(g[i], 1, k - 1)] = substr(g[i], k + 1) } }
     m[$1] != $2 { printf "FAIL route %s: want \"%s\", got \"%s\"\n", $1, $2, m[$1]; bad = 1 }
     END { exit bad }' <<<"$cases" || bad=1
-  INERT_RE=$INERT BLIND_RE=$SELECT_BLIND awk -F'|' '
-    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["BLIND_RE"]) ? "blind" : "" }
+  INERT_RE=$INERT STD_RE=$SELECT_STD BLIND_RE=$SELECT_BLIND awk -F'|' '
+    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 !~ ENVIRON["STD_RE"] && $1 ~ ENVIRON["BLIND_RE"]) ? "blind" : "" }
     got != $2 { printf "FAIL narrowing %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
     END { exit bad }' <<'CASES' || bad=1
 src/checker/checkPass.ms|
@@ -1204,7 +1368,9 @@ src/codegen/c/expressions.ms|
 src/compiler/cc.ms|blind
 src/compiler/compile.ms|blind
 src/compiler/toolchain.ms|blind
-std/fs/index.ms|blind
+std/fs/index.ms|
+std/core/system/index.rms|blind
+std/build/template.txt|blind
 runtime/drc.h|blind
 src/test/corpus/run.ms|blind
 src/test/corpus/programs/804-enumNegativeValue.ms|
@@ -1356,8 +1522,10 @@ CASES
   publish_self_test || bad=1
   emit_env_self_test || bad=1
   control_boot_self_test || bad=1
+  emit_many_self_test || bad=1
   emit_width_self_test || bad=1
   cand_reuse_self_test || bad=1
+  std_swap_self_test || bad=1
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
   adopt_self_test || bad=1
@@ -1426,7 +1594,7 @@ case " $lanes " in *" corpus "*|*" san "*)
   if [ -n "$lanes_arg" ]; then select_why="--lanes runs a lane whole"
   elif [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then select_why="the full ladder"
   else
-    blind=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -E "$SELECT_BLIND" | head -1)
+    blind=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -Ev "$SELECT_STD" | grep -E "$SELECT_BLIND" | head -1)
     if [ -n "$blind" ]; then select_why="$blind cannot show in emitted code"; else select=1; fi
   fi ;;
 esac
@@ -1614,23 +1782,7 @@ select_whole() {
 select_programs() {
   local sha key ctl_dir ctl cand t0=$SECONDS n_all line
   sha=$(git merge-base "$base" HEAD) || { select_whole "no merge base with $base"; return; }
-  if [ -n "$(git status --porcelain -- std runtime vendor)" ] \
-    || [ "$(git ls-tree "$sha" std runtime vendor)" != "$(git ls-tree HEAD std runtime vendor)" ]; then
-    select_whole "control and candidate support trees differ"; return
-  fi
-  prepare_emit_workspace || { select_whole "cannot snapshot emission inputs"; return; }
-  CONTROL_SUPPORT=$(control_support "$CTL_WORK") || { select_whole "cannot fingerprint support snapshot"; return; }
-  key=$(build_ctl "$sha") || { select_whole "no control compiler at $(printf '%s' "$sha" | cut -c1-8), log: $OUT/ctl.log"; return; }
-  ctl_dir=$(control_dir "$key")
-  ctl=$(stage_emit_compiler "$(control_binary "$ctl_dir")" ctrl) \
-    && cand=$(stage_emit_compiler "$CAND" cand) || { select_whole "cannot stage emission compilers"; return; }
-  rm -rf "$EMIT"
-  mkdir -p "$EMIT"
-  stable_programs >"$EMIT/programs"
-  emit_cached "$ctl" "$ctl_dir" ctl || { select_whole "control emit or cache publication failed"; return; }
-  emit_candidate "$cand" || { select_whole "candidate emit failed"; return; }
-  adopt_candidate || { select_whole "candidate cache publication failed"; return; }
-  trim_controls "$key" "$(control_key HEAD)"
+  emit_sides "$sha" || return
   n_all=$(grep -c . "$EMIT/programs")
   if [ "$(grep -c . "$EMIT/ctl.sig")" -ne "$n_all" ] || [ "$(grep -c . "$EMIT/cand.sig")" -ne "$n_all" ]; then
     select_whole "an emit pass lost programs"; return

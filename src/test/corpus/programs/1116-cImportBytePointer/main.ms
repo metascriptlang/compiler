@@ -1,4 +1,5 @@
 // @stdout: 251 251 5
+// @xfail(raiser): raiser runtime error: Unknown host function: bytesSum — a C header import has no host bridge on the Raiser
 // @skip-js: a C header import binds C symbols; the JS backend has no C linkage
 // note: a header's `unsigned char *` and `uint8_t *` point at bytes, so they import as a
 // borrowed uint8, not as cstring; plain `char *` stays cstring. Both byte forms used to be
