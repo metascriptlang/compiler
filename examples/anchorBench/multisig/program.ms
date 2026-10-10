@@ -1,4 +1,5 @@
 import { seedTable } from "std/solana/accountSeeds";
+import { signingMembers } from "std/solana/signers";
 import {
 	Account,
 	Discriminator,
@@ -127,14 +128,7 @@ function executeTransfer(): Result<uint64, ProgramError> {
 	const vaultBump = try canonicalBump(x.vault.asAccount(), seedTable(["vault", x.config.key()]));
 	const config = x.config.data();
 	if (config.signersLength > 10) { return Result.err(ProgramError.invalidAccountData()); }
-	let approvals: uint32 = 0;
-	for (let i = 5; i < accountCount(); i++) {
-		const remaining = try account(i);
-		if (!remaining.isSigner()) { continue; }
-		for (let stored = 0; stored < (config.signersLength as int32); stored++) {
-			if (remaining.key() == config.signers[stored]) { approvals = approvals + 1; break; }
-		}
-	}
+	const approvals = try signingMembers(5, config.signers, config.signersLength as int32);
 	if (approvals < (config.threshold as uint32)) { return Result.err(ProgramError.userError(2)); }
 	return signed(transfer(x.vault.asAccount(), x.recipient.asAccount(), input.amount),
 		["vault", x.config.key(), [vaultBump]]);
