@@ -97,8 +97,8 @@ answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = refuse at once, < 0 = skip the load check)
-      GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers
-      MSCORPUS_BUILD_JOBS optional corpus build ceiling, kept across phases
+      GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
+      MSCORPUS_BUILD_JOBS width of selector emit and corpus build workers, kept across phases; it replaces the GATE_PAR cap on them
       these limits do not cap aggregate processes or compiler-internal parallelism
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
@@ -827,10 +827,12 @@ trim_controls() {
   return 0
 }
 
+build_width() { cap_jobs "$(share_of_cores "$1")" "${corpus_build_limit:-${GATE_PAR:-}}"; }
+
 emit_width() {
   local share=2
   [ "$(find "${SLOTS_DIR:-/nonexistent}" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 1 ] || share=1
-  cap_jobs "$(share_of_cores "$share")" "${GATE_PAR:-}"
+  build_width "$share"
 }
 
 emit_batch() {
@@ -1247,7 +1249,7 @@ FAKE
 )
 
 emit_width_self_test() (
-  local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" full half
+  local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
   SLOTS_DIR="$d/slots" GATES_DIR="$d/gates"
   mkdir -p "$SLOTS_DIR/0" "$GATES_DIR"
@@ -1257,6 +1259,8 @@ emit_width_self_test() (
   [ "$full" -eq "$(cores)" ] || { printf 'FAIL emit width: a selector alone got %s of %s cores\n' "$full" "$(cores)"; bad=1; }
   [ "$(cores)" -lt 2 ] || [ "$half" -lt "$full" ] || { printf 'FAIL emit width: a selector beside another lane kept %s cores\n' "$half"; bad=1; }
   GATE_PAR=2; [ "$(emit_width)" -le 2 ] || { printf 'FAIL emit width: GATE_PAR did not cap the selector\n'; bad=1; }
+  corpus_build_limit=5
+  [ "$(cores)" -lt 6 ] || [ "$(build_width 2)" -gt 2 ] || { printf 'FAIL emit width: an explicit build width did not replace the GATE_PAR cap\n'; bad=1; }
   rm -rf "$d"
   return $bad
 )
@@ -1959,7 +1963,7 @@ for phase in "${PHASES[@]}"; do
   for lane in $todo; do case "$lane" in corpus|san) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
-  MSCORPUS_BUILD_JOBS=$(cap_jobs "$(share_of_cores "$heavy")" "${GATE_PAR:-}" "$corpus_build_limit") || exit $?
+  MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
   select_pid=""
   case " $todo " in *" suite "*|*" tests "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
