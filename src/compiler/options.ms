@@ -397,6 +397,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		}
 		i += 1;
 	}
+	if (opts.targetOs == "solana" && opts.mode == MODE_DANGER) {
+		return Result.err("--danger is refused on --os=solana: it drops the bound, range, object and division checks that guard a program fed adversarial input\n  → use --release, which links with LTO on this target");
+	}
 	return Result.ok(null);
 }
 
@@ -533,6 +536,13 @@ test "an argument after the file is an error for a command that takes one file" 
 		assert !applyArgs(newCliOptions(), [command, "a.ms", "b.ms"], 0).ok;
 		assert !applyArgs(newCliOptions(), ["--release", command, "a.ms", "--danger", "b.ms"], 0).ok;
 	}
+}
+
+test "--danger is an error on --os=solana whichever order the flags come in" {
+	assert !applyArgs(newCliOptions(), ["build", "a.ms", "--os=solana", "--danger"], 0).ok;
+	assert !applyArgs(newCliOptions(), ["build", "a.ms", "--danger", "--os=solana"], 0).ok;
+	assert applyArgs(newCliOptions(), ["build", "a.ms", "--os=solana", "--release"], 0).ok;
+	assert applyArgs(newCliOptions(), ["build", "a.ms", "--os=bare", "--danger"], 0).ok;
 }
 
 test "a package command still takes flags through" {

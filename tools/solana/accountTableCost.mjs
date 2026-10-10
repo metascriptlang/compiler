@@ -32,9 +32,9 @@ const form = option("form", "std");
 const suite = option("suite", "matrix");
 const work = resolve(option("work", "/tmp/accountTableCost"));
 const localTables = argv.includes("--local-tables");
-const optimizationFlags = argv.includes("--danger") ? ["--danger"] : [];
+const optimizationFlags = argv.includes("--release") ? ["--release"] : [];
 if (!msc || !["std", "table", "chain"].includes(form) || !["matrix", "decorators", "hibernal", "refusals", "escrow"].includes(suite)) {
-	console.error("usage: node accountTableCost.mjs --msc <msc> [--form std|table|chain] [--suite matrix|decorators|hibernal|refusals|escrow] [--work <dir>] [--local-tables] [--danger]");
+	console.error("usage: node accountTableCost.mjs --msc <msc> [--form std|table|chain] [--suite matrix|decorators|hibernal|refusals|escrow] [--work <dir>] [--local-tables] [--release]");
 	console.error("  std:   accounts<T>() from the std beside <msc>; use a separately installed baseline compiler for A/B");
 	console.error("  table: rejected historical unsafe-cast prototype; requires its pre-private-proof compiler/std");
 	console.error("  chain: actual accounts<T>() from the candidate std, no prototype or forged proofs");

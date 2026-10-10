@@ -1745,7 +1745,7 @@ solana_replays() {
     printf 'FAIL solana replay-deps: node or tools/solana/node_modules/litesvm missing\n'
     return 1
   fi
-  solana_check fields-build "$CAND" build tools/solana/accountValuesProbe.ms --os=solana --danger --output="$dir/accountValues.so" \
+  solana_check fields-build "$CAND" build tools/solana/accountValuesProbe.ms --os=solana --release --output="$dir/accountValues.so" \
     && { solana_check fields-replay node tools/solana/accountValues.mjs "$dir/accountValues.so" || rc=1; } || rc=1
   if solana_check escrow-build "$CAND" build examples/escrow/program.ms --os=solana --output="$dir/escrow.so" \
     && solana_check idl-build "$CAND" build examples/escrow/idl.cms --output="$dir/escrow-idl" \

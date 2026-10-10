@@ -525,9 +525,13 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
 
 ### Solana LTO follows the optimization flags — measured 2026-10-07
 
-`--os=solana` alone does not enable LTO. `--danger` selects it unless an explicit
+`--os=solana` alone does not enable LTO. `--release` selects it unless an explicit
 `--lto=off` disables it; `--lto=full` and `--lto=thin` also select the whole-module
-SBF merge. The decision lives in `resolveLto`, and the two-step merge in
+SBF merge. `--danger` is a compile error on this target: it drops the bound, range,
+object and checked-division checks, and Solana input is adversarial (an out-of-range
+client index overwrote an account's authority field under `--danger` and was refused
+under `--release`). The measurements below that say `--danger` predate the refusal;
+`--release --lto=thin` cost 0-56 CU more than `--danger` on them. The decision lives in `resolveLto`, and the two-step merge in
 `linkSolana` / `mergeSbfBitcode` (`src/compiler/cc.ms`).
 
 On tree `2afa173472c6e47a6cf4b62f011e5364eed4d116`, installed compiler and support
