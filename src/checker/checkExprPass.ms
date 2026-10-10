@@ -1523,6 +1523,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (stampType != null && isMaybeType(stampType)) {
 			stampType = stampType.typeReturn != null ? stampType.typeReturn : objExpected;
 		}
+		const stampRef = stampType != null ? unwrapRefNullUnion(stampType) : null;
+		if (stampRef != null) stampType = stampRef;
 		node.nodeType = (stampType != null) ? stampType : objExpected;
 		// Pin to consts so the inner while-loop body sees non-null typeNames/
 		// typeChildren — flow narrowing on `let objExpected` doesn't reach

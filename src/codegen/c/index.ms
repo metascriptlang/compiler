@@ -46,10 +46,6 @@ function prepareEmissionTypes(node: Node, ctx: CheckerContext): void {
 			if (d.initializer.nodeType == null && node.nodeType != null) {
 				d.initializer.nodeType = node.nodeType;
 			}
-			if (node.nodeType != null && node.nodeType.kind == TypeKind.Union
-				&& d.initializer.kind == NodeKind.ObjectLiteral) {
-				d.initializer.nodeType = node.nodeType;
-			}
 		}
 	} else if (node.kind == NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
