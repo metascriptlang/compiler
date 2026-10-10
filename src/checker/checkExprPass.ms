@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
+import { adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -157,7 +157,7 @@ function readonlyFieldDeclarer(classSym: Symbol, propName: string): Symbol {
 	let depth = 0;
 	while (sym != null && depth < 64) {
 		const decl = classDeclNodeOf(sym);
-		if (decl == null) return null as unknown as Symbol;
+		if (decl == null) return declaresReadonlyField(sym, propName) ? sym : null as unknown as Symbol;
 		const body = decl.kind == NodeKind.ClassDecl
 			? (decl.data as ClassDeclData).classBody
 			: (decl.data as ActorDeclData).actorBody;
@@ -2186,6 +2186,7 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 		}
 		if (elemExpected == null && d.elements.length > 1
 			&& !(elemType != null && isAwaitable(elemType))) {
+			adoptLiteralArms(ctx, d.elements);
 			const elemJoinTypes: Type[] = [];
 			for (const el of d.elements) {
 				const elType = literalElemType(el);
@@ -2210,6 +2211,9 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 			const fromSpreads = joinBranchTypes(spreadTypes);
 			if (!isUnresolvedType(fromSpreads)) elemType = fromSpreads;
 		}
+		// A spread first element carries no type of its own; under a Span or other
+		// element slot every element was checked against that slot.
+		if (elemExpected != null && isUnresolvedType(elemType) && !isUnresolvedType(elemExpected)) elemType = elemExpected;
 		if (elemExpected == null && elemType != null && closureStorageType(elemType) != elemType) {
 			const storedElem = closureStorageType(elemType);
 			let si = 0;
@@ -2654,6 +2658,7 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 	}
 	retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 	retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
+	adoptLiteralArms(ctx, [d.ternaryConsequent, d.ternaryAlternate]);
 	const branchTypes: Type[] = [];
 	if (d.ternaryConsequent.nodeType != null) { branchTypes.push(d.ternaryConsequent.nodeType); }
 	if (d.ternaryAlternate.nodeType != null) { branchTypes.push(d.ternaryAlternate.nodeType); }
@@ -2680,7 +2685,12 @@ function nullishArmExpected(expectedType: Type | null): Type | null {
 function fitNullishArms(ctx: CheckerContext, d: BinaryExprData, leftType: Type | null, rightType: Type | null, expectedType: Type | null, converting: boolean): Type | null {
 	if (rightType == null || rightType.kind == TypeKind.Null || isMaybeType(rightType) || nullishPayloadType(rightType) != null) return null;
 	const payload = nullishPayloadType(leftType);
-	if (payload == null) return null;
+	if (payload == null) {
+		// A left side already known non-null makes the right arm dead, yet it is
+		// still a value of the left's type: an empty array takes that type.
+		if (leftType != null) retypeEmptyArrayBranch(d.right, leftType);
+		return null;
+	}
 	const target = nullishArmExpected(expectedType);
 	if (converting && target != null && isNumeric(payload) && isNumeric(target) && numericConvRefuses(payload, target)) {
 		d.right = fitJoinedBranch(ctx, d.right, payload);

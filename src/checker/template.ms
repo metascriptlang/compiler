@@ -49,6 +49,11 @@ export function rewindTemplateGensym(mark: int32): void {
 	_templateGensymCounter = mark;
 }
 
+export function nextQuoteGensymSuffix(): string {
+	_templateGensymCounter = _templateGensymCounter + 1;
+	return "$q" + String(_templateGensymCounter);
+}
+
 export function beginGensymUnit(): int32 {
 	const outer = _templateGensymCounter;
 	_templateGensymCounter = 0;

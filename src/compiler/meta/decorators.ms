@@ -25,7 +25,8 @@ import {
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectGetField,
 } from "../../raiser/value";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
-import { nodeToValue, valueToNode, takeWireRefusals } from "./bridge";
+import { nodeToValue, valueToExpansion, takeWireRefusals } from "./bridge";
+import { nextQuoteGensymSuffix } from "../../checker/template";
 import { forEachChild } from "../../ast/visitor";
 
 function rebaseLocations(node: Node, loc: SourceLocation): void {
@@ -603,14 +604,14 @@ function readStrings(arrHeap: RaiserArrayHeap, v: RaiserValue): string[] {
 	return out;
 }
 
-function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, v: RaiserValue, loc: SourceLocation): Node[] {
+function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, v: RaiserValue, loc: SourceLocation, gensym: string): Node[] {
 	const out: Node[] = [];
 	if (v.kind != RaiserValueKind.Array) return out;
 	const len = heapArrayLen(arrHeap, v.intVal) as int32;
 	for (let i = 0; i < len; i += 1) {
 		const item = heapArrayGet(arrHeap, v.intVal, i);
 		if (item.kind == RaiserValueKind.Nil) continue;
-		out.push(valueToNode(item, objHeap, arrHeap, loc));
+		out.push(valueToExpansion(item, objHeap, arrHeap, loc, gensym));
 	}
 	return out;
 }
@@ -713,9 +714,10 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		return target;
 	}
 	const h = res.intVal;
+	const gensym = nextQuoteGensymSuffix();
 	plan.metaKeys = readStrings(arrHeap, heapObjectGetField(objHeap, h, "metaKeys"));
-	plan.metaValues = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "metaValues"), loc);
-	const inits = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "initializers"), loc);
+	plan.metaValues = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "metaValues"), loc, gensym);
+	const inits = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "initializers"), loc, gensym);
 	const friends = isMacro ? expansionOf(ctx, target, sym.modulePath) : ([] as string[]);
 	for (const s of inits) markExpansion(ctx, s, friends);
 	for (const s of inits) {
@@ -726,10 +728,10 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	let outNode = target;
 	if (shape == shapeTransformer) {
 		const pd = target.data as PropertyDeclData;
-		pd.propInitializer = rv.kind == RaiserValueKind.Nil ? (null as unknown as Node) : valueToNode(rv, objHeap, arrHeap, loc);
+		pd.propInitializer = rv.kind == RaiserValueKind.Nil ? (null as unknown as Node) : valueToExpansion(rv, objHeap, arrHeap, loc, gensym);
 		markExpansion(ctx, target, friends);
 	} else if (shape == shapeNode && rv.kind != RaiserValueKind.Nil) {
-		const replacement = valueToNode(rv, objHeap, arrHeap, loc);
+		const replacement = valueToExpansion(rv, objHeap, arrHeap, loc, gensym);
 		if (replacement == null || replacement.kind != target.kind) {
 			const got = replacement == null ? "nothing" : kindLabel(replacement.kind);
 			const want = kindLabel(target.kind);

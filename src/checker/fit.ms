@@ -1019,6 +1019,36 @@ export function literalAdoptsFloat32(lit: Node): boolean {
 	return (lit.data as NumberLiteralData).isFloat || (isNodeIntLit(lit) && intLiteralExactInFloat(lit, createPrimitive(TypeKind.Float32)));
 }
 
+// CK-135 at a join (ternary, match, array elements, try/catch value): a literal
+// arm takes the numeric type every other arm shares, by the rule a literal
+// operand follows beside a typed operand.
+export function adoptLiteralArms(ctx: CheckerContext, arms: Node[]): void {
+	let shared: Type | null = null;
+	let literals = 0;
+	for (const arm of arms) {
+		if (arm == null) continue;
+		if (arm.kind == NodeKind.NumberLiteral) { literals += 1; continue; }
+		const t = arm.nodeType;
+		if (t == null || !isNumeric(t)) return;
+		if (shared == null) shared = t;
+		else if (!sameType(shared, t)) return;
+	}
+	if (shared == null || literals == 0) return;
+	for (const arm of arms) {
+		if (arm != null && arm.kind == NodeKind.NumberLiteral) adoptLiteralTo(ctx, arm, shared);
+	}
+}
+
+export function adoptLiteralTo(ctx: CheckerContext, lit: Node, t: Type): void {
+	if (lit.kind != NodeKind.NumberLiteral) return;
+	if (isIntegerType(t) && isNodeIntLit(lit) && literalFitsInType(lit, t, false)) {
+		lit.nodeType = t;
+	} else if (t.kind == TypeKind.Float32 && literalAdoptsFloat32(lit)) {
+		reportFloat32LiteralRange(ctx, lit);
+		lit.nodeType = t;
+	}
+}
+
 export function constantAdoptsFloat32(expr: Node): Node {
 	const none = null as unknown as Node;
 	if (expr.kind == NodeKind.NumberLiteral || !isUntypedConstant(expr, 0)) return none;

@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBloc
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
+import { adoptLiteralArms, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
@@ -1002,6 +1002,7 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 	if (argType != null && isResult(argType) && getResultOkType(argType) != null) {
 		const okT = getResultOkType(argType);
 		if (d.hasCatch && d.catchVal != null && okT != null && okT.kind != TypeKind.Void && d.catchVal.nodeType != null) {
+			if (isNumeric(okT)) adoptLiteralTo(ctx, d.catchVal, okT);
 			const joined = joinBranchTypes([okT, d.catchVal.nodeType]);
 			if (!isUnresolvedType(joined)) {
 				d.catchVal = fitJoinedBranch(ctx, d.catchVal, joined);
@@ -1740,8 +1741,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		node.nodeType = nullableRet;
 		return nullableRet;
 	}
-	if (calleeType != null && isValueCallee(d.callee) && isNeverCallable(calleeType)) {
-		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures",
+	if (calleeType != null && isValueCallee(d.callee) && !isCallableValueType(calleeType)) {
+		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures" + dynamicFieldCalleeHint(d.callee),
 			node.location.line, node.location.column);
 		node.nodeType = inferredType();
 		return node.nodeType;
@@ -3389,16 +3390,47 @@ function isValueCallee(callee: Node): boolean {
 		|| sym.symbolKind == SymbolKind.Property || sym.symbolKind == SymbolKind.Temp;
 }
 
-function isNeverCallable(t: Type): boolean {
+// Reference (semIndirectOp, semexprs.nim): a value is called only through a
+// procedure type; every other type in call position is refused. A type not
+// known yet is left to the code that settles it.
+// The node whose value a match arm yields: its expression, or the argument of
+// the return that ends its block.
+function matchArmValue(cd: MatchCaseData, asStatement: boolean): Node {
+	const none = null as unknown as Node;
+	if (cd.caseBody.kind != NodeKind.BlockStmt) return cd.caseBody;
+	if (asStatement) return none;
+	const bd = cd.caseBody.data as BlockStmtData;
+	if (bd.statements.length == 0) return none;
+	const last = bd.statements[bd.statements.length - 1];
+	return last.kind == NodeKind.ReturnStmt ? (last.data as ReturnStmtData).argument ?? none : none;
+}
+
+function unionHasFunction(t: Type): boolean {
+	for (const m of t.typeChildren) {
+		if (m.kind == TypeKind.Function) return true;
+	}
+	return false;
+}
+
+function isCallableValueType(t: Type): boolean {
 	return match (t.kind) {
-		TypeKind.Void | TypeKind.Null | TypeKind.Boolean | TypeKind.BooleanLiteral
-			| TypeKind.Number | TypeKind.Float32 | TypeKind.Float64
-			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Char | TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
-			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Array | TypeKind.SizedArray => true,
+		TypeKind.Function => true,
+		TypeKind.Inferred | TypeKind.Unknown | TypeKind.Pending | TypeKind.Error | TypeKind.Never
+			| TypeKind.GenericParam | TypeKind.GenericInstance | TypeKind.TypeReference | TypeKind.Conditional => true,
+		TypeKind.Ref | TypeKind.Var | TypeKind.Lent | TypeKind.Sink | TypeKind.Borrow | TypeKind.Alias | TypeKind.Distinct =>
+			t.typeReturn == null || isCallableValueType(t.typeReturn),
+		TypeKind.Union => unionHasFunction(t),
 		_ => false,
 	};
+}
+
+function dynamicFieldCalleeHint(callee: Node): string {
+	if (callee.kind != NodeKind.CallExpr) return "";
+	const inner = (callee.data as CallExprData).callee;
+	if (inner.kind != NodeKind.MemberExpr || (inner.data as MemberExprData).property != "getDynamicField") return "";
+	const args = (callee.data as CallExprData).arguments;
+	const key = args.length > 0 && args[0].kind == NodeKind.StringLiteral ? (args[0].data as StringLiteralData).value : "";
+	return ` — '${key}' is read as a dynamic field here, not a method; a free function is called as '${key}(value, …)'`;
 }
 
 // Declared types, not `candidates`: those have the receiver stripped, and the receiver is what differs.
@@ -4834,7 +4866,7 @@ export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boo
 	if (flattenedLocationFieldType(recvType, key) != null) return true;
 	// bindSym bake splices Identifier literals carrying the bound-symbol handle;
 	// valueToNode consumes it — never a real Node field.
-	if (key == "symHandle" || key == "typeHandle") return true;
+	if (key == "symHandle" || key == "typeHandle" || key == "gensym") return true;
 	return engineNodeDataField(recvType, key).fieldType != null;
 }
 
@@ -4998,6 +5030,12 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		}
 	}
 	let matchJoined: Type | null = null;
+	const armValues: Node[] = [];
+	for (const c of d.matchCases) armValues.push(matchArmValue(c.data as MatchCaseData, asStatement));
+	adoptLiteralArms(ctx, armValues);
+	for (let ai = 0; ai < armValues.length && ai < branchBodyTypes.length; ai += 1) {
+		if (armValues[ai] != null && armValues[ai].nodeType != null) branchBodyTypes[ai] = armValues[ai].nodeType;
+	}
 	const joined = joinBranchTypes(branchBodyTypes);
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {

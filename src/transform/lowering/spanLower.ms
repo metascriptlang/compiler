@@ -10,11 +10,13 @@
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
-import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
+import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, ThrowStmtData, SwitchStmtData, AssertStmtData, MemberExprData, HiddenDerefData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
-import { TransformContext, freshTempSym } from "../context";
-import { walkNode } from "../walker";
+import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
+import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
+import { cloneIfPure } from "../coercion/intArithJS";
+import { containsConditionalEval } from "./callHoist";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
@@ -22,9 +24,13 @@ import {
 } from "../util";
 import { overloadWinner } from "../../checker/symbol";
 
-export function spanLower(program: Node, ctx: TransformContext): Node {
+// `final`: run after conditionalExprLower. The first run splits only sources it
+// could make pure — one under a ternary arm or `&&` keeps its conversion node.
+export function spanLower(program: Node, ctx: TransformContext, final: boolean): Node {
 	walkNode(program, wrapSpanCoercions);
+	if (!ctx.jsBackend) walkExpandBlocks(program, stabilizeSpanSources, ctx);
 	return walkNode(program, (node: Node): Node => {
+		if (!ctx.jsBackend && !final && !splitsPure(node)) return node;
 		// Zero-copy slicing: ArrayAccess with range index and Span result type
 		if (node.kind == NodeKind.ArrayAccess) {
 			return ctx.jsBackend ? lowerRangeAccessJS(node) : lowerRangeAccess(node, ctx);
@@ -52,15 +58,19 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 				} else if (srcType != null) {
 					const loc = node.location;
 
-					// Stack-promoted literal: [1,2,3] → Span → SizedArray temp on stack
+					// Stack-promoted literal: [1,2,3] → Span → SizedArray temp on stack.
+					// A spread makes the length a run-time value: the literal is a Vec the Span views.
 					if (d.convExpr.kind == NodeKind.ArrayLiteral) {
-						return lowerLiteralToSpan(d.convExpr, targetType, ctx);
+						if (!hasSpreadElement(d.convExpr)) return lowerLiteralToSpan(d.convExpr, targetType, ctx);
+						srcType = createArray(spanTarget.typeReturn);
+						d.convExpr.nodeType = srcType;
 					}
 
 					if (srcType.kind == TypeKind.Array) {
-						const dataExpr = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
-						dataExpr.nodeType = createPtr(spanTarget.typeReturn);
-						const lenExpr = makeMember(d.convExpr, "length", loc);
+						const elems = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						elems.nodeType = createPtr(spanTarget.typeReturn);
+						const dataExpr = makeHiddenStdConv(elems, spanDataPtr(spanTarget.typeReturn), loc);
+						const lenExpr = makeMember(secondRead(d.convExpr), "length", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.SizedArray) {
 						// SizedArray -> Span: { data: arr.data, len: N }
@@ -72,7 +82,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 						const bytes = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
 						bytes.nodeType = createPtr(spanTarget.typeReturn);
 						const dataExpr2 = makeHiddenStdConv(bytes, createPtr(spanTarget.typeReturn), loc);
-						const lenExpr2 = makeMember(d.convExpr, "len", loc);
+						const lenExpr2 = makeMember(secondRead(d.convExpr), "len", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], targetType, loc);
 					}
 				}
@@ -88,6 +98,163 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 
 		return node;
 	});
+}
+
+// The type of a Span's `data` member: a pointer to one element slot. A Ptr
+// over a Ref names the referent itself, so a slot holding a Ref is a Ptr to a
+// Ptr of what the Ref points at.
+// ===== Source stabilization =====
+// Reference (openArrayLoc, ccgcalls.nim): the argument is evaluated once into a
+// location, and data and len read that location — a call inside it becomes a
+// temp (`T3_ = at()`), the remaining path is read twice. Here a statement's
+// span sources are made pure paths before the split, which then reads each
+// path through its own copy, so the tree stays a tree.
+
+// `a[s..e]` as a Span: its own arm stabilizes the array and the start.
+function isRangeSlice(node: Node): boolean {
+	if (node.kind != NodeKind.ArrayAccess) return false;
+	const idx = (node.data as ArrayAccessData).index;
+	if (idx == null || idx.kind != NodeKind.BinaryExpr) return false;
+	const op = (idx.data as BinaryExprData).operator;
+	return op == ".." || op == "...";
+}
+
+// Every source this node's split reads more than once is a pure path.
+function splitsPure(node: Node): boolean {
+	if (node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) {
+		const src = (node.data as HiddenStdConvData).convExpr;
+		return src == null || (src.kind == NodeKind.ArrayLiteral && !hasSpreadElement(src)) || cloneIfPure(src) != null;
+	}
+	if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		if (d.index == null || d.index.kind != NodeKind.BinaryExpr) return true;
+		return cloneIfPure(d.array) != null && cloneIfPure((d.index.data as BinaryExprData).left) != null;
+	}
+	return true;
+}
+
+export function secondRead(source: Node): Node {
+	const copy = cloneIfPure(source);
+	if (copy == null) throw new Error(`internal: a span source at ${source.location.line}:${source.location.column} was not stabilized to a pure path before its (data, len) split`);
+	return copy;
+}
+
+function unconditionalExprsOf(stmt: Node): (Node | null)[] {
+	return match (stmt.kind) {
+		NodeKind.VariableDecl => [(stmt.data as VariableDeclData).initializer],
+		NodeKind.ExprStmt => [(stmt.data as ExprStmtData).expr],
+		NodeKind.ReturnStmt => [(stmt.data as ReturnStmtData).argument],
+		NodeKind.IfStmt => [(stmt.data as IfStmtData).condition],
+		NodeKind.ThrowStmt => [(stmt.data as ThrowStmtData).throwArg],
+		NodeKind.SwitchStmt => [(stmt.data as SwitchStmtData).switchDisc],
+		NodeKind.AssertStmt => [(stmt.data as AssertStmtData).assertExpr],
+		_ => [],
+	};
+}
+
+function isArraySource(t: Type | null): boolean {
+	let s = t;
+	if (s != null && s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	return s != null && (s.kind == TypeKind.Array || s.kind == TypeKind.String || s.kind == TypeKind.Span);
+}
+
+function spanTargetOf(t: Type | null): Type | null {
+	let s = t;
+	if (s != null && (s.kind == TypeKind.Var || s.kind == TypeKind.Sink || s.kind == TypeKind.Lent) && s.typeReturn != null) s = s.typeReturn;
+	return s != null && s.kind == TypeKind.Span ? s : null;
+}
+
+// A pure path of `source`: impure parts become temps placed before the statement.
+// A location keeps its storage (only its calls and indexes are evaluated ahead);
+// an rvalue is bound whole, owned by its temp like any call result.
+function stabilize(source: Node, ctx: TransformContext, hoisted: Node[]): Node {
+	if (source == null || cloneIfPure(source) != null) return source;
+	if (source.kind == NodeKind.MemberExpr) {
+		const d = source.data as MemberExprData;
+		d.object = stabilize(d.object, ctx, hoisted);
+		return source;
+	}
+	if (source.kind == NodeKind.ArrayAccess) {
+		const d = source.data as ArrayAccessData;
+		d.array = stabilize(d.array, ctx, hoisted);
+		d.index = stabilize(d.index, ctx, hoisted);
+		return source;
+	}
+	if (source.kind == NodeKind.HiddenDeref) {
+		const d = source.data as HiddenDerefData;
+		d.expr = stabilize(d.expr, ctx, hoisted);
+		return source;
+	}
+	return bindSource(source, source.nodeType, ctx, hoisted);
+}
+
+// An owned temp: a call result parked here is destroyed with the scope, as
+// any call result is (a `$` temp would be a cursor the analyzer never frees).
+function bindSource(source: Node, t: Type | null, ctx: TransformContext, hoisted: Node[]): Node {
+	const sym = freshOwnedSym(ctx, "spansrc", t);
+	const decl = makeVarDecl(sym.name, source, DeclKind.Const, source.location);
+	decl.resolvedSym = sym;
+	decl.nodeType = t;
+	hoisted.push(decl);
+	const ref = makeIdentResolved(sym, source.location);
+	ref.nodeType = t;
+	return ref;
+}
+
+function stabilizeSpanSources(stmt: Node, ctx: TransformContext): Node[] {
+	const hoisted: Node[] = [];
+	for (const root of unconditionalExprsOf(stmt)) {
+		// A ternary arm or `&&` operand runs conditionally; the run after
+		// conditionalExprLower meets it as a statement of its own.
+		if (root == null || containsConditionalEval(root)) continue;
+		replaceInExpr(root, (node: Node): Node => {
+			if (node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) {
+				const d = node.data as HiddenStdConvData;
+				const stackLiteral = d.convExpr != null && d.convExpr.kind == NodeKind.ArrayLiteral && !hasSpreadElement(d.convExpr);
+				if (spanTargetOf(d.convType) != null && d.convExpr != null && !stackLiteral && (isArraySource(d.convExpr.nodeType) || d.convExpr.kind == NodeKind.ArrayLiteral)) {
+					d.convExpr = stabilize(d.convExpr, ctx, hoisted);
+				}
+			} else if (node.kind == NodeKind.ArrayAccess && node.nodeType != null && node.nodeType.kind == TypeKind.Span) {
+				const d = node.data as ArrayAccessData;
+				if (d.index != null && d.index.kind == NodeKind.BinaryExpr) {
+					const bd = d.index.data as BinaryExprData;
+					if (bd.operator == ".." || bd.operator == "...") {
+						d.array = stabilize(d.array, ctx, hoisted);
+						// A bound is an int64 to msSliceLen whatever literal type it was read as.
+						if (bd.left != null && cloneIfPure(bd.left) == null) bd.left = bindSource(bd.left, createPrimitive(TypeKind.Int64), ctx, hoisted);
+					}
+				}
+			} else if (node.kind == NodeKind.CallExpr) {
+				const formals = calleeFnType(node);
+				if (formals != null) {
+					const cd = node.data as CallExprData;
+					for (let i = 0; i < cd.arguments.length && i < formals.typeChildren.length; i += 1) {
+						const arg = cd.arguments[i];
+						if (arg != null && spanTargetOf(formals.typeChildren[i]) != null && arg.kind != NodeKind.HiddenStdConv
+								&& arg.kind != NodeKind.HiddenSubConv && arg.kind != NodeKind.ArrayLiteral && !isRangeSlice(arg)) {
+							cd.arguments[i] = stabilize(arg, ctx, hoisted);
+						}
+					}
+				}
+			}
+			return node;
+		});
+	}
+	if (hoisted.length == 0) return [stmt];
+	hoisted.push(stmt);
+	return hoisted;
+}
+
+function hasSpreadElement(literal: Node): boolean {
+	for (const el of (literal.data as ArrayLiteralData).elements) {
+		if (el.kind == NodeKind.SpreadExpr) return true;
+	}
+	return false;
+}
+
+function spanDataPtr(elem: Type | null): Type {
+	if (elem != null && elem.kind == TypeKind.Ref && elem.typeReturn != null) return createPtr(createPtr(elem.typeReturn));
+	return createPtr(elem);
 }
 
 function calleeFnType(node: Node): Type {
@@ -237,8 +404,8 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 	}
 
 	const endExclusive = bd.operator == "..." ? makeBinary(endExpr, "+", makeNumber(1, loc), loc) : endExpr;
-	const sourceLen = arrType.kind == TypeKind.SizedArray ? makeNumber(arrType.typeValue, loc) : makeMember(d.array, "len", loc);
-	const lenExpr = makeCall(runtimeRef("msSliceLen", loc), [startExpr, endExclusive, sourceLen], loc);
+	const sourceLen = arrType.kind == TypeKind.SizedArray ? makeNumber(arrType.typeValue, loc) : makeMember(secondRead(d.array), "len", loc);
+	const lenExpr = makeCall(runtimeRef("msSliceLen", loc), [secondRead(startExpr), endExclusive, sourceLen], loc);
 	lenExpr.nodeType = createPrimitive(TypeKind.Int64);
 
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], resultType, loc);

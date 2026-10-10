@@ -188,9 +188,12 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	if (jsBackend) { result = lowerJsPointers(result, ctx); }
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
-	result = spanLower(result, ctx);
-	if (!jsBackend) { result = spanParamExpand(result, ctx); }
+	result = spanLower(result, ctx, false);
 	result = lowerConditionalExpr(result, ctx);
+	// Conditionally-evaluated positions are statements now: the span sources the
+	// first run had to leave there are evaluated once ahead of them and split.
+	result = spanLower(result, ctx, true);
+	if (!jsBackend) { result = spanParamExpand(result, ctx); }
 	// Conditionally-evaluated positions (ternary arm, `&&`/`||` RHS, while-cond)
 	// are statements now, so the positional-new hoist that skipped them above can
 	// reach them. The pass empties `newArguments` when it lowers, so this second
