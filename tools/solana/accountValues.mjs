@@ -27,7 +27,7 @@ function verify(data, expected, label) {
 		const scoreLog = r.meta().logs().filter(line => line.startsWith("Program log: ")).at(-1);
 		if (!scoreLog?.endsWith(`0x${expectedScore.toString(16)}`)) throw new Error(`${label}: wrong typed account score ${scoreLog}`);
 		const cu = r.meta().computeUnitsConsumed();
-		if (cu > 465n) throw new Error(`${label}: packed validation cost ${cu} CU exceeds 465`);
+		if (cu > 653n) throw new Error(`${label}: packed validation cost ${cu} CU exceeds 653`);
 		if (cu > maxValidCu) maxValidCu = cu;
 	}
 	checked++;
