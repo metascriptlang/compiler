@@ -150,7 +150,20 @@ test "a stored typeof result compared with a primitive name is refused, never fa
 }
 
 test "typeof of an unknown value cannot test an exact kind" {
-	assert hasError("class Pet { n: int32 = 1; }\nfunction f(v: unknown): boolean { return typeof v === \"int64\"; }", "carries no exact kind");
+	assert hasError("class Pet { n: int32 = 1; }\nfunction f(v: unknown): boolean { return typeof v === \"int64\"; }", "carries no exact kind to compare with 'int64'");
+}
+
+test "typeof of a nullable union cannot test an exact kind, on every backend alike" {
+	const NO_KIND = "carries no exact kind to compare with 'int64'";
+	for (const shape of ["int64 | string | null", "null | int64 | string", "int64 | string | undefined"]) {
+		const fn = "function f(x: " + shape + "): boolean { ";
+		assert hasError(fn + "return typeof x === \"int64\"; }", NO_KIND), shape;
+		assert hasError(fn + "switch (typeof x) { case \"int64\": return true; default: return false; } }", NO_KIND), shape;
+		assert hasError(fn + "return match (typeof x) { \"int64\" => true, _ => false }; }", NO_KIND), shape;
+		assert strictErrorCount(fn + "return typeof x === \"number\" || typeof x === \"object\"; }") == 0, shape;
+	}
+	assert hasError("struct H { v: int64 | string | null; }\nfunction f(h: H): boolean { return typeof h.v === \"int64\"; }", NO_KIND);
+	assert strictErrorCount("function f(x: int64 | null): boolean { return typeof x === \"int64\"; }") == 0;
 }
 
 test "the eight tags compare and switch without an error" {
