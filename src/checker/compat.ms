@@ -530,14 +530,14 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return false;
 	}
 
-	// null assignable to legacy nullable kinds (value-struct/array/span).
-	// TS-strict shift: Ref/Ptr are NO LONGER auto-nullable — callers must use
-	// `T | null` (handled by the Union-target check above) to opt into nullability.
+	// A type written without `| null` holds no null: callers use `T | null`
+	// (handled by the Union-target check above) to opt into nullability.
 	// Cursor<T> is the deliberate exception (allowsNil arm at function entry).
 	// Void target lets callers write `Result.ok(null)` for Result<void, E> (§7.5).
 	if (source.kind == TypeKind.Null) {
+		if (isMaybeType(target)) return true;
 		return match (target.kind) {
-			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Void => true,
+			TypeKind.Void => true,
 			_ => false,
 		};
 	}
@@ -1334,8 +1334,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 	// Null to nullable (mirrors isAssignableInner's null-source switch).
 	if (actual.kind == TypeKind.Null) {
-		if (formal.kind == TypeKind.Struct || formal.kind == TypeKind.Array ||
-			formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span ||
+		if (isMaybeType(formal) ||
 			formal.kind == TypeKind.Function || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr ||
 			formal.kind == TypeKind.Void) {
 			return TypeRelation.Subtype;
@@ -1725,8 +1724,9 @@ test "numeric widening" {
 }
 
 test "null to nullable" {
-	assert isAssignable(nullType(), createStruct("Foo", [], [], false));
-	assert isAssignable(nullType(), createArray(numberType()));
+	assert !isAssignable(nullType(), createStruct("Foo", [], [], false));
+	assert !isAssignable(nullType(), createArray(numberType()));
+	assert isAssignable(nullType(), createUnion([createArray(numberType()), nullType()]));
 	assert !isAssignable(nullType(), numberType());
 }
 
@@ -1808,7 +1808,7 @@ test "unknown = generic" {
 
 test "an integer into a float formal is a conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) == TypeRelation.Convertible; }
 
-test "null to object" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) == TypeRelation.Subtype; }
+test "null does not relate to an object that holds no null" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) == TypeRelation.None; }
 
 test "two object types of the same shape relate exactly, a different shape does not" {
 	const a = createRef(createStruct("", ["a", "x"], [createPrimitive(TypeKind.Int32), stringType()], true));
@@ -1908,9 +1908,11 @@ test "null accepted by Ref|Null union" {
 	assert isAssignable(nullType(), u);
 }
 
-test "null to sized array" { assert isAssignable(nullType(), createSizedArray(numberType(), 4)); }
+test "null to sized array" { assert !isAssignable(nullType(), createSizedArray(numberType(), 4)); }
 
-test "null to span" { assert isAssignable(nullType(), createSpan(numberType())); }
+test "null to span" { assert !isAssignable(nullType(), createSpan(numberType())); }
+
+test "null to void" { assert isAssignable(nullType(), voidType()); }
 
 test "array to span" {
 	const arr = createArray(numberType());

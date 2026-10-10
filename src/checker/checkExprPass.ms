@@ -1853,6 +1853,17 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 }
 
+// A direct `null as T` needs a T that admits null. Through `unknown` the cast only
+// reinterprets a pointer, so it stays open for the kinds whose slot is one.
+function nullCastAllowed(target: Type, throughUnknown: boolean): boolean {
+	const refusal = unknownRefusal(target);
+	const bare = skipModifier(target) ?? target;
+	if (throughUnknown) {
+		return refusal != UnknownRefusal.Value || bare.kind == TypeKind.Array || isFunctionKind(target);
+	}
+	return refusal != UnknownRefusal.Value && refusal != UnknownRefusal.Builtin && bare.kind != TypeKind.Ref;
+}
+
 function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	let d = node.data as TypeAssertionData;
 	// Non-null assertion `expr!` (sentinel asType "!"): strip the nullable
@@ -1959,10 +1970,9 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
 		&& d.asExpr != null && d.asExpr.kind == NodeKind.NullLiteral) {
 		const throughUnknown = srcType != null && isUnknownType(srcType);
-		if (!hasGenericParams(targetType) && !isAssignable(nullType(), targetType)
-			&& unknownRefusal(targetType) == UnknownRefusal.Value && !(throughUnknown && isFunctionKind(targetType))) {
+		if (!hasGenericParams(targetType) && !isAssignable(nullType(), targetType) && !nullCastAllowed(targetType, throughUnknown)) {
 			const held = throughUnknown ? "unknown" : "null";
-			addError(ctx, "cannot cast " + held + " to the value type " + typeDisplayName(targetType) + " — it holds no null; write `" + typeDisplayName(targetType) + " | null`", asLoc.line, asLoc.column);
+			addError(ctx, "cannot cast " + held + " to " + typeDisplayName(targetType) + " — it holds no null; write `" + typeDisplayName(targetType) + " | null`", asLoc.line, asLoc.column);
 			node.nodeType = targetType;
 			return;
 		}
