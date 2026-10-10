@@ -402,7 +402,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 	if (t.kind != TypeKind.Struct) return;
 	const sharedInstance = t.sym != null && (t.sym.instantiatedFrom != null || hasGenericParams(t.sym.symbolType));
 	if (t.sym != null && t.sym.instantiatedFrom != null) noteInstanceTypeInfo(tn, t, modulePath);
-	markTypeInfoHooks(t, sharedInstance ?modulePath : (t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath)));
+	markTypeInfoHooks(t, sharedInstance ? modulePath : (t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath)));
 	let bt = t.typeExtra;
 	let depth = 0;
 	while (bt != null && depth < 64) {
