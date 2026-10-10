@@ -2576,6 +2576,16 @@ export function isPrimitiveKindName(s: string): boolean {
 	};
 }
 
+// A value whose held kind no member tag answers: `unknown`, or a nullable
+// whose payload is itself a union, which keeps no tag for the payload member.
+export function holdsNoExactKind(t: Type): boolean {
+	const v = peelTransparentInstance(t);
+	if (isUnknownType(v)) return true;
+	if (!isMaybeType(v) || v.typeReturn == null) return false;
+	const payload = peelTransparentInstance(v.typeReturn!);
+	return isUnknownType(payload) || isMaybeType(payload) || isTagCarriedUnion(payload);
+}
+
 export function typeofNameMatches(t: Type, name: string): boolean {
 	return isPrimitiveKindName(name) ? primitiveKindName(t) == name : typeofTagOf(t) == name;
 }
