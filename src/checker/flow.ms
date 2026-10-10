@@ -23,7 +23,7 @@ import {
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
 	nullableUnionOf, hasGenericParams,
-	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag, isNumeric,
+	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
@@ -591,6 +591,10 @@ function getTypeAtSwitchClause(state: FlowState, flow: FlowNode): FlowType {
 	// Simple `switch (x)` on an identifier (not a MemberExpr) could still
 	// narrow `x` itself, but that's the truthiness/literal-equality case —
 	// Phase 6 territory.
+	if (isTypeofOperand(disc)) {
+		if (!isMatchingReference((disc.data as UnaryExprData).operand, state.reference) || parent.t == null) return parent;
+		return flowType(narrowTypeBySwitchOnTypeof(parent.t, sd, clauseData.clauseStart, clauseData.clauseEnd), parent.incomplete);
+	}
 	if (disc.kind != NodeKind.MemberExpr) return parent;
 	const md = disc.data as MemberExprData;
 	if (!isMatchingReference(md.object, state.reference)) return parent;
@@ -634,6 +638,34 @@ function getTypeAtSwitchClause(state: FlowState, flow: FlowNode): FlowType {
 	// Phase 6 will negate the covered cases to produce the correct remainder.
 	if (anyDefault || narrowed == null) return parent;
 	return flowType(narrowed, parent.incomplete);
+}
+
+// A case narrows by its own tests; a default narrows by excluding every other case.
+function narrowTypeBySwitchOnTypeof(t: Type, sd: SwitchStmtData, clauseStart: int32, clauseEnd: int32): Type {
+	let hasDefault = false;
+	for (let ci = clauseStart; ci < clauseEnd && ci < sd.switchCases.length; ci += 1) {
+		if ((sd.switchCases[ci].data as SwitchCaseData).isDefault) hasDefault = true;
+	}
+	if (hasDefault) {
+		let rest: Type = t;
+		for (let ci = 0; ci < sd.switchCases.length; ci += 1) {
+			if (ci >= clauseStart && ci < clauseEnd) continue;
+			for (const test of (sd.switchCases[ci].data as SwitchCaseData).caseTests) {
+				const narrowed = narrowTypeByTypeof(rest, test, false);
+				if (narrowed != null) rest = narrowed;
+			}
+		}
+		return rest;
+	}
+	const kept: Type[] = [];
+	for (let ci = clauseStart; ci < clauseEnd && ci < sd.switchCases.length; ci += 1) {
+		for (const test of (sd.switchCases[ci].data as SwitchCaseData).caseTests) {
+			const narrowed = narrowTypeByTypeof(t, test, true);
+			if (narrowed != null && narrowed.kind != TypeKind.Never) kept.push(narrowed);
+		}
+	}
+	if (kept.length == 0) return t;
+	return unionOfTypes(kept, t);
 }
 
 // ===== Branch label joining =====
@@ -1544,7 +1576,7 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 	if (t == null || literalExpr == null) return t;
 	if (literalExpr.kind != NodeKind.StringLiteral) return t;
 	const d = literalExpr.data as StringLiteralData;
-	if (!isTypeofTag(d.value)) return t;
+	if (!isTypeofTag(d.value) && !isPrimitiveKindName(d.value)) return t;
 	if (isMaybeType(t) && t.typeReturn != null) {
 		const members: Type[] = [];
 		const payload = t.typeReturn;
@@ -1597,7 +1629,7 @@ function noValueLeft(t: Type, unresolved: Type): Type {
 }
 
 function typeofStringMatches(v: Type, s: string): boolean {
-	return typeofTagOf(v) == s;
+	return typeofNameMatches(v, s);
 }
 
 // Narrow a discriminated-union type by a discriminant property equality.

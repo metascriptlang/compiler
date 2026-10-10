@@ -2541,12 +2541,43 @@ export function typeofTagOf(t: Type | null): string {
 	if (t == null) return "object";
 	const v = peelTransparentInstance(t);
 	if (v.kind == TypeKind.Set) return typeofTagOf(setRepr(v));
-	if (isNumeric(v)) return "number";
+	if (isNumeric(v) || v.kind == TypeKind.Enum || v.kind == TypeKind.EnumLiteral) return "number";
 	if (v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral) return "string";
 	if (v.kind == TypeKind.Boolean || v.kind == TypeKind.BooleanLiteral) return "boolean";
 	if (v.kind == TypeKind.Function) return "function";
 	if (v.kind == TypeKind.BigInt) return "bigint";
 	return "object";
+}
+
+export function primitiveKindName(t: Type | null): string {
+	if (t == null) return "";
+	return match (peelTransparentInstance(t).kind) {
+		TypeKind.Int8 => "int8",
+		TypeKind.Int16 => "int16",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint8 => "uint8",
+		TypeKind.Uint16 => "uint16",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Uint64 => "uint64",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Char => "char",
+		TypeKind.CString => "cstring",
+		_ => "",
+	};
+}
+
+export function isPrimitiveKindName(s: string): boolean {
+	return match (s) {
+		"int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64" => true,
+		"float32" | "float64" | "char" | "cstring" => true,
+		_ => false,
+	};
+}
+
+export function typeofNameMatches(t: Type, name: string): boolean {
+	return isPrimitiveKindName(name) ? primitiveKindName(t) == name : typeofTagOf(t) == name;
 }
 
 export function jsMemberKind(t: Type): string {

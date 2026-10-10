@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType } from "./types";
+import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -867,6 +867,8 @@ export function refuseFunctionTruthiness(ctx: CheckerContext, expr: Node): void 
 
 export function checkSwitchCase(ctx: CheckerContext, disc: Node, test: Node): void {
 	if (disc.nodeType == null || test.nodeType == null) return;
+	if (acceptsKindTest(ctx, disc, test, test)) return;
+	if (refusesStoredKindTest(ctx, disc, test, test)) return;
 	const testType = comparedOperandType(test);
 	if (!binaryOperandsFail(ctx, "===", disc.nodeType, testType)) return;
 	if (valueOfInPlace(ctx, disc) && disc.nodeType != null && !binaryOperandsFail(ctx, "===", disc.nodeType, testType)) return;
@@ -882,11 +884,49 @@ function comparedOperandType(operand: Node): Type {
 
 export function typeofComparisonHint(a: Type | null, b: Type | null): string {
 	if (!isTypeofResultType(a) && !isTypeofResultType(b)) return "";
-	return " — typeof yields only these eight names; to tell numeric kinds apart, use a union with named variants such as `{ kind: \"u\"; v: uint64 } | { kind: \"i\"; v: int64 }`";
+	return " — typeof yields only these eight names; to test an exact kind, compare 'typeof x' in place with a primitive name such as \"uint64\"";
+}
+
+export function isTypeofExpr(n: Node | null): boolean {
+	return n != null && n.kind == NodeKind.UnaryExpr && (n.data as UnaryExprData).unaryOp == "typeof";
+}
+
+export function primitiveNameLiteral(n: Node | null): string {
+	if (n == null || n.kind != NodeKind.StringLiteral) return "";
+	const name = (n.data as StringLiteralData).value;
+	return isPrimitiveKindName(name) ? name : "";
+}
+
+export function isKindTestOperand(typeofSide: Node, nameSide: Node): boolean {
+	return isTypeofExpr(typeofSide) && primitiveNameLiteral(nameSide) != "";
+}
+
+function acceptsKindTest(ctx: CheckerContext, typeofSide: Node, nameSide: Node, at: Node): boolean {
+	if (!isKindTestOperand(typeofSide, nameSide)) return false;
+	const operand = (typeofSide.data as UnaryExprData).operand;
+	if (operand.nodeType != null && isUnknownType(operand.nodeType)) {
+		addError(ctx, `typeof of an 'unknown' value carries no exact kind to compare with '${primitiveNameLiteral(nameSide)}'; narrow it to a concrete type or a union of them first`, at.location.line, at.location.column);
+	}
+	return true;
+}
+
+function refusesStoredKindTest(ctx: CheckerContext, tagSide: Node, nameSide: Node, at: Node): boolean {
+	const name = primitiveNameLiteral(nameSide);
+	if (name == "" || isTypeofExpr(tagSide) || !isTypeofResultType(tagSide.nodeType)) return false;
+	addError(ctx, `'${name}' names an exact kind, which only 'typeof x' written in the comparison can test; a stored typeof result holds one of the eight TS tags, so compare it with one of them or write 'typeof x === "${name}"'`, at.location.line, at.location.column);
+	return true;
+}
+
+export function kindArmHandled(ctx: CheckerContext, disc: Node, arm: Node): boolean {
+	if (primitiveNameLiteral(arm) == "") return false;
+	if (isTypeofExpr(disc)) return acceptsKindTest(ctx, disc, arm, arm);
+	return refusesStoredKindTest(ctx, disc, arm, arm);
 }
 
 export function refuseDisjointStrings(ctx: CheckerContext, op: string, left: Node, right: Node, node: Node): boolean {
 	if (binaryOperandClass(op) != "eq" || left.nodeType == null || right.nodeType == null) return false;
+	if (acceptsKindTest(ctx, left, right, node) || acceptsKindTest(ctx, right, left, node)) return false;
+	if (refusesStoredKindTest(ctx, left, right, node) || refusesStoredKindTest(ctx, right, left, node)) return true;
 	const a = comparedOperandType(left);
 	const b = comparedOperandType(right);
 	const sa = operandShape(a);
