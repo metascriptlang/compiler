@@ -36,6 +36,7 @@ import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
+import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
@@ -77,6 +78,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	// this, calls to Result.ok/err fall through to compileClosureCall →
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
+	result = lowerTypeof(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);

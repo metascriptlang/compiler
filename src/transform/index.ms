@@ -97,6 +97,7 @@ import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerNullable } from "./native/nullableLower";
 import { projectNarrowedUnions, checkVariantReads } from "./native/unionProjectLower";
 import { lowerUnionTags } from "./lowering/unionTagLower";
+import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
@@ -144,6 +145,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	result = lowerResultConstructors(result);
+	result = lowerTypeof(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
