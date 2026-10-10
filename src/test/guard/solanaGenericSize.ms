@@ -23,7 +23,8 @@
 // RED PRE-FIX: createPdaOf 920 bytes a copy, realloc 824, close 752, verifiedPda 512 and 520,
 // selectInstruction 688, ownProgram 600, __divdi3 linked; a pass-through wrapper (close, realloc,
 // verifiedPda of a Delegated) that takes its result through a temporary measured 112 bytes, 16
-// when it hands the caller's result slot on. GREEN POST-FIX: GUARD-OK.
+// when it hands the caller's result slot on; realloc also passes the type's size floor, 24 bytes
+// measured 2026-10-10. GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, cwd, exit, env, findOnPath } from "std/process";
 import { writeFile, ensureDir, removeAll, exists, readDir } from "std/fs";
@@ -112,7 +113,7 @@ export struct Accounts${i} {
 	target: Writable;
 	pet: Mutable<Pet${i}>;
 	peek: Owned<Pet${i}>;
-	rolled: Delegated<Pet${i}>;
+	@seeds("pet${i}", payer) @bump rolled: Delegated<Pet${i}>;
 	fresh: Writable;
 }
 
@@ -161,6 +162,8 @@ function probeSource(): string {
 	pda,
 	pdaWithBump,
 	realloc,
+	seeds,
+	bump,
 	external,
 	externalMutable,
 } from "std/solana";
@@ -209,7 +212,7 @@ struct Bound {
 
 const BOUNDS: Bound[] = [
 	{ family: "close", least: TYPES, copies: TYPES, most: 16 },
-	{ family: "realloc", least: TYPES, copies: TYPES, most: 16 },
+	{ family: "realloc", least: TYPES, copies: TYPES, most: 24 },
 	{ family: "Delegated_verifiedPda", least: TYPES, copies: TYPES, most: 16 },
 	{ family: "Delegated_verifiedPdaWithBump", least: TYPES, copies: TYPES, most: 16 },
 	{ family: "owned", least: 0, copies: 0, most: 0 },

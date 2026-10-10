@@ -85,9 +85,9 @@ import {
 	invokeList,
 	invokeSigned,
 } from "./index";
-import { SignerSeeds, hashAddressWithBump } from "./seed";
+import { SignerSeeds, hashAddressWithBump, seedText } from "./seed";
 import { seedTable } from "./accountSeeds";
-import { minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
+import { closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
 import { HostAccount, invocations, logs, rentReads, run, setClock, signerIs, textBytes } from "./host";
 import {
@@ -114,6 +114,7 @@ extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolProgramId(): uint64;
 extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
 extern function msSolStoreU8(address: uint64, value: uint8): void;
+extern function msSolLoadU64(address: uint64): uint64;
 
 
 export struct Counter {
@@ -1003,7 +1004,7 @@ function aliasedResizeEntry(): void {
 	if (!size.ok) { failWith(size.error); return; }
 	const held = account(0);
 	if (!held.ok) { failWith(held.error); return; }
-	const resized = resizedProgramAccount(held.value, size.value as uint64, held.value);
+	const resized = resizedProgramAccount(held.value, size.value as uint64, held.value, 0);
 	if (!resized.ok) { failWith(resized.error); }
 }
 
@@ -1029,6 +1030,7 @@ export struct WritableThenMutable { target: Writable; counter: Mutable<Counter>;
 export struct OneWritable { target: Writable; }
 export struct WritableThenSignerPair { target: Writable; watcher: Signer; }
 export struct OkVerifier { unused: uint8; }
+export function acceptsOwner(this typeof OkVerifier, owner: Pubkey): boolean { return true; }
 export function verify(this typeof OkVerifier, index: int32): Result<Account, ProgramError> {
 	return unchecked(index);
 }
@@ -1512,18 +1514,39 @@ test "a delegated account must sit at the program's PDA, with the canonical or t
 
 export struct ClaimAccounts {
 	owner: Signer;
-	pet: Delegated<Counter>;
+	@seeds("counter") @bump pet: Delegated<Counter>;
 }
 
 function claimStep(): Result<uint64, ProgramError> {
 	const x = try accounts<ClaimAccounts>();
-	const _bump = try pda(x.pet, ["counter"]);
 	return Result.ok(x.pet.data().value);
 }
 
 function claimEntry(): void {
 	const result = claimStep();
 	if (!result.ok) { failWith(result.error); }
+}
+
+export struct PinnedClaimAccounts {
+	owner: Signer;
+	@address(counterAddress().key) pet: Delegated<Counter>;
+}
+
+function pinnedClaimStep(): Result<uint64, ProgramError> {
+	const x = try accounts<PinnedClaimAccounts>();
+	return Result.ok(x.pet.data().value);
+}
+
+function pinnedClaimEntry(): void { codeOf(pinnedClaimStep()); }
+
+test "a Delegated<T> field pinned by @address is verified, and one at another address is refused" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const owner = holder(2, keyOf(9), [], true, false);
+	const pet = delegatedCounter(counterAddress().key, DELEGATION_PROGRAM_ID, bytes);
+	assert run(programKey(), [owner, pet], [], pinnedClaimEntry).result == 0;
+	const elsewhere = delegatedCounter(keyOf(55), DELEGATION_PROGRAM_ID, bytes);
+	assert run(programKey(), [owner, elsewhere], [], pinnedClaimEntry).result ==
+		ProgramError.constraintAddress().code;
 }
 
 test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
@@ -3279,7 +3302,26 @@ test "repeated direct proof calls in a third consumer module keep their checked 
 		ProgramError.invalidProgramExecutable().code;
 }
 
+export struct ForgetfulVerifier { unused: uint8; }
+export function acceptsOwner(this typeof ForgetfulVerifier, owner: Pubkey): boolean { return owner == keyOf(9); }
+export function verify(this typeof ForgetfulVerifier, index: int32): Result<Account, ProgramError> {
+	return unchecked(index);
+}
+
+function forgetfulEntry(): void { codeOf(external<ForgetfulVerifier>(0)); }
+function forgetfulMutableEntry(): void { codeOf(externalMutable<ForgetfulVerifier>(0)); }
+
+test "external<T> and externalMutable<T> call T.acceptsOwner themselves, so a verify that forgets the owner still refuses a foreign owner" {
+	const foreign = holder(1, keyOf(33), [], true, true);
+	const accepted = holder(1, keyOf(9), [], true, true);
+	assert run(programKey(), [foreign], [], forgetfulEntry).result == ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [accepted], [], forgetfulEntry).result == 0;
+	assert run(programKey(), [foreign], [], forgetfulMutableEntry).result == ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [accepted], [], forgetfulMutableEntry).result == 0;
+}
+
 export struct ZeroCodeVerifier { unused: uint8; }
+export function acceptsOwner(this typeof ZeroCodeVerifier, owner: Pubkey): boolean { return true; }
 export function verify(this typeof ZeroCodeVerifier, index: int32): Result<Account, ProgramError> {
 	return Result.err({ code: 0 });
 }
@@ -3405,4 +3447,179 @@ function mutableBumpEntry(): void {
 
 test "verifiedPdaWithBump on a Mutable accepts the stored bump and refuses another with ConstraintSeeds" {
 	assert run(programKey(), [pinnedSafe(9)], [], mutableBumpEntry).result == 0;
+}
+
+// Account lifecycle: what init, close and the raw create/close helpers refuse. Anchor v2 reference:
+// lang-v2/src/cpi.rs create_account_with_signers, tests/close_semantics.rs, tests/lamports.rs.
+
+function counterAccount(lamports: uint64): HostAccount {
+	let account = holder(2, programKey(), counterBytes(counterTag(), 9, 48), true, true);
+	account.lamports = lamports;
+	return account;
+}
+
+test "create refuses a target that already holds an initialized account and leaves it intact" {
+	const initialized = counterAccount(5000000);
+	const accounts = [wallet(1, 10000000), initialized];
+	assert run(programKey(), accounts, [], createEntry).result == ProgramError.custom(0).code;
+	assert accounts[1].data.length == 48 && accounts[1].data[8] == 9;
+	assert accounts[0].lamports == 10000000 && accounts[1].lamports == 5000000;
+	const foreign = holder(2, keyOf(77), [], true, true);
+	assert run(programKey(), [wallet(1, 10000000), foreign], [], createEntry).result ==
+		ProgramError.custom(0).code;
+	const data = holder(2, Pubkey.zero(), [1, 2, 3, 4], true, true);
+	assert run(programKey(), [wallet(1, 10000000), data], [], createEntry).result ==
+		ProgramError.custom(0).code;
+}
+
+test "create on a pre-funded system account tops up only the shortfall and keeps its lamports" {
+	const rich = wallet(2, 5000000);
+	const accounts = [wallet(1, 10000000), rich];
+	assert run(programKey(), accounts, [], createEntry).result == 0;
+	assert accounts[1].owner == programKey() && accounts[1].data.length == 48;
+	assert accounts[1].lamports == 5000000 && accounts[0].lamports == 10000000;
+	const poor = wallet(2, 1000);
+	const topped = [wallet(1, 10000000), poor];
+	assert run(programKey(), topped, [], createEntry).result == 0;
+	assert topped[1].lamports == minimumBalanceOf(48) && topped[0].lamports == 10000000 - (minimumBalanceOf(48) - 1000);
+}
+
+function minimumBalanceOf(space: uint64): uint64 {
+	return 2 * (space + 128) * 3480;
+}
+
+function rawSelfCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	return createProgramAccount(payer, payer, 8, programId());
+}
+
+function rawSelfCreateEntry(): void { codeOf(rawSelfCreateStep()); }
+
+test "createProgramAccount refuses the payer as its own target, as Anchor v2 does with InvalidArgument" {
+	const accounts = [wallet(1, 10000000)];
+	const outcome = run(programKey(), accounts, [], rawSelfCreateEntry);
+	assert outcome.result == ProgramError.invalidArgument().code;
+	assert accounts[0].owner == Pubkey.zero();
+}
+
+function seededSelfCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	return createProgramAccountSeeded(payer, payer, 8, programId(), [seedText("pet")], 255);
+}
+
+function seededSelfCreateEntry(): void { codeOf(seededSelfCreateStep()); }
+
+test "createProgramAccountSeeded refuses the payer as its own target" {
+	const accounts = [wallet(1, 10000000)];
+	assert run(programKey(), accounts, [], seededSelfCreateEntry).result == ProgramError.invalidArgument().code;
+	assert accounts[0].owner == Pubkey.zero();
+}
+
+function shortCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	const target = try account(1);
+	const space = try instructionData().readU8(0);
+	const made = try createdAccount(payer, target, space as uint64, 0x0102030405060708);
+	return Result.ok(made.dataLength());
+}
+
+function shortCreateEntry(): void { codeOf(shortCreateStep()); }
+
+test "createdAccount refuses a space that cannot hold the 8-byte discriminator it writes" {
+	for (const space of [0 as uint8, 4, 7]) {
+		const accounts = [wallet(1, 10000000), blank(keyOf(2))];
+		const outcome = run(programKey(), accounts, [space as uint8], shortCreateEntry);
+		assert outcome.result == ProgramError.accountDataTooSmall().code;
+		assert accounts[1].owner == Pubkey.zero();
+	}
+	const exact = [wallet(1, 10000000), blank(keyOf(2))];
+	assert run(programKey(), exact, [8], shortCreateEntry).result == 0;
+	assert exact[1].data.length == 8;
+}
+
+function rawCloseStep(): Result<uint64, ProgramError> {
+	return closedProgramAccount(try account(0), try account(1));
+}
+
+function rawCloseEntry(): void { codeOf(rawCloseStep()); }
+
+test "closedProgramAccount refuses a read-only destination before it moves a lamport, as Anchor v2 does with ConstraintMut" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	let refund = wallet(2, 50);
+	refund.writable = false;
+	const accounts = [counter, refund];
+	const outcome = run(programKey(), accounts, [], rawCloseEntry);
+	assert outcome.result == ProgramError.constraintMut().code;
+	assert accounts[0].lamports == 700 && accounts[1].lamports == 50;
+}
+
+test "closedProgramAccount refuses a read-only target" {
+	let readonlyCounter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, false);
+	readonlyCounter.lamports = 700;
+	const first = [readonlyCounter, wallet(2, 50)];
+	assert run(programKey(), first, [], rawCloseEntry).result == ProgramError.constraintMut().code;
+	assert first[0].lamports == 700;
+}
+
+test "closedProgramAccount refuses a target another program owns and moves nothing" {
+	let foreign = holder(1, keyOf(77), counterBytes(counterTag(), 9, 48), false, true);
+	foreign.lamports = 700;
+	const second = [foreign, wallet(2, 50)];
+	assert run(programKey(), second, [], rawCloseEntry).result != 0;
+	assert second[0].lamports == 700 && second[0].owner == keyOf(77);
+}
+
+function closeScrubStep(): Result<uint64, ProgramError> {
+	const target = try account(0);
+	const before = msSolLoadU64(target.address + 88);
+	const moved = try closedProgramAccount(target, try account(1));
+	if (msSolLoadU64(target.address + 88) == before) { return Result.err(ProgramError.userError(1)); }
+	return Result.ok(moved);
+}
+
+function closeScrubEntry(): void { codeOf(closeScrubStep()); }
+
+test "close scrubs the discriminator bytes, as Anchor v2 writes its closed sentinel over them" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	const accounts = [counter, wallet(2, 50)];
+	assert run(programKey(), accounts, [], closeScrubEntry).result == 0;
+}
+
+test "after a close the account is no longer this program's: a later instruction refuses it even when it is re-funded" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	const accounts = [counter, wallet(2, 50)];
+	assert run(programKey(), accounts, [], closeEntry).result == 0;
+	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0 && accounts[0].lamports == 0;
+	accounts[0].lamports = 5000000;
+	accounts[0].writable = true;
+	assert run(programKey(), [accounts[0]], [], bumpEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [accounts[0]], [], ownedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const revived: HostAccount = { ...accounts[0], owner: programKey() };
+	assert run(programKey(), [revived], [], bumpEntry).result ==
+		ProgramError.accountDiscriminatorNotFound().code;
+}
+
+function closeThenCreateStep(): Result<uint64, ProgramError> {
+	const counter = try mutable<Counter>(0);
+	const refund = try writable(1);
+	const payer = try writableSigner(2);
+	const _closed = try close(counter, refund);
+	const reborn = try create<Counter>(payer, try writable(0));
+	reborn.data().value = 1;
+	return Result.ok(0);
+}
+
+function closeThenCreateEntry(): void { codeOf(closeThenCreateStep()); }
+
+test "a create on an account closed earlier in the same instruction is refused: the close keeps its exclusive borrow" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), true, true);
+	counter.lamports = 700;
+	const accounts = [counter, wallet(2, 50), wallet(3, 10000000)];
+	assert run(programKey(), accounts, [], closeThenCreateEntry).result ==
+		ProgramError.accountBorrowFailed().code;
 }

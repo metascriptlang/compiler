@@ -3,6 +3,7 @@ import {
 	Bytes,
 	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
+	programId,
 	createProgramAccountSeeded,
 	invokeList,
 	putPubkey,
@@ -135,6 +136,7 @@ function parseSeeds(data: Bytes, start: uint64, ref into: SeedTable): Result<uin
 
 export function undelegate(delegated: Account, buffer: Account, payer: Account, ownerProgramId: Pubkey, callbackData: Bytes): Result<uint64, ProgramError> {
 	if (!buffer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
+	if (ownerProgramId != programId()) { return Result.err(ProgramError.incorrectProgramId()); }
 	if (!buffer.owner().equals(DELEGATION_PROGRAM_ID)) { return Result.err(ProgramError.invalidAccountOwner()); }
 	const canonical = try findProgramAddressOf(
 		DELEGATION_PROGRAM_ID,
@@ -330,8 +332,8 @@ when (testBuild) {
 		assert delegateRun(accounts, 0) == 0;
 		const calls = invocations();
 		assert calls.length == 3;
-		assert calls[0].program.equals(Pubkey.zero()) && calls[0].data[0] == 0;
-		assert calls[0].accounts[1].key.equals(accounts[3].key);
+		assert calls[0].program.equals(Pubkey.zero()) && calls[0].data[0] == 13;
+		assert calls[0].accounts[0].key.equals(accounts[3].key);
 		assert calls[1].program.equals(Pubkey.zero()) && calls[1].data[0] == 1;
 		assert calls[1].accounts[0].key.equals(petKey()) && calls[1].signers == 1;
 		const sent = calls[2];
@@ -828,5 +830,104 @@ when (testBuild) {
 		const trailing = callbackData();
 		trailing.push(0);
 		assert undelegateRun(undelegateBuffer(), trailing) == malformed;
+	}
+
+	test "delegate succeeds when the buffer address was pre-funded, and the buffer's lamports go back to the payer" {
+		const accounts = delegationAccounts();
+		accounts[3].lamports = 1;
+		const payerBefore = accounts[0].lamports;
+		assert delegateRun(accounts, 0) == 0;
+		assert accounts[1].owner.equals(DELEGATION_PROGRAM_ID);
+		assert accounts[3].lamports == 0 && accounts[3].data.length == 0;
+		assert accounts[0].lamports >= payerBefore;
+	}
+
+	test "delegate succeeds when the buffer address already holds a full rent balance, which goes back to the payer" {
+		const accounts = delegationAccounts();
+		accounts[3].lamports = 10000000;
+		const payerBefore = accounts[0].lamports;
+		assert delegateRun(accounts, 0) == 0;
+		assert accounts[1].owner.equals(DELEGATION_PROGRAM_ID);
+		assert accounts[3].lamports == 0 && accounts[3].data.length == 0;
+		assert accounts[0].lamports == payerBefore + 10000000;
+	}
+
+	test "delegate refuses an owner program account that is not this program, before any call" {
+		const other = keyOf(77);
+		const accounts = delegationAccounts();
+		const buffer = findProgramAddressOf(other, ["buffer", petKey()]);
+		assert buffer.ok;
+		if (buffer.ok) { accounts[3] = holder(buffer.value.key, Pubkey.zero(), []); }
+		accounts[2] = programAccount(other);
+		assert delegateRun(accounts, 0) != 0;
+		assert invocations().length == 0;
+	}
+
+	test "delegate refuses an account that another program owns, before it zeroes its data" {
+		const accounts = delegationAccounts();
+		accounts[1].owner = keyOf(33);
+		assert delegateRun(accounts, 0) != 0;
+		assert accounts[1].data.length == 4 && accounts[1].data[0] == 5;
+		assert invocations().length == 0;
+	}
+
+	test "undelegate refuses an unsigned buffer, a buffer another program owns and a seed count of 0 or 17, before any call" {
+		const unsigned = undelegateAccounts(undelegateBuffer());
+		unsigned[1].signer = false;
+		assert run(programKey(), unsigned, callbackData(), undelegateEntry).result ==
+			ProgramError.missingRequiredSignature().code;
+		const foreign = undelegateAccounts(undelegateBuffer());
+		foreign[1].owner = programKey();
+		assert run(programKey(), foreign, callbackData(), undelegateEntry).result ==
+			ProgramError.invalidAccountOwner().code;
+		const none = callbackData();
+		none[8] = 0;
+		assert undelegateRun(undelegateBuffer(), none) == ProgramError.invalidInstructionData().code;
+		const many = callbackData();
+		many[8] = 17;
+		assert undelegateRun(undelegateBuffer(), many) == ProgramError.invalidInstructionData().code;
+		assert invocations().length == 0;
+	}
+
+	test "undelegate refuses an account that already holds data, so a replayed callback cannot overwrite it" {
+		const live: HostAccount = { ...holder(petKey(), programKey(), [1, 1, 1, 1]), lamports: 900 };
+		const accounts = undelegateAccounts(undelegateBuffer());
+		accounts[0] = live;
+		assert run(programKey(), accounts, callbackData(), undelegateEntry).result != 0;
+		const kept: uint8[] = [1, 1, 1, 1];
+		assert sameBytes(accounts[0].data, kept) && accounts[0].lamports == 900;
+	}
+
+	test "undelegate rebuilds an account whose address was pre-funded, paying only the shortfall" {
+		const accounts = undelegateAccounts(undelegateBuffer());
+		accounts[0].lamports = 100000000;
+		assert run(programKey(), accounts, callbackData(), undelegateEntry).result == 0;
+		assert accounts[0].owner.equals(programKey()) && accounts[0].lamports == 100000000;
+		assert accounts[2].lamports == 10000000;
+	}
+
+	function foreignUndelegateStep(): Result<uint64, ProgramError> {
+		return undelegate(try account(0), try account(1), try account(2), keyOf(77), instructionData());
+	}
+
+	function foreignUndelegateEntry(): void {
+		const result = foreignUndelegateStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	test "undelegate refuses an owner program id that is not this program, which would hand the account to another program" {
+		const foreignPet = findProgramAddressOf(keyOf(77), ["pet"]);
+		assert foreignPet.ok;
+		if (foreignPet.ok) {
+			const buffer = findProgramAddressOf(DELEGATION_PROGRAM_ID, ["undelegate-buffer", foreignPet.value.key]);
+			assert buffer.ok;
+			if (buffer.ok) {
+				const accounts = undelegateAccounts(buffer.value.key);
+				accounts[0] = holder(foreignPet.value.key, Pubkey.zero(), []);
+				const outcome = run(programKey(), accounts, callbackData(), foreignUndelegateEntry);
+				assert outcome.result != 0;
+				assert !accounts[0].owner.equals(keyOf(77));
+			}
+		}
 	}
 }

@@ -440,17 +440,18 @@ export function createProgramAccount(
 	newOwner: Pubkey,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	return createAccountOwnedAt(payer, target, space, msSolSpanAddress(newOwner.bytes), signers);
+	if (keysEqual(payer.keyAddress(), target.keyAddress())) { return Result.err(ProgramError.invalidArgument()); }
+	return createAccountAllowPrefund(payer, target, minimumBalance(space), space, msSolSpanAddress(newOwner.bytes), signers);
 }
 
-function createAccountOwnedAt(
+export function createAccountAllowPrefund(
 	payer: Account,
 	target: Account,
+	required: uint64,
 	space: uint64,
 	owner: uint64,
 	signers: Readonly<Span<SignerSeeds>>,
 ): Result<uint64, ProgramError> {
-	const required = minimumBalance(space);
 	const current = target.lamports();
 	const funding = required > current ? required - current : 0;
 	let storage: uint8[52] = [];
@@ -881,7 +882,8 @@ function initialized(
 	if (keysEqual(funding.keyAddress(), created.keyAddress())) {
 		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
 	}
-	const _made = try createAccountOwnedAt(funding, created, space, msSolProgramId(), signers);
+	if (space < 8) { return Result.err(ProgramError.accountDataTooSmall()); }
+	const _made = try createAccountAllowPrefund(funding, created, minimumBalance(space), space, msSolProgramId(), signers);
 	msSolStoreU64(created.address + 88, discriminator);
 	if (!claimExclusive(created.address)) { return Result.err(ProgramError.accountBorrowFailed()); }
 	return Result.ok(created);
@@ -1000,11 +1002,14 @@ export function closedProgramAccount(
 	destination: Account,
 ): Result<uint64, ProgramError> {
 	if (target.key() == destination.key()) { return Result.err(ProgramError.constraintClose()); }
+	if (!target.isWritable() || !destination.isWritable()) { return Result.err(ProgramError.constraintMut()); }
+	if (!keysEqual(target.address + 40, msSolProgramId())) { return Result.err(ProgramError.accountOwnedByWrongProgram()); }
 	const moved = target.lamports();
 	const total = destination.lamports() + moved;
 	if (total < moved) { return Result.err(ProgramError.arithmeticOverflow()); }
 	destination.setLamports(total);
 	target.setLamports(0);
+	if (target.dataLength() >= 8) { msSolStoreU64(target.address + 88, 0xffffffffffffffff); }
 	target.assign(Pubkey.zero());
 	const _emptied = try target.resize(0);
 	return Result.ok(moved);
@@ -1014,8 +1019,10 @@ export function resizedProgramAccount(
 	target: Account,
 	space: uint64,
 	funding: Account,
+	floor: uint64,
 ): Result<uint64, ProgramError> {
 	const current = target.dataLength();
+	if (space != current && space < floor) { return Result.err(ProgramError.accountDataTooSmall()); }
 	if (space > current && space - current > 10240) {
 		return Result.err(ProgramError.accountReallocExceedsLimit());
 	}

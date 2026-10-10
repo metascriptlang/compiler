@@ -2,6 +2,7 @@ import { External, ExternalMutable, Delegated, Mutable, Owned, Program, delegate
 import { Account, System } from "./core";
 import { Discriminator, accountDiscriminator } from "./discriminator";
 import { ProgramError } from "./error";
+import { Pubkey } from "./pubkey";
 
 export struct DirectPet { value: uint64; }
 export function discriminator(this typeof DirectPet): Discriminator {
@@ -9,6 +10,7 @@ export function discriminator(this typeof DirectPet): Discriminator {
 }
 
 export struct DirectVerifier { unused: uint8; }
+export function acceptsOwner(this typeof DirectVerifier, owner: Pubkey): boolean { return true; }
 export function verify(this typeof DirectVerifier, index: int32): Result<Account, ProgramError> {
 	return Result.err(ProgramError.custom(77));
 }

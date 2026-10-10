@@ -3,7 +3,8 @@ import {
 	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
 	assignTo,
-	createAccount,
+	programId,
+	createAccountAllowPrefund,
 	putPubkey,
 	putU32,
 	putU64,
@@ -77,6 +78,10 @@ export function delegateAt(
 	const seedCount = seeds.length as uint64;
 	if (seedCount == 0 || seedCount > DELEGATION_MAX_SEEDS) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
 	const ownerKey = accounts.ownerProgram.key();
+	if (ownerKey != programId()) { return Result.err(ProgramError.incorrectProgramId()); }
+	if (!accounts.delegated.isOwnedBy(ownerKey) && !accounts.delegated.isOwnedBy(Pubkey.zero())) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
 	const bufferSeeds: SeedSlice[2] = [seedText("buffer"), seedKey(accounts.delegated.keyAddress())];
 	const bufferBump: uint8[1] = [try findExpected(bufferSeeds, bytesAddress(ownerKey.bytes), accounts.buffer.keyAddress())];
 	let table: SeedTable = { slices: [], bump: [0], count: 0 };
@@ -107,12 +112,12 @@ export function delegateAt(
 	const dataLength = accounts.delegated.dataLength();
 	const bufferSigner: SeedSlice[3] = [bufferSeeds[0], bufferSeeds[1], seedBytes(bufferBump)];
 	const bufferSigners: SignerSeeds[1] = [signerOf(bufferSigner)];
-	const _bufferCreated = try createAccount(
+	const _bufferCreated = try createAccountAllowPrefund(
 		accounts.payer,
 		accounts.buffer,
 		0,
 		dataLength,
-		ownerKey,
+		bytesAddress(ownerKey.bytes),
 		bufferSigners,
 	);
 	const _copied = try accounts.buffer.data().copyFrom(accounts.delegated.data());

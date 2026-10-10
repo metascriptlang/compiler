@@ -68,6 +68,25 @@ export macro keyAddressOf(operand: Node): Node {
 		(inner == "" ? "" : "<" + inner + ">")), operand);
 }
 
+export macro accountAddressOf(operand: Node): Node {
+	const written = getType(operand);
+	const isPubkey = written != null &&
+		((written.kind === NodeKind.Identifier && written.name == "Pubkey") ||
+		(written.kind === NodeKind.TypeObject && written.typExprTypeName == "Pubkey"));
+	if (isPubkey) {
+		error("a mint here must be an account: its owner field names the token program, which a Pubkey does not carry", operand);
+	}
+	return {
+		kind: NodeKind.CallExpr,
+		line: operand.line,
+		column: operand.column,
+		callee: bindSym("keyAddressOf"),
+		arguments: [operand],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
 export macro seedTable(list: Node): Node {
 	if (list.kind !== NodeKind.ArrayLiteral) {
 		error(SEED_LIST_REQUIRED, list);

@@ -3,8 +3,8 @@
 
 import { DeclKind, Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
-import { keyAddressOf, seedTable } from "./accountSeeds";
-import { word } from "./discriminator";
+import { accountAddressOf, keyAddressOf, seedTable } from "./accountSeeds";
+import { namedWord } from "./discriminator";
 import { ProgramError } from "./error";
 import { accountFieldsValid, zeroAccountFieldsValid } from "./accountValidation";
 import {
@@ -302,7 +302,7 @@ export struct Pda<T> {
 
 @inline function ownedProofFailure<T>(index: int32, out proof: Owned<T>): uint64 {
 	let found: Account = { address: 0 };
-	const failure = ownedFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
+	const failure = ownedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, found);
 	if (failure != 0) { return failure; }
 	if (!accountFieldsValid<T>(found.address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
 	proof = { account: found };
@@ -318,7 +318,7 @@ export struct Pda<T> {
 
 @inline function mutableProofFailure<T>(index: int32, out proof: Mutable<T>): uint64 {
 	let found: Account = { address: 0 };
-	const failure = mutableEnvelopeFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
+	const failure = mutableEnvelopeFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, found);
 	if (failure != 0) { return failure; }
 	if (!accountFieldsValid<T>(found.address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
 	const claimed = exclusiveWritable(found);
@@ -336,7 +336,7 @@ export struct Pda<T> {
 
 @inline function delegatedProofFailure<T>(index: int32, out proof: Delegated<T>): uint64 {
 	let found: Account = { address: 0 };
-	const failure = delegatedFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
+	const failure = delegatedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, found);
 	if (failure != 0) { return failure; }
 	if (!accountFieldsValid<T>(found.address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
 	proof = { account: found };
@@ -354,6 +354,7 @@ export struct Pda<T> {
 	rejected = false;
 	const found = T.verify(index);
 	if (!found.ok) { rejected = true; return found.error.code; }
+	if (!T.acceptsOwner(found.value.owner())) { rejected = true; return ProgramError.accountOwnedByWrongProgram().code; }
 	proof = { account: found.value };
 	return 0;
 }
@@ -370,6 +371,7 @@ export struct Pda<T> {
 	rejected = false;
 	const found = T.verify(index);
 	if (!found.ok) { rejected = true; return found.error.code; }
+	if (!T.acceptsOwner(found.value.owner())) { rejected = true; return ProgramError.accountOwnedByWrongProgram().code; }
 	const claimed = exclusiveWritable(found.value);
 	if (!claimed.ok) { return claimed.error.code; }
 	proof = { account: claimed.value };
@@ -412,6 +414,35 @@ test "literal selection widens the minimum int32 before negation" {
 export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
 	const member = try selectedInstruction(table);
 	return Result.ok(member as E);
+}
+
+macro provenDiscriminatorWord(): Node {
+	const type = getTypeArg();
+	const name = type.kind === NodeKind.TypeObject ? type.typExprTypeName : type.name;
+	const line = type.line;
+	const column = type.column;
+	const declared: Node = {
+		kind: NodeKind.CallExpr, line: line, column: column,
+		callee: {
+			kind: NodeKind.MemberExpr, line: line, column: column,
+			object: { kind: NodeKind.Identifier, line: line, column: column, name: "T" },
+			property: "discriminator", isOptional: false,
+		},
+		arguments: [], isDirectCall: false, resolvedOverloadIdx: -1,
+	};
+	const word: Node = {
+		kind: NodeKind.CallExpr, line: line, column: column,
+		callee: bindSym("namedWord")!,
+		arguments: [declared, { kind: NodeKind.StringLiteral, line: line, column: column, value: name }],
+		isDirectCall: false, resolvedOverloadIdx: -1,
+	};
+	return {
+		kind: NodeKind.ComptimeBlock, line: line, column: column,
+		comptimeBody: {
+			kind: NodeKind.BlockStmt, line: line, column: column,
+			statements: [{ kind: NodeKind.ReturnStmt, line: line, column: column, argument: word }],
+		},
+	};
 }
 
 macro singleAccountFailure(index: Node, value: Node, rejected: Node): Node {
@@ -469,7 +500,7 @@ export function create<T>(
 ): Result<Mutable<T>, ProgramError> {
 	const _zeroFields = zeroAccountFieldsValid<T>();
 	const space = 8 + (sizeof(T) as uint64);
-	const created = try createdAccount(payer.account, target.account, space, @comptime { return word(T.discriminator()); }, signers);
+	const created = try createdAccount(payer.account, target.account, space, provenDiscriminatorWord<T>(), signers);
 	return Result.ok({ account: created });
 }
 
@@ -480,7 +511,7 @@ export function createPdaOf<T>(
 ): Result<Pda<T>, ProgramError> {
 	const _zeroFields = zeroAccountFieldsValid<T>();
 	const space = 8 + (sizeof(T) as uint64);
-	const made = try createdPdaAccount(payer.account, target.account, seeds, space, @comptime { return word(T.discriminator()); });
+	const made = try createdPdaAccount(payer.account, target.account, seeds, space, provenDiscriminatorWord<T>());
 	return Result.ok({ account: { account: made.account }, bump: made.bump });
 }
 
@@ -499,7 +530,7 @@ export function createPdaProven<T>(
 	}
 	let one: SignerSeeds[1] = [{ address: 0, length: 0 }];
 	signerOfBumped(signed, one);
-	const created = try createdAccount(payer.account, target.account, space, @comptime { return word(T.discriminator()); }, one);
+	const created = try createdAccount(payer.account, target.account, space, provenDiscriminatorWord<T>(), one);
 	return Result.ok({ account: { account: created }, bump: target.bump });
 }
 
@@ -512,7 +543,7 @@ export function createPdaAt<T>(
 ): Result<Pda<T>, ProgramError> {
 	const _zeroFields = zeroAccountFieldsValid<T>();
 	const space = 8 + (sizeof(T) as uint64);
-	const made = try createdPdaAccountAt(payer.account, target.account, seeds, word0, word1, word2, word3, space, @comptime { return word(T.discriminator()); });
+	const made = try createdPdaAccountAt(payer.account, target.account, seeds, word0, word1, word2, word3, space, provenDiscriminatorWord<T>());
 	return Result.ok({ account: { account: made }, bump: bump });
 }
 
@@ -557,10 +588,7 @@ export function realloc<T>(
 	space: uint64,
 	payer: WritableSigner,
 ): Result<uint64, ProgramError> {
-	if (space != account.account.dataLength() && space < 8 + (sizeof(T) as uint64)) {
-		return Result.err(ProgramError.accountDataTooSmall());
-	}
-	return resizedProgramAccount(account.account, space, payer.account);
+	return resizedProgramAccount(account.account, space, payer.account, 8 + (sizeof(T) as uint64));
 }
 
 @inline function tokenMintFailure(token: uint64, expected: uint64): uint64 {
@@ -1068,7 +1096,7 @@ export macro accounts(): Node {
 					if (args.length != 2) { error(where + " takes the mint and the authority", d); }
 					associated.push(attempt(call(
 						bindSym("associatedFailure")!,
-						[keyOf(ident(self, d)), keyOf(args[1]), keyOf(args[0])],
+						[keyOf(ident(self, d)), keyOf(args[1]), call(bindSym("accountAddressOf")!, [rewrite(args[0])], args[0])],
 						d,
 					), d));
 					continue;
@@ -1087,6 +1115,10 @@ export macro accounts(): Node {
 		if (bumped != null && seeded == null) {
 			error("accounts<" + decl.interfaceName + ">(): @bump on field '" + self +
 				"' needs @seeds before it", bumped);
+		}
+		if (selfType.indexOf("Delegated<") == 0 && seeded == null && addressed.length == 0) {
+			error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a Delegated<T> with no " +
+				"@seeds/@bump or @address: any account the delegation program owns with T's layout would pass", shape);
 		}
 		if (seeded != null) {
 			if (bumped == null) {

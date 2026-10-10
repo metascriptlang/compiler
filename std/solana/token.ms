@@ -1342,4 +1342,51 @@ when (testBuild) {
 		}
 		assert accepted > 20 && refused > 100;
 	}
+
+	function wrongProgramStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const mint = try account(0);
+		const target = try account(1);
+		const authority = try account(2);
+		const payer = try account(3);
+		const system = try account(4);
+		const wrong = keyOf(3);
+		if (op == 0) { return transferChecked(wrong, payer, mint, target, authority, 250, 6); }
+		if (op == 1) { return closeAccount(wrong, target, payer, authority); }
+		if (op == 2) { return initializeMint2(wrong, mint, 6, authority.key(), null); }
+		if (op == 3) { return createAssociatedToken(payer, target, authority, mint, system, system); }
+		return createAssociatedTokenIdempotent(payer, target, authority, mint, system, system);
+	}
+
+	function wrongProgramEntry(): void {
+		const result = wrongProgramStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	test "every token wrapper refuses a program id that is not a token program before it sends anything" {
+		for (const op of [0, 1, 2, 3, 4]) {
+			assert resultOf(cpiAccounts(), op as uint8, wrongProgramEntry) ==
+				ProgramError.incorrectProgramId().code;
+			assert invocations().length == 0;
+		}
+	}
+
+	test "createMintPda refuses a mint address that already holds an initialized mint and leaves it intact" {
+		const accounts = mintPdaAccounts(mintKey());
+		accounts[1].owner = TOKEN_PROGRAM_ID;
+		accounts[1].data = mintData(7, 500, 6);
+		accounts[1].lamports = 10000000;
+		assert resultOf(accounts, 0, mintPdaEntry) == ProgramError.custom(0).code;
+		assert accounts[1].data.length == 165 - 83 && accounts[1].lamports == 10000000;
+		assert accounts[0].lamports == 10000000;
+	}
+
+	test "createMintPda on a pre-funded mint address keeps the lamports and tops up only the shortfall" {
+		const accounts = mintPdaAccounts(mintKey());
+		accounts[1].lamports = 5;
+		assert resultOf(accounts, 0, mintPdaEntry) == 0;
+		assert accounts[1].owner.equals(TOKEN_PROGRAM_ID) && accounts[1].data.length == 82;
+		assert accounts[1].lamports == 2 * (82 + 128) * 3480;
+		assert accounts[0].lamports == 10000000 - (accounts[1].lamports - 5);
+	}
 }
