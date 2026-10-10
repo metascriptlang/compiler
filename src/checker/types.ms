@@ -239,12 +239,12 @@ export function closureStorageType(t: Type): Type {
 	return c;
 }
 
-export function createEnum(name: string, members: string[], values: number[]): Type {
+export function createEnum(name: string, members: string[], values: number[] = []): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Enum;
 	t.typeName = name;
 	t.typeNames = members;
-	if (values != null && values.length > 0) {
+	if (values.length > 0) {
 		const valTypes: Type[] = [];
 		let i = 0;
 		while (i < values.length) {
@@ -4630,7 +4630,7 @@ test "createStruct" {
 }
 
 test "createEnum" {
-	const e = createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]);
+	const e = createEnum("Color", ["Red", "Green", "Blue"]);
 	assert e.kind == TypeKind.Enum;
 	assert e.typeName == "Color";
 	assert e.typeNames.length == 3;
@@ -4942,7 +4942,7 @@ test "sizeOfType primitives 64-bit" {
 
 test "an enum is stored in the narrowest width that holds its ordinals" {
 	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
-	assert sizeOfType(tg, createEnum("Two", ["A", "B"], null as unknown as number[])) == 1;
+	assert sizeOfType(tg, createEnum("Two", ["A", "B"])) == 1;
 	assert sizeOfType(tg, createEnum("Byte", ["A", "B"], [0, 255])) == 1;
 	assert sizeOfType(tg, createEnum("Word", ["A", "B"], [0, 300])) == 2;
 	assert alignOfType(tg, createEnum("Word", ["A", "B"], [0, 300])) == 2;
@@ -4953,7 +4953,7 @@ test "an enum is stored in the narrowest width that holds its ordinals" {
 
 test "an enum literal is sized by its enum" {
 	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
-	assert sizeOfType(tg, createEnumLiteral(createEnum("Two", ["A", "B"], null as unknown as number[]), "A")) == 1;
+	assert sizeOfType(tg, createEnumLiteral(createEnum("Two", ["A", "B"]), "A")) == 1;
 }
 
 test "sizeOfType primitives 32-bit" {

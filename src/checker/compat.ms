@@ -1871,14 +1871,14 @@ test "unknown ok compatible" {
 }
 
 test "same enum name" {
-	const e1 = createEnum("Color", ["Red", "Green"], null as unknown as number[]);
-	const e2 = createEnum("Color", ["Red", "Green"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red", "Green"]);
+	const e2 = createEnum("Color", ["Red", "Green"]);
 	assert isAssignable(e1, e2);
 }
 
 test "different enum name" {
-	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
-	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red"]);
+	const e2 = createEnum("Shape", ["Circle"]);
 	assert !isAssignable(e1, e2);
 }
 
@@ -1965,52 +1965,52 @@ test "different distinct name" {
 }
 
 test "enum exact" {
-	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
-	const e2 = createEnum("Color", ["Red"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red"]);
+	const e2 = createEnum("Color", ["Red"]);
 	assert typeRelation(e1, e2) == TypeRelation.Exact;
 }
 
 test "enum mismatch" {
-	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
-	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red"]);
+	const e2 = createEnum("Shape", ["Circle"]);
 	assert typeRelation(e1, e2) == TypeRelation.None;
 }
 
 test "enum literal same member exact" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a1 = createEnumLiteral(e, "A");
 	const a2 = createEnumLiteral(e, "A");
 	assert typeRelation(a1, a2) == TypeRelation.Exact;
 }
 
 test "enum literal different members none" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	const b = createEnumLiteral(e, "B");
 	assert typeRelation(a, b) == TypeRelation.None;
 }
 
 test "enum literal subtype of enum" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	assert typeRelation(e, a) == TypeRelation.Subtype;
 }
 
 test "enum not assignable to enum literal" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	assert typeRelation(a, e) == TypeRelation.None;
 }
 
 test "enum literal isAssignable to enum" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	assert isAssignable(a, e);
 }
 
 test "enum literal cross-enum none" {
-	const k = createEnum("K", ["A"], null as unknown as number[]);
-	const m = createEnum("M", ["A"], null as unknown as number[]);
+	const k = createEnum("K", ["A"]);
+	const m = createEnum("M", ["A"]);
 	const ka = createEnumLiteral(k, "A");
 	const ma = createEnumLiteral(m, "A");
 	assert typeRelation(ka, ma) == TypeRelation.None;
