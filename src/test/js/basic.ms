@@ -143,8 +143,9 @@ console.log(fromDupB().toString());
 }
 
 // Nim jsgen parity (mangleName reservedWords, jsgen.nim:229-243): "this" is a JS
-// reserved word — a lifted method's receiver binding must never emit bare. Class
-// methods keep implicit bare `this`; monomorphised lifts bind `$this`.
+// reserved word — a lifted method's receiver binding must never emit bare. A class
+// body keeps implicit bare `this`; monomorphised lifts bind `$this`, and the
+// uninstantiated generic method is not emitted at all.
 test "E2E JS: generic class method lift renames the receiver binding" {
 	const src = `class GenBox<T> {
 	value: T;
@@ -163,7 +164,8 @@ console.log(gb.get().toString());
 	assert !js.contains("(this)");
 	assert !js.contains("(this,");
 	assert js.contains("return $this.value");
-	assert js.contains("return this.value");
+	assert js.contains("this.value = v");
+	assert !js.contains("return this.value");
 }
 
 test "E2E JS: extends clause and super call keep their bindings" {
