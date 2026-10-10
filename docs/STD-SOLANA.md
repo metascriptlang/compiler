@@ -209,8 +209,11 @@ including golden padding bytes, all integer widths, exact enum membership, float
 imported hidden types and BitSet storage. A real `msc-stable run` / `--target=js`
 host consumer of nested `Pet` bytes printed
 `valid 18446744073709551615 2 badBool 3003` and `badEnum 3003` on both backends.
-The full transitive JS test run is not green: it aborts with the previously carded
-sized-local array symptom before reaching the codec tests. No Android device or
+Measured 2026-10-11 on the `wt/std-solana` candidate: `msc test
+std/solana/accountCodecTest.ms --target=js` passed **16 files / 109 tests**; before
+that, every JS consumer of `accountCodec.ms` failed to load, because JS also emitted
+the uninstantiated `decode<T>` and its `@comptime` discriminator had no value there
+(corpus `genericDeclarationEmitsOnlyInstances`). No Android device or
 Android32 runtime was exercised; incompatible native 64-bit alignment is refused
 instead of silently using another wire layout.
 
