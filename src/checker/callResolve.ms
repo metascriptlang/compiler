@@ -735,7 +735,7 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	const fnDefaults = declaredDefaults(defSym);
 	// Pass parameter types so default expressions get correct type hints
 	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
-	let paramTypes: Type[] = null as unknown as Type[];
+	let paramTypes: Type[] = [];
 	let paramNames: string[] | null = null;
 	if (defSym != null && defSym.symbolType != null && defSym.symbolType.typeChildren != null) {
 		paramTypes = defSym.symbolType.typeChildren;
@@ -896,7 +896,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// closure args see concrete types — Phase C parity with checkCallExpr).
 	// Otherwise use struct field types as expected (positional initialization).
 	const hasCtor = d.newCallee.resolvedSym != null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor);
-	let ctorFormalTypes: Type[] = null as unknown as Type[];
+	let ctorFormalTypes: Type[] = [];
 	if (hasCtor && d.newCallee.resolvedSym != null) {
 		const rawCtorTypes = getCtorParamTypes(d.newCallee.resolvedSym);
 		if (rawCtorTypes != null && rawCtorTypes.length > 0) {
@@ -979,7 +979,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			// Path 2: non-generic constructors — defaults on class sym
 			const defaults = d.newCallee.resolvedSym.defaultParams;
 			const ctorType = ctorFnTypeOf(d.newCallee.resolvedSym);
-			const ctorParamTypes = ctorType != null ? ctorType.typeChildren : null as unknown as Type[];
+			const ctorParamTypes = ctorType != null ? ctorType.typeChildren : [];
 			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule, ctorType != null ? ctorType.typeNames : null);
 		}
 	}

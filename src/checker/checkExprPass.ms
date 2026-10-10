@@ -2959,7 +2959,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// IMPORTANT: only param types are contextually inferred. Return type is still inferred
 	// from body, because contextual return types may be generic (`() => T`) and would shadow
 	// the concrete inference from the body that downstream passes (lambda lifting) rely on.
-	let ctxParamTypes: Type[] = null as unknown as Type[];
+	let ctxParamTypes: Type[] = [];
 	// A `fn | null` formal is a Maybe struct — peel it so the arrow is typed from the inner fn.
 	let fnExpected = expectedType != null ? peelTransparentInstance(expectedType) : null;
 	if (fnExpected != null && isMaybeType(fnExpected) && fnExpected.typeReturn != null) {

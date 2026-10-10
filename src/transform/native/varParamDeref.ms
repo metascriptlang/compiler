@@ -25,7 +25,7 @@ function calleeFormals(d: CallExprData): Type[] {
 	if ((t == null || t.kind != TypeKind.Function) && d.callee.resolvedSym != null) {
 		t = d.callee.resolvedSym.symbolType;
 	}
-	if (t == null || t.kind != TypeKind.Function) return null as unknown as Type[];
+	if (t == null || t.kind != TypeKind.Function) return [];
 	return t.typeChildren;
 }
 

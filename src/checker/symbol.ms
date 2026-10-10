@@ -113,7 +113,7 @@ export function registerCtorInit(classSym: Symbol, className: string, fnType: Ty
 
 export function getCtorParamTypes(classSym: Symbol): Type[] {
 	const fnType = ctorFnTypeOf(classSym);
-	return fnType != null ? fnType.typeChildren : null as unknown as Type[];
+	return fnType != null ? fnType.typeChildren : [];
 }
 
 export function ctorFnTypeOf(classSym: Symbol): Type | null {
@@ -122,7 +122,7 @@ export function ctorFnTypeOf(classSym: Symbol): Type | null {
 	while (sym != null && depth < 64) {
 		const decl = classDeclNodeOf(sym);
 		if (decl == null) return null;
-		let body: Node[] = null as unknown as Node[];
+		let body: Node[] | null = null;
 		if (decl.kind == NodeKind.ClassDecl) {
 			body = (decl.data as ClassDeclData).classBody;
 		} else if (decl.kind == NodeKind.ActorDecl) {
