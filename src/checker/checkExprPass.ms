@@ -453,6 +453,11 @@ function derefablePointee(ptr: Type, pointee: Type): boolean {
 }
 
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	if (startsOptionalChain(node)) { checkOptionalChain(ctx, node, expectedType); return; }
+	checkExprKind(ctx, node, expectedType);
+}
+
+function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => { checkNumberLiteral(ctx, node, expectedType); return; },
 		NodeKind.BigIntLiteral => {
@@ -509,7 +514,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => {
 			node.nodeType = checkMemberExpr(ctx, node, expectedType);
-			if (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional) checkOptionalRead(ctx, node, expectedType);
 			return;
 		},
 		NodeKind.ArrayAccess => { checkArrayAccess(ctx, node, expectedType); return; },
@@ -739,27 +743,68 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	node.nodeType = int32Type(); return;
 }
 
-function checkOptionalRead(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
-	const d = node.data as MemberExprData;
-	const tested = d.object.kind == NodeKind.HiddenDeref ? (d.object.data as HiddenDerefData).expr : d.object;
-	if (node.nodeType == null || isFunctionKind(node.nodeType) || tested.nodeType == null) return;
+function optionalRootOf(end: Node): Node | null {
+	let link: Node = end;
+	while (true) {
+		if (link.kind == NodeKind.MemberExpr) {
+			const d = link.data as MemberExprData;
+			if (d.isOptional) return link;
+			link = d.object;
+		} else if (link.kind == NodeKind.ArrayAccess) {
+			link = (link.data as ArrayAccessData).array;
+		} else if (link.kind == NodeKind.CallExpr) {
+			link = (link.data as CallExprData).callee;
+		} else if (link.kind == NodeKind.TypeAssertion && (link.data as TypeAssertionData).asType == "!") {
+			link = (link.data as TypeAssertionData).asExpr;
+		} else {
+			return null;
+		}
+	}
+	return null;
+}
+
+function startsOptionalChain(node: Node): boolean {
+	return node.flags.has(NodeFlag.OptionalChainEnd) || (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional);
+}
+
+function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	node.flags = node.flags.excl(NodeFlag.OptionalChainEnd);
+	const root = optionalRootOf(node);
+	if (root == null) {
+		checkExprKind(ctx, node, expectedType);
+		return;
+	}
+	const rd = root.data as MemberExprData;
+	const tested = rd.object;
+	checkInTypeSlot(ctx, tested);
+	if (tested.nodeType == null) {
+		checkExprKind(ctx, node, expectedType);
+		return;
+	}
 	if (!isNullableShape([tested.nodeType])) {
-		d.isOptional = false;
+		checkExprKind(ctx, node, expectedType);
+		rd.isOptional = false;
 		return;
 	}
 	const loc = node.location;
-	const field = createNodeAt(NodeKind.MemberExpr, { object: d.object, property: d.property, isOptional: false }, loc);
-	field.nodeType = node.nodeType;
-	field.resolvedSym = node.resolvedSym;
-	field.flags = node.flags;
-	field.variantSlot = node.variantSlot;
 	const probe = readsOnlyNames(tested) ? cloneNodeKeepSem(tested) : tested;
+	rd.object = createNodeAt(NodeKind.TypeAssertion, { asExpr: tested, asType: "!" }, tested.location);
+	rd.isOptional = false;
+	const chain = createNodeAt(node.kind, node.data, loc);
+	chain.flags = node.flags;
+	chain.typeArg = node.typeArg;
+	chain.typeExpr = node.typeExpr;
 	const cond = createNodeAt(NodeKind.BinaryExpr, { operator: "!==", left: probe, right: typedNull(loc) }, loc);
 	cond.nodeType = booleanType();
-	const arms = { ternaryCondition: cond, ternaryConsequent: field, ternaryAlternate: typedNull(loc) } as ConditionalExprData;
+	const arms = { ternaryCondition: cond, ternaryConsequent: chain, ternaryAlternate: typedNull(loc) } as ConditionalExprData;
+	ctx.condEvalDepth = ctx.condEvalDepth + 1;
+	checkExpr(ctx, chain, null);
+	ctx.condEvalDepth = ctx.condEvalDepth - 1;
 	node.kind = NodeKind.ConditionalExpr;
 	node.data = arms;
 	node.resolvedSym = null;
+	node.typeArg = "";
+	node.typeExpr = null;
 	node.nodeType = fitConditionalArms(ctx, arms, expectedType, false);
 }
 

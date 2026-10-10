@@ -596,7 +596,7 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 	}
 }
 
-const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref;
+const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref | NodeFlag.OptionalChainEnd;
 
 function isCheckerWrapper(node: Node): boolean {
 	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
