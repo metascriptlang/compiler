@@ -284,16 +284,26 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 	// Collect params: name: Type pairs
 	const paramNames: string[] = [];
 	const paramTypes: Node[] = [];
+	let seenOptional = false;
 
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		// Param name (optional — could be just types)
 		if (isTypeIdent(current(state))) {
 			const nameToken = current(state);
 			const nextKind = state.position + 1 < state.tokens.length ? state.tokens[state.position + 1].kind : TokenKind.Eof;
+			// `name?: Type` is an optional parameter; the type text keeps its `?`
+			const optionalMark = nextKind == TokenKind.Question && state.position + 2 < state.tokens.length
+				&& state.tokens[state.position + 2].kind == TokenKind.Colon;
 			// If followed by ':', it's "name: Type"
-			if (nextKind == TokenKind.Colon) {
+			if (nextKind == TokenKind.Colon || optionalMark) {
 				paramNames.push(nameToken.value);
 				advance(state); // consume name
+				if (optionalMark) {
+					advance(state); // consume ?
+					seenOptional = true;
+				} else if (seenOptional) {
+					addError(state, `A required parameter cannot follow an optional parameter ('${nameToken.value}' at line ${nameToken.line})`);
+				}
 				advance(state); // consume :
 				paramTypes.push(parseTypeExpr(state));
 			} else {
@@ -831,4 +841,23 @@ test "non-index-sig object type has null index fields" {
 	assert d.typExprFieldNames.length == 2;
 	assert d.typExprIndexKey == null;
 	assert d.typExprIndexValue == null;
+}
+
+function typeExprErrors(typeStr: string): string[] {
+	const lr = lex(typeStr);
+	if (!lr.ok) return ["lex"];
+	const state = createState(lr.value);
+	parseTypeExpr(state);
+	return state.errors;
+}
+
+test "a function type with an optional parameter parses without error" {
+	assert typeExprKind("(a: int32, b?: string) => void") == NodeKind.TypeFunction;
+	assert typeExprErrors("(a: int32, b?: string) => void").length == 0;
+}
+
+test "a function type refuses a required parameter after an optional one" {
+	const errs = typeExprErrors("(a?: int32, b: int32) => int32");
+	assert errs.length == 1;
+	assert errs[0].indexOf("A required parameter cannot follow an optional parameter") >= 0;
 }
