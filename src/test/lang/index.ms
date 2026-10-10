@@ -48,6 +48,7 @@ import "./matchDispatch";
 import "./nominalInstantiation";
 import "./nullableInstantiation";
 import "./numericRepresentation";
+import "./optionalParameters";
 import "./receiverViews";
 import "./serializationVariants";
 import "./spawnThunkValues";
