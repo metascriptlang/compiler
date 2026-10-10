@@ -170,17 +170,28 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 	const paramParts = splitTopLevel(paramsStr, ",");
 	const paramTypes: Type[] = [];
 	const paramNames: string[] = [];
-	for (const part of paramParts) {
+	let requiredCount = paramParts.length;
+	for (let pi = 0; pi < paramParts.length; pi += 1) {
+		const part = paramParts[pi];
 		const colonIdx = findChar(part, ":");
 		if (colonIdx > 0) {
-			paramNames.push(part.slice(0, colonIdx).trim());
-			paramTypes.push(resolveAnnotation(part.slice(colonIdx + 1, part.length).trim(), ctx, line, col));
+			let name = part.slice(0, colonIdx).trim();
+			let typeText = part.slice(colonIdx + 1, part.length).trim();
+			if (name.endsWith("?")) {
+				name = name.slice(0, name.length - 1).trim();
+				typeText = optionalizeTypeString(typeText);
+				if (pi < requiredCount) requiredCount = pi;
+			}
+			paramNames.push(name);
+			paramTypes.push(resolveAnnotation(typeText, ctx, line, col));
 		} else {
 			paramNames.push("");
 			paramTypes.push(resolveAnnotation(part, ctx, line, col));
 		}
 	}
-	return createClosureType(paramTypes, paramNames, returnType);
+	const fnType = createClosureType(paramTypes, paramNames, returnType);
+	if (requiredCount < paramParts.length) setMinArity(fnType, requiredCount);
+	return fnType;
 }
 
 // Unwrap a Type to its underlying Struct (handles Ref<Struct> + GenericInstance).

@@ -677,6 +677,18 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 	}
 }
 
+// A callee with no declaration (a value of function type) has no default nodes, so an
+// omitted optional argument is the null its nullable parameter type carries.
+function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[], loc: SourceLocation): void {
+	while (args.length < paramTypes.length) {
+		const expected = paramTypes[args.length];
+		if (!isMaybeType(expected) && !unionHasMemberOfKind(expected, TypeKind.Null)) return;
+		const lit = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, loc);
+		callCheckExpr(ctx, lit, expected);
+		args.push(fitNode(ctx, lit, expected, lit.nodeType));
+	}
+}
+
 // Reference parity: fill missing call arguments from parameter defaults.
 // defaultOffset accounts for receiver param in extension methods:
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
@@ -1772,6 +1784,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			if (calleeNameForDef != "") {
 				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length, 0);
 			}
+			fillNullableTail(ctx, d.arguments, calleeType.typeChildren, node.location);
 		}
 		relateCallArgs(ctx, node, calleeType!, argTypes, isActorMethodCall);
 		// On-demand generic instantiation for direct calls (transitive

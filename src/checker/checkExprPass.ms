@@ -3192,12 +3192,22 @@ function padLiteralParams(params: string[], paramTypes: string[], node: Node, ex
 	}
 }
 
+// Index where the trailing run of `null` defaults begins (`x?: T` parses to one): the
+// arrow may be called without those arguments, and each is filled with null at the call.
+function firstOfNullDefaultTail(defaults: Node[]): int32 {
+	let first = defaults.length;
+	while (first > 0 && defaults[first - 1] != null && defaults[first - 1].kind == NodeKind.NullLiteral) first -= 1;
+	return first;
+}
+
 function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as ArrowFunctionData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
 	padLiteralParams(d.arrowParams, d.arrowParamTypes, node, expectedType);
 	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations!, d.arrowReturnType, expectedType, d.arrowFlags, node);
+	const optionalFrom = firstOfNullDefaultTail(d.arrowDefaults);
+	if (optionalFrom < d.arrowDefaults.length) setMinArity(fnType, optionalFrom);
 	// The implicit return of an expression body is a fit position like any
 	// ReturnStmt (checkReturnStmt:1229) — reseat the body through fitNode so
 	// no coercion (Maybe wrap, closure wrap) is forgotten.
