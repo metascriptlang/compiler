@@ -26,8 +26,10 @@
 // serial until the fp-keyed artifact cache stopped letting sibling msc
 // processes fight over one shared std module: they swapped the .c under each
 // other's cc and deleted each other's .o (cache.ms writeCSource /
-// invalidateCompileCache, cc.ms compileCFile). BUILD_SLOTS workers claim jobs by
-// removing out/corpus/claims/<i>, so cell launches on the main thread never
+// invalidateCompileCache, cc.ms compileCFile). Worker w of BUILD_SLOTS builds jobs
+// w, w+BUILD_SLOTS, ... (no job has two takers: a claim file removed by two
+// threads at once reports success to both on Windows, measured 2026-10-10: 8
+// threads won 400 claims about 1900 times), so cell launches on the main thread never
 // idle a build slot, while builds are reported IN INPUT
 // ORDER, so progress lines, the tally and the parity grouping are byte-for-
 // byte what the serial loop produced; only the wall clock moves. Progress
@@ -48,7 +50,7 @@
 // sanitizer — the ledger IS the leak signal in this lane.
 
 import { exec, execFileCapture, execFileResult, exit, env, platform, cmdExists, findOnPath } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, isDir } from "std/fs";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, isDir } from "std/fs";
 import { writeStderr } from "std/io";
 import { isNotFound } from "std/io/errors";
 
@@ -1017,7 +1019,6 @@ function planJobs(specs: Spec[]): BuildJob[] {
 const BUILD_OK: int32 = 0;
 const BUILD_OK_RETRIED: int32 = 1;
 const BUILD_FAILED: int32 = 2;
-const CLAIM_DIR = OUT_DIR + "claims/";
 
 function builtMarker(job: Readonly<BuildJob>): string {
 	return job.cell.dir + "built";
@@ -1047,10 +1048,9 @@ function publishMarker(path: string, text: string): void {
 	}
 }
 
-function buildWorker(jobs: Readonly<BuildJob[]>, first: int32): number {
+function buildWorker(jobs: Readonly<BuildJob[]>, first: int32, stride: int32): number {
 	let built = 0;
-	for (let i: int32 = first; i < jobs.length; i += 1) {
-		if (!remove(CLAIM_DIR + i).ok) { continue; }
+	for (let i: int32 = first; i < jobs.length; i += stride) {
 		buildOneJob(jobs[i]);
 		built = built + 1;
 	}
@@ -1063,13 +1063,10 @@ function builtText(job: BuildJob): string {
 	return text.endsWith("\n") ? text : "";
 }
 
-function prepareClaims(jobs: BuildJob[]): void {
-	if (exists(CLAIM_DIR)) { removeAll(CLAIM_DIR); }
-	ensureDir(CLAIM_DIR);
+function clearBuiltMarkers(jobs: BuildJob[]): void {
 	for (let i: int32 = 0; i < jobs.length; i += 1) {
 		ensureDir(jobs[i].cell.dir);
 		if (exists(builtMarker(jobs[i]))) { remove(builtMarker(jobs[i])); }
-		writeFile(CLAIM_DIR + i, "");
 	}
 }
 
@@ -1269,11 +1266,12 @@ function main(): void {
 	//
 	// "Up to date" = msc's self-skip when the cell binary is already fresh —
 	// a success, not a failure (unchanged reruns hit it on every native cell)
-	prepareClaims(jobs);
+	clearBuiltMarkers(jobs);
+	const slots: int32 = BUILD_SLOTS < jobs.length ? BUILD_SLOTS : jobs.length as int32;
 	const workers: Promise<number>[] = [];
-	for (let w: int32 = 0; w < BUILD_SLOTS && w < jobs.length; w += 1) {
+	for (let w: int32 = 0; w < slots; w += 1) {
 		const first = w;
-		workers.push(spawn(() => buildWorker(jobs, first)));
+		workers.push(spawn(() => buildWorker(jobs, first, slots)));
 	}
 	let ci = 0;
 	while (ci < jobs.length) {
