@@ -37,10 +37,12 @@ function dirToOrdinal(v: Dir): int32 {
 
 function takesString(s: string): int32 { return 7; }
 
+function column(): Dir { return "column"; }
+
 export function main(): void {
 	const d: Dir = "row";
 	const e: Dir = "row";
-	const other: Dir = "column";
+	const other: Dir = column();
 	const s: string = "row";
 
 	// (1) the normal-call side of the relation — was always accepted
