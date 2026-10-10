@@ -742,7 +742,11 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 function checkOptionalRead(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as MemberExprData;
 	const tested = d.object.kind == NodeKind.HiddenDeref ? (d.object.data as HiddenDerefData).expr : d.object;
-	if (node.nodeType == null || isFunctionKind(node.nodeType) || tested.nodeType == null || !isNullableShape([tested.nodeType])) return;
+	if (node.nodeType == null || isFunctionKind(node.nodeType) || tested.nodeType == null) return;
+	if (!isNullableShape([tested.nodeType])) {
+		d.isOptional = false;
+		return;
+	}
 	const loc = node.location;
 	const field = createNodeAt(NodeKind.MemberExpr, { object: d.object, property: d.property, isOptional: false }, loc);
 	field.nodeType = node.nodeType;
