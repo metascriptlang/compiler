@@ -12,7 +12,7 @@ import { makeSymbol } from "../../checker/symbol";
 import { booleanType, isStructType } from "../../checker/types";
 import { TransformContext } from "../context";
 import {
-	makeVarDecl, makeReturn, makeTypedIdentResolved, makeExprStmt, makeAssign,
+	makeVarDecl, makeTypedIdentResolved, makeExprStmt, makeAssign,
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
 	makeBinary, isValueLayoutType,
 } from "../util";
