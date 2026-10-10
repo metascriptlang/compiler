@@ -1975,7 +1975,7 @@ for phase in "${PHASES[@]}"; do
     log="$OUT/$lane.log"
     : >"$OUT/$lane.scope"
     case "$lane" in build|tools) ;; *) need_cand "$lane" ;; esac
-    case "$lane" in corpus|san|tests)
+    case "$lane" in corpus|san)
       if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
       narrow="" only_csv="" lanes_csv=""
