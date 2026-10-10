@@ -4,7 +4,7 @@
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 
 import { Node, NodeKind, BinaryExprData, ArrowFunctionData, TypeAssertionData, ConditionalExprData, ExprStmtData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
+import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits, isFuncBoundary } from "../walker";
@@ -84,9 +84,6 @@ function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext)
 	let checked = left;
 	if (ctx.jsBackend) {
 		checked = asUnknown(left, loc);
-	} else if (!ctx.raiserBackend && left.nodeType != null && isStringLike(left.nodeType)) {
-		checked = makeMember(left, "p", loc);
-		checked.nodeType = createPtr(voidType());
 	}
 	return makeBinary(checked, "!==", makeNull(loc), loc);
 }
@@ -96,11 +93,11 @@ export function nullishLowered(left: Node, right: Node, loc: SourceLocation, res
 }
 
 function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: Type | null, ctx: TransformContext, temps: Node[] | null): Node {
-	// A scalar left operand carries no null, and the lowered test would emit
-	// `double !== NULL`, which is not valid C. TS keeps the expression legal and
-	// its value is the left operand.
+	// A scalar or string left operand carries no null outside JS: TS keeps the
+	// expression legal and its value is the left operand.
 	const leftType = left.nodeType != null ? peelTransparentInstance(left.nodeType) : null;
-	if (leftType != null && !isMaybeType(leftType) && (isNumeric(leftType) || isBoolType(leftType))) {
+	if (leftType != null && !isMaybeType(leftType)
+		&& (isNumeric(leftType) || isBoolType(leftType) || (!ctx.jsBackend && isStringLike(leftType)))) {
 		return left;
 	}
 
