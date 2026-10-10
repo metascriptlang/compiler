@@ -32,7 +32,7 @@ test "nullish coalescing with values" {
 }
 
 test "nullish coalescing with null" {
-	const a = null as unknown as string;
+	const a: string | null = null;
 	const b = a ?? "default";
 	assert b == "default";
 }
