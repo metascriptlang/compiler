@@ -17,7 +17,7 @@ export interface ParseOptions {
 	target: TargetInfo;
 	includePaths: string[];
 	macroFlags: string[];
-	readLog: string[];        // null normally; records every preprocessor file probe/read for the caller's dep cache
+	readLog: string[] | null;        // null normally; records every preprocessor file probe/read for the caller's dep cache
 }
 
 export interface ParseOutput {
@@ -30,7 +30,7 @@ export function defaultOptions(): ParseOptions {
 		target: hostTarget(),
 		includePaths: [],
 		macroFlags: [],
-		readLog: null as unknown as string[],
+		readLog: null,
 	};
 }
 

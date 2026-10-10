@@ -3421,7 +3421,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 	for (const cand of cands) {
 		const candType = cand.symbolType;
 		if (candType == null || candType.kind != TypeKind.Function) continue;
-		const score = scoreCandidateWithSkip(candType.typeChildren, baseArgs, getMinArity(candType), null as unknown as boolean[]);
+		const score = scoreCandidateWithSkip(candType.typeChildren, baseArgs, getMinArity(candType));
 		if (score.exactMatches < 0) continue;
 		const cmp = best == null ? 1 : cmpCandidates(score, bestScore, candType, best.symbolType);
 		if (cmp > 0) {

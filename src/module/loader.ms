@@ -190,7 +190,7 @@ export function headerTarget(): TargetInfo {
 	return os != "" && cpu != "" ? targetFor(os, cpu) : hostTarget();
 }
 
-export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] = null as unknown as ModuleError[]): string {
+export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] | null = null): string {
 	const _ih0 = performance.now();
 	_inlineN = _inlineN + 1;
 	if (!mayImportHeader(source)) {
@@ -211,10 +211,10 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 	const probeLog: string[] = [];
 	const cparseReads: string[] = [];
 	if (key != "") provider.readLog = probeLog;
-	let deps: string[] = null as unknown as string[];
+	let deps: string[] | null = null;
 	let output = "";
 	try {
-		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, key != "" ? cparseReads : (null as unknown as string[]));
+		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, cparseReads);
 	} finally {
 		if (key != "") {
 			const seen = new HashSet<string>();
@@ -238,7 +238,7 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 	return output;
 }
 
-function inlineHeaderImportsInner(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean, outErrors: ModuleError[], cparseReads: string[]): string {
+function inlineHeaderImportsInner(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean, outErrors: ModuleError[] | null, cparseReads: string[]): string {
 	let result = source;
 	let insertedLines = 0;
 	const emittedHeaderDecls = new HashSet<string>();

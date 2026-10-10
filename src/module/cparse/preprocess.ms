@@ -64,7 +64,7 @@ interface PPContext {
 	file: string;
 	counter: int32;           // for __COUNTER__
 	arena: CToken[];          // owns all tokens this preprocess session creates
-	readLog: string[];        // null normally; when set, every file probe/read is recorded as "<path>\t<hash>" / "<path>\t-" for the caller's dep cache
+	readLog: string[] | null;        // null normally; when set, every file probe/read is recorded as "<path>\t<hash>" / "<path>\t-" for the caller's dep cache
 }
 
 // Same dual-hash as compiler/cache.ms hashContent — dep-cache entries keyed by it.
@@ -1207,7 +1207,7 @@ export function preprocess(
 	target: TargetInfo,
 	includePaths: string[],
 	macroFlags: string[] = [],
-	readLog: string[] = null as unknown as string[]
+	readLog: string[] | null = null
 ): PreprocessResult {
 	const ctx: PPContext = {
 		macros: new HashMap<string, Macro>(),
