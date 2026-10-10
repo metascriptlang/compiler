@@ -670,7 +670,7 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 		const expectedType = paramTypes != null && argIdx + defaultOffset < paramTypes.length ? paramTypes[argIdx + defaultOffset] : null;
 		const diagnosticMark = defCtx.errors.length;
 		callCheckExpr(defCtx, cloned, expectedType);
-		const fitted = expectedType != null ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
+		const fitted = expectedType != null && !hasGenericParams(expectedType) ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.length = diagnosticMark;
 		args.push(fitted);
 		argIdx = argIdx + 1;
