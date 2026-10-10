@@ -1,4 +1,5 @@
 // @stdout: struct=true,false,true,false bytes=true,false box=true,false pair=false,true,true,false
+// @xfail(raiser): `<` on two tuples is always true on the Raiser — .inbox/compiler/2026-10-10-raiser-tuple-less-than-always-true.md
 // note: two modules compare structs that share a nested struct and a `uint8[32]` field, a generic struct instance, a sized array and a tuple. Each generated equality helper exists once per program, so the bundle still loads when it is an ES module (the top-level await makes it one). Same output on every backend.
 
 import { First, Second, Box } from "./lib/types";
