@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msStringSubstring
+// @xfail(raiser): raiser runtime error: expected an array, got value kind String (indexing a string with s[i])
 // Parity program — the ASCII string surface, byte-compared across every lane.
 // Broad and shallow on purpose: this is the floor the rest of the 1xx cluster
 // stands on, so a regression in plain concat/index/compare shows up here first

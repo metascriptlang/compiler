@@ -1,5 +1,4 @@
 // @stdout: field 1 elem 1
-// @xfail(raiser): the Raiser VM has no host function msStringSubstring
 // note: a local that reads through a module-level variable exported by another module is an owned copy, never a borrow. A function of that module can replace the variable while the local is alive; the local used to borrow and read the freed object. Same-module sibling: 863-cursorBorrowFromGlobal.
 
 import { Box, shared, sharedList, replaceShared, replaceFirst } from "./cursorGlobalLib";
