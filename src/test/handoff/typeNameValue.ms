@@ -77,6 +77,14 @@ test "a type name as a match arm is refused instead of binding every value" {
 	}
 }
 
+test "a primitive type named as a match arm points at the typeof kind test" {
+	assert hasError(decls + unions + "const s = match (u) { int64 => 1, _ => 2 };", "; test the kind with typeof u === \"int64\"");
+	assert hasError(decls + unions + "const s = match (h.v) { uint64 => 1, _ => 2 };", "; test the kind with typeof h.v === \"uint64\"");
+	assert hasError(decls + unions + "match (w) { uint32 => { take(1); }, _ => {} }", "; test the kind with typeof w === \"uint32\"");
+	assert hasError(decls + unions + "const s = match (take(1)) { int32 => 1, _ => 2 };", "; test the kind with typeof x === \"int32\"");
+	assert !hasError(decls + unions + "const s = match (u) { Pet => 1, _ => 2 };", "test the kind with typeof");
+}
+
 test "value arms beside the type-arm refusal keep compiling on C and JS" {
 	const src = decls + unions + "const lim = 3 as int64;\nconst t = 3 as int64;\nconst a = match (t) { lim => 1, other => 2 };\nconst k: Kind = Kind.B;\nconst b = match (k) { Kind.A => 1, Kind.B => 2 };\nmatch (t) { 3 => { take(1); }, _ => {} }\n";
 	const c = compileToC(src);
