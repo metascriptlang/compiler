@@ -3090,7 +3090,6 @@ function reportUnusedImports(ctx: CheckerContext, program: Node): void {
 		}
 		if (importNode.kind != NodeKind.ImportDecl) continue;
 		const imp = importNode.data as ImportDeclData;
-		if (imp.nameLocations == null) continue;
 		for (let ii = 0; ii < imp.importAliases.length; ii += 1) {
 			const alias = imp.importAliases[ii];
 			if (alias.length == 0) continue;

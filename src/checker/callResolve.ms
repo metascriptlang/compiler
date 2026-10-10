@@ -719,7 +719,7 @@ function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[],
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
 function declaredDefaults(defSym: Symbol | null): Node[] | null {
 	if (defSym == null) return null;
-	if (defSym.defaultParams != null && defSym.defaultParams.length > 0) return defSym.defaultParams;
+	if (defSym.defaultParams.length > 0) return defSym.defaultParams;
 	if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
 		const declData = defSym.declNode.data as FunctionDeclData;
 		if (declData.fnDefaults != null) return declData.fnDefaults;
@@ -974,8 +974,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		if (ctorEntry != null && ctorEntry.fnType != null && ctorEntry.fnType.typeChildren != null) {
 			fillDefaults(ctx, d.newArguments, ctorEntry.defaults,
 				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren, classModule, ctorEntry.fnType.typeNames);
-		} else if (d.newCallee.resolvedSym != null && d.newCallee.resolvedSym.defaultParams != null
-				&& d.newCallee.resolvedSym.defaultParams.length > 0) {
+		} else if (d.newCallee.resolvedSym != null && d.newCallee.resolvedSym.defaultParams.length > 0) {
 			// Path 2: non-generic constructors — defaults on class sym
 			const defaults = d.newCallee.resolvedSym.defaultParams;
 			const ctorType = ctorFnTypeOf(d.newCallee.resolvedSym);
@@ -1280,7 +1279,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (d.arguments.length < expectedCount) {
 			const owner = constructorDeclaringClass(parentSym) ?? parentSym;
 			const ownCtor = ctorFnTypeOf(parentSym);
-			if (owner.defaultParams != null && owner.defaultParams.length > 0) {
+			if (owner.defaultParams.length > 0) {
 				fillDefaults(ctx, d.arguments, owner.defaultParams, owner.defaultParams.length, 0, ctorParamTypes, owner.modulePath, ownCtor != null ? ownCtor.typeNames : null);
 			}
 		}

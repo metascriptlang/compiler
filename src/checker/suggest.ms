@@ -2853,7 +2853,6 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	// ImportDecl: classify each imported name by its resolved symbol kind
 	if (node.kind == NodeKind.ImportDecl) {
 		const imp = node.data as ImportDeclData;
-		if (imp.nameLocations == null) return;
 		for (let ii = 0; ii < imp.importNames.length; ii += 1) {
 			const name = imp.importNames[ii];
 			if (ii >= imp.nameLocations.length) continue;
