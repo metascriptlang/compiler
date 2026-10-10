@@ -258,7 +258,7 @@ function deriveConditionalExprType(node: Node): void {
 // Populated from registry.nameIndex (built during checkModuleGraph's addToNameIndex).
 // Old design scanned all modules × all symbols per lookup — quadratic hot path
 // measured at 51% of Phase A. Now single Map.get() per lookup.
-let _registryNameIndex: HashMap<string, ExportedSymInfo[]> = null as unknown as HashMap<string, ExportedSymInfo[]>;
+let _registryNameIndex: HashMap<string, ExportedSymInfo[]> | null = null;
 
 // Module-level scopes — avoids closure capture of value-type array.
 // Under C, closures copy value types into env structs. Array push/pop inside
@@ -270,13 +270,13 @@ export function refineTypes(program: Node, ctx: TransformContext, registry: Expo
 	if (registry != null && registry.nameIndex != null) {
 		_registryNameIndex = registry.nameIndex;
 	} else {
-		_registryNameIndex = null as unknown as HashMap<string, ExportedSymInfo[]>;
+		_registryNameIndex = null;
 	}
 	_scopes = [];
 	_scopes.push(createScope());
 
 	refineNode(program);
-	_registryNameIndex = null as unknown as HashMap<string, ExportedSymInfo[]>;
+	_registryNameIndex = null;
 	return program;
 }
 
