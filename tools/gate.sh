@@ -843,7 +843,7 @@ emit_side() {
   local jobs scrub rows
   jobs=$(emit_width) || return $?
   mkdir -p "$2"
-  mapfile -t scrub < <(compgen -e | grep '^MSC' | sed 's/^/--unset=/')
+  mapfile -t scrub < <(compgen -e | grep '^MSC' | while read -r v; do printf -- '-u\n%s\n' "$v"; done)
   mapfile -t rows < <(awk '{ print NR, $0 }')
   [ "${#rows[@]}" -gt 0 ] || return 0
   printf '%s\n' "${rows[@]}" | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 \
@@ -981,7 +981,7 @@ FAKE
     printf '%s' "$key"
   }
   printf 'new\n' >std/probe.ms; $g commit -qam std
-  touch -d '1 hour ago' std/probe.ms src/test/corpus/programs/p.ms; : >"$d/mark"
+  touch -t "$(date -v-1H +%Y%m%d%H%M.%S 2>/dev/null || date -d '1 hour ago' +%Y%m%d%H%M.%S)" std/probe.ms src/test/corpus/programs/p.ms; : >"$d/mark"
   emit_sides "$sha" >/dev/null 2>&1 || { printf 'FAIL std swap: a plain std source change was not narrowed (%s)\n' "$whole"; bad=1; }
   [ -z "$(find "$CTL_WORK/std" "$CTL_WORK/src" -type f ! -newer "$d/mark")" ] \
     || { printf 'FAIL std swap: staged sources kept a change stamp an earlier staging could share\n'; bad=1; }
