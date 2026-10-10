@@ -1,7 +1,7 @@
 import {
 	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolFlag, Type, TypeKind,
 	BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
-	TryCatchStmtData, ExprStmtData, ReturnStmtData, ThrowStmtData, AssertStmtData, ExportDeclData, ArrowFunctionData,
+	TryCatchStmtData, ExprStmtData, ReturnStmtData, ThrowStmtData, AssertStmtData, ExportDeclData,
 	FunctionDeclData, CallExprData, BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData,
 	ArrayLiteralData, ObjectLiteralData, ConditionalExprData, NewExprData, TypeAssertionData,
 	SpreadExprData, MoveExprData, OutExprData, HiddenStdConvData, HiddenDerefData,
@@ -17,7 +17,9 @@ import {
 	makeBinary, isValueLayoutType,
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { walkExpandBlocks, walkNode, containsExprKind, isFuncBoundary } from "../walker";
+import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
+import { foldedNullOperand, isNullExpr } from "./operatorLower";
+import { walkExpandBlocks, isFuncBoundary } from "../walker";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 let _spillCtx: TransformContext = null as unknown as TransformContext;
@@ -27,13 +29,24 @@ function isRoutine(node: Node): boolean {
 		|| node.kind == NodeKind.ConstructorDecl || node.kind == NodeKind.ClassDecl;
 }
 
-function hasAwait(node: Node | null): boolean {
+// A null comparison that folds to a constant keeps its operand's evaluation only if the
+// operand runs first, so an operand with effects is spilled like an await.
+function dropsOperandEffects(node: Node): boolean {
+	const operand = foldedNullOperand(_spillCtx, node);
+	return operand != null && cloneIfPure(operand) == null;
+}
+
+function isSpillPoint(node: Node): boolean {
+	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node);
+}
+
+function needsSpill(node: Node | null): boolean {
 	if (node == null) return false;
-	if (node.kind == NodeKind.AwaitExpr) return true;
+	if (isSpillPoint(node)) return true;
 	if (isRoutine(node)) return false;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
-		if (!found && hasAwait(child)) found = true;
+		if (!found && needsSpill(child)) found = true;
 	});
 	return found;
 }
@@ -112,7 +125,7 @@ function bindIfEarly(e: Node, pre: Node[]): Node {
 function lowerOperands(ops: Node[], pre: Node[], receivers: int32): void {
 	let last = -1;
 	for (let i = 0; i < ops.length; i += 1) {
-		if (hasAwait(ops[i])) last = i;
+		if (needsSpill(ops[i])) last = i;
 	}
 	if (last < 0) return;
 	for (let i = 0; i < ops.length; i += 1) {
@@ -150,7 +163,7 @@ function settleObject(obj: Node, pre: Node[]): Node {
 
 function lowerAssign(e: Node, pre: Node[]): Node {
 	const d = e.data as BinaryExprData;
-	if (!hasAwait(d.right)) {
+	if (!needsSpill(d.right)) {
 		d.left = lowerAwaitExpr(d.left, pre);
 		return e;
 	}
@@ -195,8 +208,18 @@ function lowerConditional(e: Node, pre: Node[]): Node {
 	return tempRef(tmp, loc);
 }
 
+function lowerFoldedNullOperand(e: Node, pre: Node[]): Node {
+	const d = e.data as BinaryExprData;
+	const operandOnLeft = !isNullExpr(d.left);
+	const operand = lowerAwaitExpr(operandOnLeft ? d.left : d.right, pre);
+	const bound = tempRef(bindTemp(operand, DeclKind.Const, operand.nodeType, pre, operand.location), operand.location);
+	if (operandOnLeft) d.left = bound;
+	else d.right = bound;
+	return e;
+}
+
 function lowerAwaitExpr(e: Node, pre: Node[]): Node {
-	if (e == null || !hasAwait(e)) return e;
+	if (e == null || !needsSpill(e)) return e;
 	const k = e.kind;
 	if (k == NodeKind.AwaitExpr) {
 		const d = e.data as AwaitExprData;
@@ -206,6 +229,7 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	}
 	if (k == NodeKind.BinaryExpr) {
 		const d = e.data as BinaryExprData;
+		if (dropsOperandEffects(e)) return lowerFoldedNullOperand(e, pre);
 		if (d.operator == "&&" || d.operator == "||") return lowerShortCircuit(e, pre);
 		if (d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") return e;
 		if (isAssignOp(d.operator)) return lowerAssign(e, pre);
@@ -290,7 +314,7 @@ function lowerLoopBody(body: Node): Node {
 }
 
 function lowerAwaitStmt(s: Node): Node[] {
-	if (s == null || !hasAwait(s)) return [s];
+	if (s == null || !needsSpill(s)) return [s];
 	const loc = s.location;
 	const pre: Node[] = [];
 	const k = s.kind;
@@ -357,7 +381,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 	} else if (k == NodeKind.WhileStmt) {
 		const d = s.data as WhileStmtData;
 		const body = lowerLoopBody(d.whileBody);
-		if (hasAwait(d.whileCondition)) {
+		if (needsSpill(d.whileCondition)) {
 			const head: Node[] = [];
 			const cond = lowerAwaitExpr(d.whileCondition, head);
 			head.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
@@ -370,7 +394,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 	} else if (k == NodeKind.DoWhileStmt) {
 		const d = s.data as DoWhileStmtData;
 		const body = lowerLoopBody(d.doBody);
-		if (!hasAwait(d.doCondition)) {
+		if (!needsSpill(d.doCondition)) {
 			d.doBody = body;
 		} else {
 			const entered = bindTemp(makeBool(false, loc), DeclKind.Let, booleanType(), pre, loc);
@@ -411,17 +435,7 @@ export function spillAwaitStmt(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 export function blockifyAwaitingArrows(program: Node): void {
-	walkNode(program, (n: Node): Node => {
-		if (n.kind == NodeKind.ArrowFunction) {
-			const d = n.data as ArrowFunctionData;
-			const body = d.arrowBody;
-			if (body != null && body.kind != NodeKind.BlockStmt
-					&& containsExprKind(body, NodeKind.AwaitExpr)) {
-				d.arrowBody = makeBlock([makeReturn(body, body.location)], body.location);
-			}
-		}
-		return n;
-	});
+	blockifyArrowsReading(program, isSpillPoint);
 }
 
 export function lowerAwaitSpill(program: Node, ctx: TransformContext): Node {

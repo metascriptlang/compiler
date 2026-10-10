@@ -109,10 +109,11 @@ import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
 import { lowerEnumToString } from "./native/enumToStringLower";
 
 // An instance field initializer is evaluated by the constructor, so its `?.` and `??`
-// bind their temps there, after lowerCtorInit has moved it.
+// bind their temps there, after lowerCtorInit has moved it; on C the moved expression
+// also spills what a folded null comparison would drop.
 function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
-	const result = lowerCtorInit(program, ctx);
-	return lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
+	const result = lowerNullishCoalesce(lowerOptionalChain(lowerCtorInit(program, ctx), ctx), ctx);
+	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
 }
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false): Node {
