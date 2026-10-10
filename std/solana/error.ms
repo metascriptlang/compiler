@@ -143,6 +143,9 @@ export function constraintMintTokenProgram(this typeof ProgramError): ProgramErr
 export function constraintAssociatedTokenTokenProgram(this typeof ProgramError): ProgramError {
 	return ProgramError.custom(2023);
 }
+export function constraintDuplicateMutableAccount(this typeof ProgramError): ProgramError {
+	return ProgramError.custom(2040);
+}
 export function requireViolated(this typeof ProgramError): ProgramError {
 	return ProgramError.custom(2500);
 }
@@ -231,6 +234,7 @@ test "builtin errors sit in the high word and custom zero is not success" {
 
 test "framework and user errors carry Anchor's codes" {
 	assert ProgramError.constraintSeeds().customCode() == 2006;
+	assert ProgramError.constraintDuplicateMutableAccount().customCode() == 2040;
 	assert ProgramError.accountDiscriminatorMismatch().customCode() == 3002;
 	assert ProgramError.userError(0).customCode() == 6000;
 }

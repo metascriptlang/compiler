@@ -110,7 +110,7 @@ A verifier is the only way to get a proof, and a function that needs a property 
 | `ExternalMutable<T>` | `externalMutable<T>(i)` | `#[account(mut)] InterfaceAccount<T>` | as `External<T>`, then writable (2000), then exclusive (builtin 12) |
 | `Delegated<T>` | `delegated<T>(i)` | `UncheckedAccount` with `seeds`, then `T::try_deserialize` (MagicBlock `magic-actions` `UpdateLeaderboard`) | present, owner is the delegation program (3007), 8 bytes of data (3001), `T.discriminator()` (3002), `8 + sizeof(T)` bytes and valid field values (3003); the address is checked by `pda`/`pdaWithBump` (2006) |
 
-- **Exclusive.** A `Mutable` or `ExternalMutable` proof claims its account: the runtime marks a duplicated account in the input buffer as a pointer to the first record, and the claim writes the first record's marker byte, so a second mutable proof for the same account, through any index, is `AccountBorrowFailed`. This is Pinocchio's borrow state, which lives in the same byte. Anchor 0.31.1 accepts the duplicate unless the program writes a constraint; two `Ptr<T>` into one account is how a player fights their own pet.
+- **Exclusive.** The runtime marks a duplicated account in the input buffer as a pointer to the first record. `msSolParse` writes `0xfe` into the first record's marker byte (`MS_SOL_DUPLICATED_RECORD`), so every writable proof (`Writable`, `WritableSigner`, `WritablePda`, `Mutable`, `ExternalMutable`) whose account appears at more than one index, in the declared struct or as a trailing account, is `ConstraintDuplicateMutableAccount` (2040), and a repeat between read-only fields stays allowed: Anchor v2 sets the dispatch bitvec for both the repeating index and the one it repeats, then refuses when it meets a `mut` field (`lang-v2/src/dispatch.rs:108-111`, `cursor.rs:170-171`, `context.rs:144`). A `Mutable` or `ExternalMutable` proof also claims its account by writing the marker byte, so a second mutable proof for the same index is `AccountBorrowFailed`; this is Pinocchio's borrow state, which lives in the same byte. Anchor 0.31.1 accepts the duplicate unless the program writes a constraint; two `Ptr<T>` into one account is how a player fights their own pet. A trailing account that repeats a declared writable field is refused when the field is proved, not when the trailing accounts are read, which is stricter than v2's lazy `remaining_accounts()` walk.
 - **Weakening.** `asSigner()` and `asWritable()` turn a `WritableSigner` (or a `Mutable<T>`) into the weaker proof a callee asks for. There is no conversion the other way.
 - **Constraints** that need more than the field's type are decorators on the field (below). The calls they replace stay for code that decides at run time: `pda`/`pdaWithBump` (2006, seeds as in §4), `expectHasOne` (2001), `expectAddress` (2012), and in `token.ms` `expectAssociated` (3014), `expectTokenMint` (2014), `expectTokenOwner` (2015).
 - `Owned<T>.data()` and `Delegated<T>.data()` are read-only pointers, `Mutable<T>.data()` a writable one, all at offset 8 of the account data. A `Delegated<T>` is the last state the rollup committed to the base layer, and it is accepted only while delegated: an undelegated account is read as `Owned<T>`; `External<T>.read()` decodes the other program's layout (token layouts are packed, so they are read, not overlaid).
@@ -180,7 +180,7 @@ An account type is a fixed-size value struct declared in a module shared by the 
 
 - `create<T>` and `createPda<T>` follow Anchor's `init` (`anchor-syn-0.31.1/src/codegen/accounts/constraints.rs` `generate_create_account`): a target with no lamports is created with `create_account`; a prefunded one is topped up to rent exemption, allocated and assigned. Paying with the account being created is 4101. The discriminator is written after the account exists; `createPda` takes the canonical bump, signs with the seeds and that bump, and refuses another address (2006).
 - `close` is Anchor's (`anchor-lang-0.31.1/src/common.rs` `close`): every lamport to the destination, assigned to the System program, data resized to zero. Closing onto itself is 2011; a destination that would overflow is `ArithmeticOverflow` where Anchor's `unwrap` panics.
-- `realloc` grows or shrinks the data, tops rent up from the payer through the System program or returns the excess lamports to the payer, and refuses growth past 10,240 bytes in one instruction (3016).
+- `realloc` follows `realloc_account` (`lang-v2/src/cpi.rs:529-580`): growth transfers only the rent deficit from the payer through the System program (a payer that is the account itself with a deficit is InvalidArgument), a shrink refunds `min(old rent - new rent, lamports above the new rent)` to the payer and skips the writes when the payer is the account, a same-size call moves no lamports, the refund is checked (ArithmeticOverflow). It refuses growth past 10,240 bytes in one instruction (3016) and a new size other than the current one below `8 + sizeof(T)` (AccountDataTooSmall, `lang-v2/src/accounts/slab.rs:975-985`).
 
 ### Portable account bytes
 
@@ -842,6 +842,20 @@ by-value `Result`/`Pubkey` copies in create and transfer. `accountValues` 16,905
 | multisig | 15472 to 15336 | 3004 to 2987; 2508 to 2491; 651 to 634; 3011 to 2994 (2762; 2292; 621; 2991) |
 
 The `wrong-program-id` refusal changed meaning: it sent the instruction to a program deployed at another id with that id's own fresh accounts, which the reference refuses and the SDK now serves as an independent program. It now sends the declared id's accounts to the program at the other id. The 12 records that expected 4100 (SDK: helloworld `init` and nested `initialize` now `PrivilegeEscalation`, vault and multisig `create` 2006, the other seven 3007) keep "refused, state unchanged"; prop-amm `initialize` is skipped there (a plain keypair account, nothing of the declared id's to protect; `foreignDeploy.mjs` records it). The other 90 SDK refusal records are unchanged, 102 in all.
+
+### Duplicate writable accounts and COption tags — measured 2026-10-10
+
+Same reference, ids, builder and replay command as above, `BENCH_REFUSALS=1 anchorBench.mjs` over the five fixtures, 0 failures before and after, every success state identical. The check is one byte compare of the record's marker in each writable proof; a `Mutable` or `ExternalMutable` pays nothing on success because it already read that byte. SDK B and instruction CU before to after:
+
+| Fixture | SDK B | instruction CU |
+|---|---|---|
+| hello | 4552 to 4616 | 1657 to 1662 |
+| vault | 3992 to 4112 | 1769 to 1773; 521 to 526 |
+| nested | 8088 to 8184 | 3181 to 3188; 653 to 655; 645 to 647 |
+| prop-amm | 5568 to 5664 | 143 to 145; 1550 to 1555; 166 to 168 |
+| multisig | 15336 to 15728 | 2987 to 2992; 2491 to 2497; 634 to 666; 2994 to 3000 |
+
+A bitvec in the runtime context, as the reference keeps, cost 4 CU on every instruction in `msSolParse` before any check ran (hello 1657 to 1661 with the checks stubbed out) and 6 to 47 CU more with them; the marker byte avoids both. Not measured: why multisig `set_label` rises 32 CU where the others rise 2 to 7 (its label copy loop is the only data-dependent code), a duplicate on the SBF target (the pins run on the host simulator).
 
 A field declared `WritablePda` with a bare `@bump` keeps the canonical bump the declared seeds
 check found (`foundBump()`), and `createPda` on it signs with that bump without searching again:

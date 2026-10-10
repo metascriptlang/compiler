@@ -124,9 +124,14 @@ function hasExtensionLayout(data: Bytes, accountType: uint8): Result<boolean, Pr
 	return Result.ok((try data.readU8(165)) == accountType);
 }
 
+function canonicalTag(data: Bytes, offset: uint64): Result<void, ProgramError> {
+	if ((try data.readU32(offset)) > 1) { return Result.err(ProgramError.invalidAccountData()); }
+	return Result.ok(null);
+}
+
 function optionalKey(data: Bytes, offset: uint64): Result<Pubkey | null, ProgramError> {
 	let key: Pubkey | null = null;
-	if ((try data.readU8(offset)) == 1) { key = try data.readPubkey(offset + 4); }
+	if ((try data.readU32(offset)) == 1) { key = try data.readPubkey(offset + 4); }
 	return Result.ok(key);
 }
 
@@ -170,6 +175,8 @@ function tokenAccountBytes(account: Account): Result<Bytes, ProgramError> {
 }
 
 function mintFields(data: Bytes): Result<Mint, ProgramError> {
+	const _authority = try canonicalTag(data, 0);
+	const _freeze = try canonicalTag(data, 46);
 	if ((try data.readU8(45)) != 1) { return Result.err(ProgramError.uninitializedAccount()); }
 	return Result.ok({
 		mintAuthority: try optionalKey(data, 0),
@@ -185,12 +192,15 @@ export function readMint(this account: Account): Result<Mint, ProgramError> {
 }
 
 function tokenAccountFields(data: Bytes): Result<TokenAccount, ProgramError> {
+	const _delegate = try canonicalTag(data, 72);
+	const _native = try canonicalTag(data, 109);
+	const _close = try canonicalTag(data, 129);
 	const state = try stateOf(try data.readU8(108));
 	if (state == TokenAccountState.Uninitialized) {
 		return Result.err(ProgramError.uninitializedAccount());
 	}
 	let nativeReserve: uint64 | null = null;
-	if ((try data.readU8(109)) == 1) { nativeReserve = try data.readU64(113); }
+	if ((try data.readU32(109)) == 1) { nativeReserve = try data.readU64(113); }
 	return Result.ok({
 		mint: try data.readPubkey(0),
 		owner: try data.readPubkey(32),
@@ -797,6 +807,37 @@ when (testBuild) {
 	test "a token account with an unknown state byte is refused" {
 		const accounts = single(TOKEN_PROGRAM_ID, tokenAccountData(4, 8, 77, 3));
 		assert resultOf(accounts, 1, readerEntry) == ProgramError.invalidAccountData().code;
+	}
+
+	test "a mint with a COption tag other than 0 or 1 is refused before its initialized byte is read" {
+		for (const bad of [[0, 2], [1, 2], [3, 1]] as int32[][]) {
+			const authority = mintData(5, 1, 6);
+			authority[bad[0]] = bad[1] as uint8;
+			assert resultOf(single(TOKEN_PROGRAM_ID, authority), 0, readerEntry) == ProgramError.invalidAccountData().code;
+		}
+		const freeze = mintData(5, 1, 6);
+		freeze[49] = 1;
+		assert resultOf(single(TOKEN_PROGRAM_ID, freeze), 0, readerEntry) == ProgramError.invalidAccountData().code;
+		const blank = mintData(5, 1, 6);
+		blank[1] = 2;
+		blank[45] = 0;
+		assert resultOf(single(TOKEN_PROGRAM_ID, blank), 0, readerEntry) == ProgramError.invalidAccountData().code;
+		const none = mintData(5, 1, 6);
+		none[0] = 0;
+		assert resultOf(single(TOKEN_PROGRAM_ID, none), 0, readerEntry) == 0;
+	}
+
+	test "a token account with a COption tag other than 0 or 1 is refused at each of its three tags" {
+		for (const offset of [72, 109, 129] as int32[]) {
+			for (const at of [0, 1, 3] as int32[]) {
+				const bytes = tokenAccountData(4, 8, 77, 2);
+				bytes[offset + at] = 2;
+				assert resultOf(single(TOKEN_PROGRAM_ID, bytes), 1, readerEntry) == ProgramError.invalidAccountData().code;
+			}
+		}
+		const blank = tokenAccountData(4, 8, 77, 0);
+		blank[73] = 1;
+		assert resultOf(single(TOKEN_PROGRAM_ID, blank), 1, readerEntry) == ProgramError.invalidAccountData().code;
 	}
 
 	test "mintExtension walks the Token-2022 TLV entries after byte 166" {

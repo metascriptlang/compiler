@@ -9,6 +9,7 @@
 #define MS_SOL_ACCOUNT_HEADER_SIZE 88ULL
 #define MS_SOL_MAX_PERMITTED_DATA_INCREASE 10240ULL
 #define MS_SOL_DUPLICATE_MARKER 0xFF
+#define MS_SOL_DUPLICATED_RECORD 0xFE
 
 #ifndef MS_SOL_MAX_ACCOUNTS
 #define MS_SOL_MAX_ACCOUNTS 255
@@ -100,6 +101,7 @@ static inline const uint8_t* msSolParseAccounts(uint64_t* table) {
         const uint8_t marker = cursor[0];
         if (marker != MS_SOL_DUPLICATE_MARKER) {
             table[index] = table[marker];
+            *(uint8_t*)table[marker] = MS_SOL_DUPLICATED_RECORD;
             cursor += 8;
         } else {
             table[index] = (uint64_t)cursor;

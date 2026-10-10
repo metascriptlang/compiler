@@ -15,6 +15,7 @@ import {
 	createdPdaAccount,
 	createdPdaAccountAt,
 	delegatedFailure,
+	duplicateFailure,
 	exclusiveWritable,
 	givenBump,
 	givenBumpOwned,
@@ -147,6 +148,8 @@ export function signer(index: int32): Result<Signer, ProgramError> {
 	const address = msSolAccountAt(index as uint64);
 	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
 	if (msSolLoadU8(address + 1) == 0) { return ProgramError.accountNotSigner().code; }
+	const duplicated = duplicateFailure(address);
+	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
 	proof = { account: { address: address } };
 	return 0;
@@ -162,6 +165,8 @@ export function writableSigner(index: int32): Result<WritableSigner, ProgramErro
 @inline function writableProofFailure(index: int32, out proof: Writable): uint64 {
 	const address = msSolAccountAt(index as uint64);
 	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	const duplicated = duplicateFailure(address);
+	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
 	proof = { account: { address: address } };
 	return 0;
@@ -170,6 +175,8 @@ export function writableSigner(index: int32): Result<WritableSigner, ProgramErro
 @inline function writablePdaProofFailure(index: int32, out proof: WritablePda): uint64 {
 	const address = msSolAccountAt(index as uint64);
 	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	const duplicated = duplicateFailure(address);
+	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
 	proof = { account: { address: address }, bump: 0 };
 	return 0;
@@ -540,6 +547,9 @@ export function realloc<T>(
 	space: uint64,
 	payer: WritableSigner,
 ): Result<uint64, ProgramError> {
+	if (space != account.account.dataLength() && space < 8 + (sizeof(T) as uint64)) {
+		return Result.err(ProgramError.accountDataTooSmall());
+	}
 	return resizedProgramAccount(account.account, space, payer.account);
 }
 

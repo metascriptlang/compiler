@@ -588,6 +588,18 @@ export function keyIsZero(address: uint64): boolean {
 		msSolLoadU64(address + 24)) == 0;
 }
 
+const DUPLICATED_RECORD: uint8 = 0xfe;
+
+@inline export function duplicateFailure(address: uint64): uint64 {
+	return msSolLoadU8(address) == DUPLICATED_RECORD ? ProgramError.constraintDuplicateMutableAccount().code : 0;
+}
+
+function borrowFailure(address: uint64): uint64 {
+	return msSolLoadU8(address) == DUPLICATED_RECORD
+		? ProgramError.constraintDuplicateMutableAccount().code
+		: ProgramError.accountBorrowFailed().code;
+}
+
 function claimExclusive(address: uint64): boolean {
 	if (msSolLoadU8(address) != 0xff) { return false; }
 	msSolStoreU8(address, 0);
@@ -681,7 +693,7 @@ export function mutableEnvelopeFailure(
 	const failure = programDataFailure(found.address, msSolProgramId(), discriminator, size);
 	if (failure != 0) { return failure; }
 	if (msSolLoadU8(found.address + 2) == 0) { return ProgramError.constraintMut().code; }
-	if (msSolLoadU8(found.address) != 0xff) { return ProgramError.accountBorrowFailed().code; }
+	if (msSolLoadU8(found.address) != 0xff) { return borrowFailure(found.address); }
 	return 0;
 }
 
@@ -693,7 +705,7 @@ export function mutableFailure(
 ): uint64 {
 	const failure = mutableEnvelopeFailure(index, discriminator, size, found);
 	if (failure != 0) { return failure; }
-	if (!claimExclusive(found.address)) { return ProgramError.accountBorrowFailed().code; }
+	if (!claimExclusive(found.address)) { return borrowFailure(found.address); }
 	return 0;
 }
 
@@ -729,7 +741,7 @@ export function mutableAccount(
 
 export function exclusiveWritable(found: Account): Result<Account, ProgramError> {
 	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
-	if (!claimExclusive(found.address)) { return Result.err(ProgramError.accountBorrowFailed()); }
+	if (!claimExclusive(found.address)) { return Result.err({ code: borrowFailure(found.address) }); }
 	return Result.ok(found);
 }
 
@@ -960,13 +972,22 @@ export function resizedProgramAccount(
 	if (space > current && space - current > 10240) {
 		return Result.err(ProgramError.accountReallocExceedsLimit());
 	}
-	const required = minimumBalance(space);
+	const payerIsAccount = funding.address == target.address;
 	const held = target.lamports();
-	if (required > held) {
-		const _funded = try transfer(funding, target, required - held);
-	} else if (held > required) {
-		target.setLamports(required);
-		funding.setLamports(funding.lamports() + (held - required));
+	const required = minimumBalance(space);
+	if (space > current) {
+		if (required > held) {
+			if (payerIsAccount) { return Result.err(ProgramError.invalidArgument()); }
+			const _funded = try transfer(funding, target, required - held);
+		}
+	} else if (space < current && !payerIsAccount) {
+		const reclaimable = minimumBalance(current) - required;
+		const above = held > required ? held - required : 0;
+		const refund = reclaimable < above ? reclaimable : above;
+		const payerLamports = funding.lamports();
+		if (payerLamports + refund < payerLamports) { return Result.err(ProgramError.arithmeticOverflow()); }
+		funding.setLamports(payerLamports + refund);
+		target.setLamports(held - refund);
 	}
 	return target.resize(space);
 }

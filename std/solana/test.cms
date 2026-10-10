@@ -1,6 +1,6 @@
 @include("runtime/solana/solana.h");
 
-import { External, Signer as ChainAuth, accounts, external, externalMutable } from "./typed";
+import { External, Signer as ChainAuth, accounts, external, externalMutable, writablePda } from "./typed";
 import { argBoolValid, argBytesFit, argU8, argU16, argU64 } from "./core";
 import { scopedKeysResult } from "./testArgumentScope";
 import {
@@ -80,7 +80,7 @@ import {
 } from "./index";
 import { SignerSeeds, hashAddressWithBump } from "./seed";
 import { seedTable } from "./accountSeeds";
-import { seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
+import { minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
 import { HostAccount, invocations, logs, run, setClock, signerIs, textBytes } from "./host";
 import {
@@ -287,7 +287,7 @@ test "one account passed twice cannot be mutable twice" {
 	const same = holder(1, programKey(), counterBytes(counterTag(), 0, 48), false, true);
 	const accounts = [same, same];
 	assert run(programKey(), accounts, [], twiceEntry).result ==
-		ProgramError.accountBorrowFailed().code;
+		ProgramError.constraintDuplicateMutableAccount().code;
 	const other = holder(2, programKey(), counterBytes(counterTag(), 0, 48), false, true);
 	const distinctTwo = [same, other];
 	assert run(programKey(), distinctTwo, [], twiceEntry).result == 0;
@@ -784,7 +784,7 @@ test "create allocates through the System program and writes Anchor's discrimina
 	assert accounts[1].data[8] == 5;
 	const twice = [wallet(1, 10000000), wallet(1, 10000000)];
 	assert run(programKey(), twice, [], createEntry).result ==
-		ProgramError.tryingToInitPayerAsProgramAccount().code;
+		ProgramError.constraintDuplicateMutableAccount().code;
 }
 
 test "createPda accepts only the canonical address and records its bump" {
@@ -844,7 +844,7 @@ test "close refunds every lamport, hands the account to the System program and e
 	assert accounts[0].lamports == 0 && accounts[1].lamports == 750;
 	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0;
 	const self = [counter, counter];
-	assert run(programKey(), self, [], closeEntry).result == ProgramError.constraintClose().code;
+	assert run(programKey(), self, [], closeEntry).result == ProgramError.constraintDuplicateMutableAccount().code;
 }
 
 test "realloc grows the data with zeros and tops up rent from the payer" {
@@ -854,6 +854,174 @@ test "realloc grows the data with zeros and tops up rent from the payer" {
 	assert run(programKey(), accounts, [], reallocEntry).result == 0;
 	assert accounts[0].data.length == 148 && accounts[0].data[147] == 0;
 	assert accounts[0].lamports > 1 && accounts[1].lamports == 10000001 - accounts[0].lamports;
+}
+
+function reallocSizedStep(): Result<uint64, ProgramError> {
+	const size = try instructionData().readU16(0);
+	return realloc(try mutable<Counter>(0), size as uint64, try writableSigner(1));
+}
+
+function reallocSizedEntry(): void { codeOf(reallocSizedStep()); }
+
+function sizeBytes(size: int32): uint8[] { return [(size & 255) as uint8, (size >> 8) as uint8]; }
+
+function richCounter(length: int32, lamports: uint64): HostAccount {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, length), false, true);
+	counter.lamports = lamports;
+	return counter;
+}
+
+const tenSol: uint64 = 10000000000;
+const fiveSol: uint64 = 5000000000;
+
+test "realloc to a larger size moves only the rent deficit, and nothing when the balance already covers it" {
+	const rich = [richCounter(48, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), rich, sizeBytes(148), reallocSizedEntry).result == 0;
+	assert rich[0].data.length == 148;
+	assert rich[0].lamports == fiveSol && rich[1].lamports == tenSol;
+	const poorHeld = minimumBalance(100);
+	const poor = [richCounter(48, poorHeld), wallet(2, tenSol)];
+	assert run(programKey(), poor, sizeBytes(148), reallocSizedEntry).result == 0;
+	const deficit = minimumBalance(148) - poorHeld;
+	assert poor[0].lamports == poorHeld + deficit && poor[1].lamports == tenSol - deficit;
+}
+
+test "realloc to the same size moves no lamports from a rich account" {
+	const same = [richCounter(48, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), same, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert same[0].lamports == fiveSol && same[1].lamports == tenSol;
+	assert same[0].data.length == 48;
+}
+
+test "realloc to a smaller size refunds only the rent of the removed bytes, capped by what sits above the new floor" {
+	const reclaim = minimumBalance(148) - minimumBalance(48);
+	const rich = [richCounter(148, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), rich, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert rich[0].data.length == 48;
+	assert rich[0].lamports == fiveSol - reclaim && rich[1].lamports == tenSol + reclaim;
+	const tight = [richCounter(148, minimumBalance(48) + 100), wallet(2, tenSol)];
+	assert run(programKey(), tight, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert tight[0].lamports == minimumBalance(48) && tight[1].lamports == tenSol + 100;
+	const under = [richCounter(148, 500), wallet(2, tenSol)];
+	assert run(programKey(), under, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert under[0].lamports == 500 && under[1].lamports == tenSol;
+	const full: uint64 = 0xFFFFFFFFFFFFFFFF;
+	const overflow = [richCounter(148, fiveSol), wallet(2, full)];
+	assert run(programKey(), overflow, sizeBytes(48), reallocSizedEntry).result ==
+		ProgramError.arithmeticOverflow().code;
+}
+
+test "realloc below the discriminator and the account type is refused, at the floor it is accepted" {
+	const floor = 8 + (sizeof(Counter) as int32);
+	for (const size of [0, 8, floor - 1]) {
+		const accounts = [richCounter(148, fiveSol), wallet(2, tenSol)];
+		assert run(programKey(), accounts, sizeBytes(size), reallocSizedEntry).result ==
+			ProgramError.accountDataTooSmall().code;
+		assert accounts[0].data.length == 148 && accounts[0].lamports == fiveSol;
+	}
+	const at = [richCounter(148, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), at, sizeBytes(floor), reallocSizedEntry).result == 0;
+}
+
+function aliasedResizeEntry(): void {
+	const size = instructionData().readU16(0);
+	if (!size.ok) { failWith(size.error); return; }
+	const held = account(0);
+	if (!held.ok) { failWith(held.error); return; }
+	const resized = resizedProgramAccount(held.value, size.value as uint64, held.value);
+	if (!resized.ok) { failWith(resized.error); }
+}
+
+test "a payer that is the resized account itself pays no deficit and moves no refund" {
+	const deficient = [richCounter(48, 1)];
+	assert run(programKey(), deficient, sizeBytes(148), aliasedResizeEntry).result ==
+		ProgramError.invalidArgument().code;
+	const covered = [richCounter(48, fiveSol)];
+	assert run(programKey(), covered, sizeBytes(148), aliasedResizeEntry).result == 0;
+	assert covered[0].lamports == fiveSol && covered[0].data.length == 148;
+	const shrunk = [richCounter(148, fiveSol)];
+	assert run(programKey(), shrunk, sizeBytes(48), aliasedResizeEntry).result == 0;
+	assert shrunk[0].lamports == fiveSol && shrunk[0].data.length == 48;
+}
+
+export struct WritableTwice { first: Writable; second: Writable; }
+export struct SignerThenWritable { watcher: Signer; target: Writable; }
+export struct WritableThenSigner { target: Writable; watcher: Signer; }
+export struct WritableSignerThenWritable { payer: WritableSigner; target: Writable; }
+export struct SignersTwice { first: Signer; second: Signer; }
+export struct MutableThenWritable { counter: Mutable<Counter>; target: Writable; }
+export struct WritableThenMutable { target: Writable; counter: Mutable<Counter>; }
+export struct OneWritable { target: Writable; }
+export struct WritableThenSignerPair { target: Writable; watcher: Signer; }
+export struct OkVerifier { unused: uint8; }
+export function verify(this typeof OkVerifier, index: int32): Result<Account, ProgramError> {
+	return unchecked(index);
+}
+
+function duplicateEntry<T>(): void {
+	const found = accounts<T>();
+	if (!found.ok) { failWith(found.error); }
+}
+function writableTwiceEntry(): void { duplicateEntry<WritableTwice>(); }
+function signerThenWritableEntry(): void { duplicateEntry<SignerThenWritable>(); }
+function writableThenSignerEntry(): void { duplicateEntry<WritableThenSigner>(); }
+function writableSignerThenWritableEntry(): void { duplicateEntry<WritableSignerThenWritable>(); }
+function signersTwiceEntry(): void { duplicateEntry<SignersTwice>(); }
+function mutableThenWritableEntry(): void { duplicateEntry<MutableThenWritable>(); }
+function writableThenMutableEntry(): void { duplicateEntry<WritableThenMutable>(); }
+function oneWritableEntry(): void { duplicateEntry<OneWritable>(); }
+function writableThenSignerPairEntry(): void { duplicateEntry<WritableThenSignerPair>(); }
+function writablePdaAfterSignerEntry(): void {
+	const first = signer(0);
+	if (!first.ok) { failWith(first.error); return; }
+	codeOf(writablePda(1));
+}
+function externalMutableTwiceEntry(): void {
+	const first = externalMutable<OkVerifier>(0);
+	if (!first.ok) { failWith(first.error); return; }
+	codeOf(externalMutable<OkVerifier>(1));
+}
+function remainingReadEntry(): void {
+	const declared = accounts<SignersTwice>();
+	if (!declared.ok) { failWith(declared.error); return; }
+	codeOf(account(2));
+}
+
+function duplicateOf(code: uint64): boolean { return code == ProgramError.constraintDuplicateMutableAccount().code; }
+
+test "a writable field that repeats another account of the same instruction is refused, whichever writable proof it is" {
+	const a = wallet(1, 1000);
+	const b = wallet(2, 1000);
+	assert duplicateOf(run(programKey(), [a, a], [], writableTwiceEntry).result);
+	assert run(programKey(), [a, b], [], writableTwiceEntry).result == 0;
+	assert duplicateOf(run(programKey(), [a, a], [], writableSignerThenWritableEntry).result);
+	assert run(programKey(), [a, b], [], writableSignerThenWritableEntry).result == 0;
+	const counter = holder(3, programKey(), counterBytes(counterTag(), 0, 48), false, true);
+	assert duplicateOf(run(programKey(), [counter, counter], [], mutableThenWritableEntry).result);
+	assert duplicateOf(run(programKey(), [counter, counter], [], writableThenMutableEntry).result);
+	assert run(programKey(), [counter, a], [], mutableThenWritableEntry).result == 0;
+	assert run(programKey(), [a, counter], [], writableThenMutableEntry).result == 0;
+	assert duplicateOf(run(programKey(), [a, a], [], writablePdaAfterSignerEntry).result);
+	assert duplicateOf(run(programKey(), [a, a], [], externalMutableTwiceEntry).result);
+	assert run(programKey(), [a, b], [], externalMutableTwiceEntry).result == 0;
+}
+
+test "an account shared with a read-only field is refused on the writable side and allowed between read-only fields" {
+	const a = wallet(1, 1000);
+	const b = wallet(2, 1000);
+	assert duplicateOf(run(programKey(), [a, a], [], signerThenWritableEntry).result);
+	assert duplicateOf(run(programKey(), [a, a], [], writableThenSignerEntry).result);
+	assert run(programKey(), [a, b], [], signerThenWritableEntry).result == 0;
+	assert run(programKey(), [a, a], [], signersTwiceEntry).result == 0;
+}
+
+test "a trailing account repeating a declared writable field is refused, one repeating a read-only field is not" {
+	const a = wallet(1, 1000);
+	const b = wallet(2, 1000);
+	assert duplicateOf(run(programKey(), [a, b, a], [], writableThenSignerPairEntry).result);
+	assert duplicateOf(run(programKey(), [a, b, a], [], oneWritableEntry).result);
+	assert run(programKey(), [a, b, b], [], writableThenSignerPairEntry).result == 0;
+	assert run(programKey(), [a, b, a], [], remainingReadEntry).result == 0;
 }
 
 export struct BumpAccounts {
