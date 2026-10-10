@@ -10,6 +10,7 @@ import { accountFieldsValid, zeroAccountFieldsValid } from "./accountValidation"
 import {
 	Account,
 	canonicalBump,
+	canonicalBumpOwned,
 	closedProgramAccount,
 	createdAccount,
 	createdPdaAccount,
@@ -23,15 +24,17 @@ import {
 	conditionFailure,
 	keysFailure,
 	seedsCanonicalFailure,
+	seedsCanonicalOwnedFailure,
 	seedsFoldedFailure,
+	seedsFoldedGivenFailure,
 	seedsGivenFailure,
-	seedsGivenOwnedFailure,
+	seedsGivenProvenFailure,
 	keysEqual,
 	unchecked,
 	keyIsZero,
 	mutableEnvelopeFailure,
 	ownedFailure,
-	programFailure,
+	programWordsFailure,
 	resizedProgramAccount,
 	selectedInstruction,
 	transfer,
@@ -277,7 +280,14 @@ export struct Pda<T> {
 
 @inline function programProofFailure<P>(index: int32, out proof: Program<P>): uint64 {
 	let found: Account;
-	const failure = programFailure(index, P.id(), found);
+	const failure = programWordsFailure(
+		index,
+		@comptime { return P.id().word(0); },
+		@comptime { return P.id().word(1); },
+		@comptime { return P.id().word(2); },
+		@comptime { return P.id().word(3); },
+		found,
+	);
 	if (failure != 0) { return failure; }
 	proof = { account: found };
 	return 0;
@@ -497,12 +507,12 @@ export function createPdaAt<T>(
 	payer: WritableSigner,
 	target: Writable,
 	seeds: Span<SeedSlice>,
-	address: Readonly<Span<uint8>>,
+	word0: uint64, word1: uint64, word2: uint64, word3: uint64,
 	bump: uint8,
 ): Result<Pda<T>, ProgramError> {
 	const _zeroFields = zeroAccountFieldsValid<T>();
 	const space = 8 + (sizeof(T) as uint64);
-	const made = try createdPdaAccountAt(payer.account, target.account, seeds, address, space, @comptime { return word(T.discriminator()); });
+	const made = try createdPdaAccountAt(payer.account, target.account, seeds, word0, word1, word2, word3, space, @comptime { return word(T.discriminator()); });
 	return Result.ok({ account: { account: made }, bump: bump });
 }
 
@@ -510,7 +520,7 @@ export function verifiedPda<T>(
 	this account: Mutable<T>,
 	seeds: Readonly<Span<SeedSlice>>,
 ): Result<Pda<T>, ProgramError> {
-	const bump = try canonicalBump(account.account, seeds);
+	const bump = try canonicalBumpOwned(account.account, seeds);
 	return Result.ok({ account: account, bump: bump });
 }
 
@@ -1102,57 +1112,61 @@ export macro accounts(): Node {
 				error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a WritablePda, which keeps " +
 					"the canonical bump the bare @bump finds; a given @bump needs a Writable", bumped);
 			}
+			const declared = declaredProgramKey(seeded);
+			const literal = declared.length > 0 ? literalSeeds(seeded.macroArgs) : [];
+			const words: Node[] = [key];
+			let foldedBump: uint8 = 0;
+			function constant(value: uint64, isBitPattern: boolean): Node {
+				return {
+					kind: NodeKind.NumberLiteral,
+					line: seeded.line,
+					column: seeded.column,
+					value: value as number,
+					isFloat: false,
+					intVal: value as int64,
+					outOfRangeText: "",
+					isBitPattern: isBitPattern,
+				};
+			}
+			if (literal.length > 0) {
+				let program = Pubkey.zero();
+				for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
+				const found = derivedAddressOf(literal, program);
+				if (!found.ok) {
+					error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
+						"' gives no program address for the programId of build.ms", seeded);
+				}
+				for (let w = 0; w < 4; w += 1) {
+					let word: uint64 = 0;
+					for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (found.value.key.bytes[w * 8 + b] as uint64); }
+					words.push(constant(word, true));
+				}
+				foldedBump = found.value.bump;
+			}
+			const selfOpen = selfType.indexOf("<");
+			const selfBase = selfOpen < 0 ? selfType : selfType.slice(0, selfOpen);
+			const programOwned = selfBase == "Owned" || selfBase == "Mutable";
 			if (bumped.macroArgs.length == 1) {
-				const selfOpen = selfType.indexOf("<");
-				const selfBase = selfOpen < 0 ? selfType : selfType.slice(0, selfOpen);
-				const programOwned = selfBase == "Owned" || selfBase == "Mutable";
-				checks.push(attempt(programOwned ? call(
-					bindSym("seedsGivenOwnedFailure")!,
-					[call(bindSym("asAccount")!, [rewrite(ident(self, seeded))], seeded), table, rewrite(bumped.macroArgs[0])],
-					seeded,
-				) : call(
-					bindSym("seedsGivenFailure")!,
-					[key, table, rewrite(bumped.macroArgs[0])],
-					seeded,
-				), seeded));
-			} else {
-				const declared = declaredProgramKey(seeded);
-				const literal = declared.length > 0 ? literalSeeds(seeded.macroArgs) : [];
 				if (literal.length > 0) {
-					let program = Pubkey.zero();
-					for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
-					const found = derivedAddressOf(literal, program);
-					if (!found.ok) {
-						error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
-							"' gives no program address for the programId of build.ms", seeded);
-					}
-					const words: Node[] = [key];
-					for (let w = 0; w < 4; w += 1) {
-						let word: uint64 = 0;
-						for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (found.value.key.bytes[w * 8 + b] as uint64); }
-						words.push({
-							kind: NodeKind.NumberLiteral,
-							line: seeded.line,
-							column: seeded.column,
-							value: word as number,
-							isFloat: false,
-							intVal: word as int64,
-							outOfRangeText: "",
-							isBitPattern: true,
-						});
-					}
+					words.push(rewrite(bumped.macroArgs[0]));
+					words.push(constant(foldedBump as uint64, false));
+					checks.push(attempt(call(bindSym("seedsFoldedGivenFailure")!, words, seeded), seeded));
+				} else {
+					checks.push(attempt(programOwned ? call(
+						bindSym("seedsGivenProvenFailure")!,
+						[key, table, rewrite(bumped.macroArgs[0])],
+						seeded,
+					) : call(
+						bindSym("seedsGivenFailure")!,
+						[key, table, rewrite(bumped.macroArgs[0])],
+						seeded,
+					), seeded));
+				}
+			} else {
+				if (literal.length > 0) {
 					if (keepsBump) {
 						words[0] = member(ident(holder, seeded), self, seeded);
-						words.push({
-							kind: NodeKind.NumberLiteral,
-							line: seeded.line,
-							column: seeded.column,
-							value: found.value.bump as number,
-							isFloat: false,
-							intVal: found.value.bump as int64,
-							outOfRangeText: "",
-							isBitPattern: false,
-						});
+						words.push(constant(foldedBump as uint64, false));
 						checks.push(attempt(call(bindSym("seedsFoldedPdaFailure")!, words, seeded), seeded));
 					} else {
 						checks.push(attempt(call(bindSym("seedsFoldedFailure")!, words, seeded), seeded));
@@ -1160,7 +1174,11 @@ export macro accounts(): Node {
 				} else if (keepsBump) {
 					checks.push(attempt(call(bindSym("seedsFoundFailure")!, [member(ident(holder, seeded), self, seeded), table], seeded), seeded));
 				} else {
-					checks.push(attempt(call(bindSym("seedsCanonicalFailure")!, [key, table], seeded), seeded));
+					checks.push(attempt(call(
+						programOwned ? bindSym("seedsCanonicalOwnedFailure")! : bindSym("seedsCanonicalFailure")!,
+						[key, table],
+						seeded,
+					), seeded));
 				}
 			}
 		}

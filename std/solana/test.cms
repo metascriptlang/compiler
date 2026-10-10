@@ -18,6 +18,12 @@ import {
 	ProgramError,
 	Pubkey,
 	System,
+	Token,
+	Token2022,
+	AssociatedToken,
+	ASSOCIATED_TOKEN_PROGRAM_ID,
+	TOKEN_2022_PROGRAM_ID,
+	TOKEN_PROGRAM_ID,
 	accountDiscriminator,
 	failWith,
 	mutable,
@@ -68,6 +74,7 @@ import {
 	putI32,
 	putI64,
 	putI8,
+	putPrefix,
 	putPubkey,
 	putSpan,
 	putU16,
@@ -82,7 +89,7 @@ import { SignerSeeds, hashAddressWithBump } from "./seed";
 import { seedTable } from "./accountSeeds";
 import { minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
-import { HostAccount, invocations, logs, run, setClock, signerIs, textBytes } from "./host";
+import { HostAccount, invocations, logs, rentReads, run, setClock, signerIs, textBytes } from "./host";
 import {
 	address,
 	args,
@@ -100,6 +107,8 @@ import {
 } from "./macro";
 import { anchorIdl } from "./idl";
 import { Node, NodeKind, bindSym } from "std/meta";
+import { sha256 } from "std/crypto/sha256";
+import { isEdwardsPoint } from "std/crypto/ed25519/point";
 
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolProgramId(): uint64;
@@ -254,6 +263,48 @@ test "a program verifier checks the key, then that it is executable" {
 		ProgramError.invalidProgramExecutable().code;
 	system.executable = true;
 	assert run(programKey(), [system], [], systemProgramEntry).result == 0;
+}
+
+export struct CustomProgram {}
+export function id(this typeof CustomProgram): Pubkey { return keyOf(77); }
+
+function tokenProgramEntry(): void { codeOf(program<Token>(0)); }
+function token2022ProgramEntry(): void { codeOf(program<Token2022>(0)); }
+function associatedTokenProgramEntry(): void { codeOf(program<AssociatedToken>(0)); }
+function customProgramEntry(): void { codeOf(program<CustomProgram>(0)); }
+
+function programHolder(key: Pubkey, executable: boolean): HostAccount {
+	let account = holder(9, keyOf(9), [], false, false);
+	account.key = key;
+	account.executable = executable;
+	return account;
+}
+
+function programSlotMisses(entry: () => void, right: Pubkey): int32 {
+	let misses = 0;
+	if (run(programKey(), [programHolder(right, true)], [], entry).result != 0) { misses++; }
+	if (run(programKey(), [programHolder(right, false)], [], entry).result !=
+		ProgramError.invalidProgramExecutable().code) { misses++; }
+	for (const word of [0, 8, 16, 24, 31]) {
+		let wrong = right;
+		wrong.bytes[word] = wrong.bytes[word] ^ 1;
+		if (run(programKey(), [programHolder(wrong, true)], [], entry).result !=
+			ProgramError.invalidProgramId().code) { misses++; }
+	}
+	for (const other of [Pubkey.zero(), TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, keyOf(77)]) {
+		if (other == right) { continue; }
+		if (run(programKey(), [programHolder(other, true)], [], entry).result !=
+			ProgramError.invalidProgramId().code) { misses++; }
+	}
+	return misses;
+}
+
+test "every Program<P> slot refuses a key that differs from its id in any word" {
+	assert programSlotMisses(systemProgramEntry, Pubkey.zero()) == 0;
+	assert programSlotMisses(tokenProgramEntry, TOKEN_PROGRAM_ID) == 0;
+	assert programSlotMisses(token2022ProgramEntry, TOKEN_2022_PROGRAM_ID) == 0;
+	assert programSlotMisses(associatedTokenProgramEntry, ASSOCIATED_TOKEN_PROGRAM_ID) == 0;
+	assert programSlotMisses(customProgramEntry, keyOf(77)) == 0;
 }
 
 test "an owned verifier checks owner, discriminator presence, discriminator, then size" {
@@ -710,6 +761,30 @@ function createStep(): Result<uint64, ProgramError> {
 	const at = counter.data();
 	at.value = 5;
 	return Result.ok(0);
+}
+
+function createTwiceStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const first = try create<Counter>(payer, try writable(1));
+	const second = try create<Counter>(payer, try writable(2));
+	first.data().value = 1;
+	second.data().value = 2;
+	return Result.ok(0);
+}
+
+function createTwiceEntry(): void { codeOf(createTwiceStep()); }
+
+test "the rent sysvar is read once per instruction however many accounts it creates, and again by the next instruction" {
+	const one = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), one, [], createEntry).result == 0;
+	assert rentReads() == 1;
+	const two = [wallet(1, 10000000), blank(keyOf(3)), blank(keyOf(4))];
+	assert run(programKey(), two, [], createTwiceEntry).result == 0;
+	assert rentReads() == 1;
+	assert two[1].lamports == two[2].lamports && two[1].lamports > 0;
+	assert two[1].data[8] == 1 && two[2].data[8] == 2;
+	assert run(programKey(), [wallet(1, 10000000), blank(keyOf(5))], [], createEntry).result == 0;
+	assert rentReads() == 1;
 }
 
 function createPdaEntry(): void {
@@ -1512,6 +1587,19 @@ test "putBytes and putSpan copy a view, keep the offset as the length and are re
 	assert putSpan(spanned, putU8(spanned, 0, 1), source) == 4;
 	assert spanned[1] == 4 && spanned[2] == 5 && spanned[3] == 6;
 	assert putSpan(tight, putU8(tight, 0, 1), source) == 4;
+}
+
+test "putPrefix copies only the length asked, leaves the rest of the storage and is refused past the source or the storage" {
+	let source: uint8[4] = [4, 5, 6, 7];
+	let room: uint8[6] = [9, 9, 9, 9, 9, 9];
+	assert putPrefix(room, 1, source, 2) == 3;
+	const expected: uint8[] = [9, 4, 5, 9, 9, 9];
+	for (let index = 0; index < 6; index++) { assert room[index] == expected[index]; }
+	assert putPrefix(room, 0, source, 0) == 0;
+	assert room[0] == 9;
+	assert putPrefix(room, 0, source, 5) == 7 && room[0] == 9;
+	assert putPrefix(room, 4, source, 3) == 7 && room[4] == 9 && room[5] == 9;
+	assert putPrefix(room, 7, source, 0) == 7;
 }
 
 test "the writers take a sized storage in method form" {
@@ -2547,11 +2635,87 @@ test "@seeds with @bump(account.field) accepts the address the stored bump gives
 		ProgramError.constraintSeeds().code;
 }
 
+test "@bump(account.field) on an Owned or Mutable field leaves the owner to the field's proof and still refuses a foreign owner" {
+	const found = safeAddress(keyOf(2));
+	const foreign = atKey(holder(1, keyOf(77), safeBytes(keyOf(2), 9, found.bump), false, true), found.key);
+	assert run(programKey(), [ownerWallet(), foreign], [], pinnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const system = atKey(holder(1, Pubkey.zero(), safeBytes(keyOf(2), 9, found.bump), false, true), found.key);
+	assert run(programKey(), [ownerWallet(), system], [], pinnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+}
+
 test "a bare @bump accepts the canonical address only" {
 	assert run(programKey(), [ownerWallet(), pinnedSafe(9)], [], canonicalEntry).result == 0;
 	const found = safeAddress(keyOf(2));
 	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
 	assert run(programKey(), elsewhere, [], canonicalEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+function safeHashAt(owner: Pubkey, bump: uint8): Pubkey {
+	let preimage: uint8[] = [115, 97, 102, 101];
+	for (const byte of owner.bytes) { preimage.push(byte); }
+	preimage.push(bump);
+	for (const byte of programKey().bytes) { preimage.push(byte); }
+	for (const byte of "ProgramDerivedAddress".asBytes()) { preimage.push(byte); }
+	return { bytes: sha256(preimage).bytes };
+}
+
+function ownerWithLowerOffCurveBump(): uint8 {
+	for (let seed = 1; seed < 100; seed++) {
+		const found = safeAddress(keyOf(seed as uint8));
+		for (let bump = (found.bump as int32) - 1; bump >= 1; bump--) {
+			if (!isEdwardsPoint(safeHashAt(keyOf(seed as uint8), bump as uint8).bytes)) { return seed as uint8; }
+		}
+	}
+	return 0;
+}
+
+function lowerOffCurveBump(owner: Pubkey): uint8 {
+	const found = safeAddress(owner);
+	for (let bump = (found.bump as int32) - 1; bump >= 1; bump--) {
+		if (!isEdwardsPoint(safeHashAt(owner, bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function verifiedStep(): Result<uint64, ProgramError> {
+	const safe = try mutable<Safe>(0);
+	const checked = try pda(safe, ["safe", keyOf(2)]);
+	if (checked.bump != safeAddress(keyOf(2)).bump) { return Result.err(ProgramError.userError(7)); }
+	return Result.ok(0);
+}
+
+function verifiedEntry(): void { codeOf(verifiedStep()); }
+
+test "a program-owned account at a higher-bump hash that is on the curve is the canonical address, and the lower hashes are refused" {
+	const seed = ownerWithLowerOffCurveBump();
+	assert seed != 0;
+	const owner = keyOf(seed);
+	const found = safeAddress(owner);
+	assert found.bump < 255;
+	const lower = lowerOffCurveBump(owner);
+	assert lower != 0;
+	const wallet = holder(seed, Pubkey.zero(), [], true, false);
+	assert run(programKey(), [wallet, safeAt(found.key, owner, 9, found.bump)], [], canonicalEntry).result == 0;
+	const code = ProgramError.constraintSeeds().code;
+	assert run(programKey(), [wallet, safeAt(safeHashAt(owner, lower), owner, 9, lower)], [], canonicalEntry).result == code;
+	assert run(programKey(), [wallet, safeAt(safeHashAt(owner, found.bump - 1), owner, 9, found.bump - 1)], [], canonicalEntry).result == code;
+	let flipped = found.key;
+	flipped.bytes[31] = flipped.bytes[31] ^ 1;
+	assert run(programKey(), [wallet, safeAt(flipped, owner, 9, found.bump)], [], canonicalEntry).result == code;
+}
+
+test "pda on a Mutable returns the canonical bump and refuses a lower bump's address and a foreign key" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [safeAt(found.key, keyOf(2), 9, found.bump)], [], verifiedEntry).result == 0;
+	const lower = lowerOffCurveBump(keyOf(2));
+	if (lower != 0) {
+		assert run(programKey(), [safeAt(safeHashAt(keyOf(2), lower), keyOf(2), 9, lower)], [], verifiedEntry).result ==
+			ProgramError.constraintSeeds().code;
+	}
+	assert run(programKey(), [safeAt(keyOf(77), keyOf(2), 9, found.bump)], [], verifiedEntry).result ==
 		ProgramError.constraintSeeds().code;
 }
 

@@ -25,6 +25,7 @@ import {
 	isSigner,
 	isUtf8,
 	key,
+	putPrefix,
 	seeds,
 	signed,
 	transfer,
@@ -116,7 +117,7 @@ function setLabel(): Result<uint64, ProgramError> {
 	if (!isUtf8(input.label, input.labelLength as int32)) { return Result.err(ProgramError.userError(3)); }
 	const config = x.config.data();
 	config.labelLength = input.labelLength as uint16;
-	for (let i = 0; i < (input.labelLength as int32); i++) { config.label[i] = input.label[i]; }
+	const _copied = config.label.putPrefix(0, input.label, input.labelLength as uint64);
 	return Result.ok(0);
 }
 

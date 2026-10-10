@@ -779,8 +779,21 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 		for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
 		const found = derivedAddressOf(literal, program);
 		if (!found.ok) { error("createPda: these seeds give no program address for the programId of build.ms", seeds); }
-		const address: Node[] = [];
-		for (const b of found.value.key.bytes) { address.push(byteLiteral(b, seeds)); }
+		const words: Node[] = [];
+		for (let w = 0; w < 4; w += 1) {
+			let word: uint64 = 0;
+			for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (found.value.key.bytes[w * 8 + b] as uint64); }
+			words.push({
+				kind: NodeKind.NumberLiteral,
+				line: seeds.line,
+				column: seeds.column,
+				value: word as number,
+				isFloat: false,
+				intVal: word as int64,
+				outOfRangeText: "",
+				isBitPattern: true,
+			});
+		}
 		const bumped: Node[] = [];
 		for (const seed of seeds.elements) { bumped.push(seed); }
 		bumped.push({ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: [byteLiteral(found.value.bump, seeds)] });
@@ -801,13 +814,7 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 				arguments: [{ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: bumped }],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,
-			}, {
-				kind: NodeKind.TypeAssertion,
-				line: seeds.line,
-				column: seeds.column,
-				asExpr: { kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: address },
-				asType: "uint8[32]",
-			}, byteLiteral(found.value.bump, seeds)],
+			}, words[0], words[1], words[2], words[3], byteLiteral(found.value.bump, seeds)],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		};

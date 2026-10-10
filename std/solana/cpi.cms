@@ -52,7 +52,7 @@ export struct CpiInstruction {
 	dataLength: uint64;
 }
 
-export function invokeCpi(
+@inline export function invokeCpi(
 	program: Pubkey,
 	metas: Readonly<Span<InstructionAccount>>,
 	data: Readonly<Span<uint8>>,

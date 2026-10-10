@@ -87,6 +87,7 @@ typedef struct {
     uint64_t programId;
     bool err;
     msException* currException;
+    uint64_t rent[3];
 } msSolanaContext;
 
 static inline msSolanaContext* msSolanaCurrentContext(void) {

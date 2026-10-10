@@ -2,8 +2,9 @@
 // against the declared program id, as Anchor v2 folds `seeds = [b"…"], bump` (lang-v2 derive
 // parse.rs `emit_seeds_check`, pda.rs `precompute_pda`): the deployed program derives nothing.
 // A build without a programId keeps the run-time derivation, as an undiscoverable `declare_id!`
-// does; a stored bump (`@bump(account.field)`) on a `Mutable` hashes only, because the owner check
-// has already proved the address off the curve.
+// does. A stored bump (`@bump(account.field)`) folds the same way: the key must be the folded
+// address and the stored bump the folded canonical bump; without a declared id a stored bump on a
+// `Mutable` hashes only, because the owner check has already proved the address off the curve.
 //
 // WHY A SUBPROCESS: the observable is which syscalls the linked SBF program calls, which no
 // unit test reaches. A static syscall is `call imm` with src 0 and imm = murmur3 of its name:
@@ -16,7 +17,7 @@
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, ExecFileResult, cwd, exit, env } from "std/process";
-import { writeFile, ensureDir, removeAll, exists, readFile } from "std/fs";
+import { ensureDir, removeAll, exists, readFile } from "std/fs";
 
 const root = cwd();
 const mscEnv = env.get("MSC");
@@ -80,15 +81,17 @@ if (!text.ok) {
 	report(`cannot read ${fixture}`);
 	exit(1);
 }
-const stored = `${dir}/storedBump.ms`;
-writeFile(stored, text.value.replace("@seeds(\"counter\", [7, 9]) @bump counter", "@seeds(\"counter\", [7, 9]) @bump(counter.bump) counter"));
+const stored = `${root}/src/test/guard/fixtures/solanaSeedsFoldedStored.ms`;
 
 program("folded", fixture, [declared], false, false);
 program("undeclared", fixture, [], true, true);
-program("storedBump", stored, [declared], true, false);
+program("storedBump", stored, [declared], false, false);
+program("storedBumpUndeclared", stored, [], true, false);
 
 const tested = run(["test", declared, fixture]);
 if (tested.exitCode != 0) report(`host tests of the folded seeds failed: ${tested.output}${tested.errorOutput}`);
+const testedStored = run(["test", declared, stored]);
+if (testedStored.exitCode != 0) report(`host tests of the folded stored bump failed: ${testedStored.output}${testedStored.errorOutput}`);
 
 if (failed != 0) exit(1);
 console.log("GUARD-OK");

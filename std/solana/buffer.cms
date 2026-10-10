@@ -90,3 +90,8 @@ export function putBytes(this storage: Span<uint8>, at: uint64, value: Bytes): u
 export function putSpan(this storage: Span<uint8>, at: uint64, value: Readonly<Span<uint8>>): uint64 {
 	return putAddress(storage, at, msSolSpanAddress(value), value.length as uint64);
 }
+
+export function putPrefix(this storage: Span<uint8>, at: uint64, value: Readonly<Span<uint8>>, length: uint64): uint64 {
+	if (length > (value.length as uint64)) { return refused(storage); }
+	return putAddress(storage, at, msSolSpanAddress(value), length);
+}

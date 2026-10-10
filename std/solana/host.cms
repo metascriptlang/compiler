@@ -23,6 +23,7 @@ extern function msSolHostFaultMessage(): string;
 extern function msSolHostLogTotal(): uint64;
 extern function msSolHostLogAt(index: uint64): string;
 extern function msSolHostInvocationTotal(): uint64;
+extern function msSolHostRentReadTotal(): uint64;
 extern function msSolHostInvocationAt(index: uint64): uint64;
 extern function msSolHostSetClock(
 	slot: uint64,
@@ -197,6 +198,8 @@ export function logs(): string[] {
 	}
 	return lines;
 }
+
+export function rentReads(): uint64 { return msSolHostRentReadTotal(); }
 
 export function invocations(): HostInvocation[] {
 	const found: HostInvocation[] = [];

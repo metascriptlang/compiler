@@ -35,6 +35,7 @@ static char** msSolHostLogLines;
 static uint64_t msSolHostLogCount;
 static msSolHostInvocation* msSolHostInvocations;
 static uint64_t msSolHostInvocationCount;
+static uint64_t msSolHostRentReadCount;
 static uint8_t msSolHostReturnData[MS_SOL_MAX_RETURN_DATA];
 static uint64_t msSolHostReturnLength;
 static uint8_t msSolHostReturnProgram[32];
@@ -90,6 +91,7 @@ void msSolHostEnter(uint64_t input) {
     msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
     msSolParse(msSolHostAccounts);
+    msSolHostRentReadCount = 0;
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
     msSolHostReturnLength = 0;
@@ -114,6 +116,7 @@ msString msSolHostLogAt(uint64_t index) {
 }
 
 uint64_t msSolHostInvocationTotal(void) { return msSolHostInvocationCount; }
+uint64_t msSolHostRentReadTotal(void) { return msSolHostRentReadCount; }
 
 uint64_t msSolHostInvocationAt(uint64_t index) {
     return index < msSolHostInvocationCount ? (uint64_t)&msSolHostInvocations[index] : 0;
@@ -747,6 +750,7 @@ uint64_t msSolHostGetClock(uint64_t out) {
 }
 
 uint64_t msSolHostGetRent(uint64_t out) {
+    msSolHostRentReadCount++;
     uint8_t* rent = (uint8_t*)out;
     uint64_t lamportsPerByteYear = 3480;
     uint64_t exemptionThreshold = 0x4000000000000000ULL;

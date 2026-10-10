@@ -40,6 +40,7 @@ typedef struct {
     uint64_t programId;
     bool err;
     void* currException;
+    uint64_t rent[3];
 } msSolanaContext;
 
 msSolanaContext* msSolHostContext(void);
@@ -70,6 +71,7 @@ uint64_t msSolHostTryFindProgramAddress(uint64_t seeds, uint64_t count, uint64_t
 uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount);
 uint64_t msSolHostGetClock(uint64_t out);
 uint64_t msSolHostGetRent(uint64_t out);
+uint64_t msSolHostRentReadTotal(void);
 void msSolHostSetReturnData(const uint8_t* data, int64_t length);
 uint64_t msSolHostGetReturnData(uint64_t data, uint64_t length, uint64_t programId);
 
@@ -358,6 +360,14 @@ static inline uint64_t msSolGetReturnData(uint64_t data, uint64_t length, uint64
 }
 
 #endif
+
+/* The rent sysvar is read once per instruction: the context starts zeroed for every instruction and a nonzero
+   lamports-per-byte-year marks the words as read. */
+static inline uint64_t msSolRentAddress(void) {
+    msSolanaContext* context = msSolContext();
+    if (context->rent[0] == 0) msSolGetRent((uint64_t)(uintptr_t)context->rent);
+    return (uint64_t)(uintptr_t)context->rent;
+}
 
 typedef struct {
     uint64_t address;
