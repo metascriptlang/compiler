@@ -1913,6 +1913,14 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (srcType != null && dropsReadonlyView(srcType, targetType)) reportReadonlyWrite(ctx, srcType, "cast away", asLoc.line, asLoc.column);
 	if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
 		&& d.asExpr != null && d.asExpr.kind == NodeKind.NullLiteral) {
+		const throughUnknown = srcType != null && isUnknownType(srcType);
+		if (!hasGenericParams(targetType) && !isAssignable(nullType(), targetType)
+			&& unknownRefusal(targetType) == UnknownRefusal.Value && !(throughUnknown && isFunctionKind(targetType))) {
+			const held = throughUnknown ? "unknown" : "null";
+			addError(ctx, "cannot cast " + held + " to the value type " + typeDisplayName(targetType) + " — it holds no null; write `" + typeDisplayName(targetType) + " | null`", asLoc.line, asLoc.column);
+			node.nodeType = targetType;
+			return;
+		}
 		node.kind = NodeKind.NullLiteral;
 		node.data = { nullPlaceholder: true };
 		node.nodeType = targetType;
