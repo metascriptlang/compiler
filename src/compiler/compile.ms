@@ -1811,7 +1811,7 @@ function hcrImagePath(outBinary: string, moduleId: string): string {
 function hcrCoreImagePath(outBinary: string, targetOs: string): string {
 	const stem = `${hcrImageStem(outBinary)}.core`;
 	if (targetOs == "windows") return `${stem}.dll`;
-	if (targetOs == "linux") return `${stem}.so`;
+	if (targetOs == "linux" || targetOs == "android") return `${stem}.so`;
 	if (targetOs == "darwin" || targetOs == "macos") return `${stem}.dylib`;
 	return "";
 }
@@ -1823,6 +1823,7 @@ test "HCR core image takes the target's shared-library extension, not the output
 	assert hcrCoreImagePath("out/module.hcr", "windows") == "out/module.core.dll";
 	assert hcrCoreImagePath("out/module.dll", "windows") == "out/module.core.dll";
 	assert hcrCoreImagePath("out/app", "linux") == "out/app.core.so";
+	assert hcrCoreImagePath("out/libapp.so", "android") == "out/libapp.core.so";
 }
 
 function linkHcrImage(objects: string[], externalInputs: string[], image: string, flags: string, opts: CliOptions): void {
@@ -1865,7 +1866,7 @@ function linkHcrImages(
 		coreInput = `${hcrImageStem(outBinary)}.core.lib`;
 		coreFlags = appendFlag(coreFlags, "-Wl,--export-all-symbols");
 		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,--out-implib,${coreInput}`));
-	} else if (opts.targetOs == "linux") {
+	} else if (opts.targetOs == "linux" || opts.targetOs == "android") {
 		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,-soname,${basename(core)}`));
 		imageFlags = appendFlag(imageFlags, "-Wl,-rpath,$ORIGIN");
 	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
