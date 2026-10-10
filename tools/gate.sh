@@ -153,7 +153,7 @@ control_key() {
   local tree support emit
   [ -n "$CONTROL_SUPPORT" ] || return 1
   tree=$(tree_key "$1") && support=$(git ls-tree "$1" runtime vendor) || return 1
-  emit=$(declare -f emit_one emit_side hash_files digest | digest) || return 1
+  emit=$(declare -f emit_one emit_many emit_side hash_files digest | digest) || return 1
   { printf 'stable-emit-v2\n%s\n%s\n%s\n%s\n%s\n' "$(uname -sm)" "$tree" "$support" "$emit" "$CONTROL_SUPPORT"; } | digest
 }
 
@@ -377,22 +377,54 @@ bounded() {
 
 hash_files() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
-emit_one() {
-  local bin=$1 name=$3 entry=$4 d="$GATE_EMIT_DIR/$2" c_rc js_rc c js cs LC_ALL=C
-  rm -rf "$d"; mkdir -p "$d" && cd "$d" || exit 1
-  "$bin" build "$entry" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
-  "$bin" build "$entry" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
-  shopt -s globstar nullglob dotglob; cs=(out/**/*.c)
-  c=$({ echo "rc=$c_rc"; [ "$c_rc" -eq 0 ] || cat c.log; [ "${#cs[@]}" -eq 0 ] || hash_files "${cs[@]}"; } | digest)
-  "$bin" build "$entry" --target=js --output=out.js >js.log 2>&1; js_rc=$?
-  js=$({ echo "rc=$js_rc"; if [ "$js_rc" -eq 0 ]; then cat out.js; else cat js.log; fi; } 2>/dev/null | digest)
-  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$c" "$js" "$c_rc" "${#cs[@]}"
+emit_many() {
+  local bin=$1 root=$GATE_EMIT_DIR work i n h p c_rc js_rc text
+  local -a args dirs files
+  local -A sum crc jrc count ctext
+  shift; args=("$@")
+  for ((i = 0; i < ${#args[@]}; i += 3)); do dirs+=("$root/${args[i]}"); done
+  work="$root/.sig.$$"
+  rm -rf "${dirs[@]}" "$work"; mkdir -p "${dirs[@]}" "$work" || exit 1
+  for ((i = 0; i < ${#args[@]}; i += 3)); do
+    n=${args[i]}
+    cd "$root/$n" || exit 1
+    "$bin" build "${args[i + 2]}" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
+    "$bin" build "${args[i + 2]}" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
+    "$bin" build "${args[i + 2]}" --target=js --output=out.js >js.log 2>&1; js_rc=$?
+    [ -f out.js ] || : >out.js
+    crc[$n]=$c_rc jrc[$n]=$js_rc count[$n]=0 ctext[$n]=""
+  done
+  cd "$root" || exit 1
+  shopt -s globstar nullglob dotglob
+  for ((i = 0; i < ${#args[@]}; i += 3)); do n=${args[i]}; files+=("$n"/out/**/*.c "$n/c.log" "$n/js.log" "$n/out.js"); done
+  hash_files "${files[@]}" | LC_ALL=C sort -k2 >"$work/sums" || exit 1
+  while read -r h p; do
+    p=${p#\*}; sum[$p]=$h; n=${p%%/*}
+    case "$p" in "$n"/out/*.c) count[$n]=$((${count[$n]} + 1)); ctext[$n]+="$h ${p#*/}"$'\n' ;; esac
+  done <"$work/sums"
+  for ((i = 0; i < ${#args[@]}; i += 3)); do
+    n=${args[i]}
+    text="rc=${crc[$n]}"$'\n'
+    [ "${crc[$n]}" -eq 0 ] || text+="log ${sum[$n/c.log]}"$'\n'
+    printf '%s%s' "$text" "${ctext[$n]}" >"$work/$n.c"
+    if [ "${jrc[$n]}" -eq 0 ]; then h=${sum[$n/out.js]}; else h=${sum[$n/js.log]}; fi
+    printf 'rc=%s\n%s\n' "${jrc[$n]}" "$h" >"$work/$n.js"
+  done
+  cd "$work" && hash_files ./*.c ./*.js >sigs || exit 1
+  while read -r h p; do p=${p#\*}; sum[sig:${p#./}]=$h; done <sigs
+  for ((i = 0; i < ${#args[@]}; i += 3)); do
+    n=${args[i]}
+    printf '%s\t%s\t%s\t%s\t%s\n' "${args[i + 1]}" "${sum[sig:$n.c]}" "${sum[sig:$n.js]}" "${crc[$n]}" "${count[$n]}"
+  done
+  cd "$root" && rm -rf "$work"
 }
+
+emit_one() (emit_many "$@")
 
 if [ "${1:-}" = --emit-one ]; then
   bin=${2:?}; shift 2
   [ $# -ge 3 ] && [ $(($# % 3)) -eq 0 ] || { echo "--emit-one takes a compiler and index/name/entry triples" >&2; exit 2; }
-  while [ $# -ge 3 ]; do (emit_one "$bin" "$1" "$2" "$3"); shift 3; done
+  emit_many "$bin" "$@"
   exit 0
 fi
 if [ "${1:-}" = --tree-key ]; then tree_key "${2:?--tree-key needs a rev}"; exit $?; fi
@@ -801,12 +833,21 @@ emit_width() {
   cap_jobs "$(share_of_cores "$share")" "${GATE_PAR:-}"
 }
 
+emit_batch() {
+  local per=$((($1 + $2 * 2 - 1) / ($2 * 2)))
+  [ "$per" -le 20 ] || per=20
+  echo "$per"
+}
+
 emit_side() {
-  local jobs scrub
+  local jobs scrub rows
   jobs=$(emit_width) || return $?
   mkdir -p "$2"
   mapfile -t scrub < <(compgen -e | grep '^MSC' | sed 's/^/--unset=/')
-  awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -n 60 "$GATE_SH" --emit-one "$1"
+  mapfile -t rows < <(awk '{ print NR, $0 }')
+  [ "${#rows[@]}" -gt 0 ] || return 0
+  printf '%s\n' "${rows[@]}" | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 \
+    xargs -r -P "$jobs" -n "$(($(emit_batch "${#rows[@]}" "$jobs") * 3))" "$GATE_SH" --emit-one "$1"
 }
 
 reusable_programs() (
@@ -1117,7 +1158,7 @@ control_key_self_test() (
   CONTROL_SUPPORT=support2
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: support identity change kept the key\n'; bad=1; }
   CONTROL_SUPPORT=support
-  eval "$(declare -f emit_one | sed 's/--emit=c --gc=drc --danger/--emit=c --gc=orc --danger/')"
+  eval "$(declare -f emit_many | sed 's/--emit=c --gc=drc --danger/--emit=c --gc=orc --danger/')"
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: changed emit definition kept the key\n'; bad=1; }
   cd / && rm -rf "$d"
   return $bad
@@ -1175,6 +1216,32 @@ emit_env_self_test() (
   got=$(cat "$d/e/1/out.js" 2>/dev/null)
   [ -f "$d/e/1/out.js" ] || { printf 'FAIL emit env: probe emit did not run\n'; bad=1; }
   [ -z "$got" ] || { printf 'FAIL emit env: emits saw %s\n' "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+emit_many_self_test() (
+  local d bad=0 both one GATE_EMIT_DIR
+  d=$(mktemp -d) || return 1
+  GATE_EMIT_DIR="$d/e"
+  cat >"$d/fake" <<'FAKE'
+#!/usr/bin/env bash
+case "$2" in */broken.ms) echo "error in $2"; exit 1 ;; esac
+case " $* " in *" --emit=c "*) mkdir -p out/debug && cp "$2" out/debug/p.c && cp "$2" out/q.c ;; esac
+for a; do case $a in --output=*) cp "$2" "${a#--output=}" ;; esac; done
+FAKE
+  chmod +x "$d/fake"
+  printf 'a\n' >"$d/a.ms"; printf 'b\n' >"$d/b.ms"; printf 'x\n' >"$d/broken.ms"
+  both=$(emit_one "$d/fake" 1 a "$d/a.ms" 2 b "$d/b.ms" 3 broken "$d/broken.ms")
+  one=$(emit_one "$d/fake" 9 a "$d/a.ms")
+  [ "$(sed -n 1p <<<"$both")" = "$one" ] || { printf 'FAIL emit batch: a program signed differently beside others\n'; bad=1; }
+  awk -F'\t' 'NR == 1 { c = $2; j = $3 } NR == 2 && ($2 == c || $3 == j) { bad = 1 } END { exit bad }' <<<"$both" \
+    || { printf 'FAIL emit batch: two programs shared a signature\n'; bad=1; }
+  [ "$(cut -f1,4,5 <<<"$both" | tr '\t\n' ' |')" = "a 0 2|b 0 2|broken 1 0|" ] \
+    || { printf 'FAIL emit batch: names, exit codes or C file counts are off: %s\n' "$(cut -f1,4,5 <<<"$both" | tr '\t\n' ' |')"; bad=1; }
+  mkdir "$d/other"; printf 'x\n' >"$d/other/broken.ms"
+  [ "$(emit_one "$d/fake" 3 broken "$d/other/broken.ms" | cut -f2)" != "$(sed -n 3p <<<"$both" | cut -f2)" ] \
+    || { printf 'FAIL emit batch: two different failures shared a signature\n'; bad=1; }
   rm -rf "$d"
   return $bad
 )
@@ -1455,6 +1522,7 @@ CASES
   publish_self_test || bad=1
   emit_env_self_test || bad=1
   control_boot_self_test || bad=1
+  emit_many_self_test || bad=1
   emit_width_self_test || bad=1
   cand_reuse_self_test || bad=1
   std_swap_self_test || bad=1
