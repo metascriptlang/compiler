@@ -10,7 +10,7 @@ function hookSource(hook: string, receiver: string, owner: string): string {
 	let rest = "";
 	if (hook == "onCopy" || hook == "onMove") rest = ", y: " + owner;
 	if (hook == "onTrace") rest = ", env: Ptr<void>";
-	if (hook == "onClone") return declared + "function onClone(" + receiver + "): " + owner + " { return null as unknown as " + owner + "; }\n";
+	if (hook == "onClone") return declared + "function onClone(" + receiver + "): " + owner + " { return " + (owner == "S" ? "{ h: 0 }" : "new C()") + "; }\n";
 	return declared + "function " + hook + "(" + receiver + rest + "): void { }\n";
 }
 
