@@ -345,6 +345,140 @@ function privateHelper(): void {
 	reloadsNewTypeEdit("hcrPrivateHelper", "privateHelper", "HCR-PRIVATE", "a generic body calling private functions of its module did not build or reload in the image that uses it");
 }
 
+const VALUE_APP = "import { value } from \"./logic\";
+
+@exportName(\"hcrValue\")
+export function hcrValue(): int32 {
+	return value();
+}
+";
+
+function returns(name: string, shown: int32): string {
+	return `export function ${name}(): int32 {
+	return ${shown};
+}
+`;
+}
+
+// A module that joins or leaves the project has no manifest on the other side of the comparison.
+function addedModule(): void {
+	const tag = "hcrAddedModule";
+	const dir = freshDir(`${TMP}/addedModule`);
+	const build = ["build", "app.ms", "--hcr", "--output=module.hcr"];
+	put(`${dir}/app.ms`, VALUE_APP);
+	put(`${dir}/logic.ms`, returns("value", 1));
+	put(`${dir}/words.ms`, returns("word", 2));
+	mustBuild(tag, dir, build, "the first build failed");
+	put(`${dir}/logic.ms`, "import { word } from \"./words\";
+export function value(): int32 {
+	return word();
+}
+");
+	const added = msc(dir, build);
+	if (!succeeded(added) || both(added).indexOf("HCR reload module: module added (words)") < 0) {
+		console.log(both(added));
+		failWith(tag, "a build that adds a module to an existing bundle did not report it as added");
+	}
+	put(`${dir}/logic.ms`, returns("value", 1));
+	const removed = msc(dir, build);
+	if (!succeeded(removed) || both(removed).indexOf("HCR reload dependents: module removed (words)") < 0) {
+		console.log(both(removed));
+		failWith(tag, "a build that drops a module from an existing bundle did not report it as removed");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function lastEntry(dir: string): string {
+	let last = "";
+	for (const name of readDir(dir)) {
+		if (name > last) last = name;
+	}
+	return last == "" ? "" : `${dir}/${last}`;
+}
+
+function androidNdkBin(): string {
+	let ndk = slashes(env.get("ANDROID_NDK_HOME"));
+	for (const sdk of [slashes(env.get("ANDROID_HOME")), `${slashes(env.get("LOCALAPPDATA"))}/Android/Sdk`]) {
+		if (ndk == "" && exists(`${sdk}/ndk`)) ndk = lastEntry(`${sdk}/ndk`);
+	}
+	if (ndk == "") return "";
+	const host = lastEntry(`${ndk}/toolchains/llvm/prebuilt`);
+	return host == "" ? "" : `${host}/bin`;
+}
+
+// Android loads images the way Linux does (soname on the core, $ORIGIN on the modules); a host
+// that owns the entry point starts the engine through msHcrEngineStartLibrary; and API 26 is
+// below the level where bionic has posix_spawn, which the engine's core image compiles against.
+function androidImages(): void {
+	const tag = "hcrAndroidImages";
+	const bin = androidNdkBin();
+	const exe = platform == "windows" ? ".exe" : "";
+	if (bin == "" || !exists(`${bin}/clang${exe}`)) {
+		console.log(`skip ${tag}: no Android NDK (ANDROID_NDK_HOME, or ndk/ under ANDROID_HOME)`);
+		return;
+	}
+	for (const cpu of ["x86_64", "aarch64"]) {
+		const dir = freshDir(`${TMP}/android/${cpu}`);
+		put(`${dir}/app.ms`, "import { reload } from \"std/hcr\";
+import { value } from \"./logic\";
+
+@exportName(\"hcrValue\")
+export function hcrValue(): int32 {
+	reload();
+	return value();
+}
+");
+		put(`${dir}/logic.ms`, returns("value", 1));
+		const triple = `--target=${cpu}-linux-android26`;
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", "--os=android", `--cpu=${cpu}`, "--app=lib", `--cc=${bin}/clang${exe}`,
+			`--passC=${triple}`, `--passL=${triple}`, "--passL=--driver-mode=g++", "--output=libapp.so"], `the ${cpu} images did not build for API 26`);
+		const core = both(execFileResult(`${bin}/llvm-readelf${exe}`, ["-d", "libapp.core.so"], dir));
+		const image = both(execFileResult(`${bin}/llvm-readelf${exe}`, ["-d", "libapp.logic.so"], dir));
+		const exported = both(execFileResult(`${bin}/llvm-nm${exe}`, ["-D", "--defined-only", "libapp.core.so"], dir));
+		need(tag, core.indexOf("soname: [libapp.core.so]") >= 0, `${cpu}: the core image has no soname libapp.core.so`);
+		need(tag, image.indexOf("[libapp.core.so]") >= 0 && image.indexOf("[$ORIGIN]") >= 0, `${cpu}: a module image does not find the core beside it`);
+		need(tag, exported.indexOf(" msHcrEngineStartLibrary") >= 0 && exported.indexOf(" msHcrLaunch") >= 0, `${cpu}: the core image does not export the library start`);
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function settleSecond(): void {
+	const until = performance.now() + 1100;
+	while (performance.now() < until) {}
+}
+
+// The entry image is the output the project record names, and an edit of another module leaves it
+// alone. A build that starts in the second of that save writes no record, so the record of the
+// build before it has to go: it would call the output current once the module is restored.
+function sameSecondEdit(): void {
+	const tag = "hcrSameSecondEdit";
+	const build = ["build", "app.ms", "--hcr", "--output=module.hcr"];
+	for (const nested of [false, true]) {
+		const dir = freshDir(`${TMP}/sameSecond${nested ? "Nested" : ""}`);
+		const edited = nested ? "deep" : "value";
+		const file = `${dir}/${nested ? "deep" : "logic"}.ms`;
+		put(`${dir}/app.ms`, VALUE_APP);
+		if (nested) put(`${dir}/logic.ms`, "import { deep } from \"./deep\";
+export function value(): int32 {
+	return deep();
+}
+");
+		put(file, returns(edited, 1));
+		settleSecond();
+		mustBuild(tag, dir, build, "the first build failed");
+		put(file, returns(edited, 2));
+		mustBuild(tag, dir, build, "the build in the second of the save failed");
+		settleSecond();
+		put(file, returns(edited, 1));
+		const restored = mustBuild(tag, dir, build, "the build after restoring the module failed");
+		if (restored.indexOf("Up to date") >= 0) {
+			console.log(restored);
+			failWith(tag, `restoring ${file} was called up to date on the record of the first build, while its image holds the edit in between`);
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function subdirModule(): void {
 	const tag = "hcrSubdirModule";
 	const dir = freshDir(`${TMP}/subdir`);
@@ -1377,6 +1511,9 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrImageNameCollision", run: imageNameCollision },
 	{ name: "hcrArrayOwner", run: arrayOwner },
 	{ name: "hcrInstanceofReload", run: instanceofReload },
+	{ name: "hcrAddedModule", run: addedModule },
+	{ name: "hcrSameSecondEdit", run: sameSecondEdit },
+	{ name: "hcrAndroidImages", run: androidImages },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
