@@ -1067,14 +1067,17 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	if (ownSym == null && objType != null && objType.typeReturn != null) ownSym = objType.typeReturn.sym;
 	const isDeclaringModule = ownSym != null && ownSym.modulePath == g.modulePath;
 	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || sharedName || isDeclaringModule;
-	if (!isOwner) {
+	const instance = sharedName && isHcrImageModule(g, g.modulePath) ? g.aliveSet.instanceTypeInfoByName.readonlyGet(className) : null;
+	const ownedElsewhere = instance != null && !instance.inCore
+		&& g.emissionFacts.hcrTypeInfoOwners.readonlyGet(className) != g.emissionFacts.hcrModules.readonlyGet(g.modulePath);
+	if (!isOwner || ownedElsewhere) {
 		ensureTypeInfo(g, className);
 		return;
 	}
 	// Owning module: emit definition + DatInit assignment.
 	// Generics and structural anonymous shapes use weak linkage — multiple modules may emit, linker deduplicates.
 	if (sharedName) {
-		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}TypeInfo;`);
+		if (!hcrTypeInfoRef(g, className)) addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}TypeInfo;`);
 	} else if (isCompilerGen) {
 		// $-generated types (lambda envs) are only ever referenced in the module
 		// that lifted them — static keeps same-named envs in sibling modules apart.
@@ -1235,6 +1238,17 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		}
 		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
 		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
+	}
+	if (!viaRegistry) return;
+	const self = g.emissionFacts.hcrModules.readonlyGet(g.modulePath);
+	for (const info of g.aliveSet.instanceTypeInfos) {
+		if (g.emissionFacts.hcrTypeInfoOwners.readonlyGet(info.cName) != self) continue;
+		const cName = getTypeDesc(g, info.type);
+		if (cName != info.cName) {
+			addCGenError(g, `internal: HCR image ${g.modulePath} owns the instance TypeInfo ${info.cName}, which C names ${cName}`, 0, 0);
+			continue;
+		}
+		ensureTypeInfoDef(g, cName, info.type);
 	}
 }
 

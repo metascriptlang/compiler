@@ -594,6 +594,13 @@ export class CTypeInfoDemand {
 	trace: Symbol | null = null;
 }
 
+export class CInstanceTypeInfo {
+	cName: string;
+	type: Type;
+	demanders: string[];
+	inCore: boolean;
+}
+
 export class AliveSet {
 	computed: boolean;       // reachability ran: what it did not mark is dead, even when nothing was marked by name
 	entries: string[];       // "modulePath:symbolName" keys
@@ -602,13 +609,16 @@ export class AliveSet {
 	_syms: HashSet<Symbol>;
 	typeInfos: CTypeInfoDemand[];
 	typeInfoKeys: HashSet<string>;
+	instanceTypeInfos: CInstanceTypeInfo[];
+	instanceTypeInfoByName: HashMap<string, CInstanceTypeInfo>;
 	foreignOps: HashMap<Symbol, string[]>;
 }
 
 export function createAliveSet(): AliveSet {
 	return {
 		computed: false, entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
-		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
+		typeInfos: [], typeInfoKeys: new HashSet<string>(),
+		instanceTypeInfos: [], instanceTypeInfoByName: new HashMap<string, CInstanceTypeInfo>(), foreignOps: new HashMap<Symbol, string[]>(),
 	};
 }
 
@@ -657,7 +667,7 @@ export class CEmissionFacts {
 	hcrCoreUnits: HashSet<string> = new HashSet<string>();
 	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
 	typeInfoOrder: CTypeInfoDemand[] = [];
-	hcrModules: HashSet<string> = new HashSet<string>();
+	hcrModules: HashMap<string, string> = new HashMap<string, string>();
 	hcrTypeInfoOwners: HashMap<string, string> = new HashMap<string, string>();
 	trace: string = "";
 	writes: string[] | null = null;
@@ -705,6 +715,7 @@ export function aliveSetFingerprint(aliveSet: AliveSet): string {
 	for (const info of aliveSet.typeInfos) {
 		entries.push(`t\t${info.key}\t${info.owner}\t${aliveSymKey(info.destroy)}\t${info.trace != null ? aliveSymKey(info.trace) : ""}`);
 	}
+	for (const info of aliveSet.instanceTypeInfos) entries.push(`i\t${info.cName}\t${info.inCore}\t${info.demanders.join(",")}`);
 	const joined = entries.join("\n");
 	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}:${aliveSet.computed}`;
 }
