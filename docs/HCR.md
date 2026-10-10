@@ -43,6 +43,7 @@ backend and DRC/ORC runtime.
 | Construction across images | Windows x64, Linux x64 and macOS arm64, `hcrCrossImageNew`: `new` of a class declared in another image, with and without a constructor, and `super(...)` into another image's class call the class's `_init` through the owner's table. The installed compiler (`4573591e`) fails the link with `Keeper…_init`, `Counter…_init` and `Base…_init` undefined |
 | Generic construction across images | Windows x64 candidate `02d3615a`, `hcrGenericCtor`: two image users share `Box<int32>`, another uses `Box<string>`, and an implicit generic constructor runs its field initializer. Editing constructor/initializer bodies reloads from `41:1 42:1 kept:1 stamp=3` to `41:2 42:2 kept:2 stamp=4`. JavaScript plain control matches; generic `super` and POSIX were not checked in this extension |
 | Generic TypeInfo lifecycle bindings | Windows x64 candidate `02d3615a`, `hcrGenericOps`: captured getter/setter environments and a self-referential generic cell use foreign destroy/trace hooks. DRC and ORC produce `OPS 9 10 kept` and three `onDestroy` calls; the targeted environment/cell ledger rows balance. A real Neon signal/owner/effect consumer now builds and reloads; this is not a full Neon UI refresh proof |
+| Generic instance TypeInfo identity | Windows x64 candidate `cdad9044`, `hcrGenericIdentity`: a generic class instance used by image modules has one TypeInfo across images and generations, so `as Box<T>` accepts an object another image or an older generation built; a field added to the generic class still answers restart required. Instances a core module also demands, Linux and macOS were not checked |
 | Module globals at exit | Windows x64, Linux x64 and macOS arm64, `hcrExitDestroy`: `msc run --hcr` destroys each module global once at exit, entry module first, and prints what `msc run` prints. The engine calls each current image's `Deinit000`, then the core's `msHcrCoreDeinit`; a retired cell (type reset) is never destroyed. The installed compiler printed no destroy line |
 | Dependency reload | Windows x64, Linux x64 and macOS arm64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
 | `msc run --hcr app.ms` | Windows x64, Linux x64 and macOS arm64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
@@ -742,10 +743,33 @@ Each pin was proven red by removing the mechanism it guards:
 | the layout check | `class layout changed: reloaded lifecycle,logic` |
 | registry reuse during a reload | `instanceof true false` (an object built by the new code, checked by the unrebuilt app) |
 
+**Generic class instances.** Until 2026-10-11 every image that used `Box<int32>` defined its
+own weak `Box…__int32TypeInfo`, so each image and each generation had another address: on
+Windows x64, `as Box<int32>` in `app` of an object `logic` built, or in generation 2 of an
+object generation 1 built, threw `invalid object conversion: Box<int32> is not Box<int32>`.
+An instance used only by image modules is now registered like a class: reachability records
+which image modules demand its TypeInfo (`noteInstanceTypeInfo`), the first of them in load
+order owns the registry entry and writes it (`emitOwnedTypeInfos`), and the others resolve the
+same entry by owner and name. One owner writes, so rollback and restore work as for a class.
+The generic declaration's layout key still decides a restart. `hcrGenericIdentity`, Windows x64,
+candidate `cdad9044`: `Box<int32>`, `Box<Plain>`, `Box<{ a: int32; s: string }>` and
+`Box<string>` built by generation 1 of `logic` are cast by generations 2 and 3, `app` casts a
+`Box<int32>` that `logic` built, and `app` builds a `Box<float64>` whose first user in load
+order (`peek`) only names the type; then a field added to `Box<T>` answers
+`restart required: the layout of type 'Box' in module 'box' changed`. On `c4520a83` the case
+stops at the first cast across images.
+
 Not verified:
-- TypeInfo that stays per image: generic instances (weak) and lambda environments (static).
-  Objects of those types reach their image's destroy hook, which does no harm while every
-  generation stays loaded, but a purge must account for them.
+- An edit that changes which image module is first in load order to demand an instance. The
+  new owner registers under its own module, so objects built before the edit are expected to
+  fail the cast; no fixture measures it.
+- An instance that a core module demands too keeps its weak per-image TypeInfo, as before. A
+  generic class declared outside the project and constructed there and in an image does not
+  link at all (`undefined symbol: Box…__int32_init` in the core image, also on `c4520a83`).
+- Rollback of a candidate that changes an instance's destroy hook, and Linux and macOS.
+- TypeInfo that stays per image: anonymous object shapes (weak) and lambda environments
+  (static). Objects of those types reach their image's destroy hook, which does no harm while
+  every generation stays loaded, but a purge must account for them.
 - A struct passed by value through an export: its layout key covers the declaring module,
   but no fixture exercises one.
 - Destroy counts under the DRC ledger or ASan (this host has no `libasan`).
