@@ -278,6 +278,30 @@ so the `.so` is `EM_BPF`, flags `0x3` as before (`llvm-readelf -h` on all five p
 both. `rotate_authority` is the one operation that costs a unit more. Not verified: other
 platform-tools versions, a Windows host.
 
+## Measured 2026-10-11 — the raise check of an immediately called closure
+
+`accounts<T>()` expands to a closure written and called in place. The raise inference could not
+resolve its callee, so it counted every such call as one that can raise, and the entry, `dispatch`
+and every handler above it carried `if (msErr) goto BeforeRet_`. It now follows the call to the
+routine the closure was lifted to (a closure value written once, or a closure pair called in place
+under manual memory), and the hooks that destroy a closure no longer count as an extern handed a
+routine. A closure whose body raises, nested or not, keeps the check
+(`src/test/c/raiseChecks.ms`). With the internalizing merge in both columns, the five programs
+from the section above, before → after:
+
+| program | `.so` bytes | compute units |
+|---|---|---|
+| helloworld | 3,064 → 2,960 | init 1,490 → 1,481 |
+| vault | 3,504 → 3,504 | unchanged |
+| nested | 5,304 → 5,224 | initialize 2,827 → 2,824, increment 223 → 220, reset 215 → 215 |
+| prop-amm | 4,208 → 4,176 | update 144 → 144, initialize 1,440 → 1,438, rotate_authority 168 → 168 |
+| multisig | 12,296 → 12,144 | create 2,778 → 2,776, deposit 2,399 → 2,397, set_label 545 → 544, execute_transfer 2,865 → 2,862 |
+
+The same programs built `--lto=off` are byte-identical before and after the first half of the fix,
+which is why the second half (the closure pair called in place, which `--gc=manual` produces and
+`--gc=drc` does not) matters on this target. Not verified: a closure bound to a `let`, or copied
+(`msClosureCopy`) or reassigned (`msClosureSink`), still counts as one that can raise.
+
 ## Re-measured 2026-07-28 (supersedes the tables below)
 
 Apple Silicon 8-core, `msc build src/index.ms --gc=drc --danger --cc=clang`.
