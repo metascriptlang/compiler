@@ -59,7 +59,7 @@ if (entry < 0) {
 }
 const body = text.slice(entry, text.length);
 const declared = body.indexOf("uint64_t accounts[MS_SOL_MAX_ACCOUNTS];");
-const parsed = body.indexOf("msSolStart(accounts, instructionData);");
+const parsed = body.indexOf("msSolStart(input, accounts, instructionData);");
 const started = body.indexOf("MsMain();");
 if (declared < 0) report("the entry does not declare the account table in its frame");
 if (parsed < 0) report("the entry does not parse the input into the table");

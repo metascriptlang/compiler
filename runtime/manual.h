@@ -96,9 +96,8 @@ static inline msSolanaContext* msSolanaCurrentContext(void) {
     return context;
 }
 
-static inline void msSolanaEnter(const uint8_t* input) {
+static inline void msSolanaEnter(void) {
     msSolanaContext* context = msSolanaCurrentContext();
-    context->input = (uint64_t)input;
     context->arenaPosition = sizeof(msSolanaContext);
 }
 
