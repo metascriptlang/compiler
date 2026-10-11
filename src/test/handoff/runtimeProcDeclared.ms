@@ -39,10 +39,10 @@ test "the C prelude declares every runtime routine the lowerings synthesize" {
 	"msMsgGetPtr", "msMsgGetString", "msMsgKind", "msMsgReplyFuture", "msMsgSetDouble", "msMsgSetPtr",
 	"msMsgSetPtrShared", "msMsgSetString", "msNumberArrayDestroy", "msNumberArraySetLen", "msNumberToString",
 	"msNumberToStringRadix", "msOrcBeginTeardown", "msOrcEndTeardown", "msOrcTraceRef", "msPowI32", "msPowI64",
-	"msPrintln", "msPtrWasMoved", "msRefArrayDestroy", "msRefArraySetLen", "msRefCopyCyclic", "msSetCard32",
+	"msPrintln", "msPtrWasMoved", "msRaiseFieldError", "msRefArrayDestroy", "msRefArraySetLen", "msRefCopyCyclic", "msSetCard32",
 	"msSetHashWord", "msSliceLen", "msSpawn", "msSpawnSlotSubmit", "msSpawnTaskSubmit", "msStringAppend",
 	"msStringAppendChar", "msStringArrayDestroy", "msStringArraySetLen", "msStringByteAt", "msStringByteLength",
-	"msStringConcat", "msStringCopy", "msStringDecref", "msStringEquals", "msStringHash", "msStringIncref",
+	"msStringCompare", "msStringConcat", "msStringCopy", "msStringDecref", "msStringEquals", "msStringHash", "msStringIncref",
 	"msStringLength", "msStringSink", "msStringToCString", "msStringWasMoved", "msToInt32", "msUint64ToString",
 	"msUint64ToStringRadix", "msUnboxDouble", "msUnboxInt32", "msUnboxString", "msWaitFor", "msWaitForReady"
 	];

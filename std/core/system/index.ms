@@ -294,7 +294,13 @@ when (mscDeclaresRuntime) {
 	extern function msStringEquals(a: string, b: string): boolean;
 
 	@compilerFunc
+	extern function msStringCompare(a: string, b: string): int32;
+
+	@compilerFunc
 	extern function msStringHash(s: string): int32;
+
+	@compilerFunc
+	extern function msRaiseFieldError(head: string, labels: string, tag: int64): never;
 
 	@compilerFunc
 	extern function msStringLength(s: string): int64;
