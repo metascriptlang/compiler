@@ -7,8 +7,8 @@
 // from std/core/struct) are initialized; preludes-first ordering in
 // compile.ms:loadAndCheckGraph fixes this, but keeping lazy init for safety.
 
-let _linkFlags: Set<string> = null as unknown as Set<string>;
-let _linkObjects: Set<string> = null as unknown as Set<string>;
+let _linkFlags: Set<string> | null = null;
+let _linkObjects: Set<string> | null = null;
 
 export function linkFlags(): Set<string> {
 	if (_linkFlags == null) _linkFlags = new Set<string>();
