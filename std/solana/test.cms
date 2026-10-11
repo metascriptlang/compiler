@@ -2010,7 +2010,7 @@ function keyBytes(key: Pubkey): uint8[] {
 }
 
 function vaultSigner(): uint8[][] {
-	return [textBytes("vault"), keyBytes(keyOf(5)), [7]];
+	return [textBytes("vault"), keyBytes(keyOf(5)), [5]];
 }
 
 function counterSigner(): uint8[][] {
@@ -2057,18 +2057,18 @@ function signingStep(): Result<uint64, ProgramError> {
 	const op = try instructionData().readU8(0);
 	const first = try account(0);
 	const second = try account(1);
-	if (op == 0) { return signed(transfer(first, second, 10), ["vault", keyOf(5), [7]]); }
+	if (op == 0) { return signed(transfer(first, second, 10), ["vault", keyOf(5), [5]]); }
 	if (op == 1) {
-		return signed(createAccount(first, second, 100, 8, keyOf(9)), ["vault", keyOf(5), [7]]);
+		return signed(createAccount(first, second, 100, 8, keyOf(9)), ["vault", keyOf(5), [5]]);
 	}
-	if (op == 2) { return signed(assignTo(second, keyOf(9)), ["vault", keyOf(5), [7]]); }
-	if (op == 3) { return signed(allocate(second, 16), ["vault", keyOf(5), [7]]); }
+	if (op == 2) { return signed(assignTo(second, keyOf(9)), ["vault", keyOf(5), [5]]); }
+	if (op == 3) { return signed(allocate(second, 16), ["vault", keyOf(5), [5]]); }
 	if (op == 4) {
-		return signed(createProgramAccount(first, second, 16, keyOf(9)), ["vault", keyOf(5), [7]]);
+		return signed(createProgramAccount(first, second, 16, keyOf(9)), ["vault", keyOf(5), [5]]);
 	}
-	if (op == 5) { return signed(ping(second), ["vault", keyOf(5), [7]]); }
+	if (op == 5) { return signed(ping(second), ["vault", keyOf(5), [5]]); }
 	if (op == 6) {
-		return signed(ping(second), [["vault", keyOf(5), [7]], ["counter", [7]]]);
+		return signed(ping(second), [["vault", keyOf(5), [5]], ["counter", [7]]]);
 	}
 	if (op == 11) {
 		return signed(ping(second), [
@@ -2080,15 +2080,15 @@ function signingStep(): Result<uint64, ProgramError> {
 	}
 	if (op == 13) {
 		return signed(ping(second), [
-			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+			[16], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
 		]);
 	}
 	if (op == 8) { return signed(ping(second), ["k", first, second, [7]]); }
 	if (op == 14) { return forwardSigned(ping(second), ["k", first, second, [7]]); }
-	if (op == 9) { return signed(ping(second), [[7]]); }
+	if (op == 9) { return signed(ping(second), [[6]]); }
 	if (op == 10) {
 		const wide: uint64 = 258;
-		return signed(ping(second), [["a", leBytes(wide)], [[1], [2]], [first, "z"]]);
+		return signed(ping(second), [["b", leBytes(wide)], [[1], [4]], [first, "z"]]);
 	}
 	return ping(second);
 }
@@ -2121,12 +2121,12 @@ test "a signer list takes a string, an account, a byte array, and a list of list
 	assert signerIs(calls[0], 0, [textBytes("k"), keyBytes(keyOf(1)), keyBytes(keyOf(2)), [7]]);
 	signingRun(9, wallet(2, 5000));
 	calls = invocations();
-	assert calls.length == 1 && calls[0].signers == 1 && signerIs(calls[0], 0, [[7]]);
+	assert calls.length == 1 && calls[0].signers == 1 && signerIs(calls[0], 0, [[6]]);
 	signingRun(10, wallet(2, 5000));
 	calls = invocations();
 	assert calls.length == 1 && calls[0].signers == 3;
-	assert signerIs(calls[0], 0, [textBytes("a"), [2, 1, 0, 0, 0, 0, 0, 0]]);
-	assert signerIs(calls[0], 1, [[1], [2]]);
+	assert signerIs(calls[0], 0, [textBytes("b"), [2, 1, 0, 0, 0, 0, 0, 0]]);
+	assert signerIs(calls[0], 1, [[1], [4]]);
 	assert signerIs(calls[0], 2, [keyBytes(keyOf(1)), textBytes("z")]);
 }
 
@@ -2344,6 +2344,21 @@ test "createPda signs with fifteen seeds and the bump, and refuses sixteen seeds
 	const refused = [wallet(1, 10000000), blank(keyOf(3))];
 	assert run(programKey(), refused, [], createPdaSixteenEntry).result == ProgramError.maxSeedLengthExceeded().code;
 	assert invocations().length == 0;
+}
+
+test "a signer whose seeds hash onto the curve is refused by the host before the call is recorded" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const outcome = run(programKey(), accounts, [], onCurveSignerEntry);
+	assert outcome.result == ProgramError.invalidSeeds().code;
+	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+	assert invocations().length == 0 && accounts[0].lamports == 10000 && accounts[1].lamports == 5000;
+}
+
+function onCurveSignerEntry(): void {
+	const first = account(0);
+	const second = account(1);
+	if (!first.ok || !second.ok) { return; }
+	codeOf(signed(transfer(first.value, second.value, 10), ["vault", keyOf(5), [255]]));
 }
 
 function sameBytes(left: uint8[], right: uint8[]): boolean {
