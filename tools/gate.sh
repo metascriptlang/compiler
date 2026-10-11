@@ -1754,6 +1754,8 @@ solana_replays() {
   else
     rc=1
   fi
+  solana_check multisig-build "$CAND" build examples/anchorBench/multisig/program.ms --os=solana --release --output="$dir/multisig.so" \
+    && { solana_check multisig-oncurve-replay env BENCH_REFUSALS=1 node tools/solana/anchorBench.mjs "multisig:std:anchor:$dir/multisig.so" || rc=1; } || rc=1
   if solana_check heap-build "$CAND" build tools/solana/heapProbe.ms --os=solana --output="$dir/heapProbe.so"; then
     solana_check heap-replay node tools/solana/heapExhausted.mjs "$dir/heapProbe.so" || rc=1
   else
