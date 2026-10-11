@@ -4730,7 +4730,7 @@ test "index signature in function parameter" {
 }
 
 test "index signature as function return" {
-	assert checkOk("function f(): { [key: string]: number } { return null as unknown as Map<string, number>; }");
+	assert checkOk("function f(): { [key: string]: number } { return new Map<string, number>(); }");
 }
 
 test "index signature with trailing semicolon" {

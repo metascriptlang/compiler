@@ -79,6 +79,27 @@ test "a nullable dynamic array holds null and narrows on both backends" {
 	}
 }
 
+test "null through unknown is refused for a std collection on both backends" {
+	for (const t of ["Map<string, int32>", "HashMap<string, int32>", "Set<string>", "HashSet<string>"]) {
+		const src = "const a = null as unknown as " + t + ";\nconsole.log(a);";
+		const c = compileToC(src);
+		assert !c.ok;
+		assert c.error.contains("holds no null");
+		assert c.error.contains(t + " | null");
+		const js = compileToJS(src);
+		assert !js.ok;
+		assert js.error.contains("holds no null");
+	}
+}
+
+test "a nullable std collection holds null and narrows on both backends" {
+	for (const t of ["Map<string, int32>", "HashMap<string, int32>", "Set<string>", "HashSet<string>"]) {
+		const src = "let a: " + t + " | null = null;\nconsole.log(a == null);\nif (a != null) { console.log(a.size); }";
+		assert compileToC(src).ok;
+		assert compileToJS(src).ok;
+	}
+}
+
 test "a std collection is not held as unknown" {
 	for (const t of ["Map<string, int32>", "HashMap<string, int32>", "Set<string>", "HashSet<string>"]) {
 		const result = compileToC("const a = new " + t + "();\nconst u = a as unknown;\nconsole.log(u == null);");
@@ -87,9 +108,18 @@ test "a std collection is not held as unknown" {
 	}
 }
 
+test "null through unknown stays open for a class, a Ref and a function on both backends" {
+	const prelude = "class K { v: int32 = 1; }\n";
+	for (const t of ["K", "Ref<int32>", "(() => void)"]) {
+		const src = prelude + "const a = null as unknown as " + t + ";\nconsole.log(a == null);";
+		assert compileToC(src).ok;
+		assert compileToJS(src).ok;
+	}
+}
+
 test "a direct null cast is refused for every type that holds no null" {
 	const prelude = "struct Pt { x: int32; }\nclass K { v: int32 = 1; }\n";
-	const targets = ["Pt", "K", "string[]", "int32[4]", "Span<int32>", "string", "(() => void)"];
+	const targets = ["Pt", "K", "string[]", "int32[4]", "Span<int32>", "string", "(() => void)", "Map<string, int32>", "HashMap<string, int32>", "Set<string>", "HashSet<string>"];
 	for (const t of targets) {
 		for (const literal of ["null", "undefined"]) {
 			const result = compileToC(prelude + "const a = " + literal + " as " + t + ";\nconsole.log(a);");

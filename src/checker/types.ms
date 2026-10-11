@@ -4345,6 +4345,14 @@ export function isIndexableMapType(t: Type | null): boolean {
 	return getBuiltinKind(t) == "IndexableMap";
 }
 
+export function isStdCollectionKind(kind: string): boolean {
+	return kind == "IndexableMap" || kind == "StdSet";
+}
+
+export function isStdCollection(t: Type | null): boolean {
+	return isStdCollectionKind(getBuiltinKind(t));
+}
+
 export const SIZE_NOT_COMPUTABLE: int32 = -3;
 
 // alignTo — round up offset to alignment boundary
