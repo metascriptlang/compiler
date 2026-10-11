@@ -2024,7 +2024,7 @@ lane_body() {
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
-PHASES=("build" "tools boundary suite hcr tests fmt" "corpus guard" "san" "solana")
+PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "solana")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
