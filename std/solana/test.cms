@@ -87,7 +87,7 @@ import {
 } from "./index";
 import { SignerSeeds, hashAddressWithBump, seedText } from "./seed";
 import { seedTable } from "./accountSeeds";
-import { closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
+import { canonicalBump, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
 import { HostAccount, invocations, logs, rentReads, run, setClock, signerIs, textBytes } from "./host";
 import {
@@ -2314,6 +2314,38 @@ test "createPda keeps a one-byte seed of its own apart from the slot the found b
 	}
 }
 
+function createPdaFifteenStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	return Result.ok(0);
+}
+
+function createPdaFifteenEntry(): void { codeOf(createPdaFifteenStep()); }
+
+function createPdaSixteenStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]);
+	return Result.ok(0);
+}
+
+function createPdaSixteenEntry(): void { codeOf(createPdaSixteenStep()); }
+
+test "createPda signs with fifteen seeds and the bump, and refuses sixteen seeds before it creates anything" {
+	const derived = findProgramAddressOf(programKey(), [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaFifteenEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1 && calls[0].signerSeeds[0].length == 16;
+	}
+	const refused = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), refused, [], createPdaSixteenEntry).result == ProgramError.maxSeedLengthExceeded().code;
+	assert invocations().length == 0;
+}
+
 function sameBytes(left: uint8[], right: uint8[]): boolean {
 	if (left.length != right.length) { return false; }
 	for (let index = 0; index < left.length; index++) {
@@ -3456,6 +3488,25 @@ function onCurveEntry(): void {
 test "an account not proven owned keeps the curve check, an owned one does not need it" {
 	const onCurve = holder(1, hostProgram(), [], false, false);
 	assert run(hostProgram(), [onCurve], [], onCurveEntry).result == 0;
+}
+
+function canonicalBumpEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const found = safeAddress(keyOf(2));
+	const same = canonicalBump(slot.value, seedTable(["safe", keyOf(2)]));
+	if (!same.ok || same.value != found.bump) { failWith(ProgramError.userError(1)); return; }
+	const other = canonicalBump(slot.value, seedTable(["safe", keyOf(3)]));
+	if (other.ok || other.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); return; }
+	const many = canonicalBump(slot.value, seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (many.ok || many.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(3)); return; }
+	const wide = canonicalBump(slot.value, seedTable([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]]));
+	if (wide.ok || wide.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(4)); }
+}
+
+test "canonicalBump finds the bump of the account it is given and refuses another, too many seeds and a wide seed with their codes" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), found.key)], [], canonicalBumpEntry).result == 0;
 }
 
 function mutableBumpEntry(): void {

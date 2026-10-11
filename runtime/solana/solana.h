@@ -433,8 +433,8 @@ static inline uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t
     input[count].address = (uint64_t)(uintptr_t)&bump;
     input[count].length = 1;
     const uint64_t total = msSolSeedTail(input, count + 1, program);
-    for (uint64_t attempt = 0; attempt < 255; attempt++) {
-        bump = (uint8_t)(255 - attempt);
+    for (uint64_t counter = 255; counter > 0; counter--) {
+        bump = (uint8_t)counter;
         msSolSha256((uint64_t)(uintptr_t)input, total, out);
         if (msSolCurveValidatePoint(0, out, 0) != 0) {
             msSolStoreU8(bumpOut, bump);
@@ -456,8 +456,8 @@ static inline uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, 
     input[count].address = (uint64_t)(uintptr_t)&bump;
     input[count].length = 1;
     const uint64_t total = msSolSeedTail(input, count + 1, program);
-    for (uint64_t attempt = 0; attempt < 255; attempt++) {
-        bump = (uint8_t)(255 - attempt);
+    for (uint64_t counter = 255; counter > 0; counter--) {
+        bump = (uint8_t)counter;
         msSolSha256((uint64_t)(uintptr_t)input, total, out);
         if (msSolLoadU64(out) == msSolLoadU64(expected) && msSolLoadU64(out + 8) == msSolLoadU64(expected + 8) &&
             msSolLoadU64(out + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(out + 24) == msSolLoadU64(expected + 24)) {
@@ -465,6 +465,30 @@ static inline uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, 
             return 0;
         }
         if (msSolCurveValidatePoint(0, out, 0) != 0) return 1;
+    }
+    return 1;
+}
+
+/* msSolFindAddress for a key the caller names, curve-checked at the matching bump too: 0 when the canonical address is
+   expected, 3 when it is not, 1 when every bump is on the curve, 2 as msSolHashAddress. */
+static inline uint64_t msSolFindCanonicalAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    uint8_t hash[32];
+    const uint64_t out = (uint64_t)(uintptr_t)hash;
+    uint8_t bump = 255;
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    input[count].address = (uint64_t)(uintptr_t)&bump;
+    input[count].length = 1;
+    const uint64_t total = msSolSeedTail(input, count + 1, program);
+    for (uint64_t counter = 255; counter > 0; counter--) {
+        bump = (uint8_t)counter;
+        msSolSha256((uint64_t)(uintptr_t)input, total, out);
+        if (msSolCurveValidatePoint(0, out, 0) != 0) {
+            if (!(msSolLoadU64(out) == msSolLoadU64(expected) && msSolLoadU64(out + 8) == msSolLoadU64(expected + 8) &&
+                  msSolLoadU64(out + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(out + 24) == msSolLoadU64(expected + 24))) return 3;
+            if (bumpOut != 0) msSolStoreU8(bumpOut, bump);
+            return 0;
+        }
     }
     return 1;
 }

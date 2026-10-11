@@ -21,6 +21,7 @@ import {
 	createAddressWithBump,
 	fillWithBump,
 	findExpectedFailureAt,
+	findCanonicalFailureAt,
 	findFailureAt,
 	hashAddressWithBump,
 	hashFailureAt,
@@ -390,7 +391,7 @@ export function assignTo(
 	);
 }
 
-export function transfer(
+@inline export function transfer(
 	source: Account,
 	destination: Account,
 	lamports: uint64,
@@ -977,13 +978,10 @@ export function createdPdaAccountAt(
 	account: Account,
 	seeds: Readonly<Span<SeedSlice>>,
 ): Result<uint8, ProgramError> {
-	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
-	const failure = findFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), found);
+	let bump: uint8[1] = [0];
+	const failure = findCanonicalFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), account.keyAddress(), msSolSpanAddress(bump));
 	if (failure != 0) { return Result.err({ code: failure }); }
-	if (!keysEqual(msSolSpanAddress(found.key.bytes), account.keyAddress())) {
-		return Result.err(ProgramError.constraintSeeds());
-	}
-	return Result.ok(found.bump);
+	return Result.ok(bump[0]);
 }
 
 // The account is proven owned by this program, so its address is off the curve and the matching bump
@@ -1137,11 +1135,7 @@ export function seedsGiven(key: uint64, seeds: Readonly<Span<SeedSlice>>, bump: 
 }
 
 @inline export function seedsCanonicalFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>): uint64 {
-	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
-	const failure = findFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), found);
-	if (failure != 0) { return failure; }
-	if (!keysEqual(msSolSpanAddress(found.key.bytes), key)) { return ProgramError.constraintSeeds().code; }
-	return 0;
+	return findCanonicalFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), key, 0);
 }
 
 @inline export function seedsCanonicalOwnedFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>): uint64 {

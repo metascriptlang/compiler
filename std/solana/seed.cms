@@ -17,6 +17,7 @@ extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 
 extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
 extern function msSolHashAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
 extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
+extern function msSolFindCanonicalAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
 extern function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
 
 const MAX_SEEDS: uint64 = 16;
@@ -141,6 +142,14 @@ export function findAt(
 	ref key: Pubkey,
 ): uint64 {
 	return msSolHashAddress(table, count, bump, program, msSolSpanAddress(key.bytes)) == 0 ? 0 : ProgramError.constraintSeeds().code;
+}
+
+@inline export function findCanonicalFailureAt(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64 {
+	const code = msSolFindCanonicalAddress(table, count, program, expected, bumpOut);
+	if (code == 0) { return 0; }
+	if (code == 2) { return ProgramError.maxSeedLengthExceeded().code; }
+	if (code == 1) { return ProgramError.invalidSeeds().code; }
+	return ProgramError.constraintSeeds().code;
 }
 
 export function findExpected(
