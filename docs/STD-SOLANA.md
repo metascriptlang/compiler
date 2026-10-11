@@ -28,6 +28,7 @@ The worked example is Anchor's escrow: `examples/escrow/layout.ms` (shared by pr
 | `std/solana/delegation.ms` | C, SBF | `DelegationAccounts`, `DelegationConfig` and `delegateAt`, which the `delegate` macro calls; a module `macro.ms` imports must not import `macro.ms` back (§4) |
 | `std/solana/magicblock.ms` | C, SBF | MagicBlock: `delegate`, `commit`/`commitAndUndelegate` (one account, a list, a list through the fee vault), the `undelegate` callback, `scheduleTask` |
 | `std/solana/vrf.ms` | C, SBF | MagicBlock VRF: the scoped `requestRandomness` (one callback account or a list; paid by a signing wallet or by a program PDA signing with its seeds), `verifyVrfCallback` |
+| `std/solana/hydra.ms` | C, SBF | Hydra cranks on the ephemeral rollup: `createCrank` (one scheduled instruction, one-shot or repeating), `cancelCrank`, `crankAddress`, `legacyCrankAddress`, `crankSpent`; `HYDRA_PROGRAM_ID`, `MAGIC_VAULT_ID` |
 | `std/solana/arithmetic.ms` | `when (solana)` | signed `/ % /= %=` through unsigned division |
 | `std/solana/idl.ms` | compile time | `anchorIdl<Op>(spec)`: the program's Anchor IDL as a string literal |
 | `std/solana/host.cms` | C, host | the simulator: builds the runtime's input buffer, runs an entry function, reads the accounts back, runs System, Token and Associated Token CPIs |
@@ -351,6 +352,35 @@ It replaces `@include("runtime/solana/solana.h")`, `extern function msSolAlloc` 
 - **Not a free list.** There is no way to give scratch back before the instruction ends, and a `scratch` in a loop body takes its bytes every round (583 rounds of 56 bytes fill the heap). Take the span before the loop.
 
 Measured 2026-10-11 on commit `a52f3b78e` plus this change, LiteSVM 1.4.1, `node tools/solana/heapExhausted.mjs` on `tools/solana/heapProbe.ms` (op 21, `Mon` of 56 bytes): 0, 1, 2, 36 and 100 `Mon`s read as zero, read back what was written and move the heap position by exactly `count * 56` bytes (2,016 for 36, in 2,104 CU including the loops); 583 `Mon`s, the most the heap holds from its entry position, run (24,531 CU) and 584 fail with `InvalidArgument` in under 5,000 CU with no `heap is exhausted` line, as does 65,535. Host simulator (`std/solana/test.cms`, three tests): two spans of 10 are zeroed, do not overlap (writing the second leaves the first's sum at 1045) and have the length asked; a bisection finds the largest `uint8` count that fits (between 32,000 and 32,768), the next one is `InvalidArgument`, a following one-byte `scratch` after the largest is `InvalidArgument` and after the largest less 8 it is not; a negative count is `InvalidArgument` and zero gives an empty span. A host test made red by an allocator that does not advance the pointer fails two of the three. The five anchorBench programs build to the same sizes and CU as before (hello 1528; vault 1649, 456; nested 2834, 196, 188; prop-amm 123, 1465, 148; multisig 2595, 2366, 508, 2700): a generic nothing instantiates is not emitted. Not measured: `scratch` inside a generic function (the macro reads `T` as a name), a `T` of alignment above 8, the JS backend (`std/solana` is C only), a heap raised with `RequestHeapFrame`.
+
+### Hydra cranks
+
+`std/solana/hydra` schedules an instruction of the program itself on the ephemeral rollup, the way `std/solana/vrf` requests randomness: the module owns the Hydra program id, the Magic rent vault, the `Create` and `Cancel` bytes and the account order, and the program passes what is its own.
+
+```ms
+import { CrankAccounts, CrankSchedule, cancelCrank, createCrank, crankAddress } from "std/solana/hydra";
+
+const crank = try crankAddress(x.payer.key(), seed);
+if (x.crank.key() != crank) { return Result.err(ProgramError.invalidSeeds()); }
+const held: CrankAccounts = { sponsor: x.payer.asAccount(), crank: x.crank, magicVault: x.magicVault, magicProgram: x.magicProgram };
+const metas: AccountMeta[2] = [AccountMeta.writable(x.block.key()), AccountMeta.readonly(x.config.key())];
+let data: uint8[16] = [];
+const _tag = putU64(data, 0, TURN_TAG);
+const _seq = putU64(data, 8, block.requests);
+const _created = try signed(
+	createCrank(held, seed, CrankSchedule.once(dueSlot), programId(), metas, data),
+	["vrf-payer", [bump]],
+);
+const _cancelled = try signed(cancelCrank(held), ["vrf-payer", [bump]]);
+```
+
+`CrankSchedule.once(startSlot)` is what Hibernal's `program/hydra.ms` sends: remaining 1, an interval of 1,000,000,000 slots, a tip of 0 and the 1,400,000 CU ceiling; a repeating schedule writes the five fields itself (`remaining` 0 is forever, and Hydra refuses forever with an interval of 0). The sponsor is the crank's authority, so only it can cancel, and it receives the refund. `createCrank` and `cancelCrank` take `signers` as `transfer` does, so a sponsor PDA signs with `signed` or `signedPda`.
+
+- **Wire format, read not guessed.** The checkout `~/projects/hydra` at `a6846416d`: `crates/hydra-api/src/instruction.rs` (`CreateArgs::write_to`: discriminant 0, seed, authority, start slot, interval, remaining, tip, CU limit as u32, then per scheduled instruction the account count as u8, the data length as u16, the program id, a flag byte and key per account, the data), `programs/hydra-ephemeral/src/processor/create.rs:12-20` (accounts sponsor writable signer, crank writable, vault writable, Magic program readonly) and `cancel.rs:8-11` (authority writable signer, crank, recipient, vault, Magic program, data the byte 2), `crates/hydra-api/src/consts.rs` (the ephemeral program id `eHyd5BU8QffvHi4GnXwxrK4WpS7pM2x9UGKHBWii7mf`, a writable flag of 2, the 1,400,000 ceiling), and `magicblock-magic-program-api-0.10.1/src/lib.rs:22` for the vault `MagicVau1t999999999999999999999999999999999`. Host tests in `hydra.ms` assert the bytes from those layouts (a one-shot with two accounts, 101 + 35 + 66 + 16 bytes; a repeating schedule with none; 24 accounts at the buffer's edge), the account flags and order, the signer seeds of a sponsor PDA, and the two PDA addresses against `@solana/kit` `getProgramDerivedAddress`. A throwaway probe linking Hibernal's `program/hydra.ms` and this module in one host run compared `createCrank` for three accounts (251 bytes, 4 metas) and `cancelCrank` (1 byte, 5 metas): byte for byte and flag for flag the same.
+- **Two crank addresses.** `crankAddress(sponsor, seed)` is `["crank", sponsor, seed]` under the Hydra program: another payer cannot take the address. `legacyCrankAddress(seed)` is `["crank", seed]`, which Hibernal's `crankAddress` derives. Hydra accepts both today and marks the second deprecated, squattable and to be removed (`crates/hydra-api/src/program/processor.rs:177-199`, the change `3297c06` "bind crank PDA derivation to the payer"). Which one a program uses is the program's decision: the crank account it passes decides it, `createCrank` derives nothing, and Hydra answers `InvalidSeeds` for an address that is neither. Whether the Hydra deployed on a given cluster already has the payer-bound derivation is not something this checkout can say.
+- **Limits.** One scheduled instruction per crank (Hydra takes 16), no cancel authority other than the sponsor, and a 944-byte buffer on the stack: `createCrank` answers `InvalidArgument` before it sends when `136 + 33 * accounts + data` is over 944 (24 accounts beside 16 data bytes; Hydra allows 32 accounts and 1,024 data bytes per instruction). A scheduled account with the signer flag is refused with `InvalidArgument` too, as Hydra refuses it (`SignerInScheduledIx`, `processor.rs` `write_tail`). Raise the buffer when a program needs more and has the frame for it. Only the ephemeral program is wrapped: the base-layer one (`Hydra17i1feui9deaxu6d1TzSQMRNHeBRkDR1Awy7zea`) creates through the System program with different accounts.
+- **`crankSpent(crank, sponsor)`** is Hibernal's `spentCrankOf`: true when Hydra owns the account, its authority (offset 0) is the sponsor and `remaining` (offset 80, `crates/hydra-api/src/state.rs:19-59`) is 0.
+- **Not verified.** A run against the Hydra program itself: LiteSVM has neither the Hydra binary nor the Magic program's ephemeral-account create, so the CPI is recorded by the host simulator, not executed (`guard solanaHydraLinks.ms` builds the module for SBF, signed and unsigned). The stack frame of `createCrank` is not measured beyond that build; the 5,000-block devnet and localnet runs Hibernal made were not repeated.
 
 ## 5. Instructions, arguments, errors and events
 
