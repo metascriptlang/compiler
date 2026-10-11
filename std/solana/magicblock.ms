@@ -41,6 +41,8 @@ export const MAGIC_PROGRAM_ID: Pubkey = pubkeyOf("Magic1111111111111111111111111
 
 export const MAGIC_CONTEXT_ID: Pubkey = pubkeyOf("MagicContext1111111111111111111111111111111");
 
+export const MAGIC_VAULT_ID: Pubkey = pubkeyOf("MagicVau1t999999999999999999999999999999999");
+
 function scheduleCommit(
 	payer: Account,
 	committed: Readonly<Span<Account>>,
@@ -335,10 +337,11 @@ when (testBuild) {
 		return run(programKey(), accounts, input, delegateEntry).result;
 	}
 
-	// magicblock-magic-program-api-0.10.1/src/lib.rs:9,18; magicblock-delegation-program-api-3.0.0/src/lib.rs:41.
+	// magicblock-magic-program-api-0.10.1/src/lib.rs:9,18,22; magicblock-delegation-program-api-3.0.0/src/lib.rs:41.
 	test "the MagicBlock ids are the ones the program APIs declare" {
 		assert MAGIC_PROGRAM_ID.toBase58() == "Magic11111111111111111111111111111111111111";
 		assert MAGIC_CONTEXT_ID.toBase58() == "MagicContext1111111111111111111111111111111";
+		assert MAGIC_VAULT_ID.toBase58() == "MagicVau1t999999999999999999999999999999999";
 		assert DELEGATION_PROGRAM_ID.toBase58() == "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
 	}
 

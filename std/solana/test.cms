@@ -108,6 +108,8 @@ import {
 	signedPda,
 } from "./macro";
 import { anchorIdl } from "./idl";
+import { HYDRA_PROGRAM_ID } from "./hydra";
+import { MAGIC_PROGRAM_ID, MAGIC_VAULT_ID } from "./magicblock";
 import { Node, NodeKind, bindSym } from "std/meta";
 import { sha256 } from "std/crypto/sha256";
 import { isEdwardsPoint } from "std/crypto/ed25519/point";
@@ -3953,4 +3955,8 @@ test "scratch refuses a negative count and gives an empty span for zero" {
 	assert run(programKey(), [], zero, scratchNegativeEntry).result == 0;
 	const negative: uint8[] = [0];
 	assert run(programKey(), [], negative, scratchNegativeEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "the MagicBlock and Hydra modules are linked into this test run, so their host tests run with it" {
+	assert HYDRA_PROGRAM_ID != MAGIC_PROGRAM_ID && MAGIC_VAULT_ID != MAGIC_PROGRAM_ID;
 }
