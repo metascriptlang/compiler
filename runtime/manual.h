@@ -72,6 +72,7 @@ void msArenaReset(void);
 #elif defined(MSOS_SOLANA)
 
 #define MS_SOLANA_HEAP_START 0x300000000ULL
+#define MS_SOLANA_INPUT_START 0x400000000ULL
 #ifndef MS_SOLANA_HEAP_SIZE
 #define MS_SOLANA_HEAP_SIZE (32 * 1024)
 #endif

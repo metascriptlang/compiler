@@ -66,6 +66,7 @@ extern function msSolStoreU64(address: uint64, value: uint64): void;
 extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
 extern function msSolScratch(size: uint64): uint64;
 extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
+extern function msSolDataRoom(record: uint64): uint64;
 extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
 extern function msSolLogPubkey(address: uint64): void;
 extern function msSolLogData(address: uint64, length: uint64): void;
@@ -217,18 +218,32 @@ export function assign(this account: Account, newOwner: Pubkey): void {
 	storePubkey(newOwner, account.address + 40);
 }
 
+const GROWTH_MASK: uint32 = 0xffffff;
+
+function growthOf(packed: uint32): int64 {
+	const stored: int64 = (packed >> 8) as int64;
+	return stored <= 10240 ? stored : stored - 16777216;
+}
+
+function withGrowth(packed: uint32, growth: int64): uint32 {
+	return (packed & 0xff) | ((((growth as int32) as uint32) & GROWTH_MASK) << 8);
+}
+
+@noinline function grown(account: Account, currentLength: uint64, newLength: uint64): Result<uint64, ProgramError> {
+	const packed = msSolLoadU32(account.address + 4);
+	const growth: int64 = growthOf(packed) + ((newLength - currentLength) as int64);
+	if (growth > 10240 || newLength > msSolDataRoom(account.address)) { return Result.err(ProgramError.invalidRealloc()); }
+	msSolFill(account.address + 88 + currentLength, 0, newLength - currentLength);
+	msSolStoreU32(account.address + 4, withGrowth(packed, growth));
+	msSolStoreU64(account.address + 80, newLength);
+	return Result.ok(newLength);
+}
+
 export function resize(this account: Account, newLength: uint64): Result<uint64, ProgramError> {
 	const currentLength = account.dataLength();
-	const growth: int64 = (newLength as int64) - (currentLength as int64);
+	if (newLength > currentLength) { return grown(account, currentLength, newLength); }
 	const packed = msSolLoadU32(account.address + 4);
-	const stored: int64 = (packed >> 8) as int64;
-	const previousDelta: int64 = stored <= 10240 ? stored : stored - 16777216;
-	const nextDelta: int64 = previousDelta + growth;
-	if (nextDelta > 10240) { return Result.err(ProgramError.invalidRealloc()); }
-	if (newLength > currentLength) {
-		msSolFill(account.address + 88 + currentLength, 0, newLength - currentLength);
-	}
-	msSolStoreU32(account.address + 4, (packed & 0xff) | ((((nextDelta as int32) as uint32) & 0xffffff) << 8));
+	msSolStoreU32(account.address + 4, withGrowth(packed, growthOf(packed) - ((currentLength - newLength) as int64)));
 	msSolStoreU64(account.address + 80, newLength);
 	return Result.ok(newLength);
 }

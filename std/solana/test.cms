@@ -951,6 +951,26 @@ function richCounter(length: int32, lamports: uint64): HostAccount {
 	return counter;
 }
 
+function growCreatedStep(): Result<uint64, ProgramError> {
+	const target = (try instructionData().readU16(0)) as uint64;
+	const fresh = try account(1);
+	const _created = try createAccount(try account(0), fresh, 100, 48, programKey());
+	const _grown = try fresh.resize(target);
+	return Result.ok(0);
+}
+
+function growCreatedEntry(): void { codeOf(growCreatedStep()); }
+
+test "an account a CPI created grows only into the bytes the runtime reserved for it before the CPI" {
+	const kept = [wallet(1, 10000000), wallet(2, 0), wallet(3, 77)];
+	assert run(programKey(), kept, sizeBytes(10240), growCreatedEntry).result == 0;
+	assert kept[1].data.length == 10240 && kept[2].lamports == 77;
+	for (const beyond of [10241, 10248, 10288, 20480]) {
+		const refused = [wallet(1, 10000000), wallet(2, 0), wallet(3, 77)];
+		assert run(programKey(), refused, sizeBytes(beyond), growCreatedEntry).result == ProgramError.invalidRealloc().code;
+	}
+}
+
 const tenSol: uint64 = 10000000000;
 const fiveSol: uint64 = 5000000000;
 

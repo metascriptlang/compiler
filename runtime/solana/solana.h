@@ -185,6 +185,28 @@ static inline uint64_t msSolAccountTable(void) {
     return msSolContext()->accountTable;
 }
 
+/* A callee can grow an account without this program counting it, so the room for an account's data is read
+   from where the next record starts in the input: the length the instruction began with plus the runtime's
+   reserve, never from a running count. */
+static inline __attribute__((noinline)) uint64_t msSolDataRoom(uint64_t record) {
+    const msSolanaContext* context = msSolContext();
+    const uint64_t* table = (const uint64_t*)context->accountTable;
+    const uint64_t count = context->accountCount;
+    uint64_t index = 0;
+    while (index < count && table[index] != record) index++;
+    if (index == count) return 0;
+    uint64_t next = index + 1;
+    while (next < count && table[next] <= record) next++;
+    uint64_t end = context->instructionData - 8;
+    if (next < count) end = table[next];
+#ifdef MSOS_SOLANA
+    else if (*(const uint64_t*)MS_SOLANA_INPUT_START != count) return 0;
+#else
+    else if (*(const uint64_t*)context->input != count) return 0;
+#endif
+    return end - 8 * (next - index) - (record + MS_SOL_ACCOUNT_HEADER_SIZE);
+}
+
 static inline uint64_t msSolAccountCount(void) {
     return msSolContext()->accountCount;
 }
