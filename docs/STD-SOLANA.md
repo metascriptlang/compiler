@@ -652,7 +652,7 @@ SDK instruction CU higher. It is not a completed optimization or delivery.
 
 ### Parser marker reuse — measured 2026-10-08
 
-`runtime/solana/solana.h:msSolParse` now reads each kept slot's duplicate
+`runtime/solana/solana.h:msSolParseAccounts` now reads each kept slot's duplicate
 marker once, resolves its lookup and advances its cursor in the same branch.
 The reference cursor's `next` uses the same resolve/advance ordering
 (`lang-v2/src/cursor.rs:135–179` in the archived reference). No entry ABI,
@@ -756,16 +756,32 @@ also increased size/CU. Both cursor prototypes and both extra context fields wer
 removed, including their heap-layout change. Artifacts remain in ignored
 `out/solana/goalAudit/prop-lazy{,-inline}*`; no new lazy accessor is promoted.
 
-The smaller R2-only experiment keeps eager frame-table parsing and the legacy
-host parser. `msSolStart` in `runtime/solana/solana.h` uses the direct instruction
-pointer, with the emitted two-argument entry in `src/codegen/c/index.ms`.
-A missing R2 pointer is rejected before entering the program, not silently
-accepted through an alternate decoder. SIMD-0321 is required for this experiment;
-feature-disabled VM behavior is not established. An ignored copy of the harness
-explicitly deactivated `5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL`
-and printed `isActive=false`, but both old and R2-only prop artifacts still passed
-with unchanged CU (`r2-feature-disabled-{old,new}.log`). Thus that toggle did not
-exercise missing R2; it must not be reported as a demonstrated refusal.
+The smaller R2-only experiment keeps eager frame-table parsing. `msSolStart` in
+`runtime/solana/solana.h` uses the direct instruction pointer, with the emitted
+two-argument entry in `src/codegen/c/index.ms`. A runtime that leaves r2 empty
+takes the one-argument path instead: the entry walks past the accounts to the
+instruction data with `msSolInstructionDataAfter`, the walk the host parser
+`msSolParse` takes on every host test. Which runtimes leave r2 empty: agave 4.0.x
+sets it only under feature `5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL`
+(`solana-program-runtime` 4.0.0 `src/vm.rs:264-267`; the VM starts every register
+at zero, `solana-sbpf` `src/vm.rs:317`, and the x86 JIT loads r2 from that array),
+and 4.1.0 and later set it unconditionally (`src/vm.rs:309`). A MagicBlock
+ephemeral rollup runs a 4.0 fork with the same gate (`magicblock-svm` 0395009
+`program-runtime/src/vm.rs:265`) and activates ten features on an empty set
+(`magicblock-processor/src/lib.rs:45-66`), so r2 is zero there. The entry refused
+that case from `f97ae2bc2`, and every instruction on the devnet ER failed with
+`InvalidInstructionData` after 4 CU (Hibernal, 2026-10-12). Measured 2026-10-12
+with a Rust harness on the `litesvm` 0.13.1 crate (program-runtime 4.0.0), a probe
+logging the account count, data length, data sum, program id and last account,
+for 0, 1 and 3 accounts (one repeated), data of 0, 1 and 100 bytes, built with
+the default maximum and with `MS_SOL_MAX_ACCOUNTS=1`: with the feature off the old
+entry fails all 18 at 3-4 CU and the new one returns the same logs as with r2 on,
+for 15 to 24 CU more, 39 when it walks two records past the maximum; with r2 on
+the two entries differ by one CU either way. The walk is not gated: the gate's
+LiteSVM 1.4.1 and `solana-test-validator` 4.2.2 both run a runtime that always
+sets r2 (the feature deactivated in genesis, the old entry still passed), and the
+pin `src/test/guard/solanaEntryAccountTable.ms` checks the emitted entry. When no
+supported runtime is older than 4.1 the walk is dead code on SBF.
 
 Builds use `./msc-entry-proto build examples/anchorBench/<fixture>/program.ms
 --os=solana --danger --cc=<v1.57-clang> -d:programId=<matched-id>
@@ -1122,7 +1138,7 @@ Not measured: a non-bench program that checks `Owned` or `Mutable` fields with n
 
 Program bytes, base to the PDA commit to the last one: hello 4048, 3696, 3872; vault 3784, 3464, 3872; nested 6112, 5808, 5848; prop-amm 5504, 5288, 5352; multisig 15392, 13976, 14480.
 
-- **Entry parse.** `msSolStart(input, table, instructionData)` takes the loader's `input` as a parameter and parses the accounts in one loop with account 0 taken as a full record (the loader never sends a duplicate first); `msSolanaEnter()` no longer stores the input pointer, and the host parser `msSolParse` uses the same loop.
+- **Entry parse.** `msSolStart(input, table, instructionData)` takes the loader's `input` as a parameter and parses the accounts in one loop with account 0 taken as a full record (the loader never sends a duplicate first); `msSolanaEnter()` no longer stores the input pointer, and the host parser `msSolParse` walks to the instruction data with the same `msSolInstructionDataAfter` the entry uses when r2 is empty.
 - **Accounts kernels.** `accounts<T>()` reads the table address and count once, compares the count with the field count once, and reads each `Signer`, `WritableSigner`, `Writable`, `Program<P>`, `Owned<T>` and `Mutable<T>` slot with a kernel that takes the address (`std/solana/typed.cms`, `*ProofAt`); the index verifiers (`signer(i)` and the rest) call the same kernels, except `owned<T>(i)` and `mutable<T>(i)`, which keep their calls into the shared cores. `programDataFailure` tests `length < 8 + size` once and a `@noinline` function picks the same code as before (3001, 3002 or 3003). `msSolAccountAt` tells the compiler a slot below the count is not zero. Making `ownedFailure`, `delegatedFailure`, `mutableEnvelopeFailure` and `programDataFailure` `@inline` gave the same CU and failed `solanaGenericSize.ms` (`owned` 9 copies of 488 bytes where 0 are allowed, `.text` 89,672 against a 90,000 bound), so only the address forms are inline; the guard is green with `.text` 78,768 (78,800 on the base).
 - **Arguments.** `argU8`/`16`/`32`/`64`, `argBoolValid` and `argPubkey` test the bounds once instead of building an address and testing it against zero; the instruction data length is the word before the data (the context field is gone).
 - **Create.** `createAccountAllowPrefund` writes the owner as four words, `createPda` appends a one-byte slot to the seed list and `slottedSeeds` wraps the table in `SlottedSeeds`, a struct with private fields that `createdPdaAccount` takes: the found bump is written into the caller's own table, with no zeroed 16-entry table and no copy. A caller cannot hand `createdPdaAccount` an unslotted table, because nothing but `slottedSeeds` makes a `SlottedSeeds` and `solanaProofFailurePrivate.ms` requires that `std/solana` does not export it; a host test with a one-byte seed of its own checks that the slot is a separate entry.

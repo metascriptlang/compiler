@@ -483,7 +483,7 @@ The pin is `src/test/guard/solanaStripDeployArtifact.ms`.
 ### Solana entry holds the account table in its frame — measured 2026-10-04
 
 The emitted `entrypoint` (`genProjectDispatcher`, `src/codegen/c/index.ms`) declares
-`uint64_t accounts[MS_SOL_MAX_ACCOUNTS]` and hands it to `msSolParse` (`runtime/solana/solana.h`)
+`uint64_t accounts[MS_SOL_MAX_ACCOUNTS]` and hands it to `msSolStart` (`runtime/solana/solana.h`)
 before `MsMain()`. The accessors read the table through the context and parse nothing, so no
 instruction takes its account table from the 32 KiB heap. Pins:
 `src/test/guard/solanaEntryAccountTable.ms` (the emitted entry; a maximum the runtime cannot send
@@ -496,8 +496,9 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
   at most 255 accounts: a 256th is `MaxAccountsExceeded` before the program runs
   (agave `program-runtime/src/serialization.rs:23,201-202`).
 - **Here.** `MS_SOL_MAX_ACCOUNTS` is 255 unless `--passC=-DMS_SOL_MAX_ACCOUNTS=n` says otherwise
-  (the reference's second macro argument); `0` and `256` and up are a build error. `msSolParse`
-  keeps the first `n` accounts and walks past the rest to the instruction data. The host simulator
+  (the reference's second macro argument); `0` and `256` and up are a build error. `msSolStart`
+  keeps the first `n` accounts; when the runtime leaves r2 empty it walks past the rest to the
+  instruction data. The host simulator
   parses accepted inputs the same way into a static table, but `run` refuses more than 255 accounts
   with `REFUSED` and `MaxAccountsExceeded` before calling the program, as the runtime does.
 - **Measured** on the base `4e78ec143` plus this change, platform-tools v1.57, LiteSVM 1.4.1,
