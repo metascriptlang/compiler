@@ -355,7 +355,8 @@ export function genProjectDispatcher(
 	addNewline(b);
 
 	// MsMain — exposed for targets where user provides own entry point
-	addLine(b, targetOs == "solana" ? "__attribute__((noinline)) void MsMain(void) {" : "void MsMain(void) {");
+	if (targetOs == "solana") addLine(b, "#ifdef MS_SOL_MAIN_NOINLINE\n__attribute__((noinline))\n#endif");
+	addLine(b, "void MsMain(void) {");
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
 	addLine(b, "  msTestErrorFlag();");

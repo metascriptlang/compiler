@@ -565,10 +565,15 @@ both produced **7,928 B** and completed the merge. Their compute units were not 
   `scheduled` overflowed by 896 bytes in `solanaAccountLists`, `solanaCpiFrame` and
   `solanaOverloadedAggregateReturn`, and `entrypoint` by 64 in `solanaMemBuiltins`. The std cores
   that build a CPI or an event on the stack are `@noinline` (`invokeList` in `std/solana/cpi.cms`,
-  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`), and
-  the emitted `MsMain` is `__attribute__((noinline))` under `--os=solana`, so the entry's frame is
-  the account table alone: the escrow's `entrypoint` is the same 11 instructions with and without
-  LTO (the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). A CPI's account infos
+  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`). The
+  emitted `MsMain` was `__attribute__((noinline))` under `--os=solana`, so the entry's frame was
+  the account table alone (the escrow's `entrypoint` the same 11 instructions with and without
+  LTO: the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). It is now inlined
+  into `entrypoint` by the LTO merge, and when that overflows the entry frame the build prints
+  `note: the entry frame overflowed with MsMain inlined; rebuilding MsMain out of line` on stderr
+  and recompiles the dispatcher with `-DMS_SOL_MAIN_NOINLINE`, which restores the attribute
+  (`solanaMainInlines.ms`; measured numbers in `docs/BUILD-PERF.md` "Measured 2026-10-11 — MsMain
+  inlined"). A CPI's account infos
   live in the fixed 64-slot frame of `msSolInvokeMetas`, so a 64-account CPI written beside a
   one-byte buffer builds (`solanaCpiFrame.ms`) and the 65th is the macro's error. `solanaGenericSize.ms` reads per-copy
   symbol sizes and builds with `--lto=off`.

@@ -770,6 +770,12 @@ function reportsSbfError(errorOutput: string): boolean {
 	return false;
 }
 
+export const SBF_MAIN_NOINLINE_FLAG = "-DMS_SOL_MAIN_NOINLINE";
+
+export function reportsSbfFrameOverflow(err: ProcessError): boolean {
+	return err.errorOutput.contains("overflows the maximum allowed frame space");
+}
+
 function runCc(command: ToolCommand, args: string[]): Result<string, ProcessError> {
 	if (!args.includes(SBF_TARGET)) return execFileCapture(command.path, args);
 	const run = execFileResult(command.path, args);

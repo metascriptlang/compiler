@@ -302,6 +302,30 @@ which is why the second half (the closure pair called in place, which `--gc=manu
 `--gc=drc` does not) matters on this target. Not verified: a closure bound to a `let`, or copied
 (`msClosureCopy`) or reassigned (`msClosureSink`), still counts as one that can raise.
 
+## Measured 2026-10-11 — MsMain inlined
+
+`MsMain` no longer carries `noinline` under `--os=solana` (it did since `d2835679f`). The LTO merge
+folds it into `entrypoint`; a fold that overflows the 4,096-byte frame (a probe with a 2,800-byte
+local reached from `main` made `entrypoint` 4,864 bytes: `Function entrypoint overflows the
+maximum allowed frame space`) is caught where `linkSolana` fails, and the dispatcher is recompiled
+with `-DMS_SOL_MAIN_NOINLINE` and relinked, with a `note:` on stderr. The same probe builds without
+LTO unchanged. A program that needs the fallback pays one failed merge on every build.
+
+Same five programs, before → after (the raise fix applied in both columns); the 102 refusals all
+still refuse with the state unchanged and the error strings identical:
+
+| program | `.so` bytes | compute units |
+|---|---|---|
+| helloworld | 2,960 → 2,912 | init 1,481 → 1,475 |
+| vault | 3,504 → 3,432 | deposit 1,683 → 1,676, withdraw 482 → 475 |
+| nested | 5,224 → 5,168 | initialize 2,824 → 2,817, increment 220 → 215, reset 215 → 210 |
+| prop-amm | 4,176 → 4,128 | update 144 → 141, initialize 1,438 → 1,432, rotate_authority 168 → 165 |
+| multisig | 12,144 → 12,000 | create 2,776 → 2,763, deposit 2,397 → 2,391, set_label 544 → 519, execute_transfer 2,862 → 2,858 |
+
+No bench program needed the fallback (`solanaMainInlines.ms` builds one that does). Not verified: a
+program whose fold overflows through code other than `MsMain` (the fallback does not help it and
+the second link reports the overflow), other platform-tools versions.
+
 ## Re-measured 2026-07-28 (supersedes the tables below)
 
 Apple Silicon 8-core, `msc build src/index.ms --gc=drc --danger --cc=clang`.
