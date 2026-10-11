@@ -10,6 +10,7 @@
 #define MS_SOL_MAX_PERMITTED_DATA_INCREASE 10240ULL
 #define MS_SOL_DUPLICATE_MARKER 0xFF
 #define MS_SOL_DUPLICATED_RECORD 0xFE
+#define MS_SOL_PEELED_ACCOUNTS 4
 
 #ifndef MS_SOL_MAX_ACCOUNTS
 #define MS_SOL_MAX_ACCOUNTS 255
@@ -113,28 +114,43 @@ static inline __attribute__((always_inline)) const uint8_t* msSolParseAccounts(c
     msSolanaContext* context = msSolContext();
     const uint8_t* cursor = input + 8;
     const uint64_t count = *(const uint64_t*)input;
+#if MS_SOL_MAX_ACCOUNTS == 255
+    /* The loader refuses more than 255 accounts before the program runs (agave serialization.rs), so the default
+       table's bound is one branch; a clamp measured 4 instructions on every instruction. */
+    if (count > MS_SOL_MAX_ACCOUNTS) __builtin_trap();
+    const uint64_t kept = count;
+#else
     const uint64_t kept = count < MS_SOL_MAX_ACCOUNTS ? count : MS_SOL_MAX_ACCOUNTS;
-    uint64_t* slot = table;
-    uint64_t* end = table + kept;
-    if (slot != end) {
-        *slot++ = (uint64_t)cursor;
-        if (slot != end) {
+#endif
+    *table = (uint64_t)cursor;
+    if (kept > 1) {
+        uint64_t* slot = table + MS_SOL_PEELED_ACCOUNTS;
+        cursor = msSolPastRecord(cursor);
+        for (uint64_t index = 1; index < MS_SOL_PEELED_ACCOUNTS; index++) {
+            if (cursor[0] != MS_SOL_DUPLICATE_MARKER) {
+                slot = table + index;
+                break;
+            }
+            table[index] = (uint64_t)cursor;
+            if (kept == index + 1) goto parsed;
             cursor = msSolPastRecord(cursor);
-            for (;;) {
-                const uint8_t marker = cursor[0];
-                if (marker == MS_SOL_DUPLICATE_MARKER) {
-                    *slot++ = (uint64_t)cursor;
-                    if (slot == end) break;
-                    cursor = msSolPastRecord(cursor);
-                } else {
-                    *slot++ = table[marker];
-                    *(uint8_t*)table[marker] = MS_SOL_DUPLICATED_RECORD;
-                    if (slot == end) break;
-                    cursor += 8;
-                }
+        }
+        uint64_t* end = table + kept;
+        for (;;) {
+            const uint8_t marker = cursor[0];
+            if (marker == MS_SOL_DUPLICATE_MARKER) {
+                *slot++ = (uint64_t)cursor;
+                if (slot == end) break;
+                cursor = msSolPastRecord(cursor);
+            } else {
+                *slot++ = table[marker];
+                *(uint8_t*)table[marker] = MS_SOL_DUPLICATED_RECORD;
+                if (slot == end) break;
+                cursor += 8;
             }
         }
     }
+parsed:
     context->accountCount = kept;
     context->accountTable = (uint64_t)table;
     return cursor;
