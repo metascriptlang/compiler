@@ -64,6 +64,7 @@ function checkZigCC(): boolean {
 // platform-tools (where `cargo build-sbf` installs it) → PATH clang.
 
 const SBF_TARGET = "sbpfv3-solana-solana";
+const LLD_KEEP_TRAP_CALLEE = "--undefined=abort";
 
 let _sbfClang = "";
 let _sbfClangChecked = false;
@@ -335,7 +336,7 @@ function sbfLto(lto: string): boolean {
 function mergeSbfBitcode(lld: string, clang: string, oFiles: string[], outBinary: string, mode: number): Result<string, ProcessError> {
 	const level = mode == MODE_DANGER ? "3" : "2";
 	const bitcode = `${outBinary}.lto.bc`;
-	const mergeArgs = ["--threads=1", "-r", "--plugin-opt=emit-llvm", `--lto-O${level}`, "-o", bitcode];
+	const mergeArgs = ["--threads=1", "-shared", "--entry", "entrypoint", LLD_KEEP_TRAP_CALLEE, "--plugin-opt=emit-llvm", `--lto-O${level}`, "-o", bitcode];
 	for (const oFile of oFiles) mergeArgs.push(oFile);
 	const m = execFileCapture(lld, mergeArgs);
 	if (!m.ok) return Result.err(m.error);

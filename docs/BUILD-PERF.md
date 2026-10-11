@@ -217,8 +217,9 @@ against its base `09692dc8b`. CU counts are deterministic; build times were not 
 (load 12–47 during the runs).
 
 `--danger` (or an explicit `--lto=`) compiles every module to bitcode, always full `-flto`;
-the link merges it with `ld.lld -r --plugin-opt=emit-llvm --lto-O<2|3>`, compiles the merged
-module with the SBF clang (its frame errors still fail the build), then links as before. A
+the link merges it with `ld.lld -shared --entry entrypoint --undefined=abort --plugin-opt=emit-llvm
+--lto-O<2|3>` (an `-r` merge when this was measured; see the 2026-10-11 section below), compiles the
+merged module with the SBF clang (its frame errors still fail the build), then links as before. A
 direct LTO link is refused: ld.lld gives bitcode the SBF machine (`0x107`) while clang's
 objects and platform-tools' `libcompiler_builtins` are `EM_BPF` ("is incompatible with").
 A thin `-r` merge writes only its last module, so SBF merges full whatever the strategy. A
@@ -249,6 +250,33 @@ object-literal destination also applied, 4,032 without LTO → 3,200 with it. Th
 A release build with `--lto=thin` merges the same way (i32 `a / 4` and i64 `a / 100` 0.6 CU each).
 Not verified: other platform-tools versions, Hibernal's full tree, std/solana's own deployed
 programs.
+
+## Measured 2026-10-11 — the SBF LTO merge internalizes
+
+The merge was `ld.lld -r`, which keeps every hidden function external, so LLVM never internalized
+one and the interprocedural passes saw each as callable from outside (the merged object of the
+`nested` bench program listed 224 non-local functions). It is now a `-shared` link with
+`--entry entrypoint`: lld internalizes every symbol the entry does not name, and the merged module
+holds `entrypoint` and `abort` as its only non-local functions. `--undefined=abort` keeps the one
+function the SBF backend calls to lower a trap after the merge; without it the final link stops
+with `undefined symbol: abort`. The output stays `-emit-llvm` bitcode compiled by the SBF clang,
+so the `.so` is `EM_BPF`, flags `0x3` as before (`llvm-readelf -h` on all five programs below).
+
+`examples/anchorBench/<name>/program.ms --os=solana --release`, platform-tools v1.57, LiteSVM with
+`tools/solana/mainnetInactiveFeatures.json`, base `f421de59b` → candidate; the 102 refusals of
+`BENCH_REFUSALS=1` all still refuse with the state unchanged and every error string unchanged:
+
+| program | `.so` bytes | compute units |
+|---|---|---|
+| helloworld | 4,048 → 3,064 | init 1,578 → 1,490 |
+| vault | 3,784 → 3,504 | deposit 1,702 → 1,683, withdraw 490 → 482 |
+| nested | 6,112 → 5,304 | initialize 2,913 → 2,827, increment 226 → 223, reset 218 → 215 |
+| prop-amm | 5,504 → 4,208 | update 144 → 144, initialize 1,520 → 1,440, rotate_authority 167 → 168 |
+| multisig | 15,392 → 12,296 | create 2,922 → 2,778, deposit 2,401 → 2,399, set_label 569 → 545, execute_transfer 2,919 → 2,865 |
+
+`examples/escrow/program.ms --release`: 30,512 → 25,912 B, and `tools/solana/escrow.mjs` passes on
+both. `rotate_authority` is the one operation that costs a unit more. Not verified: other
+platform-tools versions, a Windows host.
 
 ## Re-measured 2026-07-28 (supersedes the tables below)
 
