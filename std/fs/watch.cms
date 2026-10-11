@@ -56,12 +56,13 @@ export function watch(path: string, recursive: boolean = true): Result<FsWatch, 
 
 export async function nextChanges(w: FsWatch): Promise<FsChanges> {
 	if (!w.open) return { paths: [], closed: [], rescan: false, ended: true };
-	const raw = await w.armed;
+	const awaited = w.armed;
+	const raw = await awaited;
 	if (raw == "") {
 		w.open = false;
 		return { paths: [], closed: [], rescan: false, ended: true };
 	}
-	if (w.open) w.armed = msIoWatchNext_ms(w.handle, w.recursive ? 1 : 0);
+	if (w.open && w.armed == awaited) w.armed = msIoWatchNext_ms(w.handle, w.recursive ? 1 : 0);
 	if (raw == "*") return { paths: [], closed: [], rescan: true, ended: false };
 	const paths: string[] = [];
 	const closed: string[] = [];
