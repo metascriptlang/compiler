@@ -523,12 +523,28 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
 - **Not measured.** A Windows host; a validator (LiteSVM only). LTO, which could have inlined the
   program's `Init000` into the entry, is measured in the next section.
 
-### Solana programs link as one LTO module — measured 2026-10-05
+### Solana LTO follows the optimization flags — measured 2026-10-07
 
-`--os=solana` takes `--lto=full` unless the build says `--lto=off` (`resolveLto`,
-`src/compiler/cc.ms`); `--lto=thin` is refused. Every module compiles to bitcode with `-flto`;
-`linkSolana` merges the bitcode with `ld.lld -r --lto-emit-llvm`, compiles the merged module once
-with the SBF clang at `-O2`, and links that object with `compiler_builtins` as before.
+`--os=solana` alone does not enable LTO. `--release` selects it unless an explicit
+`--lto=off` disables it; `--lto=full` and `--lto=thin` also select the whole-module
+SBF merge. `--danger` is a compile error on this target: it drops the bound, range,
+object and checked-division checks, and Solana input is adversarial (an out-of-range
+client index overwrote an account's authority field under `--danger` and was refused
+under `--release`). The measurements below that say `--danger` predate the refusal;
+`--release --lto=thin` cost 0-56 CU more than `--danger` on them. The decision lives in `resolveLto`, and the two-step merge in
+`linkSolana` / `mergeSbfBitcode` (`src/compiler/cc.ms`).
+
+On tree `2afa173472c6e47a6cf4b62f011e5364eed4d116`, installed compiler and support
+`369dbc18a`, platform-tools v1.57: a copy of
+`examples/anchorBench/helloworld/program.ms` built from `/tmp/borsh` with
+`msc build hello.ms --os=solana --output=hello-synced-default.so` was **12,768 B**;
+adding `--danger` was **7,920 B**. Only the latter produced the merge's
+`.lto.bc` / `.lto.o` intermediates. This comparison changes both optimization
+level and LTO; it does not isolate LTO's size gain or measure compute units.
+The measurements below retain their original tree and then-default flags.
+Explicit flag neighbours on the same source and installation: `--danger --lto=off`
+produced **11,768 B**, while `--lto=thin` and `--lto=full` without `--danger`
+both produced **7,928 B** and completed the merge. Their compute units were not measured.
 
 - **Reference.** Anchor v2 benches its programs with `lto = "fat"` and `opt-level = 3`
   (`anchor-next` `ff0514b6` `bench/Cargo.toml:48-52`).
@@ -549,12 +565,17 @@ with the SBF clang at `-O2`, and links that object with `compiler_builtins` as b
   `scheduled` overflowed by 896 bytes in `solanaAccountLists`, `solanaCpiFrame` and
   `solanaOverloadedAggregateReturn`, and `entrypoint` by 64 in `solanaMemBuiltins`. The std cores
   that build a CPI or an event on the stack are `@noinline` (`invokeList` in `std/solana/cpi.cms`,
-  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`), and
-  the emitted `MsMain` is `__attribute__((noinline))` under `--os=solana`, so the entry's frame is
-  the account table alone: the escrow's `entrypoint` is the same 11 instructions with and without
-  LTO (the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). A CPI written beside
-  a one-byte buffer fits 51 accounts and fails the build at 52 (`solanaCpiFrame.ms`,
-  `solanaCpiFrameOverflow.ms`; 44 and 45 without LTO). `solanaGenericSize.ms` reads per-copy
+  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`). The
+  emitted `MsMain` was `__attribute__((noinline))` under `--os=solana`, so the entry's frame was
+  the account table alone (the escrow's `entrypoint` the same 11 instructions with and without
+  LTO: the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). It is now inlined
+  into `entrypoint` by the LTO merge, and when that overflows the entry frame the build prints
+  `note: the entry frame overflowed with MsMain inlined; rebuilding MsMain out of line` on stderr
+  and recompiles the dispatcher with `-DMS_SOL_MAIN_NOINLINE`, which restores the attribute
+  (`solanaMainInlines.ms`; measured numbers in `docs/BUILD-PERF.md` "Measured 2026-10-11 — MsMain
+  inlined"). A CPI's account infos
+  live in the fixed 64-slot frame of `msSolInvokeMetas`, so a 64-account CPI written beside a
+  one-byte buffer builds (`solanaCpiFrame.ms`) and the 65th is the macro's error. `solanaGenericSize.ms` reads per-copy
   symbol sizes and builds with `--lto=off`.
 - **Measured** on tree `e5ba345dad02` with a compiler built from it, platform-tools v1.57,
   LiteSVM 1.4.1 with the features inactive on mainnet turned off

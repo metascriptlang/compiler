@@ -48,7 +48,8 @@ test "strings" {
 	assert "".length == 0;
 	assert "a" + "b" == "ab";
 	assert "hello" == "hello";
-	assert "hello" != "world";
+	const world: string = "world";
+	assert "hello" != world;
 }
 
 test "variables" {

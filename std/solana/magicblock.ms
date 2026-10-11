@@ -3,6 +3,7 @@ import {
 	Bytes,
 	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
+	programId,
 	createProgramAccountSeeded,
 	invokeList,
 	putPubkey,
@@ -14,7 +15,7 @@ import {
 import { ProgramError } from "./error";
 import { findProgramAddressOf } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
-import { SeedTable, bytesAddress, findAt, tableAddress } from "./seed";
+import { SeedTable, SignerSeeds, bytesAddress, findAt, tableAddress } from "./seed";
 
 export { DelegationAccounts, DelegationConfig, anyValidator, onValidator } from "./delegation";
 export { delegate } from "./macro";
@@ -27,8 +28,10 @@ when (testBuild) {
 		anyValidator,
 		onValidator,
 	} from "./delegation";
-	import { delegate, findProgramAddress } from "./macro";
+	import { delegate, findProgramAddress, signed, signedPda } from "./macro";
 	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
+	import { delegateAt } from "./delegation";
+	import { SeedSlice, createAddressWithBump, seedBytes, seedText } from "./seed";
 }
 
 const MAX_COMMIT_ACCOUNTS: uint64 = 16;
@@ -38,14 +41,17 @@ export const MAGIC_PROGRAM_ID: Pubkey = pubkeyOf("Magic1111111111111111111111111
 
 export const MAGIC_CONTEXT_ID: Pubkey = pubkeyOf("MagicContext1111111111111111111111111111111");
 
+export const MAGIC_VAULT_ID: Pubkey = pubkeyOf("MagicVau1t999999999999999999999999999999999");
+
 function scheduleCommit(
 	payer: Account,
 	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 	feeVault: Account | null,
 	discriminant: uint32,
+	signers: Readonly<Span<SignerSeeds>>,
 ): Result<uint64, ProgramError> {
-	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
+	if (signers.length == 0 && !payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const prefix: uint64 = feeVault === null ? 2 : 3;
 	if (prefix + (committed.length as uint64) > MAX_COMMIT_ACCOUNTS) {
 		return Result.err(ProgramError.invalidArgument());
@@ -61,20 +67,26 @@ function scheduleCommit(
 	}
 	let storage: uint8[4] = [];
 	const length = putU32(storage, 0, discriminant);
-	return invokeList(MAGIC_PROGRAM_ID, metas[0..at], storage, length);
+	return invokeList(MAGIC_PROGRAM_ID, metas[0..at], storage, length, signers);
 }
 
-export function commit(payer: Account, committed: Account, magicContextAccount: Account): Result<uint64, ProgramError> {
+export function commit(
+	payer: Account,
+	committed: Account,
+	magicContextAccount: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
 	const accounts: Account[1] = [committed];
-	return scheduleCommit(payer, accounts, magicContextAccount, null, 1);
+	return scheduleCommit(payer, accounts, magicContextAccount, null, 1, signers);
 }
 
 export function commit(
 	payer: Account,
 	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	return scheduleCommit(payer, committed, magicContextAccount, null, 1);
+	return scheduleCommit(payer, committed, magicContextAccount, null, 1, signers);
 }
 
 export function commit(
@@ -82,21 +94,28 @@ export function commit(
 	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 	feeVault: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	return scheduleCommit(payer, committed, magicContextAccount, feeVault, 1);
+	return scheduleCommit(payer, committed, magicContextAccount, feeVault, 1, signers);
 }
 
-export function commitAndUndelegate(payer: Account, committed: Account, magicContextAccount: Account): Result<uint64, ProgramError> {
+export function commitAndUndelegate(
+	payer: Account,
+	committed: Account,
+	magicContextAccount: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
 	const accounts: Account[1] = [committed];
-	return scheduleCommit(payer, accounts, magicContextAccount, null, 2);
+	return scheduleCommit(payer, accounts, magicContextAccount, null, 2, signers);
 }
 
 export function commitAndUndelegate(
 	payer: Account,
 	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	return scheduleCommit(payer, committed, magicContextAccount, null, 2);
+	return scheduleCommit(payer, committed, magicContextAccount, null, 2, signers);
 }
 
 export function commitAndUndelegate(
@@ -104,8 +123,9 @@ export function commitAndUndelegate(
 	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 	feeVault: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	return scheduleCommit(payer, committed, magicContextAccount, feeVault, 2);
+	return scheduleCommit(payer, committed, magicContextAccount, feeVault, 2, signers);
 }
 
 export function isUndelegateCallback(data: Bytes): boolean {
@@ -133,6 +153,7 @@ function parseSeeds(data: Bytes, start: uint64, ref into: SeedTable): Result<uin
 
 export function undelegate(delegated: Account, buffer: Account, payer: Account, ownerProgramId: Pubkey, callbackData: Bytes): Result<uint64, ProgramError> {
 	if (!buffer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
+	if (ownerProgramId != programId()) { return Result.err(ProgramError.incorrectProgramId()); }
 	if (!buffer.owner().equals(DELEGATION_PROGRAM_ID)) { return Result.err(ProgramError.invalidAccountOwner()); }
 	const canonical = try findProgramAddressOf(
 		DELEGATION_PROGRAM_ID,
@@ -316,10 +337,11 @@ when (testBuild) {
 		return run(programKey(), accounts, input, delegateEntry).result;
 	}
 
-	// magicblock-magic-program-api-0.10.1/src/lib.rs:9,18; magicblock-delegation-program-api-3.0.0/src/lib.rs:41.
+	// magicblock-magic-program-api-0.10.1/src/lib.rs:9,18,22; magicblock-delegation-program-api-3.0.0/src/lib.rs:41.
 	test "the MagicBlock ids are the ones the program APIs declare" {
 		assert MAGIC_PROGRAM_ID.toBase58() == "Magic11111111111111111111111111111111111111";
 		assert MAGIC_CONTEXT_ID.toBase58() == "MagicContext1111111111111111111111111111111";
+		assert MAGIC_VAULT_ID.toBase58() == "MagicVau1t999999999999999999999999999999999";
 		assert DELEGATION_PROGRAM_ID.toBase58() == "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
 	}
 
@@ -328,8 +350,8 @@ when (testBuild) {
 		assert delegateRun(accounts, 0) == 0;
 		const calls = invocations();
 		assert calls.length == 3;
-		assert calls[0].program.equals(Pubkey.zero()) && calls[0].data[0] == 0;
-		assert calls[0].accounts[1].key.equals(accounts[3].key);
+		assert calls[0].program.equals(Pubkey.zero()) && calls[0].data[0] == 13;
+		assert calls[0].accounts[0].key.equals(accounts[3].key);
 		assert calls[1].program.equals(Pubkey.zero()) && calls[1].data[0] == 1;
 		assert calls[1].accounts[0].key.equals(petKey()) && calls[1].signers == 1;
 		const sent = calls[2];
@@ -399,6 +421,118 @@ when (testBuild) {
 		const misplaced = delegationAccounts();
 		misplaced[3] = holder(keyOf(3), Pubkey.zero(), []);
 		assert delegateRun(misplaced, 0) == ProgramError.invalidSeeds().code;
+		assert invocations().length == 0;
+	}
+
+	function heldSeedKey(): Pubkey {
+		const derived = findProgramAddressOf(programKey(), ["pet", [5, 6, 7, 8]]);
+		if (derived.ok) { return derived.value.key; }
+		return Pubkey.zero();
+	}
+
+	// pinned 0: one seed inside the delegated account's data; 1: the same bytes from a local; 2: nine seeds; 3: none.
+	function delegateHeldStep(): Result<uint64, ProgramError> {
+		const shape = try instructionData().readU8(0);
+		const delegation: DelegationAccounts = {
+			payer: try account(0),
+			delegated: try account(1),
+			ownerProgram: try account(2),
+			buffer: try account(3),
+			delegationRecord: try account(4),
+			delegationMetadata: try account(5),
+			systemProgram: try account(6),
+		};
+		const derived = try findProgramAddress(["pet", [5, 6, 7, 8]]);
+		const local: uint8[4] = [5, 6, 7, 8];
+		const held = delegation.delegated.data();
+		const inside: SeedSlice = { address: held.address, length: 4 };
+		const config = DelegationConfig.anyValidator();
+		if (shape == 0) { return delegateAt(delegation, [seedText("pet"), inside], derived.bump, config); }
+		if (shape == 1) { return delegateAt(delegation, [seedText("pet"), seedBytes(local)], derived.bump, config); }
+		if (shape == 2) {
+			const many: SeedSlice[9] = [
+				seedText("pet"), inside, inside, inside, inside, inside, inside, inside, inside,
+			];
+			return delegateAt(delegation, many, derived.bump, config);
+		}
+		const none: SeedSlice[0] = [];
+		return delegateAt(delegation, none, derived.bump, config);
+	}
+
+	function delegateHeldEntry(): void {
+		const result = delegateHeldStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function heldAccounts(buffer: Pubkey): HostAccount[] {
+		const pet: HostAccount = { ...holder(heldSeedKey(), programKey(), [5, 6, 7, 8]), lamports: 900 };
+		return [
+			payerAccount(),
+			pet,
+			programAccount(programKey()),
+			holder(buffer, Pubkey.zero(), []),
+			holder(keyOf(4), Pubkey.zero(), []),
+			holder(keyOf(5), Pubkey.zero(), []),
+			programAccount(Pubkey.zero()),
+		];
+	}
+
+	function heldBuffer(): Pubkey {
+		const derived = findProgramAddressOf(programKey(), ["buffer", heldSeedKey()]);
+		if (derived.ok) { return derived.value.key; }
+		return Pubkey.zero();
+	}
+
+	function heldBufferBump(): uint8 {
+		const derived = findProgramAddressOf(programKey(), ["buffer", heldSeedKey()]);
+		if (derived.ok) { return derived.value.bump; }
+		return 0;
+	}
+
+	function delegateHeldRun(accounts: HostAccount[], shape: uint8): uint64 {
+		const input: uint8[] = [shape];
+		return run(programKey(), accounts, input, delegateHeldEntry).result;
+	}
+
+	test "a seed read from the delegated account signs and is sent as it was before the account is zeroed" {
+		const pet = findProgramAddressOf(programKey(), ["pet", [5, 6, 7, 8]]);
+		assert pet.ok;
+		const heldBytes: uint8[] = [5, 6, 7, 8];
+		const seeds: uint8[] = [2, 0, 0, 0, 3, 0, 0, 0, 112, 101, 116, 4, 0, 0, 0, 5, 6, 7, 8];
+		for (const shape of [0, 1]) {
+			const accounts = heldAccounts(heldBuffer());
+			assert delegateHeldRun(accounts, shape as uint8) == 0;
+			const calls = invocations();
+			assert calls.length == 3;
+			if (pet.ok) {
+				const signed = [textBytes("pet"), heldBytes, [pet.value.bump]];
+				assert signerIs(calls[1], 0, signed) && signerIs(calls[2], 0, signed);
+			}
+			for (let index = 0; index < seeds.length; index++) {
+				assert calls[2].data[12 + index] == seeds[index];
+			}
+			assert accounts[1].data[0] == 0 && accounts[1].owner.equals(DELEGATION_PROGRAM_ID);
+		}
+	}
+
+	test "delegate refuses a buffer at a lower bump than the canonical one, before any call" {
+		const bufferSeeds: SeedSlice[2] = [seedText("buffer"), seedBytes(heldSeedKey().bytes)];
+		let lower = Pubkey.zero();
+		let bump = heldBufferBump();
+		while (bump > 0 && lower.isZero()) {
+			bump = bump - 1;
+			const candidate = createAddressWithBump(bufferSeeds, bump, bytesAddress(programKey().bytes));
+			if (candidate.ok) { lower = candidate.value; }
+		}
+		assert !lower.isZero();
+		assert delegateHeldRun(heldAccounts(lower), 1) == ProgramError.invalidSeeds().code;
+		assert invocations().length == 0;
+	}
+
+	test "delegate refuses nine seeds and none before any call: the delegation program takes 1 to 8" {
+		assert delegateHeldRun(heldAccounts(heldBuffer()), 2) == ProgramError.maxSeedLengthExceeded().code;
+		assert invocations().length == 0;
+		assert delegateHeldRun(heldAccounts(heldBuffer()), 3) == ProgramError.maxSeedLengthExceeded().code;
 		assert invocations().length == 0;
 	}
 
@@ -509,6 +643,92 @@ when (testBuild) {
 		const accounts = commitAccounts();
 		accounts[0] = { ...accounts[0], signer: false };
 		assert commitRun(accounts, 2) == ProgramError.missingRequiredSignature().code;
+		assert invocations().length == 0;
+	}
+
+	function paidKey(): Pubkey {
+		const found = findProgramAddressOf(programKey(), ["vrf-payer"]);
+		if (found.ok) { return found.value.key; }
+		return Pubkey.zero();
+	}
+
+	function paidAccounts(): HostAccount[] {
+		const accounts = commitAccounts();
+		accounts[0] = { ...holder(paidKey(), Pubkey.zero(), []), lamports: 10000000 };
+		return accounts;
+	}
+
+	// op 0-2 commit, 3-5 commitAndUndelegate (one account, a list, a list through the fee vault), signed with the seeds
+	// and the bump; 6-8 the same three of commit, 9 a list of commitAndUndelegate through the vault, under signedPda;
+	// 10 an unsigned commit by the PDA payer.
+	function paidStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const payer = try account(0);
+		const context = try account(1);
+		const vault = try account(2);
+		const committed: Account[2] = [try account(3), try account(4)];
+		const found = try findProgramAddress(["vrf-payer"]);
+		const bump = found.bump;
+		if (op == 6) { return signedPda(commit(payer, committed[0], context), payer, ["vrf-payer"]); }
+		if (op == 7) { return signedPda(commit(payer, committed, context), payer, ["vrf-payer"]); }
+		if (op == 8) { return signedPda(commit(payer, committed, context, vault), payer, ["vrf-payer"]); }
+		if (op == 9) {
+			return signedPda(commitAndUndelegate(payer, committed, context, vault), payer, ["vrf-payer"]);
+		}
+		return match (op) {
+			0 => signed(commit(payer, committed[0], context), ["vrf-payer", [bump]]),
+			1 => signed(commit(payer, committed, context), ["vrf-payer", [bump]]),
+			2 => signed(commit(payer, committed, context, vault), ["vrf-payer", [bump]]),
+			3 => signed(commitAndUndelegate(payer, committed[0], context), ["vrf-payer", [bump]]),
+			4 => signed(commitAndUndelegate(payer, committed, context), ["vrf-payer", [bump]]),
+			5 => signed(commitAndUndelegate(payer, committed, context, vault), ["vrf-payer", [bump]]),
+			_ => commit(payer, committed, context, vault),
+		};
+	}
+
+	function paidEntry(): void {
+		const result = paidStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function paidRun(accounts: HostAccount[], op: uint8): uint64 {
+		const input: uint8[] = [op];
+		return run(programKey(), accounts, input, paidEntry).result;
+	}
+
+	test "a commit signed by a PDA payer sends the payer's seeds and the bytes of the unsigned commit" {
+		const found = findProgramAddressOf(programKey(), ["vrf-payer"]);
+		assert found.ok;
+		if (!found.ok) { return; }
+		const seeds = [textBytes("vrf-payer"), [found.value.bump]];
+		const commitBytes: uint8[] = [1, 0, 0, 0];
+		const undelegateBytes: uint8[] = [2, 0, 0, 0];
+		for (const op of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+			assert paidRun(paidAccounts(), op as uint8) == 0;
+			const calls = invocations();
+			assert calls.length == 1;
+			const sent = calls[0];
+			assert sent.program.equals(MAGIC_PROGRAM_ID);
+			assert sent.signers == 1 && signerIs(sent, 0, seeds);
+			assert sent.accounts[0].key.equals(paidKey());
+			assert sent.accounts[0].signer && sent.accounts[0].writable;
+			assert sent.accounts[1].key.equals(MAGIC_CONTEXT_ID) && sent.accounts[1].writable && !sent.accounts[1].signer;
+			const undelegating = op == 3 || op == 4 || op == 5 || op == 9;
+			assert sameBytes(sent.data, undelegating ? undelegateBytes : commitBytes);
+			const withVault = op == 2 || op == 5 || op == 8 || op == 9;
+			const single = op == 0 || op == 3 || op == 6;
+			const first = withVault ? 3 : 2;
+			assert sent.accounts.length == first + (single ? 1 : 2);
+			if (withVault) {
+				assert sent.accounts[2].key.equals(keyOf(3)) && sent.accounts[2].writable && !sent.accounts[2].signer;
+			}
+			assert sent.accounts[first].key.equals(keyOf(4)) && sent.accounts[first].writable;
+			if (!single) { assert sent.accounts[first + 1].key.equals(keyOf(5)) && !sent.accounts[first + 1].writable; }
+		}
+	}
+
+	test "a PDA payer without its seeds is refused before the commit is sent" {
+		assert paidRun(paidAccounts(), 10) == ProgramError.missingRequiredSignature().code;
 		assert invocations().length == 0;
 	}
 
@@ -714,5 +934,104 @@ when (testBuild) {
 		const trailing = callbackData();
 		trailing.push(0);
 		assert undelegateRun(undelegateBuffer(), trailing) == malformed;
+	}
+
+	test "delegate succeeds when the buffer address was pre-funded, and the buffer's lamports go back to the payer" {
+		const accounts = delegationAccounts();
+		accounts[3].lamports = 1;
+		const payerBefore = accounts[0].lamports;
+		assert delegateRun(accounts, 0) == 0;
+		assert accounts[1].owner.equals(DELEGATION_PROGRAM_ID);
+		assert accounts[3].lamports == 0 && accounts[3].data.length == 0;
+		assert accounts[0].lamports >= payerBefore;
+	}
+
+	test "delegate succeeds when the buffer address already holds a full rent balance, which goes back to the payer" {
+		const accounts = delegationAccounts();
+		accounts[3].lamports = 10000000;
+		const payerBefore = accounts[0].lamports;
+		assert delegateRun(accounts, 0) == 0;
+		assert accounts[1].owner.equals(DELEGATION_PROGRAM_ID);
+		assert accounts[3].lamports == 0 && accounts[3].data.length == 0;
+		assert accounts[0].lamports == payerBefore + 10000000;
+	}
+
+	test "delegate refuses an owner program account that is not this program, before any call" {
+		const other = keyOf(77);
+		const accounts = delegationAccounts();
+		const buffer = findProgramAddressOf(other, ["buffer", petKey()]);
+		assert buffer.ok;
+		if (buffer.ok) { accounts[3] = holder(buffer.value.key, Pubkey.zero(), []); }
+		accounts[2] = programAccount(other);
+		assert delegateRun(accounts, 0) != 0;
+		assert invocations().length == 0;
+	}
+
+	test "delegate refuses an account that another program owns, before it zeroes its data" {
+		const accounts = delegationAccounts();
+		accounts[1].owner = keyOf(33);
+		assert delegateRun(accounts, 0) != 0;
+		assert accounts[1].data.length == 4 && accounts[1].data[0] == 5;
+		assert invocations().length == 0;
+	}
+
+	test "undelegate refuses an unsigned buffer, a buffer another program owns and a seed count of 0 or 17, before any call" {
+		const unsigned = undelegateAccounts(undelegateBuffer());
+		unsigned[1].signer = false;
+		assert run(programKey(), unsigned, callbackData(), undelegateEntry).result ==
+			ProgramError.missingRequiredSignature().code;
+		const foreign = undelegateAccounts(undelegateBuffer());
+		foreign[1].owner = programKey();
+		assert run(programKey(), foreign, callbackData(), undelegateEntry).result ==
+			ProgramError.invalidAccountOwner().code;
+		const none = callbackData();
+		none[8] = 0;
+		assert undelegateRun(undelegateBuffer(), none) == ProgramError.invalidInstructionData().code;
+		const many = callbackData();
+		many[8] = 17;
+		assert undelegateRun(undelegateBuffer(), many) == ProgramError.invalidInstructionData().code;
+		assert invocations().length == 0;
+	}
+
+	test "undelegate refuses an account that already holds data, so a replayed callback cannot overwrite it" {
+		const live: HostAccount = { ...holder(petKey(), programKey(), [1, 1, 1, 1]), lamports: 900 };
+		const accounts = undelegateAccounts(undelegateBuffer());
+		accounts[0] = live;
+		assert run(programKey(), accounts, callbackData(), undelegateEntry).result != 0;
+		const kept: uint8[] = [1, 1, 1, 1];
+		assert sameBytes(accounts[0].data, kept) && accounts[0].lamports == 900;
+	}
+
+	test "undelegate rebuilds an account whose address was pre-funded, paying only the shortfall" {
+		const accounts = undelegateAccounts(undelegateBuffer());
+		accounts[0].lamports = 100000000;
+		assert run(programKey(), accounts, callbackData(), undelegateEntry).result == 0;
+		assert accounts[0].owner.equals(programKey()) && accounts[0].lamports == 100000000;
+		assert accounts[2].lamports == 10000000;
+	}
+
+	function foreignUndelegateStep(): Result<uint64, ProgramError> {
+		return undelegate(try account(0), try account(1), try account(2), keyOf(77), instructionData());
+	}
+
+	function foreignUndelegateEntry(): void {
+		const result = foreignUndelegateStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	test "undelegate refuses an owner program id that is not this program, which would hand the account to another program" {
+		const foreignPet = findProgramAddressOf(keyOf(77), ["pet"]);
+		assert foreignPet.ok;
+		if (foreignPet.ok) {
+			const buffer = findProgramAddressOf(DELEGATION_PROGRAM_ID, ["undelegate-buffer", foreignPet.value.key]);
+			assert buffer.ok;
+			if (buffer.ok) {
+				const accounts = undelegateAccounts(buffer.value.key);
+				accounts[0] = holder(foreignPet.value.key, Pubkey.zero(), []);
+				const outcome = run(programKey(), accounts, callbackData(), foreignUndelegateEntry);
+				assert outcome.result != 0;
+				assert !accounts[0].owner.equals(keyOf(77));
+			}
+		}
 	}
 }

@@ -2,8 +2,9 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNode, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText, addError } from "./context";
+import { optionalizeTypeString } from "../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { isBinaryOperator } from "./expressions/precedence";
@@ -241,6 +242,42 @@ function parseDefaultValue(state: ParserState): Result<Node, string> {
 	return value;
 }
 
+// `x?: T` is `x: T | null = null`: the type text is optionalized exactly as an optional
+// field's is, and the default is a null literal pushed at the parameter's index.
+function pushOptionalDefault(paramIdx: int32, markToken: Token): void {
+	while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null as unknown as Node); }
+	_lastDefaults.push(createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, markToken));
+}
+
+function refuseOptionalThis(state: ParserState, fnName: string): void {
+	if (current(state).kind != TokenKind.Question) return;
+	addError(state, `The 'this' parameter cannot be optional (parameters of '${fnName}' at line ${current(state).line})`);
+	advance(state);
+}
+
+// Takes the `?` of an optional parameter; refuses it on a rest parameter.
+function takeOptionalMark(state: ParserState, paramPrefix: string, name: string): Token | null {
+	if (isAtEnd(state) || current(state).kind != TokenKind.Question) return null;
+	const mark = current(state);
+	advance(state);
+	if (paramPrefix.indexOf("...") >= 0) addError(state, `A rest parameter cannot be optional ('${name}' at line ${mark.line})`);
+	return mark;
+}
+
+// An optional destructured parameter is refused in an implementation signature only:
+// the signature has a body when `)` is followed by `{`, `=>` or `: Type` and then one of those.
+function hasBodyAfterParams(state: ParserState): boolean {
+	const saved = state.position;
+	if (current(state).kind == TokenKind.RParen) advance(state);
+	if (current(state).kind == TokenKind.Colon) {
+		advance(state);
+		skipTypeAnnotation(state);
+	}
+	const kind = current(state).kind;
+	state.position = saved;
+	return kind == TokenKind.LBrace || kind == TokenKind.Arrow;
+}
+
 export function parseParamList(state: ParserState, fnName: string): string[] {
 	const params: string[] = [];
 	_lastDefaults = [];
@@ -249,6 +286,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 	_lastParamPatterns = [];
 	if (current(state).kind != TokenKind.LParen) { return params; }
 	advance(state);
+	let seenOptional = false;
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		let paramPrefix = "";
 		if (current(state).kind == TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
@@ -308,6 +346,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			}
 			const receiverName = current(state);
 			if (!isIdentLike(receiverName)) {
+				refuseOptionalThis(state, fnName);
 				params.push("this");
 				_lastParamLocations.push(makeLoc(thisToken.line, thisToken.column));
 				params.push(captureOptionalType(state));
@@ -318,6 +357,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			params.push(`this:${receiverPrefix}${receiverName.value}`);
 			_lastParamLocations.push(makeLoc(receiverName.line, receiverName.column));
 			advance(state);
+			refuseOptionalThis(state, fnName);
 			params.push(captureOptionalType(state));
 			_lastParamTypeExprs.push(_lastTypeExpr!);
 			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
@@ -333,14 +373,25 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			while (_lastParamPatterns.length < slot) { _lastParamPatterns.push(null as unknown as Node); }
 			_lastParamPatterns.push(patResult.value);
 			params.push(`${paramPrefix}${paramPatternName(slot)}`);
-			params.push(captureOptionalType(state));
+			const patMark = takeOptionalMark(state, paramPrefix, paramPatternName(slot));
+			const patTypeText = captureOptionalType(state);
+			params.push(patMark != null ? optionalizeTypeString(patTypeText) : patTypeText);
 			_lastParamTypeExprs.push(_lastTypeExpr!);
+			const patIdx = (params.length - 2) / 2;
+			if (patMark != null && hasBodyAfterParams(state)) {
+				addError(state, `A binding pattern parameter cannot be optional in an implementation signature (line ${patMark.line})`);
+			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
+				if (patMark != null) addError(state, `Parameter cannot have question mark and initializer (line ${patMark.line})`);
 				advance(state);
-				const dIdx = (params.length - 2) / 2;
-				while (_lastDefaults.length < dIdx) { _lastDefaults.push(null as unknown as Node); }
+				while (_lastDefaults.length < patIdx) { _lastDefaults.push(null as unknown as Node); }
 				const dResult = parseDefaultValue(state);
 				_lastDefaults.push(dResult.ok ? dResult.value : null as unknown as Node);
+			} else if (patMark != null) {
+				pushOptionalDefault(patIdx, patMark);
+				seenOptional = true;
+			} else if (seenOptional && paramPrefix.indexOf("...") < 0) {
+				addError(state, `A required parameter cannot follow an optional parameter (line ${destToken.line})`);
 			}
 			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
@@ -350,15 +401,23 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		_lastParamLocations.push(makeLoc(param.line, param.column));
 		params.push(`${paramPrefix}${param.value}`);
 		advance(state);
-		params.push(captureOptionalType(state));
+		const optMark = takeOptionalMark(state, paramPrefix, param.value);
+		const paramTypeText = captureOptionalType(state);
+		params.push(optMark != null ? optionalizeTypeString(paramTypeText) : paramTypeText);
 		_lastParamTypeExprs.push(_lastTypeExpr!);
+		const paramIdx = (params.length - 2) / 2;
 		// Capture default value as AST node (Reference parity: store default expression)
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
+			if (optMark != null) addError(state, `Parameter cannot have question mark and initializer ('${param.value}' at line ${optMark.line})`);
 			advance(state);
-			const paramIdx = (params.length - 2) / 2;
 			while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null as unknown as Node); }
 			const defResult = parseDefaultValue(state);
 			_lastDefaults.push(defResult.ok ? defResult.value : null as unknown as Node);
+		} else if (optMark != null) {
+			pushOptionalDefault(paramIdx, optMark);
+			seenOptional = true;
+		} else if (seenOptional && paramPrefix.indexOf("...") < 0) {
+			addError(state, `A required parameter cannot follow an optional parameter ('${param.value}' at line ${param.line})`);
 		}
 		if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 	}
@@ -431,4 +490,63 @@ test "no default returns empty array" {
 	parseParams("(x: number, y: string)", "testFn3");
 	const defs = getLastParsedDefaults();
 	assert defs.length == 0;
+}
+
+function paramErrors(input: string): string[] {
+	const lr = lex(input);
+	if (!lr.ok) return ["lex"];
+	const state = createState(lr.value);
+	parseParamList(state, "f");
+	return state.errors;
+}
+
+test "an optional parameter is its type or null with a null default" {
+	const raw = parseParams("(a: int32, xs?: number[], s?: string)", "optional1");
+	assert raw.length == 6;
+	assert raw[3] == "(number[]) | null";
+	assert raw[5] == "(string) | null";
+	const defs = getLastParsedDefaults();
+	assert defs.length == 3;
+	assert defs[0] == null;
+	assert defs[1] != null && defs[1].kind == NodeKind.NullLiteral;
+	assert defs[2] != null && defs[2].kind == NodeKind.NullLiteral;
+	assert getLastParamTypeExprs().length == 3;
+}
+
+test "an optional parameter without a type annotation keeps no type" {
+	const raw = parseParams("(x?)", "optional2");
+	assert raw[1] == "";
+	assert getLastParsedDefaults()[0].kind == NodeKind.NullLiteral;
+}
+
+test "an optional parameter already nullable keeps its type text" {
+	const raw = parseParams("(x?: string | null)", "optional3");
+	assert raw[1] == "string | null";
+}
+
+test "an optional parameter may be followed by another or by a rest parameter" {
+	assert paramErrors("(a?: int32, b?: int32)").length == 0;
+	assert paramErrors("(a?: int32, ...rest: int32[])").length == 0;
+}
+
+test "an optional parameter refuses an initializer" {
+	const errs = paramErrors("(x?: int32 = 1)");
+	assert errs.length == 1 && errs[0].indexOf("Parameter cannot have question mark and initializer") >= 0;
+}
+
+test "a required parameter after an optional one is refused" {
+	const errs = paramErrors("(x?: int32, y: int32)");
+	assert errs.length == 1 && errs[0].indexOf("A required parameter cannot follow an optional parameter") >= 0;
+}
+
+test "a rest parameter cannot be optional" {
+	const errs = paramErrors("(...xs?: int32[])");
+	assert errs.length == 1 && errs[0].indexOf("A rest parameter cannot be optional") >= 0;
+}
+
+test "a receiver cannot be optional" {
+	const errs = paramErrors("(this?: int32)");
+	assert errs.length == 1 && errs[0].indexOf("The 'this' parameter cannot be optional") >= 0;
+	const named = paramErrors("(this self?: int32)");
+	assert named.length == 1 && named[0].indexOf("The 'this' parameter cannot be optional") >= 0;
 }

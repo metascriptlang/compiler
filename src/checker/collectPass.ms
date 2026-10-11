@@ -12,6 +12,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { normalize } from "std/fs/path";
 import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
+import { forEachChild } from "../ast/visitor";
 import { callDecoratorDefers, callCheckExpr } from "./checkerCallbacks";
 import { mangleModuleName } from "../codegen/c/names";
 import { setOpByKey } from "../codegen/c/types";
@@ -694,6 +695,24 @@ function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string): S
 
 import { genericParamNamesOf } from "./types";
 
+function typeNamesAny(t: Node | null, names: string[]): boolean {
+	if (t == null) return false;
+	if (t.kind == NodeKind.Identifier && names.indexOf((t.data as IdentifierData).name) >= 0) return true;
+	let hit = false;
+	forEachChild(t, (c: Node): void => { if (!hit && typeNamesAny(c, names)) hit = true; });
+	return hit;
+}
+
+function signatureNamesAny(routine: Node, names: string): boolean {
+	const wanted = names.split(",");
+	if (typeNamesAny(routine.typeExpr, wanted)) return true;
+	if (routine.typeExprs == null) return false;
+	for (const t of routine.typeExprs) {
+		if (typeNamesAny(t, wanted)) return true;
+	}
+	return false;
+}
+
 function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
 	const member = body[memberIdx];
 	let builtinKind = "";
@@ -757,7 +776,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 			md.methodDefaults = newDefaults;
 		}
 	}
-	if (md.methodIsStatic && classGenerics != "" && !isGenericFn(md.methodFlags)) {
+	if (md.methodIsStatic && classGenerics != "" && !isGenericFn(md.methodFlags) && signatureNamesAny(methodNode, genericParamNamesOf(classGenerics))) {
 		md.methodFlags = md.methodFlags == "" ? `gen:${classGenerics}` : `${md.methodFlags}|gen:${classGenerics}`;
 	}
 	const fnType = createFunction([], [], inferredType());
@@ -855,7 +874,7 @@ export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	// resolved at use site in checkMemberExpr via synthetic symbols.
 	let mi = 0;
 	while (mi < d.enumMembers.length) {
-		const memberLoc = d.memberLocations != null && mi < d.memberLocations.length ? d.memberLocations[mi] : node.location;
+		const memberLoc = mi < d.memberLocations.length ? d.memberLocations[mi] : node.location;
 		const memberSym = makeSymbol(d.enumMembers[mi], SymbolKind.EnumMember, enumType, false);
 		memberSym.location = memberLoc;
 		sgRecordSym(ctx, memberLoc.line, memberLoc.column, memberLoc.column + d.enumMembers[mi].length, memberSym, enumType, SymbolKind.EnumMember, d.enumMembers[mi], d.enumName, true);
@@ -1182,7 +1201,7 @@ function collectPreludeNames(ctx: CheckerContext, imp: ImportDeclData, node: Nod
 	for (let i = 0; i < imp.importNames.length; i += 1) {
 		const name = imp.importNames[i];
 		const alias = imp.importAliases[i];
-		const loc = imp.nameLocations != null && i < imp.nameLocations.length ? imp.nameLocations[i] : node.location;
+		const loc = i < imp.nameLocations.length ? imp.nameLocations[i] : node.location;
 		const local = lookupLocal(ctx.table, alias);
 		if (local != null) {
 			if (reexport) exportSym(ctx, local);
@@ -1259,7 +1278,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			if (preludeSym != null) {
 				defineSymbol(ctx.table, preludeSym);
 			} else if (exportInfo != null) {
-				const nameLoc = d.nameLocations != null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
+				const nameLoc = i < d.nameLocations.length ? d.nameLocations[i] : node.location;
 				const primarySym = importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
 				if (primarySym.symbolKind == SymbolKind.Macro && exportInfo.converterTargetType != null) {
 					ctx.converterTargetTypes.set(primarySym, exportInfo.converterTargetType);
@@ -1425,7 +1444,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 						if (preludeReSym != null) {
 							defineSymbol(ctx.table, preludeReSym);
 						} else if (exportInfo != null) {
-							const reNameLoc = imp.nameLocations != null && i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
+							const reNameLoc = i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
 							const primaryNamed = importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
 							// Re-export parity: propagate extension-method dispatch via
 							// shared helper. Same path used by collectImport's primary

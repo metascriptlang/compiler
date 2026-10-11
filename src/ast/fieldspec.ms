@@ -402,7 +402,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(switchCase);
 	out.push(createNodeAt(NodeKind.UnreachableStmt, { unreachableMsg: "um" } as NodeData, makeLoc(17, 53)));
 	out.push(createNodeAt(NodeKind.MatchStmt, { matchStmtDisc: a, matchStmtCases: [matchCase] } as NodeData, makeLoc(17, 54)));
-	out.push(createNodeAt(NodeKind.ImportDecl, { importNames: ["a", "b"], importAliases: ["x", "y"], importSource: "std/fs", nameLocations: null as unknown as SourceLocation[] } as NodeData, makeLoc(17, 55)));
+	out.push(createNodeAt(NodeKind.ImportDecl, { importNames: ["a", "b"], importAliases: ["x", "y"], importSource: "std/fs", nameLocations: [] } as NodeData, makeLoc(17, 55)));
 	out.push(createNodeAt(NodeKind.ExportDecl, { exportedDecl: fnDecl } as NodeData, makeLoc(17, 56)));
 	out.push(createNodeAt(NodeKind.TypeAliasDecl, { aliasName: "TA", aliasType: "int32", aliasIsDistinct: true, aliasGenericParams: "<T>", discriminantName: "d", discriminantType: "string", variantKeys: ["A", "B"], variantTypes: ["{a}", "{b}"], nameLocation: pkLoc(8) } as NodeData, makeLoc(17, 57)));
 	out.push(createNodeAt(NodeKind.EnumDecl, { enumName: "E", enumMembers: ["A", "B"], enumValues: [1.5, -2.25], nameLocation: pkLoc(9), memberLocations: [pkLoc(10)], enumInits: [n1, null as unknown as Node] } as NodeData, makeLoc(17, 58)));

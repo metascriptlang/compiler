@@ -25,7 +25,7 @@ const HEAP = 32 * 1024;
 const BUDGET = 1_400_000;
 const LARGEST_COUNT = 60_000;
 const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
-const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13, rent: 14, clock: 15, returnData: 16, logKey: 17, event: 18, wide: 19, fullReturn: 20 };
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13, rent: 14, clock: 15, returnData: 16, logKey: 17, event: 18, wide: 19, fullReturn: 20, scratch: 21 };
 const MASK = 2n ** 64n - 1n;
 const SUMS = {
 	push: (n) => sum(n, (i) => (3n * i + 1n) * (i + 1n)),
@@ -83,6 +83,7 @@ async function run(op, count, accounts = [program]) {
 	return {
 		value: found.length === 0 ? null : BigInt(`0x${found[found.length - 1][1]}`),
 		first: found.length === 0 ? null : BigInt(`0x${found[0][1]}`),
+		values: found.map((entry) => BigInt(`0x${entry[1]}`)),
 		ok: !failed,
 		error: failed ? result.err().toString() : "",
 		units: Number(meta.computeUnitsConsumed()),
@@ -226,6 +227,33 @@ function namedFailure(label, outcome) {
 	check(`[${name}] 1,024 bytes of return data come back whole, with the program that set them, and leave the heap position at ${base} (${full.ok ? `${full.units} CU` : full.error})`,
 		full.ok && full.value === base);
 	console.log(`[${name}] per call: ${sizes.join(", ")}`);
+}
+
+{
+	const name = "scratch";
+	const HEAP_START = 0x300000000n;
+	const MON = 56n;
+	const base = (await run(OPS.request, 0)).value;
+	const room = BigInt(HEAP) - (base - HEAP_START);
+	for (const count of [0, 1, 2, 36, 100]) {
+		const n = BigInt(count);
+		const outcome = await run(OPS.scratch, count);
+		check(`[${name}] ${count} Mons of ${MON} bytes run (${outcome.ok ? `${outcome.units} CU` : outcome.error})`, outcome.ok);
+		if (!outcome.ok) continue;
+		const [seen, checksum, position] = outcome.values;
+		check(`[${name}] ${count} Mons start zeroed`, seen === 0n);
+		check(`[${name}] ${count} Mons read back what was written`, checksum === 2n * n * (n + 1n));
+		check(`[${name}] ${count} Mons take ${n * MON} bytes of the heap and nothing else (${position - base})`, position - base === n * MON);
+	}
+	const fits = Number(room / MON);
+	const last = await run(OPS.scratch, fits);
+	check(`[${name}] ${fits} Mons, the most the heap holds, run and take ${BigInt(fits) * MON} bytes (${last.ok ? `${last.units} CU` : last.error})`,
+		last.ok && last.values[2] - base === BigInt(fits) * MON);
+	const beyond = await run(OPS.scratch, fits + 1);
+	check(`[${name}] ${fits + 1} Mons are refused with InvalidArgument, not by the heap's abort (${beyond.error})`,
+		!beyond.ok && /InvalidArgument/.test(beyond.error) && beyond.named === null && beyond.units < 5000);
+	const huge = await run(OPS.scratch, 65535);
+	check(`[${name}] 65535 Mons are refused with InvalidArgument (${huge.error})`, !huge.ok && /InvalidArgument/.test(huge.error) && huge.named === null);
 }
 
 for (const [name, op] of Object.entries(OPS).filter(([name]) => name === "cells")) {

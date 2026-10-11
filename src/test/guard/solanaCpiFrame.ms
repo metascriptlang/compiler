@@ -1,9 +1,12 @@
 // GUARD-OS solana
 // The largest CPI shapes the std supports build for SBF inside the 4 KB frame: sixteen accounts
-// written at the call beside a 1 KB data buffer, a signed one, forty-five beside a one-byte buffer,
-// and the run-time lists behind invokeList (up to 64), commit, scheduleTask and requestRandomness.
-// RED MEANS: a CPI shape grew past the frame the SBF backend allows, or a helper stopped
-// building its accounts and data on the caller's stack.
+// written at the call beside a 1 KB data buffer, a signed one, the maximum of sixty-four written at
+// the call beside a one-byte buffer, and the run-time lists behind invokeList (up to 64), commit,
+// scheduleTask and requestRandomness. The account infos live in the fixed frame of the noinline
+// msSolInvokeMetas, so the caller's frame does not grow with the list; the 65th is refused in
+// solanaCpiAccountLimit.ms.
+// RED MEANS: a CPI shape grew past the frame the SBF backend allows, the infos moved back into the
+// caller's frame, or the 64-account maximum stopped building.
 import {
 	Account,
 	AccountMeta,
@@ -42,25 +45,17 @@ function sixteen(a: Account, b: Account): Result<uint64, ProgramError> {
 	);
 }
 
-function forty5(a: Account): Result<uint64, ProgramError> {
+function sixtyFour(a: Account): Result<uint64, ProgramError> {
 	let storage: uint8[1] = [];
 	return invoke(programId(), [
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
 	], storage, putU8(storage, 0, 1));
 }
 
@@ -130,7 +125,7 @@ function main(): void {
 	if (op == 3) { result = committed(a.value, b.value, c.value, op as int32); }
 	if (op == 4) { result = scheduledList(a.value, b.value, c.value); }
 	if (op == 5) { result = randomness(a.value, b.value, c.value, metas); }
-	if (op == 6) { result = forty5(a.value); }
+	if (op == 6) { result = sixtyFour(a.value); }
 	if (!result.ok) { failWith(result.error); }
 }
 main();

@@ -66,13 +66,13 @@ function bareTypeName(g: CGen, cName: string): string {
 	return bare != "" ? bare : cName;
 }
 
-function crossModuleCtorParamTypes(sym: Symbol): Type[] {
-	if (sym == null) return null as unknown as Type[];
+function crossModuleCtorParamTypes(sym: Symbol): Type[] | null {
+	if (sym == null) return null;
 	let dn = sym.declNode;
 	if ((dn == null || dn.kind != NodeKind.ClassDecl) && sym.symbolType != null && sym.symbolType.sym != null) {
 		dn = sym.symbolType.sym.declNode;
 	}
-	if (dn == null || dn.kind != NodeKind.ClassDecl) return null as unknown as Type[];
+	if (dn == null || dn.kind != NodeKind.ClassDecl) return null;
 	const body = (dn.data as ClassDeclData).classBody;
 	for (const member of body) {
 		if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
@@ -80,10 +80,10 @@ function crossModuleCtorParamTypes(sym: Symbol): Type[] {
 			return member.nodeType.typeChildren;
 		}
 	}
-	return null as unknown as Type[];
+	return null;
 }
 
-function ctorParamTypes(entry: CtorEntry | null, classSym: Symbol | null): Type[] {
+function ctorParamTypes(entry: CtorEntry | null, classSym: Symbol | null): Type[] | null {
 	if (entry != null && entry.fnType != null) return entry.fnType.typeChildren;
 	return crossModuleCtorParamTypes(classSym!);
 }
@@ -2254,7 +2254,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Variant struct → discriminated union: construct with tag + variant slot.
 		// C layouts differ (variant = small struct, union = tagged union with all
 		// variant slots) — a raw cast silently misaligns fields.
-		if (d.convType.kind == TypeKind.Union && d.convType.typeChildren != null) {
+		if (isTagCarriedUnion(d.convType)) {
 			const srcType = d.convExpr.nodeType;
 			let vi = 0;
 			// Checker-stamped slot wins: union variants are frequently anonymous,
@@ -2314,7 +2314,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${payload}, .present=true} : (${targetC}){0})`);
 			return;
 		}
-		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind != TypeKind.Union) {
+		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && !isTagCarriedUnion(d.convType)) {
 			const pvi = projSlot - 1;
 			ctx.results.push(`(${inner}).v${pvi}`);
 			return;
@@ -2396,7 +2396,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					const innerStruct = (litType != null && litType.kind == TypeKind.Ref) ? litType.typeReturn : litType;
 					ensureTypeInfoDef(g, cType, innerStruct);
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
-					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null as unknown as string[];
+					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null;
 					// Bare-NullLiteral keys are skipped by the assignment loop below and
 					// rely on the field being pre-zeroed; that's incompatible with Uninit.
 					let hasNullProp = false;

@@ -127,8 +127,17 @@ test "numeric lattice: a number goes into the one union member that holds it imp
 	assert errorCount("let i: int32 = 3;\nconst a: number | string = i;\nlet f: float32 = 1.5;\nlet b: number | string = \"x\";\nb = f;\n") == 0;
 	assert errorCount("let i: int32 = 3;\nconst a: int64 | number = i;\nfunction t(v: int64 | number): void {}\nt(i);\n") == 0;
 	assert hasError("let s: int16 = 2;\nconst a: float32 | number = s;\n", "implicit int16 conversion into 'float32 | number' fits both float32 and number — write an explicit 'as float32' or 'as number'");
-	assert hasError("let u: uint8 = 1;\nfunction t(v: int64 | uint32): void {}\nt(u);\n", "fits both int64 and uint32");
+	assert errorCount("let u: uint8 = 1;\nfunction t(v: int64 | uint32): void {}\nt(u);\n") == 0;
 	assert hasError("let d: float64 = 0.1;\nconst f: float32 | string = d;\n", "may lose precision");
+}
+
+test "numeric lattice: an unsigned integer takes the unsigned member over a wider signed one" {
+	const r = compileToC("const a: uint8 = 200;\nconst u: int64 | uint64 = a;\nconst b: uint16 = 300;\nconst w: int32 | uint64 = b;\nconst m: uint32 = 7;\nconst f: int64 | uint64 | float64 = m;\nconst n: int8 = -1;\nconst s: int64 | uint64 = n;\n");
+	assert r.ok, r.ok ? "" : r.error;
+	assert r.value.contains("=200ULL})"), r.value;
+	assert r.value.contains("=300ULL})"), r.value;
+	assert r.value.contains("=7ULL})"), r.value;
+	assert r.value.contains("=-1LL})"), r.value;
 }
 
 test "numeric lattice: a compound assignment converts its right operand as an assignment would" {

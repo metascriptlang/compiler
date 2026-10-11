@@ -193,3 +193,13 @@ test "nested match via function composition" {
 	assert seasonActivity(Season.Winter) == "ski (cold)";
 	assert seasonActivity(Season.Spring) == "garden (mild)";
 }
+
+test "a match assertion evaluates its discriminant once at the assertion site" {
+	let calls: int32 = 0;
+	function sample(): int32 {
+		calls += 1;
+		return 7;
+	}
+	assert match (sample()) { 7 => true, _ => false };
+	assert calls == 1;
+}

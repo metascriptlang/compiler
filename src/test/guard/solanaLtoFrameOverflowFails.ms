@@ -1,4 +1,4 @@
-// GUARD-OS solana --danger
+// GUARD-OS solana --release
 // GUARD-CHECK-FAIL overflows the maximum allowed frame space
 // GUARD-CHECK-FAIL SBF link failed
 import { instructionData, logU64 } from "std/solana";

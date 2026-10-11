@@ -239,12 +239,12 @@ export function closureStorageType(t: Type): Type {
 	return c;
 }
 
-export function createEnum(name: string, members: string[], values: number[]): Type {
+export function createEnum(name: string, members: string[], values: number[] = []): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Enum;
 	t.typeName = name;
 	t.typeNames = members;
-	if (values != null && values.length > 0) {
+	if (values.length > 0) {
 		const valTypes: Type[] = [];
 		let i = 0;
 		while (i < values.length) {
@@ -523,6 +523,7 @@ export function nullableUnionOf(members: Type[]): Type {
 		if (!dup) kept.push(p);
 	}
 	if (kept.length == 0) return nullType();
+	foldBooleanLiterals(kept);
 	if (kept.length == 1) {
 		const only = kept[0];
 		if (isMaybeWrappable(only) || only.kind == TypeKind.Union) return createMaybeType(only);
@@ -594,6 +595,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 		if (!dup) seen.push(k);
 	}
+	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
 	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
 	t.kind = TypeKind.Union;
@@ -641,6 +643,32 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 	}
 	return t;
+}
+
+// `true | false` is `boolean`: both literal members, and a `boolean` beside them, become one
+// `boolean` member at the first one's position. Returns whether it folded.
+function foldBooleanLiterals(members: Type[]): boolean {
+	let sawTrue = false;
+	let sawFalse = false;
+	for (const m of members) {
+		if (m.kind == TypeKind.BooleanLiteral) {
+			if (booleanLiteralValue(m)) sawTrue = true;
+			else sawFalse = true;
+		}
+	}
+	if (!sawTrue || !sawFalse) return false;
+	let kept = 0;
+	let placed = false;
+	for (let i = 0; i < members.length; i += 1) {
+		const m = members[i];
+		const isBoolean = m.kind == TypeKind.BooleanLiteral || m.kind == TypeKind.Boolean;
+		if (isBoolean && placed) continue;
+		members[kept] = isBoolean ? booleanType() : m;
+		if (isBoolean) placed = true;
+		kept += 1;
+	}
+	members.length = kept;
+	return true;
 }
 
 function extendsDeclaredSum(types: Type[]): boolean {
@@ -961,33 +989,58 @@ export function duVariantIndexOfType(unionType: Type | null, variantType: Type |
 // Maybe/nilable family — synthMaybeWrap and nullableLower own them, and their C
 // repr is not a tagged union) and all-string-literal unions (repr = msString).
 export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32 {
-	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
+	const hits = primitiveMemberHits(formal, exprType);
+	return hits.length == 1 ? hits[0] : -1;
+}
+
+// Every member a non-struct value matches; more than one is ambiguous.
+export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
+	const hits: int32[] = [];
+	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return hits;
 	const ek = exprType.kind;
 	const stringCarried = isAllStringLiteralUnion(exprType);
-	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !stringCarried) || ek == TypeKind.Null) return -1;
+	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !stringCarried) || ek == TypeKind.Null) return hits;
 	let allStrLit = true;
 	for (const child of formal.typeChildren) {
-		if (child == null || child.kind == TypeKind.Null) return -1;
+		if (child == null || child.kind == TypeKind.Null) return hits;
 		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
-	if (allStrLit) return -1;
-	let found: int32 = -1;
+	if (allStrLit) return hits;
+	if (isStringLike(exprType)) {
+		const slot = stringSlotOf(formal, exprType);
+		if (slot >= 0) hits.push(slot);
+		return hits;
+	}
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
-		if (!hit && stringCarried) {
-			hit = child.kind == TypeKind.String;
-		} else if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) {
-			hit = child.kind == ek
-				|| (child.kind == TypeKind.String && ek == TypeKind.StringLiteral);
-		}
-		if (hit) {
-			if (found >= 0) return -1;
-			found = vi;
-		}
+		if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) hit = child.kind == ek;
+		if (hit) hits.push(vi);
 		vi += 1;
 	}
-	return found;
+	return hits;
+}
+
+function stringSlotOf(formal: Type, value: Type): int32 {
+	let slot: int32 = -1;
+	let wide = false;
+	for (let i: int32 = 0; i < formal.typeChildren.length; i += 1) {
+		const child = formal.typeChildren[i];
+		if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral) continue;
+		if (slot < 0) slot = i;
+		if (child.kind == TypeKind.String) wide = true;
+	}
+	if (slot < 0 || wide) return slot;
+	if (value.kind == TypeKind.String) return -1;
+	const literals = value.kind == TypeKind.StringLiteral ? [value] : value.typeChildren;
+	for (const lit of literals) {
+		let held = false;
+		for (const child of formal.typeChildren) {
+			if (child.kind == TypeKind.StringLiteral && child.typeName == lit.typeName) held = true;
+		}
+		if (!held) return -1;
+	}
+	return slot;
 }
 
 export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
@@ -2195,7 +2248,7 @@ export function isSysType(t: Type): boolean {
 export function numberType(): Type { return getSysType(TypeKind.Number); }
 
 export function literalBase(t: Type): Type {
-	if (t.kind == TypeKind.StringLiteral) return stringType();
+	if (t.kind == TypeKind.StringLiteral || isAllStringLiteralUnion(t)) return stringType();
 	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
 	if (t.kind == TypeKind.EnumLiteral && t.typeReturn != null) return t.typeReturn;
 	return t;
@@ -2488,12 +2541,53 @@ export function typeofTagOf(t: Type | null): string {
 	if (t == null) return "object";
 	const v = peelTransparentInstance(t);
 	if (v.kind == TypeKind.Set) return typeofTagOf(setRepr(v));
-	if (isNumeric(v)) return "number";
+	if (isNumeric(v) || v.kind == TypeKind.Enum || v.kind == TypeKind.EnumLiteral) return "number";
 	if (v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral) return "string";
 	if (v.kind == TypeKind.Boolean || v.kind == TypeKind.BooleanLiteral) return "boolean";
 	if (v.kind == TypeKind.Function) return "function";
 	if (v.kind == TypeKind.BigInt) return "bigint";
 	return "object";
+}
+
+export function primitiveKindName(t: Type | null): string {
+	if (t == null) return "";
+	return match (peelTransparentInstance(t).kind) {
+		TypeKind.Int8 => "int8",
+		TypeKind.Int16 => "int16",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint8 => "uint8",
+		TypeKind.Uint16 => "uint16",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Uint64 => "uint64",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Char => "char",
+		TypeKind.CString => "cstring",
+		_ => "",
+	};
+}
+
+export function isPrimitiveKindName(s: string): boolean {
+	return match (s) {
+		"int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64" => true,
+		"float32" | "float64" | "char" | "cstring" => true,
+		_ => false,
+	};
+}
+
+// A value whose held kind no member tag answers: `unknown`, or a nullable
+// whose payload is itself a union, which keeps no tag for the payload member.
+export function holdsNoExactKind(t: Type): boolean {
+	const v = peelTransparentInstance(t);
+	if (isUnknownType(v)) return true;
+	if (!isMaybeType(v) || v.typeReturn == null) return false;
+	const payload = peelTransparentInstance(v.typeReturn!);
+	return isUnknownType(payload) || isMaybeType(payload) || isTagCarriedUnion(payload);
+}
+
+export function typeofNameMatches(t: Type, name: string): boolean {
+	return isPrimitiveKindName(name) ? primitiveKindName(t) == name : typeofTagOf(t) == name;
 }
 
 export function jsMemberKind(t: Type): string {
@@ -2535,6 +2629,24 @@ export function isArrayShaped(t: Type): boolean {
 
 export function isTypeofTag(s: string): boolean {
 	return s == "string" || s == "number" || s == "boolean" || s == "function" || s == "bigint" || s == "object";
+}
+
+function isTypeofResult(s: string): boolean {
+	return isTypeofTag(s) || s == "symbol" || s == "undefined";
+}
+
+export function typeofResultType(): Type {
+	const members: Type[] = [];
+	for (const tag of ["bigint", "boolean", "function", "number", "object", "string", "symbol", "undefined"]) members.push(createStringLiteral(tag));
+	return createUnionInOrder(members);
+}
+
+export function isTypeofResultType(t: Type | null): boolean {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null || t.typeChildren.length == 0) return false;
+	for (const m of t.typeChildren) {
+		if (m == null || m.kind != TypeKind.StringLiteral || !isTypeofResult(m.typeName)) return false;
+	}
+	return true;
 }
 
 // ===== Min Arity (Default Parameters) =====
@@ -3929,17 +4041,22 @@ function getPropertyInner(t: Type | null, name: string): Type {
 		}
 		// Search variants for the field — return type if unambiguous across variants
 		let foundType: Type | null = null;
-		let ambiguous = false;
+		const literals: Type[] = [];
+		let allLiterals = true;
 		for (const variant of t.typeChildren) {
 			if (variant == null) continue;
 			const ft = findFieldInVariant(variant, name);
 			if (ft == null) continue;
-			if (foundType == null) {
-				foundType = ft;
-			} else if (foundType.kind != ft.kind) {
-				ambiguous = true;
+			if (foundType == null) foundType = ft;
+			if (ft.kind != TypeKind.StringLiteral) {
+				allLiterals = false;
+				continue;
 			}
+			let seen = false;
+			for (const l of literals) { if (l.typeName == ft.typeName) seen = true; }
+			if (!seen) literals.push(ft);
 		}
+		if (allLiterals && literals.length > 1) return createUnionInOrder(literals);
 		if (foundType != null) return foundType;
 	}
 	// Enum member access: Color.Red → returns the Enum type
@@ -4228,6 +4345,14 @@ export function isIndexableMapType(t: Type | null): boolean {
 	return getBuiltinKind(t) == "IndexableMap";
 }
 
+export function isStdCollectionKind(kind: string): boolean {
+	return kind == "IndexableMap" || kind == "StdSet";
+}
+
+export function isStdCollection(t: Type | null): boolean {
+	return isStdCollectionKind(getBuiltinKind(t));
+}
+
 export const SIZE_NOT_COMPUTABLE: int32 = -3;
 
 // alignTo — round up offset to alignment boundary
@@ -4358,6 +4483,11 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 }
 
 function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
+	return structLayoutAt(tg, t, depth, -1);
+}
+
+// Size and field offsets share one traversal, including padding and erased fields.
+function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32): int32 {
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
@@ -4370,13 +4500,42 @@ function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 				const fieldAlign = alignOfTypeAt(tg, field, depth);
 				if (fieldAlign > maxAlign) maxAlign = fieldAlign;
 				offset = alignTo(offset, fieldAlign);
+				if (i == fieldIndex) return offset;
 				offset = offset + fieldSize;
 			}
+			if (i == fieldIndex) return offset;
 			i = i + 1;
 		}
 	}
 	if (offset == 0) return 0;
 	return alignTo(offset, maxAlign);
+}
+
+export function structLayoutType(t: Type): Type | null {
+	let cur = t;
+	for (let depth = 0; depth <= 16; depth += 1) {
+		if (cur.kind == TypeKind.Struct) return cur;
+		if (cur.kind == TypeKind.GenericInstance) {
+			const body = instanceLayoutBody(cur);
+			if (body == null || body == cur) return null;
+			cur = body;
+		} else if ((cur.kind == TypeKind.Alias || cur.kind == TypeKind.Distinct || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent) && cur.typeReturn != null) {
+			cur = cur.typeReturn;
+		} else {
+			return null;
+		}
+	}
+	return null;
+}
+
+export function offsetOfField(tg: TargetInfo, t: Type, field: string): int32 {
+	if (tg.ptrSize < 4) return SIZE_NOT_COMPUTABLE;
+	const body = structLayoutType(t);
+	if (body == null) return SIZE_NOT_COMPUTABLE;
+	for (let i = 0; i < body.typeNames.length; i += 1) {
+		if (body.typeNames[i] == field && i < body.typeChildren.length) return structLayoutAt(tg, body, 1, i);
+	}
+	return SIZE_NOT_COMPUTABLE;
 }
 
 function instanceLayoutBody(t: Type): Type | null {
@@ -4479,7 +4638,7 @@ test "createStruct" {
 }
 
 test "createEnum" {
-	const e = createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]);
+	const e = createEnum("Color", ["Red", "Green", "Blue"]);
 	assert e.kind == TypeKind.Enum;
 	assert e.typeName == "Color";
 	assert e.typeNames.length == 3;
@@ -4791,7 +4950,7 @@ test "sizeOfType primitives 64-bit" {
 
 test "an enum is stored in the narrowest width that holds its ordinals" {
 	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
-	assert sizeOfType(tg, createEnum("Two", ["A", "B"], null as unknown as number[])) == 1;
+	assert sizeOfType(tg, createEnum("Two", ["A", "B"])) == 1;
 	assert sizeOfType(tg, createEnum("Byte", ["A", "B"], [0, 255])) == 1;
 	assert sizeOfType(tg, createEnum("Word", ["A", "B"], [0, 300])) == 2;
 	assert alignOfType(tg, createEnum("Word", ["A", "B"], [0, 300])) == 2;
@@ -4802,7 +4961,7 @@ test "an enum is stored in the narrowest width that holds its ordinals" {
 
 test "an enum literal is sized by its enum" {
 	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
-	assert sizeOfType(tg, createEnumLiteral(createEnum("Two", ["A", "B"], null as unknown as number[]), "A")) == 1;
+	assert sizeOfType(tg, createEnumLiteral(createEnum("Two", ["A", "B"]), "A")) == 1;
 }
 
 test "sizeOfType primitives 32-bit" {
@@ -4926,6 +5085,25 @@ test "sizeOfType char before int64 follows the target alignment rule" {
 	const obj = createStruct("Head", ["c", "x"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int64)], true);
 	assert sizeOfType(wasm, obj) == 16;
 	assert sizeOfType(i386, obj) == 12;
+}
+
+test "field offsets share target padding with struct size" {
+	const i386: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "linux" };
+	const sbf: TargetInfo = { ptrSize: 8, floatSize: 8, cpu: "sbf", os: "solana" };
+	const nested = createStruct("Nested", ["c", "wide"], [createPrimitive(TypeKind.Uint8), createPrimitive(TypeKind.Uint64)], false);
+	const outer = createStruct("Outer", ["lead", "items", "tail"], [createPrimitive(TypeKind.Uint8), createSizedArray(nested, 2), createPrimitive(TypeKind.Uint8)], false);
+	assert offsetOfField(i386, nested, "wide") == 4;
+	assert offsetOfField(sbf, nested, "wide") == 8;
+	assert offsetOfField(i386, outer, "items") == 4;
+	assert offsetOfField(i386, outer, "tail") == 28;
+	assert sizeOfType(i386, outer) == 32;
+	assert offsetOfField(sbf, outer, "items") == 8;
+	assert offsetOfField(sbf, outer, "tail") == 40;
+	assert sizeOfType(sbf, outer) == 48;
+	assert offsetOfField(sbf, outer, "missing") < 0;
+	assert offsetOfField(sbf, numberType(), "missing") < 0;
+	const unavailable = createStruct("Unavailable", ["unknown", "tail"], [unknownType(), int32Type()], false);
+	assert offsetOfField(sbf, unavailable, "tail") < 0;
 }
 
 // ===== Maybe<T> + Nullable Pointer Tests =====

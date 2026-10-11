@@ -4,6 +4,8 @@ export LC_ALL=C
 
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 FLOOR_EXEMPT='^tools/'
+SOLANA_SDK='^(std/(solana|crypto|meta|serialize/json)|runtime/solana|tools/solana|examples/(escrow|anchorBench))/|^runtime/manual\.h$|^src/test/c/solana'
+SOLANA_COMPILER='^src/(checker|codegen/c|monomorphize)/|^src/module/cparse/target\.ms$|^src/compiler/(meta/|(buildConfig|cc|compile|defines|options|toolchain)\.ms$)'
 EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomorphize|parser|raiser|transform|utils)/|^src/compiler/(meta/|[^/]+\.ms$)|^src/index\.ms$|^(std|runtime|vendor)/'
 RULES=(
   'tools|^tools/'
@@ -11,6 +13,8 @@ RULES=(
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
   "tests,corpus|$EMITS"
+  "solana|$SOLANA_SDK|$SOLANA_COMPILER"
+  'guard|^(std|runtime)/solana/'
   'guard|^src/test/guard/'
   'corpus|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
@@ -18,9 +22,9 @@ RULES=(
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary suite hcr tests fmt corpus san guard"
-LADDER="build boundary suite hcr tests fmt corpus san guard"
-KNOWN_LANES="boundary suite hcr tests fmt corpus san guard"
+ORDER="tools build boundary suite hcr tests fmt corpus san guard solana"
+LADDER="build boundary suite hcr tests fmt corpus san guard solana"
+KNOWN_LANES="boundary suite hcr tests fmt corpus san guard solana"
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
@@ -34,7 +38,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests fmt corpus san guard
+  --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests fmt corpus san guard solana
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json
   --reuse        read a lane log that already ended instead of running that lane again
@@ -464,6 +468,7 @@ reds_of() {
       ;;
     corpus|san) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
     guard|hcr) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
+    solana) sed -n 's/^FAIL solana \([^:]*\):.*$/\1/p' "$log" ;;
     fmt) sed -nE 's/^(LOSSY|UNSTABLE|NO-FMT|UNREADABLE) (.*\.ms).*$/\2/p' "$log" ;;
   esac | sort -u
 }
@@ -845,7 +850,7 @@ emit_side() {
   local jobs scrub rows
   jobs=$(emit_width) || return $?
   mkdir -p "$2"
-  mapfile -t scrub < <(compgen -e | grep '^MSC' | sed 's/^/--unset=/')
+  mapfile -t scrub < <(compgen -e | grep '^MSC' | while read -r v; do printf -- '-u\n%s\n' "$v"; done)
   mapfile -t rows < <(awk '{ print NR, $0 }')
   [ "${#rows[@]}" -gt 0 ] || return 0
   printf '%s\n' "${rows[@]}" | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 \
@@ -983,7 +988,7 @@ FAKE
     printf '%s' "$key"
   }
   printf 'new\n' >std/probe.ms; $g commit -qam std
-  touch -d '1 hour ago' std/probe.ms src/test/corpus/programs/p.ms; : >"$d/mark"
+  touch -t "$(date -v-1H +%Y%m%d%H%M.%S 2>/dev/null || date -d '1 hour ago' +%Y%m%d%H%M.%S)" std/probe.ms src/test/corpus/programs/p.ms; : >"$d/mark"
   emit_sides "$sha" >/dev/null 2>&1 || { printf 'FAIL std swap: a plain std source change was not narrowed (%s)\n' "$whole"; bad=1; }
   [ -z "$(find "$CTL_WORK/std" "$CTL_WORK/src" -type f ! -newer "$d/mark")" ] \
     || { printf 'FAIL std swap: staged sources kept a change stamp an earlier staging could share\n'; bad=1; }
@@ -1319,28 +1324,28 @@ FAKE
 self_test() {
   local bad=0 cases got want log
   cases=$(cat <<'CASES'
-src/checker/checkPass.ms|build corpus suite tests
+src/checker/checkPass.ms|build corpus solana suite tests
 src/parser/parser.ms|build corpus fmt suite tests
 src/lexer/lexer.ms|build corpus fmt suite tests
-std/meta/node.ms|build corpus fmt suite tests
+std/meta/node.ms|build corpus fmt solana suite tests
 std/fs/index.ms|boundary build corpus suite tests
 vendor/miniz/miniz.c|boundary build corpus suite tests
 src/module/loader.ms|build corpus suite tests
-src/monomorphize/index.ms|build corpus suite tests
+src/monomorphize/index.ms|build corpus solana suite tests
 src/utils/path.ms|build corpus suite tests
 src/index.ms|boundary build corpus suite tests
 src/analyzer/inject.ms|build corpus guard san suite tests
 runtime/drc.h|boundary build corpus guard san suite tests
 runtime/hcr.c|boundary build corpus hcr suite tests
-src/codegen/c/expressions.ms|build corpus suite tests
+src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
-src/compiler/cc.ms|boundary build corpus suite tests
-src/compiler/compile.ms|boundary build corpus hcr suite tests
-src/compiler/meta/comptime.ms|build corpus suite tests
+src/compiler/cc.ms|boundary build corpus solana suite tests
+src/compiler/compile.ms|boundary build corpus hcr solana suite tests
+src/compiler/meta/comptime.ms|build corpus solana suite tests
 src/compiler/lsp/server.ms|build suite
 src/compiler/transam/query.ms|build suite
 src/compiler/package/install.ms|boundary build suite
-src/compiler/meta/hostTable.ms|boundary build corpus suite tests
+src/compiler/meta/hostTable.ms|boundary build corpus solana suite tests
 src/test/nativeBuildBoundary.ms|boundary build suite
 src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
@@ -1353,6 +1358,20 @@ src/test/native/programs/x.ms|build suite
 examples/hcrProbe/main.ms|build hcr suite
 tools/gate.sh|tools
 tools/syncLocalBinary.ms|build tools
+tools/solana/escrow.mjs|solana tools
+tools/solana/heapProbe.ms|build solana tools
+examples/escrow/program.ms|build solana suite
+examples/anchorBench/helloworld/program.ms|build solana suite
+examples/anchorBench/vault/program.ms|build solana suite
+src/test/c/solanaVaultHost.ms|build solana suite tests
+src/test/guard/solanaCpiFrame.ms|build guard suite
+src/codegen/js/expressions.ms|build corpus suite tests
+std/crypto/sha256.ms|build corpus solana suite tests
+runtime/manual.h|boundary build corpus guard san solana suite tests
+runtime/solana/host.c|boundary build corpus guard solana suite tests
+std/solana/core.cms|build corpus guard solana suite tests
+std/solana/test.cms|build corpus guard solana suite tests
+runtime/solana/solana.h|boundary build corpus guard solana suite tests
 docs/TESTING.md|
 src/test/known-red.json|
 CASES
@@ -1417,6 +1436,11 @@ CASES
   got=$(reds_of tools "$log" 1 | paste -sd'|' -)
   want="tools/gate.sh|tools/wt.sh"
   [ "$got" = "$want" ] || { printf 'FAIL reds tools: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  printf '%s\n' 'FAIL solana escrow-build: exit 1' 'FAIL solana heap-replay: exit 1' \
+    'FAIL solana std/solana/test.cms: no test result' >"$log"
+  got=$(reds_of solana "$log" 1 | paste -sd'|' -)
+  want="escrow-build|heap-replay|std/solana/test.cms"
+  [ "$got" = "$want" ] || { printf 'FAIL reds: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   rm -f "$log"
   got=$(printf 'key\t%s\tsrc/test/corpus/programs/%s\n' o1 100-file.ms o2 200-dir o3 630-escapes.ms o4 802-nested o5 803-up o6 804-dirty \
     | cat - <(printf 'ref\t\tsrc/test/corpus/programs/%s\n' '630-escapes.ms:"../../../' '802-nested/app/direct.ms:"../' '802-nested/main.ms:"./' '803-up/main.ms:"../') \
@@ -1694,6 +1718,69 @@ run_tools_lane() {
   return $rc
 }
 
+solana_check() {
+  local name=$1 rc
+  shift
+  "$@"; rc=$?
+  [ "$rc" -eq 0 ] || printf 'FAIL %s: exit %s\n' "$name" "$rc"
+  return "$rc"
+}
+
+solana_host_test() {
+  local entry=$1 name part rc
+  shift
+  name=$entry${1:+ $1}
+  part="$OUT/solana/$(printf '%s' "$name" | tr '/. =' '____').log"
+  env -u FORCE_COLOR NO_COLOR=1 "$CAND" test "$entry" "$@" >"$part" 2>&1; rc=$?
+  cat "$part"
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL solana %s: exit %s\n' "$name" "$rc"
+    return 1
+  fi
+  if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^ *Test Files +[0-9]' >/dev/null; then
+    printf 'FAIL solana %s: no test result\n' "$name"
+    return 1
+  fi
+}
+
+solana_replays() {
+  local dir=$1 rc=0
+  if ! command -v node >/dev/null 2>&1 || [ ! -d tools/solana/node_modules/litesvm ]; then
+    printf 'FAIL solana replay-deps: node or tools/solana/node_modules/litesvm missing\n'
+    return 1
+  fi
+  solana_check fields-build "$CAND" build tools/solana/accountValuesProbe.ms --os=solana --release --output="$dir/accountValues.so" \
+    && { solana_check fields-replay node tools/solana/accountValues.mjs "$dir/accountValues.so" || rc=1; } || rc=1
+  if solana_check escrow-build "$CAND" build examples/escrow/program.ms --os=solana --output="$dir/escrow.so" \
+    && solana_check idl-build "$CAND" build examples/escrow/idl.cms --output="$dir/escrow-idl" \
+    && solana_check idl-run "$dir/escrow-idl" >"$dir/escrow-idl.json"; then
+    solana_check escrow-replay node tools/solana/escrow.mjs "$dir/escrow.so" "$dir/escrow-idl.json" || rc=1
+  else
+    rc=1
+  fi
+  solana_check multisig-build "$CAND" build examples/anchorBench/multisig/program.ms --os=solana --release --output="$dir/multisig.so" \
+    && { solana_check multisig-oncurve-replay env BENCH_REFUSALS=1 node tools/solana/anchorBench.mjs "multisig:std:anchor:$dir/multisig.so" || rc=1; } || rc=1
+  if solana_check heap-build "$CAND" build tools/solana/heapProbe.ms --os=solana --output="$dir/heapProbe.so"; then
+    solana_check heap-replay node tools/solana/heapExhausted.mjs "$dir/heapProbe.so" || rc=1
+  else
+    rc=1
+  fi
+  return $rc
+}
+
+run_solana_lane() {
+  local dir="$OUT/solana" rc=0 entry
+  mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
+  for entry in std/solana/test.cms std/solana/index.cms std/solana/vrf.ms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
+    examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
+    solana_host_test "$entry" || rc=1
+  done
+  solana_host_test std/solana/accountCodecTest.ms --target=js || rc=1
+  if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^tools\/solana\//{f=1} END{exit !f}' "$OUT/why"; then
+    solana_replays "$dir" || rc=1
+  fi
+  return $rc
+}
 
 part_of() { printf '%s/%s.%s.part' "$OUT" "$1" "$(printf '%s' "$2" | tr '/.' '__')"; }
 
@@ -1930,6 +2017,7 @@ lane_body() {
     tests|suite) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
     guard) bounded run_sharded_lane guard GUARD_SHARD src/test/guard/run.ms "${GATE_GUARD_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     hcr) bounded run_sharded_lane hcr HCR_SHARD src/test/hcr/run.ms "${GATE_HCR_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
+    solana) with_slot bounded run_solana_lane >"$log" 2>&1; rc=$? ;;
     boundary|corpus|san) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
@@ -1940,7 +2028,7 @@ lane_body() {
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
-PHASES=("build" "tools boundary suite hcr tests fmt" "corpus guard" "san")
+PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "solana")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0

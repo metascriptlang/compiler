@@ -2,7 +2,6 @@ import {
 	Account,
 	InstructionAccount,
 	createProgramAccountSeeded,
-	keysEqual,
 	putPubkey,
 	putU8,
 } from "./core";
@@ -18,7 +17,6 @@ import {
 	findAt,
 	ownProgram,
 	seedBytes,
-	seedKey,
 	tableAddress,
 } from "./seed";
 
@@ -96,32 +94,3 @@ export function associatedTokenAddress(
 	return findAddress(seeds, bytesAddress(associatedProgram.bytes));
 }
 
-export function tokenMintMatches(token: uint64, expected: uint64): Result<void, ProgramError> {
-	if (!keysEqual(token + 80, expected)) { return Result.err(ProgramError.constraintTokenMint()); }
-	return Result.ok(null);
-}
-
-export function tokenAuthorityMatches(token: uint64, expected: uint64): Result<void, ProgramError> {
-	if (!keysEqual(token + 112, expected)) { return Result.err(ProgramError.constraintTokenOwner()); }
-	return Result.ok(null);
-}
-
-export function associatedMatches(
-	token: uint64,
-	wallet: uint64,
-	mint: uint64,
-): Result<void, ProgramError> {
-	if (!keysEqual(token + 112, wallet)) { return Result.err(ProgramError.constraintTokenOwner()); }
-	const tokenProgram = mint + 32;
-	if (!keysEqual(tokenProgram, bytesAddress(TOKEN_PROGRAM_ID.bytes)) &&
-		!keysEqual(tokenProgram, bytesAddress(TOKEN_2022_PROGRAM_ID.bytes))) {
-		return Result.err(ProgramError.incorrectProgramId());
-	}
-	const seeds: SeedSlice[3] = [seedKey(wallet), seedKey(tokenProgram), seedKey(mint)];
-	const associatedProgram = ASSOCIATED_TOKEN_PROGRAM_ID;
-	const derived = try findAddress(seeds, bytesAddress(associatedProgram.bytes));
-	if (!keysEqual(bytesAddress(derived.key.bytes), token)) {
-		return Result.err(ProgramError.constraintAssociated());
-	}
-	return Result.ok(null);
-}

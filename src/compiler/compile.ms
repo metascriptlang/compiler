@@ -63,7 +63,7 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -3102,6 +3102,8 @@ setGlobalHookOwners(sharedHookOwners);
 	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
 	const hcrImageSlots: int32[] = [];
 	let hcrCoreSlot: int32 = -1;
+	let dispatcherSource = "";
+	let dispatcherSlot: int32 = -1;
 	if (hcrImages) {
 		const coreModules: string[] = [];
 		for (const mp of aliveModules) {
@@ -3120,13 +3122,15 @@ setGlobalHookOwners(sharedHookOwners);
 		}
 	} else {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		pushDispatcherJob(cJobs, oSlots, "_dispatch", genProjectDispatcher(
+		dispatcherSource = genProjectDispatcher(
 			aliveModules,
 			entryPath,
 			opts.targetOs,
 			opts.appMode == "lib" || opts.appMode == "staticlib",
 			moduleOutputs,
-		), allFlags, opts);
+		);
+		dispatcherSlot = oSlots.length;
+		pushDispatcherJob(cJobs, oSlots, "_dispatch", dispatcherSource, allFlags, opts);
 	}
 
 	// DISPATCH + COLLECT — parallel cc over the runtime thread pool, publish
@@ -3231,7 +3235,24 @@ setGlobalHookOwners(sharedHookOwners);
 			throw new Error(BUILD_STOPPED);
 		}
 	} else if (opts.targetOs == "solana") {
-		const linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
+		let linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
+		if (!linkRes.ok && dispatcherSlot >= 0 && reportsSbfFrameOverflow(linkRes.error)) {
+			printDiag(`${yellow("note")}: the entry frame overflowed with MsMain inlined; rebuilding MsMain out of line`);
+			const retryJobs: ModuleCompileJob[] = [];
+			const retrySlots: string[][] = [];
+			pushDispatcherJob(retryJobs, retrySlots, "_dispatch", dispatcherSource, appendFlag(allFlags, SBF_MAIN_NOINLINE_FLAG), opts);
+			const retryCodes = dispatchCompileJobs(retryJobs, opts.mode, opts.ccCompiler, opts.ccBinary, true);
+			for (const code of retryCodes) {
+				if (code != 0) {
+					printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
+					throw new Error(BUILD_STOPPED);
+				}
+			}
+			const retried = retryJobs.length > 0 ? retryJobs[0].oFile : retrySlots[0][0];
+			const stale = oSlots[dispatcherSlot][0];
+			oFiles = oFiles.map((o: string): string => o == stale ? retried : o);
+			linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
+		}
 		if (!linkRes.ok) {
 			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);

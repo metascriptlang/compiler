@@ -39,10 +39,10 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
-import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
+import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
+import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
@@ -2573,6 +2573,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		const hasGuard = cd.caseGuard != null;
 		for (const p of cd.casePatterns) {
 			if (p.kind == NodeKind.Identifier) {
+				if (refusesTypeArm(ctx, p, d.matchStmtDisc)) continue;
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
@@ -2586,7 +2587,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 					coveredMembers.push(sd.value);
 				}
 				if (p.kind == NodeKind.BooleanLiteral && !hasGuard) coveredMembers.push((p.data as BooleanLiteralData).boolValue ? "true" : "false");
-				checkExpr(ctx, p, discType);
+				checkExpr(ctx, p, kindArmHandled(ctx, d.matchStmtDisc, p) ? null : discType);
 			}
 		}
 
@@ -2680,7 +2681,7 @@ function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Typ
 	noteDefaultCheckedAtDeclaration(def);
 }
 
-export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[], defaults: Node[] | null = null): Symbol[] {
+export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null, defaults: Node[] | null = null): Symbol[] {
 	const paramSyms: Symbol[] = [];
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
@@ -3025,7 +3026,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		markExpansion(ctx, stmt, expansionOf(ctx, stmt, sym.modulePath));
 		call.kind = expanded.kind;
 		call.data = expanded.data;
-		if (expanded.typeArg != "") call.typeArg = expanded.typeArg;
+		call.typeArg = expanded.typeArg;
 		if (expanded.location != null) call.location = expanded.location;
 		call.nodeType = null as unknown as Type;
 		call.resolvedSym = null;
@@ -3089,7 +3090,6 @@ function reportUnusedImports(ctx: CheckerContext, program: Node): void {
 		}
 		if (importNode.kind != NodeKind.ImportDecl) continue;
 		const imp = importNode.data as ImportDeclData;
-		if (imp.nameLocations == null) continue;
 		for (let ii = 0; ii < imp.importAliases.length; ii += 1) {
 			const alias = imp.importAliases[ii];
 			if (alias.length == 0) continue;
@@ -3756,7 +3756,7 @@ function checkProgramCore(
 	runThreePasses(ctx, program);
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
-	stampHeaderPaths(ctx);
+	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
 	checkViewBorrows(ctx, program);
@@ -3884,7 +3884,7 @@ export function checkProgramWithRegistryCancellable(
 
 // Register callbacks at module load time
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
-registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
+registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
 registerSelfReadType(selfReadType);
 registerLaterDeclarationNote(laterDeclarationNote);
@@ -4730,7 +4730,7 @@ test "index signature in function parameter" {
 }
 
 test "index signature as function return" {
-	assert checkOk("function f(): { [key: string]: number } { return null as unknown as Map<string, number>; }");
+	assert checkOk("function f(): { [key: string]: number } { return new Map<string, number>(); }");
 }
 
 test "index signature with trailing semicolon" {

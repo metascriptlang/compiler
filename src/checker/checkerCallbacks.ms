@@ -7,7 +7,7 @@ import { SourceLocation } from "../ast/node";
 
 type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null) => void;
 type StmtCheckerFn = (ctx: CheckerContext, node: Node) => void;
-type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]) => Symbol[];
+type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null) => Symbol[];
 type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation) => Symbol | null;
 type EvalComptimeBlockFn = (node: Node, ctx: CheckerContext) => Node;
 type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) => Node;
@@ -25,7 +25,7 @@ let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedTyp
 let stmtCheckerFn: StmtCheckerFn = (ctx: CheckerContext, node: Node): void => {
 };
 
-let bodyCheckerFn: BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => {
+let bodyCheckerFn: BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => {
 	return [];
 };
 
@@ -75,7 +75,7 @@ export function callCheckStmt(ctx: CheckerContext, node: Node): void {
 	stmtCheckerFn(ctx, node);
 }
 
-export function callCheckFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] {
+export function callCheckFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] {
 	return bodyCheckerFn(ctx, sym, params, body, paramLocs);
 }
 

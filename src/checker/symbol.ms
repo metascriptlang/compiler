@@ -1,7 +1,7 @@
 import { Node, NodeKind, ClassDeclData, ActorDeclData, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
 export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
-import { IdentCache, createIdentCache, findIdentId, getIdentId } from "./idents";
+import { IdentCache, createIdentCache, findIdentId, getIdentId, identName } from "./idents";
 
 // The lifted constructor's name. Read by reachability (DCE marking),
 // methodToFunction (which creates it) and the C backend (call + proto sites) —
@@ -113,7 +113,7 @@ export function registerCtorInit(classSym: Symbol, className: string, fnType: Ty
 
 export function getCtorParamTypes(classSym: Symbol): Type[] {
 	const fnType = ctorFnTypeOf(classSym);
-	return fnType != null ? fnType.typeChildren : null as unknown as Type[];
+	return fnType != null ? fnType.typeChildren : [];
 }
 
 export function ctorFnTypeOf(classSym: Symbol): Type | null {
@@ -122,7 +122,7 @@ export function ctorFnTypeOf(classSym: Symbol): Type | null {
 	while (sym != null && depth < 64) {
 		const decl = classDeclNodeOf(sym);
 		if (decl == null) return null;
-		let body: Node[] = null as unknown as Node[];
+		let body: Node[] | null = null;
 		if (decl.kind == NodeKind.ClassDecl) {
 			body = (decl.data as ClassDeclData).classBody;
 		} else if (decl.kind == NodeKind.ActorDecl) {
@@ -387,6 +387,20 @@ export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
 	const out: Symbol[] = [];
 	for (const sym of scope.symbols.values()) {
 		out.push(sym);
+	}
+	return out;
+}
+
+// Module-scope names (as written there, so an `import { X as Y }` gives `Y`) with their symbols.
+export function moduleScopeNamed(table: SymbolTable): { name: string, sym: Symbol }[] {
+	let scope = table.current;
+	while (scope != null && scope.scopeKind != ScopeKind.Module) {
+		scope = scope.parent;
+	}
+	const out: { name: string, sym: Symbol }[] = [];
+	if (scope == null) return out;
+	for (const entry of scope.symbols.entries) {
+		out.push({ name: identName(table.identCache, entry.key), sym: entry.value });
 	}
 	return out;
 }

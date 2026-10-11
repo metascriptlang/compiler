@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -12,19 +12,19 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { adoptLiteralArms, adoptLiteralTo, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
+import { adoptLiteralArms, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
-import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
+import { bindFromExplicitTypeArgs, builtinTypeNamed, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
+import { SymbolFlag, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
+import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
@@ -477,6 +477,31 @@ function genericArgOrder(ctx: CheckerContext, args: Node[], isGeneric: boolean):
 	return order;
 }
 
+// A static extension names its receiver by text, and an alias of a struct or enum is a
+// transparent wrapper, as in the reference's type identity, so the receiver written at the
+// call and the receiver an extension declares match when both reach the same canonical type.
+function canonicalReceiverName(ctx: CheckerContext, ownerModule: string, name: string): string {
+	const sym = lookupSymbol(pickBodyCtx(ownerModule, ctx).table, name);
+	let t = sym != null ? sym.symbolType : null;
+	if (t == null) return name;
+	while (t.kind == TypeKind.Alias || t.kind == TypeKind.Ref) {
+		if (t.typeReturn == null) throw new Error("internal: '" + t.typeName + "' has no target for static extension receiver '" + name + "'");
+		t = t.typeReturn;
+	}
+	return (t.kind == TypeKind.Struct || t.kind == TypeKind.Enum) && t.typeName != "" ? t.typeName : name;
+}
+
+function staticExtsOfReceiver(ctx: CheckerContext, exts: ExtensionMethod[], receiverName: string): ExtensionMethod[] {
+	const want = canonicalReceiverName(ctx, ctx.modulePath, receiverName);
+	const results: ExtensionMethod[] = [];
+	for (const e of exts) {
+		if (!e.isStatic) continue;
+		const owner = e.sym != null ? e.sym.modulePath : "";
+		if (canonicalReceiverName(ctx, owner, e.receiverTypeName) == want) results.push(e);
+	}
+	return results;
+}
+
 function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
 	const sym = obj.resolvedSym;
 	if (sym == null) return false;
@@ -670,10 +695,22 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 		const expectedType = paramTypes != null && argIdx + defaultOffset < paramTypes.length ? paramTypes[argIdx + defaultOffset] : null;
 		const diagnosticMark = defCtx.errors.length;
 		callCheckExpr(defCtx, cloned, expectedType);
-		const fitted = expectedType != null ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
+		const fitted = expectedType != null && !hasGenericParams(expectedType) ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.length = diagnosticMark;
 		args.push(fitted);
 		argIdx = argIdx + 1;
+	}
+}
+
+// A callee with no declaration (a value of function type) has no default nodes, so an
+// omitted optional argument is the null its nullable parameter type carries.
+function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[], loc: SourceLocation): void {
+	while (args.length < paramTypes.length) {
+		const expected = paramTypes[args.length];
+		if (!isMaybeType(expected) && !unionHasMemberOfKind(expected, TypeKind.Null)) return;
+		const lit = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, loc);
+		callCheckExpr(ctx, lit, expected);
+		args.push(fitNode(ctx, lit, expected, lit.nodeType));
 	}
 }
 
@@ -682,7 +719,7 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
 function declaredDefaults(defSym: Symbol | null): Node[] | null {
 	if (defSym == null) return null;
-	if (defSym.defaultParams != null && defSym.defaultParams.length > 0) return defSym.defaultParams;
+	if (defSym.defaultParams.length > 0) return defSym.defaultParams;
 	if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
 		const declData = defSym.declNode.data as FunctionDeclData;
 		if (declData.fnDefaults != null) return declData.fnDefaults;
@@ -698,7 +735,7 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	const fnDefaults = declaredDefaults(defSym);
 	// Pass parameter types so default expressions get correct type hints
 	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
-	let paramTypes: Type[] = null as unknown as Type[];
+	let paramTypes: Type[] = [];
 	let paramNames: string[] | null = null;
 	if (defSym != null && defSym.symbolType != null && defSym.symbolType.typeChildren != null) {
 		paramTypes = defSym.symbolType.typeChildren;
@@ -859,7 +896,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// closure args see concrete types — Phase C parity with checkCallExpr).
 	// Otherwise use struct field types as expected (positional initialization).
 	const hasCtor = d.newCallee.resolvedSym != null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor);
-	let ctorFormalTypes: Type[] = null as unknown as Type[];
+	let ctorFormalTypes: Type[] = [];
 	if (hasCtor && d.newCallee.resolvedSym != null) {
 		const rawCtorTypes = getCtorParamTypes(d.newCallee.resolvedSym);
 		if (rawCtorTypes != null && rawCtorTypes.length > 0) {
@@ -937,12 +974,11 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		if (ctorEntry != null && ctorEntry.fnType != null && ctorEntry.fnType.typeChildren != null) {
 			fillDefaults(ctx, d.newArguments, ctorEntry.defaults,
 				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren, classModule, ctorEntry.fnType.typeNames);
-		} else if (d.newCallee.resolvedSym != null && d.newCallee.resolvedSym.defaultParams != null
-				&& d.newCallee.resolvedSym.defaultParams.length > 0) {
+		} else if (d.newCallee.resolvedSym != null && d.newCallee.resolvedSym.defaultParams.length > 0) {
 			// Path 2: non-generic constructors — defaults on class sym
 			const defaults = d.newCallee.resolvedSym.defaultParams;
 			const ctorType = ctorFnTypeOf(d.newCallee.resolvedSym);
-			const ctorParamTypes = ctorType != null ? ctorType.typeChildren : null as unknown as Type[];
+			const ctorParamTypes = ctorType != null ? ctorType.typeChildren : [];
 			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule, ctorType != null ? ctorType.typeNames : null);
 		}
 	}
@@ -1164,8 +1200,47 @@ export function keepFoldedType(node: Node, expanded: Node): void {
 	node.flags = node.flags.incl(NodeFlag.Folded);
 	node.nodeType = expanded.nodeType;
 }
+function isBareName(text: string): boolean {
+	return text != "" && text.indexOf("<", 0) < 0 && text.indexOf("[", 0) < 0 && text.indexOf(" ", 0) < 0 && text.indexOf(".", 0) < 0;
+}
+
+// The name a module-scope type symbol gives `bound` (a private type reached through an exported alias).
+function visibleNameOf(ctx: CheckerContext, bound: Type): string {
+	for (const entry of moduleScopeNamed(ctx.table)) {
+		if (!isTypeSymbol(entry.sym)) continue;
+		ensureShaped(entry.sym, ctx);
+		if (entry.sym.symbolType != null && sameType(entry.sym.symbolType, bound)) return entry.name;
+	}
+	return "";
+}
+
+// A macro replacement owns its type arguments as bound typed operands: the callee
+// `base<operands>` is lowered here to the ordinary explicit generic call `base<T>(...)`.
+function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boolean {
+	const callee = d.callee;
+	if (callee.kind != NodeKind.TypeGeneric) return true;
+	const g = callee.data as TypeGenericData;
+	const spelled: string[] = [];
+	for (const operand of g.typExprArgs) {
+		const bound = operand.nodeType;
+		if (bound == null) {
+			addError(ctx, "a generic callee's type operand carries no bound type (a macro must pass getTypeArg())", operand.location.line, operand.location.column);
+			return false;
+		}
+		const written = monoConcreteTypeName(bound);
+		const seen = isBareName(written) && lookupSymbol(ctx.table, written) == null ? visibleNameOf(ctx, bound) : "";
+		const name = seen != "" ? seen : written;
+		spelled.push(name);
+	}
+	d.callee = g.typExprBase;
+	d.callee.location = callee.location;
+	node.typeArg = spelled.join(", ");
+	return true;
+}
+
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
+	if (!lowerTypedCallee(ctx, node, d)) return errorType();
 	if (d.callee == null) {
 		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
 		return errorType();
@@ -1204,7 +1279,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (d.arguments.length < expectedCount) {
 			const owner = constructorDeclaringClass(parentSym) ?? parentSym;
 			const ownCtor = ctorFnTypeOf(parentSym);
-			if (owner.defaultParams != null && owner.defaultParams.length > 0) {
+			if (owner.defaultParams.length > 0) {
 				fillDefaults(ctx, d.arguments, owner.defaultParams, owner.defaultParams.length, 0, ctorParamTypes, owner.modulePath, ownCtor != null ? ownCtor.typeNames : null);
 			}
 		}
@@ -1309,7 +1384,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			node.kind = expandedValue.kind;
 			node.data = expandedValue.data;
-			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+			node.typeArg = expandedValue.typeArg;
 			if (expandedValue.location != null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;
@@ -1366,8 +1441,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object);
 				let filtered = filterExtsByReceiverType(allByName, objType);
-				if (filtered.length == 0 && isStaticAccess && me.object.resolvedSym != null) {
-					filtered = filterStaticExtsByReceiverName(allByName, me.object.resolvedSym.name);
+				if (isStaticAccess && me.object.resolvedSym != null) {
+					for (const ext of staticExtsOfReceiver(ctx, allByName, me.object.resolvedSym.name)) {
+						if (filtered.indexOf(ext) < 0) filtered.push(ext);
+					}
 				}
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
@@ -1772,6 +1849,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			if (calleeNameForDef != "") {
 				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length, 0);
 			}
+			fillNullableTail(ctx, d.arguments, calleeType.typeChildren, node.location);
 		}
 		relateCallArgs(ctx, node, calleeType!, argTypes, isActorMethodCall);
 		// On-demand generic instantiation for direct calls (transitive
@@ -3342,7 +3420,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 	for (const cand of cands) {
 		const candType = cand.symbolType;
 		if (candType == null || candType.kind != TypeKind.Function) continue;
-		const score = scoreCandidateWithSkip(candType.typeChildren, baseArgs, getMinArity(candType), null as unknown as boolean[]);
+		const score = scoreCandidateWithSkip(candType.typeChildren, baseArgs, getMinArity(candType));
 		if (score.exactMatches < 0) continue;
 		const cmp = best == null ? 1 : cmpCandidates(score, bestScore, candType, best.symbolType);
 		if (cmp > 0) {
@@ -4489,9 +4567,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// where Buffer is `type Buffer = string` — objType resolves to string, but
 		// the extension is registered as `this typeof Buffer`).
 		if (ext == null && isStaticClassAccess && d.object.resolvedSym != null) {
-			const symName = d.object.resolvedSym.name;
-			const aliasType = createTypeRef(symName);
-			ext = findFirstMatchingExt(allByName, aliasType);
+			const sameReceiver = staticExtsOfReceiver(ctx, allByName, d.object.resolvedSym.name);
+			if (sameReceiver.length > 0) ext = sameReceiver[0];
 		}
 		if (ext != null) {
 			// Direct sym link — no name-based lookup needed
@@ -4967,6 +5044,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 						continue;
 					}
 				}
+				if (refusesTypeArm(ctx, p, d.matchDisc)) continue;
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
@@ -4978,10 +5056,12 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 				// Tier 2: collect string literal patterns for exhaustiveness
 				if (patternKind == NodeKind.StringLiteral && !hasGuard) { coveredName = (p.data as StringLiteralData).value; covers = true; }
 				if (patternKind == NodeKind.BooleanLiteral && !hasGuard) { coveredName = (p.data as BooleanLiteralData).boolValue ? "true" : "false"; covers = true; }
+				const errorsBeforeCheck = ctx.errors.length;
+				if (kindArmHandled(ctx, d.matchDisc, p)) { callCheckExpr(ctx, p, null); continue; }
 				callCheckExpr(ctx, p, discType);
 				const errorsBeforePattern = ctx.errors.length;
-				if (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
-					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral) {
+				if (errorsBeforePattern == errorsBeforeCheck && (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
+					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral)) {
 					checkSwitchCase(ctx, d.matchDisc, p);
 				}
 				if (covers && ctx.errors.length == errorsBeforePattern) coveredMembers.push(coveredName);
@@ -5176,6 +5256,27 @@ export function estimateExprEndCol(node: Node): int32 {
 		},
 		_ => col + 1,
 	};
+}
+
+export function refusesTypeArm(ctx: CheckerContext, p: Node, disc: Node): boolean {
+	const name = (p.data as IdentifierData).name;
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym == null ? builtinTypeNamed(ctx, name) == null : !isTypeSymbol(sym)) return false;
+	const kindTest = sym == null && (isPrimitiveKindName(name) || isTypeofTag(name))
+		? `; test the kind with typeof ${referenceText(disc)} === "${name}"` : "";
+	addError(ctx, `'${name}' only refers to a type, but is being used as a value here: a match arm compares values, so it cannot test which type a value holds${kindTest}`, p.location.line, p.location.column);
+	p.nodeType = errorType();
+	return true;
+}
+
+function referenceText(n: Node): string {
+	if (n.kind == NodeKind.Identifier) return (n.data as IdentifierData).name;
+	if (n.kind == NodeKind.MemberExpr) {
+		const md = n.data as MemberExprData;
+		const head = referenceText(md.object);
+		return head == "x" ? "x" : head + "." + md.property;
+	}
+	return "x";
 }
 
 // Detect duplicate unguarded match patterns (reference parity: checkForOverlap).

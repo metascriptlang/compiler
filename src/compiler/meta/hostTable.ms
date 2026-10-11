@@ -1258,7 +1258,6 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 	];
 	// Deliberately dead — each needs work before it can come off this list.
 	const knownDead: string[] = [
-		"msStringSubstring",                              // clamp semantics differ from byteSlice
 		"msStringParseFloat", "msStringParseInt",         // parsing not in the shared tier
 		"msStringFromCodePoint",                          // needs a codepoint-to-UTF8 encoder
 	];

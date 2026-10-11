@@ -1,0 +1,27 @@
+export extern function accountByteArray(size: int32): uint8[] from "new Array(#).fill(0)";
+
+@emit("const msSolAccountFloatWord = new DataView(new ArrayBuffer(8));");
+
+export function accountFloat32FromBits(bits: uint32): float32 {
+	@emit(`msSolAccountFloatWord.setUint32(0, ${bits}, true);
+	return msSolAccountFloatWord.getFloat32(0, true);`);
+	unreachable;
+}
+
+export function accountFloat64FromBits(bits: uint64): float64 {
+	@emit(`msSolAccountFloatWord.setBigUint64(0, ${bits}, true);
+	return msSolAccountFloatWord.getFloat64(0, true);`);
+	unreachable;
+}
+
+export function accountFloat32Bits(value: float32): uint32 {
+	@emit(`msSolAccountFloatWord.setFloat32(0, ${value}, true);
+	return msSolAccountFloatWord.getUint32(0, true);`);
+	unreachable;
+}
+
+export function accountFloat64Bits(value: float64): uint64 {
+	@emit(`msSolAccountFloatWord.setFloat64(0, ${value}, true);
+	return msSolAccountFloatWord.getBigUint64(0, true);`);
+	unreachable;
+}

@@ -2853,7 +2853,6 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	// ImportDecl: classify each imported name by its resolved symbol kind
 	if (node.kind == NodeKind.ImportDecl) {
 		const imp = node.data as ImportDeclData;
-		if (imp.nameLocations == null) return;
 		for (let ii = 0; ii < imp.importNames.length; ii += 1) {
 			const name = imp.importNames[ii];
 			if (ii >= imp.nameLocations.length) continue;
@@ -2949,7 +2948,7 @@ test "function with params" {
 
 test "enum" {
 	const members: string[] = ["A", "B"];
-	const t = createEnum("Color", members, null as unknown as number[]);
+	const t = createEnum("Color", members);
 	assert sgTypeToString(t) == "Color";
 }
 
@@ -3271,7 +3270,7 @@ test "object properties with prefix" {
 
 test "enum members" {
 	const members: string[] = ["Red", "Green", "Blue"];
-	const enumType = createEnum("Color", members, null as unknown as number[]);
+	const enumType = createEnum("Color", members);
 	const pr = parseSource("const a = 1;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);

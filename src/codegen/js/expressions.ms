@@ -30,7 +30,9 @@ export function emitNumberLiteral(gen: JSGenerator, node: Node): void {
 	// a double — exact int64 SEMANTICS on this backend need the BigInt mapping —
 	// but emitting the digits the user wrote keeps the loss in one place instead
 	// of baking a second, front-end rounding into the output.
-	const text = d.isFloat ? "" + d.value : int64ToDecimal(d.intVal);
+	const floating = d.isFloat || (node.nodeType != null && (node.nodeType.kind == TypeKind.Number || node.nodeType.kind == TypeKind.Float32 || node.nodeType.kind == TypeKind.Float64));
+	const negativeZero = floating && d.value == 0.0 && (1.0 / d.value) < 0.0;
+	const text = negativeZero ? "-0.0" : floating ? "" + d.value : int64ToDecimal(d.intVal);
 	if (text.byteLength > 0 && text.byteAt(0) == "-".code) {
 		emit(gen, "(");
 		emit(gen, text);
@@ -550,7 +552,7 @@ export function jsMethodMemberName(methodName: string, sym: Symbol | null): stri
 export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as MemberExprData;
 	const ns = d.object.resolvedSym;
-	if (gen.bundleMode && ns != null && ns.symbolKind == SymbolKind.Module && node.resolvedSym != null) {
+	if (ns != null && ns.symbolKind == SymbolKind.Module && node.resolvedSym != null && (gen.bundleMode || node.resolvedSym.instantiatedFrom != null)) {
 		emit(gen, jsReferenceName(gen, node.resolvedSym, d.property));
 		return;
 	}

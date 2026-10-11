@@ -2261,7 +2261,7 @@ test "primitive keys" {
 	assert typeKey(createPrimitive(TypeKind.Void)) == "void";
 }
 
-test "enum key" { assert typeKey(createEnum("Color", ["Red", "Green"], null as unknown as number[])) == "enum:Color"; }
+test "enum key" { assert typeKey(createEnum("Color", ["Red", "Green"])) == "enum:Color"; }
 
 test "object key" { assert typeKey(createStruct("Foo", [], [], true)) == "object:Foo"; }
 
@@ -2289,7 +2289,7 @@ test "primitives" {
 }
 
 test "non-primitive returns empty" {
-	assert getSimpleTypeDesc(createEnum("X", [], null as unknown as number[])) == "";
+	assert getSimpleTypeDesc(createEnum("X", [])) == "";
 	assert getSimpleTypeDesc(createStruct("Y", [], [], true)) == "";
 }
 
@@ -2320,7 +2320,7 @@ test "primitive type desc" {
 
 test "enum emits typedef and defines" {
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]));
+	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"]));
 	assert result == "Color";
 	const types = extract(sec(g, CSection.Types));
 	assert types.contains("typedef uint8_t Color");
@@ -2370,7 +2370,7 @@ test "forward decl emitted" {
 
 test "cached second call" {
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const t = createEnum("Dir", ["Up", "Down"], null as unknown as number[]);
+	const t = createEnum("Dir", ["Up", "Down"]);
 	const r1 = getTypeDesc(g, t);
 	const r2 = getTypeDesc(g, t);
 	assert r1 == r2;

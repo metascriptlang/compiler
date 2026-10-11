@@ -31,7 +31,7 @@
 import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
-import { createTransformContextWithChecker } from "./context";
+import { createTransformContextWithChecker, TransformContext } from "./context";
 import { bindCompilerFuncs } from "./util";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
@@ -97,6 +97,7 @@ import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerNullable } from "./native/nullableLower";
 import { projectNarrowedUnions, checkVariantReads } from "./native/unionProjectLower";
 import { lowerUnionTags } from "./lowering/unionTagLower";
+import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
@@ -106,6 +107,14 @@ import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
 import { lowerEnumToString } from "./native/enumToStringLower";
+
+// An instance field initializer is evaluated by the constructor, so its `?.` and `??`
+// bind their temps there, after lowerCtorInit has moved it; on C the moved expression
+// also spills what a folded null comparison would drop.
+function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
+	const result = lowerNullishCoalesce(lowerOptionalChain(lowerCtorInit(program, ctx), ctx), ctx);
+	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
+}
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -137,6 +146,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	result = lowerResultConstructors(result);
+	result = lowerTypeof(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
@@ -153,14 +163,14 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// lowerSpawn boxes a thunk's return value around its await; spill that before lowerAwait.
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
 	if (!jsBackend) { result = lowerAwait(result, ctx); }
-	if (!jsBackend) { result = lowerCtorInit(result, ctx); }
+	if (!jsBackend) { result = lowerFieldInitializers(result, ctx); }
 	if (!jsBackend) { result = lowerActor(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	if (!jsBackend) { result = lowerRvalueBridge(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
 	// Field initializers become assignments inside the constructor, so both
 	// backends run them in one place and the parent chain reaches them.
-	result = lowerCtorInit(result, ctx);
+	result = jsBackend ? lowerFieldInitializers(result, ctx) : lowerCtorInit(result, ctx);
 	result = lowerNewExpr(result, ctx);
 	// Lift class/actor methods → top-level FunctionDecl. C + Raiser want one
 	// uniform shape for codegen; JS keeps `class Foo {}` native (its semantics

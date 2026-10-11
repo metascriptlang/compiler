@@ -5,7 +5,7 @@ import { refusePrivateField, declaresReadonlyField, hiddenPrivateField, declarin
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf, isNullableShape } from "./types";
+import { peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, isStdCollection, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf, isNullableShape } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf, lookupCtorDefaults, isVisibleSymbol } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
 import {
@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
+import { adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -453,6 +453,11 @@ function derefablePointee(ptr: Type, pointee: Type): boolean {
 }
 
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	if (startsOptionalChain(node)) { checkOptionalChain(ctx, node, expectedType); return; }
+	checkExprKind(ctx, node, expectedType);
+}
+
+function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => { checkNumberLiteral(ctx, node, expectedType); return; },
 		NodeKind.BigIntLiteral => {
@@ -509,7 +514,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => {
 			node.nodeType = checkMemberExpr(ctx, node, expectedType);
-			if (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional) checkOptionalRead(ctx, node, expectedType);
 			return;
 		},
 		NodeKind.ArrayAccess => { checkArrayAccess(ctx, node, expectedType); return; },
@@ -634,7 +638,7 @@ function checkStringLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 				if (child == null || child.kind != TypeKind.StringLiteral) allStrLit = false;
 			}
 			if (allStrLit && expectedType.typeChildren.length > 0) {
-				addError(ctx, `Type '"${sd.value}"' is not assignable to type '${typeDisplayName(expectedType)}'`, node.location.line, node.location.column);
+				addError(ctx, `Type '"${sd.value}"' is not assignable to type '${typeDisplayName(expectedType)}'` + typeofComparisonHint(expectedType, null), node.location.line, node.location.column);
 				node.nodeType = stringType(); return;
 			}
 		}
@@ -702,7 +706,7 @@ function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	node.kind = expandedValue.kind;
 	node.data = expandedValue.data;
-	if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+	node.typeArg = expandedValue.typeArg;
 	if (expandedValue.location != null) node.location = expandedValue.location;
 	node.nodeType = null as unknown as Type;
 	node.resolvedSym = null;
@@ -739,23 +743,68 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	node.nodeType = int32Type(); return;
 }
 
-function checkOptionalRead(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
-	const d = node.data as MemberExprData;
-	const tested = d.object.kind == NodeKind.HiddenDeref ? (d.object.data as HiddenDerefData).expr : d.object;
-	if (node.nodeType == null || isFunctionKind(node.nodeType) || tested.nodeType == null || !isNullableShape([tested.nodeType])) return;
+function optionalRootOf(end: Node): Node | null {
+	let link: Node = end;
+	while (true) {
+		if (link.kind == NodeKind.MemberExpr) {
+			const d = link.data as MemberExprData;
+			if (d.isOptional) return link;
+			link = d.object;
+		} else if (link.kind == NodeKind.ArrayAccess) {
+			link = (link.data as ArrayAccessData).array;
+		} else if (link.kind == NodeKind.CallExpr) {
+			link = (link.data as CallExprData).callee;
+		} else if (link.kind == NodeKind.TypeAssertion && (link.data as TypeAssertionData).asType == "!") {
+			link = (link.data as TypeAssertionData).asExpr;
+		} else {
+			return null;
+		}
+	}
+	return null;
+}
+
+function startsOptionalChain(node: Node): boolean {
+	return node.flags.has(NodeFlag.OptionalChainEnd) || (node.kind == NodeKind.MemberExpr && (node.data as MemberExprData).isOptional);
+}
+
+function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
+	node.flags = node.flags.excl(NodeFlag.OptionalChainEnd);
+	const root = optionalRootOf(node);
+	if (root == null) {
+		checkExprKind(ctx, node, expectedType);
+		return;
+	}
+	const rd = root.data as MemberExprData;
+	const tested = rd.object;
+	checkInTypeSlot(ctx, tested);
+	if (tested.nodeType == null) {
+		checkExprKind(ctx, node, expectedType);
+		return;
+	}
+	if (!isNullableShape([tested.nodeType])) {
+		checkExprKind(ctx, node, expectedType);
+		rd.isOptional = false;
+		return;
+	}
 	const loc = node.location;
-	const field = createNodeAt(NodeKind.MemberExpr, { object: d.object, property: d.property, isOptional: false }, loc);
-	field.nodeType = node.nodeType;
-	field.resolvedSym = node.resolvedSym;
-	field.flags = node.flags;
-	field.variantSlot = node.variantSlot;
 	const probe = readsOnlyNames(tested) ? cloneNodeKeepSem(tested) : tested;
+	rd.object = createNodeAt(NodeKind.TypeAssertion, { asExpr: tested, asType: "!" }, tested.location);
+	rd.isOptional = false;
+	const chain = createNodeAt(node.kind, node.data, loc);
+	chain.flags = node.flags;
+	chain.typeArg = node.typeArg;
+	chain.typeExpr = node.typeExpr;
 	const cond = createNodeAt(NodeKind.BinaryExpr, { operator: "!==", left: probe, right: typedNull(loc) }, loc);
 	cond.nodeType = booleanType();
-	const arms = { ternaryCondition: cond, ternaryConsequent: field, ternaryAlternate: typedNull(loc) } as ConditionalExprData;
+	const arms = { ternaryCondition: cond, ternaryConsequent: chain, ternaryAlternate: typedNull(loc) } as ConditionalExprData;
+	ctx.condEvalDepth = ctx.condEvalDepth + 1;
+	checkExpr(ctx, chain, null);
+	ctx.condEvalDepth = ctx.condEvalDepth - 1;
 	node.kind = NodeKind.ConditionalExpr;
 	node.data = arms;
 	node.resolvedSym = null;
+	node.typeArg = "";
+	node.typeExpr = null;
 	node.nodeType = fitConditionalArms(ctx, arms, expectedType, false);
 }
 
@@ -1331,6 +1380,7 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 		node.nodeType = isRelational ? booleanType() : ((maybeSide.typeReturn != null) ? maybeSide.typeReturn : inferredType());
 		return;
 	}
+	if (refuseDisjointStrings(ctx, d.operator, d.left, d.right, node)) { node.nodeType = errorType(); return; }
 	const tplOpName = (d.operator == "!=" || d.operator == "!==") ? "!="
 		: ((d.operator == ">" || d.operator == ">=") ? d.operator : "");
 	if (tplOpName != "" && effLeft != null && effRight != null
@@ -1522,6 +1572,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (stampType != null && isMaybeType(stampType)) {
 			stampType = stampType.typeReturn != null ? stampType.typeReturn : objExpected;
 		}
+		const stampRef = stampType != null ? unwrapRefNullUnion(stampType) : null;
+		if (stampRef != null) stampType = stampRef;
 		node.nodeType = (stampType != null) ? stampType : objExpected;
 		// Pin to consts so the inner while-loop body sees non-null typeNames/
 		// typeChildren — flow narrowing on `let objExpected` doesn't reach
@@ -1801,6 +1853,17 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 }
 
+// A direct `null as T` needs a T that admits null. Through `unknown` the cast only
+// reinterprets a pointer, so it stays open for the kinds whose slot is one.
+function nullCastAllowed(target: Type, throughUnknown: boolean): boolean {
+	const refusal = unknownRefusal(target);
+	const bare = skipModifier(target) ?? target;
+	if (throughUnknown) {
+		return (refusal != UnknownRefusal.Value && !isArrayShaped(bare) && !isStdCollection(bare)) || isFunctionKind(target);
+	}
+	return refusal != UnknownRefusal.Value && refusal != UnknownRefusal.Builtin && bare.kind != TypeKind.Ref;
+}
+
 function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	let d = node.data as TypeAssertionData;
 	// Non-null assertion `expr!` (sentinel asType "!"): strip the nullable
@@ -1906,6 +1969,13 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (srcType != null && dropsReadonlyView(srcType, targetType)) reportReadonlyWrite(ctx, srcType, "cast away", asLoc.line, asLoc.column);
 	if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
 		&& d.asExpr != null && d.asExpr.kind == NodeKind.NullLiteral) {
+		const throughUnknown = srcType != null && isUnknownType(srcType);
+		if (!hasGenericParams(targetType) && !isAssignable(nullType(), targetType) && !nullCastAllowed(targetType, throughUnknown)) {
+			const held = throughUnknown ? "unknown" : "null";
+			addError(ctx, "cannot cast " + held + " to " + typeDisplayName(targetType) + " — it holds no null; write `" + typeDisplayName(targetType) + " | null`", asLoc.line, asLoc.column);
+			node.nodeType = targetType;
+			return;
+		}
 		node.kind = NodeKind.NullLiteral;
 		node.data = { nullPlaceholder: true };
 		node.nodeType = targetType;
@@ -2566,7 +2636,7 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 		}
 		node.kind = expandedValue.kind;
 		node.data = expandedValue.data;
-		if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+		node.typeArg = expandedValue.typeArg;
 		if (expandedValue.location != null) node.location = expandedValue.location;
 		node.nodeType = null as unknown as Type;
 		node.resolvedSym = null;
@@ -2593,7 +2663,8 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)))) {
 		d.ternaryConsequent = fitArm(ctx, d.ternaryConsequent, expectedType, converting);
 		d.ternaryAlternate = fitArm(ctx, d.ternaryAlternate, expectedType, converting);
-		return d.ternaryConsequent.nodeType;
+		const fitted = d.ternaryConsequent.nodeType;
+		return fitted != null && sameType(fitted, d.ternaryAlternate.nodeType) ? fitted : expectedType;
 	}
 	retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 	retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
@@ -2888,7 +2959,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// IMPORTANT: only param types are contextually inferred. Return type is still inferred
 	// from body, because contextual return types may be generic (`() => T`) and would shadow
 	// the concrete inference from the body that downstream passes (lambda lifting) rely on.
-	let ctxParamTypes: Type[] = null as unknown as Type[];
+	let ctxParamTypes: Type[] = [];
 	// A `fn | null` formal is a Maybe struct — peel it so the arrow is typed from the inner fn.
 	let fnExpected = expectedType != null ? peelTransparentInstance(expectedType) : null;
 	if (fnExpected != null && isMaybeType(fnExpected) && fnExpected.typeReturn != null) {
@@ -3131,12 +3202,22 @@ function padLiteralParams(params: string[], paramTypes: string[], node: Node, ex
 	}
 }
 
+// Index where the trailing run of `null` defaults begins (`x?: T` parses to one): the
+// arrow may be called without those arguments, and each is filled with null at the call.
+function firstOfNullDefaultTail(defaults: Node[]): int32 {
+	let first = defaults.length;
+	while (first > 0 && defaults[first - 1] != null && defaults[first - 1].kind == NodeKind.NullLiteral) first -= 1;
+	return first;
+}
+
 function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as ArrowFunctionData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
 	padLiteralParams(d.arrowParams, d.arrowParamTypes, node, expectedType);
 	const fnType = checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations!, d.arrowReturnType, expectedType, d.arrowFlags, node);
+	const optionalFrom = firstOfNullDefaultTail(d.arrowDefaults);
+	if (optionalFrom < d.arrowDefaults.length) setMinArity(fnType, optionalFrom);
 	// The implicit return of an expression body is a fit position like any
 	// ReturnStmt (checkReturnStmt:1229) — reseat the body through fitNode so
 	// no coercion (Maybe wrap, closure wrap) is forgotten.

@@ -74,6 +74,7 @@ import { bindExpandedSubtree } from "../../binder/binder";
 import { valueToExpansion, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
+import { ModuleGraph } from "../../module/graph";
 import { addWarning } from "../../checker/context";
 
 
@@ -1658,9 +1659,16 @@ interface MacroBuild {
 	compiled: CompiledMacro | null;
 }
 
-// Cache keyed on CheckerContext identity so it resets per compilation.
+// One cache per compilation, as the reference keeps a macro's code on the module graph's VM: the
+// module graph names the compilation, a context outside any graph names itself.
 let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild[]>();
+let _macroBuildsGraph: ModuleGraph = null as unknown as ModuleGraph;
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
+
+function inMacroBuildsCompilation(ctx: CheckerContext): boolean {
+	if (ctx.moduleGraph != null) return ctx.moduleGraph == _macroBuildsGraph;
+	return _macroBuildsGraph == null && ctx == _macroBuildsCtx;
+}
 
 function errorsSince(ctx: CheckerContext, mark: int32): boolean {
 	for (let i = mark; i < ctx.errors.length; i += 1) {
@@ -1670,8 +1678,9 @@ function errorsSince(ctx: CheckerContext, mark: int32): boolean {
 }
 
 function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, typeArg: string): CompiledMacro | null {
-	if (_macroBuildsCtx != ctx) {
+	if (!inMacroBuildsCompilation(ctx)) {
 		_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
+		_macroBuildsGraph = ctx.moduleGraph;
 		_macroBuildsCtx = ctx;
 	}
 	const known = _macroBuilds.get(macroSym);

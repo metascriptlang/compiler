@@ -59,6 +59,9 @@ extern function msMetaResolveType(text: string): Node | null;
 extern function msMetaTypeKind(n: Node | null): int32;
 extern function msMetaSameType(a: Node | null, b: Node | null): boolean;
 extern function msMetaSymKind(n: Node | null): int32;
+extern function msMetaGetSize(n: Node): int32;
+extern function msMetaGetAlign(n: Node): int32;
+extern function msMetaGetOffset(n: Node, field: string): int32;
 
 export function bindSym(name: string): Node | null { return msMetaBindSym(name); }
 export function getType(n: Node | null): Node | null { if (n == null) return null; return msMetaGetType(n, false); }
@@ -68,3 +71,8 @@ export function resolveType(text: string): Node | null { return msMetaResolveTyp
 export function typeKind(n: Node | null): TypeKind { return msMetaTypeKind(n) as TypeKind; }
 export function sameType(a: Node | null, b: Node | null): boolean { return msMetaSameType(a, b); }
 export function symKind(n: Node | null): SymbolKind { return msMetaSymKind(n) as SymbolKind; }
+
+// Target-native layout; negative means the compiler cannot calculate it.
+export function getSize(n: Node): int32 { return msMetaGetSize(n); }
+export function getAlign(n: Node): int32 { return msMetaGetAlign(n); }
+export function getOffset(n: Node, field: string): int32 { return msMetaGetOffset(n, field); }

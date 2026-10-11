@@ -596,7 +596,7 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 	}
 }
 
-const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref;
+const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref | NodeFlag.OptionalChainEnd;
 
 function isCheckerWrapper(node: Node): boolean {
 	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
@@ -838,7 +838,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.inferredReturnStmts = [];
 		const _igb0 = performance.now();
 		const outerGensym = beginGensymUnit();
-		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, cloned);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
@@ -1212,7 +1212,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);
 		ctorSym.state = SymbolState.Checked;
 		const outerGensym = beginGensymUnit();
-		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
+		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, ctorDeclNode);
 		bodyCtx.modulePath = savedModulePath;

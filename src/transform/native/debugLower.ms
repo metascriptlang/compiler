@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, int32Type } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, int32Type } from "../../checker/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
@@ -30,7 +30,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	if (arg.nodeType == null) return arg;
 	const t = literalBase(peelTransparentInstance(arg.nodeType));
 	// String: as-is
-	if (t.kind == TypeKind.String || arg.kind == NodeKind.StringLiteral) return arg;
+	if (isStringLike(t) || arg.kind == NodeKind.StringLiteral) return arg;
 	if (t.kind == TypeKind.Char) return charToString(arg, loc);
 	// Number/int → msNumberToString; 64-bit integers need the exact formatter
 	if (isWideInteger(t)) {

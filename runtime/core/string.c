@@ -779,10 +779,6 @@ msString msStringSlice(msString s, int64_t start, int64_t end) {
 	return result;
 }
 
-msString msStringSubstring(msString s, int64_t start, int64_t end) {
-	return msStringSlice(s, start, end);
-}
-
 /* ===== Transformation ===== */
 
 msString msStringToLower(msString s) {

@@ -79,7 +79,8 @@ const unbridgedCallSource = `
 import { Node, NodeKind } from "std/meta";
 
 export macro usesDead(node: Node): Node {
-	const v = "Hello".substring(1, 3);
+	const p = Promise.reject("x");
+	const v = "x";
 	return { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: v };
 }
 
@@ -94,7 +95,7 @@ test "macro unsupported evaluation: unbridged externs identify the unavailable h
 	const c = compileToCWithStd(unbridgedCallSource);
 	assert !c.ok;
 	if (!c.ok) {
-		assert c.error.contains("msStringSubstring");
+		assert c.error.contains("msPromiseReject");
 	}
 }
 

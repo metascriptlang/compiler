@@ -11,7 +11,7 @@ import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docBreakParent, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawBalancedAt, rawGenericsAt, sourceByteAt } from "./literals";
+import { rawBalancedAt, rawGenericsAt, sourceByteAt, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
@@ -499,15 +499,20 @@ export function buildParamList(names: string[], types: string[], defaults: Node[
 	const out: Doc[] = [];
 	for (let i = 0; i < names.length; i += 1) {
 		let p = spellParamModifiers(names[i]);
+		let written = p.startsWith("...") ? p.byteSlice(3, p.byteLength) : p;
 		if (names[i].startsWith("_destr") && locs != null && i < locs.length) {
 			const pattern = rawBalancedAt(options.source, locs[i].line, locs[i].column);
-			if (pattern != "") p = pattern;
+			if (pattern != "") { p = pattern; written = pattern; }
 		}
-		if (i < types.length && types[i] != "") {
-			p = p + ": " + types[i];
+		const optional = locs != null && i < locs.length && writtenOptional(options.source, locs[i].line, locs[i].column, written);
+		const type = i < types.length ? types[i] : "";
+		if (optional) p = p + "?";
+		if (type != "") {
+			const keptType = optional && writtenTypeAfterOptional(options.source, locs![i].line, locs![i].column, written, type);
+			p = p + ": " + (optional && !keptType ? unoptionalized(type) : type);
 		}
 		const def = i < defaults.length ? defaults[i] : null;
-		if (def != null) {
+		if (def != null && !optional) {
 			out.push(docGroup([docText(p + " = "), callPrintNode(def, options)]));
 		} else {
 			out.push(docText(p));

@@ -35,6 +35,7 @@ static char** msSolHostLogLines;
 static uint64_t msSolHostLogCount;
 static msSolHostInvocation* msSolHostInvocations;
 static uint64_t msSolHostInvocationCount;
+static uint64_t msSolHostRentReadCount;
 static uint8_t msSolHostReturnData[MS_SOL_MAX_RETURN_DATA];
 static uint64_t msSolHostReturnLength;
 static uint8_t msSolHostReturnProgram[32];
@@ -68,6 +69,11 @@ uint64_t msSolHostAlloc(uint64_t size) {
     return address;
 }
 
+uint64_t msSolHostScratch(uint64_t size) {
+    if (size > MS_SOL_HOST_HEAP_SIZE - msSolHostContext()->arenaPosition) return 0;
+    return msSolHostAlloc(size);
+}
+
 static void msSolHostForget(void) {
     for (uint64_t index = 0; index < msSolHostLogCount; index++) free(msSolHostLogLines[index]);
     free(msSolHostLogLines);
@@ -90,6 +96,7 @@ void msSolHostEnter(uint64_t input) {
     msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
     msSolParse(msSolHostAccounts);
+    msSolHostRentReadCount = 0;
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
     msSolHostReturnLength = 0;
@@ -114,6 +121,7 @@ msString msSolHostLogAt(uint64_t index) {
 }
 
 uint64_t msSolHostInvocationTotal(void) { return msSolHostInvocationCount; }
+uint64_t msSolHostRentReadTotal(void) { return msSolHostRentReadCount; }
 
 uint64_t msSolHostInvocationAt(uint64_t index) {
     return index < msSolHostInvocationCount ? (uint64_t)&msSolHostInvocations[index] : 0;
@@ -528,6 +536,24 @@ static uint64_t msSolHostSystem(const uint64_t* header) {
         memcpy(second + 40, data + 20, 32);
         return 0;
     }
+    case 13: {
+        if (first == NULL || header[4] < 52) return 3ULL << 32;
+        uint64_t length, space;
+        memcpy(&length, first + 80, 8);
+        memcpy(&space, data + 12, 8);
+        if (length != 0 || memcmp(first + 40, systemProgram, 32) != 0) return 1ULL << 32;
+        if (space > MS_SOL_MAX_PERMITTED_DATA_INCREASE) return 20ULL << 32;
+        if (amount != 0 && (second == NULL || second == first)) return 3ULL << 32;
+        if (amount != 0 && msSolHostLamports(second) < amount) return 1;
+        uint64_t current = msSolHostLamports(first);
+        if (amount > UINT64_MAX - current) return 24ULL << 32;
+        uint64_t status = msSolHostResize(first, space);
+        if (status != 0) return status;
+        if (amount != 0) msSolHostSetLamports(second, msSolHostLamports(second) - amount);
+        msSolHostSetLamports(first, current + amount);
+        memcpy(first + 40, data + 20, 32);
+        return 0;
+    }
     case 1:
         if (first == NULL || header[4] < 36) return 3ULL << 32;
         memcpy(first + 40, data + 4, 32);
@@ -672,6 +698,16 @@ static uint64_t msSolHostSignerBytes(uint64_t signers, uint64_t signerCount) {
     return total;
 }
 
+static int msSolHostSignersDerive(uint64_t signers, uint64_t signerCount) {
+    const uint64_t programId = msSolHostContext()->programId;
+    for (uint64_t signer = 0; signer < signerCount; signer++) {
+        const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
+        uint8_t address[32];
+        if (!msSolHostDerive(entry[0], entry[1], NULL, programId, address)) return 0;
+    }
+    return 1;
+}
+
 static void msSolHostRecordSigners(uint8_t* out, uint64_t signers, uint64_t signerCount) {
     for (uint64_t signer = 0; signer < signerCount; signer++) {
         const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
@@ -693,6 +729,10 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     const uint64_t* header = (const uint64_t*)instruction;
     uint64_t signerBytes = msSolHostSignerBytes(signers, signerCount);
     if (signerBytes == UINT64_MAX) return 13ULL << 32;
+    if (!msSolHostSignersDerive(signers, signerCount)) {
+        msSolHostFault(4, "sol_invoke_signed: Could not create program address with signer seeds: Provided seeds do not result in a valid address");
+        return 14ULL << 32;
+    }
     msSolHostInvocation* grown = (msSolHostInvocation*)realloc(msSolHostInvocations,
         (size_t)(msSolHostInvocationCount + 1) * sizeof(msSolHostInvocation));
     if (grown == NULL) abort();
@@ -729,6 +769,7 @@ uint64_t msSolHostGetClock(uint64_t out) {
 }
 
 uint64_t msSolHostGetRent(uint64_t out) {
+    msSolHostRentReadCount++;
     uint8_t* rent = (uint8_t*)out;
     uint64_t lamportsPerByteYear = 3480;
     uint64_t exemptionThreshold = 0x4000000000000000ULL;
