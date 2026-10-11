@@ -23,6 +23,7 @@ import {
 	instructionHasDiscriminator,
 	instructionHasWord,
 	logEvent,
+	slottedSeeds,
 } from "./core";
 import {
 	createPdaAt,
@@ -819,6 +820,13 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			resolvedOverloadIdx: -1,
 		};
 	}
+	let slotted: Node = seeds;
+	if (seeds.kind === NodeKind.ArrayLiteral) {
+		const elements: Node[] = [];
+		for (const seed of seeds.elements) { elements.push(seed); }
+		elements.push({ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: [byteLiteral(0, seeds)] });
+		slotted = { kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: elements };
+	}
 	return {
 		kind: NodeKind.CallExpr,
 		line: payer.line,
@@ -832,8 +840,16 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,
 			column: seeds.column,
-			callee: bindSym("seedTable"),
-			arguments: [seeds],
+			callee: bindSym("slottedSeeds"),
+			arguments: [{
+				kind: NodeKind.CallExpr,
+				line: seeds.line,
+				column: seeds.column,
+				callee: bindSym("seedTable"),
+				arguments: [slotted],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		}],

@@ -2293,6 +2293,27 @@ test "createPda signs with its seeds and the found bump" {
 	}
 }
 
+function createPdaByteSeedStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, ["counter", [7]]);
+	return Result.ok(0);
+}
+
+function createPdaByteSeedEntry(): void { codeOf(createPdaByteSeedStep()); }
+
+test "createPda keeps a one-byte seed of its own apart from the slot the found bump goes into" {
+	const derived = findProgramAddressOf(programKey(), ["counter", [7]]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaByteSeedEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [7], [derived.value.bump]]);
+	}
+}
+
 function sameBytes(left: uint8[], right: uint8[]): boolean {
 	if (left.length != right.length) { return false; }
 	for (let index = 0; index < left.length; index++) {

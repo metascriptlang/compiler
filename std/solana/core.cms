@@ -444,7 +444,7 @@ export function createProgramAccount(
 	return createAccountAllowPrefund(payer, target, minimumBalance(space), space, msSolSpanAddress(newOwner.bytes), signers);
 }
 
-export function createAccountAllowPrefund(
+@inline export function createAccountAllowPrefund(
 	payer: Account,
 	target: Account,
 	required: uint64,
@@ -454,11 +454,18 @@ export function createAccountAllowPrefund(
 ): Result<uint64, ProgramError> {
 	const current = target.lamports();
 	const funding = required > current ? required - current : 0;
+	const owner0 = msSolLoadU64(owner);
+	const owner1 = msSolLoadU64(owner + 8);
+	const owner2 = msSolLoadU64(owner + 16);
+	const owner3 = msSolLoadU64(owner + 24);
 	let storage: uint8[52] = [];
 	let length = putU32(storage, 0, 13);
 	length = putU64(storage, length, funding);
 	length = putU64(storage, length, space);
-	length = putAddress(storage, length, owner, 32);
+	length = putU64(storage, length, owner0);
+	length = putU64(storage, length, owner1);
+	length = putU64(storage, length, owner2);
+	length = putU64(storage, length, owner3);
 	if (funding == 0) {
 		return invokeSigned(
 			SYSTEM_PROGRAM_ID,
@@ -889,7 +896,7 @@ export function argBytes(offset: uint64): Bytes {
 	return view;
 }
 
-function initialized(
+@inline function initialized(
 	funding: Account,
 	created: Account,
 	space: uint64,
@@ -921,25 +928,31 @@ export struct DerivedAccount {
 	bump: uint8;
 }
 
+export struct SlottedSeeds {
+	private table: uint64;
+	private used: uint64;
+}
+
+// Only `createPda` builds one: its seed list ends with the one-byte entry the found bump is written into.
+export function slottedSeeds(seeds: Readonly<Span<SeedSlice>>): SlottedSeeds {
+	return { table: tableAddress(seeds), used: (seeds.length as uint64) - 1 };
+}
+
 export function createdPdaAccount(
 	payer: Account,
 	target: Account,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 	space: uint64,
 	discriminator: uint64,
 ): Result<DerivedAccount, ProgramError> {
 	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
-	const failure = findFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), found);
+	const failure = findFailureAt(seeds.table, seeds.used, ownProgram(), found);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	if (!keysEqual(msSolSpanAddress(found.key.bytes), target.keyAddress())) {
 		return Result.err(ProgramError.constraintSeeds());
 	}
-	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
-	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, found.bump)) {
-		return Result.err(ProgramError.maxSeedLengthExceeded());
-	}
-	let one: SignerSeeds[1] = [{ address: 0, length: 0 }];
-	signerOfBumped(signed, one);
+	msSolStoreU8(msSolLoadU64(seeds.table + seeds.used * 16), found.bump);
+	const one: SignerSeeds[1] = [{ address: seeds.table, length: seeds.used + 1 }];
 	const created = try initialized(payer, target, space, discriminator, one);
 	return Result.ok({ account: created, bump: found.bump });
 }

@@ -9,6 +9,7 @@ import { ProgramError } from "./error";
 import { accountFieldsValid, zeroAccountFieldsValid } from "./accountValidation";
 import {
 	Account,
+	SlottedSeeds,
 	canonicalBump,
 	canonicalBumpOwned,
 	closedProgramAccount,
@@ -546,7 +547,7 @@ export function create<T>(
 export function createPdaOf<T>(
 	payer: WritableSigner,
 	target: Writable,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<Pda<T>, ProgramError> {
 	const _zeroFields = zeroAccountFieldsValid<T>();
 	const space = 8 + (sizeof(T) as uint64);
