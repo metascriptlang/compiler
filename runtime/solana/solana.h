@@ -410,18 +410,23 @@ typedef struct {
 #define MS_SOL_MAX_SEEDS 16
 #define MS_SOL_MAX_SEED_LENGTH 32
 
-static inline uint64_t msSolSeedStage(msSolSeed* input, uint64_t table, uint64_t count, uint64_t limit) {
+#define MS_SOL_STAGED static inline __attribute__((always_inline))
+
+/* Staging is inlined into the caller, where the seed count and every literal length are constants: the checks fold
+   away and each slice is written once, into the array the hash reads. */
+MS_SOL_STAGED uint64_t msSolSeedStage(msSolSeed* input, uint64_t table, uint64_t count, uint64_t limit) {
+    const msSolSeed* seeds = (const msSolSeed*)(uintptr_t)table;
     if (count > limit) return 0;
     for (uint64_t index = 0; index < count; index++) {
-        const uint64_t length = msSolLoadU64(table + index * 16 + 8);
+        const uint64_t length = seeds[index].length;
         if (length > MS_SOL_MAX_SEED_LENGTH) return 0;
-        input[index].address = msSolLoadU64(table + index * 16);
+        input[index].address = seeds[index].address;
         input[index].length = length;
     }
     return 1;
 }
 
-static inline uint64_t msSolSeedTail(msSolSeed* input, uint64_t at, uint64_t program) {
+MS_SOL_STAGED uint64_t msSolSeedTail(msSolSeed* input, uint64_t at, uint64_t program) {
     static const char tag[] = "ProgramDerivedAddress";
     input[at].address = program;
     input[at].length = 32;
@@ -453,17 +458,19 @@ static inline uint64_t msSolDeriveAddress(uint64_t table, uint64_t count, uint64
     return msSolCurveValidatePoint(0, out, 0) != 0 ? 0 : 1;
 }
 
-/* The canonical bump of seeds that carry none: 0 and the bump through bumpOut, 1 when every bump is on the curve, 2 as above. */
-static inline uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t out, uint64_t bumpOut) {
-    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+static inline bool msSolKeyIs(uint64_t key, uint64_t expected) {
+    return msSolLoadU64(key) == msSolLoadU64(expected) && msSolLoadU64(key + 8) == msSolLoadU64(expected + 8) &&
+        msSolLoadU64(key + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(key + 24) == msSolLoadU64(expected + 24);
+}
+
+/* The bump walks below take staged slices whose slot `at` is free for the bump byte, and count down from 255. */
+static __attribute__((noinline)) uint64_t msSolWalkAny(msSolSeed* input, uint64_t at, uint64_t out, uint64_t bumpOut) {
     uint8_t bump = 255;
-    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    input[count].address = (uint64_t)(uintptr_t)&bump;
-    input[count].length = 1;
-    const uint64_t total = msSolSeedTail(input, count + 1, program);
+    input[at].address = (uint64_t)(uintptr_t)&bump;
+    input[at].length = 1;
     for (uint64_t counter = 255; counter > 0; counter--) {
         bump = (uint8_t)counter;
-        msSolSha256((uint64_t)(uintptr_t)input, total, out);
+        msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
         if (msSolCurveValidatePoint(0, out, 0) != 0) {
             msSolStoreU8(bumpOut, bump);
             return 0;
@@ -472,23 +479,16 @@ static inline uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t
     return 1;
 }
 
-/* msSolFindAddress for a key the caller names: 0 and its bump when it is the canonical address, 1 when it is not.
-   The matching hash skips the curve check, because a key on the curve cannot sign: the runtime refuses the first
-   CPI signed with these seeds. Every bump above it is still checked, so a non-canonical key is refused. */
-static inline uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
-    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+static inline uint64_t msSolWalkExpected(msSolSeed* input, uint64_t at, uint64_t expected, uint64_t bumpOut) {
     uint8_t hash[32];
     const uint64_t out = (uint64_t)(uintptr_t)hash;
     uint8_t bump = 255;
-    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    input[count].address = (uint64_t)(uintptr_t)&bump;
-    input[count].length = 1;
-    const uint64_t total = msSolSeedTail(input, count + 1, program);
+    input[at].address = (uint64_t)(uintptr_t)&bump;
+    input[at].length = 1;
     for (uint64_t counter = 255; counter > 0; counter--) {
         bump = (uint8_t)counter;
-        msSolSha256((uint64_t)(uintptr_t)input, total, out);
-        if (msSolLoadU64(out) == msSolLoadU64(expected) && msSolLoadU64(out + 8) == msSolLoadU64(expected + 8) &&
-            msSolLoadU64(out + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(out + 24) == msSolLoadU64(expected + 24)) {
+        msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
+        if (msSolKeyIs(out, expected)) {
             msSolStoreU8(bumpOut, bump);
             return 0;
         }
@@ -497,28 +497,49 @@ static inline uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, 
     return 1;
 }
 
-/* msSolFindAddress for a key the caller names, curve-checked at the matching bump too: 0 when the canonical address is
-   expected, 3 when it is not, 1 when every bump is on the curve, 2 as msSolHashAddress. */
-static inline uint64_t msSolFindCanonicalAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
-    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+static inline uint64_t msSolWalkCanonical(msSolSeed* input, uint64_t at, uint64_t expected, uint64_t bumpOut) {
     uint8_t hash[32];
     const uint64_t out = (uint64_t)(uintptr_t)hash;
     uint8_t bump = 255;
-    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    input[count].address = (uint64_t)(uintptr_t)&bump;
-    input[count].length = 1;
-    const uint64_t total = msSolSeedTail(input, count + 1, program);
+    input[at].address = (uint64_t)(uintptr_t)&bump;
+    input[at].length = 1;
     for (uint64_t counter = 255; counter > 0; counter--) {
         bump = (uint8_t)counter;
-        msSolSha256((uint64_t)(uintptr_t)input, total, out);
+        msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
         if (msSolCurveValidatePoint(0, out, 0) != 0) {
-            if (!(msSolLoadU64(out) == msSolLoadU64(expected) && msSolLoadU64(out + 8) == msSolLoadU64(expected + 8) &&
-                  msSolLoadU64(out + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(out + 24) == msSolLoadU64(expected + 24))) return 3;
+            if (!msSolKeyIs(out, expected)) return 3;
             if (bumpOut != 0) msSolStoreU8(bumpOut, bump);
             return 0;
         }
     }
     return 1;
+}
+
+/* The canonical bump of seeds that carry none: 0 and the bump through bumpOut, 1 when every bump is on the curve, 2 as above. */
+MS_SOL_STAGED uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t out, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    msSolSeedTail(input, count + 1, program);
+    return msSolWalkAny(input, count, out, bumpOut);
+}
+
+/* msSolFindAddress for a key the caller names: 0 and its bump when it is the canonical address, 1 when it is not.
+   The matching hash skips the curve check, because a key on the curve cannot sign: the runtime refuses the first
+   CPI signed with these seeds. Every bump above it is still checked, so a non-canonical key is refused. */
+MS_SOL_STAGED uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    msSolSeedTail(input, count + 1, program);
+    return msSolWalkExpected(input, count, expected, bumpOut);
+}
+
+/* msSolFindAddress for a key the caller names, curve-checked at the matching bump too: 0 when the canonical address is
+   expected, 3 when it is not, 1 when every bump is on the curve, 2 as msSolHashAddress. */
+MS_SOL_STAGED uint64_t msSolFindCanonicalAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    msSolSeedTail(input, count + 1, program);
+    return msSolWalkCanonical(input, count, expected, bumpOut);
 }
 
 #define MS_SOL_MAX_CPI_ACCOUNTS 64
