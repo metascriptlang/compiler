@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf } from "./types";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -406,8 +406,16 @@ function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: s
 	return results;
 }
 
+// An alias is transparent in type identity, so a receiver written through one
+// owns the same static extensions as the type it denotes.
+function denotedOwner(sym: Symbol): Symbol {
+	if (sym.symbolKind != SymbolKind.TypeAlias || sym.symbolType == null) return sym;
+	return nominalTypeSym(sym.symbolType) ?? sym;
+}
+
 export function isStaticExtOf(ext: ExtensionMethod, owner: Symbol): boolean {
-	return ext.isStatic && ext.sym != null && ext.sym.staticOwner == owner;
+	if (!ext.isStatic || ext.sym == null || ext.sym.staticOwner == null) return false;
+	return denotedOwner(ext.sym.staticOwner) == denotedOwner(owner);
 }
 
 export function filterStaticExtsByOwner(exts: ExtensionMethod[], owner: Symbol): ExtensionMethod[] {
@@ -622,7 +630,7 @@ function sameInstanceArgs(recv: Type, obj: Type): boolean {
 }
 
 export function nominalTypeSym(t: Type): Symbol | null {
-	let s = addressed(t);
+	let s = addressed(peelThrough(t, PEEL_ALIAS) ?? t);
 	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) {
 		s = s.typeExtra;
 		if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
