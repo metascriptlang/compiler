@@ -1,5 +1,5 @@
-// GUARD-OS solana --danger
-// A --danger build for SBF takes LTO (the capability table, BUILD-PERF.md) and must link:
+// GUARD-OS solana --release
+// A --release build for SBF takes LTO (the capability table, BUILD-PERF.md) and must link:
 // its bitcode is merged and compiled to an SBF object before ld.lld meets platform-tools'
 // compiler_builtins, which ld.lld refuses beside raw bitcode ("is incompatible with").
 import { instructionData, logU64 } from "std/solana";

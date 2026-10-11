@@ -43,9 +43,10 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
+import { refusesTypeArm } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
+import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
@@ -2550,6 +2551,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		const hasGuard = cd.caseGuard != null;
 		for (const p of cd.casePatterns) {
 			if (p.kind == NodeKind.Identifier) {
+				if (refusesTypeArm(ctx, p, d.matchStmtDisc)) continue;
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
@@ -2563,7 +2565,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 					coveredMembers.push(sd.value);
 				}
 				if (p.kind == NodeKind.BooleanLiteral && !hasGuard) coveredMembers.push((p.data as BooleanLiteralData).boolValue ? "true" : "false");
-				checkExpr(ctx, p, discType);
+				checkExpr(ctx, p, kindArmHandled(ctx, d.matchStmtDisc, p) ? null : discType);
 			}
 		}
 
@@ -3006,7 +3008,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		markExpansion(ctx, stmt, expansionOf(ctx, stmt, sym.modulePath));
 		call.kind = expanded.kind;
 		call.data = expanded.data;
-		if (expanded.typeArg != "") call.typeArg = expanded.typeArg;
+		call.typeArg = expanded.typeArg;
 		if (expanded.location != null) call.location = expanded.location;
 		call.nodeType = null as unknown as Type;
 		call.resolvedSym = null;
@@ -3737,7 +3739,7 @@ function checkProgramCore(
 	runThreePasses(ctx, program);
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
-	stampHeaderPaths(ctx);
+	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
 	checkViewBorrows(ctx, program);

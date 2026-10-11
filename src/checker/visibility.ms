@@ -53,9 +53,26 @@ function ownVisibility(sym: Symbol, field: string): DeclaredVisibility {
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		if (d.interfaceFields[i] != field) continue;
 		const vis = d.interfaceFieldVisibility;
-		return vis != null && i < vis.length && vis[i] == "private" ? DeclaredVisibility.Private : DeclaredVisibility.Public;
+		return vis != null && i < vis.length && hasFieldModifier(vis[i], "private") ? DeclaredVisibility.Private : DeclaredVisibility.Public;
 	}
 	return DeclaredVisibility.NotDeclared;
+}
+
+// A struct or interface field's modifiers, as written before its name.
+export function hasFieldModifier(modifiers: string, word: string): boolean {
+	return modifiers.split(" ").indexOf(word) >= 0;
+}
+
+export function declaresReadonlyField(sym: Symbol, field: string): boolean {
+	const decl = unwrapDecl(sym.declNode);
+	if (decl == null || (decl.kind != NodeKind.StructDecl && decl.kind != NodeKind.InterfaceDecl)) return false;
+	const d = decl.data as InterfaceDeclData;
+	for (let i = 0; i < d.interfaceFields.length; i += 1) {
+		if (d.interfaceFields[i] != field) continue;
+		const vis = d.interfaceFieldVisibility;
+		return vis != null && i < vis.length && hasFieldModifier(vis[i], "readonly");
+	}
+	return false;
 }
 
 function parentOf(sym: Symbol): Symbol | null {

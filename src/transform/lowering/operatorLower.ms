@@ -17,11 +17,12 @@
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
 import { Node, NodeKind, BinaryExprData, ExprStmtData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag } from "../../ast/node";
-import { TransformContext, PendingTupleOp } from "../context";
+import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
+import { cloneIfPure } from "../coercion/intArithJS";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
@@ -86,6 +87,35 @@ function maybeCarrierOf(side: Node): Node | null {
 
 function hasValueEq(t: Type): boolean {
 	return isValueObject(t) || t.kind == TypeKind.SizedArray;
+}
+
+// A type that can never hold null: comparing it with `null` is a constant.
+// `Union(Ref<T>, Null)` / `Union(Ptr<T>, Null)` is the nullable pointer pattern and
+// stays a runtime check, as does a Maybe carrier.
+function neverHoldsNull(t: Type): boolean {
+	if (hasValueEq(t)) return true;
+	if (isMaybeType(t)) return false;
+	const vk = t.kind;
+	if (vk == TypeKind.Array || vk == TypeKind.GenericInstance || vk == TypeKind.Tuple || vk == TypeKind.String) return true;
+	return vk == TypeKind.Union && unwrapRefNullUnion(t) == null;
+}
+
+// The operand of an `==`/`!=` against `null` whose answer is a constant, else null.
+// Every pass that must keep that operand's evaluation asks this one question.
+export function foldedNullOperand(ctx: TransformContext, node: Node): Node | null {
+	if (node.kind != NodeKind.BinaryExpr || ctx.checkerCtx == null) return null;
+	const d = node.data as BinaryExprData;
+	const op = d.operator;
+	if (op != "==" && op != "===" && op != "!=" && op != "!==") return null;
+	const nullLeft = isNullExpr(d.left);
+	if (nullLeft == isNullExpr(d.right)) return null;
+	const operand = nullLeft ? d.right : d.left;
+	let valueType = resolveType(ctx, operand);
+	if (valueType != null && !nullLeft) {
+		const peeled = peelThrough(valueType, PEEL_ALIAS);
+		valueType = peelTransparentInstance(peeled != null ? peeled : valueType);
+	}
+	return valueType != null && neverHoldsNull(valueType) ? operand : null;
 }
 
 function declaresEquality(ctx: TransformContext, leftType: Type, right: Node): boolean {
@@ -288,7 +318,13 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		if (carrier != null && hasNullLeft) d.right = carrier;
 		else if (carrier != null) d.left = carrier;
 		const valueType = carrier != null ? carrier.nodeType : hasNullLeft ? resolveType(ctx, d.right) : leftType;
-		if (valueType != null && hasValueEq(valueType)) {
+		// The operand is still evaluated once, in order: awaitSpill binds an impure one to a
+		// temp on C. JS and the Raiser compare with null natively, so they keep the comparison.
+		const folded = foldedNullOperand(ctx, node);
+		if (folded != null) {
+			if (cloneIfPure(folded) != null) return makeBool(isNotEqual, loc);
+			if (ctx.jsBackend || ctx.raiserBackend) return node;
+			reportTransformError(ctx, "internal: a null comparison on an operand with effects reached operatorLower unspilled", loc);
 			return makeBool(isNotEqual, loc);
 		}
 		// Maybe<T>: x !== null → x.present, x === null → !x.present
@@ -297,13 +333,6 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			const member = makeMember(nonNullSide, "present", loc);
 			if (isNotEqual) return member;
 			return makeUnary("!", member, loc);
-		}
-		// Array null check: arrays are value-type structs { len, p } — can never be null.
-		// Reference parity: disallows isNil on sequences (value types with same layout).
-		// Empty arrays have p=NULL but are valid — push handles lazy alloc.
-		// Fold to constant true/false, same as strings, results, tuples.
-		if (valueType != null && valueType.kind == TypeKind.Array) {
-			return makeBool(isNotEqual, loc);
 		}
 		// Closure null check: `closure === null` → `closure.fn === NULL`.
 		// Both sides re-bound: the null side must be a bare null literal — a
@@ -316,21 +345,6 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			d.left = hasNullLeft ? bareNull : fnMember;
 			d.right = hasNullLeft ? fnMember : bareNull;
 			return node;
-		}
-		// Other value types (Result, Tuple, String, plain Union) can never be null —
-		// fold to constant true/false. Reference parity: value types can't be nil.
-		// EXCLUSION: `Union(Ref<T>, Null)` / `Union(Ptr<T>, Null)` IS the standard
-		// nullable pointer pattern (kept as Union for flow narrowing — see
-		// resolveAnnotation in resolvePass.ms). Those CAN be null at runtime, so
-		// the comparison must stay as a real runtime pointer check.
-		if (valueType != null) {
-			const vk = valueType.kind;
-			if (vk == TypeKind.GenericInstance || vk == TypeKind.Tuple || vk == TypeKind.String) {
-				return makeBool(isNotEqual, loc);
-			}
-			if (vk == TypeKind.Union && unwrapRefNullUnion(valueType) == null) {
-				return makeBool(isNotEqual, loc);
-			}
 		}
 	}
 

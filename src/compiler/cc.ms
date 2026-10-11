@@ -22,7 +22,7 @@ import {
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
-import { CliOptions, MODE_DANGER, buildCpu, newCliOptions, applyArgs } from "./options";
+import { CliOptions, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
@@ -520,7 +520,7 @@ export function ltoBroken(cc: string, targetOs: string): boolean {
 	return targetOs == "darwin" || targetOs == "macos";
 }
 
-// Should --danger reach for LTO by default? Practicality on top of
+// Should --danger (or --release on Solana) reach for LTO by default? Practicality on top of
 // possibility: GNU gcc links -flto, but a whole-program link of this tree ran
 // 40+ minutes without finishing — never a sane default, still allowed
 // explicitly (informed choice, e.g. an overnight CI build).
@@ -531,6 +531,8 @@ function ltoDefaultOn(cc: string, targetOs: string): boolean {
 }
 
 // Resolve opts.lto once the compiler is known. Empty = no explicit --lto=:
+// --release on Solana takes thin LTO too, since --danger is refused there and
+// the checked build must be as optimized as the unchecked one was.
 // --danger means "the fastest binary this toolchain can produce on this
 // target", so it takes thin LTO where that links and drops it (with a notice)
 // where it cannot. An explicit --lto= against a proven-broken pair fails loud.
@@ -538,12 +540,13 @@ export function resolveLto(opts: CliOptions): void {
 	const cc = opts.targetOs == "solana" ? "clang" : getCompilerName(opts.ccCompiler, opts.ccBinary);
 	const ccName = isZigCC(cc) ? "zig cc" : cc;
 	if (opts.lto == "") {
-		if (opts.mode == MODE_DANGER && ltoDefaultOn(cc, opts.targetOs)) {
+		const wantsLto = opts.mode == MODE_DANGER || (opts.mode == MODE_RELEASE && opts.targetOs == "solana");
+		if (wantsLto && ltoDefaultOn(cc, opts.targetOs)) {
 			opts.lto = "thin";
 		} else {
 			opts.lto = "off";
-			if (opts.mode == MODE_DANGER) {
-				writeStderr(`note: --danger builds without LTO for ${ccName} targeting ${opts.targetOs}.\n`);
+			if (wantsLto) {
+				writeStderr(`note: ${opts.mode == MODE_DANGER ? "--danger" : "--release"} builds without LTO for ${ccName} targeting ${opts.targetOs}.\n`);
 			}
 		}
 		return;
@@ -1356,7 +1359,7 @@ test "no-default-library flags suppress implicit math linkage but preserve expli
 
 test "an SBF build with LTO compiles bitcode, and one without LTO native objects" {
 	const lto = newCliOptions();
-	assert applyArgs(lto, ["--os=solana", "--danger"], 0).ok;
+	assert applyArgs(lto, ["--os=solana", "--release"], 0).ok;
 	resolveLto(lto);
 	assert lto.lto == "thin";
 	assert cliCompileFlags(lto).indexOf("-flto", 0) >= 0;

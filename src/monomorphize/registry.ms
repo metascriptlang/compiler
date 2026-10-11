@@ -156,6 +156,10 @@ function monoTypeKeyBody(t: Type): string {
 			}
 			return key;
 		},
+		TypeKind.Alias => {
+			if (t.typeReturn == null) throw new Error("internal: alias '" + t.typeName + "' has no target in monoTypeKey");
+			return monoTypeKey(t.typeReturn);
+		},
 		TypeKind.SizedArray => "sizedArr_" + t.typeValue.toString() + "_" + monoTypeKey(t.typeReturn),
 		TypeKind.Span => "span_" + monoTypeKey(t.typeReturn),
 		TypeKind.Set => "set_" + monoTypeKey(t.typeReturn),

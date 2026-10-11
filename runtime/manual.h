@@ -87,18 +87,19 @@ typedef struct {
     uint64_t programId;
     bool err;
     msException* currException;
+    uint64_t rent[3];
 } msSolanaContext;
 
 static inline msSolanaContext* msSolanaCurrentContext(void) {
-    return (msSolanaContext*)MS_SOLANA_HEAP_START;
+    msSolanaContext* context = (msSolanaContext*)MS_SOLANA_HEAP_START;
+    __asm__("" : "+r"(context));
+    return context;
 }
 
 static inline void msSolanaEnter(const uint8_t* input) {
     msSolanaContext* context = msSolanaCurrentContext();
     context->input = (uint64_t)input;
     context->arenaPosition = sizeof(msSolanaContext);
-    context->err = false;
-    context->currException = (msException*)0;
 }
 
 static inline uint64_t msSolanaResult(void) {

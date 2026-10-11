@@ -37,6 +37,14 @@ import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
 
+let _jsProgramScope = false;
+
+// A JS bundle is one module scope, so its modules share the claim C makes over
+// one image; a split file sees only its own top level and keeps its own copy.
+export function setJsProgramScope(on: boolean): void {
+	_jsProgramScope = on;
+}
+
 export function resetLiftedOps(): void {
 	resetHookSyms();
 }
@@ -1557,13 +1565,11 @@ function unionMemberEq(aMember: Node, bMember: Node, memberType: Type, loc: Sour
 
 // ===== Ensure Eq (on-demand: only for unions actually compared) =====
 
-// C links every module into one image, so one module owns each Eq; a JS module
-// only sees its own top level, so each module that compares emits its own.
 function claimEq(t: Type, op: AttachedOp, lctx: LiftCtx): boolean {
 	const key = opKey(t, op);
 	if (nameSetContains(lctx.generated, key)) return false;
 	nameSetAdd(lctx.generated, key);
-	if (lctx.jsBackend) return true;
+	if (lctx.jsBackend && !_jsProgramScope) return true;
 	return !hasLiftedOp(t, op);
 }
 
@@ -1743,66 +1749,68 @@ function tupleField(obj: Node, idx: number, lctx: LiftCtx, loc: SourceLocation):
 	return field;
 }
 
-// Generate lexicographic < for tuples.
+// On-demand msTuple_<hash>Lt for a tuple ordered as a tuple field (fieldOrderExpr).
+// Shares the claim on the tuple's `<` with operatorLower's pending ops, so one body.
+function ensureTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
+	if (!claimEq(t, AttachedOp.AttachedLt, lctx)) return;
+	generateTupleLt(tupleName, t, lctx, loc);
+}
+
+// One field of the lexicographic walk: `op` is "<" or ">", the reference's
+// cmp(a, b) < 0 and cmp(a, b) > 0, spelled with the field type's own ordering.
+// These helpers are built after the operator lowerings ran, so a string, bigint
+// or tuple field is lowered here, as fieldEqExpr does for equality.
+function fieldOrderExpr(aField: Node, bField: Node, fieldType: Type, op: string, lctx: LiftCtx, loc: SourceLocation): Node {
+	if (fieldType.kind == TypeKind.Tuple) {
+		ensureTupleLt(tupleTypeName(fieldType), fieldType, lctx, loc);
+		const lt = makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedLt), null, loc);
+		return op == "<" ? makeCall(lt, [aField, bField], loc) : makeCall(lt, [bField, aField], loc);
+	}
+	if (lctx.jsBackend) return makeBinary(aField, op, bField, loc);
+	if (isStringLike(fieldType)) {
+		return makeBinary(makeCall(runtimeRef("msStringCompare", loc), [aField, bField], loc), op, makeNumber(0, loc), loc);
+	}
+	if (fieldType.kind == TypeKind.BigInt) {
+		return makeBinary(makeCall(runtimeRef("msBigIntCmp", loc), [aField, bField], loc), op, makeNumber(0, loc), loc);
+	}
+	return makeBinary(aField, op, bField, loc);
+}
+
+// Lexicographic < and <= for tuples; they differ only in the answer for equal tuples.
 // Reference: proc `<`*[T: tuple](x, y: T): bool =
 //        for a, b in fields(x, y):
 //          var c = cmp(a, b)
 //          if c < 0: return true
 //          if c > 0: return false
-//        return false
-//
-// We inline the cmp pattern: if (a < b) return true; if (a > b) return false;
-function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+//        return false    (`<=` returns true)
+function generateTupleOrder(tupleName: string, suffix: string, op: AttachedOp, whenEqual: boolean, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
 	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
 	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		// if (a._i < b._i) return true;
-		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
-		// if (a._i > b._i) return false;
-		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
-		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
+		const fieldType = t.typeChildren[i];
+		const less = fieldOrderExpr(tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc), tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc), fieldType, "<", lctx, loc);
+		buf.push(makeIf(less, makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
+		const greater = fieldOrderExpr(tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc), tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc), fieldType, ">", lctx, loc);
+		buf.push(makeIf(greater, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
 	}
-	buf.push(makeReturn(makeBool(false, loc), loc));
-	const tltFn = makeFnDecl(tupleName + "Lt", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
-	setHookParamType(tltFn, 0, t);
-	setHookParamType(tltFn, 1, t);
-	liftOp(tltFn, t, t, AttachedOp.AttachedLt, tupleName + "Lt");
-	lctx.collector.push(tltFn);
+	buf.push(makeReturn(makeBool(whenEqual, loc), loc));
+	const fn = makeFnDecl(tupleName + suffix, [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
+	setHookParamType(fn, 0, t);
+	setHookParamType(fn, 1, t);
+	liftOp(fn, t, t, op, tupleName + suffix);
+	lctx.collector.push(fn);
 }
 
-// Generate lexicographic <= for tuples.
-// Reference: proc `<=`*[T: tuple](x, y: T): bool =
-//        for a, b in fields(x, y):
-//          var c = cmp(a, b)
-//          if c < 0: return true
-//          if c > 0: return false
-//        return true    <-- only difference from <
+function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	generateTupleOrder(tupleName, "Lt", AttachedOp.AttachedLt, false, t, lctx, loc);
+}
+
 function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	const buf: Node[] = [];
-	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
-	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
-	let i = 0;
-	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
-		const aField2 = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
-		const bField2 = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
-		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
-		i += 1;
-	}
-	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
-	const tleFn = makeFnDecl(tupleName + "Le", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
-	setHookParamType(tleFn, 0, t);
-	setHookParamType(tleFn, 1, t);
-	liftOp(tleFn, t, t, AttachedOp.AttachedLe, tupleName + "Le");
-	lctx.collector.push(tleFn);
+	generateTupleOrder(tupleName, "Le", AttachedOp.AttachedLe, true, t, lctx, loc);
 }
 
 // ===== Standalone Array Lifecycle Hooks (reference parity: reference sequence op) =====

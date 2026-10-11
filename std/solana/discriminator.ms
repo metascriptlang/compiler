@@ -58,6 +58,13 @@ export function word(this discriminator: Discriminator): uint64 {
 	return value;
 }
 
+export function namedWord(declared: Discriminator, typeName: string): uint64 {
+	if (declared != accountDiscriminator(typeName)) {
+		throw new Error("discriminator(this typeof " + typeName + ") does not hash its own name: write accountDiscriminator(\"" + typeName + "\")");
+	}
+	return declared.word();
+}
+
 function expectBytes(discriminator: Discriminator, hex: string): boolean {
 	const digits = "0123456789abcdef";
 	for (let i = 0; i < 8; i++) {

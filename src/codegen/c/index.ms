@@ -46,10 +46,6 @@ function prepareEmissionTypes(node: Node, ctx: CheckerContext): void {
 			if (d.initializer.nodeType == null && node.nodeType != null) {
 				d.initializer.nodeType = node.nodeType;
 			}
-			if (node.nodeType != null && node.nodeType.kind == TypeKind.Union
-				&& d.initializer.kind == NodeKind.ObjectLiteral) {
-				d.initializer.nodeType = node.nodeType;
-			}
 		}
 	} else if (node.kind == NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
@@ -399,10 +395,11 @@ export function genProjectDispatcher(
 			addLine(b, "}");
 		},
 		"solana" => {
-			addLine(b, "uint64_t entrypoint(const uint8_t* input) {");
+			addLine(b, "uint64_t entrypoint(const uint8_t* input, const uint8_t* instructionData) {");
+			addLine(b, "  if (!instructionData) return 3ULL << 32;");
 			addLine(b, "  uint64_t accounts[MS_SOL_MAX_ACCOUNTS];");
 			addLine(b, "  msSolanaEnter(input);");
-			addLine(b, "  msSolParse(accounts);");
+			addLine(b, "  msSolStart(accounts, instructionData);");
 			addLine(b, "  MsMain();");
 			addLine(b, "  return msSolanaResult();");
 			addLine(b, "}");

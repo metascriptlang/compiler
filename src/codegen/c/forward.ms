@@ -9,6 +9,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { ensureDrcProto, procHeader } from "./types";
 import { mangledFunctionName } from "./names";
+import { placedInstanceOf } from "../../checker/instantiate";
 
 // ===== DRC forward prototypes =====
 
@@ -29,7 +30,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 		return;
 	}
 	if (sym != null && copiesInline(g, sym)) {
-		requestInlineCopy(g, calleeName, sym);
+		requestInlineCopy(g, calleeName, placedInstanceOf(sym));
 		return;
 	}
 	if (sym != null && sym.modulePath != "" && sym.modulePath == g.modulePath) return;

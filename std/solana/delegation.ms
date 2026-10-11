@@ -3,7 +3,8 @@ import {
 	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
 	assignTo,
-	createAccount,
+	programId,
+	createAccountAllowPrefund,
 	putPubkey,
 	putU32,
 	putU64,
@@ -19,7 +20,7 @@ import {
 	SignerSeeds,
 	bytesAddress,
 	fillWithBump,
-	findAddress,
+	findExpected,
 	seedBytes,
 	seedKey,
 	seedText,
@@ -27,6 +28,9 @@ import {
 	signerOfBumped,
 	tableAddress,
 } from "./seed";
+
+// magicblock delegation-program src/processor/fast/delegate.rs:160-204 takes 1 to 8 seeds.
+export const DELEGATION_MAX_SEEDS: uint64 = 8;
 
 export struct DelegationAccounts {
 	payer: Account;
@@ -71,27 +75,49 @@ export function delegateAt(
 	config: DelegationConfig,
 ): Result<uint64, ProgramError> {
 	if (!accounts.payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const ownerKey = accounts.ownerProgram.key();
-	const bufferSeeds: SeedSlice[2] = [seedText("buffer"), seedKey(accounts.delegated.keyAddress())];
-	const bufferAddress = try findAddress(bufferSeeds, bytesAddress(ownerKey.bytes));
-	if (!bufferAddress.key.equals(accounts.buffer.key())) { return Result.err(ProgramError.invalidSeeds()); }
 	const seedCount = seeds.length as uint64;
+	if (seedCount == 0 || seedCount > DELEGATION_MAX_SEEDS) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	const ownerKey = accounts.ownerProgram.key();
+	if (ownerKey != programId()) { return Result.err(ProgramError.incorrectProgramId()); }
+	if (!accounts.delegated.isOwnedBy(ownerKey) && !accounts.delegated.isOwnedBy(Pubkey.zero())) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	const bufferSeeds: SeedSlice[2] = [seedText("buffer"), seedKey(accounts.delegated.keyAddress())];
+	const bufferBump: uint8[1] = [try findExpected(bufferSeeds, bytesAddress(ownerKey.bytes), accounts.buffer.keyAddress())];
 	let table: SeedTable = { slices: [], bump: [0], count: 0 };
 	if (!fillWithBump(table, tableAddress(seeds), seedCount, bump)) {
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
+
+	// A seed may point into the delegated account's data, which is zeroed below: sign with the copy the args carry.
+	let storage: uint8[625] = [];
+	let length = putU64(storage, 0, 0);
+	length = putU32(storage, length, config.commitFrequencyMs);
+	length = putU32(storage, length, seedCount as uint32);
+	for (let index: uint64 = 0; index < seedCount; index++) {
+		const seed = table.slices[index];
+		length = putU32(storage, length, seed.length as uint32);
+		table.slices[index] = { address: bytesAddress(storage) + length, length: seed.length };
+		length = putAddress(storage, length, seed.address, seed.length);
+	}
+	if (config.validator.isZero()) {
+		length = putU8(storage, length, 0);
+	} else {
+		length = putU8(storage, length, 1);
+		length = putPubkey(storage, length, config.validator);
+	}
 	let signer: SignerSeeds[1] = [{ address: 0, length: 0 }];
 	signerOfBumped(table, signer);
+
 	const dataLength = accounts.delegated.dataLength();
-	const bufferBump: uint8[1] = [bufferAddress.bump];
 	const bufferSigner: SeedSlice[3] = [bufferSeeds[0], bufferSeeds[1], seedBytes(bufferBump)];
 	const bufferSigners: SignerSeeds[1] = [signerOf(bufferSigner)];
-	const _bufferCreated = try createAccount(
+	const _bufferCreated = try createAccountAllowPrefund(
 		accounts.payer,
 		accounts.buffer,
 		0,
 		dataLength,
-		ownerKey,
+		bytesAddress(ownerKey.bytes),
 		bufferSigners,
 	);
 	const _copied = try accounts.buffer.data().copyFrom(accounts.delegated.data());
@@ -102,20 +128,6 @@ export function delegateAt(
 	}
 	const _assigned = try assignTo(accounts.delegated, DELEGATION_PROGRAM_ID, signer);
 
-	let storage: uint8[625] = [];
-	let length = putU64(storage, 0, 0);
-	length = putU32(storage, length, config.commitFrequencyMs);
-	length = putU32(storage, length, seedCount as uint32);
-	for (const seed of seeds) {
-		length = putU32(storage, length, seed.length as uint32);
-		length = putAddress(storage, length, seed.address, seed.length);
-	}
-	if (config.validator.isZero()) {
-		length = putU8(storage, length, 0);
-	} else {
-		length = putU8(storage, length, 1);
-		length = putPubkey(storage, length, config.validator);
-	}
 	const _delegated = try invokeSigned(
 		DELEGATION_PROGRAM_ID,
 		[

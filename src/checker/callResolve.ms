@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -13,19 +13,19 @@ import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBloc
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint } from "./fit";
+import { fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation } from "./resolvePass";
+import { bindFromExplicitTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf } from "./symbol";
+import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
+import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { dispatchDeclaredEntry, dispatchEntryFor } from "./context";
@@ -710,10 +710,22 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 		const expectedType = paramTypes != null && argIdx + defaultOffset < paramTypes.length ? paramTypes[argIdx + defaultOffset] : null;
 		const diagnosticMark = defCtx.errors.length;
 		callCheckExpr(defCtx, cloned, expectedType);
-		const fitted = expectedType != null ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
+		const fitted = expectedType != null && !hasGenericParams(expectedType) ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.length = diagnosticMark;
 		args.push(fitted);
 		argIdx = argIdx + 1;
+	}
+}
+
+// A callee with no declaration (a value of function type) has no default nodes, so an
+// omitted optional argument is the null its nullable parameter type carries.
+function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[], loc: SourceLocation): void {
+	while (args.length < paramTypes.length) {
+		const expected = paramTypes[args.length];
+		if (!isMaybeType(expected) && !unionHasMemberOfKind(expected, TypeKind.Null)) return;
+		const lit = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, loc);
+		callCheckExpr(ctx, lit, expected);
+		args.push(fitNode(ctx, lit, expected, lit.nodeType));
 	}
 }
 
@@ -1036,6 +1048,7 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 	if (argType != null && isResult(argType) && getResultOkType(argType) != null) {
 		const okT = getResultOkType(argType);
 		if (d.hasCatch && d.catchVal != null && okT != null && okT.kind != TypeKind.Void && d.catchVal.nodeType != null) {
+			if (isNumeric(okT)) adoptLiteralTo(ctx, d.catchVal, okT);
 			const joined = joinBranchTypes([okT, d.catchVal.nodeType]);
 			if (!isUnresolvedType(joined)) {
 				d.catchVal = fitJoinedBranch(ctx, d.catchVal, joined);
@@ -1197,8 +1210,47 @@ export function keepFoldedType(node: Node, expanded: Node): void {
 	node.flags = node.flags.incl(NodeFlag.Folded);
 	node.nodeType = expanded.nodeType;
 }
+function isBareName(text: string): boolean {
+	return text != "" && text.indexOf("<", 0) < 0 && text.indexOf("[", 0) < 0 && text.indexOf(" ", 0) < 0 && text.indexOf(".", 0) < 0;
+}
+
+// The name a module-scope type symbol gives `bound` (a private type reached through an exported alias).
+function visibleNameOf(ctx: CheckerContext, bound: Type): string {
+	for (const entry of moduleScopeNamed(ctx.table)) {
+		if (!isTypeSymbol(entry.sym)) continue;
+		ensureShaped(entry.sym, ctx);
+		if (entry.sym.symbolType != null && sameType(entry.sym.symbolType, bound)) return entry.name;
+	}
+	return "";
+}
+
+// A macro replacement owns its type arguments as bound typed operands: the callee
+// `base<operands>` is lowered here to the ordinary explicit generic call `base<T>(...)`.
+function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boolean {
+	const callee = d.callee;
+	if (callee.kind != NodeKind.TypeGeneric) return true;
+	const g = callee.data as TypeGenericData;
+	const spelled: string[] = [];
+	for (const operand of g.typExprArgs) {
+		const bound = operand.nodeType;
+		if (bound == null) {
+			addError(ctx, "a generic callee's type operand carries no bound type (a macro must pass getTypeArg())", operand.location.line, operand.location.column);
+			return false;
+		}
+		const written = monoConcreteTypeName(bound);
+		const seen = isBareName(written) && lookupSymbol(ctx.table, written) == null ? visibleNameOf(ctx, bound) : "";
+		const name = seen != "" ? seen : written;
+		spelled.push(name);
+	}
+	d.callee = g.typExprBase;
+	d.callee.location = callee.location;
+	node.typeArg = spelled.join(", ");
+	return true;
+}
+
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
+	if (!lowerTypedCallee(ctx, node, d)) return errorType();
 	if (d.callee == null) {
 		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
 		return errorType();
@@ -1342,7 +1394,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			adoptExpansionResult(node, expandedValue);
-			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
+			node.typeArg = expandedValue.typeArg;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;
 			node.flags = 0 as BitSet<NodeFlag>;
@@ -1410,7 +1462,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object, me.property);
 				let filtered = filterExtsByReceiverType(allByName, objType);
 				if (isStaticAccess && me.object.resolvedSym != null) {
-					for (const owned of staticExtsOwnedBy(ctx, allByName, me.object.resolvedSym, objType)) filtered.push(owned);
+					for (const owned of staticExtsOwnedBy(ctx, allByName, me.object.resolvedSym, objType)) {
+						if (filtered.indexOf(owned) < 0) filtered.push(owned);
+					}
 				}
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
@@ -1801,8 +1855,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		node.nodeType = nullableRet;
 		return nullableRet;
 	}
-	if (calleeType != null && isValueCallee(d.callee) && isNeverCallable(calleeType)) {
-		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures",
+	if (calleeType != null && isValueCallee(d.callee) && !isCallableValueType(calleeType)) {
+		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures" + dynamicFieldCalleeHint(d.callee),
 			node.location.line, node.location.column);
 		node.nodeType = inferredType();
 		return node.nodeType;
@@ -1832,6 +1886,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			if (calleeNameForDef != "") {
 				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length, 0);
 			}
+			fillNullableTail(ctx, d.arguments, calleeType.typeChildren, node.location);
 		}
 		relateCallArgs(ctx, node, calleeType!, argTypes, isActorMethodCall);
 		// On-demand generic instantiation for direct calls (transitive
@@ -3463,16 +3518,47 @@ function isValueCallee(callee: Node): boolean {
 		|| sym.symbolKind == SymbolKind.Property || sym.symbolKind == SymbolKind.Temp;
 }
 
-function isNeverCallable(t: Type): boolean {
+// Reference (semIndirectOp, semexprs.nim): a value is called only through a
+// procedure type; every other type in call position is refused. A type not
+// known yet is left to the code that settles it.
+// The node whose value a match arm yields: its expression, or the argument of
+// the return that ends its block.
+function matchArmValue(cd: MatchCaseData, asStatement: boolean): Node {
+	const none = null as unknown as Node;
+	if (cd.caseBody.kind != NodeKind.BlockStmt) return cd.caseBody;
+	if (asStatement) return none;
+	const bd = cd.caseBody.data as BlockStmtData;
+	if (bd.statements.length == 0) return none;
+	const last = bd.statements[bd.statements.length - 1];
+	return last.kind == NodeKind.ReturnStmt ? (last.data as ReturnStmtData).argument ?? none : none;
+}
+
+function unionHasFunction(t: Type): boolean {
+	for (const m of t.typeChildren) {
+		if (m.kind == TypeKind.Function) return true;
+	}
+	return false;
+}
+
+function isCallableValueType(t: Type): boolean {
 	return match (t.kind) {
-		TypeKind.Void | TypeKind.Null | TypeKind.Boolean | TypeKind.BooleanLiteral
-			| TypeKind.Number | TypeKind.Float32 | TypeKind.Float64
-			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Char | TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
-			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Array | TypeKind.SizedArray => true,
+		TypeKind.Function => true,
+		TypeKind.Inferred | TypeKind.Unknown | TypeKind.Pending | TypeKind.Error | TypeKind.Never
+			| TypeKind.GenericParam | TypeKind.GenericInstance | TypeKind.TypeReference | TypeKind.Conditional => true,
+		TypeKind.Ref | TypeKind.Var | TypeKind.Lent | TypeKind.Sink | TypeKind.Borrow | TypeKind.Alias | TypeKind.Distinct =>
+			t.typeReturn == null || isCallableValueType(t.typeReturn),
+		TypeKind.Union => unionHasFunction(t),
 		_ => false,
 	};
+}
+
+function dynamicFieldCalleeHint(callee: Node): string {
+	if (callee.kind != NodeKind.CallExpr) return "";
+	const inner = (callee.data as CallExprData).callee;
+	if (inner.kind != NodeKind.MemberExpr || (inner.data as MemberExprData).property != "getDynamicField") return "";
+	const args = (callee.data as CallExprData).arguments;
+	const key = args.length > 0 && args[0].kind == NodeKind.StringLiteral ? (args[0].data as StringLiteralData).value : "";
+	return ` — '${key}' is read as a dynamic field here, not a method; a free function is called as '${key}(value, …)'`;
 }
 
 // Declared types, not `candidates`: those have the receiver stripped, and the receiver is what differs.
@@ -4868,7 +4954,7 @@ export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boo
 	if (flattenedLocationFieldType(recvType, key) != null) return true;
 	// bindSym bake splices Identifier literals carrying the bound-symbol handle;
 	// valueToNode consumes it — never a real Node field.
-	if (key == "symHandle" || key == "typeHandle") return true;
+	if (key == "symHandle" || key == "typeHandle" || key == "gensym") return true;
 	return engineNodeDataField(recvType, key).fieldType != null;
 }
 
@@ -4969,6 +5055,7 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 						continue;
 					}
 				}
+				if (refusesTypeArm(ctx, p, d.matchDisc)) continue;
 				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
@@ -4980,10 +5067,12 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 				// Tier 2: collect string literal patterns for exhaustiveness
 				if (patternKind == NodeKind.StringLiteral && !hasGuard) { coveredName = (p.data as StringLiteralData).value; covers = true; }
 				if (patternKind == NodeKind.BooleanLiteral && !hasGuard) { coveredName = (p.data as BooleanLiteralData).boolValue ? "true" : "false"; covers = true; }
+				const errorsBeforeCheck = ctx.errors.length;
+				if (kindArmHandled(ctx, d.matchDisc, p)) { callCheckExpr(ctx, p, null); continue; }
 				callCheckExpr(ctx, p, discType);
 				const errorsBeforePattern = ctx.errors.length;
-				if (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
-					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral) {
+				if (errorsBeforePattern == errorsBeforeCheck && (patternKind == NodeKind.MemberExpr || patternKind == NodeKind.StringLiteral
+					|| patternKind == NodeKind.NumberLiteral || patternKind == NodeKind.BooleanLiteral)) {
 					checkSwitchCase(ctx, d.matchDisc, p);
 				}
 				if (covers && ctx.errors.length == errorsBeforePattern) coveredMembers.push(coveredName);
@@ -5029,6 +5118,12 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		}
 	}
 	let matchJoined: Type | null = null;
+	const armValues: Node[] = [];
+	for (const c of d.matchCases) armValues.push(matchArmValue(c.data as MatchCaseData, asStatement));
+	adoptLiteralArms(ctx, armValues);
+	for (let ai = 0; ai < armValues.length && ai < branchBodyTypes.length; ai += 1) {
+		if (armValues[ai] != null && armValues[ai].nodeType != null) branchBodyTypes[ai] = armValues[ai].nodeType;
+	}
 	const joined = joinBranchTypes(branchBodyTypes);
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
@@ -5172,6 +5267,27 @@ export function estimateExprEndCol(node: Node): int32 {
 		},
 		_ => col + 1,
 	};
+}
+
+export function refusesTypeArm(ctx: CheckerContext, p: Node, disc: Node): boolean {
+	const name = (p.data as IdentifierData).name;
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym == null ? builtinTypeNamed(ctx, name) == null : !isTypeSymbol(sym)) return false;
+	const kindTest = sym == null && (isPrimitiveKindName(name) || isTypeofTag(name))
+		? `; test the kind with typeof ${referenceText(disc)} === "${name}"` : "";
+	addError(ctx, `'${name}' only refers to a type, but is being used as a value here: a match arm compares values, so it cannot test which type a value holds${kindTest}`, p.location.line, p.location.column);
+	p.nodeType = errorType();
+	return true;
+}
+
+function referenceText(n: Node): string {
+	if (n.kind == NodeKind.Identifier) return (n.data as IdentifierData).name;
+	if (n.kind == NodeKind.MemberExpr) {
+		const md = n.data as MemberExprData;
+		const head = referenceText(md.object);
+		return head == "x" ? "x" : head + "." + md.property;
+	}
+	return "x";
 }
 
 // Detect duplicate unguarded match patterns (reference parity: checkForOverlap).

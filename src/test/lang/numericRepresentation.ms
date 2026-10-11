@@ -178,3 +178,14 @@ test "numericRepresentation: sink arguments convert numeric payloads before nati
 	map.set("key", other.wide as number);
 	assert labels[map.get("key")!] == "four";
 }
+
+test "numericRepresentation: floating unary negation preserves the zero sign" {
+	const wide: float64 = -0.0;
+	const narrow: float32 = -0.0;
+	const positive: float64 = -(-0.0);
+	assert 1.0 / wide < -1e308;
+	assert 1.0 / (narrow as float64) < -1e308;
+	assert 1.0 / positive > 1e308;
+	const aliased: float64 = -positive;
+	assert 1.0 / aliased < -1e308;
+}

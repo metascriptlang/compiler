@@ -28,9 +28,10 @@
 // 25. dce                   — dead code elimination (2-tier: statement + symbol level)
 // 26. destructorLifting     — generate per-type _destroy/_copy function bodies
 
-import { Node, NodeKind, ProgramData } from "../ast/node";
+import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
-import { createTransformContextWithChecker } from "./context";
+import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
+import { createTransformContextWithChecker, TransformContext } from "./context";
 import { bindCompilerFuncs } from "./util";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
@@ -96,6 +97,7 @@ import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerNullable } from "./native/nullableLower";
 import { projectNarrowedUnions, checkVariantReads } from "./native/unionProjectLower";
 import { lowerUnionTags } from "./lowering/unionTagLower";
+import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
@@ -104,6 +106,14 @@ import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
+
+// An instance field initializer is evaluated by the constructor, so its `?.` and `??`
+// bind their temps there, after lowerCtorInit has moved it; on C the moved expression
+// also spills what a folded null comparison would drop.
+function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
+	const result = lowerNullishCoalesce(lowerOptionalChain(lowerCtorInit(program, ctx), ctx), ctx);
+	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
+}
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -135,6 +145,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	result = lowerResultConstructors(result);
+	result = lowerTypeof(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
@@ -151,14 +162,14 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// lowerSpawn boxes a thunk's return value around its await; spill that before lowerAwait.
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
 	if (!jsBackend) { result = lowerAwait(result, ctx); }
-	if (!jsBackend) { result = lowerCtorInit(result, ctx); }
+	if (!jsBackend) { result = lowerFieldInitializers(result, ctx); }
 	if (!jsBackend) { result = lowerActor(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	if (!jsBackend) { result = lowerRvalueBridge(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
 	// Field initializers become assignments inside the constructor, so both
 	// backends run them in one place and the parent chain reaches them.
-	result = lowerCtorInit(result, ctx);
+	result = jsBackend ? lowerFieldInitializers(result, ctx) : lowerCtorInit(result, ctx);
 	result = lowerNewExpr(result, ctx);
 	// Lift class/actor methods → top-level FunctionDecl. C + Raiser want one
 	// uniform shape for codegen; JS keeps `class Foo {}` native (its semantics
@@ -177,9 +188,12 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	if (jsBackend) { result = lowerJsPointers(result, ctx); }
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
-	result = spanLower(result, ctx);
-	if (!jsBackend) { result = spanParamExpand(result, ctx); }
+	result = spanLower(result, ctx, false);
 	result = lowerConditionalExpr(result, ctx);
+	// Conditionally-evaluated positions are statements now: the span sources the
+	// first run had to leave there are evaluated once ahead of them and split.
+	result = spanLower(result, ctx, true);
+	if (!jsBackend) { result = spanParamExpand(result, ctx); }
 	// Conditionally-evaluated positions (ternary arm, `&&`/`||` RHS, while-cond)
 	// are statements now, so the positional-new hoist that skipped them above can
 	// reach them. The pass empties `newArguments` when it lowers, so this second
@@ -217,7 +231,26 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerEnumToString(result, ctx); }
 	result = liftDestructors(result, ctx, !jsBackend);
 	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); }
+	if (jsBackend) { result = ownModuleScopeTemps(result, checkerCtx); }
 	return result;
+}
+
+// A binding the lowerings declare at module scope belongs to the module, as one
+// the author wrote does. C keeps such a slot apart with static linkage per
+// translation unit; a JS bundle is one flat scope, so the slot takes the module
+// qualifier every module-level variable carries.
+function ownModuleScopeTemps(program: Node, checkerCtx: CheckerContext): Node {
+	if (program.kind != NodeKind.Program) return program;
+	const pd = program.data as ProgramData;
+	for (const s of pd.programStmts) {
+		if (s.kind != NodeKind.VariableDecl) continue;
+		const sym = s.resolvedSym;
+		if (sym == null || hasFlag(sym, SymbolFlag.Global)) continue;
+		if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp) continue;
+		if (sym.modulePath == "") sym.modulePath = checkerCtx.modulePath;
+		setFlag(sym, SymbolFlag.Global);
+	}
+	return program;
 }
 
 function dropLocalTypeLift(program: Node, checkerCtx: CheckerContext): Node {

@@ -4,7 +4,7 @@
 
 import { Account, ProgramError } from "std/solana";
 import { Mint, TokenAccount } from "std/solana/token";
-import { associatedMatches } from "std/solana/mint";
+import { associatedMatches } from "std/solana/typed";
 import { SeedSlice, createAddressWithBump, createAt, findAt, ownProgram, tableAddress } from "std/solana/seed";
 
 extern function msSolAccountTable(): uint64;

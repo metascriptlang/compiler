@@ -16,11 +16,12 @@
 //   { value: x, present: true }   (Maybe wrapper literal)   →  x
 //   x.present   (x is Maybe-typed)                          →  x !== null
 //   x.value     (x is Maybe-typed)                          →  x
+//   x.value     (checked narrowed read)                     →  msMaybeGet(x, …)
 //
 // The absent case (null-typed-as-Maybe) already lowers to native `null` via JS
 // codegen's emitNullLiteral, so construction needs no rewrite — only the reads above.
 
-import { Node, NodeKind, MemberExprData, ObjectLiteralData, TypeAssertionData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, MemberExprData, ObjectLiteralData, TypeAssertionData } from "../../ast/node";
 import { isMaybeType, peelTransparentInstance } from "../../checker/types";
 import { nullAccessHead, unwrapRefusesNull } from "./nullableLower";
 import { TransformContext } from "../context";
@@ -67,6 +68,12 @@ function unwrapMaybeNode(node: Node): Node {
 			}
 			// x.value → x  (native value IS the payload once null-collapsed)
 			if (d.property == "value") {
+				if (node.flags.has(NodeFlag.ConvCheck)) {
+					const carrier = peelTransparentInstance(d.object.nodeType);
+					const call = makeCall(runtimeRef("msMaybeGet", loc), [d.object, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
+					call.nodeType = node.nodeType;
+					return call;
+				}
 				if (node.nodeType != null) d.object.nodeType = node.nodeType;
 				return d.object;
 			}

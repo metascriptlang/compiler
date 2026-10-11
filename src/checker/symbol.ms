@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeFlag, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
 export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
-import { IdentCache, createIdentCache, findIdentId, getIdentId } from "./idents";
+import { IdentCache, createIdentCache, findIdentId, getIdentId, identName } from "./idents";
 
 // A bindSym identifier and a checked enum member cross the macro wire as their
 // Symbol: the enum member's checked form is an identifier spelled with a mangled
@@ -294,6 +294,20 @@ export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
 	const out: Symbol[] = [];
 	for (const sym of scope.symbols.values()) {
 		out.push(sym);
+	}
+	return out;
+}
+
+// Module-scope names (as written there, so an `import { X as Y }` gives `Y`) with their symbols.
+export function moduleScopeNamed(table: SymbolTable): { name: string, sym: Symbol }[] {
+	let scope = table.current;
+	while (scope != null && scope.scopeKind != ScopeKind.Module) {
+		scope = scope.parent;
+	}
+	const out: { name: string, sym: Symbol }[] = [];
+	if (scope == null) return out;
+	for (const entry of scope.symbols.entries) {
+		out.push({ name: identName(table.identCache, entry.key), sym: entry.value });
 	}
 	return out;
 }

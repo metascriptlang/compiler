@@ -219,7 +219,7 @@ function testedByTypeof(kind: string): boolean {
 	return kind == "number" || kind == "string" || kind == "boolean" || kind == "bigint";
 }
 
-function armOrder(source: Type, ctx: TransformContext, loc: SourceLocation): int32[] {
+export function armOrder(source: Type, ctx: TransformContext, loc: SourceLocation): int32[] {
 	const order: int32[] = [];
 	if (testsByTag(source, ctx)) {
 		for (let vi: int32 = 0; vi < source.typeChildren.length; vi += 1) order.push(vi);
@@ -250,7 +250,7 @@ function armOrder(source: Type, ctx: TransformContext, loc: SourceLocation): int
 	return order;
 }
 
-function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: TransformContext, loc: SourceLocation): Node {
+export function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: TransformContext, loc: SourceLocation): Node {
 	const member = source.typeChildren[vi];
 	let test: Node;
 	if (testsByTag(source, ctx)) {
@@ -266,7 +266,7 @@ function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: TransformCo
 	} else {
 		const kind = makeUnary("typeof", read(valueSym, source, loc), loc);
 		kind.nodeType = stringType();
-		const want = makeString(valueKind(member), loc);
+		const want = makeString(ctx.raiserBackend ? jsMemberKind(member) : valueKind(member), loc);
 		test = makeBinary(kind, "===", want, loc);
 	}
 	test.nodeType = booleanType();

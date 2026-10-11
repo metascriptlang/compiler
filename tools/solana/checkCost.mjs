@@ -62,12 +62,14 @@ const OPS = [
 ];
 
 // Totals of each op when this table was last set (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
+// The three structs holding `rolled: Delegated<Pet>` were reset on 2026-10-10, when a Delegated field became pinned by
+// `@seeds @bump`: the canonical search costs about 430 CU that the unpinned field never paid.
 const BASELINE = {
 	"idle": 264,
 	"owned<Pet>": 370,
 	"mutable<Pet>": 380,
 	"delegated<Pet>": 376,
-	"accounts<Everything>": 837,
+	"accounts<Everything>": 1019,
 	"args<Parameters>": 536,
 	"createPda<Pet>": 3854,
 	"create<Pet>": 2061,
@@ -85,8 +87,8 @@ const BASELINE = {
 	"accounts<3 fields> + @seeds @bump": 3685,
 	"accounts<3 fields> + @hasOne": 555,
 	"accounts<3 fields> + @constraint": 528,
-	"accounts<7 fields> + @address": 833,
-	"accounts<7 fields>, no @address": 782,
+	"accounts<7 fields> + @address": 1050,
+	"accounts<7 fields>, no @address": 1011,
 };
 
 function u64(value) {

@@ -11,10 +11,12 @@ extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 from "msSolSpanAddress";
 extern function msSolInfosAddress(table: Span<CpiAccount>): uint64 from "msSolSpanAddress";
 extern function msSolInstructionAddress(table: Readonly<Span<CpiInstruction>>): uint64 from "msSolSpanAddress";
-extern function msSolInvokeSigned(
-	instruction: uint64,
-	accountInfos: uint64,
-	accountInfoCount: uint64,
+extern function msSolInvokeMetas(
+	program: uint64,
+	metas: uint64,
+	count: uint64,
+	data: uint64,
+	length: uint64,
 	signers: uint64,
 	signerCount: uint64,
 ): uint64;
@@ -50,42 +52,24 @@ export struct CpiInstruction {
 	dataLength: uint64;
 }
 
-export function invokeCpi(
+@inline export function invokeCpi(
 	program: Pubkey,
 	metas: Readonly<Span<InstructionAccount>>,
-	infos: Span<CpiAccount>,
 	data: Readonly<Span<uint8>>,
 	length: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const count = metas.length as uint64;
-	if (count > MAX_CPI_ACCOUNTS || infos.length != metas.length || length > (data.length as uint64)) {
+	if (count > MAX_CPI_ACCOUNTS || length > (data.length as uint64)) {
 		return Result.err(ProgramError.invalidArgument());
 	}
-	for (let index = 0; index < metas.length; index++) {
-		const record = metas[index].key - 8;
-		infos[index].key = metas[index].key;
-		infos[index].lamports = record + 72;
-		infos[index].dataLength = msSolLoadU64(record + 80);
-		infos[index].data = record + 88;
-		infos[index].owner = record + 40;
-		infos[index].rentEpoch = 0;
-		infos[index].signer = msSolLoadU8(record + 1);
-		infos[index].writable = msSolLoadU8(record + 2);
-		infos[index].executable = msSolLoadU8(record + 3);
-	}
-	const instruction: CpiInstruction[1] = [{
-		program: msSolSpanAddress(program.bytes),
-		accounts: msSolMetasAddress(metas),
-		accountCount: count,
-		data: msSolSpanAddress(data),
-		dataLength: length,
-	}];
 	const signing = signingOf(signers);
-	const status = msSolInvokeSigned(
-		msSolInstructionAddress(instruction),
-		msSolInfosAddress(infos),
+	const status = msSolInvokeMetas(
+		msSolSpanAddress(program.bytes),
+		msSolMetasAddress(metas),
 		count,
+		msSolSpanAddress(data),
+		length,
 		signing.table,
 		signing.count,
 	);
@@ -96,18 +80,14 @@ export function invokeCpi(
 	return Result.ok(status);
 }
 
-@noinline export function invokeList(
+export function invokeList(
 	program: Pubkey,
 	accounts: Readonly<Span<InstructionAccount>>,
 	data: Readonly<Span<uint8>>,
 	length: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	if (accounts.length > MAX_CPI_ACCOUNTS as int32) {
-		return Result.err(ProgramError.invalidArgument());
-	}
-	let infos: CpiAccount[64];
-	return invokeCpi(program, accounts, infos[0..accounts.length], data, length, signers);
+	return invokeCpi(program, accounts, data, length, signers);
 }
 
 test "the CPI structs have the runtime's sizes" {

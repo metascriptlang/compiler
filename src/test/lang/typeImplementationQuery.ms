@@ -1,4 +1,4 @@
-import { Node, NodeKind, TypeKind, bindSym, getType, getTypeImpl, resolveType, sameType, typeKind } from "std/meta";
+import { Node, NodeKind, TypeKind, bindSym, getType, getTypeImpl, resolveType, sameType, typeKind, getSize, getAlign, getOffset } from "std/meta";
 
 struct QueryPoint { x: int32; label: string; }
 struct QueryPair<T> { value: T; label: string; }
@@ -210,4 +210,32 @@ test "a type query reads an element of a list that a macro passed to another mac
 	const first: int32 = 3;
 	const second: int32 = 4;
 	assert forwardFirstElementKind([first, second]) == "int32";
+}
+
+enum QueryByte { A, B }
+enum QueryWord { A = 0, B = 300 }
+enum QuerySigned { A = -1, B = 0 }
+struct QueryLayout<T> { lead: uint8; values: T[3]; tail: uint32; }
+type QueryLayoutAlias = QueryLayout<QueryWord>;
+
+macro layoutMatches(value: Node): Node {
+	const shape = getTypeImpl(value);
+	if (shape == null) error("missing layout implementation", value);
+	if (getSize(value) != 12 || getAlign(value) != 4) error("layout size/alignment lost padding", value);
+	if (getOffset(value, "values") != 2 || getOffset(value, "tail") != 8) error("layout offsets lost field padding", value);
+	const array = shape.typExprFieldTypes[1];
+	if (getSize(array) != 6 || getAlign(array) != 2) error("nested fixed-array layout lost enum width", value);
+	if (getSize(bindSym("QueryByte")!) != 1 || getSize(bindSym("QuerySigned")!) != 4) error("enum layout width mismatch", value);
+	if (getSize(shape) != getSize(value) || getOffset(shape, "tail") != 8) error("implementation node lost layout identity", value);
+	return { kind: NodeKind.BooleanLiteral, line: value.line, column: value.column, boolValue: true };
+}
+
+function genericLayoutMatches<T>(): boolean {
+	return layoutMatches({ lead: 0, values: [], tail: 0 } as QueryLayout<T>);
+}
+
+test "macro layout queries retain generic alias and nested array identities" {
+	assert layoutMatches({ lead: 0, values: [], tail: 0 } as QueryLayout<QueryWord>);
+	assert layoutMatches({ lead: 0, values: [], tail: 0 } as QueryLayoutAlias);
+	assert genericLayoutMatches<QueryWord>();
 }

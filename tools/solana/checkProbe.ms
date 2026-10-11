@@ -54,7 +54,7 @@ export struct Everything {
 	target: Writable;
 	pet: Mutable<Pet>;
 	peek: Owned<Pet>;
-	rolled: Delegated<Pet>;
+	@seeds("rolled", payer) @bump rolled: Delegated<Pet>;
 	fresh: Writable;
 	systemProgram: Program<System>;
 }
@@ -94,7 +94,7 @@ export struct Addressed {
 	target: Writable;
 	pet: Mutable<Pet>;
 	peek: Owned<Pet>;
-	rolled: Delegated<Pet>;
+	@seeds("rolled", payer) @bump rolled: Delegated<Pet>;
 	fresh: Writable;
 	@address(SYSTEM_PROGRAM_ID) systemProgram: Account;
 }
@@ -104,7 +104,7 @@ export struct Unaddressed {
 	target: Writable;
 	pet: Mutable<Pet>;
 	peek: Owned<Pet>;
-	rolled: Delegated<Pet>;
+	@seeds("rolled", payer) @bump rolled: Delegated<Pet>;
 	fresh: Writable;
 	systemProgram: Account;
 }

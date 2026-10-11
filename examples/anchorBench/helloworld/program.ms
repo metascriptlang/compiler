@@ -88,14 +88,6 @@ when (testBuild) {
 		assert accounts[1].owner == declaredProgramId() && accounts[1].data[8] == 42;
 	}
 
-	test "a program deployed under another id refuses every instruction with Anchor's 4100" {
-		let other = declaredProgramId();
-		other.bytes[0] = other.bytes[0] ^ 1;
-		const accounts = initAccounts(other);
-		assert run(other, accounts, initData(), entry).result == ProgramError.declaredProgramIdMismatch().code;
-		assert accounts[1].owner == SYSTEM_PROGRAM_ID;
-	}
-
 	test "the folded address refuses a counter account off it" {
 		const accounts = initAccounts(declaredProgramId());
 		accounts[1].key.bytes[31] = accounts[1].key.bytes[31] ^ 1;

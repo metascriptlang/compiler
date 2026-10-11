@@ -95,6 +95,12 @@ export function toBase58(this key: Pubkey): string {
 	return text;
 }
 
+export function word(this key: Pubkey, index: int32): uint64 {
+	let value: uint64 = 0;
+	for (let i = 7; i >= 0; i--) { value = (value << 8) | (key.bytes[index * 8 + i] as uint64); }
+	return value;
+}
+
 export function isZero(this key: Pubkey): boolean {
 	return key == Pubkey.zero();
 }

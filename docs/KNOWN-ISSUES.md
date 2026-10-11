@@ -701,13 +701,17 @@ console.log(`${A.twice()}`);
 The static method is lowered like a message handler: its body reads the receiver and its call
 returns a future. The same failure with `this.limit` in place of `A.limit`.
 
-## L40. A static getter is not found (LIVE, measured 2026-09-19)
+## L40. A static getter is refused (LIVE, measured 2026-10-07)
 
 ```
 class K { static a: int32 = 6; static get doubled(): int32 { return K.a * 2; } }
 console.log(`${K.doubled}`);
+    build of main 99a851d7, C and JS: Parse: Accessor 'get doubled' at line 1
+    cannot be static: an accessor is a plain instance getter or setter
     build of 98886eb2, C and JS: Property 'doubled' does not exist on type 'K'
 ```
+
+Instance getters and setters work since `wt/shader-prereqs`; a static one is refused where it is declared.
 
 Fails at check on both backends. Static setters were not measured.
 

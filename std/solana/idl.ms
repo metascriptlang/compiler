@@ -1,4 +1,6 @@
-import { Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
+import { Node, NodeKind, bindSym, define, getImpl, getTypeImpl, sameType, stringValue } from "std/meta";
+import { Pubkey } from "./pubkey";
+import { Bytes } from "./bytes";
 import {
 	accountDiscriminator,
 	eventDiscriminator,
@@ -28,6 +30,138 @@ export macro anchorIdl(spec: Node): Node {
 	}
 	if (spec.kind !== NodeKind.ObjectLiteral) {
 		error("anchorIdl<Op>(spec): spec must be an object literal", spec);
+	}
+	function nameIndex(names: string[], name: string): int32 {
+		let i = 0;
+		while (i < names.length) {
+			if (names[i] == name) { return i as int32; }
+			i = i + 1;
+		}
+		return -1;
+	}
+
+	function constSeed(bytes: Readonly<Span<uint8>>): string {
+		let list = "";
+		let i = 0;
+		while (i < bytes.length) {
+			list = list + (i > 0 ? "," : "") + (bytes[i] as int32);
+			i = i + 1;
+		}
+		return "{\"kind\":\"const\",\"value\":[" + list + "]}";
+	}
+
+	function encodesRaw(need: string, written: string): boolean {
+		if (need == "u8") { return written == "uint8"; }
+		if (need == "le") { return written == "uint16" || written == "uint32" || written == "uint64"; }
+		return written == "Pubkey";
+	}
+
+	function valueSeed(expr: Node, need: string, fields: string[], fieldTypes: string[], argNames: string[], argTypes: string[]): string {
+		if (expr.kind === NodeKind.Identifier) {
+			if (need == "key" && nameIndex(fields, expr.name) >= 0) {
+				return "{\"kind\":\"account\",\"path\":\"" + snakeCase(expr.name) + "\"}";
+			}
+			return "";
+		}
+		if (expr.kind !== NodeKind.MemberExpr || expr.object.kind !== NodeKind.Identifier) { return ""; }
+		const base = expr.object.name;
+		const owner = nameIndex(fields, base);
+		if (owner < 0) {
+			const at = nameIndex(argNames, expr.property);
+			if (at < 0 || !encodesRaw(need, argTypes[at])) { return ""; }
+			return "{\"kind\":\"arg\",\"path\":\"" + snakeCase(expr.property) + "\"}";
+		}
+		const written = fieldTypes[owner];
+		const open = written.indexOf("<");
+		const wrapper = open < 0 ? "" : written.slice(0, open);
+		if (wrapper != "Owned" && wrapper != "Mutable" && wrapper != "Delegated") { return ""; }
+		const dataName = written.slice(open + 1, written.length - 1);
+		const data = getImpl(bindSym(dataName));
+		if (data == null) { return ""; }
+		const member = nameIndex(data!.interfaceFields, expr.property);
+		if (member < 0 || !encodesRaw(need, data!.interfaceFieldTypes[member])) { return ""; }
+		return "{\"kind\":\"account\",\"path\":\"" + snakeCase(base) + "." + snakeCase(expr.property) +
+			"\",\"account\":\"" + dataName + "\"}";
+	}
+
+	function seedJson(seed: Node, fields: string[], fieldTypes: string[], argNames: string[], argTypes: string[]): string {
+		if (seed.kind === NodeKind.StringLiteral) { return constSeed(stringValue(seed).asBytes()); }
+		if (seed.kind === NodeKind.ArrayLiteral) {
+			const bytes: uint8[] = [];
+			let i = 0;
+			while (i < seed.elements.length) {
+				const element = seed.elements[i];
+				if (element.kind !== NodeKind.NumberLiteral || element.intVal < 0 || element.intVal > 255) {
+					if (seed.elements.length == 1) {
+						return valueSeed(element, "u8", fields, fieldTypes, argNames, argTypes);
+					}
+					return "";
+				}
+				bytes.push(element.intVal as uint8);
+				i = i + 1;
+			}
+			return bytes.length == 0 ? "" : constSeed(bytes);
+		}
+		if (seed.kind === NodeKind.CallExpr) {
+			if (seed.callee.kind === NodeKind.Identifier && seed.callee.name == "leBytes" && seed.arguments.length == 1) {
+				return valueSeed(seed.arguments[0], "le", fields, fieldTypes, argNames, argTypes);
+			}
+			if (seed.callee.kind === NodeKind.MemberExpr && seed.callee.property == "key" &&
+				seed.arguments.length == 0 && seed.callee.object.kind === NodeKind.Identifier) {
+				return valueSeed(seed.callee.object, "key", fields, fieldTypes, argNames, argTypes);
+			}
+			return "";
+		}
+		return valueSeed(seed, "key", fields, fieldTypes, argNames, argTypes);
+	}
+
+	function pdaJson(decorators: Node[], fields: string[], fieldTypes: string[], argNames: string[], argTypes: string[]): string {
+		for (const d of decorators) {
+			if (d.macroName != "seeds") { continue; }
+			let list = "";
+			let i = 0;
+			while (i < d.macroArgs.length) {
+				const one = seedJson(d.macroArgs[i], fields, fieldTypes, argNames, argTypes);
+				if (one == "") { return ""; }
+				list = list + (i > 0 ? "," : "") + one;
+				i = i + 1;
+			}
+			return "{\"seeds\":[" + list + "]}";
+		}
+		return "";
+	}
+
+	function knownProgram(inner: string): string {
+		if (inner == "System") { return "11111111111111111111111111111111"; }
+		if (inner == "Token") { return "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"; }
+		if (inner == "Token2022") { return "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"; }
+		if (inner == "AssociatedToken") { return "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"; }
+		return "";
+	}
+
+	function declaredAddress(decorators: Node[], at: Node): string {
+		for (const d of decorators) {
+			if (d.macroName != "address" || d.macroArgs.length == 0 || d.macroArgs[0].kind !== NodeKind.Identifier) { continue; }
+			const name = d.macroArgs[0].name;
+			const found = getImpl(bindSym(name));
+			if (found == null) {
+				error("anchorIdl: @address(" + name + ") names a constant that is not visible where " +
+					"anchorIdl is called; import it there", at);
+			}
+			const init = found!.initializer;
+			if (found!.kind === NodeKind.VariableDecl && init.kind === NodeKind.ObjectLiteral &&
+				init.keys.length == 1 && init.keys[0] == "bytes" && init.properties[0].kind === NodeKind.ArrayLiteral &&
+				init.properties[0].elements.length == 32) {
+				let key = Pubkey.zero();
+				let n = 0;
+				while (n < 32) {
+					key.bytes[n] = init.properties[0].elements[n].intVal as uint8;
+					n = n + 1;
+				}
+				return key.toBase58();
+			}
+		}
+		return "";
 	}
 	let name = "program";
 	const declared = define("programId");
@@ -85,6 +219,22 @@ export macro anchorIdl(spec: Node): Node {
 		json = json + "{\"name\":\"" + snakeCase(op) + "\",\"discriminator\":" + tag +
 			",\"accounts\":[";
 		const accountsDecl = getImpl(bindSym(pair[0].name))!;
+		let argsDecl: Node | null = null;
+		const argNames: string[] = [];
+		const argTypes: string[] = [];
+		if (pair.length > 1) {
+			argsDecl = getTypeImpl(bindSym(pair[1].name));
+			if (argsDecl == null || argsDecl!.kind != NodeKind.TypeObject) {
+				error("anchorIdl: instruction arguments must be a struct visible where anchorIdl is called", spec);
+			}
+			let n = 0;
+			while (n < argsDecl!.typExprFieldNames.length) {
+				const seedType = getTypeImpl(argsDecl!.typExprFieldTypes[n]);
+				argNames.push(argsDecl!.typExprFieldNames[n]);
+				argTypes.push(seedType != null && seedType!.kind == NodeKind.Identifier ? seedType!.name : "");
+				n = n + 1;
+			}
+		}
 		let f = 0;
 		while (f < accountsDecl.interfaceFields.length) {
 			const written = accountsDecl.interfaceFieldTypes[f];
@@ -92,30 +242,36 @@ export macro anchorIdl(spec: Node): Node {
 			const base = open < 0 ? written : written.slice(0, open);
 			const inner = open < 0 ? "" : written.slice(open + 1, written.length - 1);
 			let account = "{\"name\":\"" + snakeCase(accountsDecl.interfaceFields[f]) + "\"";
-			const isWritable = base == "WritableSigner" || base == "Writable" ||
+			const isWritable = base == "WritableSigner" || base == "Writable" || base == "WritablePda" ||
 				base == "Mutable" || base == "ExternalMutable";
 			if (isWritable) { account = account + ",\"writable\":true"; }
 			if (base == "Signer" || base == "WritableSigner") {
 				account = account + ",\"signer\":true";
 			}
-			if (base == "Program" && inner == "System") {
-				account = account + ",\"address\":\"11111111111111111111111111111111\"";
-			}
-			if (base == "Program" && inner == "Token") {
-				account = account + ",\"address\":\"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA\"";
-			}
-			if (base == "Program" && inner == "AssociatedToken") {
-				account = account + ",\"address\":\"ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL\"";
-			}
+			const decorators = accountsDecl.interfaceFieldDecorators[f];
+			let fixed = declaredAddress(decorators, spec);
+			if (fixed == "" && base == "Program") { fixed = knownProgram(inner); }
+			if (fixed != "") { account = account + ",\"address\":\"" + fixed + "\""; }
+			const pda = pdaJson(decorators, accountsDecl.interfaceFields, accountsDecl.interfaceFieldTypes, argNames, argTypes);
+			if (pda != "") { account = account + ",\"pda\":" + pda; }
 			json = json + (f > 0 ? "," : "") + account + "}";
 			f = f + 1;
 		}
 		json = json + "],\"args\":[";
 		if (pair.length > 1) {
-			const argsDecl = getImpl(bindSym(pair[1].name))!;
 			let a = 0;
-			while (a < argsDecl.interfaceFields.length) {
-				const written = argsDecl.interfaceFieldTypes[a];
+			while (a < argsDecl!.typExprFieldNames.length) {
+				const fieldType = getTypeImpl(argsDecl!.typExprFieldTypes[a]);
+				if (fieldType == null) {
+					error("anchorIdl: unresolved argument field '" + argsDecl!.typExprFieldNames[a] + "'", spec);
+				}
+				let scalarType = fieldType!;
+				let count = -1;
+				if (fieldType!.kind == NodeKind.TypeArray && fieldType!.typExprSize >= 0) {
+					count = fieldType!.typExprSize as int32;
+					scalarType = getTypeImpl(fieldType!.typExprElement)!;
+				}
+				const written = scalarType.kind == NodeKind.Identifier ? scalarType.name : scalarType.typExprTypeName;
 				let idlType = "";
 				if (written == "uint8") { idlType = "\"u8\""; }
 				if (written == "uint16") { idlType = "\"u16\""; }
@@ -126,12 +282,16 @@ export macro anchorIdl(spec: Node): Node {
 				if (written == "int32") { idlType = "\"i32\""; }
 				if (written == "int64") { idlType = "\"i64\""; }
 				if (written == "boolean") { idlType = "\"bool\""; }
-				if (written == "Pubkey") { idlType = "\"pubkey\""; }
-				if (written == "Bytes") { idlType = "\"bytes\""; }
+				if (sameType(scalarType, bindSym("Pubkey"))) { idlType = "\"pubkey\""; }
+				if (sameType(scalarType, bindSym("Bytes"))) { idlType = "\"bytes\""; }
+				if (count >= 0 && idlType != "" && written != "Bytes") {
+					idlType = "{\"array\":[" + idlType + "," + count + "]}";
+				}
+				if (count >= 0 && written == "Bytes") { idlType = ""; }
 				if (idlType == "") {
 					error("anchorIdl: argument type '" + written + "' has no IDL type", spec);
 				}
-				const argName = snakeCase(argsDecl.interfaceFields[a]);
+				const argName = snakeCase(argsDecl!.typExprFieldNames[a]);
 				json = json + (a > 0 ? "," : "") + "{\"name\":\"" + argName + "\",\"type\":" +
 					idlType + "}";
 				a = a + 1;

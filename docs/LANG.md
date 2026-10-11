@@ -98,7 +98,7 @@ the API already proven for C holding an object's address:
 A `Handle` is copied freely; a second `release` is a use-after-free and a missing one is a
 leak, both caught by the ledger and SAN lanes. On JS `h.ptr` is the object and the counts do
 nothing. The retained form is `Handle.retain(x)` and the read is `h.value()`, not
-`new Handle(x)` and a `h.value` getter: a struct has no constructor or getter, and a class
+`new Handle(x)`: a struct has no constructor, and a class
 would make every handle a heap object. `using h = …` was dropped because `defer h.release()`
 already does the same job.
 

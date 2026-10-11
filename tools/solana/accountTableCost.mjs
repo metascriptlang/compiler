@@ -32,15 +32,19 @@ const form = option("form", "std");
 const suite = option("suite", "matrix");
 const work = resolve(option("work", "/tmp/accountTableCost"));
 const localTables = argv.includes("--local-tables");
+const optimizationFlags = argv.includes("--release") ? ["--release"] : [];
 if (!msc || !["std", "table", "chain"].includes(form) || !["matrix", "decorators", "hibernal", "refusals", "escrow"].includes(suite)) {
-	console.error("usage: node accountTableCost.mjs --msc <msc> [--form std|table|chain] [--suite matrix|decorators|hibernal|refusals|escrow] [--work <dir>] [--local-tables]");
-	console.error("  std:   accounts<T>() as the std beside <msc> expands it (one Result per field, one try per check)");
-	console.error("  table: a const table per accounts struct and one shared walker, accountTableProto.cms (built by an <msc> at this tree's root)");
-	console.error("  chain: the same per-field calls returning a failure code, one failure site per struct, accountTableProto.cms");
+	console.error("usage: node accountTableCost.mjs --msc <msc> [--form std|table|chain] [--suite matrix|decorators|hibernal|refusals|escrow] [--work <dir>] [--local-tables] [--release]");
+	console.error("  std:   accounts<T>() from the std beside <msc>; use a separately installed baseline compiler for A/B");
+	console.error("  table: rejected historical unsafe-cast prototype; requires its pre-private-proof compiler/std");
+	console.error("  chain: actual accounts<T>() from the candidate std, no prototype or forged proofs");
 	console.error("  --local-tables: the table form with each table declared inside its handler, the shape a macro can emit today");
 	console.error("  matrix: bytes and CU per account kind; decorators: per decorator; hibernal: a program shaped like Hibernal's;");
 	console.error("  escrow: examples/escrow with its three accounts structs in the form; refusals: every refusal answers the code Anchor's constraint does");
 	process.exit(2);
+}
+if (form === "std" || form === "chain") {
+	console.error(`${form}: actual accounts<T>() via ${msc}; std and chain with the same compiler/std are NOT an A/B. Use separate baseline and candidate installations and --work directories.`);
 }
 
 const TOOLS = `${process.env.HOME}/.cache/solana/v1.57/platform-tools/llvm/bin`;
@@ -315,7 +319,7 @@ function tableOf(shape, datas) {
 const sumOf = (shape, holder) => shape.fields.map((f) => f.type === "Account" ? `${holder}.${f.name}.address` : `${holder}.${f.name}.asAccount().address`).join(" + ");
 
 function handlerSource(shape, datas) {
-	if (form === "std") {
+	if (form !== "table") {
 		return `function ${shape.handler}(): Result<uint64, ProgramError> {
 	const x = try accounts<${shape.name}>();
 	return Result.ok(${sumOf(shape, "x")});
@@ -330,7 +334,6 @@ ${parts.body}	return Result.ok(${sumOf(shape, "$accounts")});
 }
 
 function statementsOf(shape, datas) {
-	if (form === "chain") return { consts: "", body: chainBody(shape) };
 	const t = tableOf(shape, datas);
 	let consts = `const ${shape.name}Fields: uint64[${t.fields.length}] = [${t.fields.map(hexWord).join(", ")}];\n`;
 	if (t.constraints) consts += `const ${shape.name}Constraints: uint64[${t.constraints.length}] = [${t.constraints.map(hexWord).join(", ")}];\n`;
@@ -365,100 +368,6 @@ function statementsOf(shape, datas) {
 	return { consts, body: text };
 }
 
-function chainBody(shape) {
-	let text = "\tlet $c: uint64 = 0;\n";
-	shape.fields.forEach((f, i) => {
-		const t = parseType(f.type);
-		const out = `$a${i}`;
-		let call;
-		switch (t.base) {
-			case "Signer": call = `signerCode(${i}, ${out})`; break;
-			case "WritableSigner": call = `writableSignerCode(${i}, ${out})`; break;
-			case "Writable": call = `writableCode(${i}, ${out})`; break;
-			case "SystemAccount": call = `systemCode(${i}, ${out})`; break;
-			case "Account": call = `anyCode(${i}, ${out})`; break;
-			case "Program": call = `programCode(${i}, ${PROGRAM_INDEX[t.inner]}, ${out})`; break;
-			case "Owned": call = `ownedCode(${i}, @comptime { return word(${t.inner}.discriminator()); }, sizeof(${t.inner}) as uint64, ${out})`; break;
-			case "Mutable": call = `mutableCode(${i}, @comptime { return word(${t.inner}.discriminator()); }, sizeof(${t.inner}) as uint64, ${out})`; break;
-			case "Delegated": call = `delegatedCode(${i}, @comptime { return word(${t.inner}.discriminator()); }, sizeof(${t.inner}) as uint64, ${out})`; break;
-			default: call = null;
-		}
-		if (call) {
-			text += `\tlet ${out}: Account;\n\tif ($c == 0) { $c = ${call}; }\n`;
-		} else {
-			const verified = `${t.inner}.verify(${i})`;
-			const expr = t.base === "ExternalMutable" ? `exclusiveWritable(try ${verified})` : verified;
-			text += `\tlet ${out}: Account;\n\tif ($c == 0) {\n\t\tconst $r${i} = ${expr};\n\t\tif ($r${i}.ok) { ${out} = $r${i}.value; } else { $c = $r${i}.error.code; }\n\t}\n`;
-		}
-	});
-	text += `\tif ($c != 0) { try failed($c); }\n`;
-	text += `\tconst $accounts: ${shape.name} = { ${shape.fields.map((f, i) => `${f.name}: $a${i} as ${f.type}`).join(", ")} };\n`;
-	text += chainConstraints(shape);
-	return text;
-}
-
-function keyExpr(ref) {
-	if (ref.field) return `$accounts.${ref.field}.keyAddress()`;
-	if (ref.data) return `bytesAddress($accounts.${ref.data[0]}.data().${ref.data[1]}.bytes)`;
-	if (ref.wk) return `bytesAddress(${WK_CONST[ref.wk]}.bytes)`;
-	if (ref.own) return "bytesAddress(programId().bytes)";
-	if (ref.user) return `bytesAddress(Pubkey.${ref.user}().bytes)`;
-	throw new Error("bad key reference");
-}
-
-function chainConstraints(shape) {
-	let text = "";
-	const SENTINEL = "0x7fffffffffffffff";
-	const step = (call, error) => {
-		if (!error) return `\tif ($c == 0) { $c = ${call(null)}; }\n`;
-		return `\tif ($c == 0) {\n\t\t$c = ${call(SENTINEL)};\n\t\tif ($c == ${SENTINEL}) { $c = (${error}).code; }\n\t}\n`;
-	};
-	let any = false;
-	for (const f of shape.fields) {
-		const self = `$accounts.${f.name}.keyAddress()`;
-		const decos = f.decos ?? [];
-		const seeded = decos.find((d) => d.d === "seeds");
-		if (seeded) {
-			any = true;
-			const elements = seeded.seeds.map((seed) => {
-				if (seed.text !== undefined) return `seedText(${JSON.stringify(seed.text)})`;
-				if (seed.key) return `seedKey($accounts.${seed.key}.keyAddress())`;
-				if (seed.data) return `seedBytes($accounts.${seed.data[0]}.data().${seed.data[1]}.bytes)`;
-				return `seedBytes(leBytes($accounts.${seed.le.of}.data().${seed.le.member}${seed.le.cast ? ` as ${seed.le.cast}` : ""}))`;
-			}).join(", ");
-			if (seeded.bump) {
-				const [owner, member] = seeded.bump.split(".");
-				text += `\tif ($c == 0) { $c = seedsGivenCode(${self}, [${elements}], $accounts.${owner}.data().${member}); }\n`;
-			} else text += `\tif ($c == 0) { $c = seedsCanonicalCode(${self}, [${elements}]); }\n`;
-		}
-		for (const d of decos.filter((x) => x.d === "associated")) {
-			any = true;
-			text += `\tif ($c == 0) { $c = associatedCode(${self}, $accounts.${d.authority}.keyAddress(), $accounts.${d.mint}.keyAddress()); }\n`;
-		}
-		for (const d of decos.filter((x) => x.d === "hasOne")) {
-			any = true;
-			text += step((failure) => `keysCode(bytesAddress($accounts.${f.name}.data().${d.name}.bytes), $accounts.${d.name}.keyAddress(), ${failure ?? 2001})`, d.error);
-		}
-		for (const d of decos.filter((x) => x.d === "constraint")) {
-			any = true;
-			text += `\tif ($c == 0 && !(${d.table})) { $c = ${d.error ? `(${d.error}).code` : 2003}; }\n`;
-		}
-		for (const d of decos.filter((x) => x.d === "address")) {
-			any = true;
-			text += step((failure) => `keysCode(${self}, ${keyExpr(d.key)}, ${failure ?? 2012})`, d.error);
-		}
-		for (const d of decos.filter((x) => x.d === "tokenAuthority")) {
-			any = true;
-			text += `\tif ($c == 0) { $c = tokenAuthorityCode(${self}, ${keyExpr(d.key)}); }\n`;
-		}
-		for (const d of decos.filter((x) => x.d === "tokenMint")) {
-			any = true;
-			text += `\tif ($c == 0) { $c = tokenMintCode(${self}, ${keyExpr(d.key)}); }\n`;
-		}
-	}
-	if (any) text += `\tif ($c != 0) { try failed($c); }\n`;
-	return text;
-}
 
 function programSource(shapes, datas, extra = "") {
 	const userKeys = Object.entries(USER_KEYS).map(([name, key]) => `export function ${name}(this typeof Pubkey): Pubkey {
@@ -507,7 +416,7 @@ function programSource(shapes, datas, extra = "") {
 	word,
 } from "std/solana";
 import { Mint, TokenAccount } from "std/solana/token";
-${form === "chain" ? 'import { exclusiveWritable } from "std/solana";\nimport { bytesAddress, seedBytes, seedKey, seedText } from "std/solana/seed";\nimport { anyCode, associatedCode, delegatedCode, failed, keysCode, mutableCode, ownedCode, programCode, seedsCanonicalCode, seedsGivenCode, signerCode, systemCode, tokenAuthorityCode, tokenMintCode, writableCode, writableSignerCode } from "./accountTableProto";\n' : ""}${form === "table" ? 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\n' : ""}`;
+${form === "table" ? 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\n' : ""}`;
 	const body = shapes.map((s) => `${structSource(s)}${handlerSource(s, datas)}`).join("\n");
 	const dispatch = shapes.map((s) => `\tif (op == ${s.op}) { result = ${s.handler}(); }`).join("\n");
 	return `${imports}
@@ -539,10 +448,10 @@ function build(name, source) {
 	rmSync(dir, { recursive: true, force: true });
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, "program.ms"), source);
-	if (form !== "std") copyFileSync(join(HERE, "accountTableProto.cms"), join(dir, "accountTableProto.cms"));
+	if (form === "table") copyFileSync(join(HERE, "accountTableProto.cms"), join(dir, "accountTableProto.cms"));
 	const out = join(dir, "program.so");
 	try {
-		execFileSync(msc, ["build", join(dir, "program.ms"), "--os=solana", `--output=${out}`], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
+		execFileSync(msc, ["build", join(dir, "program.ms"), "--os=solana", ...optimizationFlags, `--output=${out}`], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
 	} catch (error) {
 		const text = `${error.stdout ?? ""}${error.stderr ?? ""}`;
 		throw new Error(`${name} did not build:\n${text.split("\n").filter((l) => /error/.test(l)).slice(0, 12).join("\n")}`);
@@ -963,7 +872,7 @@ async function escrow() {
 	rmSync(dir, { recursive: true, force: true });
 	mkdirSync(dir, { recursive: true });
 	let source = readFileSync(join(root, "program.ms"), "utf8");
-	if (form !== "std") {
+	if (form === "table") {
 		let consts = "";
 		for (const shape of escrowShapes()) {
 			const parts = statementsOf(shape, DATAS_ESCROW);
@@ -974,9 +883,7 @@ async function escrow() {
 			void call;
 			source = source.replace(original, `${parts.body}\tconst x = $accounts;\n`);
 		}
-		const imports = form === "table"
-			? 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\nimport { word } from "std/solana";\n'
-			: 'import { exclusiveWritable, word } from "std/solana";\nimport { bytesAddress, seedBytes, seedKey, seedText } from "std/solana/seed";\nimport { anyCode, associatedCode, delegatedCode, failed, keysCode, mutableCode, ownedCode, programCode, seedsCanonicalCode, seedsGivenCode, signerCode, systemCode, tokenAuthorityCode, tokenMintCode, writableCode, writableSignerCode } from "./accountTableProto";\n';
+		const imports = 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\nimport { word } from "std/solana";\n';
 		source = source.replace('import { Escrow, EscrowError', `${imports}function raise(error: ProgramError): Result<void, ProgramError> {\n\treturn Result.err(error);\n}\n\n${consts}import { Escrow, EscrowError`);
 		copyFileSync(join(HERE, "accountTableProto.cms"), join(dir, "accountTableProto.cms"));
 	}
@@ -984,7 +891,7 @@ async function escrow() {
 	copyFileSync(join(root, "layout.ms"), join(dir, "layout.ms"));
 	const out = join(dir, "escrow.so");
 	try {
-		execFileSync(msc, ["build", join(dir, "program.ms"), "--os=solana", `--output=${out}`], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
+		execFileSync(msc, ["build", join(dir, "program.ms"), "--os=solana", ...optimizationFlags, `--output=${out}`], { cwd: dir, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 28 });
 	} catch (error) {
 		const text = `${error.stdout ?? ""}${error.stderr ?? ""}`;
 		throw new Error(`the escrow did not build:\n${text.split("\n").filter((l) => /error/.test(l)).slice(0, 14).join("\n")}`);

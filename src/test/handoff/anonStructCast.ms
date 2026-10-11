@@ -32,6 +32,24 @@ test "null as unknown as struct compiles to zero-init" {
 	assert !result.value.contains("(void*)");
 }
 
+test "null cast to a value type that holds no null is refused" {
+	const casts = ["null as string", "undefined as string", "null as int32", "null as boolean",
+		"null as unknown as string", "null as unknown as int32", "undefined as unknown as float64", "null as (() => void)"];
+	for (const cast of casts) {
+		const result = compileToC("const a = " + cast + ";\nconsole.log(a);");
+		assert !result.ok;
+		assert result.error.contains("holds no null");
+	}
+}
+
+test "null cast to a type that holds null compiles" {
+	const casts = ["null as string | null", "null as int32 | null", "null as unknown", "null as unknown as (() => void)", "null as Ptr<int32>"];
+	for (const cast of casts) {
+		const result = compileToC("const a = " + cast + ";\nconsole.log(a == null);");
+		assert result.ok;
+	}
+}
+
 // ===== struct-to-struct reinterpret via as unknown as =====
 
 test "an interface reinterpreted through unknown is refused" {

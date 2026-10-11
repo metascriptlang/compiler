@@ -8,7 +8,7 @@ import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
-import { programOk, stmtKind, stmtAt } from "./validation";
+import { programOk, stmtKind, stmtAt, parseSource } from "./validation";
 
 
 type NodeResult = Result<Node, string>;
@@ -879,6 +879,10 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 				return Result.err(`'${modifier.value}' cannot modify a field of ${keyword} at line ${modifier.line}: a ${keyword} field is visible wherever its type is${nodeKind == NodeKind.StructDecl ? ", unless it is marked 'private'" : ""}`);
 			}
 			visibility = "private";
+			advance(state);
+		}
+		if (current(state).kind == TokenKind.Readonly && isPropertyName(peek(state, 1))) {
+			visibility = visibility == "" ? "readonly" : `${visibility} readonly`;
 			advance(state);
 		}
 		const field = current(state);
@@ -2403,3 +2407,48 @@ test "implements" { assert programOk("class Foo implements Bar {}"); }
 test "a parameter list without its closing paren is an error" { assert !programOk("function f(a: int32, b: int32: int32 { return a; }"); }
 
 test "a method parameter list without its closing paren is an error" { assert !programOk("class C { m(a: int32: void {} }"); }
+
+function parseError(input: string): string {
+	const r = parseSource(input);
+	if (r.ok) return "";
+	return r.error;
+}
+
+test "an optional parameter parses in every parameter list" {
+	assert programOk("function f(xs?: number[]): void { }");
+	assert programOk("const a = (s?: string): string => \"\";");
+	assert programOk("const a = function (n?: int32): int32 { return 1; };");
+	assert programOk("class C { m(p?: C): int32 { return 1; } }");
+	assert programOk("class C { constructor(n?: int32) { } }");
+	assert programOk("extern function cf(x?: int32): void from \"abs\";");
+	assert programOk("function f<T>(x?: T): void { }");
+	assert programOk("type F = (a: int32, b?: string) => void;");
+}
+
+test "an initialized or optional parameter may follow an optional one" {
+	assert programOk("function f(a?: int32, b: int32 = 2): void { }");
+	assert programOk("function f(a?: int32, b?: int32): void { }");
+	assert programOk("function f({ a }?: { a: int32 }): void;");
+}
+
+test "an optional parameter refuses an initializer" {
+	assert parseError("function f(x?: int32 = 1): void { }").indexOf("Parameter cannot have question mark and initializer") >= 0;
+}
+
+test "a required parameter after an optional one is refused in a declaration and in a function type" {
+	assert parseError("function f(x?: int32, y: int32): void { }").indexOf("A required parameter cannot follow an optional parameter") >= 0;
+	assert parseError("type F = (x?: int32, y: int32) => void;").indexOf("A required parameter cannot follow an optional parameter") >= 0;
+}
+
+test "a rest parameter cannot be optional" {
+	assert parseError("function f(...xs?: int32[]): void { }").indexOf("A rest parameter cannot be optional") >= 0;
+}
+
+test "a binding pattern parameter cannot be optional in an implementation signature" {
+	assert parseError("function f({ a }?: { a: int32 }): void { }").indexOf("A binding pattern parameter cannot be optional in an implementation signature") >= 0;
+	assert parseError("const g = ([a]?: int32[]) => a;").indexOf("A binding pattern parameter cannot be optional in an implementation signature") >= 0;
+}
+
+test "an optional receiver is refused" {
+	assert parseError("function f(this?: int32): void { }").indexOf("The 'this' parameter cannot be optional") >= 0;
+}

@@ -70,3 +70,9 @@ test "narrowing: integer arithmetic is untouched" {
 test "narrowing: widening an integer to float64 stays implicit" {
 	assert accepted("const i: int32 = 3; const f: float64 = i;");
 }
+
+test "narrowing: a join adopts only a literal arm, by the operand rule" {
+	assert !accepted("const a: float32 = 0.5; const d: float64 = 0.1; function mix(p: int32): float32 { return p == 0 ? d : a; }");
+	assert !accepted("function big(p: int32): uint8 { const u: uint8 = 1; const v = p == 0 ? 300 : u; return v; }");
+	assert accepted("const a: float32 = 0.5; function f(p: int32): float32 { return p == 0 ? 1.0 : a; }");
+}

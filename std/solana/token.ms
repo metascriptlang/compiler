@@ -33,13 +33,13 @@ when (testBuild) {
 	} from "./core";
 	import {
 		external,
+		accounts,
 		externalMutable,
 		writable,
 		writableSigner,
 	} from "./typed";
 	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 	import {
-		accounts,
 		associated,
 		findProgramAddressOf,
 		signed,
@@ -124,9 +124,14 @@ function hasExtensionLayout(data: Bytes, accountType: uint8): Result<boolean, Pr
 	return Result.ok((try data.readU8(165)) == accountType);
 }
 
+function canonicalTag(data: Bytes, offset: uint64): Result<void, ProgramError> {
+	if ((try data.readU32(offset)) > 1) { return Result.err(ProgramError.invalidAccountData()); }
+	return Result.ok(null);
+}
+
 function optionalKey(data: Bytes, offset: uint64): Result<Pubkey | null, ProgramError> {
 	let key: Pubkey | null = null;
-	if ((try data.readU8(offset)) == 1) { key = try data.readPubkey(offset + 4); }
+	if ((try data.readU32(offset)) == 1) { key = try data.readPubkey(offset + 4); }
 	return Result.ok(key);
 }
 
@@ -170,6 +175,8 @@ function tokenAccountBytes(account: Account): Result<Bytes, ProgramError> {
 }
 
 function mintFields(data: Bytes): Result<Mint, ProgramError> {
+	const _authority = try canonicalTag(data, 0);
+	const _freeze = try canonicalTag(data, 46);
 	if ((try data.readU8(45)) != 1) { return Result.err(ProgramError.uninitializedAccount()); }
 	return Result.ok({
 		mintAuthority: try optionalKey(data, 0),
@@ -185,12 +192,15 @@ export function readMint(this account: Account): Result<Mint, ProgramError> {
 }
 
 function tokenAccountFields(data: Bytes): Result<TokenAccount, ProgramError> {
+	const _delegate = try canonicalTag(data, 72);
+	const _native = try canonicalTag(data, 109);
+	const _close = try canonicalTag(data, 129);
 	const state = try stateOf(try data.readU8(108));
 	if (state == TokenAccountState.Uninitialized) {
 		return Result.err(ProgramError.uninitializedAccount());
 	}
 	let nativeReserve: uint64 | null = null;
-	if ((try data.readU8(109)) == 1) { nativeReserve = try data.readU64(113); }
+	if ((try data.readU32(109)) == 1) { nativeReserve = try data.readU64(113); }
 	return Result.ok({
 		mint: try data.readPubkey(0),
 		owner: try data.readPubkey(32),
@@ -799,6 +809,37 @@ when (testBuild) {
 		assert resultOf(accounts, 1, readerEntry) == ProgramError.invalidAccountData().code;
 	}
 
+	test "a mint with a COption tag other than 0 or 1 is refused before its initialized byte is read" {
+		for (const bad of [[0, 2], [1, 2], [3, 1]] as int32[][]) {
+			const authority = mintData(5, 1, 6);
+			authority[bad[0]] = bad[1] as uint8;
+			assert resultOf(single(TOKEN_PROGRAM_ID, authority), 0, readerEntry) == ProgramError.invalidAccountData().code;
+		}
+		const freeze = mintData(5, 1, 6);
+		freeze[49] = 1;
+		assert resultOf(single(TOKEN_PROGRAM_ID, freeze), 0, readerEntry) == ProgramError.invalidAccountData().code;
+		const blank = mintData(5, 1, 6);
+		blank[1] = 2;
+		blank[45] = 0;
+		assert resultOf(single(TOKEN_PROGRAM_ID, blank), 0, readerEntry) == ProgramError.invalidAccountData().code;
+		const none = mintData(5, 1, 6);
+		none[0] = 0;
+		assert resultOf(single(TOKEN_PROGRAM_ID, none), 0, readerEntry) == 0;
+	}
+
+	test "a token account with a COption tag other than 0 or 1 is refused at each of its three tags" {
+		for (const offset of [72, 109, 129] as int32[]) {
+			for (const at of [0, 1, 3] as int32[]) {
+				const bytes = tokenAccountData(4, 8, 77, 2);
+				bytes[offset + at] = 2;
+				assert resultOf(single(TOKEN_PROGRAM_ID, bytes), 1, readerEntry) == ProgramError.invalidAccountData().code;
+			}
+		}
+		const blank = tokenAccountData(4, 8, 77, 0);
+		blank[73] = 1;
+		assert resultOf(single(TOKEN_PROGRAM_ID, blank), 1, readerEntry) == ProgramError.invalidAccountData().code;
+	}
+
 	test "mintExtension walks the Token-2022 TLV entries after byte 166" {
 		const accounts = single(TOKEN_2022_PROGRAM_ID, mint2022Data());
 		assert resultOf(accounts, 2, readerEntry) == 0;
@@ -1065,8 +1106,13 @@ when (testBuild) {
 		assert accounts[1].owner.equals(TOKEN_PROGRAM_ID) && accounts[1].data.length == 82;
 		assert accounts[1].lamports > 0;
 		const created = invocations()[0];
-		assert created.program.equals(Pubkey.zero()) && created.data[0] == 0;
+		assert created.program.equals(Pubkey.zero()) && created.data[0] == 13;
+		assert created.data.length == 52 && created.data[1] == 0 && created.data[2] == 0 && created.data[3] == 0;
 		assert created.data[12] == 82 && created.signers == 1;
+		for (let i = 0; i < 32; i++) { assert created.data[20 + i] == TOKEN_PROGRAM_ID.bytes[i]; }
+		assert created.accounts.length == 2;
+		assert created.accounts[0].key.equals(mintKey()) && created.accounts[0].writable && created.accounts[0].signer;
+		assert created.accounts[1].key.equals(accounts[0].key) && created.accounts[1].writable && created.accounts[1].signer;
 		const mintBump = findProgramAddressOf(keyOf(9), ["mint"]);
 		assert mintBump.ok;
 		if (mintBump.ok) { assert signerIs(created, 0, [textBytes("mint"), [mintBump.value.bump]]); }
@@ -1295,5 +1341,52 @@ when (testBuild) {
 			}
 		}
 		assert accepted > 20 && refused > 100;
+	}
+
+	function wrongProgramStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const mint = try account(0);
+		const target = try account(1);
+		const authority = try account(2);
+		const payer = try account(3);
+		const system = try account(4);
+		const wrong = keyOf(3);
+		if (op == 0) { return transferChecked(wrong, payer, mint, target, authority, 250, 6); }
+		if (op == 1) { return closeAccount(wrong, target, payer, authority); }
+		if (op == 2) { return initializeMint2(wrong, mint, 6, authority.key(), null); }
+		if (op == 3) { return createAssociatedToken(payer, target, authority, mint, system, system); }
+		return createAssociatedTokenIdempotent(payer, target, authority, mint, system, system);
+	}
+
+	function wrongProgramEntry(): void {
+		const result = wrongProgramStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	test "every token wrapper refuses a program id that is not a token program before it sends anything" {
+		for (const op of [0, 1, 2, 3, 4]) {
+			assert resultOf(cpiAccounts(), op as uint8, wrongProgramEntry) ==
+				ProgramError.incorrectProgramId().code;
+			assert invocations().length == 0;
+		}
+	}
+
+	test "createMintPda refuses a mint address that already holds an initialized mint and leaves it intact" {
+		const accounts = mintPdaAccounts(mintKey());
+		accounts[1].owner = TOKEN_PROGRAM_ID;
+		accounts[1].data = mintData(7, 500, 6);
+		accounts[1].lamports = 10000000;
+		assert resultOf(accounts, 0, mintPdaEntry) == ProgramError.custom(0).code;
+		assert accounts[1].data.length == 165 - 83 && accounts[1].lamports == 10000000;
+		assert accounts[0].lamports == 10000000;
+	}
+
+	test "createMintPda on a pre-funded mint address keeps the lamports and tops up only the shortfall" {
+		const accounts = mintPdaAccounts(mintKey());
+		accounts[1].lamports = 5;
+		assert resultOf(accounts, 0, mintPdaEntry) == 0;
+		assert accounts[1].owner.equals(TOKEN_PROGRAM_ID) && accounts[1].data.length == 82;
+		assert accounts[1].lamports == 2 * (82 + 128) * 3480;
+		assert accounts[0].lamports == 10000000 - (accounts[1].lamports - 5);
 	}
 }

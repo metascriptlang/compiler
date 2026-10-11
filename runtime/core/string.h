@@ -286,9 +286,6 @@ msString msStringSlice(msString s, int64_t start, int64_t end);
 /* Substring [start, end) by byte offset. For lexer/binary protocols. */
 msString msStringByteSlice(msString s, int64_t start, int64_t end);
 
-/* Alias for slice */
-msString msStringSubstring(msString s, int64_t start, int64_t end);
-
 /* ===== Transformation ===== */
 
 msString msStringToLower(msString s);

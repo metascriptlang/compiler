@@ -68,3 +68,30 @@ test "macro overload winner: the call still runs the overload it resolved to" {
 	assert threeWay(1, "x", true);
 	assert genericFirst(3, 4) == 7;
 }
+
+class Shelf {
+	put(a: int32): int32 { return a; }
+	put(a: int32, b: string): string { return b; }
+	static make(a: int32, b: string): string { return b; }
+	static make(a: int32): int32 { return a; }
+}
+
+function stack(this s: Shelf, a: int32): int32 { return a; }
+function stack(this s: Shelf, a: int32, b: string): string { return b; }
+
+test "macro overload winner: an overloaded method, each call sees its own" {
+	const shelf = new Shelf();
+	assert calleeShape(shelf.put(1)) == "(int32)->int32";
+	assert calleeShape(shelf.put(1, "x")) == "(int32,string)->string";
+}
+
+test "macro overload winner: an overloaded static method declared longest first" {
+	assert calleeShape(Shelf.make(1)) == "(int32)->int32";
+	assert calleeShape(Shelf.make(1, "x")) == "(int32,string)->string";
+}
+
+test "macro overload winner: an overloaded extension, each call sees its own" {
+	const shelf = new Shelf();
+	assert calleeShape(shelf.stack(1)) == "(int32)->int32";
+	assert calleeShape(shelf.stack(1, "x")) == "(int32,string)->string";
+}

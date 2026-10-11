@@ -34,8 +34,9 @@ import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerUserOperators } from "./lowering/operatorLower";
-import { projectTaggedMaybeReads } from "./coercion/maybeReadMaterialize";
+import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
+import { lowerTypeof } from "./lowering/typeofLower";
 import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
@@ -64,6 +65,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerArraySpreadEager(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
+	result = materializeMaybeReads(result, ctx);
 	result = lowerTypeCoercion(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
@@ -76,18 +78,19 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	// this, calls to Result.ok/err fall through to compileClosureCall →
 	// LoadField on Nil → "object handle out of bounds: 0".
 	result = lowerResultConstructors(result);
+	result = lowerTypeof(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
 	result = lowerGenerator(result, ctx);
 	result = lowerCtorInit(result, ctx);
+	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
-	result = projectTaggedMaybeReads(result);
 	result = lowerUnionConversions(result, ctx);
 	result = lowerUnionTags(result, ctx);
 	result = unwrapMaybe(result, ctx);
@@ -116,12 +119,12 @@ test "the raiser lowering names runtime procs from its own std, not from the las
 	const lowered = transformForRaiser(parsed.value, checkerCtx);
 	const restored = compilerFuncSym("msCheckRangeI32");
 	leaveCompilerFuncs(saved);
-	let check: Symbol | null = null;
+	const checks: Symbol[] = [];
 	walkNode(lowered, (n: Node): Node => {
-		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") check = n.resolvedSym;
+		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") checks.push(n.resolvedSym);
 		return n;
 	});
-	assert check != null;
-	assert check != jsHelper;
+	assert checks.length > 0;
+	for (const check of checks) assert check != jsHelper;
 	assert restored == jsHelper;
 }

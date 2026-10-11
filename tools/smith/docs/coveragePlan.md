@@ -204,15 +204,81 @@ threshold, rather than a fixed coin. `gen.ms` `Gen.nodesLeft`, `Gen.reserve`,
 weighted numeric blocks/loops/calls and selection retries using the existing
 budget model. No compiler pass or runtime protocol was added.
 
-**Still open:** scalar expression/helper costs, callback/closure invocation
-weights (including repeated generic callbacks), safe budget composition through
-capture graphs, and observation coverage. Source fuel and these small consumer
-probes do NOT prove a whole-program execution bound or full family coverage.
-The mixed-family C build needs a longer isolated deadline after the heavy gate;
-it must not be called a bug or silently omitted. The 100-seed execution campaign,
-closure-only campaign, driver controls, SAN and reducer remain unrun/unimplemented
-at this checkpoint. Old bundles keep their source/identity; they are not rewritten
-for the changed generator.
+### Execution work bound — measured 2026-10-08
+
+Every node the generator emits is now charged to the existing `Gen.reserve` budget:
+expression and condition nodes cost 1, and a closure body is built in its own
+`Gen.routine` frame. A deferred body (named callable, effect, closure array, maker)
+records its cost on its `Ent`, the same way `Fn.cost` does. A call site reserves
+`cost + 1` under the loop multiplier, or falls back. An immediate invocation (IIFE,
+`twiceG` ×2, `BoxG.map`) takes its body cap from `Gen.spare` and pays `times × cost`.
+Closure bodies may now call `fN` routines; the old `costCap = cost` block is gone. The
+one uncharged repeat is the closure-array fill loop, at most 4 pushes per execution.
+
+| check | result |
+|---|---|
+| `msc test tools/smith/gen.ms`, C / `--target=js`, `./msc` SHA-256 `a71ac39a…` | **326/326**, **89/89**, 0 red |
+| Five mutants (expression free, named call free, `twiceG` charged once, IIFE body free, deferred frame cap 0), C and JS | **10/10 red**, each only on its own guard |
+| 200 seeds × default knobs, total source bytes before → after | none 2,538,556 → 2,516,991; closure 2,909,506 → 2,822,925; all three 3,450,493 → 3,561,067 |
+| Closure bodies that open with an `fN(` call, same sweep | closure 0 → 196; all three 0 → 95 |
+| Seeds 1,2,3 × `fams=none` / `closure` / `closure,union,generic`, `funcs=64 globals=64 stmts=32 depth=8 expr=8 trips=64 entries=64`, `./msc` | 9/9 generated (48–64 KB); every run that built finished in ≤ **0.60 s** C and ≤ **0.06 s** JS; the 6 seeds that built and ran on both lanes printed identical stdout |
+
+The run times come from the shared machine at load 16–60. They show that the extreme
+vectors finish quickly, not how fast an idle machine runs them.
+
+The same sweep found three compiler failures on valid programs, reproduced with the
+installed `msc` (BUILD `c0949e9f2`, SHA-256 `1362b92c…`) outside the worktree:
+
+- `none-1`: C runs; JS throws `SyntaxError: Invalid left-hand side expression in prefix operation`.
+- `closure-3`: JS runs; C fails with `use of undeclared identifier '_envP'`.
+- `closure_union_generic-2`: JS runs; C fails with `use of undeclared identifier 'dollarhoist_6_'`.
+
+No inbox card covers them. Their inputs and logs are kept in `out/smith/budget/findings/`
+as real-divergence inputs for the reducer. They are reduced and filed when the reducer
+exists, or earlier if the person asks. The 2026-10-07 mixed-family input
+(`out/smith/core/work-extreme-closure_union_generic.ms`), whose C build exceeded 30 s,
+built with the same `./msc` in **4 s** at load 7 on 2026-10-08, ran with exit 0, and
+printed stdout byte-identical to its JS run. The timeout came from the loaded machine,
+not from the compiler.
+
+**Still open:** observation coverage (locals and closure state that never reach the
+output). The 100-seed execution campaign, closure-only campaign, driver controls, SAN
+and reducer remain unrun or unimplemented at this checkpoint. Old bundles keep their
+source and identity; they are not rewritten for the changed generator.
+
+### Per-construct weights (G3, first half) — measured 2026-10-08
+
+`Features.w` holds 34 `w.<group>.<name>=0..100` weights: `w.expr.{leaf,binary,unary,
+convert,ternary,call}`, `w.stmt.{let,assign,compound,if,for,match,break,return}`,
+`w.fam.{closure,union,generic}`, `w.closure.{named,array,iife,decl,effect,invoke,maker,fill}`,
+`w.generic.{id,twice,pick,map,box}` and the percentages `w.expr.fam`, `w.stmt.fam`,
+`w.stmt.else`, `w.union.len`. A group may not be all zero. `format` prints only
+non-default weights, so every old header and bundle parses unchanged. Kind groups draw
+`below(sum)`, which at the defaults is `below(100)` / `below(3)` / `below(6)` as before.
+Source tree `7c55bccb7decbcac72337f174dbfc16355888f4d`; installed `msc`
+(`~/.metascript/BUILD` `525c8ba4f`).
+
+| check | result |
+|---|---|
+| `gen <seed>` of the base (`8894ce287`) and this tree, seeds 1..200, `cmp`: default / `fams=none` / `fams=closure` / `--swarm` / `fams=union types=int32,uint8` / `fams=generic stmts=8 depth=4 expr=4` / `plant=backend` | **200/200** identical for each of the 7 vectors, header line included |
+| `msc test tools/smith/gen.ms`, C / `--target=js` | **341/341**, **104/104** (base 326 / 89) |
+| 10 mutants (weights ignored, `format` printing all / none, `g.w` not set, iife guard, two binary-fallback guards, compound guard, family weights ignored, all-zero group accepted), C and JS | **10/10 red**, each on 1–3 intended guards, no collateral |
+| Aimed batches, seeds 1..200; hit = target marker count strictly exceeds each other marker count in the program body (markers: ` ? `, `fN(` calls, `(qN:` lambdas, convert, unary, binary spellings by regex) | below |
+| `msc check` of seeds 1..20 of each aimed vector | **20/20 clean** for all three |
+
+| aimed vector (on top of base) | dominant | same, no weights | count: base → aimed (mean per program) |
+|---|---|---|---|
+| ternary: `fams=none` + `w.expr.ternary=80 leaf=10 binary=4 unary=2 convert=2 call=2` | **200/200** | 0/200 | 26 → 355 |
+| call: `fams=none types=int32 funcs=16 expr=2 stmts=2` + `w.expr.call=80 leaf=10 binary=4 unary=2 convert=2 ternary=2 w.stmt.let=60 assign=20 if=5 for=5 compound=4 match=2 break=2 return=2` | **191/200** | 0/200 | 29 → 64 |
+| closure: `fams=closure` + `w.expr.fam=90 w.stmt.fam=60 w.closure.iife=4` | **200/200** | 0/200 | 65 → 267 |
+
+Not measured: with `w.expr.call` alone and the default type set, calls stay at
+**0/200** dominant (mean 14 → 28): the cost bound refuses a call whose callee is
+expensive, and a call needs an earlier routine of the requested type. A caller
+aims calls by also narrowing `types`, `expr` and `stmts`. Markers are regex counts
+of generated text, not generator decisions; negative-literal casts inflate the
+convert and binary counts, which is conservative for the aimed construct. Bash
+and script sources of the measurement are in `out/smith/weights/` (untracked).
 
 ## Approved order and NEW MECHANISM decisions
 

@@ -334,7 +334,11 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		return;
 	}
 
-	if (node.nodeType != null && hasGenericParams(node.nodeType)) return;
+	if (node.nodeType != null && hasGenericParams(node.nodeType)) {
+		genStaticFieldGlobals(g, d);
+		return;
+	}
+
 	const name = mangledTypeName(declTypeSym(node), d.className);
 
 	// Check if struct type already declared (by genObjectType for generic instances)

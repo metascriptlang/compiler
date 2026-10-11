@@ -1,6 +1,6 @@
 // The deploy keypair (its public half, bytes 32-63 of the solana-keygen JSON) must hold the declared
 // program id, as `anchor keys sync` keeps declare_id! equal to it; the fixture holds another id.
-// RED MEANS: a build deploys at one address while its entry checks another, so every call fails 4100.
+// RED MEANS: a build deploys at one address while its entry checks another, so the folded PDAs and the IDL address name a program the deploy never runs.
 //
 // WHY A SUBPROCESS: a `-d:programKeypair` path without a build.ms is read against the working
 // directory, as a command-line path is, and the guard runner builds each probe in a sandbox. The

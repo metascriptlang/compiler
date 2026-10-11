@@ -17,11 +17,11 @@ import { firstStmtKindAfter, stmtCountAfter, parseInput, makeCtx, getStmts } fro
 // ===== Main Entry Point =====
 
 export function lowerForLoop(program: Node, ctx: TransformContext): Node {
-	walkNode(program, (node: Node): Node => lowerForNode(node, ctx));
+	walkNode(program, (node: Node): Node => lowerForStmt(node, ctx));
 	return program;
 }
 
-function lowerForNode(node: Node, ctx: TransformContext): Node {
+export function lowerForStmt(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.ForStmt) return node;
 	const d = node.data as ForStmtData;
 	const captured = capturedLetBinding(d);

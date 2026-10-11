@@ -92,8 +92,8 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   `@comptime` function, imported and in the entry, with a literal and a const-name argument, is
   evaluated while compiling and links (NIM-REF CT-32). Proven RED on `6162af93` (FREESTANDING E02
   at the module const).
-- **`solanaLtoLinks.ms`**, **`solanaLtoFrameOverflowFails.ms`** (`GUARD-OS solana --danger`) — a
-  `--danger` SBF build takes LTO (`docs/BUILD-PERF.md`, 2026-10-05): the merged bitcode is compiled
+- **`solanaLtoLinks.ms`**, **`solanaLtoFrameOverflowFails.ms`** (`GUARD-OS solana --release`) — a
+  `--release` SBF build takes LTO (`docs/BUILD-PERF.md`, 2026-10-05): the merged bitcode is compiled
   to one SBF object before ld.lld, and an overflowing frame in it still fails the build. Proven RED
   with the merge step removed (`is incompatible with` the compiler_builtins objects) and with the
   object compiled without the SBF error check (the overflow links).

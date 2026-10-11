@@ -14,11 +14,14 @@ extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
 extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
 extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
-extern function msSolSha256(slices: uint64, count: uint64, out: uint64): uint64;
-extern function msSolCurveValidatePoint(curve: uint64, point: uint64, result: uint64): uint64;
+extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
+extern function msSolHashAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
+extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
+extern function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
 
 const MAX_SEEDS: uint64 = 16;
 const MAX_SEED_LENGTH: uint64 = 32;
+const NO_BUMP: uint64 = 256;
 
 // A SeedSlice points into the frame that built it: valid while that call runs, never returned.
 export struct SeedSlice {
@@ -87,30 +90,9 @@ export function signingOf(signers: Readonly<Span<SignerSeeds>>): Signing {
 	return { table: msSolSignersAddress(signers), count: signers.length as uint64 };
 }
 
-const EDWARDS: uint64 = 0;
-
-function offCurve(input: Span<SeedSlice>, count: uint64, out: uint64): boolean {
-	const _hashed = msSolSha256(msSolTableAddress(input), count, out);
-	return msSolCurveValidatePoint(EDWARDS, out, 0) != 0;
-}
-
-function tail(ref input: SeedSlice[18], at: uint64, program: uint64): void {
-	input[at as int32] = { address: program, length: 32 };
-	input[(at + 1) as int32] = seedText("ProgramDerivedAddress");
-}
-
-function createChecked(
-	table: uint64,
-	count: uint64,
-	program: uint64,
-): Result<Pubkey, ProgramError> {
-	let input: SeedSlice[18] = [];
-	if (count > 0) { msSolCopy(msSolTableAddress(input), table, count * 16); }
-	tail(input, count, program);
-	let key = Pubkey.zero();
-	if (!offCurve(input, count + 2, msSolSpanAddress(key.bytes))) {
-		return Result.err(ProgramError.invalidSeeds());
-	}
+function derivedKey(code: uint64, key: Pubkey): Result<Pubkey, ProgramError> {
+	if (code == 2) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	if (code != 0) { return Result.err(ProgramError.invalidSeeds()); }
 	return Result.ok(key);
 }
 
@@ -119,8 +101,8 @@ export function createAt(
 	count: uint64,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
-	if (!fits(table, count, MAX_SEEDS)) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
-	return createChecked(table, count, program);
+	let key = Pubkey.zero();
+	return derivedKey(msSolDeriveAddress(table, count, NO_BUMP, program, msSolSpanAddress(key.bytes)), key);
 }
 
 export function findAt(
@@ -128,24 +110,61 @@ export function findAt(
 	count: uint64,
 	program: uint64,
 ): Result<ProgramAddress, ProgramError> {
-	if (!fits(table, count, MAX_SEEDS - 1)) {
-		return Result.err(ProgramError.maxSeedLengthExceeded());
-	}
-	let input: SeedSlice[18] = [];
-	let bump: uint8[1] = [255];
-	if (count > 0) { msSolCopy(msSolTableAddress(input), table, count * 16); }
-	input[count as int32] = { address: msSolSpanAddress(bump), length: 1 };
-	tail(input, count + 1, program);
 	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
-	const out = msSolSpanAddress(found.key.bytes);
-	for (let attempt = 0; attempt < 255; attempt++) {
-		bump[0] = (255 - attempt) as uint8;
-		if (offCurve(input, count + 3, out)) {
-			found.bump = bump[0];
-			return Result.ok(found);
-		}
-	}
-	return Result.err(ProgramError.invalidSeeds());
+	const keyAddress = msSolSpanAddress(found.key.bytes);
+	const code = msSolFindAddress(table, count, program, keyAddress, keyAddress + 32);
+	if (code == 2) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	if (code != 0) { return Result.err(ProgramError.invalidSeeds()); }
+	return Result.ok(found);
+}
+
+// The find and the hash below return a ProgramError code without a Result, so a check that only
+// compares the key afterwards pays for no second wrapper.
+@inline export function findFailureAt(
+	table: uint64,
+	count: uint64,
+	program: uint64,
+	ref found: ProgramAddress,
+): uint64 {
+	const keyAddress = msSolSpanAddress(found.key.bytes);
+	const code = msSolFindAddress(table, count, program, keyAddress, keyAddress + 32);
+	if (code == 2) { return ProgramError.maxSeedLengthExceeded().code; }
+	if (code != 0) { return ProgramError.invalidSeeds().code; }
+	return 0;
+}
+
+@inline export function hashFailureAt(
+	table: uint64,
+	count: uint64,
+	bump: uint64,
+	program: uint64,
+	ref key: Pubkey,
+): uint64 {
+	return msSolHashAddress(table, count, bump, program, msSolSpanAddress(key.bytes)) == 0 ? 0 : ProgramError.constraintSeeds().code;
+}
+
+export function findExpected(
+	seeds: Readonly<Span<SeedSlice>>,
+	program: uint64,
+	expected: uint64,
+): Result<uint8, ProgramError> {
+	let bump: uint8[1] = [0];
+	const code = msSolFindExpectedAddress(tableAddress(seeds), seeds.length as uint64, program, expected, msSolSpanAddress(bump));
+	if (code == 2) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	if (code != 0) { return Result.err(ProgramError.invalidSeeds()); }
+	return Result.ok(bump[0]);
+}
+
+@inline export function findExpectedFailureAt(
+	table: uint64,
+	count: uint64,
+	program: uint64,
+	expected: uint64,
+	bumpOut: uint64,
+): uint64 {
+	const code = msSolFindExpectedAddress(table, count, program, expected, bumpOut);
+	if (code == 2) { return ProgramError.maxSeedLengthExceeded().code; }
+	return code == 0 ? 0 : ProgramError.constraintSeeds().code;
 }
 
 export function createAddress(
@@ -182,11 +201,24 @@ export function createAddressWithBump(
 	bump: uint8,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
-	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
-	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, bump)) {
-		return Result.err(ProgramError.maxSeedLengthExceeded());
-	}
-	return createChecked(msSolTableAddress(signed.slices), signed.count, program);
+	let key = Pubkey.zero();
+	return derivedKey(
+		msSolDeriveAddress(tableAddress(seeds), seeds.length as uint64, bump as uint64, program, msSolSpanAddress(key.bytes)),
+		key,
+	);
+}
+
+// No curve check: the caller has proved the account at this address is owned by the program.
+export function hashAddressWithBump(
+	seeds: Readonly<Span<SeedSlice>>,
+	bump: uint8,
+	program: uint64,
+): Result<Pubkey, ProgramError> {
+	let key = Pubkey.zero();
+	return derivedKey(
+		msSolHashAddress(tableAddress(seeds), seeds.length as uint64, bump as uint64, program, msSolSpanAddress(key.bytes)),
+		key,
+	);
 }
 
 export function signerOfBumped(ref signed: SeedTable, ref one: SignerSeeds[1]): void {

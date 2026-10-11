@@ -28,6 +28,7 @@ import "./cases/classInterfaceGenerics";
 import "./cases/templateLiteral";
 import "./cases/newGenericArgs";
 import "./cases/defaultParams";
+import "./cases/optionalParams";
 import "./cases/starExportImport";
 import "./cases/unreachableStmt";
 import "./cases/testDeclEscape";

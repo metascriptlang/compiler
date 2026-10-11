@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
 import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
@@ -16,12 +16,14 @@ import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType } from "./types";
 import { forEachChild } from "../ast/visitor";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
-import { findCallTypeArg } from "../parser/context";
+import { findCallTypeArg, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
+import { lex } from "../lexer/lexer";
+import { parseExpressionFromState } from "../parser/expressions/core";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -176,17 +178,28 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 	const paramParts = splitTopLevel(paramsStr, ",");
 	const paramTypes: Type[] = [];
 	const paramNames: string[] = [];
-	for (const part of paramParts) {
+	let requiredCount = paramParts.length;
+	for (let pi = 0; pi < paramParts.length; pi += 1) {
+		const part = paramParts[pi];
 		const colonIdx = findChar(part, ":");
 		if (colonIdx > 0) {
-			paramNames.push(part.slice(0, colonIdx).trim());
-			paramTypes.push(resolveAnnotation(part.slice(colonIdx + 1, part.length).trim(), ctx, line, col));
+			let name = part.slice(0, colonIdx).trim();
+			let typeText = part.slice(colonIdx + 1, part.length).trim();
+			if (name.endsWith("?")) {
+				name = name.slice(0, name.length - 1).trim();
+				typeText = optionalizeTypeString(typeText);
+				if (pi < requiredCount) requiredCount = pi;
+			}
+			paramNames.push(name);
+			paramTypes.push(resolveAnnotation(typeText, ctx, line, col));
 		} else {
 			paramNames.push("");
 			paramTypes.push(resolveAnnotation(part, ctx, line, col));
 		}
 	}
-	return createClosureType(paramTypes, paramNames, returnType);
+	const fnType = createClosureType(paramTypes, paramNames, returnType);
+	if (requiredCount < paramParts.length) setMinArity(fnType, requiredCount);
+	return fnType;
 }
 
 // Unwrap a Type to its underlying Struct (handles Ref<Struct> + GenericInstance).
@@ -436,19 +449,37 @@ function isAllDigits(s: string): boolean {
 	return true;
 }
 
-function constArrayDimension(name: string, ctx: CheckerContext, line: int32, col: int32): int32 {
-	const sym = lookupSymbol(ctx.table, name);
-	if (sym != null) {
-		markUsedIn(ctx, sym);
-		const ident = createNodeAt(NodeKind.Identifier, { name }, makeLoc(line, col));
-		ident.resolvedSym = sym;
-		const folded = constantLiteralOf(ident, 0);
-		if (folded != null && folded.kind == NodeKind.NumberLiteral) {
-			const fd = folded.data as NumberLiteralData;
-			if (!fd.isFloat && fd.intVal >= 0 && fd.intVal <= 2147483647) return fd.intVal as int32;
-		}
-	}
-	return -1;
+function bindDimensionNames(expr: Node, ctx: CheckerContext): boolean {
+	return match (expr.kind) {
+		NodeKind.NumberLiteral => true,
+		NodeKind.Identifier => {
+			const sym = lookupSymbol(ctx.table, (expr.data as IdentifierData).name);
+			if (sym == null) return false;
+			ensureShaped(sym, ctx);
+			markUsedIn(ctx, sym);
+			expr.resolvedSym = sym;
+			return true;
+		},
+		NodeKind.BinaryExpr => {
+			const d = expr.data as BinaryExprData;
+			return bindDimensionNames(d.left, ctx) && bindDimensionNames(d.right, ctx);
+		},
+		NodeKind.UnaryExpr => bindDimensionNames((expr.data as UnaryExprData).operand, ctx),
+		_ => false,
+	};
+}
+
+function constArrayDimension(text: string, ctx: CheckerContext, line: int32, col: int32): int32 {
+	const tokens = lex(text);
+	if (!tokens.ok) return -1;
+	const state = createState(tokens.value);
+	const parsed = parseExpressionFromState(state);
+	if (!parsed.ok || !isAtEnd(state) || !bindDimensionNames(parsed.value, ctx)) return -1;
+	const folded = constantLiteralOf(parsed.value, 0);
+	if (folded == null || folded.kind != NodeKind.NumberLiteral) return -1;
+	const fd = folded.data as NumberLiteralData;
+	if (fd.isFloat || fd.intVal < 0 || fd.intVal > 2147483647) return -1;
+	return fd.intVal as int32;
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {

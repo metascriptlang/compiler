@@ -4,17 +4,61 @@
 // Uses bottom-up walk via walker.ms so chained a?.b?.c works naturally:
 // inner ?.b transforms first, outer ?.c sees the conditional result.
 
-import { Node, NodeKind, MemberExprData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, MemberExprData, CallExprData, TypeAssertionData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { TransformContext } from "../context";
-import { walkNode } from "../walker";
-import { makeMember, makeNull, makeBinary, makeConditional } from "../util";
+import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
+import { makeMember, makeNull, makeBinary, makeConditional, makeIdentResolved } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
-import { rereadOperand } from "./nullishCoalesce";
+import { rereadOperand, bindOnce, blockifyArrowsReading } from "./nullishCoalesce";
+import { cloneIfPure } from "./intArithJS";
 
 // ===== Main Entry Point =====
 
 export function lowerOptionalChain(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, lowerOptionalNode);
+	blockifyArrowsReading(program, (node: Node): boolean => sharedProbe(node) != null);
+	walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => bindReadProbes(stmt, c), ctx);
+	return walkOutsideInstanceFieldInits(program, lowerOptionalNode);
+}
+
+function bindReadProbes(stmt: Node, ctx: TransformContext): Node[] {
+	const temps: Node[] = [];
+	const lowered = walkWithinStatement(stmt, (node: Node): Node => bindReadProbe(node, ctx, temps));
+	temps.push(lowered);
+	return temps;
+}
+
+// The checker reads `x?.f` as `x !== null ? x.f : null` with one `x` node in both
+// places when `x` is not a name path.
+function sharedProbe(node: Node): Node | null {
+	if (node.kind != NodeKind.ConditionalExpr) return null;
+	const arms = node.data as ConditionalExprData;
+	if (arms.ternaryCondition.kind != NodeKind.BinaryExpr) return null;
+	const test = arms.ternaryCondition.data as BinaryExprData;
+	if (test.operator != "!==" || cloneIfPure(test.left) != null || !reads(arms.ternaryConsequent, test.left)) return null;
+	return test.left;
+}
+
+function bindReadProbe(node: Node, ctx: TransformContext, temps: Node[]): Node {
+	const read = sharedProbe(node);
+	if (read == null) return node;
+	const arms = node.data as ConditionalExprData;
+	const test = arms.ternaryCondition.data as BinaryExprData;
+	const loc = node.location;
+	const bound = bindOnce(read, ctx, temps, loc);
+	const sym = (bound.data as BinaryExprData).left.resolvedSym!;
+	test.left = bound;
+	arms.ternaryConsequent = walkNode(arms.ternaryConsequent, (n: Node): Node => n == read ? makeIdentResolved(sym, loc) : n);
+	return node;
+}
+
+function reads(tree: Node, shared: Node): boolean {
+	if (tree == shared) return true;
+	let found = false;
+	forEachChild(tree, (child: Node): void => {
+		if (!found && child != null && reads(child, shared)) found = true;
+	});
+	return found;
 }
 
 // ===== Visitor =====
@@ -54,3 +98,29 @@ test "a pure object is read again through its own node" {
 		}
 	}
 }
+
+function chainEnds(input: string): string {
+	let marks = "";
+	const parsed = parseInput(input);
+	if (!parsed.ok) return "parse error";
+	let link: Node | null = (getStmts(parsed.value)[0].data as ExprStmtData).expr;
+	while (link != null) {
+		marks = marks + (link.flags.has(NodeFlag.OptionalChainEnd) ? "E" : "-");
+		if (link.kind == NodeKind.MemberExpr) link = (link.data as MemberExprData).object;
+		else if (link.kind == NodeKind.CallExpr) link = (link.data as CallExprData).callee;
+		else if (link.kind == NodeKind.TypeAssertion) link = (link.data as TypeAssertionData).asExpr;
+		else link = null;
+	}
+	return marks;
+}
+
+test "an optional chain ends at its last link" { assert chainEnds("a?.b.c(1).d;") == "E----"; }
+
+test "each ?. closes the run before it" { assert chainEnds("a?.b.c?.d;") == "EE--"; }
+
+test "parentheses and a cast end the chain" {
+	assert chainEnds("(a?.b).c;") == "-E-";
+	assert chainEnds("a?.b as int32;") == "-E-";
+}
+
+test "a plain member chain carries no chain end" { assert chainEnds("a.b.c(1);") == "----"; }

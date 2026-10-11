@@ -241,8 +241,8 @@ export function deepAliases(dest: Node, ri: Node): boolean {
 			return false;
 		},
 		NodeKind.NewExpr => {
+			// The callee names a type, which aliases nothing (a type node is never a location).
 			const d = ri.data as NewExprData;
-			if (deepAliases(dest, d.newCallee)) return true;
 			for (const arg of d.newArguments) {
 				if (deepAliases(dest, arg)) return true;
 			}

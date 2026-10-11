@@ -5,7 +5,7 @@
 // arrives already converted by the checker's std dump call.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol } from "../../ast/node";
-import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase } from "../../checker/types";
+import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef } from "../util";
 import { charToString } from "./stringOpLower";
@@ -14,7 +14,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	if (arg.nodeType == null) return arg;
 	const t = literalBase(peelTransparentInstance(arg.nodeType));
 	// String: as-is
-	if (t.kind == TypeKind.String || arg.kind == NodeKind.StringLiteral) return arg;
+	if (isStringLike(t) || arg.kind == NodeKind.StringLiteral) return arg;
 	if (t.kind == TypeKind.Char) return charToString(arg, loc);
 	// Number/int → msNumberToString; 64-bit integers need the exact formatter
 	if (isWideInteger(t)) {

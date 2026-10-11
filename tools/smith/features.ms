@@ -18,6 +18,99 @@ export enum Fam {
 	Generic,
 }
 
+export enum W {
+	ExprLeaf,
+	ExprBinary,
+	ExprUnary,
+	ExprConvert,
+	ExprTernary,
+	ExprCall,
+	StmtLet,
+	StmtAssign,
+	StmtCompound,
+	StmtIf,
+	StmtFor,
+	StmtMatch,
+	StmtBreak,
+	StmtReturn,
+	FamClosure,
+	FamUnion,
+	FamGeneric,
+	ClosureNamed,
+	ClosureArray,
+	ClosureIife,
+	ClosureDecl,
+	ClosureEffect,
+	ClosureInvoke,
+	ClosureMaker,
+	ClosureFill,
+	GenericId,
+	GenericTwice,
+	GenericPick,
+	GenericMap,
+	GenericBox,
+	ExprFam,
+	StmtFam,
+	StmtElse,
+	UnionLen,
+}
+
+export const W_KEYS: string[] = [
+	"w.expr.leaf",
+	"w.expr.binary",
+	"w.expr.unary",
+	"w.expr.convert",
+	"w.expr.ternary",
+	"w.expr.call",
+	"w.stmt.let",
+	"w.stmt.assign",
+	"w.stmt.compound",
+	"w.stmt.if",
+	"w.stmt.for",
+	"w.stmt.match",
+	"w.stmt.break",
+	"w.stmt.return",
+	"w.fam.closure",
+	"w.fam.union",
+	"w.fam.generic",
+	"w.closure.named",
+	"w.closure.array",
+	"w.closure.iife",
+	"w.closure.decl",
+	"w.closure.effect",
+	"w.closure.invoke",
+	"w.closure.maker",
+	"w.closure.fill",
+	"w.generic.id",
+	"w.generic.twice",
+	"w.generic.pick",
+	"w.generic.map",
+	"w.generic.box",
+	"w.expr.fam",
+	"w.stmt.fam",
+	"w.stmt.else",
+	"w.union.len",
+];
+
+export const W_DEFAULTS: int32[] = [
+	25, 30, 8, 10, 8, 19,
+	25, 25, 8, 12, 12, 6, 6, 6,
+	1, 1, 1,
+	1, 1, 1,
+	1, 1, 1, 1, 1,
+	1, 1, 1, 1, 2,
+	20, 20, 50, 30,
+];
+
+const W_GROUPS: int32[][] = [
+	[0, 5],
+	[6, 13],
+	[14, 16],
+	[17, 19],
+	[20, 24],
+	[25, 29],
+];
+
 export enum Plant {
 	None,
 	Backend,
@@ -35,6 +128,7 @@ export struct Features {
 	trips: int32;
 	entries: int32;
 	plant: Plant;
+	w: int32[];
 }
 
 export const ALL_TYS: Ty[] = [
@@ -120,6 +214,7 @@ export function defaults(this typeof Features): Features {
 		trips: 4,
 		entries: 4,
 		plant: Plant.None,
+		w: W_DEFAULTS.map((n: int32): int32 => n),
 	};
 }
 
@@ -141,7 +236,33 @@ export function format(this f: Features): string {
 		" expr=" + String(f.exprDepth) +
 		" trips=" + String(f.trips) +
 		" entries=" + String(f.entries) +
-		" plant=" + plantName(f.plant);
+		" plant=" + plantName(f.plant) + weightText(f.w);
+}
+
+function weightText(w: int32[]): string {
+	let out = "";
+	for (let i = 0; i < W_KEYS.length; i++) {
+		if (w[i] != W_DEFAULTS[i]) { out += " " + W_KEYS[i] + "=" + String(w[i]); }
+	}
+	return out;
+}
+
+function weightIndex(key: string): int32 {
+	for (let i = 0; i < W_KEYS.length; i++) {
+		if (W_KEYS[i] == key) { return i; }
+	}
+	return -1;
+}
+
+function weightsSound(w: int32[]): Result<boolean, string> {
+	for (const g of W_GROUPS) {
+		let sum = 0;
+		for (let i = g[0]; i <= g[1]; i++) { sum += w[i]; }
+		if (sum == 0) {
+			return Result.err(W_KEYS[g[0]] + " .. " + W_KEYS[g[1]] + " are all 0; one must be positive");
+		}
+	}
+	return Result.ok(true);
 }
 
 function boundedInt(key: string, text: string, low: int32, high: int32): Result<int32, string> {
@@ -224,10 +345,19 @@ export function overlay(this base: Features, text: string): Result<Features, str
 			f = { ...f, trips: try boundedInt(key, value, 1, 64) };
 		} else if (key == "entries") {
 			f = { ...f, entries: try boundedInt(key, value, 1, 64) };
+		} else if (key.startsWith("w.")) {
+			const at = weightIndex(key);
+			if (at < 0) { return Result.err("unknown weight '" + key + "'"); }
+			const n = try boundedInt(key, value, 0, 100);
+			const next = f.w.map((x: int32): int32 => x);
+			next[at] = n;
+			f = { ...f, w: next };
 		} else {
 			return Result.err("unknown feature '" + key + "'");
 		}
 	}
+	const sound = weightsSound(f.w);
+	if (!sound.ok) { return Result.err(sound.error); }
 	return Result.ok(f);
 }
 
@@ -249,6 +379,63 @@ test "an overlay changes only the keys it names" {
 		assert r.value.fams == base.fams;
 		assert r.value.funcs == base.funcs && r.value.depth == base.depth;
 	}
+}
+
+test "default weights print nothing and a changed weight prints only itself" {
+	assert !Features.defaults().format().contains(" w.");
+	const r = Features.defaults().overlay("w.expr.ternary=80 w.stmt.fam=0");
+	assert r.ok;
+	if (r.ok) {
+		const text = r.value.format();
+		assert text.endsWith(" w.expr.ternary=80 w.stmt.fam=0");
+		assert !text.contains("w.expr.leaf");
+	}
+}
+
+test "a weight vector parses back to itself" {
+	const r = Features.defaults().overlay("fams=closure w.expr.call=0 w.fam.union=7 w.closure.iife=3");
+	assert r.ok;
+	if (r.ok) {
+		const back = Features.defaults().overlay(r.value.format());
+		assert back.ok;
+		if (back.ok) { assert back.value.format() == r.value.format(); }
+	}
+}
+
+test "setting a weight back to its default prints nothing" {
+	const r = Features.defaults().overlay("w.expr.leaf=3 w.expr.leaf=25");
+	assert r.ok;
+	if (r.ok) { assert r.value.format() == Features.defaults().format(); }
+}
+
+test "an overlay never changes the weights of its base" {
+	const base = Features.defaults();
+	const r = base.overlay("w.expr.leaf=3");
+	assert r.ok;
+	assert base.w[0] == 25;
+}
+
+test "an unknown weight, a bad value and an all-zero group are refused" {
+	assert !Features.defaults().overlay("w.expr.nope=3").ok;
+	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
+	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
+	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0").ok;
+}
+
+test "swarm keeps the weights of its base" {
+	const base = Features.defaults().overlay("w.expr.ternary=80");
+	assert base.ok;
+	if (base.ok) {
+		for (let s = 0; s < 16; s++) { assert base.value.swarm(s as uint64).format().contains(" w.expr.ternary=80"); }
+	}
+}
+
+test "weight keys and defaults line up with the enum" {
+	assert W_KEYS.length == W_DEFAULTS.length;
+	assert W_KEYS.length == (W.UnionLen as int32) + 1;
+	assert W_KEYS[W.StmtBreak as int32] == "w.stmt.break";
+	assert W_KEYS[W.GenericBox as int32] == "w.generic.box";
 }
 
 test "an unknown key is refused" {

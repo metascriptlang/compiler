@@ -14,7 +14,7 @@ import {
 } from "../doc";
 import { Token } from "../../../lexer/token";
 import { callPrintNode } from "./callbacks";
-import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
+import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
@@ -286,12 +286,6 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
-function unoptionalized(type: string): string {
-	const suffix = ") | null";
-	if (type.startsWith("(") && type.endsWith(suffix)) return type.byteSlice(1, type.byteLength - suffix.byteLength);
-	return type;
-}
-
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
@@ -349,7 +343,7 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		if (d.interfaceFieldTypes[i] != "") {
 			field = field + ": " + (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
 		}
-		if (d.interfaceFieldVisibility != null && i < d.interfaceFieldVisibility.length && d.interfaceFieldVisibility[i] == "private") field = "private " + field;
+		if (d.interfaceFieldVisibility != null && i < d.interfaceFieldVisibility.length && d.interfaceFieldVisibility[i] != "") field = d.interfaceFieldVisibility[i] + " " + field;
 		// Find a trailing comment for this field.
 		let attached: Token = null as unknown as Token;
 		for (let j = 0; j < inline.length; j += 1) {

@@ -1,7 +1,13 @@
 export extern function Number(v: string): float64 from "Number(#)";
 export extern function Number(v: boolean): float64 from "Number(#)";
 export extern function Number(v: float64): float64 from "Number(#)";
+export extern function Number(v: int8): float64 from "Number(#)";
+export extern function Number(v: int16): float64 from "Number(#)";
+export extern function Number(v: int32): float64 from "Number(#)";
 export extern function Number(v: int64): float64 from "Number(#)";
+export extern function Number(v: uint8): float64 from "Number(#)";
+export extern function Number(v: uint16): float64 from "Number(#)";
+export extern function Number(v: uint32): float64 from "Number(#)";
 export extern function Number(v: uint64): float64 from "Number(#)";
 
 export extern function isNaN(this typeof Number, x: float64): boolean from "Number.isNaN(#)";

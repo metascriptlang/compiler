@@ -43,10 +43,12 @@ test "string + number coercion" {
 
 test "string comparison" {
 	assert "abc" == "abc";
-	assert "abc" != "def";
+	const abc: string = "abc";
+	assert abc != "def";
 	assert "" == "";
-	assert "a" != "";
-	assert "abc" != "abcd";
+	const a: string = "a";
+	assert a != "";
+	assert abc != "abcd";
 }
 
 test "string slice" {
