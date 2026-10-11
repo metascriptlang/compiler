@@ -152,6 +152,7 @@ export {
 	writableSigner,
 } from "./typed";
 export * from "./macro";
+export * from "./securityTxt";
 export * from "./invoke";
 export * from "./accountCodec";
 export { isUtf8 } from "./bytes";
