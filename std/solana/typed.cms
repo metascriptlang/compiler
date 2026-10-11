@@ -64,8 +64,6 @@ extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
 extern function msSolClaimRecord(address: uint64): void;
 
-const UNDUPLICATED_SIGNER_WRITABLE: uint32 = 0x0101ff;
-
 export struct Signer { private account: Account; }
 export struct WritableSigner { private account: Account; }
 export struct Writable { private account: Account; }
