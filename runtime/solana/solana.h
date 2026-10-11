@@ -158,26 +158,26 @@ parsed:
     return cursor;
 }
 
-static inline __attribute__((noinline)) const uint8_t* msSolInstructionDataAfter(const uint8_t* input, const uint8_t* last) {
-    const uint64_t count = *(const uint64_t*)input;
-    const uint64_t kept = msSolContext()->accountCount;
-    for (uint64_t index = kept == 0 ? 0 : kept - 1; index < count; index++) last = msSolNextRecord(last);
-    return last + 8;
+static inline __attribute__((noinline)) const uint8_t* msSolInstructionDataOf(const uint8_t* input) {
+    const uint8_t* cursor = input + 8;
+    for (uint64_t left = *(const uint64_t*)input; left > 0; left--) cursor = msSolNextRecord(cursor);
+    return cursor + 8;
 }
 
 #ifndef MSOS_SOLANA
 static inline __attribute__((noinline)) void msSolParse(uint64_t* table) {
     msSolanaContext* context = msSolContext();
     const uint8_t* input = (const uint8_t*)context->input;
-    const uint8_t* instructionData = msSolInstructionDataAfter(input, msSolParseAccounts(input, table));
+    msSolParseAccounts(input, table);
+    const uint8_t* instructionData = msSolInstructionDataOf(input);
     context->instructionData = (uint64_t)instructionData;
     context->programId = (uint64_t)instructionData + *(const uint64_t*)(instructionData - 8);
 }
 #endif
 
 static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
-    const uint8_t* last = msSolParseAccounts(input, table);
-    if (!instructionData) instructionData = msSolInstructionDataAfter(input, last);
+    if (!instructionData) instructionData = msSolInstructionDataOf(input);
+    msSolParseAccounts(input, table);
     msSolContext()->instructionData = (uint64_t)instructionData;
 }
 
