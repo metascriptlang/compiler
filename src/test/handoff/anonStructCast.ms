@@ -79,6 +79,14 @@ test "a nullable dynamic array holds null and narrows on both backends" {
 	}
 }
 
+test "a std collection is not held as unknown" {
+	for (const t of ["Map<string, int32>", "HashMap<string, int32>", "Set<string>", "HashSet<string>"]) {
+		const result = compileToC("const a = new " + t + "();\nconst u = a as unknown;\nconsole.log(u == null);");
+		assert !result.ok;
+		assert result.error.contains("as unknown");
+	}
+}
+
 test "a direct null cast is refused for every type that holds no null" {
 	const prelude = "struct Pt { x: int32; }\nclass K { v: int32 = 1; }\n";
 	const targets = ["Pt", "K", "string[]", "int32[4]", "Span<int32>", "string", "(() => void)"];
