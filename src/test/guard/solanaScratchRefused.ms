@@ -2,7 +2,7 @@
 // GUARD-CHECK-FAIL in instantiation of 'scratchAddress<Named>'
 // GUARD-CHECK-FAIL in instantiation of 'scratchAddress<Listed>'
 // GUARD-CHECK-FAIL in instantiation of 'scratchAddress<Held>'
-// GUARD-CHECK-FAIL scratchTypeOwnsManagedMemory
+// GUARD-CHECK-FAIL scratch<T>(count): T owns managed memory
 // scratch<T> places T on the program heap, which nothing frees and no destructor reaches, so a T that owns
 // a string, an array or a class instance would leak or alias it.
 // RED MEANS: scratch accepts a type that owns managed memory.

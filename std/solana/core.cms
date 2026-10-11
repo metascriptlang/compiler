@@ -119,7 +119,10 @@ export function scratchAddress<T>(count: uint64): Result<uint64, ProgramError> {
 		if (address == 0) { return Result.err(ProgramError.invalidArgument()); }
 		return Result.ok(address);
 	} else {
-		return scratchTypeOwnsManagedMemory<T>();
+		const refused: uint64 = @comptime {
+			throw new Error("scratch<T>(count): T owns managed memory (a string, an array, a class, or a struct holding one); scratch holds plain data only: numbers, booleans, Pubkey, and structs or fixed arrays of those");
+		};
+		return Result.ok(refused);
 	}
 }
 
