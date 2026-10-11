@@ -103,6 +103,7 @@ import {
 	programAddress,
 	programAddressOf,
 	seeds,
+	scratch,
 	signed,
 	signedPda,
 } from "./macro";
@@ -3853,4 +3854,103 @@ test "a create on an account closed earlier in the same instruction is refused: 
 	const accounts = [counter, wallet(2, 50), wallet(3, 10000000)];
 	assert run(programKey(), accounts, [], closeThenCreateEntry).result ==
 		ProgramError.accountBorrowFailed().code;
+}
+
+struct Crit {
+	hp: uint32;
+	alive: boolean;
+	owner: Pubkey;
+	rolls: uint16[3];
+}
+
+let scratchFirstSeen: uint64 = 0;
+let scratchSecondSeen: uint64 = 0;
+let scratchFirstKept: uint64 = 0;
+let scratchLengths: uint64 = 0;
+
+function scratchStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU8(0);
+	const first = scratch<Crit>(count as int32);
+	for (const crit of first) {
+		scratchFirstSeen = scratchFirstSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
+	}
+	for (let index = 0; index < first.length; index++) {
+		first[index].hp = 100 + (index as uint32);
+		first[index].rolls[2] = 7;
+		first[index].alive = true;
+		first[index].owner.bytes[31] = 3;
+	}
+	const second = scratch<Crit>(count as int32);
+	for (const crit of second) {
+		scratchSecondSeen = scratchSecondSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
+	}
+	for (let index = 0; index < second.length; index++) { second[index].hp = 5; }
+	for (const crit of first) { scratchFirstKept = scratchFirstKept + (crit.hp as uint64); }
+	const bytes = scratch<uint8>(3);
+	bytes[2] = 9;
+	scratchLengths = (first.length as uint64) * 100 + (second.length as uint64) * 10 + (bytes.length as uint64);
+	return Result.ok(0);
+}
+
+function scratchEntry(): void { codeOf(scratchStep()); }
+
+test "scratch hands out zeroed spans of the length asked for that never overlap" {
+	const input: uint8[] = [10];
+	assert run(programKey(), [], input, scratchEntry).result == 0;
+	assert scratchFirstSeen == 0 && scratchSecondSeen == 0;
+	assert scratchFirstKept == 1045;
+	assert scratchLengths == 10 * 100 + 10 * 10 + 3;
+}
+
+function scratchSizeStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU16(0);
+	const big = scratch<uint8>(count as int32);
+	if (big.length > 0) { big[big.length - 1] = 1; }
+	const tail = try instructionData().readU8(2);
+	if (tail == 1) {
+		const more = scratch<uint8>(1);
+		more[0] = 1;
+	}
+	return Result.ok(0);
+}
+
+function scratchSizeEntry(): void { codeOf(scratchSizeStep()); }
+
+function scratchSizeRun(count: int32, tail: uint8): uint64 {
+	const input: uint8[] = [(count & 255) as uint8, ((count >> 8) & 255) as uint8, tail];
+	return run(programKey(), [], input, scratchSizeEntry).result;
+}
+
+test "scratch answers InvalidArgument when the heap cannot hold the request, and takes what fits to the last byte" {
+	assert scratchSizeRun(0, 1) == 0;
+	let fits = 0;
+	let refused = 32768;
+	while (refused - fits > 1) {
+		const middle = (fits + refused) / 2;
+		if (scratchSizeRun(middle, 0) == 0) { fits = middle; } else { refused = middle; }
+	}
+	assert fits > 32000 && fits < 32768;
+	assert scratchSizeRun(refused, 0) == ProgramError.invalidArgument().code;
+	assert scratchSizeRun(fits, 0) == 0;
+	assert scratchSizeRun(fits, 1) == ProgramError.invalidArgument().code;
+	assert scratchSizeRun(fits - 8, 1) == 0;
+	assert scratchSizeRun(65535, 0) == ProgramError.invalidArgument().code;
+}
+
+function scratchNegativeStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU8(0);
+	const wide: int32 = (count as int32) - 1;
+	const none = scratch<uint8>(wide);
+	return Result.ok(none.length as uint64);
+}
+
+function scratchNegativeEntry(): void { codeOf(scratchNegativeStep()); }
+
+test "scratch refuses a negative count and gives an empty span for zero" {
+	const zero: uint8[] = [1];
+	assert run(programKey(), [], zero, scratchNegativeEntry).result == 0;
+	const negative: uint8[] = [0];
+	assert run(programKey(), [], negative, scratchNegativeEntry).result == ProgramError.invalidArgument().code;
 }

@@ -69,6 +69,11 @@ uint64_t msSolHostAlloc(uint64_t size) {
     return address;
 }
 
+uint64_t msSolHostScratch(uint64_t size) {
+    if (size > MS_SOL_HOST_HEAP_SIZE - msSolHostContext()->arenaPosition) return 0;
+    return msSolHostAlloc(size);
+}
+
 static void msSolHostForget(void) {
     for (uint64_t index = 0; index < msSolHostLogCount; index++) free(msSolHostLogLines[index]);
     free(msSolHostLogLines);

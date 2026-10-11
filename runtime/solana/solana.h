@@ -27,6 +27,11 @@ static inline uint64_t msSolAlloc(uint64_t size) {
     return (uint64_t)msArenaAlloc((size_t)size);
 }
 
+static inline uint64_t msSolScratch(uint64_t size) {
+    if (size > MS_SOLANA_HEAP_SIZE - msSolanaCurrentContext()->arenaPosition) return 0;
+    return (uint64_t)msArenaAlloc((size_t)size);
+}
+
 #else
 
 typedef struct {
@@ -44,6 +49,7 @@ typedef struct {
 
 msSolanaContext* msSolHostContext(void);
 uint64_t msSolHostAlloc(uint64_t size);
+uint64_t msSolHostScratch(uint64_t size);
 uint64_t msSolHostInput(uint64_t size);
 void msSolHostEnter(uint64_t input);
 uint64_t msSolHostResult(void);
@@ -80,6 +86,10 @@ static inline msSolanaContext* msSolContext(void) {
 
 static inline uint64_t msSolAlloc(uint64_t size) {
     return msSolHostAlloc(size);
+}
+
+static inline uint64_t msSolScratch(uint64_t size) {
+    return msSolHostScratch(size);
 }
 
 #endif

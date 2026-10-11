@@ -10,6 +10,7 @@ import {
 	pubkeyOf,
 } from "./pubkey";
 import { ProgramError } from "./error";
+import { isPlainData } from "std/typetraits";
 import { Bytes, putAddress, putPubkey, putU32, putU64, storePubkey } from "./buffer";
 import { InstructionAccount } from "./cpi";
 import { invokeSigned } from "./invoke";
@@ -63,6 +64,7 @@ extern function msSolStoreU16(address: uint64, value: uint16): void;
 extern function msSolStoreU32(address: uint64, value: uint32): void;
 extern function msSolStoreU64(address: uint64, value: uint64): void;
 extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
+extern function msSolScratch(size: uint64): uint64;
 extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
 extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
 extern function msSolLogPubkey(address: uint64): void;
@@ -77,6 +79,8 @@ extern function msSolSetReturnData(data: Readonly<Span<uint8>>): void;
 extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
 
 const MAX_RETURN_DATA: uint64 = 1024;
+
+export const SCRATCH_MAX_COUNT: uint64 = 262144;
 
 export struct Account {
 	address: uint64;
@@ -100,6 +104,23 @@ export struct ReturnData {
 	program: Pubkey;
 	length: uint64;
 	data: uint8[1024];
+}
+
+// The address of `count` T on the program heap, 8-aligned, or InvalidArgument when the heap cannot hold them. The heap
+// starts every instruction zeroed and the bump pointer never moves back, so the bytes are zero.
+// Only `scratch<T>(count)` calls this, and it keeps no address: a span of exactly `count` elements is all it hands out.
+export function scratchAddress<T>(count: uint64): Result<uint64, ProgramError> {
+	when (isPlainData<T>()) {
+		const width = sizeof(T) as uint64;
+		if (count > SCRATCH_MAX_COUNT) {
+			return Result.err(ProgramError.invalidArgument());
+		}
+		const address = msSolScratch(count * width);
+		if (address == 0) { return Result.err(ProgramError.invalidArgument()); }
+		return Result.ok(address);
+	} else {
+		return scratchTypeOwnsManagedMemory<T>();
+	}
 }
 
 export function failWith(error: ProgramError): void {

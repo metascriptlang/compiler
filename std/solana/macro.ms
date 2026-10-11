@@ -1,4 +1,4 @@
-import { Node, NodeKind, bindSym, define, getType, stringValue } from "std/meta";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
@@ -22,8 +22,10 @@ import {
 	argsFit,
 	instructionHasDiscriminator,
 	instructionHasWord,
+	SCRATCH_MAX_COUNT,
 	foundSigner,
 	logEvent,
+	scratchAddress,
 	slottedSeeds,
 } from "./core";
 import {
@@ -349,6 +351,62 @@ export macro tokenMint(use: Node): Node {
 
 export macro tokenAuthority(use: Node): Node {
 	error("@tokenAuthority is a field decorator that accounts<T>() reads; it is not called", use);
+}
+
+export macro scratch(count: Node): Node {
+	const element = getTypeArg();
+	let typeName = "";
+	if (element.kind === NodeKind.Identifier) { typeName = element.name; }
+	if (element.kind === NodeKind.TypeObject) { typeName = element.typExprTypeName; }
+	if (typeName == "") {
+		error("scratch<T>(count): T is a named type with no managed memory: a number, boolean, Pubkey, " +
+			"or a struct or fixed array of those", element);
+	}
+	function readsTwice(value: Node): boolean {
+		if (value.kind === NodeKind.NumberLiteral || value.kind === NodeKind.Identifier) { return true; }
+		if (value.kind === NodeKind.MemberExpr) { return readsTwice(value.object); }
+		if (value.kind === NodeKind.TypeAssertion) { return readsTwice(value.asExpr); }
+		if (value.kind === NodeKind.BinaryExpr) { return readsTwice(value.left) && readsTwice(value.right); }
+		return false;
+	}
+	if (!readsTwice(count)) {
+		error("scratch<T>(count): count is evaluated twice, so it is made of numbers, locals, fields, casts and " +
+			"arithmetic; bind a call to a const first", count);
+	}
+	const line = count.line;
+	const column = count.column;
+	const address: Node = {
+		kind: NodeKind.CallExpr,
+		line: line,
+		column: column,
+		callee: bindSym("scratchAddress"),
+		arguments: [{ kind: NodeKind.TypeAssertion, line: line, column: column, asExpr: count, asType: "uint64" }],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+	address.typeArg = typeName;
+	const found: Node = { kind: NodeKind.TryExpr, line: line, column: column, tryArg: address, hasCatch: false, catchVal: address };
+	const pointer: Node = {
+		kind: NodeKind.TypeAssertion,
+		line: line,
+		column: column,
+		asExpr: found,
+		asType: "Ptr<" + typeName + "[" + String(SCRATCH_MAX_COUNT as int32) + "]>",
+	};
+	const whole: Node = { kind: NodeKind.HiddenDeref, line: line, column: column, expr: pointer };
+	whole.flags = whole.flags.incl(NodeFlag.ExplicitDeref);
+	const zero: Node = {
+		kind: NodeKind.NumberLiteral,
+		line: line,
+		column: column,
+		value: 0,
+		isFloat: false,
+		intVal: 0,
+		outOfRangeText: "",
+		isBitPattern: false,
+	};
+	const range: Node = { kind: NodeKind.BinaryExpr, line: line, column: column, operator: "..", left: zero, right: count };
+	return { kind: NodeKind.ArrayAccess, line: line, column: column, array: whole, index: range };
 }
 
 export macro emit(value: Node): Node {
