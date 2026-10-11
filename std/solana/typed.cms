@@ -60,8 +60,11 @@ extern function msSolAccountAt(index: uint64): uint64;
 extern function msSolAccountTable(): uint64;
 extern function msSolAccountCount(): uint64;
 extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolLoadU32(address: uint64): uint32;
 extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
+
+const UNDUPLICATED_SIGNER_WRITABLE: uint32 = 0x0101ff;
 
 export struct Signer { private account: Account; }
 export struct WritableSigner { private account: Account; }
@@ -158,6 +161,10 @@ export function signer(index: int32): Result<Signer, ProgramError> {
 }
 
 @inline function writableSignerProofAt(address: uint64, out proof: WritableSigner): uint64 {
+	if ((msSolLoadU32(address) & 0x00ffffff) == UNDUPLICATED_SIGNER_WRITABLE) {
+		proof = { account: { address: address } };
+		return 0;
+	}
 	if (msSolLoadU8(address + 1) == 0) { return ProgramError.accountNotSigner().code; }
 	const duplicated = duplicateFailure(address);
 	if (duplicated != 0) { return duplicated; }
