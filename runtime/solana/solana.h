@@ -483,6 +483,23 @@ MS_SOL_STAGED uint64_t msSolSeedTail(msSolSeed* input, uint64_t at, uint64_t pro
     return at + 2;
 }
 
+/* The bump's slice, one byte at `bump`, then the program and the tag. */
+MS_SOL_STAGED void msSolSeedSlot(msSolSeed* input, uint64_t at, uint64_t bump, uint64_t program) {
+    input[at].address = bump;
+    input[at].length = 1;
+    msSolSeedTail(input, at + 1, program);
+}
+
+/* A table the caller built with three free slices after its seeds is staged where it is, with nothing copied.
+   Answers the number of seeds, or MS_SOL_MAX_SEEDS for a table that cannot be hashed. */
+MS_SOL_STAGED uint64_t msSolSeedStageInPlace(uint64_t table, uint64_t count, uint64_t bump, uint64_t program) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    const uint64_t used = count - 3;
+    if (count < 3 || !msSolSeedStage(input, table, used, MS_SOL_MAX_SEEDS - 1)) return MS_SOL_MAX_SEEDS;
+    msSolSeedSlot(input, used, bump, program);
+    return used;
+}
+
 /* The sha256 of the seeds, the bump when it is at most 255, the program and the tag: 0 with the hash in out, 2 when
    there are too many seeds or one is over 32 bytes. No curve check. */
 static inline uint64_t msSolHashAddress(uint64_t table, uint64_t count, uint64_t bump, uint64_t program, uint64_t out) {
@@ -511,18 +528,13 @@ static inline bool msSolKeyIs(uint64_t key, uint64_t expected) {
         msSolLoadU64(key + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(key + 24) == msSolLoadU64(expected + 24);
 }
 
-/* The bump walks below take staged slices whose slot `at` is free for the bump byte, and count down from 255. */
+/* The bump walks below take staged slices and count the byte at bumpOut, which the bump's slice names, down from
+   255: it holds the bump they stop at. */
 static __attribute__((noinline)) uint64_t msSolWalkAny(msSolSeed* input, uint64_t at, uint64_t out, uint64_t bumpOut) {
-    uint8_t bump = 255;
-    input[at].address = (uint64_t)(uintptr_t)&bump;
-    input[at].length = 1;
     for (uint64_t counter = 255; counter > 0; counter--) {
-        bump = (uint8_t)counter;
+        msSolStoreU8(bumpOut, (uint8_t)counter);
         msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
-        if (msSolCurveValidatePoint(0, out, 0) != 0) {
-            msSolStoreU8(bumpOut, bump);
-            return 0;
-        }
+        if (msSolCurveValidatePoint(0, out, 0) != 0) return 0;
     }
     return 1;
 }
@@ -530,16 +542,10 @@ static __attribute__((noinline)) uint64_t msSolWalkAny(msSolSeed* input, uint64_
 static inline uint64_t msSolWalkExpected(msSolSeed* input, uint64_t at, uint64_t expected, uint64_t bumpOut) {
     uint8_t hash[32];
     const uint64_t out = (uint64_t)(uintptr_t)hash;
-    uint8_t bump = 255;
-    input[at].address = (uint64_t)(uintptr_t)&bump;
-    input[at].length = 1;
     for (uint64_t counter = 255; counter > 0; counter--) {
-        bump = (uint8_t)counter;
+        msSolStoreU8(bumpOut, (uint8_t)counter);
         msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
-        if (msSolKeyIs(out, expected)) {
-            msSolStoreU8(bumpOut, bump);
-            return 0;
-        }
+        if (msSolKeyIs(out, expected)) return 0;
         if (msSolCurveValidatePoint(0, out, 0) != 0) return 1;
     }
     return 1;
@@ -548,17 +554,10 @@ static inline uint64_t msSolWalkExpected(msSolSeed* input, uint64_t at, uint64_t
 static inline uint64_t msSolWalkCanonical(msSolSeed* input, uint64_t at, uint64_t expected, uint64_t bumpOut) {
     uint8_t hash[32];
     const uint64_t out = (uint64_t)(uintptr_t)hash;
-    uint8_t bump = 255;
-    input[at].address = (uint64_t)(uintptr_t)&bump;
-    input[at].length = 1;
     for (uint64_t counter = 255; counter > 0; counter--) {
-        bump = (uint8_t)counter;
+        msSolStoreU8(bumpOut, (uint8_t)counter);
         msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
-        if (msSolCurveValidatePoint(0, out, 0) != 0) {
-            if (!msSolKeyIs(out, expected)) return 3;
-            if (bumpOut != 0) msSolStoreU8(bumpOut, bump);
-            return 0;
-        }
+        if (msSolCurveValidatePoint(0, out, 0) != 0) return msSolKeyIs(out, expected) ? 0 : 3;
     }
     return 1;
 }
@@ -567,7 +566,7 @@ static inline uint64_t msSolWalkCanonical(msSolSeed* input, uint64_t at, uint64_
 MS_SOL_STAGED uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t out, uint64_t bumpOut) {
     msSolSeed input[MS_SOL_MAX_SEEDS + 2];
     if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    msSolSeedTail(input, count + 1, program);
+    msSolSeedSlot(input, count, bumpOut, program);
     return msSolWalkAny(input, count, out, bumpOut);
 }
 
@@ -577,7 +576,7 @@ MS_SOL_STAGED uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t
 MS_SOL_STAGED uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
     msSolSeed input[MS_SOL_MAX_SEEDS + 2];
     if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    msSolSeedTail(input, count + 1, program);
+    msSolSeedSlot(input, count, bumpOut, program);
     return msSolWalkExpected(input, count, expected, bumpOut);
 }
 
@@ -586,8 +585,31 @@ MS_SOL_STAGED uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, 
 MS_SOL_STAGED uint64_t msSolFindCanonicalAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
     msSolSeed input[MS_SOL_MAX_SEEDS + 2];
     if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    msSolSeedTail(input, count + 1, program);
+    msSolSeedSlot(input, count, bumpOut, program);
     return msSolWalkCanonical(input, count, expected, bumpOut);
+}
+
+/* The finds and the hash of a table msSolSeedStageInPlace staged, which answered `used`: 2 when it refused the table. */
+MS_SOL_STAGED uint64_t msSolFindExpectedStaged(uint64_t table, uint64_t used, uint64_t expected) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    if (used >= MS_SOL_MAX_SEEDS) return 2;
+    return msSolWalkExpected(input, used, expected, input[used].address);
+}
+
+MS_SOL_STAGED uint64_t msSolFindCanonicalStaged(uint64_t table, uint64_t used, uint64_t expected) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    if (used >= MS_SOL_MAX_SEEDS) return 2;
+    return msSolWalkCanonical(input, used, expected, input[used].address);
+}
+
+/* 0 when the sha256 of the seeds and `bump` is `expected`, 3 when it is not. No curve check. */
+MS_SOL_STAGED uint64_t msSolHashIsStaged(uint64_t table, uint64_t used, uint64_t bump, uint64_t expected) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    uint8_t hash[32];
+    if (used >= MS_SOL_MAX_SEEDS) return 2;
+    msSolStoreU8(input[used].address, (uint8_t)bump);
+    msSolSha256(table, used + 3, (uint64_t)(uintptr_t)hash);
+    return msSolKeyIs((uint64_t)(uintptr_t)hash, expected) ? 0 : 3;
 }
 
 #define MS_SOL_MAX_CPI_ACCOUNTS 64

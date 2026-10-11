@@ -4,7 +4,7 @@ import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
 import { readFile } from "std/fs";
-import { SEED_LIST_REQUIRED, seedTable } from "./accountSeeds";
+import { SEED_LIST_REQUIRED, seedTable, slottedTable } from "./accountSeeds";
 import {
 	argBool,
 	argBoolValid,
@@ -26,7 +26,6 @@ import {
 	foundSigner,
 	logEvent,
 	scratchAddress,
-	slottedSeeds,
 } from "./core";
 import {
 	createPdaAt,
@@ -720,7 +719,7 @@ export macro pda(account: Node, seeds: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,
 			column: seeds.column,
-			callee: bindSym("seedTable"),
+			callee: bindSym("slottedTable"),
 			arguments: [seeds],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
@@ -747,7 +746,7 @@ export macro pdaWithBump(account: Node, seeds: Node, bump: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,
 			column: seeds.column,
-			callee: bindSym("seedTable"),
+			callee: bindSym("slottedTable"),
 			arguments: [seeds],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
@@ -879,13 +878,6 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			resolvedOverloadIdx: -1,
 		};
 	}
-	let slotted: Node = seeds;
-	if (seeds.kind === NodeKind.ArrayLiteral) {
-		const elements: Node[] = [];
-		for (const seed of seeds.elements) { elements.push(seed); }
-		elements.push({ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: [byteLiteral(0, seeds)] });
-		slotted = { kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: elements };
-	}
 	return {
 		kind: NodeKind.CallExpr,
 		line: payer.line,
@@ -899,16 +891,8 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,
 			column: seeds.column,
-			callee: bindSym("slottedSeeds"),
-			arguments: [{
-				kind: NodeKind.CallExpr,
-				line: seeds.line,
-				column: seeds.column,
-				callee: bindSym("seedTable"),
-				arguments: [slotted],
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			}],
+			callee: bindSym("slottedTable"),
+			arguments: [seeds],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		}],
@@ -968,20 +952,6 @@ export macro signedPda(call: Node, pda: Node, seeds: Node): Node {
 	// The signer table of one PDA, found where the call that signs with it is written: a failure of the find
 	// returns from the enclosing function before the call runs.
 	function foundSigning(pda: Node, seeds: Node): Node {
-		const slot: Node = {
-			kind: NodeKind.NumberLiteral,
-			line: seeds.line,
-			column: seeds.column,
-			value: 0,
-			isFloat: false,
-			intVal: 0,
-			outOfRangeText: "",
-			isBitPattern: false,
-		};
-		const elements: Node[] = [];
-		for (const seed of seeds.elements) { elements.push(seed); }
-		elements.push({ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: [slot] });
-		const slotted: Node = { kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: elements };
 		const found: Node = {
 			kind: NodeKind.CallExpr,
 			line: pda.line,
@@ -991,16 +961,8 @@ export macro signedPda(call: Node, pda: Node, seeds: Node): Node {
 				kind: NodeKind.CallExpr,
 				line: seeds.line,
 				column: seeds.column,
-				callee: bindSym("slottedSeeds"),
-				arguments: [{
-					kind: NodeKind.CallExpr,
-					line: seeds.line,
-					column: seeds.column,
-					callee: bindSym("seedTable"),
-					arguments: [slotted],
-					isDirectCall: false,
-					resolvedOverloadIdx: -1,
-				}],
+				callee: bindSym("slottedTable"),
+				arguments: [seeds],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,
 			}],

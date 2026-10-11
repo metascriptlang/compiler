@@ -3,14 +3,13 @@
 
 import { DeclKind, Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
-import { accountAddressOf, keyAddressOf, seedTable } from "./accountSeeds";
+import { accountAddressOf, keyAddressOf, slottedTable } from "./accountSeeds";
 import { namedWord } from "./discriminator";
 import { ProgramError } from "./error";
 import { accountFieldsValid, zeroAccountFieldsValid } from "./accountValidation";
 import {
 	Account,
 	SlottedSeeds,
-	canonicalBump,
 	canonicalBumpProven,
 	closedProgramAccount,
 	createdAccount,
@@ -30,6 +29,7 @@ import {
 	seedsFoldedGivenFailure,
 	seedsGivenFailure,
 	seedsGivenProvenFailure,
+	slottedCanonicalBump,
 	keysEqual,
 	unchecked,
 	keyIsZero,
@@ -50,7 +50,6 @@ import {
 	bytesAddress,
 	fillWithBump,
 	findAddress,
-	ownProgram,
 	seedKey,
 	signerOfBumped,
 	tableAddress,
@@ -223,13 +222,10 @@ export function writablePda(index: int32): Result<WritablePda, ProgramError> {
 }
 
 // The proof keeps the canonical bump the declared `@seeds(..) @bump` found: Anchor's `ctx.bumps.<field>`.
-export function seedsFoundFailure(ref proof: WritablePda, seeds: Readonly<Span<SeedSlice>>): uint64 {
-	const found = findAddress(seeds, ownProgram());
+export function seedsFoundFailure(ref proof: WritablePda, seeds: SlottedSeeds): uint64 {
+	const found = slottedCanonicalBump(proof.account, seeds);
 	if (!found.ok) { return found.error.code; }
-	if (!keysEqual(proof.account.keyAddress(), bytesAddress(found.value.key.bytes))) {
-		return ProgramError.constraintSeeds().code;
-	}
-	proof.bump = found.value.bump;
+	proof.bump = found.value;
 	return 0;
 }
 
@@ -600,7 +596,7 @@ export function createPdaAt<T>(
 
 export function verifiedPda<T>(
 	this account: Mutable<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<Pda<T>, ProgramError> {
 	const bump = try canonicalBumpProven(account.account, seeds);
 	return Result.ok({ account: account, bump: bump });
@@ -608,7 +604,7 @@ export function verifiedPda<T>(
 
 export function verifiedPdaWithBump<T>(
 	this account: Mutable<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 	bump: uint8,
 ): Result<Pda<T>, ProgramError> {
 	const given = try givenBumpOwned(account.account, seeds, bump);
@@ -617,14 +613,14 @@ export function verifiedPdaWithBump<T>(
 
 export function verifiedPda<T>(
 	this account: Delegated<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<uint8, ProgramError> {
-	return canonicalBump(account.account, seeds);
+	return slottedCanonicalBump(account.account, seeds);
 }
 
 export function verifiedPdaWithBump<T>(
 	this account: Delegated<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
 	return givenBump(account.account, seeds, bump);
@@ -1204,7 +1200,7 @@ export macro accounts(): Node {
 				list.push(rewrite(seeded.macroArgs[seed]));
 				seed = seed + 1;
 			}
-			const table = call(bindSym("seedTable")!, [{
+			const table = call(bindSym("slottedTable")!, [{
 				kind: NodeKind.ArrayLiteral,
 				line: seeded.line,
 				column: seeded.column,

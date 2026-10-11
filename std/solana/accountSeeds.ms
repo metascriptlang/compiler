@@ -1,5 +1,6 @@
 import { Node, NodeKind, bindSym, getType } from "std/meta";
-import { bytesAddress, seedBytes, seedKey, seedText } from "./seed";
+import { bytesAddress, seedBytes, seedFree, seedKey, seedText } from "./seed";
+import { slottedSeeds } from "./core";
 
 export const SEED_LIST_REQUIRED = "seeds must be written as a list at the call: [\"pet\", mint, [bump]]";
 
@@ -124,6 +125,11 @@ export macro seedTable(list: Node): Node {
 				if (first.kind === NodeKind.TypeArray) { inner = "an array"; }
 			}
 			description = "type " + name + (inner == "" ? "" : "<" + inner + ">");
+			if (name == "SeedSlice") {
+				slices.push(element);
+				position = position + 1;
+				continue;
+			}
 			if (name == "string") { builder = bindSym("seedText"); }
 			if (name == "an array" || (name == "Ref" && inner == "an array")) {
 				builder = bindSym("seedBytes");
@@ -177,4 +183,56 @@ export macro seedTable(list: Node): Node {
 		position = position + 1;
 	}
 	return { kind: NodeKind.ArrayLiteral, line: list.line, column: list.column, elements: slices };
+}
+
+// `seedTable` with three free slices after the seeds and a byte for the bump, as `SlottedSeeds`: the hash is staged
+// in the list's own table.
+export macro slottedTable(list: Node): Node {
+	if (list.kind !== NodeKind.ArrayLiteral) {
+		error(SEED_LIST_REQUIRED, list);
+	}
+	const elements: Node[] = [];
+	for (const seed of list.elements) { elements.push(seed); }
+	for (let free = 0; free < 3; free += 1) {
+		elements.push({
+			kind: NodeKind.CallExpr,
+			line: list.line,
+			column: list.column,
+			callee: bindSym("seedFree"),
+			arguments: [],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		});
+	}
+	return {
+		kind: NodeKind.CallExpr,
+		line: list.line,
+		column: list.column,
+		callee: bindSym("slottedSeeds"),
+		arguments: [{
+			kind: NodeKind.CallExpr,
+			line: list.line,
+			column: list.column,
+			callee: bindSym("seedTable"),
+			arguments: [{ kind: NodeKind.ArrayLiteral, line: list.line, column: list.column, elements: elements }],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, {
+			kind: NodeKind.TypeAssertion,
+			line: list.line,
+			column: list.column,
+			asExpr: {
+				kind: NodeKind.ArrayLiteral,
+				line: list.line,
+				column: list.column,
+				elements: [{
+					kind: NodeKind.NumberLiteral, line: list.line, column: list.column,
+					value: 0, isFloat: false, intVal: 0, outOfRangeText: "", isBitPattern: false,
+				}],
+			},
+			asType: "uint8[1]",
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
 }

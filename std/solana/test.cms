@@ -85,9 +85,9 @@ import {
 	invokeList,
 	invokeSigned,
 } from "./index";
-import { SignerSeeds, findExpected, hashAddressWithBump, seedText } from "./seed";
-import { seedTable } from "./accountSeeds";
-import { canonicalBump, canonicalBumpOwned, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
+import { SignerSeeds, findExpected, seedText, tableAddress } from "./seed";
+import { seedTable, slottedTable } from "./accountSeeds";
+import { canonicalBump, canonicalBumpOwned, canonicalBumpProven, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, slottedCanonicalBump, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
 import { HostAccount, invocations, logs, rentReads, run, setClock, signerIs, textBytes } from "./host";
 import {
@@ -119,6 +119,7 @@ extern function msSolProgramId(): uint64;
 extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
 extern function msSolStoreU8(address: uint64, value: uint8): void;
 extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolHashAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
 
 
 export struct Counter {
@@ -2511,7 +2512,7 @@ function onCurveSignerEntry(): void {
 function canonicalBumpOwnedEntry(): void {
 	const slot = unchecked(0);
 	if (!slot.ok) { failWith(slot.error); return; }
-	const bump = canonicalBumpOwned(slot.value, seedTable(["vault", keyOf(5)]));
+	const bump = canonicalBumpOwned(slot.value, slottedTable(["vault", keyOf(5)]));
 	if (!bump.ok) { failWith(bump.error); return; }
 	if (bump.value != vaultCanonicalBump()) { failWith(ProgramError.userError(1)); }
 }
@@ -3618,7 +3619,7 @@ function ownerFirstEntry(): void {
 	const found = safeAddress(keyOf(2));
 	const slot = unchecked(0);
 	if (!slot.ok) { failWith(slot.error); return; }
-	const code = seedsGivenOwnedFailure(slot.value, seedTable(["safe", keyOf(2)]), found.bump);
+	const code = seedsGivenOwnedFailure(slot.value, slottedTable(["safe", keyOf(2)]), found.bump);
 	if (code != 0) { failWith({ code: code }); }
 }
 
@@ -3638,7 +3639,7 @@ function ownedWrongBumpEntry(): void {
 	const found = safeAddress(keyOf(2));
 	const slot = unchecked(0);
 	if (!slot.ok) { failWith(slot.error); return; }
-	const code = seedsGivenOwnedFailure(slot.value, seedTable(["safe", keyOf(2)]), found.bump - 1);
+	const code = seedsGivenOwnedFailure(slot.value, slottedTable(["safe", keyOf(2)]), found.bump - 1);
 	if (code != 0) { failWith({ code: code }); }
 }
 
@@ -3653,15 +3654,16 @@ test "the hash-only given-bump check answers ConstraintSeeds for another bump or
 }
 
 function onCurveEntry(): void {
-	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
 	const slot = unchecked(0);
-	const hashed = hashAddressWithBump(seeds, 255, msSolProgramId());
-	if (!slot.ok || !hashed.ok) { failWith(ProgramError.invalidSeeds()); return; }
-	msSolCopy(slot.value.address + 8, msSolSpanAddress(hashed.value.bytes), 32);
-	if (seedsGivenOwnedFailure(slot.value, seeds, 255) != 0) { failWith(ProgramError.userError(1)); return; }
-	if (seedsGivenFailure(slot.value.keyAddress(), seeds, 255) != ProgramError.constraintSeeds().code) {
-		failWith(ProgramError.userError(2));
+	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	if (!slot.ok || msSolHashAddress(tableAddress(seeds), 15, 255, msSolProgramId(), slot.value.keyAddress()) != 0) {
+		failWith(ProgramError.invalidSeeds());
+		return;
 	}
+	const owned = seedsGivenOwnedFailure(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]), 255);
+	if (owned != 0) { failWith(ProgramError.userError(1)); return; }
+	const given = seedsGivenFailure(slot.value.keyAddress(), slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]), 255);
+	if (given != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); }
 }
 
 test "an account not proven owned keeps the curve check, an owned one does not need it" {
@@ -3688,13 +3690,36 @@ test "canonicalBump finds the bump of the account it is given and refuses anothe
 	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), found.key)], [], canonicalBumpEntry).result == 0;
 }
 
+function slottedBumpEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const found = safeAddress(keyOf(2));
+	const same = slottedCanonicalBump(slot.value, slottedTable(["safe", keyOf(2)]));
+	if (!same.ok || same.value != found.bump) { failWith(ProgramError.userError(1)); return; }
+	const other = slottedCanonicalBump(slot.value, slottedTable(["safe", keyOf(3)]));
+	if (other.ok || other.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); return; }
+	const many = slottedCanonicalBump(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (many.ok || many.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(3)); return; }
+	const wide = slottedCanonicalBump(slot.value, slottedTable([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]]));
+	if (wide.ok || wide.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(4)); return; }
+	const proven = canonicalBumpProven(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (proven.ok || proven.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(5)); return; }
+	const given = seedsGivenFailure(slot.value.keyAddress(), slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]), found.bump);
+	if (given != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(6)); }
+}
+
+test "a slotted table finds the bump of its account and refuses another, sixteen seeds and a wide seed with the codes of the copied table" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), found.key)], [], slottedBumpEntry).result == 0;
+}
+
 function mutableBumpEntry(): void {
 	const found = safeAddress(keyOf(2));
 	const safe = mutable<Safe>(0);
 	if (!safe.ok) { failWith(safe.error); return; }
-	const checked = safe.value.verifiedPdaWithBump(seedTable(["safe", keyOf(2)]), found.bump);
+	const checked = safe.value.verifiedPdaWithBump(slottedTable(["safe", keyOf(2)]), found.bump);
 	if (!checked.ok) { failWith(checked.error); return; }
-	const wrong = safe.value.verifiedPdaWithBump(seedTable(["safe", keyOf(2)]), found.bump - 1);
+	const wrong = safe.value.verifiedPdaWithBump(slottedTable(["safe", keyOf(2)]), found.bump - 1);
 	if (wrong.ok) { failWith(ProgramError.userError(1)); return; }
 	if (wrong.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); }
 }
