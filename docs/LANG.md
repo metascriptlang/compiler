@@ -72,7 +72,10 @@ checker rejects it and names the alternative.
   `genericConversionDiagnosticNames`, `classConversionInStaticInitializationStops`.
 - `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
   `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
-  still works, because a `null` literal takes any type.
+  compiles only where the slot is a pointer that may be nil: a class or interface instance, a
+  function, `Ref<T>`, `Ptr<T>`, `Arc<T>`. A value struct, a fixed array, a span, a dynamic array,
+  `Map`/`HashMap`/`Set`/`HashSet`, a string and a number refuse it with an error that names
+  `T | null`, because a type without `| null` never holds null (measured on C and JS, 0bf22f324).
 - An `unknown` reaches an actor only by `move`, and a spawn thunk sees a captured one as
   `Readonly<unknown>`, like every captured reference.
 
@@ -129,7 +132,7 @@ function f(x: any): void {}          // ✗ 'any' is not a MetaScript type - use
 let a: undefined = null;             // ⚠ 'undefined' is an alias of 'null' - prefer 'null'  (compiles)
 function g(s: string | undefined) {} // ⚠ same warning; behaves exactly as `string | null`
 function h(x: unknown): void {}      // ✓
-const t = null as unknown as Token;  // ✓ the nullable-field idiom
+let t: Token | null = null;          // ✓ a slot that may be empty says so
 ```
 
 ### Sized Integer Types
