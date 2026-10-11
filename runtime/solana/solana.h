@@ -577,10 +577,12 @@ typedef struct {
     uint64_t data;
     uint64_t owner;
     uint64_t rentEpoch;
-    uint8_t signer;
-    uint8_t writable;
-    uint8_t executable;
+    /* SolAccountInfo's is_signer, is_writable, executable and one byte of its padding: bytes 1 to 4 of the
+       account record, in that order. */
+    uint32_t recordFlags;
 } msSolCpiAccount;
+_Static_assert(__builtin_offsetof(msSolCpiAccount, recordFlags) == 48 && sizeof(msSolCpiAccount) == 56,
+    "msSolCpiAccount is the runtime's SolAccountInfo");
 
 typedef struct {
     uint64_t program;
@@ -602,9 +604,7 @@ static __attribute__((noinline)) uint64_t msSolInvokeMetas(uint64_t program, uin
         infos[index].data = record + 88;
         infos[index].owner = record + 40;
         infos[index].rentEpoch = 0;
-        infos[index].signer = msSolLoadU8(record + 1);
-        infos[index].writable = msSolLoadU8(record + 2);
-        infos[index].executable = msSolLoadU8(record + 3);
+        infos[index].recordFlags = msSolLoadU32(record + 1);
     }
     msSolCpiInstruction instruction = { program, metas, count, data, length };
     return msSolInvokeSigned((uint64_t)(uintptr_t)&instruction, (uint64_t)(uintptr_t)infos, count, signers, signerCount);
