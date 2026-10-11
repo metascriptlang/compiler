@@ -19,6 +19,7 @@ import {
 	programId,
 	putU8,
 	returnData,
+	scratch,
 	setReturnData,
 	signed,
 } from "std/solana";
@@ -259,6 +260,36 @@ function textLoop(count: uint64): Result<uint64, ProgramError> {
 	return Result.ok(0);
 }
 
+struct Mon {
+	owner: Pubkey;
+	hp: uint32;
+	level: uint32;
+	xp: uint64;
+	flags: uint8[8];
+}
+
+function scratchLoop(count: uint64): Result<uint64, ProgramError> {
+	const mons = scratch<Mon>(count as int32);
+	let seen: uint64 = 0;
+	for (const mon of mons) {
+		seen = seen + (mon.hp as uint64) + (mon.level as uint64) + mon.xp + (mon.owner.bytes[0] as uint64) + (mon.flags[7] as uint64);
+	}
+	for (let index = 0; index < mons.length; index++) {
+		mons[index].hp = (index as uint32) + 1;
+		mons[index].xp = (index as uint64) * 3;
+		mons[index].flags[7] = 1;
+		mons[index].owner.bytes[0] = 2;
+	}
+	let checksum: uint64 = 0;
+	for (const mon of mons) {
+		checksum = checksum + (mon.hp as uint64) + mon.xp + (mon.owner.bytes[0] as uint64) + (mon.flags[7] as uint64);
+	}
+	logU64(seen);
+	logU64(checksum);
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
 function request(size: uint64): Result<uint64, ProgramError> {
 	logU64(msSolAlloc(size));
 	return Result.ok(0);
@@ -287,6 +318,7 @@ function dispatch(): Result<uint64, ProgramError> {
 	if (op == 18) { return eventLoop(count); }
 	if (op == 19) { return wideList(count as int32); }
 	if (op == 20) { return fullReturnData(); }
+	if (op == 21) { return scratchLoop(count); }
 	return request(0 - count);
 }
 
