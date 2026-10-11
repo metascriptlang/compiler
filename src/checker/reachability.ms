@@ -12,6 +12,7 @@ import { getDeclName } from "./collectPass";
 import {
 	AliveSet,
 	CTypeInfoDemand,
+	CInstanceTypeInfo,
 	createAliveSet,
 	aliveSetAdd,
 	aliveSetAddSym,
@@ -325,6 +326,19 @@ function markTypeInfoHooks(t: Type, modulePath: string): void {
 	if (trace != null) markReferenced(trace, modulePath);
 }
 
+function noteInstanceTypeInfo(cName: string, type: Type, modulePath: string): void {
+	if (_imageModules.size == 0) return;
+	let info = _aliveSet.instanceTypeInfoByName.get(cName);
+	if (info == null) {
+		const first: CInstanceTypeInfo = { cName, type, demanders: [], inCore: false };
+		_aliveSet.instanceTypeInfoByName.set(cName, first);
+		_aliveSet.instanceTypeInfos.push(first);
+		info = first;
+	}
+	if (!_imageModules.has(modulePath)) info.inCore = true;
+	else if (!info.demanders.includes(modulePath)) info.demanders.push(modulePath);
+}
+
 function markRematerializedMemberTypeInfo(conv: Type | null, modulePath: string): void {
 	if (conv == null || conv.kind == TypeKind.Union) return;
 	const member = unwrapPointerLikeForVariant(conv);
@@ -348,6 +362,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 	if (t.kind != TypeKind.Struct && t.kind != TypeKind.TypeReference && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Union) return;
 	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0) {
 		const mono = monoInstanceName(t);
+		noteInstanceTypeInfo(mono, t, modulePath);
 		for (const hn of [mono + "TypeInfo", mono + "Destroy", mono + "Trace"]) {
 			const h = nameIndexLookup(hn);
 			if (h != "") {
@@ -386,6 +401,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 	}
 	if (t.kind != TypeKind.Struct) return;
 	const sharedInstance = t.sym != null && (t.sym.instantiatedFrom != null || hasGenericParams(t.sym.symbolType));
+	if (t.sym != null && t.sym.instantiatedFrom != null) noteInstanceTypeInfo(tn, t, modulePath);
 	markTypeInfoHooks(t, sharedInstance ? modulePath : (t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath)));
 	let bt = t.typeExtra;
 	let depth = 0;

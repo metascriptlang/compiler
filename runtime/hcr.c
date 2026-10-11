@@ -405,11 +405,90 @@ void msHcrRestoreTypeInfos(const char* moduleId) {
 	}
 }
 
+#if defined(__ANDROID__)
+#include <dlfcn.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+/* An app has no terminal: stdout and stderr go to logcat under the tag MetaScript (info and
+ * error), so console output and an engine failure are visible from the PC. liblog is opened
+ * here so that no program has to link it. */
+typedef struct {
+	int stream;
+	int priority;
+	int readEnd;
+	pthread_t pump;
+} msHcrLogStream;
+
+static msHcrLogStream msHcrLogStreams[2] = { { 1, 4, -1 }, { 2, 6, -1 } };
+static int (*msHcrLogWrite)(int priority, const char* tag, const char* text);
+
+static void* msHcrLogPump(void* raw) {
+	msHcrLogStream* stream = (msHcrLogStream*)raw;
+	char text[1024];
+	size_t used = 0;
+	for (;;) {
+		ssize_t got = read(stream->readEnd, text + used, sizeof(text) - 1 - used);
+		if (got <= 0) break;
+		used += (size_t)got;
+		text[used] = 0;
+		char* line = text;
+		for (char* end; (end = strchr(line, '\n')) != NULL; line = end + 1) {
+			*end = 0;
+			msHcrLogWrite(stream->priority, "MetaScript", line);
+		}
+		used = strlen(line);
+		if (used == sizeof(text) - 1) {
+			msHcrLogWrite(stream->priority, "MetaScript", line);
+			used = 0;
+		}
+		memmove(text, line, used);
+	}
+	if (used > 0) {
+		text[used] = 0;
+		msHcrLogWrite(stream->priority, "MetaScript", text);
+	}
+	return NULL;
+}
+
+/* exit() must not outrun the pumps: the last line is the reason the process ends. */
+static void msHcrLogDrain(void) {
+	fflush(NULL);
+	for (int i = 0; i < 2; i++) {
+		if (msHcrLogStreams[i].readEnd < 0) continue;
+		close(msHcrLogStreams[i].stream);
+		pthread_join(msHcrLogStreams[i].pump, NULL);
+	}
+}
+
+static void msHcrLogToLogcat(void) {
+	void* liblog = dlopen("liblog.so", RTLD_NOW);
+	if (liblog == NULL) return;
+	msHcrLogWrite = (int (*)(int, const char*, const char*))dlsym(liblog, "__android_log_write");
+	if (msHcrLogWrite == NULL) return;
+	for (int i = 0; i < 2; i++) {
+		int ends[2];
+		if (pipe(ends) != 0) continue;
+		dup2(ends[1], msHcrLogStreams[i].stream);
+		close(ends[1]);
+		if (pthread_create(&msHcrLogStreams[i].pump, NULL, msHcrLogPump, &msHcrLogStreams[i]) != 0) continue;
+		msHcrLogStreams[i].readEnd = ends[0];
+	}
+	setvbuf(stdout, NULL, _IOLBF, 0);
+	setvbuf(stderr, NULL, _IONBF, 0);
+	atexit(msHcrLogDrain);
+}
+#endif
+
 void msHcrLaunch(const char* dir, const char* stem) {
 	if (msHcrDir != NULL) {
 		fprintf(stderr, "HCR: the engine was already launched from '%s'\n", msHcrDir);
 		abort();
 	}
+#if defined(__ANDROID__)
+	msHcrLogToLogcat();
+#endif
 	msHcrDir = msHcrCopy(dir, "launch directory");
 	msHcrStem = msHcrCopy(stem, "launch stem");
 	msHcrCoreInit();

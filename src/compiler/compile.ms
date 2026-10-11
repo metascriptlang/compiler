@@ -1811,7 +1811,7 @@ function hcrImagePath(outBinary: string, moduleId: string): string {
 function hcrCoreImagePath(outBinary: string, targetOs: string): string {
 	const stem = `${hcrImageStem(outBinary)}.core`;
 	if (targetOs == "windows") return `${stem}.dll`;
-	if (targetOs == "linux") return `${stem}.so`;
+	if (targetOs == "linux" || targetOs == "android") return `${stem}.so`;
 	if (targetOs == "darwin" || targetOs == "macos") return `${stem}.dylib`;
 	return "";
 }
@@ -1823,6 +1823,7 @@ test "HCR core image takes the target's shared-library extension, not the output
 	assert hcrCoreImagePath("out/module.hcr", "windows") == "out/module.core.dll";
 	assert hcrCoreImagePath("out/module.dll", "windows") == "out/module.core.dll";
 	assert hcrCoreImagePath("out/app", "linux") == "out/app.core.so";
+	assert hcrCoreImagePath("out/libapp.so", "android") == "out/libapp.core.so";
 }
 
 function linkHcrImage(objects: string[], externalInputs: string[], image: string, flags: string, opts: CliOptions): void {
@@ -1865,7 +1866,7 @@ function linkHcrImages(
 		coreInput = `${hcrImageStem(outBinary)}.core.lib`;
 		coreFlags = appendFlag(coreFlags, "-Wl,--export-all-symbols");
 		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,--out-implib,${coreInput}`));
-	} else if (opts.targetOs == "linux") {
+	} else if (opts.targetOs == "linux" || opts.targetOs == "android") {
 		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,-soname,${basename(core)}`));
 		imageFlags = appendFlag(imageFlags, "-Wl,-rpath,$ORIGIN");
 	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
@@ -1995,11 +1996,19 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	const imagePaths: string[] = [];
 	for (const module of modules) {
 		imagePaths.push(module.modulePath);
-		facts.hcrModules.add(module.modulePath);
+		facts.hcrModules.set(module.modulePath, module.moduleId);
 	}
 	for (const info of facts.typeInfoOrder) {
 		for (const module of modules) {
 			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
+		}
+	}
+	for (const info of aliveSet.instanceTypeInfos) {
+		if (info.inCore) continue;
+		for (const module of modules) {
+			if (!info.demanders.includes(module.modulePath)) continue;
+			module.typeInfos.push(info.cName);
+			break;
 		}
 	}
 	for (const module of modules) {
