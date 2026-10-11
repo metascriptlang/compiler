@@ -155,3 +155,56 @@ test "raiseChecks: a closure value destroyed at scope exit does not make its rou
 	assert checksIn(result.value, "holdsClosure") == 0;
 	assert checksIn(result.value, "holdsBare") == 0;
 }
+
+const IIFE_SRC = `
+function plain(x: int32): int32 { return x + 1; }
+function boom(x: int32): int32 {
+	if (x > 100) throw new Error("big");
+	return x + 1;
+}
+function iifeQuiet(x: int32): int32 { return (() => plain(x))(); }
+function iifeBare(): int32 { return (() => plain(3))(); }
+function iifeWithArg(x: int32): int32 { return ((y: int32) => plain(y + x))(2); }
+function iifeNested(x: int32): int32 { return (() => (() => plain(x))())(); }
+function iifeRaises(x: int32): int32 { return (() => boom(x))(); }
+function iifeThrows(x: int32): int32 {
+	return (() => { if (x > 100) throw new Error("big"); return x; })();
+}
+function iifeNestedRaises(x: int32): int32 { return (() => (() => boom(x))())(); }
+function useQuiet(n: int32): int32 {
+	const a = iifeQuiet(n);
+	const b = iifeBare();
+	const c = iifeWithArg(a);
+	const d = iifeNested(c);
+	return a + b + c + d;
+}
+function useRaises(n: int32): int32 {
+	const a = iifeRaises(n);
+	return a + 1;
+}
+function useThrows(n: int32): int32 {
+	const a = iifeThrows(n);
+	return a + 1;
+}
+function useNestedRaises(n: int32): int32 {
+	const a = iifeNestedRaises(n);
+	return a + 1;
+}
+console.log(String(useQuiet(1) + useRaises(2) + useThrows(3) + useNestedRaises(4)));
+`;
+
+test "raiseChecks: a closure called where it is written takes its routine's verdict" {
+	const result = compileToC(IIFE_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useQuiet") == 0;
+	assert checksIn(result.value, "iifeQuiet") == 0;
+	assert checksIn(result.value, "iifeNested") == 0;
+}
+
+test "raiseChecks: a closure called where it is written keeps the check when its body raises, nested or not" {
+	const result = compileToC(IIFE_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useRaises") == 1;
+	assert checksIn(result.value, "useThrows") == 1;
+	assert checksIn(result.value, "useNestedRaises") == 1;
+}
