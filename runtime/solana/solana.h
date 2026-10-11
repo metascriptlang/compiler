@@ -9,7 +9,9 @@
 #define MS_SOL_ACCOUNT_HEADER_SIZE 88ULL
 #define MS_SOL_MAX_PERMITTED_DATA_INCREASE 10240ULL
 #define MS_SOL_DUPLICATE_MARKER 0xFF
-#define MS_SOL_DUPLICATED_RECORD 0xFE
+#define MS_SOL_BORROW_OFFSET 4
+#define MS_SOL_CLAIMED_RECORD 1
+#define MS_SOL_DUPLICATED_RECORD 2
 #define MS_SOL_PEELED_ACCOUNTS 4
 
 #ifndef MS_SOL_MAX_ACCOUNTS
@@ -144,7 +146,7 @@ static inline __attribute__((always_inline)) const uint8_t* msSolParseAccounts(c
                 cursor = msSolPastRecord(cursor);
             } else {
                 *slot++ = table[marker];
-                *(uint8_t*)table[marker] = MS_SOL_DUPLICATED_RECORD;
+                ((uint8_t*)table[marker])[MS_SOL_BORROW_OFFSET] = MS_SOL_DUPLICATED_RECORD;
                 if (slot == end) break;
                 cursor += 8;
             }
@@ -240,6 +242,10 @@ static inline uint64_t msSolLoadU64(uint64_t address) {
     uint64_t value;
     __builtin_memcpy(&value, (const void*)address, 8);
     return value;
+}
+
+static inline void msSolClaimRecord(uint64_t address) {
+    ((uint8_t*)address)[MS_SOL_BORROW_OFFSET] = MS_SOL_CLAIMED_RECORD;
 }
 
 static inline void msSolStoreU8(uint64_t address, uint8_t value) {

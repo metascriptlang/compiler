@@ -63,6 +63,7 @@ extern function msSolLoadU64(address: uint64): uint64;
 extern function msSolLoadU32(address: uint64): uint32;
 extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
+extern function msSolClaimRecord(address: uint64): void;
 
 const UNDUPLICATED_SIGNER_WRITABLE: uint32 = 0x0101ff;
 
@@ -161,7 +162,7 @@ export function signer(index: int32): Result<Signer, ProgramError> {
 }
 
 @inline function writableSignerProofAt(address: uint64, out proof: WritableSigner): uint64 {
-	if ((msSolLoadU32(address) & 0x00ffffff) == UNDUPLICATED_SIGNER_WRITABLE) {
+	if (msSolLoadU32(address + 1) == 0x0101) {
 		proof = { account: { address: address } };
 		return 0;
 	}
@@ -187,6 +188,10 @@ export function writableSigner(index: int32): Result<WritableSigner, ProgramErro
 }
 
 @inline function writableProofAt(address: uint64, out proof: Writable): uint64 {
+	if (msSolLoadU32(address + 2) == 1) {
+		proof = { account: { address: address } };
+		return 0;
+	}
 	const duplicated = duplicateFailure(address);
 	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
@@ -357,9 +362,8 @@ export struct Pda<T> {
 	const failure = mutableEnvelopeAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
 	if (failure != 0) { return failure; }
 	if (!accountFieldsValid<T>(address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
-	const claimed = exclusiveWritable({ address: address });
-	if (!claimed.ok) { return claimed.error.code; }
-	proof = { account: claimed.value };
+	msSolClaimRecord(address);
+	proof = { account: { address: address } };
 	return 0;
 }
 
