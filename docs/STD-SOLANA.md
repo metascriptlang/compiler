@@ -1154,3 +1154,37 @@ The rule and its condition are in §4, Signing ("The curve check at the matching
 - Checks run: `std/solana/index.cms` 390 tests, `test.cms` 547, `idlTest.ms` 396, `accountCodecTest.ms` 402 and 109 on `--target=js`, the escrow program and IDL, hello, `vrf.ms`, `token.ms`, `magicblock.ms`, `delegation.ms` and `src/test/c/solanaVaultHost.ms`; 81 guard cells (the `solana*` guards and the other probes that name `std/solana`) and the new `solanaSignedPdaRefused.ms`; `checkCost.mjs` with every refusal code unchanged; `escrow.mjs` and `accountValues.mjs` (16,905 cases) on both stds with identical output.
 
 Not measured: a signer that is an on-curve address in a CPI to a program other than the System program (the runtime derives signers before any callee runs, read in `solana-program-runtime` 3.0 to 3.1.14, not replayed per callee); `signedPda` with a callee other than `transfer`; `--danger`; `delegateSeeds.mjs`; a find that needs many bumps on the host simulator; the JS backend.
+
+### CU pass on the entry loop, the context, PDA staging and cold-edge sinking — measured 2026-10-12
+
+`--os=solana --release`, LiteSVM 1.4.1, platform-tools v1.57, the five anchorBench programs at their ids, `BENCH_REFUSALS=1 node tools/solana/anchorBench.mjs`. Base is `95ddecc7b` built by the installed compiler of that commit; "runtime" is this tree's merged bitcode compiled without the new flag, "this tree" with it. 0 failures; the 106 refusals are all refused with unchanged accounts, and each error string equals the base's (106 of 106 compared by instruction and fault through `BENCH_JSON`).
+
+| Instruction CU | base | runtime | this tree | Anchor v2 |
+|---|---|---|---|---|
+| hello init | 1443 | 1440 | 1434 | 1441 |
+| vault deposit; withdraw | 1631; 451 | 1625; 444 | 1621; 441 | 1602; 418 |
+| nested initialize; increment; reset | 2768; 188; 183 | 2765; 182; 177 | 2762; 174; 171 | 2840; 866; 861 |
+| prop-amm update; initialize; rotate | 104; 1397; 127 | 98; 1393; 121 | 93; 1390; 117 | 81; 1398; 93 |
+| multisig create; deposit; set_label; execute | 2492; 2315; 486; 2609 | 2491; 2299; 471; 2610 | 2487; 2295; 466; 2604 | 2762; 2292; 621; 2991 |
+
+Program bytes, base to this tree (Anchor v2): hello 2960 to 3024 (6400), vault 3096 to 3104 (5632), nested 5240 to 5304 (12256), prop-amm 3984 to 4088 (8448), multisig 11240 to 11192 (30496). Eight of the thirteen instructions are below the reference; vault deposit and withdraw, multisig deposit and prop-amm update and rotate are above it by 19, 23, 3, 12 and 24.
+
+- **Entry loop.** `msSolParseAccounts` takes account 0 before the loop and tests the end after each store, so it never computes the address past the last record: the instruction data comes from the loader's second argument. The host parser `msSolParse` walks from the last record instead.
+- **Context.** The SBF context holds `arenaUsed`, an offset that starts at 0 on the heap the loader zeroes, in place of an absolute position that `msSolanaEnter` stored at every entry; `msSolanaEnter` is gone. The program id is no field: `msSolProgramId` reads it behind the instruction data (the length word is at `data - 8`), two loads and an add at a use against a load, an add and a store at every entry.
+- **PDA staging.** `msSolSeedStage` reads the caller's table through a typed pointer and copies a slice field by field. The integer address it used (`table + index * 16 + 8`) kept LLVM from forwarding a seed the caller had just written, and the struct copy was a `memcpy` that reloaded the length it had just checked (multisig create 2491 to 2487, execute 2612 to 2604 for the field copy alone). The find functions inline the staging into their caller and call a walk that takes the staged slices.
+- **Cold-edge sinking.** `SBF_SINK_TO_COLD_EDGES` in `src/compiler/cc.ms`: LLVM's machine sinking leaves a constant that only a failing branch reads above the branch unless the edge is likely enough to be worth a new block; on SBF that is one instruction on every success path for each check. The table's last two columns are its effect: 3 to 8 CU an instruction, 8 to 48 bytes a program.
+
+`node tools/solana/checkCost.mjs` on the default build (no `--release`), totals base to this tree: idle 176 to 174, `accounts<Everything>` 840 to 846, `createPda<Pet>` 2189 unchanged, `pda` 937 to 938 and 735 to 734 for a `Delegated<T>`, `instruction<Dispatch>` 344 to 326, `accounts<3 fields>` with `@seeds @bump` 884 to 886, the rest within 3; with `--release` 121 to 118, 595 to 599, 1705 to 1697, 698 to 681 and 509 to 489, 128 to 124, 681 to 665. Its table is reset to the default-build totals of this tree. The two seven-field structs that pin a `Delegated<T>` by `@seeds @bump` are the ones that rise, by 4 to 6 CU; the cause is not attributed (the program id read at each use is the suspect).
+
+Rejected, each measured on the same five programs:
+
+- **`noinline` canonical walk.** With `msSolWalkCanonical` kept out of line, a caller that is inlined into its handler stages literal seeds with no copy: vault 1601; 421, below the reference on deposit. A program that calls `seedsCanonicalFailure` from three sites keeps that function out of line and pays the second call: `accounts<Everything>` 595 to 611 with `--release` and 840 to 866 on the default build, where `checkCost.mjs` fails eight ops. Passing the program id into the walk to shrink the wrapper changed neither. The walk is left to the inliner; `noinline` on `msSolWalkExpected` cost multisig execute 25 CU and 296 bytes.
+- **Account table in the heap.** The table as the arena's first allocation at a constant address (no `accountTable` field, no 2 KiB of entry frame): hello 1437 against 1434, multisig create 2496 against 2491 and execute 2617 against 2612, the rest within 2 either way.
+- **Entry loop without the peeled first account** (a break in each arm, `slot == table` tested in the loop): 1 to 14 CU worse on every instruction; LLVM recomputed the table base and spilled the heap base.
+- **Other code generator options**, tried on the merged bitcode: `-phi-elim-split-all-critical-edges`, `-enable-tail-merge=false` and `-tail-dup-size` changed nothing or lost; `-inline-threshold=500` changed nothing and 2000 helped only nested, for 304 bytes.
+
+Why prop-amm update and rotate stay above the reference: its ELFs are built without a writable check on `mut` and without the duplicate-marker compare, about 4 CU of update; rotate pays about 15 for the `Pubkey` argument, which `args<T>()` returns in a `Result` whose payload starts at offset 9 (compiler inbox `2026-10-12-result-payload-of-byte-alignment-sits-at-offset-9.md`).
+
+Checks run on this tree's candidate compiler: `std/solana/test.cms` 588 tests, `index.cms` 390, `vrf.ms` 402, `idlTest.ms` 396, `accountCodecTest.ms` 402, the escrow program and IDL and hello host tests; `accountCodecTest.ms` on `--target=js` 109; the 87 guard cells of the 65 `solana*` guards; `accountValues.mjs` (16,905 cases), `escrow.mjs`, `heapExhausted.mjs`; `src/compiler/cc.ms` tests.
+
+Not measured: `--danger` (refused on `--os=solana`), platform-tools other than v1.57, a find that needs many bumps, `foreignDeploy.mjs` in this pass, a program the size of Hibernal's, where the count of `@seeds @bump` sites decides whether the inliner fuses the walk.
