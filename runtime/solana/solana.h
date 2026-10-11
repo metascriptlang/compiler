@@ -36,7 +36,6 @@ typedef struct {
     uint64_t accountCount;
     uint64_t accountTable;
     uint64_t instructionData;
-    uint64_t instructionDataLength;
     uint64_t programId;
     bool err;
     void* currException;
@@ -124,19 +123,17 @@ static inline __attribute__((noinline)) void msSolParse(uint64_t* table) {
     const uint8_t* cursor = msSolParseAccounts(input, table);
     const uint64_t count = *(const uint64_t*)input;
     for (uint64_t index = context->accountCount; index < count; index++) cursor = msSolNextRecord(cursor);
-    context->instructionDataLength = *(const uint64_t*)cursor;
+    const uint64_t length = *(const uint64_t*)cursor;
     cursor += 8;
     context->instructionData = (uint64_t)cursor;
-    cursor += context->instructionDataLength;
-    context->programId = (uint64_t)cursor;
+    context->programId = (uint64_t)cursor + length;
 }
 
 static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
     msSolParseAccounts(input, table);
     msSolanaContext* context = msSolContext();
     context->instructionData = (uint64_t)instructionData;
-    context->instructionDataLength = *(const uint64_t*)(instructionData - 8);
-    context->programId = (uint64_t)instructionData + context->instructionDataLength;
+    context->programId = (uint64_t)instructionData + *(const uint64_t*)(instructionData - 8);
 }
 
 static inline uint64_t msSolAccountCount(void) {
@@ -160,7 +157,7 @@ static inline uint64_t msSolInstructionData(void) {
 }
 
 static inline uint64_t msSolInstructionDataLength(void) {
-    return msSolContext()->instructionDataLength;
+    return *(const uint64_t*)(msSolContext()->instructionData - 8);
 }
 
 static inline uint64_t msSolProgramId(void) {

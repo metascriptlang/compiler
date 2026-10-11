@@ -815,12 +815,15 @@ export function selectedInstruction(table: Readonly<Span<uint8>>): Result<int32,
 	return selectedMember(msSolSpanAddress(table), table.length >> 3);
 }
 
-function argumentAddress(offset: uint64, width: uint64): uint64 {
+function argumentFits(offset: uint64, width: uint64): boolean {
 	const data = instructionData();
-	if (data.length < 8) { return 0; }
+	if (data.length < 8) { return false; }
 	const available = data.length - 8;
-	if (offset > available || width > available - offset) { return 0; }
-	return data.address + 8 + offset;
+	return offset <= available && width <= available - offset;
+}
+
+function argumentAddress(offset: uint64, width: uint64): uint64 {
+	return argumentFits(offset, width) ? msSolInstructionData() + 8 + offset : 0;
 }
 
 export function argsFit(length: uint64): boolean {
@@ -829,24 +832,20 @@ export function argsFit(length: uint64): boolean {
 }
 
 export function argU8(offset: uint64): uint8 {
-	const at = argumentAddress(offset, 1);
-	return at == 0 ? 0 : msSolLoadU8(at);
+	return argumentFits(offset, 1) ? msSolLoadU8(msSolInstructionData() + 8 + offset) : 0;
 }
 
 export function argU16(offset: uint64): uint16 {
-	const at = argumentAddress(offset, 2);
-	return at == 0 ? 0 : msSolLoadU16(at);
+	return argumentFits(offset, 2) ? msSolLoadU16(msSolInstructionData() + 8 + offset) : 0;
 }
 
 export function argU32(offset: uint64): uint32 {
-	const at = argumentAddress(offset, 4);
-	return at == 0 ? 0 : msSolLoadU32(at);
+	return argumentFits(offset, 4) ? msSolLoadU32(msSolInstructionData() + 8 + offset) : 0;
 }
 
 @inline
 export function argU64(offset: uint64): uint64 {
-	const at = argumentAddress(offset, 8);
-	return at == 0 ? 0 : msSolLoadU64(at);
+	return argumentFits(offset, 8) ? msSolLoadU64(msSolInstructionData() + 8 + offset) : 0;
 }
 
 export function argI8(offset: uint64): int8 {
@@ -865,13 +864,11 @@ export function argBool(offset: uint64): boolean {
 }
 
 export function argBoolValid(offset: uint64): boolean {
-	const at = argumentAddress(offset, 1);
-	return at != 0 && msSolLoadU8(at) <= 1;
+	return argumentFits(offset, 1) && msSolLoadU8(msSolInstructionData() + 8 + offset) <= 1;
 }
 
 export function argPubkey(offset: uint64): Pubkey {
-	const at = argumentAddress(offset, 32);
-	return at == 0 ? Pubkey.zero() : loadPubkey(at);
+	return argumentFits(offset, 32) ? loadPubkey(msSolInstructionData() + 8 + offset) : Pubkey.zero();
 }
 
 export function argBytesFit(offset: uint64): boolean {

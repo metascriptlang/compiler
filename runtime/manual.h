@@ -83,7 +83,6 @@ typedef struct {
     uint64_t accountCount;
     uint64_t accountTable;
     uint64_t instructionData;
-    uint64_t instructionDataLength;
     uint64_t programId;
     bool err;
     msException* currException;
