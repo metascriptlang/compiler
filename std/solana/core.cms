@@ -986,7 +986,7 @@ export function createdPdaAccountAt(
 
 // The account is proven owned by this program, so its address is off the curve and the matching bump
 // needs no sol_curve_validate_point; every higher bump is still curve-checked inside the find.
-@inline export function canonicalBumpOwned(
+@inline export function canonicalBumpProven(
 	account: Account,
 	seeds: Readonly<Span<SeedSlice>>,
 ): Result<uint8, ProgramError> {
@@ -994,6 +994,16 @@ export function createdPdaAccountAt(
 	const failure = findExpectedFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), account.keyAddress(), msSolSpanAddress(bump));
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(bump[0]);
+}
+
+@inline export function canonicalBumpOwned(
+	account: Account,
+	seeds: Readonly<Span<SeedSlice>>,
+): Result<uint8, ProgramError> {
+	if (!keysEqual(account.address + 40, ownProgram())) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	return canonicalBumpProven(account, seeds);
 }
 
 export function givenBump(
@@ -1138,7 +1148,7 @@ export function seedsGiven(key: uint64, seeds: Readonly<Span<SeedSlice>>, bump: 
 	return findCanonicalFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), key, 0);
 }
 
-@inline export function seedsCanonicalOwnedFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>): uint64 {
+@inline export function seedsCanonicalProvenFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>): uint64 {
 	let bump: uint8[1] = [0];
 	return findExpectedFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), key, msSolSpanAddress(bump));
 }

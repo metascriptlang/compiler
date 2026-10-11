@@ -11,7 +11,7 @@ import {
 	Account,
 	SlottedSeeds,
 	canonicalBump,
-	canonicalBumpOwned,
+	canonicalBumpProven,
 	closedProgramAccount,
 	createdAccount,
 	createdPdaAccount,
@@ -25,7 +25,7 @@ import {
 	conditionFailure,
 	keysFailure,
 	seedsCanonicalFailure,
-	seedsCanonicalOwnedFailure,
+	seedsCanonicalProvenFailure,
 	seedsFoldedFailure,
 	seedsFoldedGivenFailure,
 	seedsGivenFailure,
@@ -598,7 +598,7 @@ export function verifiedPda<T>(
 	this account: Mutable<T>,
 	seeds: Readonly<Span<SeedSlice>>,
 ): Result<Pda<T>, ProgramError> {
-	const bump = try canonicalBumpOwned(account.account, seeds);
+	const bump = try canonicalBumpProven(account.account, seeds);
 	return Result.ok({ account: account, bump: bump });
 }
 
@@ -1275,7 +1275,7 @@ export macro accounts(): Node {
 					checks.push(attempt(call(bindSym("seedsFoundFailure")!, [member(ident(holder, seeded), self, seeded), table], seeded), seeded));
 				} else {
 					checks.push(attempt(call(
-						programOwned ? bindSym("seedsCanonicalOwnedFailure")! : bindSym("seedsCanonicalFailure")!,
+						programOwned ? bindSym("seedsCanonicalProvenFailure")! : bindSym("seedsCanonicalFailure")!,
 						[key, table],
 						seeded,
 					), seeded));

@@ -85,9 +85,9 @@ import {
 	invokeList,
 	invokeSigned,
 } from "./index";
-import { SignerSeeds, hashAddressWithBump, seedText } from "./seed";
+import { SignerSeeds, findExpected, hashAddressWithBump, seedText } from "./seed";
 import { seedTable } from "./accountSeeds";
-import { canonicalBump, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
+import { canonicalBump, canonicalBumpOwned, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
 import { HostAccount, invocations, logs, rentReads, run, setClock, signerIs, textBytes } from "./host";
 import {
@@ -2346,6 +2346,60 @@ test "createPda signs with fifteen seeds and the bump, and refuses sixteen seeds
 	assert invocations().length == 0;
 }
 
+function vaultHashAt(bump: uint8): Pubkey {
+	let preimage: uint8[] = [118, 97, 117, 108, 116];
+	for (const byte of keyOf(5).bytes) { preimage.push(byte); }
+	preimage.push(bump);
+	for (const byte of programKey().bytes) { preimage.push(byte); }
+	for (const byte of "ProgramDerivedAddress".asBytes()) { preimage.push(byte); }
+	return { bytes: sha256(preimage).bytes };
+}
+
+function vaultCanonicalBump(): uint8 {
+	for (let bump = 255; bump >= 1; bump--) {
+		if (!isEdwardsPoint(vaultHashAt(bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function vaultAliasBump(): uint8 {
+	for (let bump = (vaultCanonicalBump() as int32) - 1; bump >= 1; bump--) {
+		if (!isEdwardsPoint(vaultHashAt(bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function vaultFundedAt(key: Pubkey, lamports: uint64): HostAccount {
+	return { ...blank(key), lamports: lamports };
+}
+
+test "the vault seeds put an on-curve hash above the canonical bump and an off-curve alias below it" {
+	assert isEdwardsPoint(vaultHashAt(255).bytes);
+	assert vaultCanonicalBump() < 255 && vaultCanonicalBump() > 1;
+	assert vaultAliasBump() > 0 && vaultAliasBump() < vaultCanonicalBump();
+	assert !isEdwardsPoint(vaultHashAt(vaultAliasBump()).bytes);
+}
+
+function findExpectedEntry(): void {
+	const seeds = seedTable(["vault", keyOf(5)]);
+	const program = msSolProgramId();
+	const canonical = vaultCanonicalBump();
+	const found = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(canonical).bytes));
+	if (!found.ok || found.value != canonical) { failWith(ProgramError.userError(1)); return; }
+	const above = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(255).bytes));
+	if (!above.ok || above.value != 255) { failWith(ProgramError.userError(2)); return; }
+	const alias = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(vaultAliasBump()).bytes));
+	if (alias.ok || alias.error.code != ProgramError.invalidSeeds().code) { failWith(ProgramError.userError(3)); return; }
+	const elsewhere = findExpected(seeds, program, msSolSpanAddress(keyOf(77).bytes));
+	if (elsewhere.ok) { failWith(ProgramError.userError(4)); return; }
+	const sixteen = findExpected(seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]), program, msSolSpanAddress(keyOf(77).bytes));
+	if (sixteen.ok || sixteen.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(5)); }
+}
+
+test "findExpected takes the canonical bump, lets an on-curve hash above it match, and refuses a lower off-curve alias and sixteen seeds" {
+	assert run(programKey(), [], [], findExpectedEntry).result == 0;
+}
+
 test "a signer whose seeds hash onto the curve is refused by the host before the call is recorded" {
 	const accounts = [wallet(1, 10000), wallet(2, 5000)];
 	const outcome = run(programKey(), accounts, [], onCurveSignerEntry);
@@ -2359,6 +2413,23 @@ function onCurveSignerEntry(): void {
 	const second = account(1);
 	if (!first.ok || !second.ok) { return; }
 	codeOf(signed(transfer(first.value, second.value, 10), ["vault", keyOf(5), [255]]));
+}
+
+function canonicalBumpOwnedEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const bump = canonicalBumpOwned(slot.value, seedTable(["vault", keyOf(5)]));
+	if (!bump.ok) { failWith(bump.error); return; }
+	if (bump.value != vaultCanonicalBump()) { failWith(ProgramError.userError(1)); }
+}
+
+test "canonicalBumpOwned compares the owner itself, then finds the canonical bump" {
+	const key = vaultHashAt(vaultCanonicalBump());
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), key)], [], canonicalBumpOwnedEntry).result == 0;
+	assert run(programKey(), [atKey(holder(1, Pubkey.zero(), [], false, false), key)], [], canonicalBumpOwnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [atKey(holder(1, keyOf(77), [], false, false), key)], [], canonicalBumpOwnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
 }
 
 function sameBytes(left: uint8[], right: uint8[]): boolean {
