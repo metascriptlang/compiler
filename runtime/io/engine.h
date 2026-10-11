@@ -63,6 +63,13 @@ msIoEngine* msGetIoEngineIfExists(void);
 /* Accept: returns msFuture_int32* (client fd, or -1 on error) */
 void* msIoAccept(msIoEngine* e, int listenFd);
 
+static inline void msIoDropStringValue(void* fut) { msStringDecref(msFutureTakeStringRaw(fut)); }
+static inline msFuture_msString* msIoStringFutureCreate(void) {
+	msFuture_msString* fut = msFutureCreateT(msFuture_msString);
+	((msFutureBase*)fut)->valueDrop = msIoDropStringValue;
+	return fut;
+}
+
 /* Recv: returns msFuture_msString* (inline msString — empty string on close/error) */
 void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes);
 
