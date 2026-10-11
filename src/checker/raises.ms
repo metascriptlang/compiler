@@ -21,7 +21,7 @@ export function resetRaises(): void {
 	_tempWrites = new HashMap<Symbol, int32>();
 }
 
-function closurePairTarget(value: Node | null): Symbol | null {
+function closurePairTarget(value: Readonly<Node> | null): Symbol | null {
 	if (value == null || value.kind != NodeKind.ObjectLiteral || !value.flags.has(NodeFlag.Closure)) return null;
 	const d = value.data as ObjectLiteralData;
 	for (let i = 0; i < d.keys.length; i += 1) {
@@ -66,8 +66,9 @@ function noteTempWrites(node: Node): void {
 }
 
 function calleeTarget(call: Readonly<Node>): Symbol | null {
-	const sym = (call.data as CallExprData).callee.resolvedSym;
-	if (sym == null) return null;
+	const callee = (call.data as CallExprData).callee;
+	const sym = callee.resolvedSym;
+	if (sym == null) return closurePairTarget(callee);
 	const bound = _closureTargets.get(sym);
 	return bound != null && _tempWrites.get(sym) == 1 ? bound : sym;
 }

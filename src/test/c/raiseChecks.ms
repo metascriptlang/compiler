@@ -1,4 +1,5 @@
 import { compileToC } from "../helpers";
+import { hostTargetInfo } from "../../checker/types";
 
 function functionBody(code: string, name: string): string {
 	for (const line of code.split("\n")) {
@@ -207,4 +208,50 @@ test "raiseChecks: a closure called where it is written keeps the check when its
 	assert checksIn(result.value, "useRaises") == 1;
 	assert checksIn(result.value, "useThrows") == 1;
 	assert checksIn(result.value, "useNestedRaises") == 1;
+}
+
+const MANUAL_IIFE_SRC = `
+function plain(x: int32): int32 { return x + 1; }
+function boom(x: int32): int32 {
+	if (x > 100) throw new Error("big");
+	return x + 1;
+}
+function bareQuiet(): int32 { return (() => plain(2))(); }
+function bareRaises(n: int32): int32 { return (() => boom(n))(); }
+function tryQuiet(): Result<int32, string> {
+	const v = try (() => {
+		const r: Result<int32, string> = Result.ok(plain(1));
+		return r;
+	})();
+	return Result.ok(v + 1);
+}
+function useBareQuiet(): int32 {
+	const a = bareQuiet();
+	return a + 1;
+}
+function useBareRaises(n: int32): int32 {
+	const a = bareRaises(n);
+	return a + 1;
+}
+function useTryQuiet(): int32 {
+	const a = tryQuiet();
+	return a.ok ? 1 : 0;
+}
+console.log(String(useBareQuiet() + useBareRaises(1) + useTryQuiet()));
+`;
+
+test "raiseChecks: under manual memory a closure called where it is written takes its routine's verdict" {
+	const result = compileToC(MANUAL_IIFE_SRC, hostTargetInfo(), true);
+	assert result.ok, result.error;
+	assert result.value.indexOf("env = NULL }.env") >= 0;
+	assert checksIn(result.value, "bareQuiet") == 0;
+	assert checksIn(result.value, "tryQuiet") == 0;
+	assert checksIn(result.value, "useBareQuiet") == 0;
+	assert checksIn(result.value, "useTryQuiet") == 0;
+}
+
+test "raiseChecks: under manual memory a closure called where it is written keeps the check when its body raises" {
+	const result = compileToC(MANUAL_IIFE_SRC, hostTargetInfo(), true);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useBareRaises") == 1;
 }
