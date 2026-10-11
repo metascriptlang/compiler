@@ -264,8 +264,8 @@ A PDA that signs the CPI which follows its find needs no `sol_curve_validate_poi
 
 The condition is that the found bump flows into the signer table of the CPI with nothing done with the address in between, so the skip exists in two places and nowhere else:
 
-- `createPda<T>`: `createdPdaAccount` finds with `findExpectedFailureAt` into the slot of the caller's seed table and signs the `CreateAccountAllowPrefund` with that table.
-- `signedPda(call, pda, seeds)`: `signed` for one PDA whose bump the std finds. `seeds` is one list without the bump; the macro appends a one-byte slot, `foundSigner` writes the found bump into it and the call receives that table as its signers, with the `try` of the find in the argument list so a failed find returns before the call is made.
+- `createPda<T>`: `createdPdaAccount` finds with `msSolFindExpectedStaged` in the caller's own seed table, which leaves the bump in the byte the table's bump slice names, and signs the `CreateAccountAllowPrefund` with that table.
+- `signedPda(call, pda, seeds)`: `signed` for one PDA whose bump the std finds. `seeds` is one list without the bump; `slottedTable` appends the bump's slice and a byte for it, `foundSigner` leaves the found bump in that byte and the call receives that table as its signers, with the `try` of the find in the argument list so a failed find returns before the call is made.
 
 ```ms
 return signedPda(
@@ -1245,7 +1245,7 @@ Rejected or not taken, each measured:
 - **`+alu32` on the merged bitcode**: 70 CU over the thirteen on the previous tree (set_label 466 to 419), but it emits JMP32 instructions, which LiteSVM 1.4.1 runs and which were not checked against a validator.
 - **Removing `llvm.lifetime` markers from the merged bitcode**: 25 over the thirteen in the analysis lane, not re-run; it needs a new build step.
 - **The rent sysvar's address as an immediate through inline assembly**: 1 on a create.
-- **A seed table hashed in place** (an analysis lane's prototype on the previous tree, not re-run: vault 1604; 422, multisig create 2462): three canonical rows of `checkCost.mjs` rose 4 to 7 and `WritablePda` was not converted; open.
+- **A seed table hashed in place** (an analysis lane's prototype on the previous tree, not re-run: vault 1604; 422, multisig create 2462): three canonical rows of `checkCost.mjs` rose 4 to 7 and `WritablePda` was not converted. Taken in another form in the section below.
 
 Where the rest is, by a tracer over the disassembly of both ELFs on the previous tree (written for the baseline, reconciled with the measured CU on twelve success paths, its attribution not re-derived): the PDA check of vault withdraw is 68 instructions against Pinocchio's 45 (the seed table is staged by the caller, then copied by `seedsCanonicalFailure`); rotate copies its `Pubkey` argument in seven pieces (compiler inbox `2026-10-12-result-payload-of-byte-alignment-sits-at-offset-9.md`); the exit is 6 to 10 instructions against 3 to 5 (the result and the rejection byte are read back from the context).
 
