@@ -10,7 +10,6 @@ import {
 	pubkeyOf,
 } from "./pubkey";
 import { ProgramError } from "./error";
-import { ProgramAddress } from "./pda";
 import { Bytes, putAddress, putPubkey, putU32, putU64, storePubkey } from "./buffer";
 import { InstructionAccount } from "./cpi";
 import { invokeSigned } from "./invoke";
@@ -22,7 +21,6 @@ import {
 	fillWithBump,
 	findExpectedFailureAt,
 	findCanonicalFailureAt,
-	findFailureAt,
 	hashAddressWithBump,
 	hashFailureAt,
 	ownProgram,
@@ -939,6 +937,10 @@ export function slottedSeeds(seeds: Readonly<Span<SeedSlice>>): SlottedSeeds {
 	return { table: tableAddress(seeds), used: (seeds.length as uint64) - 1 };
 }
 
+@inline function foundIntoSlot(key: uint64, seeds: SlottedSeeds): uint64 {
+	return findExpectedFailureAt(seeds.table, seeds.used, ownProgram(), key, msSolLoadU64(seeds.table + seeds.used * 16));
+}
+
 export function createdPdaAccount(
 	payer: Account,
 	target: Account,
@@ -946,16 +948,20 @@ export function createdPdaAccount(
 	space: uint64,
 	discriminator: uint64,
 ): Result<DerivedAccount, ProgramError> {
-	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
-	const failure = findFailureAt(seeds.table, seeds.used, ownProgram(), found);
+	const failure = foundIntoSlot(target.keyAddress(), seeds);
 	if (failure != 0) { return Result.err({ code: failure }); }
-	if (!keysEqual(msSolSpanAddress(found.key.bytes), target.keyAddress())) {
-		return Result.err(ProgramError.constraintSeeds());
-	}
-	msSolStoreU8(msSolLoadU64(seeds.table + seeds.used * 16), found.bump);
 	const one: SignerSeeds[1] = [{ address: seeds.table, length: seeds.used + 1 }];
 	const created = try initialized(payer, target, space, discriminator, one);
-	return Result.ok({ account: created, bump: found.bump });
+	return Result.ok({ account: created, bump: msSolLoadU8(msSolLoadU64(seeds.table + seeds.used * 16)) });
+}
+
+// Only `signedPda(call, pda, seeds)` calls this, with the table it passes to that call as its signers. The matching hash
+// skips the curve check because the runtime derives every signer before it runs the callee and refuses an address on the
+// curve; an `ok` here proves nothing about the address until that CPI has run.
+export function foundSigner(account: Account, seeds: SlottedSeeds): Result<SignerSeeds, ProgramError> {
+	const failure = foundIntoSlot(account.keyAddress(), seeds);
+	if (failure != 0) { return Result.err({ code: failure }); }
+	return Result.ok({ address: seeds.table, length: seeds.used + 1 });
 }
 
 // The address and bump of literal seeds, folded at compile time against the declared program id:

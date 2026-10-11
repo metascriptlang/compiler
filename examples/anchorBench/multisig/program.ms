@@ -28,7 +28,7 @@ import {
 	key,
 	putPrefix,
 	seeds,
-	signed,
+	signedPda,
 	transfer,
 	transferLamports,
 } from "std/solana";
@@ -125,13 +125,12 @@ function setLabel(): Result<uint64, ProgramError> {
 function executeTransfer(): Result<uint64, ProgramError> {
 	const input = try args<AmountArgs>();
 	const x = try accounts<TransferAccounts>();
-	const vaultBump = try canonicalBump(x.vault.asAccount(), seedTable(["vault", x.config.key()]));
 	const config = x.config.data();
 	if (config.signersLength > 10) { return Result.err(ProgramError.invalidAccountData()); }
 	const approvals = try signingMembers(5, config.signers, config.signersLength as int32);
 	if (approvals < (config.threshold as uint32)) { return Result.err(ProgramError.userError(2)); }
-	return signed(transfer(x.vault.asAccount(), x.recipient.asAccount(), input.amount),
-		["vault", x.config.key(), [vaultBump]]);
+	return signedPda(transfer(x.vault.asAccount(), x.recipient.asAccount(), input.amount),
+		x.vault.asAccount(), ["vault", x.config.key()]);
 }
 
 export function dispatch(): Result<uint64, ProgramError> {

@@ -22,6 +22,7 @@ import {
 	argsFit,
 	instructionHasDiscriminator,
 	instructionHasWord,
+	foundSigner,
 	logEvent,
 	slottedSeeds,
 } from "./core";
@@ -905,7 +906,53 @@ export macro createMintPda(
 	};
 }
 
-export macro signed(call: Node, seeds: Node): Node {
+export macro signedPda(call: Node, pda: Node, seeds: Node): Node {
+	// The signer table of one PDA, found where the call that signs with it is written: a failure of the find
+	// returns from the enclosing function before the call runs.
+	function foundSigning(pda: Node, seeds: Node): Node {
+		const slot: Node = {
+			kind: NodeKind.NumberLiteral,
+			line: seeds.line,
+			column: seeds.column,
+			value: 0,
+			isFloat: false,
+			intVal: 0,
+			outOfRangeText: "",
+			isBitPattern: false,
+		};
+		const elements: Node[] = [];
+		for (const seed of seeds.elements) { elements.push(seed); }
+		elements.push({ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: [slot] });
+		const slotted: Node = { kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: elements };
+		const found: Node = {
+			kind: NodeKind.CallExpr,
+			line: pda.line,
+			column: pda.column,
+			callee: bindSym("foundSigner"),
+			arguments: [pda, {
+				kind: NodeKind.CallExpr,
+				line: seeds.line,
+				column: seeds.column,
+				callee: bindSym("slottedSeeds"),
+				arguments: [{
+					kind: NodeKind.CallExpr,
+					line: seeds.line,
+					column: seeds.column,
+					callee: bindSym("seedTable"),
+					arguments: [slotted],
+					isDirectCall: false,
+					resolvedOverloadIdx: -1,
+				}],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+		return { kind: NodeKind.TryExpr, line: pda.line, column: pda.column, tryArg: found, hasCatch: false, catchVal: found };
+	}
+
+	const plain = pda.kind === NodeKind.NullLiteral;
 	if (call.kind !== NodeKind.CallExpr) {
 		error("signed(call, seeds): the first argument is the call that signs, written " +
 			"with its own arguments: signed(transfer(from, to, 10), [\"vault\", [bump]])", call);
@@ -971,8 +1018,15 @@ export macro signed(call: Node, seeds: Node): Node {
 	}
 	const lists: Node[] = signers == 0 ? [seeds] : seeds.elements;
 	const table: Node[] = [];
+	if (!plain) {
+		if (signers != 0) {
+			error("signedPda(call, pda, seeds): one PDA signs, so the seeds are one list of seeds " +
+				"without the bump, and this is a list of signers", seeds);
+		}
+		table.push(foundSigning(pda, seeds));
+	}
 	position = 0;
-	while (position < lists.length) {
+	while (plain && position < lists.length) {
 		const list = lists[position];
 		table.push({
 			kind: NodeKind.CallExpr,
@@ -1015,6 +1069,18 @@ export macro signed(call: Node, seeds: Node): Node {
 	};
 	signing.typeArg = call.typeArg;
 	return signing;
+}
+
+export macro signed(call: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("signedPda"),
+		arguments: [call, { kind: NodeKind.NullLiteral, line: call.line, column: call.column, nullPlaceholder: true }, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
 }
 
 export macro delegate(accounts: Node, seeds: Node, bump: Node, config: Node): Node {

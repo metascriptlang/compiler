@@ -104,6 +104,7 @@ import {
 	programAddressOf,
 	seeds,
 	signed,
+	signedPda,
 } from "./macro";
 import { anchorIdl } from "./idl";
 import { Node, NodeKind, bindSym } from "std/meta";
@@ -2398,6 +2399,75 @@ function findExpectedEntry(): void {
 
 test "findExpected takes the canonical bump, lets an on-curve hash above it match, and refuses a lower off-curve alias and sixteen seeds" {
 	assert run(programKey(), [], [], findExpectedEntry).result == 0;
+}
+
+function createVaultPdaStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, ["vault", keyOf(5)]);
+	return Result.ok(0);
+}
+
+function createVaultPdaEntry(): void { codeOf(createVaultPdaStep()); }
+
+test "createPda at the canonical address signs with the canonical bump" {
+	const accounts = [wallet(1, 10000000), blank(vaultHashAt(vaultCanonicalBump()))];
+	assert run(programKey(), accounts, [], createVaultPdaEntry).result == 0;
+	const calls = invocations();
+	assert calls.length == 1 && signerIs(calls[0], 0, [textBytes("vault"), keyBytes(keyOf(5)), [vaultCanonicalBump()]]);
+}
+
+test "createPda at an address on the curve fails inside the CPI and creates nothing, funded or not" {
+	for (const funded of [0, 1, 10000000]) {
+		const accounts = [wallet(1, 10000000), vaultFundedAt(vaultHashAt(255), funded as uint64)];
+		const outcome = run(programKey(), accounts, [], createVaultPdaEntry);
+		assert outcome.result == ProgramError.invalidSeeds().code;
+		assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+		assert invocations().length == 0;
+		assert accounts[1].lamports == funded as uint64 && accounts[1].data.length == 0 && accounts[1].owner.equals(Pubkey.zero());
+		assert accounts[0].lamports == 10000000;
+	}
+}
+
+test "createPda refuses a lower off-curve alias and another address with ConstraintSeeds before any CPI" {
+	for (const key of [vaultHashAt(vaultAliasBump()), keyOf(77)]) {
+		const accounts = [wallet(1, 10000000), blank(key)];
+		const outcome = run(programKey(), accounts, [], createVaultPdaEntry);
+		assert outcome.result == ProgramError.constraintSeeds().code && outcome.fault == "";
+		assert invocations().length == 0;
+		assert accounts[1].lamports == 0 && accounts[1].data.length == 0;
+	}
+}
+
+function signedVaultStep(): Result<uint64, ProgramError> {
+	const vault = try account(0);
+	const recipient = try account(1);
+	return signedPda(transfer(vault, recipient, 10), vault, ["vault", keyOf(5)]);
+}
+
+function signedVaultEntry(): void { codeOf(signedVaultStep()); }
+
+test "signedPda signs a transfer with the canonical bump it found" {
+	const accounts = [vaultFundedAt(vaultHashAt(vaultCanonicalBump()), 1000), wallet(2, 5000)];
+	assert run(programKey(), accounts, [], signedVaultEntry).result == 0;
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("vault"), keyBytes(keyOf(5)), [vaultCanonicalBump()]]);
+	assert accounts[0].lamports == 990 && accounts[1].lamports == 5010;
+}
+
+test "signedPda sends an address on the curve to the runtime, which refuses it, and sends a lower alias nowhere" {
+	const onCurve = [vaultFundedAt(vaultHashAt(255), 1000), wallet(2, 5000)];
+	const outcome = run(programKey(), onCurve, [], signedVaultEntry);
+	assert outcome.result == ProgramError.invalidSeeds().code;
+	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+	assert invocations().length == 0 && onCurve[0].lamports == 1000 && onCurve[1].lamports == 5000;
+	for (const key of [vaultHashAt(vaultAliasBump()), keyOf(77)]) {
+		const refused = [vaultFundedAt(key, 1000), wallet(2, 5000)];
+		const second = run(programKey(), refused, [], signedVaultEntry);
+		assert second.result == ProgramError.constraintSeeds().code && second.fault == "";
+		assert invocations().length == 0 && refused[0].lamports == 1000 && refused[1].lamports == 5000;
+	}
 }
 
 test "a signer whose seeds hash onto the curve is refused by the host before the call is recorded" {
