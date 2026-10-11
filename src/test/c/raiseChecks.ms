@@ -130,3 +130,28 @@ test "raiseChecks: a dispatched method keeps its check, a method with no overrid
 	assert checksIn(result.value, "useShape") == 1;
 	assert checksIn(result.value, "usePoint") == 0;
 }
+
+const CLOSURE_HOLD_SRC = `
+function holdsClosure(x: int32): int32 {
+	const g = () => x + 1;
+	return x + 2;
+}
+function holdsBare(x: int32): int32 {
+	const g = () => 7;
+	return x + 2;
+}
+function useHolds(n: int32): int32 {
+	const a = holdsClosure(n);
+	const b = holdsBare(a);
+	return a + b;
+}
+console.log(String(useHolds(1)));
+`;
+
+test "raiseChecks: a closure value destroyed at scope exit does not make its routine raise" {
+	const result = compileToC(CLOSURE_HOLD_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useHolds") == 0;
+	assert checksIn(result.value, "holdsClosure") == 0;
+	assert checksIn(result.value, "holdsBare") == 0;
+}

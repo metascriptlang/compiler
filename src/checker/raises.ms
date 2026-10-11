@@ -37,8 +37,8 @@ function classifyCall(call: Readonly<Node>): CallRaise {
 	const sym = cd.callee.resolvedSym;
 	if (sym == null) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Throws)) return CallRaise.Can;
-	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(cd.arguments) ? CallRaise.Can : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.DestroyOp) || hasFlag(sym, SymbolFlag.WasMovedOp)) return CallRaise.Never;
+	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(cd.arguments) ? CallRaise.Can : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.NeverRaises)) return CallRaise.Never;
 	if (sym.symbolKind != SymbolKind.Function) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Async) || hasFlag(sym, SymbolFlag.StateMachine)) return CallRaise.Can;
