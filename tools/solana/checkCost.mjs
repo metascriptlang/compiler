@@ -61,34 +61,34 @@ const OPS = [
 	["accounts<7 fields>, no @address", 23],
 ];
 
-// Totals of each op when this table was last set, 2026-10-11 (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
+// Totals of each op when this table was last set, 2026-10-12 (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
 // The three structs holding `rolled: Delegated<Pet>` were reset on 2026-10-10, when a Delegated field became pinned by
 // `@seeds @bump`: the canonical search costs about 430 CU that the unpinned field never paid.
 const BASELINE = {
-	"idle": 179,
-	"owned<Pet>": 240,
-	"mutable<Pet>": 271,
-	"delegated<Pet>": 241,
-	"accounts<Everything>": 843,
-	"args<Parameters>": 318,
-	"createPda<Pet>": 2371,
-	"create<Pet>": 1846,
-	"pda (Mutable)": 940,
+	"idle": 174,
+	"owned<Pet>": 238,
+	"mutable<Pet>": 269,
+	"delegated<Pet>": 237,
+	"accounts<Everything>": 846,
+	"args<Parameters>": 312,
+	"createPda<Pet>": 2189,
+	"create<Pet>": 1841,
+	"pda (Mutable)": 938,
 	"pdaWithBump (Mutable)": 682,
-	"pda (Delegated)": 738,
-	"pdaWithBump (Delegated)": 787,
-	"realloc<Pet>": 507,
-	"close<Pet>": 435,
-	"instruction<Dispatch> (last)": 347,
-	"external<Mint>": 371,
-	"externalMutable<TokenAccount>": 410,
-	"accounts<3 fields>": 309,
-	"accounts<3 fields> + @seeds @bump(account.field)": 580,
-	"accounts<3 fields> + @seeds @bump": 887,
-	"accounts<3 fields> + @hasOne": 336,
-	"accounts<3 fields> + @constraint": 297,
-	"accounts<7 fields> + @address": 876,
-	"accounts<7 fields>, no @address": 837,
+	"pda (Delegated)": 734,
+	"pdaWithBump (Delegated)": 783,
+	"realloc<Pet>": 504,
+	"close<Pet>": 433,
+	"instruction<Dispatch> (last)": 326,
+	"external<Mint>": 366,
+	"externalMutable<TokenAccount>": 405,
+	"accounts<3 fields>": 306,
+	"accounts<3 fields> + @seeds @bump(account.field)": 579,
+	"accounts<3 fields> + @seeds @bump": 886,
+	"accounts<3 fields> + @hasOne": 331,
+	"accounts<3 fields> + @constraint": 292,
+	"accounts<7 fields> + @address": 877,
+	"accounts<7 fields>, no @address": 840,
 };
 
 function u64(value) {
