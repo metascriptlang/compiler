@@ -609,7 +609,7 @@ const DUPLICATED_RECORD: uint8 = 0xfe;
 	return msSolLoadU8(address) == DUPLICATED_RECORD ? ProgramError.constraintDuplicateMutableAccount().code : 0;
 }
 
-function borrowFailure(address: uint64): uint64 {
+@noinline function borrowFailure(address: uint64): uint64 {
 	return msSolLoadU8(address) == DUPLICATED_RECORD
 		? ProgramError.constraintDuplicateMutableAccount().code
 		: ProgramError.accountBorrowFailed().code;
@@ -623,6 +623,18 @@ function claimExclusive(address: uint64): boolean {
 
 export const DELEGATION_PROGRAM_ID: Pubkey = pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 
+@noinline function shortProgramDataFailure(
+	address: uint64,
+	discriminator: uint64,
+	length: uint64,
+): uint64 {
+	if (length < 8) { return ProgramError.accountDiscriminatorNotFound().code; }
+	if (msSolLoadU64(address + 88) != discriminator) {
+		return ProgramError.accountDiscriminatorMismatch().code;
+	}
+	return ProgramError.accountDidNotDeserialize().code;
+}
+
 function programDataFailure(
 	address: uint64,
 	owner: uint64,
@@ -631,11 +643,10 @@ function programDataFailure(
 ): uint64 {
 	if (!keysEqual(address + 40, owner)) { return ProgramError.accountOwnedByWrongProgram().code; }
 	const length = msSolLoadU64(address + 80);
-	if (length < 8) { return ProgramError.accountDiscriminatorNotFound().code; }
+	if (length < 8 + size) { return shortProgramDataFailure(address, discriminator, length); }
 	if (msSolLoadU64(address + 88) != discriminator) {
 		return ProgramError.accountDiscriminatorMismatch().code;
 	}
-	if (length < 8 + size) { return ProgramError.accountDidNotDeserialize().code; }
 	return 0;
 }
 
@@ -665,17 +676,14 @@ export function unchecked(index: int32): Result<Account, ProgramError> {
 
 // The same checks with the program id given as its four little-endian words, so a typed Program<P>
 // compares immediates and builds no Pubkey on the stack.
-@inline export function programWordsFailure(
-	index: int32, word0: uint64, word1: uint64, word2: uint64, word3: uint64, out found: Account,
+@inline export function programWordsAtFailure(
+	address: uint64, word0: uint64, word1: uint64, word2: uint64, word3: uint64,
 ): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
 	if (msSolLoadU64(address + 8) != word0 || msSolLoadU64(address + 16) != word1 ||
 		msSolLoadU64(address + 24) != word2 || msSolLoadU64(address + 32) != word3) {
 		return ProgramError.invalidProgramId().code;
 	}
 	if (msSolLoadU8(address + 3) == 0) { return ProgramError.invalidProgramExecutable().code; }
-	found = { address: address };
 	return 0;
 }
 
@@ -694,7 +702,7 @@ export function ownedFailure(
 ): uint64 {
 	found = { address: msSolAccountAt(index as uint64) };
 	if (found.address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	return programDataFailure(found.address, msSolProgramId(), discriminator, size);
+	return ownedAtFailure(found.address, discriminator, size);
 }
 
 export function delegatedFailure(
@@ -721,10 +729,22 @@ export function mutableEnvelopeFailure(
 ): uint64 {
 	found = { address: msSolAccountAt(index as uint64) };
 	if (found.address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	const failure = programDataFailure(found.address, msSolProgramId(), discriminator, size);
+	return mutableEnvelopeAtFailure(found.address, discriminator, size);
+}
+
+@inline export function ownedAtFailure(address: uint64, discriminator: uint64, size: uint64): uint64 {
+	return programDataFailure(address, msSolProgramId(), discriminator, size);
+}
+
+@inline export function mutableEnvelopeAtFailure(
+	address: uint64,
+	discriminator: uint64,
+	size: uint64,
+): uint64 {
+	const failure = programDataFailure(address, msSolProgramId(), discriminator, size);
 	if (failure != 0) { return failure; }
-	if (msSolLoadU8(found.address + 2) == 0) { return ProgramError.constraintMut().code; }
-	if (msSolLoadU8(found.address) != 0xff) { return borrowFailure(found.address); }
+	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
+	if (msSolLoadU8(address) != 0xff) { return borrowFailure(address); }
 	return 0;
 }
 

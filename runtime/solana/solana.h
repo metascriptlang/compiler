@@ -143,9 +143,16 @@ static inline uint64_t msSolAccountCount(void) {
     return msSolContext()->accountCount;
 }
 
+static inline uint64_t msSolAccountTable(void) {
+    return msSolContext()->accountTable;
+}
+
 static inline uint64_t msSolAccountAt(uint64_t index) {
     msSolanaContext* context = msSolContext();
-    return index < context->accountCount ? ((const uint64_t*)context->accountTable)[index] : 0;
+    if (index >= context->accountCount) return 0;
+    const uint64_t address = ((const uint64_t*)context->accountTable)[index];
+    if (address == 0) __builtin_unreachable();
+    return address;
 }
 
 static inline uint64_t msSolInstructionData(void) {

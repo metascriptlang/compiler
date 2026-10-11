@@ -1141,6 +1141,9 @@ test "accounts<T>() verifies each field by its proof type, in declaration order"
 	const short = [owner, counter];
 	assert run(programKey(), short, [], bumpAccountsEntry).result ==
 		ProgramError.accountNotEnoughKeys().code;
+	const shortAndUnsigned = [unsignedOwner, counter];
+	assert run(programKey(), shortAndUnsigned, [], bumpAccountsEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
 }
 
 function trailingAccountsStep(): Result<uint64, ProgramError> {
