@@ -28,7 +28,7 @@ static inline uint64_t msSolAlloc(uint64_t size) {
 }
 
 static inline uint64_t msSolScratch(uint64_t size) {
-    if (size > MS_SOLANA_HEAP_SIZE - msSolanaCurrentContext()->arenaPosition) return 0;
+    if (size > MS_SOLANA_ARENA_SIZE - msSolanaCurrentContext()->arenaUsed) return 0;
     return (uint64_t)msArenaAlloc((size_t)size);
 }
 
@@ -102,6 +102,13 @@ static inline const uint8_t* msSolNextRecord(const uint8_t* cursor) {
     return cursor + 8;
 }
 
+static inline const uint8_t* msSolPastRecord(const uint8_t* record) {
+    return (const uint8_t*)(((uint64_t)record + *(const uint64_t*)(record + 80) +
+        (MS_SOL_ACCOUNT_HEADER_SIZE + MS_SOL_MAX_PERMITTED_DATA_INCREASE + 15)) & ~(uint64_t)7);
+}
+
+/* Returns the last record it read, not the one after it: the instruction data comes from the runtime, so the
+   walk past the final account would be paid for nothing. */
 static inline __attribute__((always_inline)) const uint8_t* msSolParseAccounts(const uint8_t* input, uint64_t* table) {
     msSolanaContext* context = msSolContext();
     const uint8_t* cursor = input + 8;
@@ -109,49 +116,55 @@ static inline __attribute__((always_inline)) const uint8_t* msSolParseAccounts(c
     const uint64_t kept = count < MS_SOL_MAX_ACCOUNTS ? count : MS_SOL_MAX_ACCOUNTS;
     uint64_t* slot = table;
     uint64_t* end = table + kept;
-    while (slot < end) {
-        const uint8_t marker = cursor[0];
-        if (marker == MS_SOL_DUPLICATE_MARKER || slot == table) {
-            *slot = (uint64_t)cursor;
-            cursor = (const uint8_t*)(((uint64_t)cursor + *(const uint64_t*)(cursor + 80) +
-                (MS_SOL_ACCOUNT_HEADER_SIZE + MS_SOL_MAX_PERMITTED_DATA_INCREASE + 15)) & ~(uint64_t)7);
-        } else {
-            *slot = table[marker];
-            *(uint8_t*)table[marker] = MS_SOL_DUPLICATED_RECORD;
-            cursor += 8;
+    if (slot != end) {
+        *slot++ = (uint64_t)cursor;
+        if (slot != end) {
+            cursor = msSolPastRecord(cursor);
+            for (;;) {
+                const uint8_t marker = cursor[0];
+                if (marker == MS_SOL_DUPLICATE_MARKER) {
+                    *slot++ = (uint64_t)cursor;
+                    if (slot == end) break;
+                    cursor = msSolPastRecord(cursor);
+                } else {
+                    *slot++ = table[marker];
+                    *(uint8_t*)table[marker] = MS_SOL_DUPLICATED_RECORD;
+                    if (slot == end) break;
+                    cursor += 8;
+                }
+            }
         }
-        slot++;
     }
     context->accountCount = kept;
     context->accountTable = (uint64_t)table;
     return cursor;
 }
 
+#ifndef MSOS_SOLANA
 static inline __attribute__((noinline)) void msSolParse(uint64_t* table) {
     msSolanaContext* context = msSolContext();
     const uint8_t* input = (const uint8_t*)context->input;
     const uint8_t* cursor = msSolParseAccounts(input, table);
     const uint64_t count = *(const uint64_t*)input;
-    for (uint64_t index = context->accountCount; index < count; index++) cursor = msSolNextRecord(cursor);
+    for (uint64_t index = context->accountCount == 0 ? 0 : context->accountCount - 1; index < count; index++) cursor = msSolNextRecord(cursor);
     const uint64_t length = *(const uint64_t*)cursor;
     cursor += 8;
     context->instructionData = (uint64_t)cursor;
     context->programId = (uint64_t)cursor + length;
 }
+#endif
 
 static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
     msSolParseAccounts(input, table);
-    msSolanaContext* context = msSolContext();
-    context->instructionData = (uint64_t)instructionData;
-    context->programId = (uint64_t)instructionData + *(const uint64_t*)(instructionData - 8);
-}
-
-static inline uint64_t msSolAccountCount(void) {
-    return msSolContext()->accountCount;
+    msSolContext()->instructionData = (uint64_t)instructionData;
 }
 
 static inline uint64_t msSolAccountTable(void) {
     return msSolContext()->accountTable;
+}
+
+static inline uint64_t msSolAccountCount(void) {
+    return msSolContext()->accountCount;
 }
 
 static inline uint64_t msSolAccountAt(uint64_t index) {
@@ -171,7 +184,12 @@ static inline uint64_t msSolInstructionDataLength(void) {
 }
 
 static inline uint64_t msSolProgramId(void) {
+#ifdef MSOS_SOLANA
+    const uint64_t data = msSolContext()->instructionData;
+    return data + *(const uint64_t*)(data - 8);
+#else
     return msSolContext()->programId;
+#endif
 }
 
 static inline void msSolSetResult(uint64_t code) {

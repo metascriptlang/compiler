@@ -394,7 +394,6 @@ export function genProjectDispatcher(
 			addLine(b, "uint64_t entrypoint(const uint8_t* input, const uint8_t* instructionData) {");
 			addLine(b, "  if (!instructionData) return 3ULL << 32;");
 			addLine(b, "  uint64_t accounts[MS_SOL_MAX_ACCOUNTS];");
-			addLine(b, "  msSolanaEnter();");
 			addLine(b, "  msSolStart(input, accounts, instructionData);");
 			addLine(b, "  MsMain();");
 			addLine(b, "  return msSolanaResult();");
