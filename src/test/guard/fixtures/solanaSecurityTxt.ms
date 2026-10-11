@@ -1,4 +1,4 @@
-import { logU64, securityTxt } from "std/solana";
+import { accounts, logU64, securityTxt, Writable } from "std/solana";
 
 securityTxt({
 	policy: "say \"hi\"\\ done\nline two é1 ✓ ??/ \n7",
@@ -14,6 +14,12 @@ securityTxt({
 	acknowledgements: "",
 	expiry: "2030-01-01",
 });
+
+export struct Ledger { payer: Writable; }
+
+function load(): void {
+	const view = accounts<Ledger>();
+}
 
 function answer(): uint64 {
 	return 7;
