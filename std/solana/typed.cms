@@ -1058,6 +1058,13 @@ export macro accounts(): Node {
 		const open = canonical.indexOf("<");
 		const base = open < 0 ? canonical : canonical.slice(0, open);
 		const inner = open < 0 ? "" : canonical.slice(open + 1, canonical.length - 1);
+		const meant = inner == "" ? null : bindSym(inner);
+		if (meant != null && reflected.kind === NodeKind.TypeGeneric && !sameType(meant, reflected.typExprArgs[0])) {
+			error("accounts<" + decl.interfaceName + ">(): field '" + names[field] + "' holds '" + written +
+				"', and where accounts<T>() is called '" + inner + "' means another type, '" + meant!.resolvedSym!.name +
+				"' of '" + meant!.resolvedSym!.modulePath + "'; import the '" + inner + "' the field was declared with " +
+				"under that name, or call accounts<T>() in the module that declares the field", shape);
+		}
 		proofKinds.push(base);
 		const index: Node = {
 			kind: NodeKind.NumberLiteral,
