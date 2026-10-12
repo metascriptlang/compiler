@@ -3249,6 +3249,95 @@ test "@hasOne compares the account's field of that name to the key of the siblin
 		ProgramError.userError(3).code;
 }
 
+export struct Titled { stamp: uint64; owner: Pubkey; }
+export struct Capped extends Titled { limit: uint64; }
+export struct Sealed extends Capped { bump: uint8; }
+
+export function discriminator(this typeof Capped): Discriminator {
+	return @comptime { return accountDiscriminator("Capped"); };
+}
+
+export function discriminator(this typeof Sealed): Discriminator {
+	return @comptime { return accountDiscriminator("Sealed"); };
+}
+
+function titledBytes(tag: Discriminator, stamp: uint8, owner: Pubkey, limit: uint8, tail: uint8[]): uint8[] {
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	bytes.push(stamp);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	for (let i = 0; i < 32; i++) { bytes.push(owner.bytes[i]); }
+	bytes.push(limit);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	for (const byte of tail) { bytes.push(byte); }
+	return bytes;
+}
+
+function cappedAt(stamp: uint8, owner: Pubkey, limit: uint8): HostAccount {
+	return holder(8, programKey(), titledBytes(Capped.discriminator(), stamp, owner, limit, []), false, false);
+}
+
+export struct CappedAccounts {
+	owner: Signer;
+	@hasOne(owner) @constraint(vault.stamp == 7, ProgramError.userError(4)) vault: Owned<Capped>;
+}
+
+function cappedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<CappedAccounts>();
+	return Result.ok(x.vault.data().limit);
+}
+
+function cappedEntry(): void { codeOf(cappedStep()); }
+
+test "@hasOne and @constraint read a field the data struct inherits one struct up" {
+	assert run(programKey(), [ownerWallet(), cappedAt(7, keyOf(2), 9)], [], cappedEntry).result == 0;
+	assert run(programKey(), [ownerWallet(), cappedAt(7, keyOf(9), 9)], [], cappedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), cappedAt(2, keyOf(7), 9)], [], cappedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), cappedAt(6, keyOf(2), 9)], [], cappedEntry).result ==
+		ProgramError.userError(4).code;
+}
+
+function sealedAddress(owner: Pubkey, stamp: uint8): ProgramAddress {
+	const derived = findProgramAddressOf(programKey(), ["sealed", owner, [stamp, 0, 0, 0, 0, 0, 0, 0]]);
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
+function sealedAt(key: Pubkey, stamp: uint8, owner: Pubkey, limit: uint8, bump: uint8): HostAccount {
+	const tail: uint8[] = [bump, 0, 0, 0, 0, 0, 0, 0];
+	return atKey(holder(8, programKey(), titledBytes(Sealed.discriminator(), stamp, owner, limit, tail), false, true), key);
+}
+
+export struct SealedAccounts {
+	owner: Signer;
+	@hasOne(owner) @seeds("sealed", sealed.owner, leBytes(sealed.stamp)) @bump(sealed.bump) @constraint(sealed.limit > 5)
+	sealed: Mutable<Sealed>;
+}
+
+function sealedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<SealedAccounts>();
+	return Result.ok(x.sealed.data().limit);
+}
+
+function sealedEntry(): void { codeOf(sealedStep()); }
+
+test "@hasOne, @seeds, @bump and @constraint read the fields a data struct inherits one and two structs up" {
+	const found = sealedAddress(keyOf(2), 7);
+	assert found.bump != 0;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 7, keyOf(2), 9, found.bump)], [], sealedEntry).result == 0;
+	const strangers = sealedAddress(keyOf(9), 7);
+	assert run(programKey(), [ownerWallet(), sealedAt(strangers.key, 7, keyOf(9), 9, strangers.bump)], [], sealedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 6, keyOf(2), 9, found.bump)], [], sealedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 7, keyOf(2), 9, found.bump - 1)], [], sealedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 7, keyOf(2), 5, found.bump)], [], sealedEntry).result ==
+		ProgramError.constraintRaw().code;
+}
+
 export struct SignedBase { owner: Signer; }
 export struct SignedChild extends SignedBase { refund: Writable; }
 

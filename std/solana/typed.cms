@@ -788,12 +788,22 @@ export macro accounts(): Node {
 				"' holds '" + written + "', whose fields are not visible where accounts<T>() is " +
 				"called: import the struct", at);
 		}
-		let member = 0;
-		while (member < target!.interfaceFields.length) {
-			if (target!.interfaceFields[member] == property) { return true; }
-			member = member + 1;
+		function declares(from: Node): boolean {
+			for (const own of from.interfaceFields) {
+				if (own == property) { return true; }
+			}
+			for (const base of from.interfaceExtends) {
+				const parent = getImpl(bindSym(base));
+				if (parent == null) {
+					error("accounts<" + decl.interfaceName + ">(): field '" + names[owner] + "' holds '" + written +
+						"', and '" + from.interfaceName + "' extends '" + base + "', whose fields accounts<T>() " +
+						"cannot read: a base is a struct without type arguments, imported where accounts<T>() is called", at);
+				}
+				if (declares(parent!)) { return true; }
+			}
+			return false;
 		}
-		return false;
+		return declares(target!);
 	}
 
 	function rewrite(n: Node): Node {
