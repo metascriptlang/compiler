@@ -2,11 +2,11 @@
 // Extracted from expression.ms with callback injection
 
 import { TokenKind } from "../../lexer/token";
-import { Node, NodeKind, Expression, createNode, ArrowFunctionData, makeLoc } from "../../ast/node";
+import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
-import { parseOk, mockExpr } from "./util";
+import { parseOk, mockExpr, exprNode } from "./util";
 
 
 type ExprResult = Result<Expression, string>;
@@ -318,3 +318,44 @@ test "destructured array param" { assert parseOk("([a, b]) => a + b"); }
 // Paren-wrapped object/array expressions (NO arrow) must NOT trigger isArrowFunction
 test "paren object expr no arrow" { assert parseOk("({k: 1, v: 2})"); }
 test "paren assignment expr" { assert parseOk("(x = 5)"); }
+
+// Return type after one untyped parameter, and the conditional's true arm
+function armKinds(input: string): string {
+	const node = exprNode(input);
+	if (node.kind != NodeKind.ConditionalExpr) return "not a conditional";
+	const d = node.data as ConditionalExprData;
+	return `${d.ternaryConsequent.kind == NodeKind.ArrowFunction ? "arrow" : "other"}/${d.ternaryAlternate.kind == NodeKind.ArrowFunction ? "arrow" : "other"}`;
+}
+
+function arrowReturnTypeOf(input: string): string {
+	const node = exprNode(input);
+	if (node.kind != NodeKind.ArrowFunction) return "not an arrow";
+	return (node.data as ArrowFunctionData).arrowReturnType;
+}
+
+function trueArmCallArgIsArrow(input: string): boolean {
+	const node = exprNode(input);
+	if (node.kind != NodeKind.ConditionalExpr) return false;
+	const arm = (node.data as ConditionalExprData).ternaryConsequent;
+	if (arm.kind != NodeKind.CallExpr) return false;
+	return (arm.data as CallExprData).arguments[0].kind == NodeKind.ArrowFunction;
+}
+
+test "untyped param return type expr body" { assert arrowReturnTypeOf("(n): string => n") == "string"; }
+test "untyped param return type block body" { assert arrowReturnTypeOf("(n): string => { return n; }") == "string"; }
+test "untyped param return type async" { assert arrowReturnTypeOf("async (n): Promise<string> => n") == "Promise<string>"; }
+test "untyped param return type destructured" { assert arrowReturnTypeOf("({ a }): string => a") == "string"; }
+test "two untyped params return type" { assert arrowReturnTypeOf("(a, b): number => a + b") == "number"; }
+test "zero params return type" { assert arrowReturnTypeOf("(): string => 'v'") == "string"; }
+test "typed param return type" { assert arrowReturnTypeOf("(n: number): string => n") == "string"; }
+
+test "true arm paren is not an arrow" { assert armKinds("c ? (y) : (n: number): number => n + 1") == "other/arrow"; }
+test "true arm paren, untyped false arrow" { assert armKinds("c ? (y) : z => z") == "other/arrow"; }
+test "true arm arrow with return type ended by colon" { assert armKinds("a ? (x): string => x : null") == "arrow/other"; }
+test "true arm bare arrow body paren object" { assert armKinds("c ? y => ({ y }) : z => ({ z })") == "arrow/arrow"; }
+test "true arm paren object, bare false arrow" { assert armKinds("c ? ({ a: 1 }) : z => z") == "other/arrow"; }
+test "true arm paren object, false identifier" { assert armKinds("c ? ({ a: 1 }) : y") == "other/other"; }
+test "true arm paren object, next line an arrow" { assert armKinds("c ? ({ a: 1 }) : y\nconst g = (z: number): number => z + 1") == "other/other"; }
+test "false arm keeps return type" { assert armKinds("c ? 1 : (n): string => n") == "other/arrow"; }
+test "call in true arm takes a return type" { assert trueArmCallArgIsArrow("c ? f((n): string => n) : 1"); }
+test "true arm block body arrow ended by colon" { assert armKinds("a ? (x): string => { return x; } : null") == "arrow/other"; }
