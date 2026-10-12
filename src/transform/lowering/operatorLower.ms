@@ -490,6 +490,7 @@ import { createStruct, createFunction, createTuple, createRef, createPtr, create
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
 import { createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind } from "../testUtil";
+import { ExprStmtData } from "../../ast/node";
 
 function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
 	const fnType = createFunction([inferredType(), inferredType()], ["a", "b"], inferredType());
@@ -779,4 +780,23 @@ test "interface !== null constant-folds to true" {
 	const result = lowerOperators(pr.value, ctx);
 	// Should constant-fold to BooleanLiteral(true)
 	assert firstExprKind(result) == NodeKind.BooleanLiteral;
+}
+
+function unspilledNullCheckErrors(input: string): int32 {
+	const checkerCtx = createContext();
+	checkerCtx.extensionRegistry = createExtensionRegistry();
+	const pr = parseInput(input);
+	if (!pr.ok) return -1;
+	const comparison = (getStmts(pr.value)[0].data as ExprStmtData).expr;
+	(comparison.data as BinaryExprData).left.nodeType = createStruct("Token", [], [], true);
+	lowerOperators(pr.value, createTransformContextWithChecker(checkerCtx));
+	return checkerCtx.errors.length as int32;
+}
+
+test "a never-null call that reaches the null comparison unspilled is refused" {
+	assert unspilledNullCheckErrors("make() !== null;") == 1;
+}
+
+test "a never-null read through a cast folds its null comparison without a spill" {
+	assert unspilledNullCheckErrors("(env as Env).token !== null;") == 0;
 }
