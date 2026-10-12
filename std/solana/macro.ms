@@ -1,5 +1,5 @@
 import { Node, NodeFlag, NodeKind, bindSym, define, getType, sameType, stringValue } from "std/meta";
-import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
+import { eventDiscriminator, instructionDiscriminator, snakeCase } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
@@ -118,10 +118,21 @@ export macro instruction(): Node {
 	}
 	checkDeployKeypair(decl);
 	declaredProgramKey(decl);
+	const tags = decl.enumMembers.map((name: string) => instructionDiscriminator(name));
+	for (let later = 1; later < tags.length; later++) {
+		for (let earlier = 0; earlier < later; earlier++) {
+			const first = decl.enumMembers[earlier];
+			const second = decl.enumMembers[later];
+			if (tags[earlier] == tags[later]) {
+				error("instruction<" + decl.enumName + ">(): members '" + first + "' and '" + second +
+					"' have the same discriminator, of the instruction names '" + snakeCase(first) + "' and '" +
+					snakeCase(second) + "': no instruction data selects '" + second + "'", decl);
+			}
+		}
+	}
 	let selected = ordinal(-(ProgramError.instructionFallbackNotFound().code as int32));
 	for (let member = decl.enumMembers.length - 1; member >= 0; member--) {
-		const tag = instructionDiscriminator(decl.enumMembers[member]);
-		selected = choose(call(bindSym("instructionHasWord"), [word(tag.bytes, 0)]), ordinal(member), selected);
+		selected = choose(call(bindSym("instructionHasWord"), [word(tags[member].bytes, 0)]), ordinal(member), selected);
 	}
 	selected = choose(call(bindSym("instructionHasDiscriminator"), []), selected, ordinal(-(ProgramError.instructionMissing().code as int32)));
 	return {
