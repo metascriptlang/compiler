@@ -764,6 +764,28 @@ for (const features of ["all features", "mainnet"]) {
 		await does("its account given away, a call that does not receive it, then a byte written in it",
 			steps(step.assign(OWN, CALLEE), call([]), step.write(OWN, 0, 9)), "ModifiedProgramId");
 	});
+	await scenario("refused by the runtime, not yet by the simulator", features, async (t) => {
+		const SOL = 1_000_000_000n;
+		const nothing = new Uint8Array([OP.nothing]);
+		const own = t.put(await t.fresh(), { data: new Uint8Array(8).fill(0x61), owner: program, balance: SOL });
+		const wallet = t.put(await t.fresh(), { balance: SOL });
+		const passed = [t.meta(other, false), t.meta(own, true), t.meta(wallet, true)];
+		const CALLEE = 0, OWN = 1, WALLET = 2;
+		const BY_THE_TRANSACTION = (error) => `${error} by the transaction`;
+		await t.send("a call to an account that is not a program",
+			steps(step.call(WALLET, [], nothing)), passed, byProbe("UnsupportedProgramId"));
+		await t.send("a call that marks an account the caller holds unsigned a signer, to a program the simulator does not run",
+			steps(step.call(CALLEE, [[WALLET, SIGNER]], nothing)), passed, ESCALATED);
+		const calls = (count) => steps(...Array.from({ length: count }, () => step.call(CALLEE, [], nothing)));
+		await t.send("63 calls in one instruction", calls(63), passed, OK);
+		await t.send("64 calls in one instruction", calls(64), passed, BY_THE_TRANSACTION("MaxInstructionTraceLengthExceeded"));
+		const logged = (lines) => concat(new Uint8Array([OP.logAccountData]), u16(1), u16(lines));
+		await t.send("1000 log lines of one byte", logged(1000), [t.meta(own, false)], OK);
+		await t.send("3000 log lines of one byte", logged(3000), [t.meta(own, false)], BY_THE_TRANSACTION("ComputationalBudgetExceeded"));
+		const nested = (depth) => depth === 0 ? nothing : steps(step.call(0, [[0, 0]], nested(depth - 1)));
+		await t.send("a call nested 4 deep under the instruction", steps(step.call(CALLEE, [[CALLEE, 0]], nested(3))), passed, OK);
+		await t.send("a call nested 5 deep under the instruction", steps(step.call(CALLEE, [[CALLEE, 0]], nested(4))), passed, "CallDepth by the callee");
+	});
 }
 
 if (failures > 0) {
