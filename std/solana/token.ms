@@ -21,7 +21,13 @@ import {
 import { ProgramError } from "./error";
 import { invoke, invokeSigned } from "./invoke";
 import { associatedTokenAddress, isTokenProgram } from "./mint";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
+import {
+	ASSOCIATED_TOKEN_PROGRAM_ID,
+	Pubkey,
+	SYSTEM_PROGRAM_ID,
+	TOKEN_2022_PROGRAM_ID,
+	TOKEN_PROGRAM_ID,
+} from "./pubkey";
 import { SignerSeeds } from "./seed";
 
 export { associatedTokenAddress, initializeMint2 } from "./mint";
@@ -551,6 +557,9 @@ function createAssociated(
 	signers: Readonly<Span<SignerSeeds>>,
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program.key())) { return Result.err(ProgramError.incorrectProgramId()); }
+	if (systemProgram.key() != SYSTEM_PROGRAM_ID) {
+		return Result.err(ProgramError.incorrectProgramId());
+	}
 	let storage: uint8[1] = [];
 	const length = putU8(storage, 0, discriminator);
 	return invokeSigned(
@@ -1366,6 +1375,17 @@ when (testBuild) {
 		const program = created.accounts[5];
 		assert program.key.equals(TOKEN_PROGRAM_ID) && !program.writable;
 		assert created.data.length == 1 && created.data[0] == 1;
+	}
+
+	test "createAssociatedToken and its idempotent form refuse a system program account that is not System" {
+		for (const op of [15, 5]) {
+			const accounts = cpiAccounts();
+			accounts[1].lamports = 0;
+			accounts[3].lamports = 10000000;
+			accounts[4].key = keyOf(8);
+			assert resultOf(accounts, op as uint8, cpiEntry) == ProgramError.incorrectProgramId().code;
+			assert invocations().length == 0 && accounts[3].lamports == 10000000;
+		}
 	}
 
 	test "createAssociatedToken sends discriminator 0 with the six accounts and their flags" {
