@@ -1,6 +1,7 @@
 import { sha256 } from "std/crypto/sha256";
 import { isEdwardsPoint } from "std/crypto/ed25519/point";
 import { ProgramError } from "./error";
+import { minimumBalance } from "./core";
 import { HostAccount, NOT_SIMULATED, REFUSED, invocations, logs, run } from "./host";
 import { Pubkey, SYSTEM_PROGRAM_ID } from "./pubkey";
 import {
@@ -291,6 +292,8 @@ test "the log keeps the lines that fit under 10,000 bytes and says once that it 
 	}
 }
 
+function rentOf(space: uint64): uint64 { return (space + 128) * 3480 * 2; }
+
 const RENT_OF_8: uint64 = 946560;
 const TOO_LARGE: uint64 = 10485761;
 
@@ -421,7 +424,7 @@ test "the simulated System account creation answers what the System program answ
 		assert account.lamports == RENT_OF_8;
 		assert made.accounts[prefunds ? 2 : 1].lamports == SOL - RENT_OF_8;
 		assert passes(plain(payer, target, createOf(0, 0, programKey(), tag)));
-		assert passes(plain(payer, target, createOf(RENT_OF_8, 10240, programKey(), tag)));
+		assert passes(plain(payer, target, createOf(rentOf(10240), 10240, programKey(), tag)));
 		const cut: uint8[] = [];
 		for (let index = 0; index < 51; index++) { cut.push(sized[index]); }
 		assert short(plain(payer, target, cut));
@@ -619,4 +622,80 @@ test "a run that fails leaves every account as it was before the run" {
 	assert passes(kept) && kept.accounts[2].lamports == SOL - 5 && kept.accounts[3].lamports == SOL + 5;
 	assert kept.accounts[2].data.length == 16 && kept.accounts[2].data[0] == 9;
 	assert kept.accounts[4].lamports == RENT_OF_8 && kept.accounts[4].owner.equals(programKey());
+}
+
+function belowRent(outcome: Outcome, index: int32): boolean {
+	return refusedAs(outcome, "InsufficientFundsForRent") && outcome.fault.indexOf(` account ${index} `) > 0;
+}
+
+function gone(account: HostAccount): boolean {
+	return account.lamports == 0 && account.data.length == 0 && account.owner.equals(SYSTEM_PROGRAM_ID);
+}
+
+function moved(from: uint8, to: uint8, amount: uint64): uint8[][] {
+	return [subtracted(from, amount), added(to, amount)];
+}
+
+test "the rent the simulator asks is the rent minimumBalance reads on the host" {
+	assert rentOf(8) == RENT_OF_8;
+	for (const space of [0, 8, 165, 10240]) { assert rentOf(space as uint64) == minimumBalance(space as uint64); }
+}
+
+test "an account the System program creates or funds below its rent fails the run, as the transaction fails" {
+	const system = executable(SYSTEM_PROGRAM_ID);
+	const signs: uint8 = WRITABLE + SIGNER;
+	for (const tag of [0, 13]) {
+		const metas: uint8[][] = tag == 0 ? [[1, signs], [2, signs]] : [[2, signs], [1, signs]];
+		for (const space of [0, 8]) {
+			const creates = (amount: uint64): Outcome => {
+				const sent = createOf(amount, space as uint64, programKey(), tag as uint8);
+				return stepped([called(0, metas, sent)], [system, wallet(1), blank(2)]);
+			};
+			const poor = creates(rentOf(space as uint64) - 1);
+			assert belowRent(poor, 2) && gone(poor.accounts[2]) && poor.accounts[1].lamports == SOL;
+			const exact = creates(rentOf(space as uint64));
+			assert passes(exact) && exact.accounts[2].data.length == space;
+		}
+	}
+	const sends = (amount: uint64, from: HostAccount, to: HostAccount): Outcome => {
+		return stepped([called(0, [[1, signs], [2, WRITABLE]], transferOf(amount))], [system, from, to]);
+	};
+	assert belowRent(sends(1, wallet(1), blank(2)), 2);
+	assert belowRent(sends(rentOf(0) - 1, wallet(1), blank(2)), 2);
+	assert passes(sends(rentOf(0), wallet(1), blank(2)));
+	const leaving: HostAccount = { ...wallet(1), lamports: rentOf(0) + 10 };
+	assert belowRent(sends(11, leaving, wallet(2)), 1);
+	assert passes(sends(10, leaving, wallet(2)));
+	const emptied = sends(rentOf(0) + 10, leaving, wallet(2));
+	assert passes(emptied) && gone(emptied.accounts[1]);
+	const thin: HostAccount = { ...wallet(2), signer: false, lamports: 1000 };
+	assert passes(stepped([], [system, wallet(1), thin]));
+	assert belowRent(sends(1, wallet(1), thin), 2);
+	const incinerator = Pubkey.parse("1nc1nerator11111111111111111111111111111111");
+	assert incinerator.ok;
+	if (incinerator.ok) { assert passes(sends(1, wallet(1), holding(incinerator.value, SYSTEM_PROGRAM_ID, 0))); }
+}
+
+test "lamports the program moves or bytes it adds that leave an account below its rent fail the run" {
+	const system = executable(SYSTEM_PROGRAM_ID);
+	const exact = (steps: uint8[][]): Outcome => stepped(steps, [system, owned(1, 0, RENT_OF_8), wallet(2)]);
+	assert belowRent(exact(moved(1, 2, 1)), 1);
+	assert belowRent(exact([resized(1, 9)]), 1);
+	assert passes(exact([resized(1, 4)]));
+	const rich = (steps: uint8[][]): Outcome => stepped(steps, [system, owned(1, 7), wallet(2)]);
+	assert passes(rich(moved(1, 2, SOL - RENT_OF_8)));
+	const emptied = rich(moved(1, 2, SOL));
+	assert passes(emptied) && gone(emptied.accounts[1]) && emptied.accounts[2].lamports == 2 * SOL;
+	const below = (steps: uint8[][]): Outcome => {
+		return stepped(steps, [system, owned(1, 0, 1000), wallet(2), owned(3)]);
+	};
+	assert passes(below([[WRITE, 1, 0, 9]]));
+	assert passes(below(moved(1, 2, 1)));
+	assert belowRent(below(moved(3, 1, 1)), 1);
+	assert passes(below(moved(3, 1, RENT_OF_8 - 1000)));
+	assert belowRent(below([resized(1, 9)]), 1);
+	assert belowRent(below([resized(1, 4)]), 1);
+	assert belowRent(below([subtracted(1, 1), added(2, 1), resized(1, 4)]), 1);
+	const readOnly: HostAccount = { ...owned(1, 0, 1000), writable: false };
+	assert passes(stepped([], [system, readOnly]));
 }

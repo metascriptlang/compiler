@@ -1317,7 +1317,7 @@ when (testBuild) {
 			holderOf(1, TOKEN_PROGRAM_ID, mintData(3, 500, 6)),
 			holderOf(2, TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 0, 1)),
 			{ ...holderOf(3, keyOf(0), []), signer: true, writable: false },
-			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true },
+			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true, lamports: TOKEN_ACCOUNT_RENT },
 			{ ...holderOf(0, keyOf(0), []), writable: false, executable: true },
 			program,
 		];
@@ -3054,9 +3054,10 @@ when (testBuild) {
 	test "a transfer from a native account moves its lamports with the amount" {
 		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
 			const accounts = nativeAccounts(program);
+			accounts[1].lamports = TOKEN_ACCOUNT_RENT;
 			assert ledgerRun(accounts, 3, 300).result == 0;
 			assert heldBy(accounts, 0) == 600 && heldBy(accounts, 1) == 300;
-			assert accounts[0].lamports == 4700 && accounts[1].lamports == 1300;
+			assert accounts[0].lamports == 4700 && accounts[1].lamports == TOKEN_ACCOUNT_RENT + 300;
 			const toNative = movingAccounts(program);
 			toNative[1].data[109] = 1;
 			assert ledgerRun(toNative, 3, 300).result == 0;

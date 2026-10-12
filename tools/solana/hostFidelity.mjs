@@ -589,6 +589,89 @@ for (const features of ["all features", "mainnet"]) {
 			&& stored(own).data.length === 16 && stored(takes).lamports === SOL + 5n);
 	});
 
+	await scenario("rent", features, async (t) => {
+		const SOL = 1_000_000_000n;
+		const rent = (space) => t.svm.minimumBalanceForRentExemption(BigInt(space));
+		const BELOW_RENT = "InsufficientFundsForRent by the transaction";
+		const pays = t.put(await t.fresh(), { balance: SOL });
+		const takes = t.put(await t.fresh(), { balance: SOL });
+		const stored = (account) => t.svm.getAccount(account);
+		const create = (amount, space, tag = 0) => concat(u32(tag), u64(amount), u64(space), encoder.encode(program));
+		const transfer = (amount) => concat(u32(2), u64(amount));
+		const programOwned = async (space, balance) => t.put(await t.fresh(), { data: new Uint8Array(space), owner: program, balance });
+		const refusedFor = async (what, sent, passed, account) => {
+			const outcome = await t.send(what, sent, passed, BELOW_RENT);
+			t.check("the error names that account and no instruction", outcome.blamed === account && !outcome.raw.includes("InstructionError"));
+			t.check("the program had succeeded", outcome.logs.at(-1) === `Program ${program} success`);
+			return outcome;
+		};
+		for (const [name, tag] of [["CreateAccount", 0], ["CreateAccountAllowPrefund", 13]]) {
+			const order = (payer, target) => tag === 0 ? [payer, target] : [target, payer];
+			for (const space of [0, 8]) {
+				const poor = await t.fresh();
+				await refusedFor(`${name} of ${space} bytes for a lamport less than they need`,
+					steps(step.call(0, order([1, 3], [2, 3]), create(rent(space) - 1n, space, tag))),
+					[t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(poor, true, true)], poor);
+				t.check("the account does not exist", !stored(poor).exists);
+				await t.send(`${name} of ${space} bytes for exactly what they need`,
+					steps(step.call(0, order([1, 3], [2, 3]), create(rent(space), space, tag))),
+					[t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(await t.fresh(), true, true)], OK);
+			}
+		}
+		const send = async (amount, to, expected) => {
+			const passed = [t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(to, true)];
+			const sent = steps(step.call(0, [[1, 3], [2, 1]], transfer(amount)));
+			const what = `Transfer of ${amount === rent(0) ? "the rent of no bytes" : `${amount} lamport(s)`}`;
+			if (expected === OK) return t.send(`${what} to an address that holds nothing`, sent, passed, OK);
+			return refusedFor(`${what} to an address that holds nothing`, sent, passed, to);
+		};
+		await send(1n, await t.fresh(), BELOW_RENT);
+		await send(rent(0) - 1n, await t.fresh(), BELOW_RENT);
+		await send(rent(0), await t.fresh(), OK);
+		const payerLeft = t.put(await t.fresh(), { balance: rent(0) + 10n });
+		const draining = (amount) => steps(step.call(0, [[1, 3], [2, 1]], transfer(amount)));
+		const drainedPassed = [t.meta(SYSTEM, false), t.meta(payerLeft, true, true), t.meta(takes, true)];
+		await refusedFor("Transfer that leaves the payer a lamport below the rent of no bytes", draining(11n), drainedPassed, payerLeft);
+		await t.send("Transfer that leaves the payer exactly the rent of no bytes", draining(10n), drainedPassed, OK);
+		await t.send("Transfer of everything the payer holds", draining(rent(0)), drainedPassed, OK);
+		t.check("the emptied payer does not exist", !stored(payerLeft).exists);
+
+		const moving = (from, to, amount, ...more) => steps(step.subtract(from, amount), step.add(to, amount), ...more);
+		const exact = await programOwned(8, rent(8));
+		const exactPassed = [t.meta(SYSTEM, false), t.meta(exact, true), t.meta(takes, true)];
+		await refusedFor("the program takes a lamport out of its account that holds exactly its rent", moving(1, 2, 1n), exactPassed, exact);
+		await refusedFor("the program grows its account that holds exactly its rent", steps(step.resize(1, 9)), exactPassed, exact);
+		await t.send("the program shrinks its account that holds exactly its rent", steps(step.resize(1, 4)), exactPassed, OK);
+		const rich = await programOwned(8, SOL);
+		const richPassed = [t.meta(SYSTEM, false), t.meta(rich, true), t.meta(takes, true)];
+		await t.send("the program takes its account down to exactly its rent", moving(1, 2, SOL - rent(8)), richPassed, OK);
+		await t.send("the program takes every lamport out of its account, data left in place", moving(1, 2, rent(8)), richPassed, OK);
+		t.check("the emptied account does not exist: no lamports, no data, no owner", !stored(rich).exists);
+
+		const bank = await programOwned(8, SOL);
+		const INCINERATOR = address("1nc1nerator11111111111111111111111111111111");
+		const below = async (what, sent, expected, space = 8) => {
+			const poor = await programOwned(space, 1000n);
+			const passed = [t.meta(SYSTEM, false), t.meta(poor, true), t.meta(takes, true), t.meta(bank, true)];
+			const title = `an account already below its rent: ${what}`;
+			return expected === OK ? t.send(title, sent, passed, OK) : refusedFor(title, sent, passed, poor);
+		};
+		await below("a byte written, lamports unchanged", steps(step.write(1, 0, 9)), OK);
+		await below("a lamport taken out", moving(1, 2, 1n), OK);
+		await below("a lamport added, still below", moving(3, 1, 1n), BELOW_RENT);
+		await below("topped up to exactly its rent", moving(3, 1, rent(8) - 1000n), OK);
+		await below("grown, lamports unchanged", steps(step.resize(1, 9)), BELOW_RENT);
+		await below("shrunk, lamports unchanged", steps(step.resize(1, 4)), BELOW_RENT);
+		await below("shrunk and a lamport taken out", moving(1, 2, 1n, step.resize(1, 4)), BELOW_RENT);
+		const thin = t.put(await t.fresh(), { balance: 1000n });
+		const thinPassed = [t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(thin, true)];
+		await t.send("a wallet already below the rent of no bytes, passed writable and left alone", steps(), thinPassed, OK);
+		await refusedFor("a wallet already below the rent of no bytes receives a lamport",
+			steps(step.call(0, [[1, 3], [2, 1]], transfer(1n))), thinPassed, thin);
+		await t.send("the incinerator receives a lamport",
+			steps(step.call(0, [[1, 3], [2, 1]], transfer(1n))), [t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(INCINERATOR, true)], OK);
+	});
+
 }
 
 if (failures > 0) {

@@ -32,6 +32,12 @@ typedef struct {
     size_t length;
 } msSolHostLogLine;
 
+typedef struct {
+    uint8_t* record;
+    uint64_t lamports;
+    uint64_t length;
+} msSolHostHeld;
+
 static _Alignas(16) uint8_t msSolHostHeap[MS_SOL_HOST_HEAP_SIZE];
 static const uint64_t msSolHostEmptyInput[6];
 static msSolanaContext msSolHostState;
@@ -50,6 +56,8 @@ static uint8_t msSolHostReturnData[MS_SOL_MAX_RETURN_DATA];
 static uint64_t msSolHostReturnLength;
 static uint8_t msSolHostReturnProgram[32];
 static uint64_t msSolHostClock[5];
+static msSolHostHeld msSolHostStart[MS_SOL_MAX_ACCOUNTS];
+static uint64_t msSolHostStartCount;
 
 msSolanaContext* msSolHostContext(void) {
     if (msSolHostState.input == 0) {
@@ -108,6 +116,17 @@ void msSolHostEnter(uint64_t input) {
     msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
     msSolParse(msSolHostAccounts);
+    msSolHostStartCount = 0;
+    for (uint64_t index = 0; index < msSolHostState.accountCount; index++) {
+        uint8_t* record = (uint8_t*)msSolHostAccounts[index];
+        uint64_t earlier = 0;
+        while (earlier < index && (uint8_t*)msSolHostAccounts[earlier] != record) earlier++;
+        if (earlier < index) continue;
+        uint64_t lamports, length;
+        memcpy(&lamports, record + 72, 8);
+        memcpy(&length, record + 80, 8);
+        msSolHostStart[msSolHostStartCount++] = (msSolHostHeld){record, lamports, length};
+    }
     msSolHostRentReadCount = 0;
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
@@ -548,6 +567,14 @@ static void msSolHostSetLamports(uint8_t* record, uint64_t value) {
     memcpy(record + 72, &value, 8);
 }
 
+#define MS_SOL_HOST_LAMPORTS_PER_BYTE_YEAR 3480ULL
+#define MS_SOL_HOST_RENT_EXEMPTION_YEARS 2
+#define MS_SOL_HOST_ACCOUNT_STORAGE_OVERHEAD 128ULL
+
+static uint64_t msSolHostRentExempt(uint64_t length) {
+    return (length + MS_SOL_HOST_ACCOUNT_STORAGE_OVERHEAD) * MS_SOL_HOST_LAMPORTS_PER_BYTE_YEAR * MS_SOL_HOST_RENT_EXEMPTION_YEARS;
+}
+
 static uint64_t msSolHostResize(uint8_t* record, uint64_t space) {
     uint64_t length;
     memcpy(&length, record + 80, 8);
@@ -717,7 +744,7 @@ static uint64_t msSolHostInitializeAccount3(const uint64_t* header, uint8_t* acc
     uint8_t* fields = account + 88;
     if (!msSolHostHasTokenLayout(header, account, MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH, 0)) return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     if (fields[108] != 0) return MS_SOL_HOST_TOKEN_ALREADY_IN_USE;
-    uint64_t reserve = (length + 128) * 3480 * 2;
+    uint64_t reserve = msSolHostRentExempt(length);
     if (msSolHostLamports(account) < reserve) return MS_SOL_HOST_TOKEN_NOT_RENT_EXEMPT;
     int native = memcmp(mint + 8, msSolHostIsToken2022(header) ? msSolHostNativeMint2022 : msSolHostNativeMint, 32) == 0;
     if (!native) {
@@ -1109,7 +1136,7 @@ static uint64_t msSolHostInitializeMint2(const uint64_t* header) {
         return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     }
     uint8_t* fields = mint + 88;
-    int belowRent = msSolHostLamports(mint) < (MS_SOL_HOST_TOKEN_MINT_LENGTH + 128) * 3480 * 2;
+    int belowRent = msSolHostLamports(mint) < msSolHostRentExempt(MS_SOL_HOST_TOKEN_MINT_LENGTH);
     if (extended && belowRent) return MS_SOL_HOST_TOKEN_NOT_RENT_EXEMPT;
     if (fields[45] != 0) return MS_SOL_HOST_TOKEN_ALREADY_IN_USE;
     if (belowRent) return MS_SOL_HOST_TOKEN_NOT_RENT_EXEMPT;
@@ -1247,7 +1274,7 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     uint8_t state = 1;
     uint64_t space = MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH;
     if (extended) space += 1 + msSolHostAccountExtensionsOf(mint, 1, extensions, &state);
-    uint64_t rent = (space + 128) * 3480 * 2;
+    uint64_t rent = msSolHostRentExempt(space);
     uint64_t held = msSolHostLamports(associated);
     uint64_t missing = rent > held ? rent - held : 0;
     if (missing != 0) {
@@ -1505,6 +1532,35 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     return status;
 }
 
+static int msSolHostPaysRent(uint64_t lamports, uint64_t length) {
+    return lamports != 0 && lamports < msSolHostRentExempt(length);
+}
+
+void msSolHostLeave(void) {
+    if (msSolHostFaultCode != 0 || msSolHostState.result != 0) return;
+    for (uint64_t index = 0; index < msSolHostStartCount; index++) {
+        const msSolHostHeld* start = &msSolHostStart[index];
+        uint8_t* record = start->record;
+        if (record[2] == 0 || memcmp(record + 8, msSolHostIncinerator, 32) == 0) continue;
+        uint64_t lamports = msSolHostLamports(record);
+        uint64_t length = msSolHostLoadU64(record + 80);
+        if (lamports == 0) {
+            msSolHostStoreU64(record + 80, 0);
+            memset(record + 40, 0, 32);
+            continue;
+        }
+        if (!msSolHostPaysRent(lamports, length)) continue;
+        if (msSolHostPaysRent(start->lamports, start->length) && length == start->length && lamports <= start->lamports) continue;
+        char text[sizeof(msSolHostFaultText)];
+        snprintf(text, sizeof(text),
+            "InsufficientFundsForRent: account %llu ends the transaction with %llu lamports, its %llu bytes are rent exempt from %llu",
+            (unsigned long long)index, (unsigned long long)lamports, (unsigned long long)length,
+            (unsigned long long)msSolHostRentExempt(length));
+        msSolHostFault(MS_SOL_HOST_REFUSED, text);
+        return;
+    }
+}
+
 static uint64_t msSolHostSysvarStatus;
 
 void msSolHostSetSysvarStatus(uint64_t status) { msSolHostSysvarStatus = status; }
@@ -1519,8 +1575,8 @@ uint64_t msSolHostGetRent(uint64_t out) {
     msSolHostRentReadCount++;
     if (msSolHostSysvarStatus != 0) return msSolHostSysvarStatus;
     uint8_t* rent = (uint8_t*)out;
-    uint64_t lamportsPerByteYear = 3480;
-    uint64_t exemptionThreshold = 0x4000000000000000ULL;
+    uint64_t lamportsPerByteYear = MS_SOL_HOST_LAMPORTS_PER_BYTE_YEAR;
+    double exemptionThreshold = MS_SOL_HOST_RENT_EXEMPTION_YEARS;
     memset(rent, 0, 17);
     memcpy(rent, &lamportsPerByteYear, 8);
     memcpy(rent + 8, &exemptionThreshold, 8);
