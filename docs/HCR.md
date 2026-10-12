@@ -44,6 +44,7 @@ backend and DRC/ORC runtime.
 | Generic construction across images | Windows x64 candidate `02d3615a`, `hcrGenericCtor`: two image users share `Box<int32>`, another uses `Box<string>`, and an implicit generic constructor runs its field initializer. Editing constructor/initializer bodies reloads from `41:1 42:1 kept:1 stamp=3` to `41:2 42:2 kept:2 stamp=4`. JavaScript plain control matches; generic `super` and POSIX were not checked in this extension |
 | Generic TypeInfo lifecycle bindings | Windows x64 candidate `02d3615a`, `hcrGenericOps`: captured getter/setter environments and a self-referential generic cell use foreign destroy/trace hooks. DRC and ORC produce `OPS 9 10 kept` and three `onDestroy` calls; the targeted environment/cell ledger rows balance. A real Neon signal/owner/effect consumer now builds and reloads; this is not a full Neon UI refresh proof |
 | Generic instance TypeInfo identity | Windows x64 candidate `cdad9044`, `hcrGenericIdentity`: a generic class instance used by image modules has one TypeInfo across images and generations, so `as Box<T>` accepts an object another image or an older generation built; a field added to the generic class still answers restart required. Instances a core module also demands, Linux and macOS were not checked |
+| Lifted operations shared with core | Windows x64 candidate `2709c996`, `hcrCoreOp`: a project module earlier in load order and a module outside the project both assign a `"row" \| "column" \| null` field and a `[string, int32]` field; the core module defines the destroy, copy, sink and moved operations, the image calls them, and an edit of the project module reloads (`start row s+ 2 column wide 7`, `cleared none none 0`, `reloaded logic column s++ 12`). `e8c024c8` stops the build with an internal error. Linux and macOS were not checked |
 | Module globals at exit | Windows x64, Linux x64 and macOS arm64, `hcrExitDestroy`: `msc run --hcr` destroys each module global once at exit, entry module first, and prints what `msc run` prints. The engine calls each current image's `Deinit000`, then the core's `msHcrCoreDeinit`; a retired cell (type reset) is never destroyed. The installed compiler printed no destroy line |
 | Dependency reload | Windows x64, Linux x64 and macOS arm64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
 | `msc run --hcr app.ms` | Windows x64, Linux x64 and macOS arm64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
@@ -520,6 +521,24 @@ Three edges that a single image resolved by the linker needed a mechanism across
   through `createSignal`). Nim picks the owner by the type's module and lets the demander keep
   the definition when that module is closed for codegen (`ccgtypes.nim` `genTypeInfoV2`,
   `myModuleOpenForCodegen`); an image is closed to core in the same way.
+  The operation itself follows the same rule through the order of lowering: under `--hcr`
+  the modules outside the project are lowered before the project's (`compile.ms`
+  `coreBeforeImages`), so the first module to need an operation, its owner, is a core module
+  whenever one needs it, and an image calls it as a core symbol. Lowering used to follow load
+  order, where a project module that assigned a `"row" | "column" | null` field or a
+  `[string, int32]` field before a module outside the project did stopped the build with
+  `internal: HCR core module '…' calls '…Destroy', which module '…' generates in its
+  reloadable image` (`hcrCoreOp`, Windows x64, tree `cda1b8930eba`: red on `e8c024c8`, on the
+  candidate the edited image reloads; Neon inside the project hit it through Yoga's
+  `flexDirection`). The reference emits a lifted operation in its owner's module and lets
+  every other module fetch it from the registry (`cgen.nim` `genProcLvl2`,
+  `findPendingModule`), which needs no order because every module there is an image. Moving
+  the definition into core after dead-code elimination, as the cell does, was not tried: the
+  lowered program of a module is kept across watch builds, and the operation is a statement
+  of it. A core module with a type-only import of a project module still builds and runs in
+  that order (probe: the core module assigns fields typed by the project's alias). Not
+  verified: Linux and macOS, and a generic class instance constructed in a core module and in
+  an image, which still fails the core link (`undefined symbol: Box…__int32_init`).
 
 Methods of exported classes were missing from the S3a DCE roots although their table slots
 referenced them (`use of undeclared identifier 'Shape_area__…'`); every manifest function is
