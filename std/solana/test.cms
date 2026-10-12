@@ -63,6 +63,7 @@ import {
 	pubkeyOf,
 	instructionData,
 	logPubkey,
+	logText,
 	clock,
 	returnData,
 	returnDataFrom,
@@ -1325,6 +1326,24 @@ test "emit logs Anchor's event discriminator and the Borsh fields as Program dat
 		if (line == expected) { found = true; }
 	}
 	assert found;
+}
+
+function logTextEntry(): void {
+	logText("escrow made");
+	logText("giá 5 ✓");
+	logText("");
+	logText(instructionData());
+}
+
+test "logText writes a literal and the bytes of a buffer as one Program log line each" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, textBytes("memo: paid"), logTextEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 4;
+	assert lines[0] == "Program log: escrow made";
+	assert lines[1] == "Program log: giá 5 ✓";
+	assert lines[2] == "Program log: ";
+	assert lines[3] == "Program log: memo: paid";
 }
 
 export struct Paid { amount: uint64; }

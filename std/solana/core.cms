@@ -67,6 +67,9 @@ extern function msSolCopy(destination: uint64, source: uint64, length: uint64): 
 extern function msSolScratch(size: uint64): uint64;
 extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
 extern function msSolDataRoom(record: uint64): uint64;
+extern function msSolLog(address: uint64, length: uint64): void;
+extern function msSolStringAddress(text: string): uint64;
+extern function msSolStringLength(text: string): uint64;
 extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
 extern function msSolLogPubkey(address: uint64): void;
 extern function msSolLogData(address: uint64, length: uint64): void;
@@ -622,6 +625,14 @@ export function readPubkey(this found: ReturnData, offset: uint64): Result<Pubke
 
 export function logU64(value: uint64): void {
 	msSolLog64(0, 0, 0, 0, value);
+}
+
+export function logText(text: string): void {
+	msSolLog(msSolStringAddress(text), msSolStringLength(text));
+}
+
+export function logText(text: Bytes): void {
+	msSolLog(text.address, text.length);
 }
 
 export function logPubkey(key: Pubkey): void {
