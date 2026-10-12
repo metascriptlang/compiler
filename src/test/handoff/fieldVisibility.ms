@@ -133,6 +133,9 @@ test "fieldVisibility: as builds a struct only from a struct, a distinct of one,
 	assert reports(lib, pre + "function f(a: int32[]): Proof { return a[0..1] as Proof; }\n", "cannot convert Span<int32> to Proof" + refusal);
 	assert reports(lib, pre + "function g(): int32 { return 1; }\nfunction pick(b: boolean): (() => int32) | null { return b ? g : null; }\nconst q = pick(true) as Proof;\n", "to Proof" + refusal);
 	assert reports(lib, pre + "function pick(b: boolean): P | Q { return b ? ({ x: 1 } as P) : ({ y: 2 } as Q); }\nconst q = pick(true) as Proof;\n", "to Proof" + refusal);
+	assert reports(lib, pre + "function ma(): int32[] | null { return null; }\nconst q = ma() as Proof;\n", "to Proof" + refusal);
+	assert reports(lib, pre + "function mm(): Map<string, int32> | null { return null; }\nconst q = mm() as Proof;\n", "to Proof" + refusal);
+	assert !reports(lib, pre + "const q = null as Proof;\n", "converts to a struct");
 	assert !reports(lib, pre + "const q = missing as Proof;\n", "converts to a struct");
 }
 

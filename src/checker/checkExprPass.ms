@@ -3481,7 +3481,7 @@ function relatedStructInstances(source: Type, target: Type): boolean {
 
 function deferredSource(t: Type): boolean {
 	return match (t.kind) {
-		TypeKind.Error | TypeKind.Inferred | TypeKind.Pending | TypeKind.GenericParam | TypeKind.Unknown | TypeKind.Null | TypeKind.Never => true,
+		TypeKind.Error | TypeKind.Inferred | TypeKind.Pending | TypeKind.GenericParam | TypeKind.Unknown | TypeKind.Never => true,
 		_ => hasGenericParams(t),
 	};
 }
@@ -3500,9 +3500,11 @@ function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Ty
 	const target = structBehindConversion(targetType);
 	if (target == null) return false;
 	const body = conversionOperandBody(srcType);
+	if (body.kind == TypeKind.Null) return false;
 	const members = body.kind == TypeKind.Union ? body.typeChildren : [body];
 	for (const member of members) {
 		const bare = conversionOperandBody(peelDistinct(member) ?? member);
+		if (bare.kind == TypeKind.Null) continue;
 		if (deferredSource(bare)) return false;
 		const source = structBehindConversion(bare);
 		if (source != null && relatedStruct(source, target)) return false;
