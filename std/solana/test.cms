@@ -4542,6 +4542,17 @@ test "proof kernels and result wrappers retain checked types across module consu
 	assert run(programKey(), [], [], wireModuleOwnedEntry).result == ProgramError.accountNotEnoughKeys().code;
 }
 
+struct Auth { value: uint64; }
+
+function wireNamesakeProofEntry(): void { codeOf(accounts<ScopedProgramAccounts>()); }
+test "accounts<T>() of another module proves the field types that module declared, not a namesake written here" {
+	const namesake: Auth = { value: 7 };
+	assert namesake.value == 7;
+	assert run(programKey(), [holder(1, keyOf(9), [], false, false), systemProgramAccount()], [], wireNamesakeProofEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), [holder(1, keyOf(9), [], true, false), systemProgramAccount()], [], wireNamesakeProofEntry).result == 0;
+}
+
 function wireThirdModuleEntry(): void {
 	const first = directOwned();
 	const second = directMutable();
