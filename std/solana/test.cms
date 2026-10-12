@@ -114,6 +114,7 @@ import {
 	signedPda,
 } from "./macro";
 import { anchorIdl } from "./idl";
+import { decode, encode } from "./accountCodec";
 import { HYDRA_PROGRAM_ID } from "./hydra";
 import { MAGIC_PROGRAM_ID, MAGIC_VAULT_ID } from "./magicblock";
 import { Node, NodeKind, bindSym } from "std/meta";
@@ -4288,6 +4289,50 @@ test "the IDL lays a field out after an enum of many members by the one byte the
 		const pair = idlRead(parsed.value, idlTypeFields(parsed.value, "WireCrowdedPair"), bytes, 0, "");
 		assert pair.text == "crowded=127 gap=5 wide=300 ";
 		assert pair.next == sizeof(WireCrowdedPair) as int32;
+	}
+}
+
+function wireKindsOwnedEntry(): void { codeOf(owned<WireKinds>(0)); }
+
+function wireKindsWith(offset: int32, value: int32): uint8[] {
+	const bytes = wireKindsBytes();
+	bytes[8 + offset] = value as uint8;
+	return bytes;
+}
+
+function wireKindsProof(offset: int32, value: int32): uint64 {
+	return run(programKey(), [holder(1, programKey(), wireKindsWith(offset, value), false, false)], [], wireKindsOwnedEntry).result;
+}
+
+test "raw enum validation accepts the values of an enum with no zero member, of one declared in descending order and of one with repeated values, and nothing between" {
+	for (const apart of [1, 4]) { assert wireKindsProof(8, apart) == 0; }
+	for (const apart of [0, 2, 3, 5, 255]) { assert wireKindsProof(8, apart) == ProgramError.accountDidNotDeserialize().code; }
+	for (const backward of [0, 1, 2]) { assert wireKindsProof(9, backward) == 0; }
+	for (const backward of [3, 255]) { assert wireKindsProof(9, backward) == ProgramError.accountDidNotDeserialize().code; }
+	for (const crowded of [0, 1, 127]) { assert wireKindsProof(10, crowded) == 0; }
+	for (const crowded of [128, 255]) { assert wireKindsProof(10, crowded) == ProgramError.accountDidNotDeserialize().code; }
+}
+
+test "the account codec reads and writes the members of those enums by their values and refuses the values between" {
+	const stored = [holder(1, programKey(), wireKindsBytes(), false, true)];
+	assert run(programKey(), stored, [], wireKindsEntry).result == 0;
+	const decoded = decode<WireKinds>(stored[0].data);
+	assert decoded.ok;
+	if (decoded.ok) {
+		const kinds = decoded.value;
+		assert kinds.apart == WireApart.Four && kinds.backward == WireBackward.Last && kinds.crowded == WireCrowded.C127;
+		assert kinds.signed == WireSigned.Plus && kinds.wide == WireWide.Large;
+		const encoded = encode(kinds);
+		assert encoded.ok;
+		if (encoded.ok) {
+			assert encoded.value.length == stored[0].data.length;
+			for (let i = 0; i < encoded.value.length; i++) { assert encoded.value[i] == stored[0].data[i]; }
+		}
+	}
+	for (const hole of [wireKindsWith(8, 0), wireKindsWith(8, 2), wireKindsWith(9, 3), wireKindsWith(10, 128)]) {
+		const refused = decode<WireKinds>(hole);
+		assert !refused.ok;
+		if (!refused.ok) { assert refused.error.code == ProgramError.accountDidNotDeserialize().code; }
 	}
 }
 
