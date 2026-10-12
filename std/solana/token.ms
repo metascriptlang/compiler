@@ -2754,7 +2754,7 @@ when (testBuild) {
 
 	function forwardStep(): Result<uint64, ProgramError> {
 		const input = instructionData();
-		let storage: uint8[16] = [];
+		let storage: uint8[40] = [];
 		let length: uint64 = 0;
 		for (let at: uint64 = 0; at < input.length; at++) {
 			length = putU8(storage, length, try input.readU8(at));
@@ -2762,7 +2762,9 @@ when (testBuild) {
 		const last = accountCount() - 1;
 		const callee = (try account(last)).key();
 		const first = asPassed(try account(0));
+		if (last == 1) { return invoke(callee, [first], storage, length); }
 		const second = asPassed(try account(1));
+		if (last == 2) { return invoke(callee, [first, second], storage, length); }
 		const third = asPassed(try account(2));
 		if (last == 3) { return invoke(callee, [first, second, third], storage, length); }
 		return invoke(callee, [first, second, third, asPassed(try account(3))], storage, length);
@@ -3451,5 +3453,294 @@ when (testBuild) {
 		guarded[0].data[174] = 1;
 		assert notSimulated(ledgerRun(guarded, 3, 1), "extension 11 with a setting in force");
 		for (const refused of [charged, hooked, guarded]) { assert unmoved(refused); }
+	}
+}
+
+when (testBuild) {
+	function sentTo(program: Pubkey, accounts: HostAccount[], data: uint8[]): HostRun {
+		accounts.push(programAccount(program));
+		const outcome = run(keyOf(9), accounts, data, forwardEntry);
+		accounts.pop();
+		return outcome;
+	}
+
+	function instructionOf(tag: uint8, amount: uint64, tail: uint8[]): uint8[] {
+		const data: uint8[] = [tag];
+		pushU64(data, amount);
+		for (const byte of tail) { data.push(byte); }
+		return data;
+	}
+
+	function authorityTo(kind: uint8, next: uint64): uint8[] {
+		const data: uint8[] = [6, kind, 1];
+		pushKey(data, keyOf(next));
+		return data;
+	}
+
+	function ownedBy(word: uint64): uint8[] {
+		const data: uint8[] = [18];
+		pushKey(data, keyOf(word));
+		return data;
+	}
+
+	function approving(program: Pubkey): HostAccount[] {
+		return delegateAccounts(program).slice(0, 4);
+	}
+
+	function initializing(program: Pubkey): HostAccount[] {
+		return [
+			{ ...holderOf(4, program, zeros(165)), lamports: TOKEN_ACCOUNT_RENT },
+			{ ...holderOf(1, program, mintData(7, 5000, 6)), writable: false },
+		];
+	}
+
+	function shortFor(program: Pubkey): ProgramError {
+		return program == TOKEN_PROGRAM_ID
+			? ProgramError.custom(12)
+			: ProgramError.invalidInstructionData();
+	}
+
+	test "data shorter than a token instruction reads is refused before its accounts are counted" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const short = shortFor(program);
+			const burns: uint8[][] = [[8], [8, 1, 0, 0, 0, 0, 0, 0], [15], instructionOf(15, 1, [])];
+			for (const data of burns) {
+				assert refusedWith(sentTo(program, burnAccounts(program), data), short, "");
+				assert refusedWith(sentTo(program, burnAccounts(program).slice(0, 2), data), short, "");
+			}
+			const approvals: uint8[][] = [[13], instructionOf(13, 1, [])];
+			for (const data of approvals) {
+				assert refusedWith(sentTo(program, approving(program), data), short, "");
+				assert refusedWith(sentTo(program, approving(program).slice(0, 3), data), short, "");
+			}
+			const cutKey = authorityTo(0, 5);
+			cutKey.pop();
+			const badTag = authorityTo(0, 5);
+			badTag[2] = 2;
+			const authorities: uint8[][] = [[6], [6, 0], [6, 0, 1], cutKey, badTag];
+			for (const data of authorities) {
+				assert refusedWith(sentTo(program, mintAuthorityAccounts(program), data), short, "");
+				const alone = mintAuthorityAccounts(program).slice(0, 1);
+				assert refusedWith(sentTo(program, alone, data), short, "");
+			}
+			const cutOwner = ownedBy(3);
+			cutOwner.pop();
+			const owners: uint8[][] = [[18], cutOwner];
+			for (const data of owners) {
+				assert refusedWith(sentTo(program, initializing(program), data), short, "");
+				assert refusedWith(sentTo(program, initializing(program).slice(0, 1), data), short, "");
+			}
+		}
+	}
+
+	test "a token instruction sent fewer accounts than it reads is refused before an account is read, but for the Token program's Revoke" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const missing = ProgramError.notEnoughAccountKeys();
+			const blankSource = burnAccounts(program).slice(0, 2);
+			blankSource[0].data[108] = 0;
+			assert refusedWith(sentTo(program, blankSource, instructionOf(8, 1, [])), missing, "");
+			const frozen = approving(program).slice(0, 3);
+			frozen[0].data[108] = 2;
+			assert refusedWith(sentTo(program, frozen, instructionOf(13, 1, [6])), missing, "");
+			const blank = ownerAuthorityAccounts(program).slice(0, 1);
+			blank[0].data[108] = 0;
+			const unread = program == TOKEN_PROGRAM_ID ? ProgramError.uninitializedAccount() : missing;
+			assert refusedWith(sentTo(program, blank, [5]), unread, "");
+			const sized = ownerAuthorityAccounts(program).slice(0, 1);
+			sized[0].data = zeros(100);
+			assert refusedWith(sentTo(program, sized, [6, 0, 0]), missing, "");
+			const used = initializing(program).slice(0, 1);
+			used[0].data = tokenAccountData(1, 3, 900, 1);
+			assert refusedWith(sentTo(program, used, ownedBy(3)), missing, "");
+		}
+	}
+
+	test "a byte after a token instruction's last field is taken by the Token program and refused by Token-2022" {
+		const legacy = TOKEN_PROGRAM_ID;
+		assert sentTo(legacy, burnAccounts(legacy), instructionOf(8, 1, [0])).result == 0;
+		assert sentTo(legacy, burnAccounts(legacy), instructionOf(15, 1, [6, 0])).result == 0;
+		assert sentTo(legacy, approving(legacy), instructionOf(13, 1, [6, 0])).result == 0;
+		const owned = ownedBy(3);
+		owned.push(0);
+		assert sentTo(legacy, initializing(legacy), owned).result == 0;
+		assert sentTo(legacy, mintingAccounts(legacy).slice(0, 3), instructionOf(7, 1, [0])).result == 0;
+		assert sentTo(legacy, uncheckedOrder(movingAccounts(legacy)), instructionOf(3, 1, [0])).result == 0;
+		assert sentTo(legacy, checkedOrder(movingAccounts(legacy)).slice(0, 4), instructionOf(12, 1, [6, 0]))
+			.result == 0;
+
+		const extended = TOKEN_2022_PROGRAM_ID;
+		const refused = ProgramError.invalidInstructionData();
+		const burning = burnAccounts(extended);
+		assert refusedWith(sentTo(extended, burning, instructionOf(8, 1, [0])), refused, "");
+		assert refusedWith(sentTo(extended, burnAccounts(extended), instructionOf(15, 1, [6, 0])), refused, "");
+		const lending = approving(extended);
+		assert refusedWith(sentTo(extended, lending, instructionOf(13, 1, [6, 0])), refused, "");
+		const fresh = initializing(extended);
+		assert refusedWith(sentTo(extended, fresh, owned), refused, "");
+		const minting = mintingAccounts(extended).slice(0, 3);
+		assert refusedWith(sentTo(extended, minting, instructionOf(7, 1, [0])), refused, "");
+		const moving = uncheckedOrder(movingAccounts(extended));
+		assert refusedWith(sentTo(extended, moving, instructionOf(3, 1, [0])), refused, "");
+		const checked = checkedOrder(movingAccounts(extended)).slice(0, 4);
+		assert refusedWith(sentTo(extended, checked, instructionOf(12, 1, [6, 0])), refused, "");
+		assert u64At(burning[0].data, 64) == 900 && delegateOf(lending) == null && fresh[0].data[108] == 0;
+		assert u64At(minting[1].data, 64) == 0 && u64At(moving[0].data, 64) == 900;
+
+		for (const program of [legacy, extended]) {
+			assert sentTo(program, ownerAuthorityAccounts(program), [5, 1, 2, 3]).result == 0;
+			const fixed = mintAuthorityAccounts(program);
+			assert sentTo(program, fixed, [6, 0, 0, 9, 9]).result == 0 && fixed[0].data[0] == 0;
+		}
+	}
+
+	function foreignTo(program: Pubkey, accounts: HostAccount[], index: int32): HostAccount[] {
+		accounts[index].owner = otherTokenProgram(program);
+		return accounts;
+	}
+
+	test "Token-2022 refuses an account or a mint another program owns before any other check" {
+		const program = TOKEN_2022_PROGRAM_ID;
+		const refused = ProgramError.incorrectProgramId();
+		const burn = instructionOf(8, 1, []);
+		const stranger = foreignTo(program, burnAccounts(program), 0);
+		stranger[2].key = keyOf(5);
+		assert refusedWith(sentTo(program, stranger, burn), refused, "");
+		const frozen = foreignTo(program, burnAccounts(program), 0);
+		frozen[0].data[108] = 2;
+		assert refusedWith(sentTo(program, frozen, burn), refused, "");
+		const blank = foreignTo(program, burnAccounts(program), 0);
+		blank[0].data[108] = 0;
+		assert refusedWith(sentTo(program, blank, instructionOf(8, 0, [])), refused, "");
+		const beyond = foreignTo(program, burnAccounts(program), 1);
+		assert refusedWith(sentTo(program, beyond, instructionOf(8, 901, [])), refused, "");
+		const undecimal = foreignTo(program, burnAccounts(program), 1);
+		assert refusedWith(sentTo(program, undecimal, instructionOf(15, 1, [5])), refused, "");
+		const cut = foreignTo(program, burnAccounts(program), 0);
+		assert refusedWith(sentTo(program, cut, [8]), ProgramError.invalidInstructionData(), "");
+
+		const approve = instructionOf(13, 1, [6]);
+		const lentByStranger = foreignTo(program, approving(program), 0);
+		lentByStranger[3].key = keyOf(5);
+		assert refusedWith(sentTo(program, lentByStranger, approve), refused, "");
+		const lentFrozen = foreignTo(program, approving(program), 0);
+		lentFrozen[0].data[108] = 2;
+		assert refusedWith(sentTo(program, lentFrozen, approve), refused, "");
+		const foreignMint = foreignTo(program, approving(program), 1);
+		assert refusedWith(sentTo(program, foreignMint, approve), refused, "");
+		assert refusedWith(sentTo(program, foreignMint, instructionOf(13, 1, [5])), refused, "");
+		assert delegateOf(foreignMint) == null;
+
+		const revokedByStranger = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revokedByStranger[1].key = keyOf(5);
+		assert refusedWith(sentTo(program, revokedByStranger, [5]), refused, "");
+		const revokedBlank = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revokedBlank[0].data[108] = 0;
+		assert refusedWith(sentTo(program, revokedBlank, [5]), refused, "");
+		assert refusedWith(sentTo(program, foreignTo(program, ownerAuthorityAccounts(program), 0), [5]), refused, "");
+
+		const mintByStranger = foreignTo(program, mintAuthorityAccounts(program), 0);
+		mintByStranger[1].key = keyOf(5);
+		assert refusedWith(sentTo(program, mintByStranger, authorityTo(0, 5)), refused, "");
+		const unsupported = foreignTo(program, mintAuthorityAccounts(program), 0);
+		assert refusedWith(sentTo(program, unsupported, authorityTo(2, 5)), refused, "");
+		assert refusedWith(sentTo(program, unsupported, authorityTo(1, 5)), refused, "");
+		const frozenOwner = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		frozenOwner[0].data[108] = 2;
+		assert refusedWith(sentTo(program, frozenOwner, authorityTo(2, 5)), refused, "");
+		const blankOwner = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		blankOwner[0].data[108] = 0;
+		assert refusedWith(sentTo(program, blankOwner, authorityTo(2, 5)), refused, "");
+		const sized = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		sized[0].data = zeros(100);
+		assert refusedWith(sentTo(program, sized, authorityTo(0, 5)), refused, "");
+		const own = ownerAuthorityAccounts(program);
+		own[0].data = zeros(100);
+		assert refusedWith(sentTo(program, own, authorityTo(0, 5)), ProgramError.invalidAccountData(), "");
+
+		const used = foreignTo(program, initializing(program), 0);
+		used[0].data = tokenAccountData(1, 3, 900, 1);
+		assert refusedWith(sentTo(program, used, ownedBy(3)), refused, "");
+		const small = foreignTo(program, initializing(program), 0);
+		small[0].data = zeros(164);
+		assert refusedWith(sentTo(program, small, ownedBy(3)), refused, "");
+		const unminted = foreignTo(program, initializing(program), 0);
+		unminted[1].data = zeros(82);
+		assert refusedWith(sentTo(program, unminted, ownedBy(3)), refused, "");
+		assert refusedWith(sentTo(program, foreignTo(program, initializing(program), 1), ownedBy(3)), refused, "");
+	}
+
+	test "the Token program runs its own checks on an account another program owns and is refused only a write that changes it" {
+		const program = TOKEN_PROGRAM_ID;
+		const burn = instructionOf(8, 1, []);
+		assert runtimeRefused(sentTo(program, foreignTo(program, burnAccounts(program), 0), burn), FOREIGN_WRITE);
+		assert runtimeRefused(sentTo(program, foreignTo(program, burnAccounts(program), 1), burn), FOREIGN_WRITE);
+		const nothing = instructionOf(8, 0, []);
+		const wrongProgram = ProgramError.incorrectProgramId();
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 0), nothing), wrongProgram, "");
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 1), nothing), wrongProgram, "");
+		const beyond = instructionOf(8, 901, []);
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 0), beyond), ProgramError.custom(1), "");
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 1), beyond), ProgramError.custom(1), "");
+		const stranger = foreignTo(program, burnAccounts(program), 0);
+		stranger[2].key = keyOf(5);
+		assert refusedWith(sentTo(program, stranger, burn), ProgramError.custom(4), "");
+		const frozen = foreignTo(program, burnAccounts(program), 0);
+		frozen[0].data[108] = 2;
+		assert refusedWith(sentTo(program, frozen, burn), ProgramError.custom(17), "");
+		const blank = foreignTo(program, burnAccounts(program), 0);
+		blank[0].data[108] = 0;
+		assert refusedWith(sentTo(program, blank, nothing), ProgramError.uninitializedAccount(), "");
+		const undecimal = instructionOf(15, 1, [5]);
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 0), undecimal), ProgramError.custom(18), "");
+
+		const approve = instructionOf(13, 1, [6]);
+		const lent = foreignTo(program, approving(program), 0);
+		assert runtimeRefused(sentTo(program, lent, approve), FOREIGN_WRITE) && delegateOf(lent) == null;
+		const again = foreignTo(program, approving(program), 0);
+		again[0].data = withDelegate(again[0].data, keyOf(8), 1);
+		assert sentTo(program, again, approve).result == 0;
+		const lentByStranger = foreignTo(program, approving(program), 0);
+		lentByStranger[3].key = keyOf(5);
+		assert refusedWith(sentTo(program, lentByStranger, approve), ProgramError.custom(4), "");
+		const foreignMint = foreignTo(program, approving(program), 1);
+		assert refusedWith(sentTo(program, foreignMint, instructionOf(13, 1, [5])), ProgramError.custom(18), "");
+		assert sentTo(program, foreignMint, approve).result == 0 && delegateOf(foreignMint) == keyOf(8);
+
+		const unlent = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		assert sentTo(program, unlent, [5]).result == 0;
+		const revoked = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revoked[0].data = withDelegate(revoked[0].data, keyOf(8), 5);
+		assert runtimeRefused(sentTo(program, revoked, [5]), FOREIGN_WRITE);
+		assert delegateOf(revoked) == keyOf(8) && u64At(revoked[0].data, 121) == 5;
+		const revokedByStranger = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revokedByStranger[1].key = keyOf(5);
+		assert refusedWith(sentTo(program, revokedByStranger, [5]), ProgramError.custom(4), "");
+
+		const mint = foreignTo(program, mintAuthorityAccounts(program), 0);
+		assert runtimeRefused(sentTo(program, mint, authorityTo(0, 5)), FOREIGN_WRITE);
+		assert keyAt(mint[0].data, 4) == keyOf(7);
+		assert sentTo(program, foreignTo(program, mintAuthorityAccounts(program), 0), authorityTo(0, 7)).result == 0;
+		assert refusedWith(sentTo(program, foreignTo(program, mintAuthorityAccounts(program), 0), authorityTo(2, 5)),
+			ProgramError.custom(15), "");
+		const owner = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		assert runtimeRefused(sentTo(program, owner, authorityTo(2, 5)), FOREIGN_WRITE);
+		assert keyAt(owner[0].data, 32) == keyOf(3);
+		assert sentTo(program, foreignTo(program, ownerAuthorityAccounts(program), 0), authorityTo(2, 3)).result == 0;
+		const sized = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		sized[0].data = zeros(100);
+		assert refusedWith(sentTo(program, sized, authorityTo(0, 5)), ProgramError.invalidArgument(), "");
+
+		const fresh = foreignTo(program, initializing(program), 0);
+		assert runtimeRefused(sentTo(program, fresh, ownedBy(3)), FOREIGN_WRITE) && fresh[0].data[108] == 0;
+		const used = foreignTo(program, initializing(program), 0);
+		used[0].data = tokenAccountData(1, 3, 900, 1);
+		assert refusedWith(sentTo(program, used, ownedBy(3)), ProgramError.custom(6), "");
+		const small = foreignTo(program, initializing(program), 0);
+		small[0].data = zeros(164);
+		assert refusedWith(sentTo(program, small, ownedBy(3)), ProgramError.invalidAccountData(), "");
+		const unminted = foreignTo(program, initializing(program), 0);
+		unminted[1].data = zeros(82);
+		assert refusedWith(sentTo(program, unminted, ownedBy(3)), ProgramError.custom(2), "");
+		assert refusedWith(sentTo(program, foreignTo(program, initializing(program), 1), ownedBy(3)), wrongProgram, "");
 	}
 }

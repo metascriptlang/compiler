@@ -614,6 +614,153 @@ for (const [name, tokenProgram] of [["token", TOKEN], ["token-2022", TOKEN_2022]
 			revoking(lent, t.owner.address, false), new Uint8Array(), custom(2006, program));
 	});
 
+	await scenario(`${name}: malformed and misdirected`, tokenProgram, async (t) => {
+		const other = tokenProgram === TOKEN ? TOKEN_2022 : TOKEN;
+		const SHORT = tokenProgram === TOKEN ? 12 : "InvalidInstructionData";
+		const TAKEN = tokenProgram === TOKEN ? null : "InvalidInstructionData";
+		const MISSING = "NotEnoughAccountKeys";
+		const WRONG_PROGRAM = "IncorrectProgramId";
+		const FOREIGN_WRITE = "ExternalAccountDataModified";
+		const answer = (expected) => expected === null ? null
+			: typeof expected === "number" ? custom(expected, tokenProgram) : { error: expected, by: tokenProgram };
+		const ask = (step, metas, data, legacy, extended = legacy) => t.forward(step, tokenProgram, metas, data,
+			answer(tokenProgram === TOKEN ? legacy : extended));
+		const misdirected = (step, metas, data, legacy) => ask(step, metas, data, legacy, WRONG_PROGRAM);
+		const bytes = (...parts) => concat(...parts.map((part) => typeof part === "number" ? new Uint8Array([part]) : part));
+		const w = (account) => t.meta(account, true);
+		const r = (account) => t.meta(account, false);
+		const blank = async (length = 165, owningProgram = tokenProgram) => {
+			const made = (await t.fresh()).address;
+			t.put(made, new Uint8Array(length), owningProgram);
+			return made;
+		};
+		const mintOf = async (owningProgram) => {
+			const made = (await t.fresh()).address;
+			t.put(made, mintData(t.owner.address, 6, 1_000_000), owningProgram);
+			return made;
+		};
+		const mint = await t.mint(6, 1_000_000);
+		const foreignMint = await mintOf(other);
+		const probeMint = await mintOf(program);
+		const held = await t.token(mint, t.owner.address, 900);
+		const frozen = await t.token(mint, t.owner.address, 900, { state: 2 });
+		const ofForeignMint = await t.token(foreignMint, t.owner.address, 900);
+		const foreign = await t.token(mint, t.owner.address, 900, {}, other);
+		const foreignFrozen = await t.token(mint, t.owner.address, 900, { state: 2 }, other);
+		const probeOwned = await t.token(mint, t.owner.address, 900, {}, program);
+		const owner = t.meta(t.owner.address, false, true);
+		const stranger = t.meta(t.payer.address, false, true);
+		const delegate = t.meta((await t.fresh()).address, false);
+		const ownerKey = encoder.encode(t.owner.address);
+		const next = encoder.encode(t.payer.address);
+		const burn = (amount) => bytes(8, u64(amount));
+		const approve = (amount, decimals = 6) => bytes(13, u64(amount), decimals);
+		const init = bytes(18, ownerKey);
+
+		const burning = [w(held), w(mint), owner];
+		const approving = [w(held), r(mint), delegate, owner];
+		const naming = [w(mint), owner];
+		for (const [what, metas, data] of [
+			["Burn without its amount", burning, bytes(8)],
+			["Burn with 7 bytes of amount", burning, bytes(8, new Uint8Array(7))],
+			["BurnChecked without its amount", burning, bytes(15)],
+			["BurnChecked without its decimals", burning, bytes(15, u64(1))],
+			["ApproveChecked without its amount", approving, bytes(13)],
+			["ApproveChecked without its decimals", approving, bytes(13, u64(1))],
+			["SetAuthority without its type", naming, bytes(6)],
+			["SetAuthority without its option tag", naming, bytes(6, 0)],
+			["SetAuthority with an option tag and no key", naming, bytes(6, 0, 1)],
+			["SetAuthority with 31 bytes of key", naming, bytes(6, 0, 1, new Uint8Array(31))],
+			["SetAuthority with option tag 2", naming, bytes(6, 0, 2, new Uint8Array(32))],
+			["InitializeAccount3 without its owner", [w(await blank()), r(mint)], bytes(18)],
+			["InitializeAccount3 with 31 bytes of owner", [w(await blank()), r(mint)], bytes(18, ownerKey.subarray(0, 31))],
+		]) {
+			await ask(what, metas, data, SHORT);
+			await ask(`${what} and its last account`, metas.slice(0, -1), data, SHORT);
+		}
+		await ask("SetAuthority with authority type 200", naming, bytes(6, 200, 0), 12);
+		await ask("Burn without its authority", [w(held), w(mint)], burn(1), MISSING);
+		await ask("Burn from a blank account without its authority", [w(await blank()), w(mint)], burn(1), MISSING);
+		await ask("ApproveChecked without its owner", [w(held), r(mint), delegate], approve(1), MISSING);
+		await ask("ApproveChecked on a frozen account without its owner", [w(frozen), r(mint), delegate], approve(1), MISSING);
+		await ask("Revoke without its owner", [w(held)], bytes(5), MISSING);
+		await ask("Revoke on a blank account without its owner", [w(await blank())], bytes(5), "UninitializedAccount", MISSING);
+		await ask("SetAuthority without its authority", [w(mint)], bytes(6, 0, 0), MISSING);
+		await ask("SetAuthority on an account of 100 bytes without its authority", [w(await blank(100))], bytes(6, 0, 0), MISSING);
+		await ask("InitializeAccount3 without its mint", [w(await blank())], init, MISSING);
+		await ask("InitializeAccount3 of an initialized account without its mint", [w(held)], init, MISSING);
+
+		const target = await t.token(mint, t.owner.address, 0);
+		const spare = await t.token(mint, t.owner.address, 0);
+		await ask("Burn with a byte after its amount", [w(held), w(mint), owner], bytes(burn(1), 0), TAKEN);
+		await ask("BurnChecked with a byte after its decimals", [w(held), w(mint), owner], bytes(15, u64(1), 6, 0), TAKEN);
+		await ask("ApproveChecked with a byte after its decimals", [w(held), r(mint), delegate, owner], bytes(approve(1), 0), TAKEN);
+		await ask("InitializeAccount3 with a byte after its owner", [w(await blank()), r(mint)], bytes(init, 0), TAKEN);
+		await ask("MintTo with a byte after its amount", [w(mint), w(target), owner], bytes(7, u64(1), 0), TAKEN);
+		await ask("Transfer with a byte after its amount", [w(held), w(target), owner], bytes(3, u64(1), 0), TAKEN);
+		await ask("TransferChecked with a byte after its decimals", [w(held), r(mint), w(target), owner], bytes(12, u64(1), 6, 0), TAKEN);
+		await ask("Revoke with bytes after its tag", [w(held), owner], bytes(5, 1, 2, 3), null);
+		await ask("CloseAccount with a byte after its tag", [w(spare), w(held), owner], bytes(9, 0), null);
+		await ask("SetAuthority to none with bytes after the tag", [w(await t.mint(6, 1)), owner], bytes(6, 0, 0, 9, 9), null);
+		await ask("SetAuthority with a byte after its key", [w(await t.mint(6, 1)), owner], bytes(6, 0, 1, next, 0), null);
+		await ask("InitializeMint2 with a byte after its freeze tag", [w(await blank(82))], bytes(20, 6, ownerKey, 0, 0), null);
+
+		await misdirected("Burn from an account of the other token program", [w(foreign), w(mint), owner], burn(1), FOREIGN_WRITE);
+		await misdirected("Burn of nothing from an account of the other token program", [w(foreign), w(mint), owner], burn(0), WRONG_PROGRAM);
+		await misdirected("Burn beyond the balance of an account of the other token program", [w(foreign), w(mint), owner], burn(901), 1);
+		await misdirected("Burn by a stranger from an account of the other token program", [w(foreign), w(mint), stranger], burn(1), 4);
+		await misdirected("Burn from a frozen account of the other token program", [w(foreignFrozen), w(mint), owner], burn(1), 17);
+		await misdirected("Burn from an account a program that is no token program owns", [w(probeOwned), w(mint), owner], burn(1), FOREIGN_WRITE);
+		await misdirected("Burn against a mint of the other token program", [w(ofForeignMint), w(foreignMint), owner], burn(1), FOREIGN_WRITE);
+		await misdirected("Burn of nothing against a mint of the other token program", [w(ofForeignMint), w(foreignMint), owner], burn(0), WRONG_PROGRAM);
+		await misdirected("Burn beyond the balance against a mint of the other token program", [w(ofForeignMint), w(foreignMint), owner], burn(901), 1);
+		await misdirected("Burn from a blank account of the other token program", [w(await blank(165, other)), w(mint), owner], burn(0), "UninitializedAccount");
+		await ask("Burn without its amount from an account of the other token program", [w(foreign), w(mint), owner], bytes(8), SHORT);
+		await misdirected("BurnChecked with wrong decimals from an account of the other token program", [w(foreign), w(mint), owner], bytes(15, u64(1), 5), 18);
+		await misdirected("BurnChecked with wrong decimals against a mint of the other token program", [w(ofForeignMint), w(foreignMint), owner], bytes(15, u64(1), 5), 18);
+
+		const foreignLent = await t.token(mint, t.owner.address, 900, { delegate: delegate.address, allowance: 5 }, other);
+		await misdirected("ApproveChecked on an account of the other token program", [w(foreign), r(mint), delegate, owner], approve(1), FOREIGN_WRITE);
+		await misdirected("ApproveChecked of the delegate and allowance an account of the other token program has", [w(foreignLent), r(mint), delegate, owner], approve(5), null);
+		await misdirected("ApproveChecked by a stranger on an account of the other token program", [w(foreign), r(mint), delegate, stranger], approve(1), 4);
+		await misdirected("ApproveChecked with wrong decimals on an account of the other token program", [w(foreign), r(mint), delegate, owner], approve(1, 5), 18);
+		await misdirected("ApproveChecked on a frozen account of the other token program", [w(foreignFrozen), r(mint), delegate, owner], approve(1), 17);
+		await misdirected("ApproveChecked with wrong decimals against a mint of the other token program", [w(ofForeignMint), r(foreignMint), delegate, owner], approve(1, 5), 18);
+		await misdirected("ApproveChecked against a mint of the other token program", [w(ofForeignMint), r(foreignMint), delegate, owner], approve(1), null);
+		await misdirected("ApproveChecked on an account a program that is no token program owns", [w(probeOwned), r(mint), delegate, owner], approve(1), FOREIGN_WRITE);
+		await misdirected("ApproveChecked against a mint a program that is no token program owns", [w(await t.token(probeMint, t.owner.address, 9)), r(probeMint), delegate, owner], approve(1), null);
+
+		await misdirected("Revoke on an account of the other token program that has no delegate", [w(foreign), owner], bytes(5), null);
+		await misdirected("Revoke on an account of the other token program that has a delegate", [w(foreignLent), owner], bytes(5), FOREIGN_WRITE);
+		await misdirected("Revoke by a stranger on an account of the other token program", [w(foreign), stranger], bytes(5), 4);
+		await misdirected("Revoke on a frozen account of the other token program", [w(foreignFrozen), owner], bytes(5), 17);
+		await misdirected("Revoke on a blank account of the other token program", [w(await blank(165, other)), owner], bytes(5), "UninitializedAccount");
+		await ask("Revoke on a frozen account", [w(frozen), owner], bytes(5), 17);
+
+		await misdirected("SetAuthority on a mint of the other token program", [w(foreignMint), owner], bytes(6, 0, 1, next), FOREIGN_WRITE);
+		await misdirected("SetAuthority to the authority a mint of the other token program has", [w(foreignMint), owner], bytes(6, 0, 1, ownerKey), null);
+		await misdirected("SetAuthority by a stranger on a mint of the other token program", [w(foreignMint), stranger], bytes(6, 0, 1, next), 4);
+		await misdirected("SetAuthority of an unsupported type on a mint of the other token program", [w(foreignMint), owner], bytes(6, 2, 1, next), 15);
+		await misdirected("SetAuthority of a freeze authority a mint of the other token program lacks", [w(foreignMint), owner], bytes(6, 1, 1, next), 16);
+		await misdirected("SetAuthority on an account of the other token program", [w(foreign), owner], bytes(6, 2, 1, next), FOREIGN_WRITE);
+		await misdirected("SetAuthority to the owner an account of the other token program has", [w(foreign), owner], bytes(6, 2, 1, ownerKey), null);
+		await misdirected("SetAuthority by a stranger on an account of the other token program", [w(foreign), stranger], bytes(6, 2, 1, next), 4);
+		await misdirected("SetAuthority on a frozen account of the other token program", [w(foreignFrozen), owner], bytes(6, 2, 1, next), 17);
+		await misdirected("SetAuthority on a blank account of the other token program", [w(await blank(165, other)), owner], bytes(6, 2, 1, next), "UninitializedAccount");
+		await misdirected("SetAuthority on a mint a program that is no token program owns", [w(probeMint), owner], bytes(6, 0, 1, next), FOREIGN_WRITE);
+		await misdirected("SetAuthority on an account of 100 bytes of the other token program", [w(await blank(100, other)), owner], bytes(6, 0, 1, next), "InvalidArgument");
+		await ask("SetAuthority on an account of 100 bytes", [w(await blank(100)), owner], bytes(6, 0, 1, next), "InvalidArgument", "InvalidAccountData");
+
+		await misdirected("InitializeAccount3 of an account of the other token program", [w(await blank(165, other)), r(mint)], init, FOREIGN_WRITE);
+		await misdirected("InitializeAccount3 of an account of the other token program for a mint of it", [w(await blank(165, other)), r(foreignMint)], init, WRONG_PROGRAM);
+		await misdirected("InitializeAccount3 for a mint of the other token program", [w(await blank()), r(foreignMint)], init, WRONG_PROGRAM);
+		await misdirected("InitializeAccount3 of an initialized account of the other token program", [w(foreign), r(mint)], init, 6);
+		await misdirected("InitializeAccount3 of 164 bytes of the other token program", [w(await blank(164, other)), r(mint)], init, "InvalidAccountData");
+		await misdirected("InitializeAccount3 of an account of the other token program for a blank mint", [w(await blank(165, other)), r(await blank(82))], init, 2);
+		await misdirected("InitializeAccount3 of an account a program that is no token program owns", [w(await blank(165, program)), r(mint)], init, FOREIGN_WRITE);
+		await misdirected("InitializeAccount3 for a mint a program that is no token program owns", [w(await blank()), r(probeMint)], init, WRONG_PROGRAM);
+	});
+
 	await scenario(`${name}: mint`, tokenProgram, async (t) => {
 		const other = tokenProgram === TOKEN ? TOKEN_2022 : TOKEN;
 		const foreignWrite = { error: tokenProgram === TOKEN ? "ExternalAccountDataModified" : "IncorrectProgramId", by: tokenProgram };
