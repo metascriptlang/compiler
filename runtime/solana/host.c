@@ -1518,12 +1518,6 @@ static int msSolHostSignsFor(const uint8_t* key, uint64_t signers, uint64_t sign
     return 0;
 }
 
-static int msSolHostExecutes(const uint8_t* program) {
-    static const uint8_t systemProgram[32] = {0};
-    return memcmp(program, systemProgram, 32) == 0 || msSolHostIsTokenProgram(program)
-        || memcmp(program, msSolHostAssociatedProgram, 32) == 0;
-}
-
 static int msSolHostPrivilegesHeld(const uint64_t* header, uint64_t signers, uint64_t signerCount) {
     for (uint64_t index = 0; index < header[2]; index++) {
         const uint8_t* meta = (const uint8_t*)(header[1] + index * 16);
@@ -1559,9 +1553,7 @@ static uint64_t msSolHostInvoked(const uint64_t* header, uint64_t signers, uint6
     uint64_t signerBytes;
     uint64_t refused = msSolHostSignersRefused(signers, signerCount, &signerBytes);
     if (refused != 0) return refused;
-    if (msSolHostExecutes((const uint8_t*)header[0]) && !msSolHostPrivilegesHeld(header, signers, signerCount)) {
-        return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
-    }
+    if (!msSolHostPrivilegesHeld(header, signers, signerCount)) return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
     for (uint64_t index = 0; index < header[2]; index++) {
         msSolHostHeld* held = msSolHostHeldAt(msSolHostRecordOf(header, index));
         if (held != NULL && !msSolHostTakes(held)) return MS_SOL_HOST_REFUSED;

@@ -233,6 +233,38 @@ test "a privilege the caller does not hold fails a call to a simulated program, 
 	}
 }
 
+function strange(passed: Passed[], signing: Signing, op: uint8): Outcome {
+	const instruction: uint8[] = [0];
+	return forwarded(keyOf(8), passed, instruction, signing, op);
+}
+
+test "a call to a program that is not simulated fails when it passes writable an account the instruction passed read-only" {
+	const readOnly = { ...holding(keyOf(2), SYSTEM_PROGRAM_ID, SOL), writable: false };
+	for (const op of [FORWARD, FORWARD_AND_CARRY_ON]) {
+		assert strange([held(wallet(1)), held(readOnly)], unsigned(), op).result == 0;
+		assert refusedAs(strange([held(wallet(1)), flagged(readOnly, true, false)], unsigned(), op), "PrivilegeEscalation");
+	}
+}
+
+test "a call to a program that is not simulated fails when it passes as a signer an account that did not sign and no seeds derive" {
+	const pdaSeed = seedWhere(false, 0);
+	const pda = flagged(holding(derived(pdaSeed), SYSTEM_PROGRAM_ID, SOL), true, true);
+	for (const op of [FORWARD, FORWARD_AND_CARRY_ON]) {
+		assert strange([pda], seeded(pdaSeed), op).result == 0;
+		assert refusedAs(strange([pda], unsigned(), op), "PrivilegeEscalation");
+	}
+}
+
+test "a call to a program that is not simulated fails when its signer seeds derive another address than the signer it passes" {
+	const pdaSeed = seedWhere(false, 0);
+	const otherSeed = seedWhere(false, pdaSeed[4] + 1);
+	const pda = flagged(holding(derived(pdaSeed), SYSTEM_PROGRAM_ID, SOL), true, true);
+	for (const op of [FORWARD, FORWARD_AND_CARRY_ON]) {
+		assert strange([pda], seeded(pdaSeed), op).result == 0;
+		assert refusedAs(strange([pda], seeded(otherSeed), op), "PrivilegeEscalation");
+	}
+}
+
 test "an instruction the System simulator does not know fails the run as not simulated" {
 	for (const op of [FORWARD, FORWARD_AND_CARRY_ON]) {
 		const passed = [held(wallet(1))];

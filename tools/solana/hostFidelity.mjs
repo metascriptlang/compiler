@@ -774,8 +774,6 @@ for (const features of ["all features", "mainnet"]) {
 		const BY_THE_TRANSACTION = (error) => `${error} by the transaction`;
 		await t.send("a call to an account that is not a program",
 			steps(step.call(WALLET, [], nothing)), passed, byProbe("UnsupportedProgramId"));
-		await t.send("a call that marks an account the caller holds unsigned a signer, to a program the simulator does not run",
-			steps(step.call(CALLEE, [[WALLET, SIGNER]], nothing)), passed, ESCALATED);
 		const calls = (count) => steps(...Array.from({ length: count }, () => step.call(CALLEE, [], nothing)));
 		await t.send("63 calls in one instruction", calls(63), passed, OK);
 		await t.send("64 calls in one instruction", calls(64), passed, BY_THE_TRANSACTION("MaxInstructionTraceLengthExceeded"));

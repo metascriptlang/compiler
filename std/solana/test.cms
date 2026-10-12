@@ -3152,7 +3152,7 @@ function invokeStep(): Result<uint64, ProgramError> {
 function invokeEntry(): void { codeOf(invokeStep()); }
 
 function invokeRun(op: uint8): uint64 {
-	const accounts = [wallet(1, 100), holder(2, programKey(), [], false, true), holder(3, programKey(), [], false, false)];
+	const accounts = [wallet(1, 100), holder(2, programKey(), [], true, true), holder(3, programKey(), [], true, true)];
 	const input: uint8[] = [op];
 	return run(programKey(), accounts, input, invokeEntry).result;
 }
