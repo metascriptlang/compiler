@@ -688,6 +688,7 @@ export macro accounts(): Node {
 	const names: string[] = [];
 	const writtenTypes: string[] = [];
 	const fieldDecorators: Node[][] = [];
+	const proofKinds: string[] = [];
 	function inheritedFirst(from: Node): void {
 		for (const base of from.interfaceExtends) {
 			const parent = getImpl(bindSym(base));
@@ -1011,6 +1012,7 @@ export macro accounts(): Node {
 		const open = canonical.indexOf("<");
 		const base = open < 0 ? canonical : canonical.slice(0, open);
 		const inner = open < 0 ? "" : canonical.slice(open + 1, canonical.length - 1);
+		proofKinds.push(base);
 		const index: Node = {
 			kind: NodeKind.NumberLiteral,
 			line: line,
@@ -1206,6 +1208,12 @@ export macro accounts(): Node {
 			error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a Delegated<T> with no " +
 				"@seeds/@bump or @address: any account the delegation program owns with T's layout would pass", shape);
 		}
+		const keepsBump = proofKinds[owner] == "WritablePda";
+		if (keepsBump && seeded == null) {
+			error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a WritablePda with no @seeds: " +
+				"any writable account would pass, and createPda<T>() would sign for it with bump 0 instead of " +
+				"the canonical bump; write @seeds(...) @bump, or Writable when no derivation is meant", shape);
+		}
 		if (seeded != null) {
 			if (bumped == null) {
 				error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
@@ -1225,7 +1233,6 @@ export macro accounts(): Node {
 				elements: list,
 			}], seeded);
 			const key = keyOf(ident(self, seeded));
-			const keepsBump = selfType == "WritablePda";
 			if (keepsBump && bumped.macroArgs.length == 1) {
 				error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a WritablePda, which keeps " +
 					"the canonical bump the bare @bump finds; a given @bump needs a Writable", bumped);

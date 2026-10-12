@@ -1,6 +1,8 @@
 @include("runtime/solana/solana.h");
 
-import { External, Signer as ChainAuth, accounts, external, externalMutable, writablePda } from "./typed";
+import {
+	External, Signer as ChainAuth, WritablePda as DerivedSlot, accounts, external, externalMutable, writablePda,
+} from "./typed";
 import { argBoolValid, argBytesFit, argU8, argU16, argU64 } from "./core";
 import { scopedKeysResult } from "./testArgumentScope";
 import {
@@ -967,6 +969,50 @@ test "a declared @seeds @bump keeps the canonical bump in the proof, createPda s
 	const wrong = [wallet(1, 10000000), blank(keyOf(3))];
 	assert run(programKey(), wrong, [], declaredCreateEntry).result ==
 		ProgramError.constraintSeeds().code;
+}
+
+test "createPda on a declared WritablePda refuses the address its seeds give with bump 0" {
+	const payer = wallet(7, 10000000);
+	const derived = findProgramAddressOf(programKey(), ["counter", payer.key]);
+	const zero: uint8 = 0;
+	const low = programAddressOf(programKey(), ["counter", payer.key, [zero]]);
+	assert derived.ok && low.ok;
+	if (derived.ok && low.ok) {
+		assert derived.value.bump != 0;
+		const lowest = [payer, blank(low.value)];
+		assert run(programKey(), lowest, [], declaredCreateEntry).result == ProgramError.constraintSeeds().code;
+		assert invocations().length == 0 && lowest[1].data.length == 0 && lowest[1].owner == Pubkey.zero();
+		const canonical = [payer, blank(derived.value.key)];
+		assert run(programKey(), canonical, [], declaredCreateEntry).result == 0;
+		assert canonical[1].owner == programKey() && canonical[1].data[8] == derived.value.bump;
+	}
+}
+
+export struct AliasedCounter {
+	payer: WritableSigner;
+	@seeds("counter", payer) @bump target: DerivedSlot;
+}
+
+function aliasedCreateStep(): Result<uint64, ProgramError> {
+	const x = try accounts<AliasedCounter>();
+	const made = try createPda<Counter>(x.payer, x.target, ["counter", x.payer]);
+	made.asMutable().data().value = x.target.foundBump() as uint64;
+	return Result.ok(0);
+}
+
+function aliasedCreateEntry(): void { codeOf(aliasedCreateStep()); }
+
+test "a WritablePda imported under another name keeps the canonical bump its @seeds found" {
+	const payer = wallet(1, 10000000);
+	const derived = findProgramAddressOf(programKey(), ["counter", payer.key]);
+	assert derived.ok;
+	if (derived.ok) {
+		assert derived.value.bump != 0;
+		const accounts = [payer, blank(derived.value.key)];
+		assert run(programKey(), accounts, [], aliasedCreateEntry).result == 0;
+		assert accounts[1].data[8] == derived.value.bump;
+		assert signerIs(invocations()[0], 0, [textBytes("counter"), [...payer.key.bytes], [derived.value.bump]]);
+	}
 }
 
 test "close refunds every lamport, hands the account to the System program and empties it" {
