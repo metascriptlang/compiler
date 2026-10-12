@@ -5,7 +5,7 @@ import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, F
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { BinaryExprData, ClassDeclData, DecoratedDeclData, ExportDeclData, ImportDeclData, InterfaceDeclData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
@@ -13,9 +13,9 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator } from "../codegen/js/jsgen";
+import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
-import { createJSHelpers, escapeJSString } from "../codegen/js/emit";
+import { createJSHelpers, escapeJSString, JsTreeLayout, createJsTreeLayout, relSpecBetween } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute, RaiserContext } from "../raiser/context";
@@ -23,7 +23,7 @@ import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
+import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -1409,6 +1409,11 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		for (let i = 0; i < tree.modulePaths.length; i += 1) {
 			const sep = i + 1 < tree.modulePaths.length ? "," : "";
 			manifest = `${manifest}    { "source": "${escapeJSString(tree.modulePaths[i])}", "out": "${escapeJSString(tree.moduleOutRels[i])}" }${sep}\n`;
+		}
+		manifest = `${manifest}  ],\n  "instances": [\n`;
+		for (let i = 0; i < tree.instanceOutRels.length; i += 1) {
+			const sep = i + 1 < tree.instanceOutRels.length ? "," : "";
+			manifest = `${manifest}    { "source": "${escapeJSString(tree.instanceOwners[i])}", "out": "${escapeJSString(tree.instanceOutRels[i])}" }${sep}\n`;
 		}
 		manifest = `${manifest}  ]\n}\n`;
 		writeOutput(`${splitRoot}/_manifest.json`, manifest);
@@ -3557,25 +3562,114 @@ function outRelForModule(modPath: string, projectRoot: string, stdRoot: string):
 	return `_ext/${mangleModuleName(modPath)}.js`;
 }
 
-function lookupOutRel(keys: string[], vals: string[], k: string): string {
-	for (let i = 0; i < keys.length; i += 1) {
-		if (keys[i] == k) return vals[i];
+interface JsInstanceFile {
+	name: string;      // the binding every module emits for the instance
+	declName: string;
+	owner: string;     // the module that declares the generic
+}
+
+function jsInstanceBindingName(node: Node): string {
+	const sym = node.resolvedSym;
+	if (sym == null || sym.instantiatedFrom == null || sym.modulePath == "") return "";
+	if (node.kind == NodeKind.FunctionDecl) {
+		return mangledFunctionName(sym, (node.data as FunctionDeclData).fnName, sym.overloadIdx);
 	}
+	if (node.kind == NodeKind.ClassDecl) return mangledGlobalName(sym, (node.data as ClassDeclData).className);
 	return "";
 }
 
-// Both arguments are '/'-separated paths relative to the same out root; the
-// result is a node-resolvable specifier (always ./ or ../ prefixed).
-function relSpecBetween(fromRel: string, toRel: string): string {
-	const spec = relative(dirname(`/${fromRel}`), `/${toRel}`);
-	if (spec.startsWith(".")) return spec;
-	return `./${spec}`;
+function isAssignment(operator: string): boolean {
+	if (!operator.endsWith("=")) return false;
+	return match (operator) {
+		"==" | "!=" | "<=" | ">=" | "===" | "!==" => false,
+		_ => true,
+	};
+}
+
+function namesModuleBinding(target: Node): boolean {
+	if (target.kind == NodeKind.Identifier) return isModuleGlobalVar(target.resolvedSym);
+	if (target.kind == NodeKind.MemberExpr || target.kind == NodeKind.ArrayAccess) return false;
+	let found = false;
+	forEachChild(target, (child: Node): void => {
+		if (!found) found = namesModuleBinding(child);
+	});
+	return found;
+}
+
+// ECMA-262 makes an imported binding immutable in the importing module, so a
+// body that assigns a module-level variable can only run in the file declaring it.
+function assignsModuleBinding(node: Node): boolean {
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (isAssignment(d.operator) && namesModuleBinding(d.left)) return true;
+	}
+	if (node.kind == NodeKind.UpdateExpr && namesModuleBinding((node.data as UpdateExprData).updateArg)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found) found = assignsModuleBinding(child);
+	});
+	return found;
+}
+
+// An instance the declaring module's own check asked for stays in that module:
+// its code needs the instance while the module is still being evaluated.
+function jsInstanceFiles(modulePaths: string[], moduleCtxs: CheckerContext[]): JsInstanceFile[] {
+	const ctxOf = new HashMap<string, CheckerContext>();
+	for (let i = 0; i < modulePaths.length; i += 1) ctxOf.set(modulePaths[i], moduleCtxs[i]);
+	const kept = new HashSet<string>();
+	const asked: Node[] = [];
+	const hosts = new HashSet<CheckerContext>();
+	for (const host of moduleCtxs) {
+		if (hosts.has(host)) continue;
+		hosts.add(host);
+		for (const node of host.generatedInstances) {
+			const name = jsInstanceBindingName(node);
+			if (name == "") continue;
+			if (ctxOf.get(node.resolvedSym!.modulePath) == host || assignsModuleBinding(node)) {
+				kept.add(name);
+			} else {
+				asked.push(node);
+			}
+		}
+	}
+	const files: JsInstanceFile[] = [];
+	const given = new HashSet<string>();
+	for (const node of asked) {
+		const name = jsInstanceBindingName(node);
+		if (kept.has(name) || given.has(name)) continue;
+		given.add(name);
+		const declName = node.kind == NodeKind.ClassDecl ? (node.data as ClassDeclData).className : (node.data as FunctionDeclData).fnName;
+		files.push({ name, declName, owner: node.resolvedSym!.modulePath });
+	}
+	return files;
+}
+
+function isNamespaceImport(stmt: Node): boolean {
+	if (stmt.kind != NodeKind.ImportDecl) return false;
+	const names = (stmt.data as ImportDeclData).importNames;
+	return names.length == 1 && names[0] == "*";
+}
+
+function importSpecsFrom(layout: JsTreeLayout, mod: Module | null, file: string): { keys: string[], vals: string[] } {
+	const keys: string[] = [];
+	const vals: string[] = [];
+	const fromRel = layout.outRelOf.get(file) ?? "";
+	if (mod == null) return { keys, vals };
+	for (const imp of mod.imports) {
+		const toRel = layout.outRelOf.get(imp.sourcePath);
+		if (toRel == null) continue;
+		keys.push(imp.sourceSpecifier);
+		vals.push(relSpecBetween(fromRel, toRel));
+	}
+	return { keys, vals };
 }
 
 export interface JsTreeResult {
 	outRoot: string;
 	modulePaths: string[];
 	moduleOutRels: string[];
+	instanceOwners: string[];
+	instanceOutRels: string[];
 	testNames: string[][];
 	testFuncs: string[][];
 }
@@ -3600,11 +3694,9 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const outRoot = outRootOverride != "" ? outRootOverride : `${projectRoot}/${outDirForMode(opts.mode)}`;
 	const stdRoot = config.stdPath;
 
-	const outRelKeys: string[] = [];
-	const outRelVals: string[] = [];
+	const layout = createJsTreeLayout();
 	for (const modPath of graph.loadOrder) {
-		outRelKeys.push(modPath);
-		outRelVals.push(outRelForModule(modPath, projectRoot, stdRoot));
+		layout.outRelOf.set(modPath, outRelForModule(modPath, projectRoot, stdRoot));
 	}
 
 	// Two phases for the same reason as cmdBuildJS: expand every module before
@@ -3631,11 +3723,21 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	}
 
 	// A generic instance belongs to the module that DECLARED the generic, and
-	// its emitted name says so. Placing the body anywhere else — e.g. in the
-	// module that first asked for it — leaves the name pointing at one module
-	// and the definition sitting in another, which on this backend becomes a
-	// module importing a symbol from itself. Same routing as the bundle path.
+	// its emitted name says so: it is placed and transformed with that module,
+	// same routing as the bundle path. Vite reloads the page when the file of a
+	// module without an HMR boundary changes, so an instance only other modules
+	// asked for is written to a file of its own instead of the declaring one.
+	const instanceFiles = jsInstanceFiles(unitPaths, unitCtxs);
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
+	const instanceOutRelTaken = new HashSet<string>();
+	for (const inst of instanceFiles) {
+		const file = `${inst.owner}#${inst.name}`;
+		const outRel = `_inst/${safeName(inst.declName).slice(0, 40)}.${hashContent(file)}.js`;
+		if (instanceOutRelTaken.has(outRel)) throw new Error(`internal: two generic instances are written to ${outRel}`);
+		instanceOutRelTaken.add(outRel);
+		layout.instanceFileOf.set(inst.name, file);
+		layout.outRelOf.set(file, outRel);
+	}
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags
@@ -3664,13 +3766,12 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		modFunctionOwnerNames.push(names);
 	}
 
-	const moduleCodes: string[] = [];
-	const moduleSmaps: SourceInfo[] = [];
-	const moduleNeededMods: string[][] = [];
-	const moduleNeededNames: string[][][] = [];
-	const moduleNamespaceMods: string[][] = [];
-	const moduleNamespaceNames: string[][][] = [];
-	const moduleExported: string[][] = [];
+	const fileKeys: string[] = [];
+	const fileIndexOf = new HashMap<string, int32>();
+	const fileResults: JsModuleResult[] = [];
+	const fileForced: string[][] = [];
+	const instanceOwners: string[] = [];
+	const instanceOutRels: string[] = [];
 	const moduleTestNames: string[][] = [];
 	const moduleTestFuncs: string[][] = [];
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
@@ -3686,78 +3787,93 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 
-		const fromRel = lookupOutRel(outRelKeys, outRelVals, modPath);
-		const importSpecKeys: string[] = [];
-		const importSpecVals: string[] = [];
-		if (mod != null) {
-			for (const imp of mod.imports) {
-				const toRel = lookupOutRel(outRelKeys, outRelVals, imp.sourcePath);
-				if (toRel == "") continue;
-				importSpecKeys.push(imp.sourceSpecifier);
-				importSpecVals.push(relSpecBetween(fromRel, toRel));
+		const own: Node[] = [];
+		const namespaceImports: Node[] = [];
+		const moved: Node[] = [];
+		for (const stmt of (transformed.data as ProgramData).programStmts) {
+			if (layout.instanceFileOf.has(jsInstanceBindingName(stmt))) {
+				moved.push(stmt);
+				continue;
 			}
+			own.push(stmt);
+			if (isNamespaceImport(stmt)) namespaceImports.push(stmt);
 		}
-		const moduleSpecKeys: string[] = [];
-		const moduleSpecVals: string[] = [];
-		for (let mi = 0; mi < outRelKeys.length; mi += 1) {
-			moduleSpecKeys.push(outRelKeys[mi]);
-			moduleSpecVals.push(relSpecBetween(fromRel, outRelVals[mi]));
+		for (const stmt of moved) {
+			const name = jsInstanceBindingName(stmt);
+			const file = layout.instanceFileOf.get(name)!;
+			if (fileIndexOf.has(file)) throw new Error(`internal: generic instance ${name} is declared twice in ${modPath}`);
+			const scope: Node[] = [];
+			for (const imp of namespaceImports) scope.push(imp);
+			scope.push(stmt);
+			const specs = importSpecsFrom(layout, mod, file);
+			const program = createNodeAt(NodeKind.Program, { programStmts: scope }, transformed.location);
+			fileIndexOf.set(file, fileKeys.length as int32);
+			fileKeys.push(file);
+			fileResults.push(generateJSModule(program, ctx.jsImportRegistry, modPath, file, layout, specs.keys, specs.vals, modExportKeys, modExportVals, modFunctionOwnerNames, isTestBuild, opts.sourcemap));
+			fileForced.push([name]);
+			instanceOwners.push(modPath);
+			instanceOutRels.push(layout.outRelOf.get(file)!);
 		}
 
-		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, modFunctionOwnerNames, isTestBuild, opts.sourcemap);
-		moduleCodes.push(res.code);
-		moduleSmaps.push(res.smap);
-		moduleNeededMods.push(res.neededModules);
-		moduleNeededNames.push(res.neededNames);
-		moduleNamespaceMods.push(res.namespaceModules);
-		moduleNamespaceNames.push(res.namespaceNames);
-		moduleExported.push(res.exportedNames);
+		const specs = importSpecsFrom(layout, mod, modPath);
+		const program = moved.length == 0 ? transformed : createNodeAt(NodeKind.Program, { programStmts: own }, transformed.location);
+		const res = generateJSModule(program, ctx.jsImportRegistry, modPath, modPath, layout, specs.keys, specs.vals, modExportKeys, modExportVals, modFunctionOwnerNames, isTestBuild, opts.sourcemap);
+		fileIndexOf.set(modPath, fileKeys.length as int32);
+		fileKeys.push(modPath);
+		fileResults.push(res);
+		fileForced.push([]);
 		moduleTestNames.push(res.testNames);
 		moduleTestFuncs.push(res.testFuncs);
 	}
 
-	// Forced exports: names other modules reference or read through a namespace
-	// object that this module didn't export (private helpers reachable from
-	// generic bodies, caller-side instances reused by later modules). A name
-	// needed here but not defined here is a compiler bug — node fails loudly at
-	// the gate, by design.
-	for (let ui = 0; ui < unitPaths.length; ui += 1) {
-		const forced: string[] = [];
-		const demanded: string[] = [];
-		for (let vi = 0; vi < unitPaths.length; vi += 1) {
-			for (let mi = 0; mi < moduleNeededMods[vi].length; mi += 1) {
-				if (vi != ui && moduleNeededMods[vi][mi] == unitPaths[ui]) for (const n of moduleNeededNames[vi][mi]) demanded.push(n);
+	// Forced exports: names other files reference, or read through a namespace
+	// object, that this file didn't export (private helpers reachable from
+	// generic bodies, instances reused by other modules). A name needed here but not defined here is a compiler
+	// bug — node fails loudly at the gate, by design.
+	for (let vi = 0; vi < fileKeys.length; vi += 1) {
+		const needed = fileResults[vi];
+		for (let mi = 0; mi < needed.neededModules.length; mi += 1) {
+			const target = needed.neededModules[mi];
+			const ti = fileIndexOf.get(target);
+			if (ti == null) {
+				if (layout.outRelOf.has(target)) throw new Error(`internal: ${fileKeys[vi]} imports from ${target}, which was not emitted`);
+				continue;
 			}
-			for (let mi = 0; mi < moduleNamespaceMods[vi].length; mi += 1) {
-				if (moduleNamespaceMods[vi][mi] == unitPaths[ui]) for (const n of moduleNamespaceNames[vi][mi]) demanded.push(n);
+			if (ti == vi) continue;
+			for (const n of needed.neededNames[mi]) {
+				if (!fileResults[ti].exportedNames.includes(n) && !fileForced[ti].includes(n)) fileForced[ti].push(n);
 			}
 		}
-		for (const n of demanded) {
-			if (!moduleExported[ui].includes(n) && !forced.includes(n)) forced.push(n);
+		for (let mi = 0; mi < needed.namespaceModules.length; mi += 1) {
+			const ti = fileIndexOf.get(needed.namespaceModules[mi]);
+			if (ti == null) continue;
+			for (const n of needed.namespaceNames[mi]) {
+				if (!fileResults[ti].exportedNames.includes(n) && !fileForced[ti].includes(n)) fileForced[ti].push(n);
+			}
 		}
-		let code = moduleCodes[ui];
+	}
+	for (let fi = 0; fi < fileKeys.length; fi += 1) {
+		let code = fileResults[fi].code;
+		const forced = fileForced[fi];
 		if (forced.length > 0) {
-			let names = "";
-			for (let fi = 0; fi < forced.length; fi += 1) {
-				if (fi > 0) names = `${names}, `;
-				names = names + forced[fi];
-			}
-			code = `${code}export { ${names} };\n`;
+			forced.sort();
+			code = `${code}export { ${forced.join(", ")} };\n`;
 		}
-		const outPath = `${outRoot}/${lookupOutRel(outRelKeys, outRelVals, unitPaths[ui])}`;
+		const outPath = `${outRoot}/${layout.outRelOf.get(fileKeys[fi])!}`;
 		ensureDir(dirname(outPath));
 		if (opts.sourcemap) {
 			const mapName = `${basename(outPath)}.map`;
-			const stdIgnored = ignoredFileIndexes(moduleSmaps[ui], (p: string): boolean => stdRoot != "" && p.startsWith(stdRoot));
-			writeOutput(`${outPath}.map`, toSourceMapJson(moduleSmaps[ui], basename(outPath), mapDirOf(outPath), readSourceText, stdIgnored));
+			const smap = fileResults[fi].smap;
+			const stdIgnored = ignoredFileIndexes(smap, (p: string): boolean => stdRoot != "" && p.startsWith(stdRoot));
+			writeOutput(`${outPath}.map`, toSourceMapJson(smap, basename(outPath), mapDirOf(outPath), readSourceText, stdIgnored));
 			code = `${code}\n//# sourceMappingURL=${mapName}\n`;
 		}
 		writeOutput(outPath, code);
 	}
 
 	const outRels: string[] = [];
-	for (const mp of unitPaths) { outRels.push(lookupOutRel(outRelKeys, outRelVals, mp)); }
-	return { outRoot, modulePaths: unitPaths, moduleOutRels: outRels, testNames: moduleTestNames, testFuncs: moduleTestFuncs };
+	for (const mp of unitPaths) { outRels.push(layout.outRelOf.get(mp) ?? ""); }
+	return { outRoot, modulePaths: unitPaths, moduleOutRels: outRels, instanceOwners, instanceOutRels, testNames: moduleTestNames, testFuncs: moduleTestFuncs };
 }
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
