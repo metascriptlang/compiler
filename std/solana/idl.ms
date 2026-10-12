@@ -1,4 +1,4 @@
-import { Node, NodeKind, bindSym, define, getImpl, getSize, getTypeImpl, sameType, stringValue } from "std/meta";
+import { Node, NodeKind, bindSym, define, expansionFile, getImpl, getSize, getTypeImpl, sameType, stringValue } from "std/meta";
 import { Pubkey } from "./pubkey";
 import { Bytes } from "./bytes";
 import {
@@ -25,15 +25,33 @@ export macro anchorIdl(spec: Node): Node {
 		return -1;
 	}
 
+	function unreadableBase(from: Node, base: string, found: Node | null): string {
+		if (base.indexOf("<") >= 0) { return "a base with type arguments is not supported; extend a struct that has none"; }
+		if (found == null) {
+			return "no struct named '" + base + "' is imported where anchorIdl is called; import it there under that name";
+		}
+		const parent = found!;
+		if (parent.kind !== NodeKind.StructDecl && parent.kind !== NodeKind.InterfaceDecl) {
+			return "'" + base + "' is not a struct where anchorIdl is called";
+		}
+		const home = from.resolvedSym!.modulePath;
+		const origin = parent.resolvedSym!.modulePath;
+		const calledWhereDeclared = home == expansionFile();
+		const declaredBesideUnderThatName = origin == home && parent.interfaceName == base;
+		if (calledWhereDeclared || declaredBesideUnderThatName) { return ""; }
+		return "'" + base + "' names the struct '" + parent.interfaceName + "' of '" + origin +
+			"' where anchorIdl is called, which may not be the base '" + from.interfaceName +
+			"' was declared with in '" + home + "'; import the '" + base + "' that module declares under that name or, " +
+			"when it imports '" + base + "' itself, call anchorIdl there";
+	}
+
 	function inheritedFirst(from: Node, names: string[], types: string[], decorators: Node[][]): void {
 		for (const base of from.interfaceExtends) {
 			const parent = getImpl(bindSym(base));
-			if (parent == null) {
-				const cause = base.indexOf("<") >= 0
-					? "a base with type arguments is not supported; extend a struct that has none"
-					: "no struct named '" + base + "' is imported where anchorIdl is called; import it there under that name";
+			const unreadable = unreadableBase(from, base, parent);
+			if (unreadable != "") {
 				error("anchorIdl: '" + from.interfaceName + "' extends '" + base +
-					"', whose fields anchorIdl cannot read: " + cause, spec);
+					"', whose fields anchorIdl cannot read: " + unreadable, spec);
 			}
 			inheritedFirst(parent!, names, types, decorators);
 		}
