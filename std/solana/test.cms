@@ -4911,7 +4911,7 @@ test "after a close the account is no longer this program's: a later instruction
 
 function closeThenCreateStep(): Result<uint64, ProgramError> {
 	const counter = try mutable<Counter>(0);
-	const refund = try writable(1);
+	const refund = try writable(2);
 	const payer = try writableSigner(2);
 	const _closed = try close(counter, refund);
 	const reborn = try create<Counter>(payer, try writable(0));
