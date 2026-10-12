@@ -304,3 +304,44 @@ test "errorPropagation: a try in a match expression arm lowers and returns its e
 	assert !lazyTryMatchArm(false).ok;
 	assert lazyTryCalls == 1;
 }
+
+let orderTrace = "";
+function orderLeft(): int32 { orderTrace = orderTrace + "L"; return 1; }
+function orderRight(): int32 { orderTrace = orderTrace + "R"; return 3; }
+function orderTry(ok: boolean): Result<int32, string> { orderTrace = orderTrace + "T"; return ok ? Result.ok(2) : Result.err("no"); }
+function orderAdd3(a: int32, b: int32, c: int32): int32 { return a + b + c; }
+function orderMiddle(ok: boolean): Result<int32, string> { return Result.ok(orderAdd3(orderLeft(), try orderTry(ok), orderRight())); }
+function orderOperator(): Result<int32, string> { return Result.ok(orderLeft() + (try orderTry(true))); }
+function orderArray(): Result<int32, string> { const x = [orderLeft(), try orderTry(true)]; return Result.ok(x[0] + x[1]); }
+function orderRead(): Result<int32, string> { orderStored = 5; return Result.ok(orderStored + (try orderMutates())); }
+let orderStored: int32 = 0;
+function orderMutates(): Result<int32, string> { orderStored = 100; return Result.ok(1); }
+
+test "errorPropagation: operands left of a try run before it and operands right of it after it" {
+	orderTrace = "";
+	const r = orderMiddle(true);
+	assert r.ok;
+	if (r.ok) assert r.value == 6;
+	assert orderTrace == "LTR";
+}
+
+test "errorPropagation: a failing try returns after the operands on its left and before those on its right" {
+	orderTrace = "";
+	assert !orderMiddle(false).ok;
+	assert orderTrace == "LT";
+}
+
+test "errorPropagation: a try right of a binary operator or in an array literal runs after the left operand" {
+	orderTrace = "";
+	assert orderOperator().ok;
+	assert orderTrace == "LT";
+	orderTrace = "";
+	assert orderArray().ok;
+	assert orderTrace == "LT";
+}
+
+test "errorPropagation: a variable on the left of a try is read before the try runs" {
+	const r = orderRead();
+	assert r.ok;
+	if (r.ok) assert r.value == 6;
+}

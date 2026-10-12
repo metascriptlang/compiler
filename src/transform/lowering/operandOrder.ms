@@ -28,7 +28,9 @@ export function isAssignOp(op: string): boolean {
 function isCallKind(e: Node): boolean {
 	if (e.kind == NodeKind.CallExpr || e.kind == NodeKind.NewExpr
 		|| e.kind == NodeKind.UnaryExpr || e.kind == NodeKind.UpdateExpr) return true;
-	return e.kind == NodeKind.BinaryExpr && !isAssignOp((e.data as BinaryExprData).operator);
+	if (e.kind != NodeKind.BinaryExpr) return false;
+	const op = (e.data as BinaryExprData).operator;
+	return op != ".." && !isAssignOp(op);
 }
 
 export function bindTemp(sp: Spiller, init: Node, declKind: DeclKind, t: Type | null, pre: Node[], loc: SourceLocation): Symbol {
@@ -82,7 +84,13 @@ function bindIfEarly(sp: Spiller, e: Node, pre: Node[]): Node {
 	return tempRef(bindTemp(sp, e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
 }
 
+// A deref wrapper holds the operand's value: the call or read inside it is what runs early.
 function bindOperand(sp: Spiller, e: Node, snapshot: boolean, pre: Node[]): Node {
+	if (e.kind == NodeKind.HiddenDeref) {
+		const hd = e.data as HiddenDerefData;
+		hd.expr = bindOperand(sp, hd.expr, snapshot, pre);
+		return e;
+	}
 	if ((snapshot && readsBeforeHoist(e)) || (isCallKind(e) && !isVoidType(e.nodeType))) {
 		return tempRef(bindTemp(sp, e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
 	}

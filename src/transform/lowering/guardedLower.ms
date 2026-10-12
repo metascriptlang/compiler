@@ -3,6 +3,7 @@
 //
 // A position evaluated conditionally (`&&`/`||` right operand, ternary arm) rewrites its OWNER
 // to statement form, so the block re-walk lowers the kind inside the branch that guards it.
+// An operand written left of the hoisted kind is evaluated first (operandOrder).
 // A loop condition becomes `while (true) { <hoisted>; if (!cond) break; body }`.
 
 import { Node, NodeKind, DeclKind, TypeKind, WhileStmtData, DoWhileStmtData, ForStmtData, SwitchStmtData, AssertStmtData, IfStmtData, VariableDeclData, ExprStmtData, BinaryExprData, ConditionalExprData } from "../../ast/node";
@@ -10,11 +11,13 @@ import { TransformContext, freshTempSym } from "../context";
 import { containsExprKind, mapExprChildren } from "../walker";
 import { lowerForStmt } from "./forLoopLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
+import { Spiller, lowerOperandList, lowerAssign, isAssignOp } from "./operandOrder";
 import { makeIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull, makeIf, makeAssign, makeBool, makeUnary, makeBreak, extractBodyStmts } from "../util";
 
 export type KindHoister = (node: Node, hoisted: Node[], ctx: TransformContext) => Node;
 
 export function hoistGuarded(expr: Node, kind: NodeKind, hoistKind: KindHoister, hoisted: Node[], ctx: TransformContext): Node {
+	if (!containsExprKind(expr, kind)) return expr;
 	if (expr.kind == NodeKind.BinaryExpr) {
 		const bd = expr.data as BinaryExprData;
 		if (bd.operator == "&&" || bd.operator == "||") {
@@ -36,6 +39,16 @@ export function hoistGuarded(expr: Node, kind: NodeKind, hoistKind: KindHoister,
 	if (expr.kind == kind) {
 		return hoistKind(expr, hoisted, ctx);
 	}
+	const sp: Spiller = {
+		ctx: ctx,
+		has: (n: Node): boolean => containsExprKind(n, kind),
+		lower: (n: Node, pre: Node[]): Node => hoistGuarded(n, kind, hoistKind, pre, ctx),
+	};
+	if (expr.kind == NodeKind.BinaryExpr) {
+		const op = (expr.data as BinaryExprData).operator;
+		if (isAssignOp(op) && op != "&&=" && op != "||=" && op != "??=") return lowerAssign(sp, expr, hoisted);
+	}
+	if (lowerOperandList(sp, expr, hoisted)) return expr;
 	mapExprChildren(expr, (child: Node): Node => hoistGuarded(child, kind, hoistKind, hoisted, ctx));
 	return expr;
 }

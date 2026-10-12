@@ -397,3 +397,7 @@ test "try in a while condition moves into the loop body" {
 	assert stmts[0].kind == NodeKind.WhileStmt;
 	assert !containsExprKind((stmts[0].data as WhileStmtData).whileCondition, NodeKind.TryExpr);
 }
+
+test "a call left of a try is bound before it" { assert stmtCountAfter("const x = add(g(), try f);", lowerTryExpr) == 4; }
+
+test "a literal left of a try is not bound" { assert stmtCountAfter("const x = add(1, try f);", lowerTryExpr) == 3; }
