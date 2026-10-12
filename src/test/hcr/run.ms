@@ -1669,6 +1669,45 @@ function dynamicImportParity(): void {
 	console.log(`ok   ${tag}`);
 }
 
+// ---- hcrJsInstanceFiles: a new instantiation in the app leaves the library's ES module alone ----
+
+function jsInstanceFiles(): void {
+	const tag = "hcrJsInstanceFiles";
+	const dir = freshDir(`${TMP}/jsInstanceFiles`);
+	copy(`${FIXTURES}/jsInstanceFiles/lib.ms`, `${dir}/lib.ms`);
+	const first = "JS-INST first 1 7 own 2 own 1 made=4 counted=1";
+	const second = "JS-INST second 1 true app 3 own 1 made=8 counted=2";
+	const refusal = "invalid object conversion: Box<boolean> is not Box<int32>";
+	const edits = ["app.ms", "appSecondType.ms", "appWrongCast.ms"];
+	const wants = [[first], [first, second], [first, second, refusal]];
+	const libOf: string[] = [];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/jsInstanceFiles/${edits[i]}`, `${dir}/app.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--target=js", "--split", `--output=tree${i}`], `split JS emission failed with ${edits[i]}`);
+		libOf.push(read(`${dir}/tree${i}/lib.js`));
+		const ran = msc(dir, ["run", "--target=js", "app.ms"]);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("JS-INST ")) seen.push(line);
+			if (line.contains("invalid object conversion")) seen.push(line.slice(line.indexOf("invalid object conversion")));
+		}
+		if (seen.join("\n") != wants[i].join("\n") || succeeded(ran) != (i < 2)) {
+			console.log(both(ran));
+			failWith(tag, `${edits[i]} did not run as on the native target`);
+		}
+	}
+	need(tag, libOf[0] != "", "the split tree has no lib.js");
+	for (let i = 1; i < edits.length; i += 1) {
+		need(tag, libOf[i] == libOf[0], `${edits[i]} changed the emitted file of the untouched module lib`);
+	}
+	const before = readDir(`${dir}/tree0/_inst`);
+	for (const file of before) {
+		need(tag, read(`${dir}/tree1/_inst/${file}`) == read(`${dir}/tree0/_inst/${file}`), `${edits[1]} changed the instance file ${file}`);
+	}
+	need(tag, readDir(`${dir}/tree1/_inst`).length > before.length, `${edits[1]} added no instance file`);
+	console.log(`ok   ${tag}`);
+}
+
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
@@ -1718,6 +1757,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrAndroidImages", run: androidImages },
 	{ name: "hcrDynamicImportReload", run: dynamicImportReload },
 	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
+	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
