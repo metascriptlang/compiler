@@ -1,7 +1,7 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
-import { DeclKind, Node, NodeKind, bindSym, define, expansionFile, getImpl, stringValue } from "std/meta";
+import { DeclKind, Node, NodeKind, bindSym, define, expansionFile, getImpl, sameType, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
 import { accountAddressOf, keyAddressOf, slottedTable } from "./accountSeeds";
 import { namedWord } from "./discriminator";
@@ -681,7 +681,23 @@ export macro accounts(): Node {
 	if (shape.kind !== NodeKind.TypeObject) {
 		error("accounts<T>(): T must be a struct of the instruction's accounts", shape);
 	}
-	const decl = getImpl(bindSym(shape.typExprTypeName))!;
+	const given = shape.typExprTypeName;
+	const named = bindSym(given);
+	const found = getImpl(named);
+	let unreadable = "";
+	if (named == null) {
+		unreadable = "no struct has that name";
+	} else if (found == null || (found!.kind !== NodeKind.StructDecl && found!.kind !== NodeKind.InterfaceDecl)) {
+		unreadable = "that name is not a struct";
+	} else if (!sameType(named, shape)) {
+		unreadable = "that name means another struct, '" + found!.interfaceName + "' of '" + found!.resolvedSym!.modulePath + "'";
+	}
+	if (unreadable != "") {
+		error("accounts<" + given + ">(): accounts<T>() reads the declaration of '" + given + "' by its name, and where it " +
+			"is called " + unreadable + "; import the struct under its own name, or call accounts<T>() in the module " +
+			"that declares it", shape);
+	}
+	const decl = found!;
 	const line = shape.line;
 	const column = shape.column;
 	const holder = "$accounts";
