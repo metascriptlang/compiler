@@ -3429,4 +3429,26 @@ when (testBuild) {
 			}
 		}
 	}
+
+	test "a Token-2022 extension with a setting in force fails the run, because its rule is not simulated" {
+		const paused = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		paused[2].data = extendedMint([26]);
+		assert ledgerRun(paused, 3, 1).result == 0;
+		paused[2].data[170 + 32] = 1;
+		const stopped = ledgerRun(paused, 3, 1);
+		assert stopped.result != 0;
+		assert stopped.fault == "sol_invoke_signed: Token-2022 extension 26 with a setting in force is not simulated";
+		const charged = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		charged[2].data = extendedMint([1]);
+		charged[2].data[170 + 106] = 50;
+		assert ledgerRun(charged, 3, 1).fault.indexOf("extension 1 with a setting in force") >= 0;
+		const hooked = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		hooked[2].data = extendedMint([14]);
+		hooked[2].data[170 + 32] = 9;
+		assert ledgerRun(hooked, 3, 1).fault.indexOf("extension 14 with a setting in force") >= 0;
+		const guarded = extendedSource(11, 1);
+		guarded[0].data[174] = 1;
+		assert ledgerRun(guarded, 3, 1).fault.indexOf("extension 11 with a setting in force") >= 0;
+		for (const refused of [charged, hooked, guarded]) { assert unmoved(refused); }
+	}
 }

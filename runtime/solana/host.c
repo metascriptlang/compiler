@@ -1110,8 +1110,51 @@ static uint64_t msSolHostInitializeMint2(const uint64_t* header) {
     return 0;
 }
 
+static int msSolHostAnyByte(const uint8_t* bytes, uint64_t from, uint64_t to) {
+    for (uint64_t index = from; index < to; index++) {
+        if (bytes[index] != 0) return 1;
+    }
+    return 0;
+}
+
+static int msSolHostExtensionInForce(uint16_t kind, const uint8_t* body, uint16_t size) {
+    switch (kind) {
+    case 1: return size >= 108 && (msSolHostAnyByte(body, 88, 90) || msSolHostAnyByte(body, 106, 108));
+    case 14: return size >= 64 && msSolHostAnyByte(body, 32, 64);
+    case 26: return size >= 33 && body[32] != 0;
+    case 2: case 4: case 5: case 8: case 11: case 12: case 16: case 17: case 24:
+        return msSolHostAnyByte(body, 0, size);
+    default: return 0;
+    }
+}
+
+static int msSolHostExtensionNotSimulated(const uint64_t* header) {
+    for (uint64_t index = 0; index < header[2]; index++) {
+        const uint8_t* record = msSolHostRecordOf(header, index);
+        uint64_t length = msSolHostLoadU64(record + 80);
+        if (!msSolHostOwnedByCallee(header, record) || length == MS_SOL_HOST_TOKEN_MULTISIG_LENGTH) continue;
+        const uint8_t* data = record + 88;
+        uint64_t offset = MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH + 1;
+        while (offset + 4 <= length) {
+            uint16_t kind, size;
+            memcpy(&kind, data + offset, 2);
+            memcpy(&size, data + offset + 2, 2);
+            if (kind == 0 || size > length - offset - 4) break;
+            if (msSolHostExtensionInForce(kind, data + offset + 4, size)) {
+                char text[sizeof(msSolHostFaultText)];
+                snprintf(text, sizeof(text), "sol_invoke_signed: Token-2022 extension %u with a setting in force is not simulated", (unsigned)kind);
+                msSolHostFault(2, text);
+                return 1;
+            }
+            offset += 4ULL + size;
+        }
+    }
+    return 0;
+}
+
 static uint64_t msSolHostToken(const uint64_t* header) {
     if (header[4] < 1) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
+    if (msSolHostIsToken2022(header) && msSolHostExtensionNotSimulated(header)) return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     const uint8_t* data = (const uint8_t*)header[3];
     switch (data[0]) {
     case 3:
