@@ -8,6 +8,8 @@ import {
 	FIND_ADDRESS,
 	FORWARD,
 	FORWARD_AND_CARRY_ON,
+	LOG_ACCOUNT_DATA,
+	LOG_BYTES,
 	NONE,
 	OVERLAPPING_COPY,
 	RETURN_DATA,
@@ -225,5 +227,56 @@ test "an instruction the System simulator does not know fails the run as not sim
 		const passed = [held(wallet(1))];
 		const outcome = forwarded(SYSTEM_PROGRAM_ID, passed, [4, 0, 0, 0], unsigned(), op);
 		assert notSimulated(outcome, "System program instruction 4 is not simulated");
+	}
+}
+
+function linesStarting(prefix: string): int32 {
+	let count = 0;
+	for (const line of logs()) {
+		if (line.indexOf(prefix) == 0) { count++; }
+	}
+	return count;
+}
+
+test "a log line is kept whole when it is UTF-8, a zero byte included, and aborts the program when not" {
+	assert sent([LOG_BYTES, 0x68, 0xc3, 0xa9]).result == 0 && logs()[0] == "Program log: h\u{e9}";
+	assert sent([LOG_BYTES]).result == 0 && logs()[0] == "Program log: ";
+	assert sent([LOG_BYTES, 0xf4, 0x8f, 0xbf, 0xbf]).result == 0 && logs()[0].length > 13;
+	assert sent([LOG_BYTES, 0x61, 0, 0x62]).result == 0;
+	const line = logs()[0].asBytes();
+	assert line.length == 16 && line[13] == 0x61 && line[14] == 0 && line[15] == 0x62;
+	const refused: uint8[][] = [
+		[0x61, 0xff],
+		[0x61, 0xc3],
+		[0x61, 0xed, 0xa0, 0x80],
+		[0x61, 0xc0, 0xaf],
+		[0x61, 0xf4, 0x90, 0x80, 0x80],
+	];
+	for (const bytes of refused) {
+		const data: uint8[] = [LOG_BYTES];
+		for (const byte of bytes) { data.push(byte); }
+		assert aborted(sent(data), "sol_log_: the line is not valid UTF-8");
+		assert linesStarting("Program log: a") == 0;
+	}
+}
+
+test "the log keeps the lines that fit under 10,000 bytes and says once that it is truncated" {
+	const text: uint8[] = [];
+	for (let index = 0; index < 20000; index++) { text.push(0x61); }
+	const invokeLine = `Program ${programKey().toBase58()} invoke [1]`.length;
+	const cases: int32[][] = [
+		[9000, 1, 0], [9900, 1, 1], [10000, 1, 1], [20000, 1, 1], [1000, 12, 1], [100, 120, 1],
+	];
+	for (const entry of cases) {
+		const length = entry[0];
+		const count = entry[1];
+		const data: uint8[] = [
+			LOG_ACCOUNT_DATA, (length & 255) as uint8, (length >> 8) as uint8, count as uint8, 0,
+		];
+		assert sent(data, [holding(keyOf(1), programKey(), SOL, text)]).result == 0;
+		let fit = 0;
+		while (fit < count && invokeLine + (fit + 1) * (13 + length) < 10000) { fit++; }
+		assert linesStarting("Program log: aa") == fit;
+		assert linesStarting("Log truncated") == entry[2];
 	}
 }
