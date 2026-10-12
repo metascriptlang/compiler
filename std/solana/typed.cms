@@ -458,6 +458,114 @@ test "literal selection widens the minimum int32 before negation" {
 	assert found.error.code == 2147483648;
 }
 
+@inline function uncheckedProof(index: int32, out failure: uint64): Account {
+	let found: Account = { address: 0 };
+	failure = uncheckedProofFailure(index, found);
+	return found;
+}
+
+@inline function signerProof(index: int32, out failure: uint64): Signer {
+	let proof: Signer;
+	failure = signerProofFailure(index, proof);
+	return proof;
+}
+
+@inline function writableSignerProof(index: int32, out failure: uint64): WritableSigner {
+	let proof: WritableSigner;
+	failure = writableSignerProofFailure(index, proof);
+	return proof;
+}
+
+@inline function writableProof(index: int32, out failure: uint64): Writable {
+	let proof: Writable;
+	failure = writableProofFailure(index, proof);
+	return proof;
+}
+
+@inline function systemProof(index: int32, out failure: uint64): SystemAccount {
+	let proof: SystemAccount;
+	failure = systemProofFailure(index, proof);
+	return proof;
+}
+
+@inline function programProof<P>(index: int32, out failure: uint64): Program<P> {
+	let proof: Program<P>;
+	failure = programProofFailure<P>(index, proof);
+	return proof;
+}
+
+@inline function ownedProof<T>(index: int32, out failure: uint64): Owned<T> {
+	let proof: Owned<T>;
+	failure = ownedProofFailure<T>(index, proof);
+	return proof;
+}
+
+@inline function mutableProof<T>(index: int32, out failure: uint64): Mutable<T> {
+	let proof: Mutable<T>;
+	failure = mutableProofFailure<T>(index, proof);
+	return proof;
+}
+
+@inline function delegatedProof<T>(index: int32, out failure: uint64): Delegated<T> {
+	let proof: Delegated<T>;
+	failure = delegatedProofFailure<T>(index, proof);
+	return proof;
+}
+
+@inline function writablePdaProof(index: int32, out failure: uint64): WritablePda {
+	let proof: WritablePda;
+	failure = writablePdaProofFailure(index, proof);
+	return proof;
+}
+
+@inline function signerProofFromAddress(address: uint64, out failure: uint64): Signer {
+	let proof: Signer;
+	failure = signerProofAt(address, proof);
+	return proof;
+}
+
+@inline function writableSignerProofFromAddress(address: uint64, out failure: uint64): WritableSigner {
+	let proof: WritableSigner;
+	failure = writableSignerProofAt(address, proof);
+	return proof;
+}
+
+@inline function writableProofFromAddress(address: uint64, out failure: uint64): Writable {
+	let proof: Writable;
+	failure = writableProofAt(address, proof);
+	return proof;
+}
+
+@inline function programProofFromAddress<P>(address: uint64, out failure: uint64): Program<P> {
+	let proof: Program<P>;
+	failure = programProofAt<P>(address, proof);
+	return proof;
+}
+
+@inline function ownedProofFromAddress<T>(address: uint64, out failure: uint64): Owned<T> {
+	let proof: Owned<T>;
+	failure = ownedProofAt<T>(address, proof);
+	return proof;
+}
+
+@inline function mutableProofFromAddress<T>(address: uint64, out failure: uint64): Mutable<T> {
+	let proof: Mutable<T>;
+	failure = mutableProofAt<T>(address, proof);
+	return proof;
+}
+
+@inline function externalProof<T>(index: int32, out failure: uint64, out rejected: boolean): External<T> {
+	let proof: External<T>;
+	failure = externalProofFailure<T>(index, proof, rejected);
+	return proof;
+}
+
+@inline function externalMutableProof<T>(index: int32, out failure: uint64, out rejected: boolean): ExternalMutable<T> {
+	let proof: ExternalMutable<T>;
+	failure = externalMutableProofFailure<T>(index, proof, rejected);
+	return proof;
+}
+
 macro provenDiscriminatorWord(): Node {
 	const type = getTypeArg();
 	const name = type.kind === NodeKind.TypeObject ? type.typExprTypeName : type.name;
@@ -496,25 +604,35 @@ macro singleAccountBody(index: Node): Node {
 	const field = shape.typExprFieldTypes[0];
 	const base = field.kind === NodeKind.TypeGeneric ? field.typExprBase.name : field.typExprTypeName;
 	let kernel: Node | null = null;
-	if (base == "Signer") { kernel = bindSym("signerProofFailure"); }
-	if (base == "WritableSigner") { kernel = bindSym("writableSignerProofFailure"); }
-	if (base == "Writable") { kernel = bindSym("writableProofFailure"); }
-	if (base == "WritablePda") { kernel = bindSym("writablePdaProofFailure"); }
-	if (base == "SystemAccount") { kernel = bindSym("systemProofFailure"); }
-	if (base == "Account") { kernel = bindSym("uncheckedProofFailure"); }
-	if (base == "Program") { kernel = bindSym("programProofFailure"); }
-	if (base == "Owned") { kernel = bindSym("ownedProofFailure"); }
-	if (base == "Mutable") { kernel = bindSym("mutableProofFailure"); }
-	if (base == "Delegated") { kernel = bindSym("delegatedProofFailure"); }
-	if (base == "External") { kernel = bindSym("externalProofFailure"); }
-	if (base == "ExternalMutable") { kernel = bindSym("externalMutableProofFailure"); }
+	if (base == "Signer") { kernel = bindSym("signerProof"); }
+	if (base == "WritableSigner") { kernel = bindSym("writableSignerProof"); }
+	if (base == "Writable") { kernel = bindSym("writableProof"); }
+	if (base == "WritablePda") { kernel = bindSym("writablePdaProof"); }
+	if (base == "SystemAccount") { kernel = bindSym("systemProof"); }
+	if (base == "Account") { kernel = bindSym("uncheckedProof"); }
+	if (base == "Program") { kernel = bindSym("programProof"); }
+	if (base == "Owned") { kernel = bindSym("ownedProof"); }
+	if (base == "Mutable") { kernel = bindSym("mutableProof"); }
+	if (base == "Delegated") { kernel = bindSym("delegatedProof"); }
+	if (base == "External") { kernel = bindSym("externalProof"); }
+	if (base == "ExternalMutable") { kernel = bindSym("externalMutableProof"); }
 	if (kernel == null) { error("single account has no proof kernel", field); }
 	function typeText(written: Node): string {
 		if (written.kind === NodeKind.TypeObject) { return written.typExprTypeName; }
-		if (written.kind !== NodeKind.TypeGeneric) { error("single account: the field type is not a named type", written); }
+		if (written.kind !== NodeKind.TypeGeneric) { error("single account: the type argument is not a named type", written); }
 		const inner: string[] = [];
 		for (const arg of written.typExprArgs) { inner.push(typeText(arg)); }
 		return written.typExprBase.name + "<" + inner.join(", ") + ">";
+	}
+	let inner = "";
+	if (field.kind === NodeKind.TypeGeneric) {
+		inner = typeText(field.typExprArgs[0]);
+		const meant = bindSym(inner);
+		if (meant != null && !sameType(meant, field.typExprArgs[0])) {
+			error("single account: where accounts<T>() is called '" + inner + "' means another type than the one the field " +
+				"was declared with; import the '" + inner + "' the field was declared with under that name, or call " +
+				"accounts<T>() in the module that declares the field", field);
+		}
 	}
 	const line = shape.line;
 	const column = shape.column;
@@ -524,11 +642,11 @@ macro singleAccountBody(index: Node): Node {
 	function ident(name: string): Node {
 		return { kind: NodeKind.Identifier, line: line, column: column, name: name };
 	}
-	function declare(name: string, type: string, value: Node | null): Node {
+	function declare(name: string, type: string, value: Node): Node {
 		return {
 			kind: NodeKind.VariableDecl, line: line, column: column,
 			declName: name, declType: type, declKind: DeclKind.Let,
-			initializer: value as Node, nameLocation: { line: line, column: column },
+			initializer: value, nameLocation: { line: line, column: column },
 		};
 	}
 	function literal(value: number): Node {
@@ -545,7 +663,7 @@ macro singleAccountBody(index: Node): Node {
 		if (typeArg != "") { made.typeArg = typeArg; }
 		return made;
 	}
-	const args: Node[] = [index, ident(proof)];
+	const args: Node[] = [index, ident(failure)];
 	if (base == "External" || base == "ExternalMutable") { args.push(ident(rejected)); }
 	const refused: Node = {
 		kind: NodeKind.BinaryExpr, line: line, column: column, operator: "||",
@@ -558,8 +676,8 @@ macro singleAccountBody(index: Node): Node {
 	};
 	const statements: Node[] = [
 		declare(rejected, "boolean", { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: false }),
-		declare(proof, typeText(field), null),
-		declare(failure, "uint64", call(kernel!, args, "")),
+		declare(failure, "uint64", literal(0)),
+		declare(proof, "", call(kernel!, args, inner)),
 		{
 			kind: NodeKind.IfStmt, line: line, column: column, condition: refused,
 			consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
@@ -1175,34 +1293,33 @@ export macro accounts(): Node {
 		});
 		const proof = ident(slotOf(names[field]), shape);
 		let direct: Node | null = null;
-		if (base == "Signer") { direct = bindSym("signerProofFailure"); }
-		if (base == "WritableSigner") { direct = bindSym("writableSignerProofFailure"); }
-		if (base == "Writable") { direct = bindSym("writableProofFailure"); }
-		if (base == "WritablePda") { direct = bindSym("writablePdaProofFailure"); }
-		if (base == "Account") { direct = bindSym("uncheckedProofFailure"); }
-		if (base == "SystemAccount") { direct = bindSym("systemProofFailure"); }
-		if (base == "Owned") { direct = bindSym("ownedProofFailure"); }
-		if (base == "Mutable") { direct = bindSym("mutableProofFailure"); }
-		if (base == "Delegated") { direct = bindSym("delegatedProofFailure"); }
-		if (base == "Program") { direct = bindSym("programProofFailure"); }
-		if (base == "External") { direct = bindSym("externalProofFailure"); }
-		if (base == "ExternalMutable") { direct = bindSym("externalMutableProofFailure"); }
+		if (base == "Signer") { direct = bindSym("signerProof"); }
+		if (base == "WritableSigner") { direct = bindSym("writableSignerProof"); }
+		if (base == "Writable") { direct = bindSym("writableProof"); }
+		if (base == "WritablePda") { direct = bindSym("writablePdaProof"); }
+		if (base == "Account") { direct = bindSym("uncheckedProof"); }
+		if (base == "SystemAccount") { direct = bindSym("systemProof"); }
+		if (base == "Owned") { direct = bindSym("ownedProof"); }
+		if (base == "Mutable") { direct = bindSym("mutableProof"); }
+		if (base == "Delegated") { direct = bindSym("delegatedProof"); }
+		if (base == "Program") { direct = bindSym("programProof"); }
+		if (base == "External") { direct = bindSym("externalProof"); }
+		if (base == "ExternalMutable") { direct = bindSym("externalMutableProof"); }
 		let atKernel: Node | null = null;
-		if (base == "Signer") { atKernel = bindSym("signerProofAt"); }
-		if (base == "Mutable") { atKernel = bindSym("mutableProofAt"); }
-		if (base == "WritableSigner") { atKernel = bindSym("writableSignerProofAt"); }
-		if (base == "Writable") { atKernel = bindSym("writableProofAt"); }
-		if (base == "Program") { atKernel = bindSym("programProofAt"); }
-		if (base == "Owned") { atKernel = bindSym("ownedProofAt"); }
+		if (base == "Signer") { atKernel = bindSym("signerProofFromAddress"); }
+		if (base == "Mutable") { atKernel = bindSym("mutableProofFromAddress"); }
+		if (base == "WritableSigner") { atKernel = bindSym("writableSignerProofFromAddress"); }
+		if (base == "Writable") { atKernel = bindSym("writableProofFromAddress"); }
+		if (base == "Program") { atKernel = bindSym("programProofFromAddress"); }
+		if (base == "Owned") { atKernel = bindSym("ownedProofFromAddress"); }
 		const slot = call(bindSym("msSolLoadU64")!, [{
 			kind: NodeKind.BinaryExpr, line: line, column: column, operator: "+",
 			left: ident("$table", shape), right: whole(field * 8, shape),
 		}], shape);
-		const verdict = atKernel == null ? call(direct!, [index, proof], shape) : call(atKernel!, [slot, proof], shape);
+		const verdict = atKernel == null ? call(direct!, [index, ident(failure, shape)], shape) : call(atKernel!, [slot, ident(failure, shape)], shape);
 		if (base == "External" || base == "ExternalMutable") { verdict.arguments.push(ident(rejected, shape)); }
 		verdict.typeArg = inner;
-		chain.push(declare(slotOf(names[field]), written, null as unknown as Node));
-		chain.push(assignFailure(verdict, shape));
+		chain.push(declare(slotOf(names[field]), "", verdict));
 		chain.push(refuseFailed());
 		values.push(proof);
 		field = field + 1;
@@ -1454,6 +1571,7 @@ export macro accounts(): Node {
 		return direct;
 	}
 	const statements: Node[] = chain;
+	if (checks.length > 0) { statements.pop(); }
 	function readBuilt(): Node {
 		const read = call(bindSym("readArgs")!, [yes, built], shape);
 		read.typeArg = decl.interfaceName;
