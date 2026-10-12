@@ -19,18 +19,19 @@
 //   → const $result_0 = f();
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, IfStmtData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
 import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { widenVariantToUnion } from "../../checker/fit";
 import { TransformContext, freshTempSym } from "../context";
-import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
+import { walkNode, walkExpandBlocksHooked, containsExprKind } from "../walker";
+import { hoistGuarded, lowerGuardedTernary, expandConditionStmt } from "../lowering/guardedLower";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
 	makeExprStmt, makeTryCatch, makeCatchSym, makeAssign, makeDefaultValue, makeTypedObjectLiteral, callBuiltinKind,
 } from "../util";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Helpers: Typed Result Access =====
 
@@ -137,95 +138,99 @@ function makeResultErr(errExpr: Node, resType: Type, loc: SourceLocation): Node 
 	return lit;
 }
 
-// ===== TryExpr Hoisting via shared walker =====
-// Uses replaceInExpr from walker.ms — single expression tree walker shared with matchLower.
+// ===== TryExpr Hoisting =====
+// Position-aware (guardedLower): a `try` under a conditionally-evaluated position hoists inside
+// its guard, so its operand and its error return run only when that position is evaluated.
 
 // Hoist all TryExpr from an expression tree into preceding statements.
 function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	return replaceInExpr(expr, (node: Node): Node => {
-		if (node.kind != NodeKind.TryExpr) return node;
-		const tryData = node.data as TryExprData;
-		const loc = node.location;
-		const resType = tryData.tryArg.nodeType;
-		const sym = freshTempSym(ctx, "result", resType != null ? resType : noneType());
+	return hoistGuarded(expr, NodeKind.TryExpr, hoistOneTry, hoisted, ctx);
+}
 
-		if (tryData.hasCatch && tryData.tryArg.kind == NodeKind.AwaitExpr && !isResult(resType)) {
-			const decl = makeVarDecl(sym.name, makeDefaultValue(resType, loc), DeclKind.Let, loc);
-			decl.resolvedSym = sym;
-			decl.nodeType = resType;
-			hoisted.push(decl);
-			const awSym = freshTempSym(ctx, "await", resType != null ? resType : noneType());
-			const awDecl = makeVarDecl(awSym.name, tryData.tryArg, DeclKind.Const, loc);
-			awDecl.resolvedSym = awSym;
-			awDecl.nodeType = resType;
-			const awRef = makeIdentResolved(awSym, loc);
-			awRef.nodeType = resType;
-			const awTarget = makeIdentResolved(sym, loc);
-			awTarget.nodeType = resType;
-			const storeAssign = makeAssign(awTarget, awRef, loc);
-			if (tryData.catchVal.nodeType == null) tryData.catchVal.nodeType = resType;
-			const fbTarget = makeIdentResolved(sym, loc);
-			fbTarget.nodeType = resType;
-			const fbAssign = makeAssign(fbTarget, tryData.catchVal, loc);
-			const tryBlock = makeBlock([awDecl, makeExprStmt(storeAssign, loc)], loc);
-			const catchBlock = makeBlock([makeExprStmt(fbAssign, loc)], loc);
-			hoisted.push(makeTryCatch(tryBlock, makeCatchSym(ctx, "$e"), catchBlock, makeBlock([], loc), loc));
-			const ref = makeIdentResolved(sym, loc);
-			ref.nodeType = node.nodeType != null ? node.nodeType : resType;
-			return ref;
-		}
+function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext): Node {
+	const tryData = node.data as TryExprData;
+	tryData.tryArg = hoistTryExpr(tryData.tryArg, hoisted, ctx);
+	const loc = node.location;
+	const resType = tryData.tryArg.nodeType;
+	const sym = freshTempSym(ctx, "result", resType != null ? resType : noneType());
 
-		// const $result_N = tryArg;
-		const resDecl = makeVarDecl(sym.name, tryData.tryArg, DeclKind.Const, loc);
-		resDecl.resolvedSym = sym;
-		resDecl.nodeType = resType;
-		hoisted.push(resDecl);
+	if (tryData.hasCatch && tryData.tryArg.kind == NodeKind.AwaitExpr && !isResult(resType)) {
+		const decl = makeVarDecl(sym.name, makeDefaultValue(resType, loc), DeclKind.Let, loc);
+		decl.resolvedSym = sym;
+		decl.nodeType = resType;
+		hoisted.push(decl);
+		const awSym = freshTempSym(ctx, "await", resType != null ? resType : noneType());
+		const awDecl = makeVarDecl(awSym.name, tryData.tryArg, DeclKind.Const, loc);
+		awDecl.resolvedSym = awSym;
+		awDecl.nodeType = resType;
+		const awRef = makeIdentResolved(awSym, loc);
+		awRef.nodeType = resType;
+		const awTarget = makeIdentResolved(sym, loc);
+		awTarget.nodeType = resType;
+		const storeAssign = makeAssign(awTarget, awRef, loc);
+		if (tryData.catchVal.nodeType == null) tryData.catchVal.nodeType = resType;
+		const fbTarget = makeIdentResolved(sym, loc);
+		fbTarget.nodeType = resType;
+		const fbAssign = makeAssign(fbTarget, tryData.catchVal, loc);
+		const tryBlock = makeBlock([awDecl, makeExprStmt(storeAssign, loc)], loc);
+		const catchBlock = makeBlock([makeExprStmt(fbAssign, loc)], loc);
+		hoisted.push(makeTryCatch(tryBlock, makeCatchSym(ctx, "$e"), catchBlock, makeBlock([], loc), loc));
+		const ref = makeIdentResolved(sym, loc);
+		ref.nodeType = node.nodeType != null ? node.nodeType : resType;
+		return ref;
+	}
 
-		if (tryData.hasCatch) {
-			// $result.ok ? $result.value : catchVal
-			const okCheck = makeResultMember(sym, resType, "ok", loc);
-			const okValueT = getResultOkType(resType);
-			let okBranch: Node;
-			if (okValueT != null && okValueT.kind == TypeKind.Void) {
-				okBranch = makeNull(loc);
-				okBranch.nodeType = okValueT;
-			} else {
-				const valueAccess = makeResultMember(sym, resType, "value", loc);
-				// Stamp catchVal with value type so ternary branches have matching C types
-				if (tryData.catchVal.nodeType == null && valueAccess.nodeType != null) {
-					tryData.catchVal.nodeType = valueAccess.nodeType;
-				}
-				okBranch = valueAccess;
-				const joinedT = node.nodeType;
-				if (joinedT != null && isMaybeType(joinedT)
-					&& valueAccess.nodeType != null && !isMaybeType(valueAccess.nodeType)) {
-					okBranch = makeTypedObjectLiteral(["value", "present"], [valueAccess, makeBool(true, loc)], joinedT, loc);
-				} else if (joinedT != null && joinedT.kind == TypeKind.Union
-					&& valueAccess.nodeType != null && valueAccess.nodeType.kind != TypeKind.Union) {
-					const widened = widenVariantToUnion(valueAccess, joinedT, valueAccess.nodeType);
-					if (widened != null as unknown as Node) okBranch = widened;
-				}
+	// const $result_N = tryArg;
+	const resDecl = makeVarDecl(sym.name, tryData.tryArg, DeclKind.Const, loc);
+	resDecl.resolvedSym = sym;
+	resDecl.nodeType = resType;
+	hoisted.push(resDecl);
+
+	if (tryData.hasCatch) {
+		// $result.ok ? $result.value : catchVal
+		const okCheck = makeResultMember(sym, resType, "ok", loc);
+		const okValueT = getResultOkType(resType);
+		let okBranch: Node;
+		if (okValueT != null && okValueT.kind == TypeKind.Void) {
+			okBranch = makeNull(loc);
+			okBranch.nodeType = okValueT;
+		} else {
+			const valueAccess = makeResultMember(sym, resType, "value", loc);
+			// Stamp catchVal with value type so ternary branches have matching C types
+			if (tryData.catchVal.nodeType == null && valueAccess.nodeType != null) {
+				tryData.catchVal.nodeType = valueAccess.nodeType;
 			}
-			const condExpr = makeConditional(okCheck, okBranch, tryData.catchVal, loc);
-			condExpr.nodeType = node.nodeType;
-			return condExpr;
+			okBranch = valueAccess;
+			const joinedT = node.nodeType;
+			if (joinedT != null && isMaybeType(joinedT)
+				&& valueAccess.nodeType != null && !isMaybeType(valueAccess.nodeType)) {
+				okBranch = makeTypedObjectLiteral(["value", "present"], [valueAccess, makeBool(true, loc)], joinedT, loc);
+			} else if (joinedT != null && joinedT.kind == TypeKind.Union
+				&& valueAccess.nodeType != null && valueAccess.nodeType.kind != TypeKind.Union) {
+				const widened = widenVariantToUnion(valueAccess, joinedT, valueAccess.nodeType);
+				if (widened != null as unknown as Node) okBranch = widened;
+			}
 		}
+		const condExpr = makeConditional(okCheck, okBranch, tryData.catchVal, loc);
+		condExpr.nodeType = node.nodeType;
+		if (containsExprKind(tryData.catchVal, NodeKind.TryExpr)) return lowerGuardedTernary(condExpr, hoisted, ctx);
+		return condExpr;
+	}
 
-		// if (!$result.ok) { return { ok: false, error: $result.error }; }
-		hoisted.push(makeErrorCheck(sym, resType!, loc, ctx, node.resolvedSym));
+	// if (!$result.ok) { return { ok: false, error: $result.error }; }
+	hoisted.push(makeErrorCheck(sym, resType!, loc, ctx, node.resolvedSym));
 
-		// Replace TryExpr with $result.value. For `Result<void, E>` the v0
-		// variant has no `value` field — synthesize a void placeholder
-		// (`null`) which the codegen drops at field-write
-		// + sink-assign sites.
-		const okT = getResultOkType(resType);
-		if (okT != null && okT.kind == TypeKind.Void) {
-			const voidLit = makeNull(loc);
-			voidLit.nodeType = okT;
-			return voidLit;
-		}
-		return makeResultMember(sym, resType, "value", loc);
-	});
+	// Replace TryExpr with $result.value. For `Result<void, E>` the v0
+	// variant has no `value` field — synthesize a void placeholder
+	// (`null`) which the codegen drops at field-write
+	// + sink-assign sites.
+	const okT = getResultOkType(resType);
+	if (okT != null && okT.kind == TypeKind.Void) {
+		const voidLit = makeNull(loc);
+		voidLit.nodeType = okT;
+		return voidLit;
+	}
+	return makeResultMember(sym, resType, "value", loc);
 }
 
 // Expand a single statement — unified through hoistTryExpr.
@@ -259,14 +264,8 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				return hoisted;
 			}
 		},
-		NodeKind.IfStmt => {
-			const d = stmt.data as IfStmtData;
-			if (containsExprKind(d.condition, NodeKind.TryExpr)) {
-				const hoisted: Node[] = [];
-				d.condition = hoistTryExpr(d.condition, hoisted, ctx);
-				hoisted.push(stmt);
-				return hoisted;
-			}
+		NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt | NodeKind.SwitchStmt | NodeKind.AssertStmt => {
+			return expandConditionStmt(stmt, NodeKind.TryExpr, hoistOneTry, ctx);
 		},
 		_ => {},
 	};
@@ -379,4 +378,22 @@ test "makeErrorCheck Result.err call has nodeType" {
 	const retData = thenBlock.statements[0].data as RetData;
 	assert retData.argument.nodeType != null;
 	assert retData.argument.nodeType != null;
+}
+
+test "try in a ternary arm hoists inside its branch" {
+	const r = parseInput("const x = c ? 1 : try f;");
+	assert r.ok;
+	const stmts = getStmts(lowerTryExpr(r.value, makeCtx()));
+	assert stmts.length == 3;
+	assert stmts[1].kind == NodeKind.IfStmt;
+	assert (stmts[1].data as IfStmtData).condition.kind != NodeKind.UnaryExpr;
+}
+
+test "try in a while condition moves into the loop body" {
+	const r = parseInput("while ((try f) == 3) { g; }");
+	assert r.ok;
+	const stmts = getStmts(lowerTryExpr(r.value, makeCtx()));
+	assert stmts.length == 1;
+	assert stmts[0].kind == NodeKind.WhileStmt;
+	assert !containsExprKind((stmts[0].data as WhileStmtData).whileCondition, NodeKind.TryExpr);
 }
