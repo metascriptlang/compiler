@@ -1,12 +1,18 @@
 import {
+	Account,
+	InstructionAccount,
 	ProgramError,
 	Pubkey,
+	System,
 	account,
 	asAccount,
 	external,
 	externalMutable,
 	failWith,
 	instructionData,
+	invoke,
+	program,
+	putU8,
 	readPubkey,
 	readU64,
 	readU8,
@@ -23,12 +29,20 @@ import {
 	approveDelegate,
 	burnChecked,
 	burnTokens,
+	closeAccount,
+	closeTokenAccount,
+	createAssociatedFor,
 	createAssociatedToken,
+	createAssociatedTokenIdempotent,
 	createTokenAccount,
 	initializeAccount3,
+	initializeMint2,
+	mintTo,
+	mintTokens,
 	revokeDelegate,
 	setAuthority,
 	setAuthorityOf,
+	transferChecked,
 	transferTokens,
 } from "std/solana/token";
 
@@ -49,6 +63,18 @@ const REVOKE: uint8 = 13;
 const REVOKE_AS_PDA: uint8 = 14;
 const TRANSFER: uint8 = 15;
 const CREATE_ASSOCIATED_RAW: uint8 = 16;
+const MINT: uint8 = 17;
+const MINT_AS_PDA: uint8 = 18;
+const MINT_RAW: uint8 = 19;
+const TRANSFER_AS_PDA: uint8 = 20;
+const TRANSFER_RAW: uint8 = 21;
+const CLOSE: uint8 = 22;
+const CLOSE_AS_PDA: uint8 = 23;
+const CLOSE_RAW: uint8 = 24;
+const CREATE_ASSOCIATED_FOR: uint8 = 25;
+const CREATE_ASSOCIATED_IDEMPOTENT_RAW: uint8 = 26;
+const INITIALIZE_MINT_RAW: uint8 = 27;
+const FORWARD: uint8 = 28;
 
 function createAtKeypair(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
@@ -202,6 +228,123 @@ function createAssociatedRaw(): Result<uint64, ProgramError> {
 	);
 }
 
+function mint(): Result<uint64, ProgramError> {
+	const minted = try externalMutable<Mint>(0);
+	const to = try externalMutable<TokenAccount>(1);
+	return mintTokens(minted, to, try account(2), try instructionData().readU64(1));
+}
+
+function mintAsPda(): Result<uint64, ProgramError> {
+	const minted = try externalMutable<Mint>(0);
+	const to = try externalMutable<TokenAccount>(1);
+	const authority = try account(2);
+	const amount = try instructionData().readU64(1);
+	return signedPda(mintTokens(minted, to, authority, amount), authority, ["authority"]);
+}
+
+function mintRaw(): Result<uint64, ProgramError> {
+	const tokenProgram = (try account(3)).key();
+	const amount = try instructionData().readU64(1);
+	return mintTo(tokenProgram, try account(0), try account(1), try account(2), amount);
+}
+
+function transferAsPda(): Result<uint64, ProgramError> {
+	const from = try externalMutable<TokenAccount>(0);
+	const to = try externalMutable<TokenAccount>(1);
+	const minted = try external<Mint>(2);
+	const authority = try account(3);
+	const amount = try instructionData().readU64(1);
+	return signedPda(transferTokens(from, to, minted, authority, amount), authority, ["authority"]);
+}
+
+function transferRaw(): Result<uint64, ProgramError> {
+	return transferChecked(
+		(try account(4)).key(),
+		try account(0),
+		try account(2),
+		try account(1),
+		try account(3),
+		try instructionData().readU64(1),
+		try instructionData().readU8(9),
+	);
+}
+
+function close(): Result<uint64, ProgramError> {
+	const closing = try externalMutable<TokenAccount>(0);
+	return closeTokenAccount(closing, try writable(1), try account(2));
+}
+
+function closeAsPda(): Result<uint64, ProgramError> {
+	const closing = try externalMutable<TokenAccount>(0);
+	const destination = try writable(1);
+	const authority = try account(2);
+	return signedPda(closeTokenAccount(closing, destination, authority), authority, ["authority"]);
+}
+
+function closeRaw(): Result<uint64, ProgramError> {
+	return closeAccount((try account(3)).key(), try account(0), try account(1), try account(2));
+}
+
+function createAssociatedTyped(): Result<uint64, ProgramError> {
+	return createAssociatedFor(
+		try writableSigner(0),
+		try writable(1),
+		try account(2),
+		try external<Mint>(3),
+		try program<System>(4),
+		try account(5),
+	);
+}
+
+function createAssociatedIdempotentRaw(): Result<uint64, ProgramError> {
+	return createAssociatedTokenIdempotent(
+		try account(0),
+		try account(1),
+		try account(2),
+		try account(3),
+		try account(4),
+		try account(5),
+	);
+}
+
+function initializeMintRaw(): Result<uint64, ProgramError> {
+	const input = instructionData();
+	const tokenProgram = (try account(1)).key();
+	const decimals = try input.readU8(1);
+	const authority = try input.readPubkey(2);
+	if ((try input.readU8(34)) == 0) {
+		return initializeMint2(tokenProgram, try account(0), decimals, authority, null);
+	}
+	return initializeMint2(tokenProgram, try account(0), decimals, authority, try input.readPubkey(35));
+}
+
+function asPassed(held: Account): InstructionAccount {
+	return InstructionAccount.flagged(held, held.isWritable(), held.isSigner());
+}
+
+function forward(): Result<uint64, ProgramError> {
+	const input = instructionData();
+	const count = try input.readU8(1);
+	let storage: uint8[80] = [];
+	let length: uint64 = 0;
+	for (let at: uint64 = 2; at < input.length; at++) {
+		length = putU8(storage, length, try input.readU8(at));
+	}
+	const callee = (try account(0)).key();
+	if (count == 0) { return invoke(callee, [], storage, length); }
+	const first = asPassed(try account(1));
+	if (count == 1) { return invoke(callee, [first], storage, length); }
+	const second = asPassed(try account(2));
+	if (count == 2) { return invoke(callee, [first, second], storage, length); }
+	const third = asPassed(try account(3));
+	if (count == 3) { return invoke(callee, [first, second, third], storage, length); }
+	const fourth = asPassed(try account(4));
+	if (count == 4) { return invoke(callee, [first, second, third, fourth], storage, length); }
+	const fifth = asPassed(try account(5));
+	const sixth = asPassed(try account(6));
+	return invoke(callee, [first, second, third, fourth, fifth, sixth], storage, length);
+}
+
 function dispatch(): Result<uint64, ProgramError> {
 	return match (try instructionData().readU8(0)) {
 		CREATE_AT_KEYPAIR => createAtKeypair(),
@@ -221,6 +364,18 @@ function dispatch(): Result<uint64, ProgramError> {
 		REVOKE_AS_PDA => revokeAsPda(),
 		TRANSFER => transfer(),
 		CREATE_ASSOCIATED_RAW => createAssociatedRaw(),
+		MINT => mint(),
+		MINT_AS_PDA => mintAsPda(),
+		MINT_RAW => mintRaw(),
+		TRANSFER_AS_PDA => transferAsPda(),
+		TRANSFER_RAW => transferRaw(),
+		CLOSE => close(),
+		CLOSE_AS_PDA => closeAsPda(),
+		CLOSE_RAW => closeRaw(),
+		CREATE_ASSOCIATED_FOR => createAssociatedTyped(),
+		CREATE_ASSOCIATED_IDEMPOTENT_RAW => createAssociatedIdempotentRaw(),
+		INITIALIZE_MINT_RAW => initializeMintRaw(),
+		FORWARD => forward(),
 		_ => Result.err(ProgramError.invalidInstructionData()),
 	};
 }
