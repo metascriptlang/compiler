@@ -482,6 +482,45 @@ core instead of reloading per module, so a change that alters core is a restart.
 core is locked on Windows, so every image keeps its own link cache and an unchanged core
 is not relinked.
 
+The core's link key is the ordered list of its object paths (`cache.ms` `objectListKey`), so
+the same sources have to give the same list on every build. Two things moved it between the
+first build of a session and the next one whenever that first build compiled only some of the
+`@compile` files and took the rest from the object cache or the store, the state a toolchain
+update leaves behind when it edits a `runtime/` or `vendor/` header: `processCompileDirectives`
+returned the cached objects before the compiled ones, so one build later the same objects came
+back in directive order; and a file recompiled with a dependency list already on disk kept the
+name that list gave, while its compile rewrote the list. Either one relinked core, and the
+running app answered `RestartRequired` to every edit of that session; a second session
+reloaded. The objects keep directive order now, as the reference links its compile list in
+registration order whether or not an entry was cached (`compiler/extccomp.nim`
+`addExternalFileToCompile`, `toCompile`), and a recompiled object is published under the name
+the next build computes (`cache.ms` `publishNativeObject`).
+
+Measured 2026-10-12, Windows x64, tree `e4ec2c416eb0`, the `coreCell` fixture under
+`msc run --hcr` with a private copy of the toolchain root (`std`, `runtime`, `vendor`, `msc`)
+so its headers could be edited between sessions; the old compiler is `e8c024c8` with temporary
+prints around the link-cache check, and build 0 of this tree's edited sessions compiled 14
+runtime objects and took 10 from the cache:
+
+| Edit of the toolchain copy before the session | compiler of `e8c024c8` | this tree |
+|---|---|---|
+| none, every `@compile` object compiled (fresh copy) | reloaded | not measured |
+| none, every object cached (second session) | reloaded | not measured |
+| the content of a header `runtime/core/system.h` includes | restart required | reloaded |
+| `system.h` gains an `#include` | restart required | not measured |
+| `system.h` loses that `#include` | not measured | reloaded |
+
+The prints showed what moved: after the content edit, two `msc build --hcr` runs of unchanged
+sources gave the core the same 41 objects in another order, and after the added include build 1
+named the 14 recompiled objects differently from build 0. `hcrCoreNative` holds both, and the
+opposite direction too: an edit of a core native's header during the session still answers
+`RestartRequired`. It fails at its first reload on the compiler of `e8c024c8`, and at `its
+header gained an include` on a compiler with the ordering fix alone. `hcrFirstWarmBuild` failed
+here for another reason, once on each compiler: it compared the whole link record, whose output
+line moves from `content:` to `settled:` without a relink once the image is two seconds old; it
+compares the link inputs now. Not verified: a real `tools/syncLocalBinary.ms` swap, Neon's
+`examples/refreshNative/drive.sh`, Linux, macOS and Android.
+
 Three edges that a single image resolved by the linker needed a mechanism across images:
 
 - **Runtime thread-locals.** A DLL cannot import a `_Thread_local` from another DLL on this
