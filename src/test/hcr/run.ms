@@ -164,11 +164,16 @@ function moduleAbi(): void {
 	console.log("ok   hcrModuleAbi");
 }
 
-function linkKeys(dir: string): string[] {
+function linkInputKeys(dir: string): string[] {
 	const cache = `${dir}/out/debug/.cache`;
 	const keys: string[] = [];
 	for (const e of readDir(cache)) {
-		if (e.startsWith("link.") && e.endsWith(".cache")) keys.push(`${e}\n${read(`${cache}/${e}`)}`);
+		if (!e.startsWith("link.") || !e.endsWith(".cache")) continue;
+		const inputs: string[] = [e];
+		for (const line of lines(read(`${cache}/${e}`))) {
+			if (!line.startsWith("outputHash:")) inputs.push(line);
+		}
+		keys.push(inputs.join("\n"));
 	}
 	return keys;
 }
@@ -180,12 +185,12 @@ function firstWarmBuild(): void {
 	copy(`${FIXTURES}/logic.ms`, `${dir}/logic.ms`);
 	const build = ["build", "app.ms", "--hcr", "--output=module.hcr"];
 	mustBuild(tag, dir, build, "cold build failed");
-	const cold = linkKeys(dir);
+	const cold = linkInputKeys(dir);
 	copy(`${FIXTURES}/logicBodyEdit.ms`, `${dir}/logic.ms`);
 	mustBuild(tag, dir, build, "body-edit build failed");
 	let relinked = 0;
 	const changed: string[] = [];
-	for (const key of linkKeys(dir)) {
+	for (const key of linkInputKeys(dir)) {
 		if (!cold.includes(key)) {
 			relinked += 1;
 			changed.push(key);
