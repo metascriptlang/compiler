@@ -1,0 +1,7 @@
+import { Signer, Writable } from "./typed";
+import { Pubkey } from "./pubkey";
+
+export struct FarBase { owner: Signer; }
+export struct FarDerived extends FarBase { refund: Writable; }
+
+export struct FarKept { owner: Pubkey; }

@@ -5,6 +5,7 @@ import {
 } from "./typed";
 import { argBoolValid, argBytesFit, argU8, argU16, argU64 } from "./core";
 import { scopedKeysResult } from "./testArgumentScope";
+import { FarBase, FarDerived, FarKept } from "./testBaseScope";
 import {
 	directDelegated, directExternal, directExternalMutable, directMutable, directOwned, directProgram,
 } from "./testDirectCalls";
@@ -3355,6 +3356,98 @@ test "@hasOne, @seeds, @bump and @constraint read the fields a data struct inher
 		ProgramError.constraintSeeds().code;
 	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 7, keyOf(2), 5, found.bump)], [], sealedEntry).result ==
 		ProgramError.constraintRaw().code;
+}
+
+export struct NearDerived extends FarBase { target: Writable; }
+
+function farDerivedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<FarDerived>();
+	if (!x.owner.key().equals(keyOf(2)) || !x.refund.key().equals(keyOf(3))) {
+		return Result.err(ProgramError.custom(1));
+	}
+	return Result.ok(0);
+}
+
+function nearDerivedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<NearDerived>();
+	if (!x.owner.key().equals(keyOf(2)) || !x.target.key().equals(keyOf(3))) {
+		return Result.err(ProgramError.custom(1));
+	}
+	return Result.ok(0);
+}
+
+function farDerivedEntry(): void { codeOf(farDerivedStep()); }
+function nearDerivedEntry(): void { codeOf(nearDerivedStep()); }
+
+test "accounts<T>() verifies the fields of a base declared in another module, under a struct of that module or of this one" {
+	const unsigned = holder(2, Pubkey.zero(), [], false, false);
+	for (const entry of [farDerivedEntry, nearDerivedEntry]) {
+		assert run(programKey(), [ownerWallet(), wallet(3, 0)], [], entry).result == 0;
+		assert run(programKey(), [unsigned, wallet(3, 0)], [], entry).result ==
+			ProgramError.accountNotSigner().code;
+		assert run(programKey(), [ownerWallet(), readOnly(wallet(3, 0))], [], entry).result ==
+			ProgramError.constraintMut().code;
+		assert run(programKey(), [ownerWallet()], [], entry).result ==
+			ProgramError.accountNotEnoughKeys().code;
+	}
+}
+
+export struct NearKept extends FarKept { limit: uint64; }
+
+export function discriminator(this typeof NearKept): Discriminator {
+	return @comptime { return accountDiscriminator("NearKept"); };
+}
+
+export struct NearKeptAccounts {
+	owner: Signer;
+	@hasOne(owner) vault: Owned<NearKept>;
+}
+
+function nearKeptStep(): Result<uint64, ProgramError> {
+	const x = try accounts<NearKeptAccounts>();
+	return Result.err(ProgramError.custom(x.vault.data().limit as uint32));
+}
+
+function nearKeptEntry(): void { codeOf(nearKeptStep()); }
+
+function nearKeptAt(owner: Pubkey, limit: uint8): HostAccount {
+	const bytes: uint8[] = [];
+	const tag = NearKept.discriminator();
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	for (let i = 0; i < 32; i++) { bytes.push(owner.bytes[i]); }
+	bytes.push(limit);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	return holder(8, programKey(), bytes, false, false);
+}
+
+test "a decorator reads a field the data struct inherits from a base declared in another module" {
+	assert run(programKey(), [ownerWallet(), nearKeptAt(keyOf(2), 9)], [], nearKeptEntry).result ==
+		ProgramError.custom(9).code;
+	assert run(programKey(), [ownerWallet(), nearKeptAt(keyOf(9), 9)], [], nearKeptEntry).result ==
+		ProgramError.constraintHasOne().code;
+}
+
+test "anchorIdl lists the accounts and the data fields of a base declared in another module" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "far",
+		address: "",
+		Bump: [FarDerived],
+		accounts: [NearKept],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const listed = parsed.value.instructions.at(0).accounts;
+		assert listed.length() == 2;
+		assert listed.at(0).name.asString() == "owner" && listed.at(0).signer.asBoolean();
+		assert listed.at(1).name.asString() == "refund" && listed.at(1).writable.asBoolean();
+		const fields = parsed.value.types.at(0).type.fields;
+		assert fields.length() == 2;
+		assert fields.at(0).name.asString() == "owner" && fields.at(0).type.asString() == "pubkey";
+		assert fields.at(1).name.asString() == "limit" && fields.at(1).type.asString() == "u64";
+	}
 }
 
 test "anchorIdl lists the seeds accounts<T>() derives from the fields a data struct inherits" {
