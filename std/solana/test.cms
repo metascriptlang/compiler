@@ -5,7 +5,7 @@ import {
 } from "./typed";
 import { argBoolValid, argBytesFit, argU8, argU16, argU64 } from "./core";
 import { scopedKeysResult } from "./testArgumentScope";
-import { FarBase, FarDerived, FarKept } from "./testBaseScope";
+import { FarBase, FarDerived, FarKept, FarPinned, FarPinnedChild } from "./testBaseScope";
 import {
 	directDelegated, directExternal, directExternalMutable, directMutable, directOwned, directProgram,
 } from "./testDirectCalls";
@@ -3573,6 +3573,22 @@ test "accounts<T>() verifies the only field of a struct when the struct inherits
 	assert run(programKey(), [holder(2, Pubkey.zero(), [], false, false)], [], loneChildEntry).result ==
 		ProgramError.accountNotSigner().code;
 	assert run(programKey(), none, [], loneChildEntry).result == ProgramError.accountNotEnoughKeys().code;
+}
+
+function farPinnedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<FarPinnedChild>();
+	if (!x.refund.key().equals(keyOf(3))) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(0);
+}
+
+function farPinnedEntry(): void { codeOf(farPinnedStep()); }
+
+test "accounts<T>() runs the decorators of a base that another module declares beside the struct extending it" {
+	assert run(programKey(), [systemAccountKey(), wallet(3, 0)], [], farPinnedEntry).result == 0;
+	assert run(programKey(), [holder(5, Pubkey.zero(), [], false, false), wallet(3, 0)], [], farPinnedEntry).result ==
+		ProgramError.constraintAddress().code;
+	assert run(programKey(), [systemAccountKey(), readOnly(wallet(3, 0))], [], farPinnedEntry).result ==
+		ProgramError.constraintMut().code;
 }
 
 export struct NearKept extends FarKept { limit: uint64; }
