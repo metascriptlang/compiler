@@ -4,6 +4,7 @@ import {
 	Mutable,
 	Program,
 	Pubkey,
+	Signer,
 	System,
 	Token,
 	Token2022,
@@ -57,6 +58,38 @@ struct OddAccounts {
 }
 
 function computed(value: uint64): uint8[8] { return leBytes(value); }
+
+enum InheritedOp { One, Two }
+
+struct PayerAccounts {
+	payer: WritableSigner;
+	systemProgram: Program<System>;
+}
+
+struct OneLevelAccounts extends PayerAccounts {
+	@seeds("escrow", payer, leBytes(given.seed)) @bump escrow: Writable;
+	@address(CLOCK_ID) clock: Account;
+}
+
+struct AuthorityAccounts extends PayerAccounts {
+	authority: Signer;
+	@seeds("config", authority) @bump config: Mutable<Escrow>;
+}
+
+struct TwoLevelAccounts extends AuthorityAccounts {
+	@seeds("vault", payer, config.maker) @bump vault: Writable;
+}
+
+function inheritedIdl(): string {
+	return anchorIdl<InheritedOp>({
+		name: "inherited",
+		One: [OneLevelAccounts, MakeArgs],
+		Two: [TwoLevelAccounts],
+		accounts: [Escrow],
+		events: [],
+		errors: "",
+	});
+}
 
 export function pdaSeedsIdl(): string {
 	return anchorIdl<VaultOp>({
@@ -118,4 +151,29 @@ test "a seed the IDL cannot express leaves the account without a pda, as Anchor 
 	assert idl.indexOf("{\"name\":\"narrow\",\"writable\":true}") >= 0;
 	assert idl.indexOf("{\"name\":\"unknown_arg\",\"writable\":true}") >= 0;
 	assert idl.indexOf("{\"name\":\"runtime\"}") >= 0;
+}
+
+test "a struct that extends another lists the base's accounts first, with their flags and address" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("\"accounts\":[{\"name\":\"payer\",\"writable\":true,\"signer\":true}," +
+		"{\"name\":\"system_program\",\"address\":\"11111111111111111111111111111111\"}," +
+		"{\"name\":\"escrow\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[101,115,99,114,111,119]}," +
+		"{\"kind\":\"account\",\"path\":\"payer\"}," +
+		"{\"kind\":\"arg\",\"path\":\"seed\"}]}}," +
+		"{\"name\":\"clock\",\"address\":\"SysvarC1ock11111111111111111111111111111111\"}],\"args\"") >= 0;
+}
+
+test "two levels of extends list the accounts base before derived, and a seed reaches every level" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("\"accounts\":[{\"name\":\"payer\",\"writable\":true,\"signer\":true}," +
+		"{\"name\":\"system_program\",\"address\":\"11111111111111111111111111111111\"}," +
+		"{\"name\":\"authority\",\"signer\":true}," +
+		"{\"name\":\"config\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[99,111,110,102,105,103]}," +
+		"{\"kind\":\"account\",\"path\":\"authority\"}]}}," +
+		"{\"name\":\"vault\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[118,97,117,108,116]}," +
+		"{\"kind\":\"account\",\"path\":\"payer\"}," +
+		"{\"kind\":\"account\",\"path\":\"config.maker\",\"account\":\"Escrow\"}]}}],\"args\"") >= 0;
 }

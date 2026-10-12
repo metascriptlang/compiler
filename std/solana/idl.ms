@@ -235,24 +235,44 @@ export macro anchorIdl(spec: Node): Node {
 				n = n + 1;
 			}
 		}
+		const accountNames: string[] = [];
+		const accountWritten: string[] = [];
+		const accountDecorators: Node[][] = [];
+		function inheritedFirst(from: Node): void {
+			for (const base of from.interfaceExtends) {
+				const parent = getImpl(bindSym(base));
+				if (parent == null) {
+					error("anchorIdl: '" + from.interfaceName + "' extends '" + base +
+						"', whose accounts anchorIdl cannot read: a base is a struct without type arguments, " +
+						"imported where anchorIdl is called", spec);
+				}
+				inheritedFirst(parent!);
+			}
+			for (let own = 0; own < from.interfaceFields.length; own++) {
+				accountNames.push(from.interfaceFields[own]);
+				accountWritten.push(from.interfaceFieldTypes[own]);
+				accountDecorators.push(from.interfaceFieldDecorators[own]);
+			}
+		}
+		inheritedFirst(accountsDecl);
 		let f = 0;
-		while (f < accountsDecl.interfaceFields.length) {
-			const written = accountsDecl.interfaceFieldTypes[f];
+		while (f < accountNames.length) {
+			const written = accountWritten[f];
 			const open = written.indexOf("<");
 			const base = open < 0 ? written : written.slice(0, open);
 			const inner = open < 0 ? "" : written.slice(open + 1, written.length - 1);
-			let account = "{\"name\":\"" + snakeCase(accountsDecl.interfaceFields[f]) + "\"";
+			let account = "{\"name\":\"" + snakeCase(accountNames[f]) + "\"";
 			const isWritable = base == "WritableSigner" || base == "Writable" || base == "WritablePda" ||
 				base == "Mutable" || base == "ExternalMutable";
 			if (isWritable) { account = account + ",\"writable\":true"; }
 			if (base == "Signer" || base == "WritableSigner") {
 				account = account + ",\"signer\":true";
 			}
-			const decorators = accountsDecl.interfaceFieldDecorators[f];
+			const decorators = accountDecorators[f];
 			let fixed = declaredAddress(decorators, spec);
 			if (fixed == "" && base == "Program") { fixed = knownProgram(inner); }
 			if (fixed != "") { account = account + ",\"address\":\"" + fixed + "\""; }
-			const pda = pdaJson(decorators, accountsDecl.interfaceFields, accountsDecl.interfaceFieldTypes, argNames, argTypes);
+			const pda = pdaJson(decorators, accountNames, accountWritten, argNames, argTypes);
 			if (pda != "") { account = account + ",\"pda\":" + pda; }
 			json = json + (f > 0 ? "," : "") + account + "}";
 			f = f + 1;
