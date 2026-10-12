@@ -1184,10 +1184,10 @@ test "a WritablePda imported under another name keeps the canonical bump its @se
 test "close refunds every lamport, hands the account to the System program and empties it" {
 	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
 	counter.lamports = 700;
-	let refund = wallet(2, 50);
+	let refund = wallet(2, 1000000000);
 	const accounts = [counter, refund];
 	assert run(programKey(), accounts, [], closeEntry).result == 0;
-	assert accounts[0].lamports == 0 && accounts[1].lamports == 750;
+	assert accounts[0].lamports == 0 && accounts[1].lamports == 1000000700;
 	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0;
 	const self = [counter, counter];
 	assert run(programKey(), self, [], closeEntry).result == ProgramError.constraintDuplicateMutableAccount().code;
@@ -1220,7 +1220,7 @@ function richCounter(length: int32, lamports: uint64): HostAccount {
 function growCreatedStep(): Result<uint64, ProgramError> {
 	const target = (try instructionData().readU16(0)) as uint64;
 	const fresh = try account(1);
-	const _created = try createAccount(try account(0), fresh, 100, 48, programKey());
+	const _created = try createAccount(try account(0), fresh, minimumBalance(10240), 48, programKey());
 	const _grown = try fresh.resize(target);
 	return Result.ok(0);
 }
@@ -1228,11 +1228,11 @@ function growCreatedStep(): Result<uint64, ProgramError> {
 function growCreatedEntry(): void { codeOf(growCreatedStep()); }
 
 test "an account a CPI created grows only into the bytes the runtime reserved for it before the CPI" {
-	const kept = [wallet(1, 10000000), wallet(2, 0), wallet(3, 77)];
+	const kept = [wallet(1, 1000000000), wallet(2, 0), wallet(3, 77)];
 	assert run(programKey(), kept, sizeBytes(10240), growCreatedEntry).result == 0;
 	assert kept[1].data.length == 10240 && kept[2].lamports == 77;
 	for (const beyond of [10241, 10248, 10288, 20480]) {
-		const refused = [wallet(1, 10000000), wallet(2, 0), wallet(3, 77)];
+		const refused = [wallet(1, 1000000000), wallet(2, 0), wallet(3, 77)];
 		assert run(programKey(), refused, sizeBytes(beyond), growCreatedEntry).result == ProgramError.invalidRealloc().code;
 	}
 }
@@ -1269,7 +1269,7 @@ test "realloc to a smaller size refunds only the rent of the removed bytes, capp
 	assert run(programKey(), tight, sizeBytes(48), reallocSizedEntry).result == 0;
 	assert tight[0].lamports == minimumBalance(48) && tight[1].lamports == tenSol + 100;
 	const under = [richCounter(148, 500), wallet(2, tenSol)];
-	assert run(programKey(), under, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert run(programKey(), under, sizeBytes(48), reallocSizedEntry).fault.startsWith("InsufficientFundsForRent");
 	assert under[0].lamports == 500 && under[1].lamports == tenSol;
 	const full: uint64 = 0xFFFFFFFFFFFFFFFF;
 	const overflow = [richCounter(148, fiveSol), wallet(2, full)];
@@ -1825,7 +1825,7 @@ test "returnDataFrom is null when no return data is set" {
 }
 
 test "returnDataFrom is null after an invocation that set none, whatever was set before it" {
-	assert run(programKey(), [wallet(1, 1000), wallet(2, 5)], [], returnDataFromInvokedEntry).result == 0;
+	assert run(programKey(), [wallet(1, 1000), wallet(2, 1000000000)], [], returnDataFromInvokedEntry).result == 0;
 }
 
 test "clock reads every field the runtime wrote" {
@@ -1898,9 +1898,9 @@ function payStep(): Result<uint64, ProgramError> {
 }
 
 test "transferLamports moves lamports through the System program" {
-	const accounts = [wallet(1, 1000), wallet(2, 5)];
+	const accounts = [wallet(1, 1000), wallet(2, 1000000000)];
 	assert run(programKey(), accounts, [], payEntry).result == 0;
-	assert accounts[0].lamports == 700 && accounts[1].lamports == 305;
+	assert accounts[0].lamports == 700 && accounts[1].lamports == 1000000300;
 	const poor = [wallet(1, 100), wallet(2, 5)];
 	assert run(programKey(), poor, [], payEntry).result != 0;
 }
@@ -2559,12 +2559,12 @@ function signingRun(op: uint8, target: HostAccount): HostAccount[] {
 
 test "a signed System call sends the seeds it was given, in order" {
 	for (const op of [0, 1, 2, 3]) {
-		signingRun(op as uint8, op == 1 ? blank(keyOf(2)) : wallet(2, 5000));
+		signingRun(op as uint8, op == 1 ? blank(keyOf(2)) : wallet(2, 1000000000));
 		const calls = invocations();
 		assert calls.length == 1 && calls[0].signers == 1;
 		assert signerIs(calls[0], 0, vaultSigner());
 	}
-	assert signingRun(0, wallet(2, 5000))[1].lamports == 5010;
+	assert signingRun(0, wallet(2, 1000000000))[1].lamports == 1000000010;
 }
 
 test "a signer list takes a string, an account, a byte array, and a list of lists takes several signers" {
@@ -2901,12 +2901,12 @@ function signedVaultStep(): Result<uint64, ProgramError> {
 function signedVaultEntry(): void { codeOf(signedVaultStep()); }
 
 test "signedPda signs a transfer with the canonical bump it found" {
-	const accounts = [vaultFundedAt(vaultHashAt(vaultCanonicalBump()), 1000), wallet(2, 5000)];
+	const accounts = [vaultFundedAt(vaultHashAt(vaultCanonicalBump()), 1000), wallet(2, 1000000000)];
 	assert run(programKey(), accounts, [], signedVaultEntry).result == 0;
 	const calls = invocations();
 	assert calls.length == 1 && calls[0].signers == 1;
 	assert signerIs(calls[0], 0, [textBytes("vault"), keyBytes(keyOf(5)), [vaultCanonicalBump()]]);
-	assert accounts[0].lamports == 990 && accounts[1].lamports == 5010;
+	assert accounts[0].lamports == 990 && accounts[1].lamports == 1000000010;
 }
 
 test "signedPda sends an address on the curve to the runtime, which refuses it, and sends a lower alias nowhere" {
@@ -2969,7 +2969,7 @@ function recordedStep(): Result<uint64, ProgramError> {
 	const op = try instructionData().readU8(0);
 	const first = try account(0);
 	const second = try account(1);
-	if (op == 0) { return createAccount(first, second, 100, 8, keyOf(9)); }
+	if (op == 0) { return createAccount(first, second, 946560, 8, keyOf(9)); }
 	if (op == 1) { return assignTo(second, keyOf(9)); }
 	if (op == 2) { return transfer(first, second, 10); }
 	if (op == 3) { return allocate(second, 16); }
@@ -3006,19 +3006,19 @@ test "createAccount sends the System program two writable signers and 52 bytes" 
 	assert sent.accounts.length == 2;
 	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
 	assert sent.accounts[1].key.equals(keyOf(2)) && sent.accounts[1].writable && sent.accounts[1].signer;
-	const head: uint8[] = [0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0];
+	const head: uint8[] = [0, 0, 0, 0, 128, 113, 14, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0];
 	assert sameBytes(sent.data, joined(head, owner9()));
 }
 
 test "assign, transfer and allocate send the System program their accounts and data" {
-	assert recordedRun(1, wallet(2, 5000)) == 0;
+	assert recordedRun(1, wallet(2, 1000000000)) == 0;
 	let sent = invocations()[0];
 	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
 	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
 	const assignHead: uint8[] = [1, 0, 0, 0];
 	assert sameBytes(sent.data, joined(assignHead, owner9()));
 
-	assert recordedRun(2, wallet(2, 5000)) == 0;
+	assert recordedRun(2, wallet(2, 1000000000)) == 0;
 	sent = invocations()[0];
 	assert sent.program.equals(systemKey()) && sent.accounts.length == 2;
 	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
@@ -3026,7 +3026,7 @@ test "assign, transfer and allocate send the System program their accounts and d
 	const transferBytes: uint8[] = [2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0];
 	assert sameBytes(sent.data, transferBytes);
 
-	assert recordedRun(3, wallet(2, 5000)) == 0;
+	assert recordedRun(3, wallet(2, 1000000000)) == 0;
 	sent = invocations()[0];
 	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
 	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
@@ -4888,14 +4888,14 @@ function closeScrubEntry(): void { codeOf(closeScrubStep()); }
 test "close scrubs the discriminator bytes, as Anchor v2 writes its closed sentinel over them" {
 	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
 	counter.lamports = 700;
-	const accounts = [counter, wallet(2, 50)];
+	const accounts = [counter, wallet(2, 1000000000)];
 	assert run(programKey(), accounts, [], closeScrubEntry).result == 0;
 }
 
 test "after a close the account is no longer this program's: a later instruction refuses it even when it is re-funded" {
 	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
 	counter.lamports = 700;
-	const accounts = [counter, wallet(2, 50)];
+	const accounts = [counter, wallet(2, 1000000000)];
 	assert run(programKey(), accounts, [], closeEntry).result == 0;
 	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0 && accounts[0].lamports == 0;
 	accounts[0].lamports = 5000000;
