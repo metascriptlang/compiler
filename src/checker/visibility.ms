@@ -282,8 +282,6 @@ function receiverClassOf(callee: Node): Symbol | null {
 	return declaringSymOf(object.nodeType);
 }
 
-// A type has no default value when it holds a function, a ref, or a struct with a field
-// the current module cannot name; a sized array has one when its element has none.
 export function requiresInit(ctx: CheckerContext, t: Type | null): boolean {
 	return noDefaultAt(ctx, t, 0) != null;
 }
@@ -302,7 +300,6 @@ function noDefaultAt(ctx: CheckerContext, t: Type | null, depth: int32): Type | 
 	return null;
 }
 
-// Why `t` has no default value, for the message that refuses building it.
 export function noDefaultReason(ctx: CheckerContext, t: Type | null): string {
 	const holder = hiddenHolder(ctx, t, 0);
 	if (holder == null) return `type '${typeDisplayName(t)}' has no default value`;
