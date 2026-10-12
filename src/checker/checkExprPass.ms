@@ -3455,24 +3455,6 @@ function peelDistinct(t: Type | null): Type | null {
 	return s;
 }
 
-function isScalarOrSequence(t: Type | null): boolean {
-	if (t == null) return false;
-	if (t.kind == TypeKind.Union) {
-		for (const member of t.typeChildren) {
-			if (member.kind != TypeKind.Null && !isScalarOrSequence(peelDistinct(member))) return false;
-		}
-		return true;
-	}
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.String | TypeKind.Boolean | TypeKind.Char | TypeKind.BigInt | TypeKind.Enum
-			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Float32 | TypeKind.Float64
-			| TypeKind.StringLiteral | TypeKind.EnumLiteral | TypeKind.BooleanLiteral
-			| TypeKind.Array | TypeKind.SizedArray | TypeKind.Tuple => true,
-		_ => false,
-	};
-}
-
 function structBehindConversion(t: Type | null): Type | null {
 	const s = peelDistinct(t);
 	if (s != null && s.kind == TypeKind.GenericInstance && s.typeExtra != null && isValueStructDecl(unwrapRefBase(s.typeExtra))) return s;
@@ -3497,27 +3479,41 @@ function relatedStructInstances(source: Type, target: Type): boolean {
 		|| (!isStructInstance(source) && valueStructBaseDepth(targetBody, source) > 0);
 }
 
+function deferredSource(t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Error | TypeKind.Inferred | TypeKind.Pending | TypeKind.GenericParam | TypeKind.Unknown | TypeKind.Null | TypeKind.Never => true,
+		_ => hasGenericParams(t),
+	};
+}
+
+function relatedStruct(source: Type, target: Type): boolean {
+	if (isStructInstance(source) || isStructInstance(target)) return relatedStructInstances(source, target);
+	return !isValueStructDecl(target) || sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0;
+}
+
+function conversionOperandBody(t: Type): Type {
+	return (t.kind == TypeKind.Ref || isMaybeType(t)) && t.typeReturn != null ? t.typeReturn : t;
+}
+
 function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
 	if (operand.kind == NodeKind.ObjectLiteral) return false;
 	const target = structBehindConversion(targetType);
-	const operandBody = (srcType.kind == TypeKind.Ref || isMaybeType(srcType)) && srcType.typeReturn != null ? srcType.typeReturn : srcType;
-	const source = structBehindConversion(operandBody);
 	if (target == null) return false;
-	if (source == null) {
-		const scalar = peelDistinct(operandBody);
-		if (!isScalarOrSequence(scalar) || !(isStructInstance(target) || isValueStructDecl(target))) return false;
-		addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": only a struct, a distinct of it, or a struct it extends converts to a struct"
-			+ structConversionHelp(ctx, scalar as Type, target), line, column);
-		return true;
+	const body = conversionOperandBody(srcType);
+	const members = body.kind == TypeKind.Union ? body.typeChildren : [body];
+	for (const member of members) {
+		const bare = conversionOperandBody(peelDistinct(member) ?? member);
+		if (deferredSource(bare)) return false;
+		const source = structBehindConversion(bare);
+		if (source != null && relatedStruct(source, target)) return false;
 	}
-	if (isStructInstance(source) || isStructInstance(target)) {
-		if (relatedStructInstances(source, target)) return false;
-	} else {
-		if (!isValueStructDecl(target)) return false;
-		if (sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0) return false;
-	}
-	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": a struct converts only to itself, a distinct of it, or a struct it extends"
-		+ structConversionHelp(ctx, source, target), line, column);
+	const sole = structBehindConversion(body);
+	if (!(isStructInstance(target) || isValueStructDecl(target))) return false;
+	const reason = sole != null
+		? ": a struct converts only to itself, a distinct of it, or a struct it extends"
+		: ": only a struct, a distinct of it, or a struct it extends converts to a struct";
+	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + reason
+		+ structConversionHelp(ctx, sole ?? body, target), line, column);
 	return true;
 }
 

@@ -108,9 +108,9 @@ test "fieldVisibility: as converts a struct only to itself, a distinct of it or 
 	assert errorsOf(lib, pre + "const b = d as P;\nconst t = p as T;\nconst back = t as P;\nconst lit = { x: 9 } as P;\nconst raw = { x: 5 };\nconst adopted = raw as P;\nconsole.log(b.x, back.x, lit.x, adopted.x);\n").length == 0;
 }
 
-test "fieldVisibility: as builds a struct from no scalar, string, enum, array, tuple or union of them" {
-	const lib = "export struct P { x: int32; }\nexport struct Box<T> { x: int32; }\nexport struct Proof { private n: int32; }\nexport type D = distinct P;\nexport enum Color { Red, Green }\n";
-	const pre = "import { P, Box, Proof, D, Color } from \"./lib\";\nconst n: int32 = 5;\nconst s = \"a\";\n";
+test "fieldVisibility: as builds a struct only from a struct, a distinct of one, or a union holding one" {
+	const lib = "export struct P { x: int32; }\nexport struct Box<T> { x: int32; }\nexport struct Proof { private n: int32; }\nexport struct Q { y: int32; }\nexport type D = distinct P;\nexport enum Color { Red, Green }\n";
+	const pre = "import { P, Q, Box, Proof, D, Color } from \"./lib\";\nconst n: int32 = 5;\nconst s = \"a\";\n";
 	const refusal = ": only a struct, a distinct of it, or a struct it extends converts to a struct";
 	assert reports(lib, pre + "const q = (0 as uint64) as Proof;\n", "cannot convert uint64 to Proof" + refusal);
 	assert reports(lib, pre + "const q = (0 as uint64) as Proof;\n", "Proof has private fields, so only the module that declares it builds one");
@@ -123,12 +123,24 @@ test "fieldVisibility: as builds a struct from no scalar, string, enum, array, t
 	assert reports(lib, pre + "const q = [1, 2] as P;\n", "cannot convert int32[] to P" + refusal);
 	assert reports(lib, pre + "function pick(b: boolean): int32 | string { return b ? 1 : \"s\"; }\nconst q = pick(true) as P;\n", "cannot convert int32 | string to P" + refusal);
 	assert reports(lib, pre + "function forge<V>(v: V): P { return v as P; }\nconsole.log(forge<int32>(1).x);\n", "cannot convert int32 to P" + refusal);
+	assert reports(lib, pre + "function f(): int32 { return 1; }\nconst q = f as Proof;\n", "cannot convert function to Proof" + refusal);
+	assert reports(lib, pre + "const q = ((): int32 => 1) as Proof;\n", "cannot convert function to Proof" + refusal);
+	assert reports(lib, pre + "const q = new Map<string, int32>() as Proof;\n", "cannot convert Map<string, int32> to Proof" + refusal);
+	assert reports(lib, pre + "const q = Promise.resolve(3) as Proof;\n", "cannot convert Promise<int32> to Proof" + refusal);
+	assert reports(lib, pre + "function v(): void {}\nconst q = v() as Proof;\n", "cannot convert void to Proof" + refusal);
+	assert reports(lib, pre + "extern function mkp(): Ptr<void> from \"mkp\";\nconst q = mkp() as Proof;\n", "cannot convert Ptr<void> to Proof" + refusal);
+	assert reports(lib, pre + "extern function mks(): cstring from \"mks\";\nconst q = mks() as Proof;\n", "cannot convert cstring to Proof" + refusal);
+	assert reports(lib, pre + "function f(a: int32[]): Proof { return a[0..1] as Proof; }\n", "cannot convert Span<int32> to Proof" + refusal);
+	assert reports(lib, pre + "function g(): int32 { return 1; }\nfunction pick(b: boolean): (() => int32) | null { return b ? g : null; }\nconst q = pick(true) as Proof;\n", "to Proof" + refusal);
+	assert reports(lib, pre + "function pick(b: boolean): P | Q { return b ? ({ x: 1 } as P) : ({ y: 2 } as Q); }\nconst q = pick(true) as Proof;\n", "to Proof" + refusal);
+	assert !reports(lib, pre + "const q = missing as Proof;\n", "converts to a struct");
 }
 
 test "fieldVisibility: as still takes a struct, a union holding one, or an object literal to a struct" {
 	const lib = "export struct P { x: int32; }\nexport struct Proof { private n: int32; }\nexport type D = distinct P;\n";
 	const pre = "import { P, Proof, D } from \"./lib\";\nconst p: P = { x: 1 };\nfunction pick(b: boolean): P | int32 { return b ? p : 2; }\n";
 	assert errorsOf(lib, pre + "const a = p as P;\nconst b = p as D;\nconst c = pick(true) as P;\nconst d = { x: 7 } as P;\nconsole.log(a.x, c.x, d.x);\n").length == 0;
+	assert errorsOf(lib, pre + "function boom(): never { throw new Error(\"x\"); }\nfunction forge<V>(v: V): P { return v as P; }\nconst viaNever = (): P => boom() as P;\nconsole.log(forge<P>(p).x);\n").length == 0;
 }
 
 test "fieldVisibility: as takes a nullable struct to its payload and still refuses an unrelated one" {
