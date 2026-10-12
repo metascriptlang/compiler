@@ -1111,11 +1111,13 @@ page from 67 to 160 requests; the `vite build` bundle stayed at 80,858 bytes and
 Still written into the declaring module, so a new one still rewrites its file: an instance
 whose body assigns a module-level variable, because an ES module cannot assign another
 module's binding (inbox card `2026-10-12-js-split-assign-imported-variable`), and an
-instance the declaring module's own code asks for. Not verified: other Vite versions and
-bundlers, macOS and Linux, an edit that removes and later restores an instance while the
-page stays open, a `static` local in a generic body (it already fails to load on the split
-tree, inbox card `2026-10-12-js-split-static-in-generic-body`), and an app export that
-takes the name of a library export, which renames the library's binding.
+instance the declaring module's own code asks for. One more edit still rewrites a library
+file: an app module that exports a function under a name a library module exports renames
+the library's binding (`describe` became `describe_u0` in a two-module probe). Not
+verified: other Vite versions and bundlers, macOS and Linux, an edit that removes and later
+restores an instance while the page stays open, and a `static` local in a generic body (it
+already fails to load on the split tree, inbox card
+`2026-10-12-js-split-static-in-generic-body`).
 
 This transport does not promise state preservation without a consumer's HMR boundary.
 Component/template signatures, surviving state scopes and refresh cleanup belong to
