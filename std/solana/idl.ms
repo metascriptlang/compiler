@@ -163,6 +163,23 @@ export macro anchorIdl(spec: Node): Node {
 		}
 		return "";
 	}
+
+	function inheritedFirst(from: Node, names: string[], types: string[], decorators: Node[][]): void {
+		for (const base of from.interfaceExtends) {
+			const parent = getImpl(bindSym(base));
+			if (parent == null) {
+				error("anchorIdl: '" + from.interfaceName + "' extends '" + base +
+					"', whose fields anchorIdl cannot read: a base is a struct without type arguments, " +
+					"imported where anchorIdl is called", spec);
+			}
+			inheritedFirst(parent!, names, types, decorators);
+		}
+		for (let own = 0; own < from.interfaceFields.length; own++) {
+			names.push(from.interfaceFields[own]);
+			types.push(from.interfaceFieldTypes[own]);
+			decorators.push(from.interfaceFieldDecorators[own]);
+		}
+	}
 	let name = "program";
 	const declared = define("programId");
 	let programAddress = declared;
@@ -238,23 +255,7 @@ export macro anchorIdl(spec: Node): Node {
 		const accountNames: string[] = [];
 		const accountWritten: string[] = [];
 		const accountDecorators: Node[][] = [];
-		function inheritedFirst(from: Node): void {
-			for (const base of from.interfaceExtends) {
-				const parent = getImpl(bindSym(base));
-				if (parent == null) {
-					error("anchorIdl: '" + from.interfaceName + "' extends '" + base +
-						"', whose accounts anchorIdl cannot read: a base is a struct without type arguments, " +
-						"imported where anchorIdl is called", spec);
-				}
-				inheritedFirst(parent!);
-			}
-			for (let own = 0; own < from.interfaceFields.length; own++) {
-				accountNames.push(from.interfaceFields[own]);
-				accountWritten.push(from.interfaceFieldTypes[own]);
-				accountDecorators.push(from.interfaceFieldDecorators[own]);
-			}
-		}
-		inheritedFirst(accountsDecl);
+		inheritedFirst(accountsDecl, accountNames, accountWritten, accountDecorators);
 		let f = 0;
 		while (f < accountNames.length) {
 			const written = accountWritten[f];
@@ -361,6 +362,8 @@ export macro anchorIdl(spec: Node): Node {
 	json = json + "],\"types\":[";
 	const typeNames: string[] = [];
 	const typeZeroCopy: boolean[] = [];
+	const typeFields: string[][] = [];
+	const typeFieldTypes: string[][] = [];
 	let a = 0;
 	while (a < accountTypes.length) {
 		typeNames.push(accountTypes[a].name);
@@ -385,8 +388,16 @@ export macro anchorIdl(spec: Node): Node {
 			error("anchorIdl: type '" + typeName + "' must be a struct visible where anchorIdl " +
 				"is called; import it there", spec);
 		}
-		const fields = decl!.interfaceFields;
-		const fieldTypes = decl!.interfaceFieldTypes;
+		const fields: string[] = [];
+		const fieldTypes: string[] = [];
+		inheritedFirst(decl!, fields, fieldTypes, []);
+		const laidOut = getTypeImpl(bindSym(typeName));
+		if (laidOut == null || laidOut!.kind != NodeKind.TypeObject || fields.join(",") != laidOut!.typExprFieldNames.join(",")) {
+			error("anchorIdl: type '" + typeName + "' and the structs it extends declare the fields '" +
+				fields.join(", ") + "', which are not the fields its type holds", spec);
+		}
+		typeFields.push(fields);
+		typeFieldTypes.push(fieldTypes);
 		const zeroCopy = typeZeroCopy[d];
 		json = json + (d > 0 ? "," : "") + "{\"name\":\"" + typeName + "\"";
 		if (zeroCopy) { json = json + ",\"serialization\":\"bytemuck\",\"repr\":{\"kind\":\"c\"}"; }
@@ -473,13 +484,13 @@ export macro anchorIdl(spec: Node): Node {
 				if (laidNames[m] == typeNames[l]) { done = true; }
 				m = m + 1;
 			}
-			const decl = getImpl(bindSym(typeNames[l]))!;
+			const fields = typeFields[l];
 			let offset = 0;
 			let structAlign = 1;
 			let ready = !done;
 			let f = 0;
-			while (ready && f < decl.interfaceFields.length) {
-				const written = decl.interfaceFieldTypes[f];
+			while (ready && f < fields.length) {
+				const written = typeFieldTypes[l][f];
 				const open = written.indexOf("[");
 				const element = open < 0 ? written : written.slice(0, open);
 				const count = open < 0 ? 1 : written.slice(open + 1, written.length - 1).parseInt();
@@ -520,7 +531,7 @@ export macro anchorIdl(spec: Node): Node {
 					if (size != 0 && packed != size && typeZeroCopy[l]) {
 						error("anchorIdl: '" + element + "' ends with " + (size - packed) +
 							" byte(s) of C padding, which sit between the fields of '" +
-							typeNames[l] + "' at '" + decl.interfaceFields[f] + "'; Anchor's " +
+							typeNames[l] + "' at '" + fields[f] + "'; Anchor's " +
 							"zero-copy (bytemuck Pod) has none: add an explicit padding field " +
 							"to '" + element + "'", spec);
 					}
@@ -531,7 +542,7 @@ export macro anchorIdl(spec: Node): Node {
 					const aligned = (offset + align - 1) / align * align;
 					if (aligned != offset && typeZeroCopy[l]) {
 						error("anchorIdl: '" + typeNames[l] + "' has " + (aligned - offset) +
-							" byte(s) of C padding before field '" + decl.interfaceFields[f] +
+							" byte(s) of C padding before field '" + fields[f] +
 							"'; Anchor's zero-copy (bytemuck Pod) has none and its clients read " +
 							"the fields back to back: order the fields by alignment or add an " +
 							"explicit padding field", spec);

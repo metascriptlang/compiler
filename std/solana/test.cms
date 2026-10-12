@@ -3357,6 +3357,144 @@ test "@hasOne, @seeds, @bump and @constraint read the fields a data struct inher
 		ProgramError.constraintRaw().code;
 }
 
+export struct Shelf { front: Capped; count: uint64; }
+
+export function discriminator(this typeof Shelf): Discriminator {
+	return @comptime { return accountDiscriminator("Shelf"); };
+}
+
+function inheritedDataIdl(): string {
+	return anchorIdl<GaugeOp>({
+		name: "inherited_data",
+		address: "",
+		Bump: [NoArrayAccounts, FlaggedSeedArgs],
+		accounts: [Capped, Sealed, Shelf],
+		events: [PaidTo],
+		errors: "",
+	});
+}
+
+function idlTypeFields(idl: JsonValue, name: string): JsonValue {
+	const types = idl.types;
+	for (let t = 0; t < types.length(); t++) {
+		if (types.at(t).name.asString() == name) { return types.at(t).type.fields; }
+	}
+	return types.at(types.length());
+}
+
+struct IdlRead { text: string; next: int32; }
+
+function idlRead(idl: JsonValue, fields: JsonValue, bytes: Readonly<Span<uint8>>, start: int32, prefix: string): IdlRead {
+	let text = "";
+	let at = start;
+	for (let f = 0; f < fields.length(); f++) {
+		const name = prefix + fields.at(f).name.asString();
+		const kind = fields.at(f).type.asString();
+		let width = 0;
+		if (kind == "u8" || kind == "bool") { width = 1; }
+		if (kind == "u64") { width = 8; }
+		if (kind == "pubkey") { width = 32; }
+		if (width == 0) {
+			const nested = idlRead(idl, idlTypeFields(idl, fields.at(f).type.defined.name.asString()), bytes, at, name + ".");
+			text = text + nested.text;
+			at = nested.next;
+			continue;
+		}
+		let value: uint64 = 0;
+		for (let b = 0; b < width && b < 8; b++) { value |= (bytes[at + b] as uint64) << ((b * 8) as uint64); }
+		text = text + name + "=" + String(value) + " ";
+		at = at + width;
+	}
+	return { text: text, next: at };
+}
+
+function blankAccount(seed: uint8, tag: Discriminator, size: int32): HostAccount {
+	return holder(seed, programKey(), counterBytes(tag, 0, 8 + size), false, true);
+}
+
+function inheritedWriteStep(): Result<uint64, ProgramError> {
+	const capped = (try mutable<Capped>(0)).data();
+	capped.stamp = 11;
+	capped.owner = keyOf(12);
+	capped.limit = 13;
+	const sealed = (try mutable<Sealed>(1)).data();
+	sealed.stamp = 21;
+	sealed.owner = keyOf(22);
+	sealed.limit = 23;
+	sealed.bump = 24;
+	const shelf = (try mutable<Shelf>(2)).data();
+	shelf.front.stamp = 31;
+	shelf.front.owner = keyOf(32);
+	shelf.front.limit = 33;
+	shelf.count = 34;
+	return Result.ok(0);
+}
+
+function inheritedWriteEntry(): void { codeOf(inheritedWriteStep()); }
+
+function inheritedBlank(): HostAccount[] {
+	return [
+		blankAccount(1, Capped.discriminator(), sizeof(Capped) as int32),
+		blankAccount(2, Sealed.discriminator(), sizeof(Sealed) as int32),
+		blankAccount(3, Shelf.discriminator(), sizeof(Shelf) as int32),
+	];
+}
+
+test "the IDL's fields of an account read back what the program stored in a struct that extends another, one and two levels" {
+	const written = inheritedBlank();
+	assert run(programKey(), written, [], inheritedWriteEntry).result == 0;
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const idl = parsed.value;
+		const capped = idlRead(idl, idlTypeFields(idl, "Capped"), written[0].data, 8, "");
+		assert capped.text == "stamp=11 owner=12 limit=13 ";
+		assert capped.next == written[0].data.length;
+		const sealed = idlRead(idl, idlTypeFields(idl, "Sealed"), written[1].data, 8, "");
+		assert sealed.text == "stamp=21 owner=22 limit=23 bump=24 ";
+		assert sealed.next == 8 + 49;
+	}
+}
+
+test "the IDL's type of a nested struct field lists the fields that struct inherits" {
+	const written = inheritedBlank();
+	assert run(programKey(), written, [], inheritedWriteEntry).result == 0;
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const idl = parsed.value;
+		const shelf = idlRead(idl, idlTypeFields(idl, "Shelf"), written[2].data, 8, "");
+		assert shelf.text == "front.stamp=31 front.owner=32 front.limit=33 count=34 ";
+		assert shelf.next == written[2].data.length;
+	}
+}
+
+test "the IDL's arguments read the bytes args<T>() reads for a struct that extends another" {
+	const none: HostAccount[] = [];
+	const data = instructionBytes("Bump", [7, 0, 0, 0, 0, 0, 0, 0, 1]);
+	assert run(programKey(), none, data, flaggedSeedEntry).result == ProgramError.custom(71).code;
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = idlRead(parsed.value, parsed.value.instructions.at(0).args, data, 8, "");
+		assert given.text == "seed=7 flag=1 ";
+		assert given.next == data.length;
+	}
+}
+
+test "the IDL's fields of an event read back what emit<E>() logged for a struct that extends another" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], paidToEntry).result == 0;
+	const logged = Buffer.fromString(logs()[0].slice("Program data: ".length), "base64").asBytes();
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const paid = idlRead(parsed.value, idlTypeFields(parsed.value, "PaidTo"), logged, 8, "");
+		assert paid.text == "amount=1234 receiver=7 done=1 ";
+		assert paid.next == logged.length;
+	}
+}
+
 export struct SignedBase { owner: Signer; }
 export struct SignedChild extends SignedBase { refund: Writable; }
 
