@@ -131,6 +131,7 @@ import "./comptimeCallFold";
 import "./readonlyViewRefArgument";
 import "./nullFirstTernaryArg";
 import "./fieldVisibility";
+import "./useBeforeAssign";
 import "./typeNameValue";
 import "./routineInterface";
 import "./enumConversionRange";

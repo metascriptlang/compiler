@@ -419,7 +419,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictDefs, opts.strictNullChecks);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -1348,7 +1348,6 @@ function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, op
 	if (program == null || ctx == null) throw new Error(`internal: module ${modPath} was not checked by the graph phase`);
 	setOuterProgramForComptime(program);
 	setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-	ctx.strictDefs = opts.strictDefs;
 	ctx.strictNullChecks = opts.strictNullChecks;
 	exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 	return { program, ctx };

@@ -1873,6 +1873,20 @@ export function createVar(inner: Type): Type {
 	return t;
 }
 
+export function createOutVar(inner: Type): Type {
+	const t = createVar(inner);
+	t.typeFlags = t.typeFlags.incl(TypeFlag.OutParam);
+	return t;
+}
+
+export function isOutParam(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Var && t.typeFlags.has(TypeFlag.OutParam);
+}
+
+function substitutedVar(t: Type, inner: Type): Type {
+	return isOutParam(t) ? createOutVar(inner) : createVar(inner);
+}
+
 export function createSink(inner: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Sink;
@@ -3435,7 +3449,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 			TypeKind.Ref => rebuildRefLike(t, substituteTypeInner(refSubstInner(t), paramName, concrete, active)),
 			TypeKind.Ptr => createPtr(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Borrow => createBorrow(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
-			TypeKind.Var => createVar(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
+			TypeKind.Var => substitutedVar(t, substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Sink => createSink(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Cursor => createCursor(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
 			TypeKind.Struct => substituteStruct(t, paramName, concrete, active),
@@ -3524,7 +3538,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), names, concretes, active)),
 			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Var => createVar(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Var => substitutedVar(t, substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Sink => createSink(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
 			TypeKind.Struct => substituteStructAll(t, names, concretes, active),

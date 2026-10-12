@@ -14,7 +14,7 @@ import { getIdentId } from "./idents";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { forEachChild } from "../ast/visitor";
-import { nestedViewType, ownedAlternativeOf, findViewType } from "./types";
+import { nestedViewType, ownedAlternativeOf, findViewType, createOutVar } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -1601,7 +1601,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 				for (const ip of idxParts) {
 					const idx = parseIntStr(ip.trim());
 					if (idx >= 0 && idx < paramTypes.length) {
-						paramTypes[idx] = createVar(paramTypes[idx]);
+						paramTypes[idx] = trimFp.slice(0, 4) == "out:" ? createOutVar(paramTypes[idx]) : createVar(paramTypes[idx]);
 					}
 				}
 			}

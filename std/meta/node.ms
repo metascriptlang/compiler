@@ -78,6 +78,7 @@ export enum TypeFlag {
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 	HasGenericParam,
 	BorrowDot,
+	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
 }
 
 // ===== Attached Lifecycle Ops =====

@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -77,9 +77,17 @@ function declaredOperatorResult(ctx: CheckerContext, op: string, left: Type | nu
 	return fnType != null ? fnType.typeReturn : null;
 }
 
+function markAssignedTargets(ctx: CheckerContext, target: Node): void {
+	if (target.kind == NodeKind.Identifier) markInitialized(ctx.initTracker, (target.data as IdentifierData).name);
+	else if (target.kind == NodeKind.SpreadExpr) markAssignedTargets(ctx, (target.data as SpreadExprData).spreadArg);
+	else if (target.kind == NodeKind.ArrayLiteral) for (const el of (target.data as ArrayLiteralData).elements) markAssignedTargets(ctx, el);
+}
+
 function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 	if (target.kind != NodeKind.ArrayLiteral) {
+		if (target.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = target;
 		checkExpr(ctx, target, null);
+		ctx.initTracker.assignTarget = null;
 		const k = target.kind;
 		if (k != NodeKind.Identifier && k != NodeKind.MemberExpr && k != NodeKind.ArrayAccess && k != NodeKind.ObjectLiteral) {
 			addError(ctx, "a destructuring assignment target must be a variable, a field or an element", target.location.line, target.location.column);
@@ -348,6 +356,11 @@ function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
 }
 
 
+function admitsNull(t: Type | null): boolean {
+	const inner = skipModifier(t);
+	return inner != null && (isUnknownType(inner) || isNullableShape([inner]));
+}
+
 function isLocalToFunction(ctx: CheckerContext, name: string, sym: Symbol): boolean {
 	const nameId = getIdentId(ctx.table.identCache, name);
 	let scope = ctx.table.current;
@@ -542,7 +555,9 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		NodeKind.MoveExpr => { checkMoveExpr(ctx, node, expectedType); return; },
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
+			if (d.outArg.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.outArg;
 			checkExpr(ctx, d.outArg, null);
+			ctx.initTracker.assignTarget = null;
 			const roOut = readonlyRootType(d.outArg);
 			if (roOut != null) reportReadonlyWrite(ctx, roOut, "pass an 'out' argument through", node.location.line, node.location.column);
 			node.nodeType = d.outArg.nodeType; return;
@@ -951,12 +966,14 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 	}
+	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
 	if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
 		if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 		checkAssignTarget(ctx, d.left);
 	} else {
 		checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
 	}
+	ctx.initTracker.assignTarget = null;
 	let leftType = d.left.nodeType;
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
@@ -1063,6 +1080,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		// Phase 4: reassignment invalidation now flows through the
 		// binder's FlowAssignment node — no fact stack to purge.
 	}
+	if (d.operator == "=" && d.left.kind == NodeKind.ArrayLiteral) markAssignedTargets(ctx, d.left);
 	if (isAsgn && ctx.ctorExits != null && d.left.kind == NodeKind.MemberExpr) {
 		const lhsMember = d.left.data as MemberExprData;
 		let lhsObject = lhsMember.object;
@@ -2506,15 +2524,11 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
 	// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
 	if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0
-		&& ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null
-		&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)) {
-		if (requiresInit(ctx, sym.symbolType)) {
-			addError(ctx, "'" + d.name + "' may be read before it is assigned: " + noDefaultReason(ctx, sym.symbolType), node.location.line, node.location.column);
-			markInitialized(ctx.initTracker, d.name);
-		} else if (ctx.strictDefs) {
-			addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
-			markInitialized(ctx.initTracker, d.name);
-		}
+		&& node != ctx.initTracker.assignTarget && ctx.currentFunction != null
+		&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)
+		&& !admitsNull(sym.symbolType)) {
+		if (ctx.initTracker.argIdents.includes(node)) { if (!ctx.initTracker.pendingReads.includes(node)) ctx.initTracker.pendingReads.push(node); }
+		else refuseUnassignedRead(ctx, node, d.name, sym.symbolType);
 	}
 	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
 	// Assignment LHS: return the declared type, not the flow-narrowed

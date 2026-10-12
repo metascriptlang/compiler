@@ -2,6 +2,7 @@ import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, Prop
 import { classDeclNodeOf, parentClassSymOf, lookupSymbol, Scope } from "./symbol";
 import { CheckerContext, addError } from "./context";
 import { skipModifier, isStructType, isMaybeType, typeDisplayName } from "./types";
+import { markInitialized } from "./initTracker";
 
 function unwrapDecl(node: Node | null): Node | null {
 	let n = node;
@@ -298,6 +299,12 @@ function noDefaultAt(ctx: CheckerContext, t: Type | null, depth: int32): Type | 
 		if (noDefaultAt(ctx, field, depth + 1) != null) return inner;
 	}
 	return null;
+}
+
+export function refuseUnassignedRead(ctx: CheckerContext, node: Node, name: string, t: Type | null): void {
+	const why = requiresInit(ctx, t) ? ": " + noDefaultReason(ctx, t) : "";
+	addError(ctx, "'" + name + "' may be read before it is assigned" + why, node.location.line, node.location.column);
+	markInitialized(ctx.initTracker, name);
 }
 
 export function noDefaultReason(ctx: CheckerContext, t: Type | null): string {

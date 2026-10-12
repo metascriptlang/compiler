@@ -54,7 +54,6 @@ export interface CliOptions {
 	watchReplay: string;
 	emitSubdir: string;
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
-	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
 	testsShard: int32;         // --tests-shard=<i>/<n>: test runs the tested modules whose position mod n is i
@@ -152,7 +151,6 @@ export function newCliOptions(): CliOptions {
 		watchReplay: "",
 		emitSubdir: "",
 		appMode: "console",
-		strictDefs: false,
 		strictNullChecks: false,
 		testsInDir: false,
 		testsShard: 0,
@@ -321,8 +319,6 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 				console.log(error("error") + ": unknown --app mode '" + bold(appVal) + "'. Valid: " + cyan("console") + ", " + cyan("lib") + ", " + cyan("staticlib"));
 				exit(1);
 			}
-		} else if (arg == "--strict-defs") {
-			opts.strictDefs = true;
 		} else if (arg == "--strict-nil") {
 			opts.strictNullChecks = true;
 		} else if (arg == "--tests-in-dir") {

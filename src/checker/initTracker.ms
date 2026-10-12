@@ -22,6 +22,9 @@ export interface InitTracker {
 	initialized: string[];     // append-only list of initialized var names
 	currentBlock: number;      // scope depth counter
 	leftPartOfAsgn: number;    // >0 when processing LHS of assignment
+	assignTarget: Node | null; // the identifier an `=` or `out` writes; its own check is not a read
+	argIdents: Node[];         // bare identifiers passed as call arguments: whether the callee takes them `out` is known only after resolution
+	pendingReads: Node[];      // those of argIdents read while unassigned, settled when the call resolves
 	declScopes: string[];      // parallel with declBlocks: var name at declaration
 	declBlocks: number[];      // block depth where each variable was declared
 }
@@ -33,6 +36,9 @@ export function createInitTracker(): InitTracker {
 		initialized: [],
 		currentBlock: 0,
 		leftPartOfAsgn: 0,
+		assignTarget: null,
+		argIdents: [],
+		pendingReads: [],
 		declScopes: [],
 		declBlocks: [],
 	};
