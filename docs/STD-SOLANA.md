@@ -1285,3 +1285,20 @@ Forms of the seed table rejected in the lane that wrote it, not re-run here: fou
 Checks run on this tree's candidate compiler: the host tests of the sections above with `std/solana/test.cms` at 590; the 87 guard cells of the 64 `solana*` guards; `accountValues.mjs`, `escrow.mjs`, `heapExhausted.mjs`, `resizeAfterCpi.mjs`; `checkCost.mjs` with every row at its total.
 
 Not verified: a real validator; `magicblock.ms`, `delegation.ms` and `mint.ms` beyond their type-check and the host tests; the empty-r2 branch on SBF, which no check here runs (LiteSVM 1.4.1 sets r2, and `solanaEntryAccountTable.ms` reads the emitted entry): its walk is the one the host parser takes on every host test.
+
+### Proofs taken by value in `accounts<T>()`; the check lanes — measured 2026-10-12
+
+Same build and harness as the section above (`--os=solana --release`, LiteSVM 1.4.1, the five anchorBench programs at their ids, `BENCH_REFUSALS=1 node tools/solana/anchorBench.mjs`, 0 std failures), one compiler per column built from that column's tree. "Before the compiler lanes" is commit `9e0c969e8` (the account-shape, token and host-simulator lanes merged, the checker and transform fixes not yet); "this tree" is tree `d98cdaec6f8d03752dd344dda894df6e3d05a478`.
+
+| Instruction CU | hello | vault | nested | prop-amm | multisig |
+|---|---|---|---|---|---|
+| section above, "this tree" | 1406 | 1577; 404 | 2722; 147; 144 | 77; 1369; 101 | 2444; 2266; 444; 2540 |
+| before the compiler lanes | 1411 | 1577; 404 | 2724; 147; 144 | 77; 1366; 101 | 2445; 2267; 445; 2541 |
+| this tree | 1411 | 1578; 405 | 2724; 147; 144 | 77; 1366; 101 | 2445; 2267; 445; 2541 |
+| Anchor v2 | 1441 | 1602; 418 | 2840; 866; 861 | 81; 1398; 93 | 2762; 2292; 621; 2991 |
+
+- The read-before-assignment rule (`docs/LANG.md`, "Locals read before they are assigned") forbids filling a zero-built account struct field by field, so `accounts<T>()` now takes each proof by value from an adapter (`signerProof`, `ownedProof`, … in `std/solana/typed.cms`: a local, the old kernel, the return) and builds the struct once every proof passed. It names no field type where it is called. Cost: 1 CU on vault deposit and withdraw.
+- Rejected: turning the kernels themselves around so they return the proof. `owned` and `delegated` then stop inlining (nine out-of-line copies of 200 bytes each) and guard `solanaGenericSize` goes red at `.text` 90384 against its 90000 bound; with the adapters it reads 86640. The cause in the inliner was not found.
+- `node tools/solana/checkCost.mjs` on the default build, before the compiler lanes to this tree: `accounts<Everything>` 763 to 752, `accounts<3 fields>` 271 to 250, `accounts<7 fields>` with `@address` 786 to 777 and without 757 to 746 (745 with the exit after every field; the other placement was kept because every other row is equal or lower). The numbers of this tree were measured twice, the earlier ones once.
+- Not attributed: which commits of the earlier lanes account for the 5 CU on hello and the 1 to 2 elsewhere.
+
