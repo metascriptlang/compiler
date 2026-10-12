@@ -859,6 +859,13 @@ model (a symbol node in the macro output; re-checked, never re-bound):
   (`src/test/lang/macroSourceForms.ms` pins both);
 - non-exported helpers of the macro's own module are bindable.
 
+Inside the macro body both forms return the same node: `resolvedSym` carries `name`, `symbolKind`,
+`modulePath` (the declaring module, also for a name the macro's module imports) and `builtinKind`, so a
+macro can compare a callee's module with `bindSym("helper").resolvedSym.modulePath`. Measured 2026-10-12
+on C and `--target=js` (corpus `bindSymLiteralCarriesSymbol`); before, the literal form read `resolvedSym`
+as `null`. The literal form needs `Node` imported from `"std/meta"` in the macro's module, as the macro's
+own signature does.
+
 ```ms
 import { cborText } from "./builder";   // the MACRO's module imports it once
 
