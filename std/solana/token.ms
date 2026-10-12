@@ -442,6 +442,53 @@ export function burnChecked(
 	);
 }
 
+export function revoke(
+	program: Pubkey,
+	source: Account,
+	owner: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[1] = [];
+	const length = putU8(storage, 0, 5);
+	return invokeSigned(
+		program,
+		[InstructionAccount.writable(source), InstructionAccount.readonlySigner(owner)],
+		storage,
+		length,
+		signers,
+	);
+}
+
+export function approveChecked(
+	program: Pubkey,
+	source: Account,
+	mint: Account,
+	delegate: Account,
+	owner: Account,
+	amount: uint64,
+	decimals: uint8,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[10] = [];
+	let length = putU8(storage, 0, 13);
+	length = putU64(storage, length, amount);
+	length = putU8(storage, length, decimals);
+	return invokeSigned(
+		program,
+		[
+			InstructionAccount.writable(source),
+			InstructionAccount.readonly(mint),
+			InstructionAccount.readonly(delegate),
+			InstructionAccount.readonlySigner(owner),
+		],
+		storage,
+		length,
+		signers,
+	);
+}
+
 export enum AuthorityType {
 	MintTokens = 0,
 	FreezeAccount = 1,
@@ -792,6 +839,67 @@ export function setAuthorityOf(
 	const _signing = try expectSigning(authority, signers);
 	const target = account.asAccount();
 	return setAuthority(target.owner(), target, authority, kind, next, signers);
+}
+
+function approved(
+	source: ExternalMutable<TokenAccount>,
+	mint: External<Mint>,
+	delegate: Account,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<uint64, ProgramError> {
+	const decimals = try mintDecimals(mint);
+	return approveChecked(
+		tokenProgramOf(mint),
+		source.asAccount(),
+		mint.asAccount(),
+		delegate,
+		authority,
+		amount,
+		decimals,
+		signers,
+	);
+}
+
+export function approveDelegate(
+	source: ExternalMutable<TokenAccount>,
+	mint: External<Mint>,
+	delegate: Account,
+	authority: Signer,
+	amount: uint64,
+): Result<uint64, ProgramError> {
+	return approved(source, mint, delegate, authority.asAccount(), amount, []);
+}
+
+export function approveDelegate(
+	source: ExternalMutable<TokenAccount>,
+	mint: External<Mint>,
+	delegate: Account,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	return approved(source, mint, delegate, authority, amount, signers);
+}
+
+export function revokeDelegate(
+	source: ExternalMutable<TokenAccount>,
+	authority: Signer,
+): Result<uint64, ProgramError> {
+	const held = source.asAccount();
+	return revoke(held.owner(), held, authority.asAccount());
+}
+
+export function revokeDelegate(
+	source: ExternalMutable<TokenAccount>,
+	authority: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	const held = source.asAccount();
+	return revoke(held.owner(), held, authority, signers);
 }
 
 export function createAssociatedFor(
@@ -2225,5 +2333,202 @@ when (testBuild) {
 		assert keyAt(accounts[0].data, 32).equals(keyOf(3));
 		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, true).result == 0;
 		assert keyAt(accounts[0].data, 133).equals(keyOf(6));
+	}
+
+	function delegateStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const amount = try instructionData().readU64(1);
+		const source = try externalMutable<TokenAccount>(0);
+		const delegate = try account(2);
+		const authority = try account(3);
+		if (op == 3) { return revokeDelegate(source, try signer(3)); }
+		if (op == 4) { return revokeDelegate(source, authority); }
+		if (op == 5) { return signed(revokeDelegate(source, authority), ["auth", [5]]); }
+		if (op == 6) {
+			const minted = try account(1);
+			return approveChecked(
+				minted.owner(),
+				try account(0),
+				minted,
+				delegate,
+				authority,
+				amount,
+				5,
+			);
+		}
+		const mint = try external<Mint>(1);
+		if (op == 7) {
+			const to = try externalMutable<TokenAccount>(4);
+			return transferTokens(source, to, mint, delegate, amount);
+		}
+		if (op == 0) { return approveDelegate(source, mint, delegate, try signer(3), amount); }
+		if (op == 1) { return approveDelegate(source, mint, delegate, authority, amount); }
+		return signed(approveDelegate(source, mint, delegate, authority, amount), ["auth", [5]]);
+	}
+
+	function delegateEntry(): void {
+		const result = delegateStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function delegateAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(4, program, tokenAccountData(1, 3, 900, 1)),
+			{ ...holderOf(1, program, mintData(7, 5000, 6)), writable: false },
+			signingAs(8),
+			signingAs(3),
+			holderOf(5, program, tokenAccountData(1, 6, 0, 1)),
+		];
+	}
+
+	function delegateRun(accounts: HostAccount[], op: uint8, amount: uint64): HostRun {
+		const data: uint8[] = [op];
+		pushU64(data, amount);
+		return run(keyOf(9), accounts, data, delegateEntry);
+	}
+
+	function delegateOf(accounts: HostAccount[]): Pubkey | null {
+		return accounts[0].data[72] == 1 ? keyAt(accounts[0].data, 76) : null;
+	}
+
+	test "approveDelegate names the delegate and its allowance, with the mint's decimals and token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0;
+			assert delegateOf(accounts) == keyOf(8) && u64At(accounts[0].data, 121) == 300;
+			assert u64At(accounts[0].data, 64) == 900;
+			assert keyAt(accounts[0].data, 32).equals(keyOf(3));
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 4 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(4)) && sent.accounts[0].writable;
+			assert sent.accounts[1].key.equals(keyOf(1)) && !sent.accounts[1].writable;
+			assert sent.accounts[2].key.equals(keyOf(8)) && !sent.accounts[2].writable;
+			assert !sent.accounts[0].signer && !sent.accounts[1].signer && !sent.accounts[2].signer;
+			assert sent.accounts[3].key.equals(keyOf(3)) && sent.accounts[3].signer;
+			assert !sent.accounts[3].writable;
+			const approveBytes: uint8[] = [13, 44, 1, 0, 0, 0, 0, 0, 0, 6];
+			assert sameBytes(sent.data, approveBytes);
+		}
+	}
+
+	test "a later approveDelegate replaces the delegate and the allowance, which the balance does not bound" {
+		const accounts = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(accounts, 0, 300).result == 0;
+		accounts[2].key = keyOf(6);
+		assert delegateRun(accounts, 0, 5000).result == 0;
+		assert delegateOf(accounts) == keyOf(6) && u64At(accounts[0].data, 121) == 5000;
+	}
+
+	test "approveDelegate is refused for another authority, another mint, a frozen account and wrong decimals" {
+		const stranger = delegateAccounts(TOKEN_PROGRAM_ID);
+		stranger[3].key = keyOf(6);
+		assert delegateRun(stranger, 0, 300).result == ProgramError.custom(4).code;
+		const otherMint = delegateAccounts(TOKEN_PROGRAM_ID);
+		otherMint[1].key = keyOf(6);
+		assert delegateRun(otherMint, 0, 300).result == ProgramError.custom(3).code;
+		const frozen = delegateAccounts(TOKEN_PROGRAM_ID);
+		frozen[0].data[108] = 2;
+		assert delegateRun(frozen, 0, 300).result == ProgramError.custom(17).code;
+		const decimals = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(decimals, 6, 300).result == ProgramError.custom(18).code;
+		for (const refused of [stranger, otherMint, frozen, decimals]) {
+			assert delegateOf(refused) == null && u64At(refused[0].data, 121) == 0;
+		}
+	}
+
+	test "approveDelegate and revokeDelegate by an authority that did not sign are refused before any CPI" {
+		const accounts = delegateAccounts(TOKEN_PROGRAM_ID);
+		accounts[3].signer = false;
+		for (const op of [0, 3]) {
+			const refused = delegateRun(accounts, op as uint8, 300);
+			assert refused.result == ProgramError.accountNotSigner().code;
+		}
+		for (const op of [1, 4]) {
+			const refused = delegateRun(accounts, op as uint8, 300);
+			assert refused.result == ProgramError.missingRequiredSignature().code;
+		}
+		assert invocations().length == 0 && delegateOf(accounts) == null;
+	}
+
+	test "a delegate transfers within its allowance, which the transfer spends" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0;
+			assert delegateRun(accounts, 7, 301).result == ProgramError.custom(1).code;
+			assert u64At(accounts[0].data, 121) == 300 && u64At(accounts[4].data, 64) == 0;
+			assert delegateRun(accounts, 7, 100).result == 0;
+			assert u64At(accounts[0].data, 64) == 800 && u64At(accounts[4].data, 64) == 100;
+			assert u64At(accounts[0].data, 121) == 200 && delegateOf(accounts) == keyOf(8);
+			assert delegateRun(accounts, 7, 200).result == 0;
+			assert u64At(accounts[4].data, 64) == 300 && u64At(accounts[0].data, 121) == 0;
+			assert delegateOf(accounts) == null;
+			assert delegateRun(accounts, 7, 1).result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "revokeDelegate removes the delegate and its allowance through the account's token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0 && delegateOf(accounts) == keyOf(8);
+			assert delegateRun(accounts, 3, 0).result == 0;
+			assert delegateOf(accounts) == null && u64At(accounts[0].data, 121) == 0;
+			assert u64At(accounts[0].data, 64) == 900;
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 2 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(4)) && sent.accounts[0].writable;
+			assert !sent.accounts[0].signer;
+			assert sent.accounts[1].key.equals(keyOf(3)) && sent.accounts[1].signer;
+			assert !sent.accounts[1].writable;
+			const revokeBytes: uint8[] = [5];
+			assert sameBytes(sent.data, revokeBytes);
+			assert delegateRun(accounts, 7, 1).result == ProgramError.custom(4).code;
+			assert delegateRun(accounts, 3, 0).result == 0;
+		}
+	}
+
+	test "revokeDelegate is refused for a signer that is not the owner and for a frozen account" {
+		const stranger = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(stranger, 0, 300).result == 0;
+		stranger[3].key = keyOf(6);
+		assert delegateRun(stranger, 3, 0).result == ProgramError.custom(4).code;
+		const frozen = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(frozen, 0, 300).result == 0;
+		frozen[0].data[108] = 2;
+		assert delegateRun(frozen, 3, 0).result == ProgramError.custom(17).code;
+		for (const refused of [stranger, frozen]) {
+			assert delegateOf(refused) == keyOf(8) && u64At(refused[0].data, 121) == 300;
+		}
+	}
+
+	test "the delegate itself revokes its own allowance" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0 && delegateOf(accounts) == keyOf(8);
+			accounts[3].key = keyOf(8);
+			assert delegateRun(accounts, 3, 0).result == 0;
+			assert delegateOf(accounts) == null && u64At(accounts[0].data, 121) == 0;
+			assert delegateRun(accounts, 3, 0).result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "approveDelegate and revokeDelegate under signed act for a PDA owner and only for that PDA" {
+		const accounts = delegateAccounts(TOKEN_2022_PROGRAM_ID);
+		setKeyAt(accounts[0].data, 32, authorityPda());
+		accounts[3].key = authorityPda();
+		accounts[3].signer = false;
+		assert delegateRun(accounts, 2, 300).result == 0;
+		assert delegateOf(accounts) == keyOf(8) && u64At(accounts[0].data, 121) == 300;
+		assert signerIs(invocations()[0], 0, authSigner());
+		assert delegateRun(accounts, 5, 0).result == 0;
+		assert delegateOf(accounts) == null;
+		assert signerIs(invocations()[0], 0, authSigner());
+		const stranger = delegateAccounts(TOKEN_PROGRAM_ID);
+		stranger[3].signer = false;
+		for (const op of [2, 5]) {
+			const refused = delegateRun(stranger, op as uint8, 300);
+			assert refused.result == ProgramError.missingRequiredSignature().code;
+			assert refused.fault.indexOf("signer privilege escalated") >= 0;
+		}
+		assert delegateOf(stranger) == null;
 	}
 }

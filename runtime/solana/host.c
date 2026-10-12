@@ -830,6 +830,62 @@ static uint64_t msSolHostBurn(const uint64_t* header, int checked) {
     return 0;
 }
 
+static uint64_t msSolHostApproveChecked(const uint64_t* header) {
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint8_t* source = msSolHostRecordOf(header, 0);
+    const uint8_t* mint = msSolHostRecordOf(header, 1);
+    const uint8_t* delegate = msSolHostRecordOf(header, 2);
+    if (header[4] < 10) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
+    uint64_t status = msSolHostTokenAccount(header, source);
+    if (status != 0) return status;
+    if (mint == NULL || delegate == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
+    uint8_t* fields = source + 88;
+    if (fields[108] == 2) return MS_SOL_HOST_TOKEN_ACCOUNT_FROZEN;
+    if (memcmp(fields, mint + 8, 32) != 0) return MS_SOL_HOST_TOKEN_MINT_MISMATCH;
+    status = msSolHostMint(header, mint);
+    if (status != 0) return status;
+    if (data[9] != mint[88 + 44]) return MS_SOL_HOST_TOKEN_MINT_DECIMALS_MISMATCH;
+    status = msSolHostAuthorized(header, 3, fields + 32);
+    if (status != 0) return status;
+    if (!msSolHostOwnedByCallee(header, source)) return msSolHostForeignAccount(header);
+    msSolHostStoreOption(header, fields + 72, delegate + 8);
+    msSolHostStoreU64(fields + 121, msSolHostLoadU64(data + 1));
+    return 0;
+}
+
+static uint64_t msSolHostRevoke(const uint64_t* header) {
+    uint8_t* source = msSolHostRecordOf(header, 0);
+    const uint8_t* authority = msSolHostRecordOf(header, 1);
+    uint64_t status = msSolHostTokenAccount(header, source);
+    if (status != 0) return status;
+    if (authority == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
+    uint8_t* fields = source + 88;
+    if (fields[108] == 2) return MS_SOL_HOST_TOKEN_ACCOUNT_FROZEN;
+    int byDelegate = msSolHostOptionIs(fields + 72, authority + 8);
+    status = msSolHostAuthorized(header, 1, byDelegate ? fields + 76 : fields + 32);
+    if (status != 0) return status;
+    if (!msSolHostOwnedByCallee(header, source)) return msSolHostForeignAccount(header);
+    msSolHostStoreOption(header, fields + 72, NULL);
+    msSolHostStoreU64(fields + 121, 0);
+    return 0;
+}
+
+static int msSolHostSpends(const uint8_t* source, const uint8_t* authority) {
+    return memcmp(source + 88 + 32, authority + 8, 32) == 0 || msSolHostOptionIs(source + 88 + 72, authority + 8);
+}
+
+static uint64_t msSolHostTransferAs(const uint64_t* header, uint8_t* source, const uint8_t* mintKey, uint8_t* destination, const uint8_t* authority, uint64_t amount) {
+    uint8_t* fields = source + 88;
+    int delegated = msSolHostOptionIs(fields + 72, authority + 8);
+    uint64_t allowance = msSolHostLoadU64(fields + 121);
+    if (delegated && allowance < amount) return MS_SOL_HOST_TOKEN_INSUFFICIENT_FUNDS;
+    uint64_t status = msSolHostMoveTokens(source, mintKey, destination, amount);
+    if (status != 0 || !delegated) return status;
+    msSolHostStoreU64(fields + 121, allowance - amount);
+    if (allowance == amount) msSolHostStoreOption(header, fields + 72, NULL);
+    return 0;
+}
+
 static uint64_t msSolHostAuthorityOf(const uint64_t* header, uint8_t* target, uint8_t* option, const uint8_t* holder, const uint8_t* next) {
     uint64_t status = msSolHostAuthorized(header, 1, holder);
     if (status != 0) return status;
@@ -887,8 +943,8 @@ static uint64_t msSolHostToken(const uint64_t* header) {
     switch (data[0]) {
     case 3:
         if (first == NULL || second == NULL || third == NULL) return 11ULL << 32;
-        if (memcmp(first + 88 + 32, third + 8, 32) != 0) return 4;
-        return msSolHostMoveTokens(first, NULL, second, amount);
+        if (!msSolHostSpends(first, third)) return 4;
+        return msSolHostTransferAs(header, first, NULL, second, third, amount);
     case 7:
         if (first == NULL || second == NULL) return 11ULL << 32;
         if (memcmp(second + 88, first + 8, 32) != 0) return 3;
@@ -910,11 +966,15 @@ static uint64_t msSolHostToken(const uint64_t* header) {
     case 12:
         if (first == NULL || second == NULL || third == NULL || fourth == NULL) return 11ULL << 32;
         if (header[4] < 10) return 12;
-        if (memcmp(first + 88 + 32, fourth + 8, 32) != 0) return 4;
+        if (!msSolHostSpends(first, fourth)) return 4;
         if (second[88 + 44] != data[9]) return 18;
-        return msSolHostMoveTokens(first, second + 8, third, amount);
+        return msSolHostTransferAs(header, first, second + 8, third, fourth, amount);
+    case 5:
+        return msSolHostRevoke(header);
     case 6:
         return msSolHostSetAuthority(header);
+    case 13:
+        return msSolHostApproveChecked(header);
     case 8:
         return msSolHostBurn(header, 0);
     case 15:
