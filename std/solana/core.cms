@@ -467,6 +467,10 @@ export function allocate(
 
 export function minimumBalance(dataLength: uint64): uint64 {
 	const rent = msSolRentAddress();
+	if (rent == 0) {
+		failWith(ProgramError.unsupportedSysvar());
+		return 0;
+	}
 	const lamportsPerByte = msSolLoadU64(rent);
 	const thresholdBits = msSolLoadU64(rent + 8);
 	const twoBits: uint64 = 0x4000000000000000;
@@ -545,7 +549,7 @@ export function createProgramAccountSeeded(
 
 export function clock(): Clock {
 	let words: uint64[5] = [];
-	const _status = msSolGetClock(msSolWordsAddress(words));
+	if (msSolGetClock(msSolWordsAddress(words)) != 0) { failWith(ProgramError.unsupportedSysvar()); }
 	const value: Clock = {
 		slot: words[0],
 		epochStartTimestamp: words[1] as int64,

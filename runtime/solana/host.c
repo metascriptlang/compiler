@@ -760,13 +760,19 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     return status;
 }
 
+static uint64_t msSolHostSysvarStatus;
+
+void msSolHostSetSysvarStatus(uint64_t status) { msSolHostSysvarStatus = status; }
+
 uint64_t msSolHostGetClock(uint64_t out) {
+    if (msSolHostSysvarStatus != 0) return msSolHostSysvarStatus;
     memcpy((void*)out, msSolHostClock, sizeof(msSolHostClock));
     return 0;
 }
 
 uint64_t msSolHostGetRent(uint64_t out) {
     msSolHostRentReadCount++;
+    if (msSolHostSysvarStatus != 0) return msSolHostSysvarStatus;
     uint8_t* rent = (uint8_t*)out;
     uint64_t lamportsPerByteYear = 3480;
     uint64_t exemptionThreshold = 0x4000000000000000ULL;

@@ -89,7 +89,7 @@ import { SignerSeeds, findExpected, seedText, tableAddress } from "./seed";
 import { seedTable, slottedTable } from "./accountSeeds";
 import { canonicalBump, canonicalBumpOwned, canonicalBumpProven, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, slottedCanonicalBump, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
-import { HostAccount, invocations, logs, rentReads, run, setClock, signerIs, textBytes } from "./host";
+import { HostAccount, invocations, logs, rentReads, run, setClock, setSysvarStatus, signerIs, textBytes } from "./host";
 import {
 	address,
 	args,
@@ -1561,6 +1561,45 @@ function clockEntry(): void {
 	if (now.epoch != 3) { failWith(ProgramError.custom(3)); }
 	if (now.leaderScheduleEpoch != 4) { failWith(ProgramError.custom(4)); }
 	if (now.unixTimestamp != 1700000000) { failWith(ProgramError.custom(5)); }
+}
+
+function resultWithSysvarStatus(status: uint64, accounts: HostAccount[], entry: () => void): uint64 {
+	setSysvarStatus(status);
+	const outcome = run(programKey(), accounts, [], entry);
+	setSysvarStatus(0);
+	return outcome.result;
+}
+
+function deadlineEntry(): void {
+	if (clock().unixTimestamp > 1700000000) { failWith(ProgramError.custom(1)); }
+}
+
+test "a clock the runtime did not write fails the instruction instead of reading as time zero" {
+	setClock({ slot: 77, epochStartTimestamp: -5, epoch: 3, leaderScheduleEpoch: 4, unixTimestamp: 1700000001 });
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], deadlineEntry).result == ProgramError.custom(1).code;
+	assert resultWithSysvarStatus(2, none, deadlineEntry) == ProgramError.unsupportedSysvar().code;
+	assert resultWithSysvarStatus(1, none, deadlineEntry) == ProgramError.unsupportedSysvar().code;
+	assert run(programKey(), none, [], deadlineEntry).result == ProgramError.custom(1).code;
+}
+
+function rentFloorEntry(): void {
+	const _floor = minimumBalance(100);
+}
+
+test "a rent the runtime did not write fails the instruction instead of pricing every account at zero" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], rentFloorEntry).result == 0;
+	assert resultWithSysvarStatus(2, none, rentFloorEntry) == ProgramError.unsupportedSysvar().code;
+	assert resultWithSysvarStatus(1, none, rentFloorEntry) == ProgramError.unsupportedSysvar().code;
+	assert run(programKey(), none, [], rentFloorEntry).result == 0;
+}
+
+test "create<T> fails the instruction when the runtime did not write the rent" {
+	const funded = [wallet(1, 10000000), blank(keyOf(3))];
+	assert resultWithSysvarStatus(2, funded, createEntry) == ProgramError.unsupportedSysvar().code;
+	assert run(programKey(), [wallet(1, 10000000), blank(keyOf(5))], [], createEntry).result == 0;
+	assert rentReads() == 1;
 }
 
 function payEntry(): void {

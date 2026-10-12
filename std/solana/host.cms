@@ -32,6 +32,7 @@ extern function msSolHostSetClock(
 	leaderEpoch: uint64,
 	unixTime: uint64,
 ): void;
+extern function msSolHostSetSysvarStatus(status: uint64): void;
 extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
 extern function msSolLoadU64(address: uint64): uint64;
@@ -282,6 +283,8 @@ export function setClock(clock: Clock): void {
 		clock.unixTimestamp as uint64,
 	);
 }
+
+export function setSysvarStatus(status: uint64): void { msSolHostSetSysvarStatus(status); }
 
 function keyOf(word: uint64): Pubkey {
 	let key = Pubkey.zero();
