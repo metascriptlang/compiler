@@ -487,7 +487,11 @@ macro provenDiscriminatorWord(): Node {
 	};
 }
 
-macro singleAccountFailure(index: Node, value: Node, rejected: Node): Node {
+function failedAccount<T>(code: uint64): Result<T, ProgramError> {
+	return Result.err({ code: code });
+}
+
+macro singleAccountBody(index: Node): Node {
 	const shape = getTypeArg();
 	const field = shape.typExprFieldTypes[0];
 	const base = field.kind === NodeKind.TypeGeneric ? field.typExprBase.name : field.typExprTypeName;
@@ -505,29 +509,77 @@ macro singleAccountFailure(index: Node, value: Node, rejected: Node): Node {
 	if (base == "External") { kernel = bindSym("externalProofFailure"); }
 	if (base == "ExternalMutable") { kernel = bindSym("externalMutableProofFailure"); }
 	if (kernel == null) { error("single account has no proof kernel", field); }
-	const proof: Node = {
-		kind: NodeKind.MemberExpr, line: shape.line, column: shape.column,
-		object: value, property: shape.typExprFieldNames[0], isOptional: false,
+	function typeText(written: Node): string {
+		if (written.kind === NodeKind.TypeObject) { return written.typExprTypeName; }
+		if (written.kind !== NodeKind.TypeGeneric) { error("single account: the field type is not a named type", written); }
+		const inner: string[] = [];
+		for (const arg of written.typExprArgs) { inner.push(typeText(arg)); }
+		return written.typExprBase.name + "<" + inner.join(", ") + ">";
+	}
+	const line = shape.line;
+	const column = shape.column;
+	const proof = "$soleProof";
+	const failure = "$soleFailure";
+	const rejected = "$soleRejected";
+	function ident(name: string): Node {
+		return { kind: NodeKind.Identifier, line: line, column: column, name: name };
+	}
+	function declare(name: string, type: string, value: Node | null): Node {
+		return {
+			kind: NodeKind.VariableDecl, line: line, column: column,
+			declName: name, declType: type, declKind: DeclKind.Let,
+			initializer: value as Node, nameLocation: { line: line, column: column },
+		};
+	}
+	function literal(value: number): Node {
+		return {
+			kind: NodeKind.NumberLiteral, line: line, column: column,
+			value: value, isFloat: false, intVal: value as int64, outOfRangeText: "", isBitPattern: false,
+		};
+	}
+	function call(callee: Node, args: Node[], typeArg: string): Node {
+		const made: Node = {
+			kind: NodeKind.CallExpr, line: line, column: column,
+			callee: callee, arguments: args, isDirectCall: false, resolvedOverloadIdx: -1,
+		};
+		if (typeArg != "") { made.typeArg = typeArg; }
+		return made;
+	}
+	const args: Node[] = [index, ident(proof)];
+	if (base == "External" || base == "ExternalMutable") { args.push(ident(rejected)); }
+	const refused: Node = {
+		kind: NodeKind.BinaryExpr, line: line, column: column, operator: "||",
+		left: { kind: NodeKind.BinaryExpr, line: line, column: column, operator: "!=", left: ident(failure), right: literal(0) },
+		right: ident(rejected),
 	};
-	const args: Node[] = [index, proof];
-	if (base == "External" || base == "ExternalMutable") { args.push(rejected); }
-	return {
-		kind: NodeKind.CallExpr, line: shape.line, column: shape.column,
-		callee: kernel!, arguments: args, isDirectCall: false, resolvedOverloadIdx: -1,
+	const built: Node = {
+		kind: NodeKind.ObjectLiteral, line: line, column: column,
+		properties: [ident(proof)], keys: [shape.typExprFieldNames[0]], keyLocations: [],
 	};
+	const statements: Node[] = [
+		declare(rejected, "boolean", { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: false }),
+		declare(proof, typeText(field), null),
+		declare(failure, "uint64", call(kernel!, args, "")),
+		{
+			kind: NodeKind.IfStmt, line: line, column: column, condition: refused,
+			consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
+				{ kind: NodeKind.ReturnStmt, line: line, column: column, argument: call(bindSym("failedAccount")!, [ident(failure)], "T") }] },
+		},
+		{
+			kind: NodeKind.ReturnStmt, line: line, column: column,
+			argument: call(bindSym("readArgs")!, [{ kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: true }, built], "T"),
+		},
+	];
+	return call({
+		kind: NodeKind.FunctionExpr, line: line, column: column,
+		funcExprParams: [], funcExprParamTypes: [], funcExprFlags: "",
+		funcExprReturnType: "",
+		funcExprBody: { kind: NodeKind.BlockStmt, line: line, column: column, statements: statements },
+	}, [], "");
 }
 
 function singleAccountResult<T>(index: int32): Result<T, ProgramError> {
-	let value: T;
-	let rejected = false;
-	const failure = singleAccountFailure<T>(index, value, rejected);
-	if (failure != 0 || rejected) { return Result.err({ code: failure }); }
-	return Result.ok(value);
-}
-
-function checkedAccountResult<T>(accepted: boolean, value: T, code: uint64): Result<T, ProgramError> {
-	if (!accepted) { return Result.err({ code: code }); }
-	return Result.ok(value);
+	return singleAccountBody<T>(index);
 }
 
 @inline export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
@@ -700,7 +752,7 @@ export macro accounts(): Node {
 	const decl = found!;
 	const line = shape.line;
 	const column = shape.column;
-	const holder = "$accounts";
+	function slotOf(field: string): string { return "$account_" + field; }
 	const names: string[] = [];
 	const writtenTypes: string[] = [];
 	const fieldDecorators: Node[][] = [];
@@ -846,13 +898,13 @@ export macro accounts(): Node {
 		if (n.kind === NodeKind.Identifier) {
 			const owner = fieldIndex(n.name);
 			if (owner < 0) { return n; }
-			return member(ident(holder, n), n.name, n);
+			return ident(slotOf(n.name), n);
 		}
 		if (n.kind === NodeKind.MemberExpr) {
 			if (n.object.kind === NodeKind.Identifier) {
 				const owner = fieldIndex(n.object.name);
 				if (owner >= 0 && dataFieldOf(owner, n.property, n)) {
-					const proof = member(ident(holder, n), n.object.name, n);
+					const proof = ident(slotOf(n.object.name), n);
 					return member(call(member(proof, "data", n), [], n), n.property, n);
 				}
 			}
@@ -1016,6 +1068,15 @@ export macro accounts(): Node {
 			initializer: value, nameLocation: { line: line, column: column },
 		};
 	}
+	function refuseFailed(): Node {
+		const no: Node = { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: false };
+		return {
+			kind: NodeKind.IfStmt, line: line, column: column,
+			condition: { kind: NodeKind.UnaryExpr, line: line, column: column, unaryOp: "!", operand: unfailed(shape) },
+			consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
+				attempt(call(bindSym("holds")!, [no, ident(failure, shape)], shape), shape)] },
+		};
+	}
 	function guard(statement: Node): Node {
 		return {
 			kind: NodeKind.IfStmt, line: line, column: column,
@@ -1036,7 +1097,6 @@ export macro accounts(): Node {
 		kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: false,
 	}));
 	chain.push(declare(failure, "uint64", whole(0, shape)));
-	chain.push(declare(holder, decl.interfaceName, null as unknown as Node));
 	chain.push(declare("$table", "uint64", call(bindSym("msSolAccountTable")!, [], shape)));
 	chain.push({
 		kind: NodeKind.IfStmt, line: line, column: column,
@@ -1047,6 +1107,7 @@ export macro accounts(): Node {
 		consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
 			assignFailure(whole(ProgramError.accountNotEnoughKeys().code as number, shape), shape)] },
 	});
+	chain.push(refuseFailed());
 	let field = 0;
 	while (field < names.length) {
 		const written = writtenTypes[field];
@@ -1112,7 +1173,7 @@ export macro accounts(): Node {
 			kind: NodeKind.TryExpr, line: line, column: column,
 			tryArg: check!, hasCatch: false, catchVal: check!,
 		});
-		const proof = member(ident(holder, shape), names[field], shape);
+		const proof = ident(slotOf(names[field]), shape);
 		let direct: Node | null = null;
 		if (base == "Signer") { direct = bindSym("signerProofFailure"); }
 		if (base == "WritableSigner") { direct = bindSym("writableSignerProofFailure"); }
@@ -1140,7 +1201,9 @@ export macro accounts(): Node {
 		const verdict = atKernel == null ? call(direct!, [index, proof], shape) : call(atKernel!, [slot, proof], shape);
 		if (base == "External" || base == "ExternalMutable") { verdict.arguments.push(ident(rejected, shape)); }
 		verdict.typeArg = inner;
-		chain.push(guard(assignFailure(verdict, shape)));
+		chain.push(declare(slotOf(names[field]), written, null as unknown as Node));
+		chain.push(assignFailure(verdict, shape));
+		chain.push(refuseFailed());
 		values.push(proof);
 		field = field + 1;
 	}
@@ -1191,7 +1254,7 @@ export macro accounts(): Node {
 						"of a struct with a field '" + target + "'", d);
 				}
 				const stored = call(bindSym("keyAddressOf")!, [
-					member(call(member(member(ident(holder, d), self, d), "data", d), [], d), target, d),
+					member(call(member(ident(slotOf(self), d), "data", d), [], d), target, d),
 				], d);
 				if (args.length == 2) {
 					related.push(lazily(call(bindSym("keysEqual")!, [stored, keyOf(args[0])], d), args[1], d));
@@ -1343,14 +1406,14 @@ export macro accounts(): Node {
 			} else {
 				if (literal.length > 0) {
 					if (keepsBump) {
-						words[0] = member(ident(holder, seeded), self, seeded);
+						words[0] = ident(slotOf(self), seeded);
 						words.push(constant(foldedBump as uint64, false));
 						checks.push(attempt(call(bindSym("seedsFoldedPdaFailure")!, words, seeded), seeded));
 					} else {
 						checks.push(attempt(call(bindSym("seedsFoldedFailure")!, words, seeded), seeded));
 					}
 				} else if (keepsBump) {
-					checks.push(attempt(call(bindSym("seedsFoundFailure")!, [member(ident(holder, seeded), self, seeded), table], seeded), seeded));
+					checks.push(attempt(call(bindSym("seedsFoundFailure")!, [ident(slotOf(self), seeded), table], seeded), seeded));
 				} else {
 					checks.push(attempt(call(
 						programOwned ? bindSym("seedsCanonicalProvenFailure")! : bindSym("seedsCanonicalFailure")!,
@@ -1391,6 +1454,11 @@ export macro accounts(): Node {
 		return direct;
 	}
 	const statements: Node[] = chain;
+	function readBuilt(): Node {
+		const read = call(bindSym("readArgs")!, [yes, built], shape);
+		read.typeArg = decl.interfaceName;
+		return read;
+	}
 	function constraintCode(statement: Node): Node {
 		if (statement.kind === NodeKind.ExprStmt && statement.expr.kind === NodeKind.TryExpr) {
 			return assignFailure(statement.expr.tryArg, statement);
@@ -1409,7 +1477,7 @@ export macro accounts(): Node {
 	if (checks.length == 0) {
 		statements.push({
 			kind: NodeKind.ReturnStmt, line: line, column: column,
-			argument: call(bindSym("checkedAccountResult")!, [unfailed(shape), ident(holder, shape), ident(failure, shape)], shape),
+			argument: readBuilt(),
 		});
 		return call({
 			kind: NodeKind.FunctionExpr, line: line, column: column,
@@ -1418,7 +1486,7 @@ export macro accounts(): Node {
 			funcExprBody: { kind: NodeKind.BlockStmt, line: line, column: column, statements: statements },
 		}, [], shape);
 	}
-	statements.push(attempt(call(bindSym("holds")!, [unfailed(shape), ident(failure, shape)], shape), shape));
-	statements.push(call(bindSym("readArgs")!, [yes, ident(holder, shape)], shape));
+	statements.push(refuseFailed());
+	statements.push(readBuilt());
 	return { kind: NodeKind.SpliceMany, line: line, column: column, spliceNodes: statements };
 }
