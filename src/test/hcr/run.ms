@@ -1679,8 +1679,9 @@ function jsInstanceFiles(): void {
 	const second = "JS-INST second 1 true app 3 own 1 made=8 counted=2";
 	const refusal = "invalid object conversion: Box<boolean> is not Box<int32>";
 	const third = "JS-INST third #8";
-	const edits = ["app.ms", "appSecondType.ms", "appWrongCast.ms", "appFirstUse.ms"];
-	const wants = [[first], [first, second], [first, second, refusal], [first, second, third]];
+	const fourth = "JS-INST fourth true false On:1";
+	const edits = ["app.ms", "appSecondType.ms", "appWrongCast.ms", "appFirstUse.ms", "appLoweringHelpers.ms"];
+	const wants = [[first], [first, second], [first, second, refusal], [first, second, third], [first, second, fourth]];
 	const libOf: string[] = [];
 	for (let i = 0; i < edits.length; i += 1) {
 		copy(`${FIXTURES}/jsInstanceFiles/${edits[i]}`, `${dir}/app.ms`);

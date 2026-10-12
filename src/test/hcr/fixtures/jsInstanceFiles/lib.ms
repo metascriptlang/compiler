@@ -16,6 +16,19 @@ export function count<T>(value: T): T {
 	return value;
 }
 
+export function same<T>(a: T, b: T): boolean {
+	return a == b;
+}
+
+export enum Mode {
+	Off,
+	On,
+}
+
+export function tagged<T>(value: T, mode: Mode): string {
+	return `${mode.toString()}:${value}`;
+}
+
 function label(n: int32): string {
 	return `#${n}`;
 }
