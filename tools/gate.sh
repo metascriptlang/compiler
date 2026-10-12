@@ -1769,13 +1769,18 @@ solana_replays() {
   fi
   solana_check resize-build "$CAND" build tools/solana/resizeProbe.ms --os=solana --output="$dir/resizeProbe.so" \
     && { solana_check resize-replay node tools/solana/resizeAfterCpi.mjs "$dir/resizeProbe.so" || rc=1; } || rc=1
+  solana_check fidelity-build "$CAND" build tools/solana/hostFidelityProbe.ms --os=solana --release --output="$dir/hostFidelityProbe.so" \
+    && { solana_check fidelity-replay node tools/solana/hostFidelity.mjs "$dir/hostFidelityProbe.so" || rc=1; } || rc=1
+  solana_check token-build "$CAND" build tools/solana/tokenOpsProbe.ms --os=solana --release --output="$dir/tokenOpsProbe.so" \
+    && { solana_check token-replay node tools/solana/tokenOps.mjs "$dir/tokenOpsProbe.so" || rc=1; } || rc=1
   return $rc
 }
 
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/index.cms std/solana/vrf.ms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
+  for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.cms std/solana/vrf.ms \
+    std/solana/idlTest.ms std/solana/accountCodecTest.ms \
     examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done
