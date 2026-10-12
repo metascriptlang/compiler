@@ -1424,14 +1424,27 @@ when (testBuild) {
 		}
 	}
 
+	function associatedCpiAccounts(existing: boolean): HostAccount[] {
+		const accounts = cpiAccounts();
+		accounts[1].key = ataOf(3, 1, TOKEN_PROGRAM_ID);
+		if (!existing) {
+			accounts[1].owner = Pubkey.zero();
+			accounts[1].data = [];
+			accounts[1].lamports = 0;
+			accounts[3].data = [];
+			accounts[3].lamports = 10000000;
+		}
+		return accounts;
+	}
+
 	test "createAssociatedTokenIdempotent sends discriminator 1 with the six accounts in order" {
-		assert resultOf(cpiAccounts(), 5, cpiEntry) == 0;
+		assert resultOf(associatedCpiAccounts(true), 5, cpiEntry) == 0;
 		const created = invocations()[0];
 		assert created.program.equals(ASSOCIATED_TOKEN_PROGRAM_ID);
 		assert created.accounts.length == 6;
 		const funding = created.accounts[0];
 		assert funding.key.equals(keyOf(4)) && funding.signer && funding.writable;
-		assert created.accounts[1].key.equals(keyOf(2)) && created.accounts[1].writable;
+		assert created.accounts[1].key.equals(ataOf(3, 1, TOKEN_PROGRAM_ID)) && created.accounts[1].writable;
 		const program = created.accounts[5];
 		assert program.key.equals(TOKEN_PROGRAM_ID) && !program.writable;
 		assert created.data.length == 1 && created.data[0] == 1;
@@ -1449,16 +1462,14 @@ when (testBuild) {
 	}
 
 	test "createAssociatedToken sends discriminator 0 with the six accounts and their flags" {
-		const accounts = cpiAccounts();
-		accounts[1].lamports = 0;
-		accounts[3].lamports = 10000000;
+		const accounts = associatedCpiAccounts(false);
 		assert resultOf(accounts, 15, cpiEntry) == 0;
 		const created = invocations()[0];
 		assert created.program.equals(ASSOCIATED_TOKEN_PROGRAM_ID);
 		assert created.accounts.length == 6;
 		assert created.accounts[0].key.equals(keyOf(4)) && created.accounts[0].writable;
 		assert created.accounts[0].signer;
-		assert created.accounts[1].key.equals(keyOf(2)) && created.accounts[1].writable;
+		assert created.accounts[1].key.equals(ataOf(3, 1, TOKEN_PROGRAM_ID)) && created.accounts[1].writable;
 		assert !created.accounts[1].signer;
 		assert created.accounts[2].key.equals(keyOf(3)) && !created.accounts[2].writable;
 		assert !created.accounts[2].signer;
@@ -1474,11 +1485,7 @@ when (testBuild) {
 
 	test "each token CPI sends the signer seeds it was given" {
 		for (const op of [7, 8, 9, 10, 11, 12, 13, 14]) {
-			const accounts = cpiAccounts();
-			if (op == 10) {
-				accounts[1].lamports = 0;
-				accounts[3].lamports = 10000000;
-			}
+			const accounts = op == 10 || op == 11 ? associatedCpiAccounts(op == 11) : cpiAccounts();
 			if (op == 8 || op == 14) { accounts[3].owner = TOKEN_PROGRAM_ID; }
 			assert resultOf(accounts, op as uint8, cpiEntry) == 0;
 			const calls = invocations();
@@ -3216,6 +3223,209 @@ when (testBuild) {
 					accounts[2].key = keyOf(8);
 					assert ledgerRun(accounts, 5, 0).result == 0 && closed(accounts, TOKEN_ACCOUNT_RENT);
 				}
+			}
+		}
+	}
+
+	function associatedStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		const op = try input.readU8(0);
+		const mint = try account(0);
+		const target = try account(1);
+		const wallet = try account(2);
+		const payer = try account(3);
+		const system = try account(4);
+		const program = try account(5);
+		if (op == 0) { return createAssociatedToken(payer, target, wallet, mint, system, program); }
+		if (op == 1) { return createAssociatedTokenIdempotent(payer, target, wallet, mint, system, program); }
+		let storage: uint8[1] = [];
+		const length = putU8(storage, 0, try input.readU8(1));
+		return invoke(
+			ASSOCIATED_TOKEN_PROGRAM_ID,
+			[
+				InstructionAccount.writable(payer),
+				InstructionAccount.writable(target),
+				InstructionAccount.readonly(wallet),
+				InstructionAccount.readonly(mint),
+				InstructionAccount.readonly(system),
+				InstructionAccount.readonly(program),
+			],
+			storage,
+			length,
+		);
+	}
+
+	function associatedEntry(): void {
+		const result = associatedStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function associatedRun(accounts: HostAccount[], op: uint8, discriminator: uint8 = 0): HostRun {
+		const data: uint8[] = [op, discriminator];
+		return run(keyOf(9), accounts, data, associatedEntry);
+	}
+
+	const PAYER_FUNDS: uint64 = 10000000;
+
+	function associatedAccounts(program: Pubkey, mint: uint8[]): HostAccount[] {
+		return [
+			{ ...holderOf(1, program, mint), writable: false },
+			{ ...holderOf(2, Pubkey.zero(), []), key: ataOf(3, 1, program), lamports: 0 },
+			{ ...holderOf(3, Pubkey.zero(), []), writable: false },
+			{ ...holderOf(4, Pubkey.zero(), []), signer: true, lamports: PAYER_FUNDS },
+			{ ...holderOf(0, Pubkey.zero(), []), writable: false, executable: true },
+			programAccount(program),
+		];
+	}
+
+	function existingAssociated(program: Pubkey, mint: uint64, owner: uint64): HostAccount[] {
+		const accounts = associatedAccounts(program, mintData(7, 500, 6));
+		accounts[1].owner = program;
+		accounts[1].data = tokenAccountData(mint, owner, 25, 1);
+		accounts[1].lamports = TOKEN_ACCOUNT_RENT;
+		return accounts;
+	}
+
+	function rentOf(length: int32): uint64 {
+		return 2 * ((length as uint64) + 128) * 3480;
+	}
+
+	function extensionKinds(data: uint8[]): int32[] {
+		const kinds: int32[] = [];
+		let offset = 166;
+		while (offset + 4 <= data.length) {
+			kinds.push((data[offset] as int32) | ((data[offset + 1] as int32) << 8));
+			offset += 4 + ((data[offset + 2] as int32) | ((data[offset + 3] as int32) << 8));
+		}
+		return kinds;
+	}
+
+	function sameKinds(left: int32[], right: int32[]): boolean {
+		if (left.length != right.length) { return false; }
+		for (let index = 0; index < left.length; index++) {
+			if (left[index] != right[index]) { return false; }
+		}
+		return true;
+	}
+
+	function untouched(accounts: HostAccount[]): boolean {
+		return accounts[1].lamports == 0 && accounts[1].data.length == 0 &&
+			accounts[1].owner == Pubkey.zero() && accounts[3].lamports == PAYER_FUNDS;
+	}
+
+	test "createAssociatedToken creates the account at the size its token program gives it, at the rent minimum" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			for (const op of [0, 1]) {
+				const length = program == TOKEN_PROGRAM_ID ? 165 : 170;
+				const accounts = associatedAccounts(program, mintData(7, 500, 6));
+				const made = associatedRun(accounts, op as uint8);
+				assert made.result == 0 && made.fault == "";
+				const created = accounts[1];
+				assert created.owner == program && created.data.length == length;
+				assert created.lamports == rentOf(length) && accounts[3].lamports == PAYER_FUNDS - rentOf(length);
+				assert keyAt(created.data, 0).equals(keyOf(1)) && keyAt(created.data, 32).equals(keyOf(3));
+				assert u64At(created.data, 64) == 0 && created.data[108] == 1 && created.data[72] == 0;
+				assert length == 165 || (created.data[165] == 2 && sameKinds(extensionKinds(created.data), [7]));
+			}
+		}
+	}
+
+	test "a Token-2022 associated account carries the immutable owner first, then the extensions its mint requires" {
+		const mints: int32[][] = [[1], [9], [14], [26], [3], [6], [1, 9, 14, 26]];
+		const lengths: int32[] = [182, 174, 175, 174, 170, 170, 195];
+		const kinds: int32[][] = [[7, 2], [7, 13], [7, 15], [7, 27], [7], [7], [7, 2, 13, 15, 27]];
+		for (let index = 0; index < mints.length; index++) {
+			const mint = extendedMint(mints[index]);
+			if (mints[index][0] == 6) { mint[170] = 2; }
+			const accounts = associatedAccounts(TOKEN_2022_PROGRAM_ID, mint);
+			assert associatedRun(accounts, 0).result == 0;
+			const created = accounts[1].data;
+			assert created.length == lengths[index] && accounts[1].lamports == rentOf(lengths[index]);
+			assert created[165] == 2 && sameKinds(extensionKinds(created), kinds[index]);
+			assert created[108] == (mints[index][0] == 6 ? 2 : 1);
+		}
+	}
+
+	test "createAssociatedToken refuses an address that exists, and its idempotent form one of another owner or mint" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const existing = existingAssociated(program, 1, 3);
+			assert refusedWith(associatedRun(existing, 0), ProgramError.illegalOwner(), "");
+			const again = associatedRun(existing, 1);
+			assert again.result == 0 && again.fault == "";
+			assert u64At(existing[1].data, 64) == 25 && existing[3].lamports == PAYER_FUNDS;
+			assert refusedWith(associatedRun(existingAssociated(program, 1, 8), 1), ProgramError.custom(0), "");
+			assert refusedWith(associatedRun(existingAssociated(program, 2, 3), 1), ProgramError.invalidAccountData(), "");
+			assert refusedWith(associatedRun(existingAssociated(program, 2, 8), 1), ProgramError.custom(0), "");
+			const blank = existingAssociated(program, 1, 3);
+			blank[1].data[108] = 0;
+			const taken = existingAssociated(program, 1, 3);
+			taken[1].owner = keyOf(8);
+			for (const op of [0, 1]) {
+				assert refusedWith(associatedRun(blank, op as uint8), ProgramError.illegalOwner(), "");
+				assert refusedWith(associatedRun(taken, op as uint8), ProgramError.illegalOwner(), "");
+			}
+		}
+	}
+
+	test "createAssociatedToken refuses an address the wallet, the token program and the mint do not derive" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			for (const op of [0, 1]) {
+				const elsewhere = associatedAccounts(program, mintData(7, 500, 6));
+				elsewhere[1].key = keyOf(2);
+				assert refusedWith(associatedRun(elsewhere, op as uint8), ProgramError.invalidSeeds(), "");
+				const otherProgram = associatedAccounts(program, mintData(7, 500, 6));
+				otherProgram[1].key = ataOf(3, 1, otherTokenProgram(program));
+				assert refusedWith(associatedRun(otherProgram, op as uint8), ProgramError.invalidSeeds(), "");
+				const existing = existingAssociated(program, 1, 3);
+				existing[1].key = keyOf(2);
+				assert refusedWith(associatedRun(existing, op as uint8), ProgramError.invalidSeeds(), "");
+				assert untouched(elsewhere) && untouched(otherProgram);
+			}
+		}
+	}
+
+	test "createAssociatedToken funds only what a prefunded address lacks, and is refused for a mint or a payer that cannot serve" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const length = program == TOKEN_PROGRAM_ID ? 165 : 170;
+			const prefunded = associatedAccounts(program, mintData(7, 500, 6));
+			prefunded[1].lamports = 1000000;
+			assert associatedRun(prefunded, 0).result == 0;
+			assert prefunded[1].lamports == rentOf(length) && prefunded[1].data.length == length;
+			assert prefunded[3].lamports == PAYER_FUNDS - (rentOf(length) - 1000000);
+			const foreignMint = associatedAccounts(program, mintData(7, 500, 6));
+			foreignMint[0].owner = otherTokenProgram(program);
+			assert refusedWith(associatedRun(foreignMint, 0), ProgramError.incorrectProgramId(), "");
+			const blankMint = associatedAccounts(program, mintData(7, 500, 6));
+			blankMint[0].data[45] = 0;
+			assert refusedWith(associatedRun(blankMint, 0), ProgramError.custom(2), "");
+			const poor = associatedAccounts(program, mintData(7, 500, 6));
+			poor[3].lamports = rentOf(length) - 1;
+			assert refusedWith(associatedRun(poor, 0), ProgramError.custom(1), "");
+			assert poor[3].lamports == rentOf(length) - 1 && poor[1].data.length == 0;
+			const unsigned = associatedAccounts(program, mintData(7, 500, 6));
+			unsigned[3].signer = false;
+			const escalated = associatedRun(unsigned, 2, 0);
+			assert escalated.result != 0 && escalated.fault.indexOf("PrivilegeEscalation") >= 0;
+			assert untouched(foreignMint) && untouched(blankMint) && untouched(unsigned);
+		}
+	}
+
+	test "an associated account of the native mint holds the lamports above its rent reserve" {
+		const native = Pubkey.parse("So11111111111111111111111111111111111111112");
+		assert native.ok;
+		if (native.ok) {
+			const found = associatedTokenAddress(keyOf(3), native.value, TOKEN_PROGRAM_ID);
+			assert found.ok;
+			if (found.ok) {
+				const accounts = associatedAccounts(TOKEN_PROGRAM_ID, mintData(7, 0, 9));
+				accounts[0].key = native.value;
+				accounts[1].key = found.value.key;
+				accounts[1].lamports = rentOf(165) + 700;
+				assert associatedRun(accounts, 0).result == 0;
+				const created = accounts[1].data;
+				assert created.length == 165 && accounts[1].lamports == rentOf(165) + 700;
+				assert accounts[3].lamports == PAYER_FUNDS && u64At(created, 64) == 700;
+				assert created[109] == 1 && u64At(created, 113) == rentOf(165);
 			}
 		}
 	}

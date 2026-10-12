@@ -605,6 +605,8 @@ static const uint8_t msSolHostNativeMint2022[32] = {
 #define MS_SOL_HOST_INCORRECT_PROGRAM_ID (7ULL << 32)
 #define MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE (8ULL << 32)
 #define MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS (11ULL << 32)
+#define MS_SOL_HOST_INVALID_SEEDS (14ULL << 32)
+#define MS_SOL_HOST_ILLEGAL_OWNER (18ULL << 32)
 #define MS_SOL_HOST_UNINITIALIZED_ACCOUNT (10ULL << 32)
 #define MS_SOL_HOST_TOKEN_NOT_RENT_EXEMPT (1ULL << 32)
 #define MS_SOL_HOST_TOKEN_INSUFFICIENT_FUNDS 1ULL
@@ -671,33 +673,38 @@ static uint64_t msSolHostPutExtension(uint8_t* out, uint16_t kind, uint16_t leng
     return 4ULL + length;
 }
 
-static uint64_t msSolHostAccountExtensionsOf(const uint8_t* mint, uint8_t out[32], uint8_t* state) {
+static uint64_t msSolHostAccountExtensionsOf(const uint8_t* mint, int immutableOwner, uint8_t out[32], uint8_t* state) {
     uint64_t length = msSolHostLoadU64(mint + 80);
     const uint8_t* data = mint + 88;
-    uint64_t written = 0;
+    uint64_t written = immutableOwner ? msSolHostPutExtension(out, 7, 0) : 0;
+    uint32_t seen = 0;
     uint64_t offset = MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH + 1;
     while (offset + 4 <= length) {
         uint16_t kind, size;
         memcpy(&kind, data + offset, 2);
         memcpy(&size, data + offset + 2, 2);
         if (kind == 0 || size > length - offset - 4) break;
-        switch (kind) {
-        case 1: written += msSolHostPutExtension(out + written, 2, 8); break;
-        case 6: if (size >= 1) *state = data[offset + 4]; break;
-        case 9:
-            written += msSolHostPutExtension(out + written, 13, 0);
-            written += msSolHostPutExtension(out + written, 7, 0);
-            break;
-        case 14: written += msSolHostPutExtension(out + written, 15, 1); break;
-        case 26: written += msSolHostPutExtension(out + written, 27, 0); break;
-        default: break;
+        int first = kind < 32 && (seen & (1u << kind)) == 0;
+        if (kind < 32) seen |= 1u << kind;
+        if (first) {
+            switch (kind) {
+            case 1: written += msSolHostPutExtension(out + written, 2, 8); break;
+            case 6: if (size >= 1) *state = data[offset + 4]; break;
+            case 9:
+                written += msSolHostPutExtension(out + written, 13, 0);
+                if (!immutableOwner) written += msSolHostPutExtension(out + written, 7, 0);
+                break;
+            case 14: written += msSolHostPutExtension(out + written, 15, 1); break;
+            case 26: written += msSolHostPutExtension(out + written, 27, 0); break;
+            default: break;
+            }
         }
         offset += 4ULL + size;
     }
     return written;
 }
 
-static uint64_t msSolHostInitializeAccount3(const uint64_t* header, uint8_t* account, const uint8_t* mint) {
+static uint64_t msSolHostInitializeAccount3(const uint64_t* header, uint8_t* account, const uint8_t* mint, int immutableOwner) {
     const uint8_t* data = (const uint8_t*)header[3];
     if (account == NULL || mint == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
     if (header[4] < 33) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
@@ -716,7 +723,7 @@ static uint64_t msSolHostInitializeAccount3(const uint64_t* header, uint8_t* acc
     }
     uint8_t extensions[32];
     uint8_t state = 1;
-    uint64_t extensionBytes = msSolHostIsToken2022(header) ? msSolHostAccountExtensionsOf(mint, extensions, &state) : 0;
+    uint64_t extensionBytes = msSolHostIsToken2022(header) ? msSolHostAccountExtensionsOf(mint, immutableOwner, extensions, &state) : 0;
     if (extensionBytes != 0 && length < MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH + 1 + extensionBytes) {
         return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     }
@@ -1126,7 +1133,7 @@ static uint64_t msSolHostToken(const uint64_t* header) {
     case 15:
         return msSolHostBurn(header, 1);
     case 18:
-        return msSolHostInitializeAccount3(header, msSolHostRecordOf(header, 0), msSolHostRecordOf(header, 1));
+        return msSolHostInitializeAccount3(header, msSolHostRecordOf(header, 0), msSolHostRecordOf(header, 1), 0);
     case 20:
         return msSolHostInitializeMint2(header);
     default:
@@ -1140,30 +1147,68 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     if (header[4] >= 1 && data[0] > 1) {
         return msSolHostNotSimulated("Associated Token", data[0], MS_SOL_HOST_INVALID_INSTRUCTION_DATA);
     }
+    static const uint8_t systemProgram[32] = {0};
     uint8_t* payer = msSolHostRecordOf(header, 0);
     uint8_t* associated = msSolHostRecordOf(header, 1);
     uint8_t* wallet = msSolHostRecordOf(header, 2);
     uint8_t* mint = msSolHostRecordOf(header, 3);
     uint8_t* program = msSolHostRecordOf(header, 5);
     if (payer == NULL || associated == NULL || wallet == NULL || mint == NULL || program == NULL) {
-        return 11ULL << 32;
+        return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
     }
+    const uint64_t seeds[6] = {
+        (uint64_t)(uintptr_t)(wallet + 8), 32, (uint64_t)(uintptr_t)(program + 8), 32, (uint64_t)(uintptr_t)(mint + 8), 32,
+    };
+    uint8_t address[32];
+    int derived = 0;
+    for (int bump = 255; bump >= 0 && !derived; bump--) {
+        uint8_t last = (uint8_t)bump;
+        derived = msSolHostDerive((uint64_t)(uintptr_t)seeds, 3, &last, (uint64_t)(uintptr_t)msSolHostAssociatedProgram, address);
+    }
+    if (!derived || memcmp(address, associated + 8, 32) != 0) return MS_SOL_HOST_INVALID_SEEDS;
+    if (!msSolHostIsTokenProgram(program + 8)) {
+        msSolHostFault(2, "sol_invoke_signed: an associated account under a program that is not a token program is not simulated");
+        return MS_SOL_HOST_INCORRECT_PROGRAM_ID;
+    }
+    uint8_t initialize[33] = {18};
+    memcpy(initialize + 1, wallet + 8, 32);
+    const uint64_t inner[5] = {(uint64_t)(uintptr_t)(program + 8), 0, 0, (uint64_t)(uintptr_t)initialize, 33};
     int idempotent = header[4] >= 1 && data[0] == 1;
-    if (msSolHostLamports(associated) != 0) {
-        if (idempotent && memcmp(associated + 40, program + 8, 32) == 0) return 0;
-        return 1ULL << 32;
+    if (idempotent && msSolHostOwnedByCallee(inner, associated) && msSolHostTokenAccount(inner, associated) == 0) {
+        if (memcmp(associated + 88 + 32, wallet + 8, 32) != 0) return 1ULL << 32;
+        if (memcmp(associated + 88, mint + 8, 32) != 0) return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
+        return 0;
     }
-    uint64_t rent = (165 + 128) * 3480 * 2;
-    if (msSolHostLamports(payer) < rent) return 1;
-    uint64_t status = msSolHostResize(associated, 165);
+    if (memcmp(associated + 40, systemProgram, 32) != 0) return MS_SOL_HOST_ILLEGAL_OWNER;
+    if (msSolHostLoadU64(associated + 80) != 0) {
+        msSolHostFault(2, "sol_invoke_signed: an associated account at a System-owned address that holds data is not simulated");
+        return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
+    }
+    int extended = msSolHostIsToken2022(inner);
+    if (memcmp(mint + 8, extended ? msSolHostNativeMint2022 : msSolHostNativeMint, 32) != 0) {
+        if (!msSolHostOwnedByCallee(inner, mint)) return MS_SOL_HOST_INCORRECT_PROGRAM_ID;
+        if (msSolHostMint(inner, mint) != 0) return MS_SOL_HOST_TOKEN_INVALID_MINT;
+    }
+    uint8_t extensions[32];
+    uint8_t state = 1;
+    uint64_t space = MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH;
+    if (extended) space += 1 + msSolHostAccountExtensionsOf(mint, 1, extensions, &state);
+    uint64_t rent = (space + 128) * 3480 * 2;
+    uint64_t held = msSolHostLamports(associated);
+    uint64_t missing = rent > held ? rent - held : 0;
+    if (missing != 0) {
+        if (((const uint8_t*)header[1])[9] == 0) {
+            msSolHostFault(5, "sol_invoke_signed: PrivilegeEscalation: the Associated Token program funds the account from a payer that did not sign");
+            return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
+        }
+        if (msSolHostLamports(payer) < missing) return 1;
+    }
+    uint64_t status = msSolHostResize(associated, space);
     if (status != 0) return status;
-    msSolHostSetLamports(payer, msSolHostLamports(payer) - rent);
-    msSolHostSetLamports(associated, rent);
+    msSolHostSetLamports(payer, msSolHostLamports(payer) - missing);
+    msSolHostSetLamports(associated, held + missing);
     memcpy(associated + 40, program + 8, 32);
-    memcpy(associated + 88, mint + 8, 32);
-    memcpy(associated + 88 + 32, wallet + 8, 32);
-    associated[88 + 108] = 1;
-    return 0;
+    return msSolHostInitializeAccount3(inner, associated, mint, 1);
 }
 
 static uint64_t msSolHostSignerBytes(uint64_t signers, uint64_t signerCount) {
