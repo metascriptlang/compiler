@@ -2131,6 +2131,19 @@ when (testBuild) {
 		assert burnRun(accounts, 0, 1).result == ProgramError.custom(4).code;
 	}
 
+	test "any signer burns from an account the System program or the incinerator owns" {
+		const incinerator = Pubkey.parse("1nc1nerator11111111111111111111111111111111");
+		assert incinerator.ok;
+		if (incinerator.ok) {
+			for (const holder of [Pubkey.zero(), incinerator.value]) {
+				const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+				setKeyAt(accounts[0].data, 32, holder);
+				assert burnRun(accounts, 0, 250).result == 0;
+				assert u64At(accounts[0].data, 64) == 650 && u64At(accounts[1].data, 36) == 4750;
+			}
+		}
+	}
+
 	test "burnChecked is refused for decimals that are not the mint's, a native account and an account of another token program" {
 		const accounts = burnAccounts(TOKEN_PROGRAM_ID);
 		assert burnRun(accounts, 3, 250).result == ProgramError.custom(18).code;

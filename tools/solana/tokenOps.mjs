@@ -25,6 +25,7 @@ const SYSTEM = address("11111111111111111111111111111111");
 const TOKEN = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022 = address("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ASSOCIATED_TOKEN = address("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+const INCINERATOR = address("1nc1nerator11111111111111111111111111111111");
 const NATIVE_MINT = { [TOKEN]: address("So11111111111111111111111111111111111111112"), [TOKEN_2022]: address("9pan9bMn5HatX4EJdBwg9VgCa7Uz5HL8N1m5D3NdXejP") };
 const OP = {
 	createAtKeypair: 0, createAtPda: 1, initializeRaw: 2, burn: 3, burnAsPda: 4, burnRaw: 5,
@@ -375,11 +376,18 @@ for (const [name, tokenProgram] of [["token", TOKEN], ["token-2022", TOKEN_2022]
 			concat(u64(0), new Uint8Array([6])), { error: "UninitializedAccount", by: tokenProgram });
 		await t.send("by the former delegate", OP.burn, metas(lent, t.payer.address), u64(1), custom(4, tokenProgram));
 
+		for (const [what, holder] of [["the System program", SYSTEM], ["the incinerator", INCINERATOR]]) {
+			const abandoned = await t.token(mint, holder, 50);
+			await t.send(`by any signer, from an account ${what} owns`, OP.burn, metas(abandoned, t.payer.address),
+				u64(50));
+			t.check("that account is empty", amountOf(abandoned) === 0n);
+		}
+
 		const [authority] = await getProgramDerivedAddress({ programAddress: program, seeds: ["authority"] });
 		const vault = await t.token(mint, authority, 400);
 		await t.send("by a PDA of the program", OP.burnAsPda, metas(vault, authority, false), u64(400));
 		t.check("the PDA's account is empty and the supply fell by 400 more",
-			amountOf(vault) === 0n && supplyOf(t.svm.getAccount(mint)) === 999_050n);
+			amountOf(vault) === 0n && supplyOf(t.svm.getAccount(mint)) === 998_950n);
 		await t.send("as a PDA the seeds do not derive", OP.burnAsPda, metas(held, t.owner.address, false), u64(1),
 			custom(2006, program));
 	});
