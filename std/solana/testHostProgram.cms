@@ -1,6 +1,6 @@
 @include("runtime/solana/solana.h");
 
-import { putU8 } from "./buffer";
+import { Bytes, putU8 } from "./buffer";
 import { account, accountCount, failWith, instructionData, logU64, setReturnData } from "./core";
 import { InstructionAccount, invokeList } from "./cpi";
 import { ProgramError } from "./error";
@@ -36,6 +36,18 @@ export const FIND_ADDRESS: uint8 = 6;
 export const VALIDATE_POINT: uint8 = 7;
 export const FORWARD: uint8 = 8;
 export const FORWARD_AND_CARRY_ON: uint8 = 9;
+export const STEPS: uint8 = 10;
+
+export const ADD: uint8 = 1;
+export const SUBTRACT: uint8 = 2;
+export const WRITE: uint8 = 3;
+export const ASSIGN: uint8 = 4;
+export const RESIZE: uint8 = 5;
+export const CALL: uint8 = 6;
+export const CALL_AND_CARRY_ON: uint8 = 7;
+export const LOG: uint8 = 8;
+export const FAIL: uint8 = 9;
+export const RETURN: uint8 = 10;
 
 export const NONE: uint8 = 255;
 const MAX_FORWARDED: int32 = 4;
@@ -145,6 +157,71 @@ function carryOnAfter(_sent: Result<uint64, ProgramError>): Result<uint64, Progr
 	return Result.ok(0);
 }
 
+function calls(input: Bytes, at: uint64, count: int32): Result<uint64, ProgramError> {
+	if (count > MAX_FORWARDED) { return Result.err(ProgramError.invalidInstructionData()); }
+	const callee = (try account((try input.readU8(at + 1)) as int32)).key();
+	let metas: InstructionAccount[MAX_FORWARDED] = [];
+	for (let index = 0; index < count; index++) {
+		const entry = at + 3 + (index as uint64) * 2;
+		const held = try account((try input.readU8(entry)) as int32);
+		const flags = try input.readU8(entry + 1);
+		metas[index] = InstructionAccount.flagged(held, (flags & 1) != 0, (flags & 2) != 0);
+	}
+	const sent = at + 3 + (count as uint64) * 2;
+	const length = (try input.readU8(sent)) as uint64;
+	let storage: uint8[96] = [];
+	for (let offset: uint64 = 0; offset < length; offset++) {
+		const _put = putU8(storage, offset, try input.readU8(sent + 1 + offset));
+	}
+	return invokeList(callee, metas[0..count], storage, length);
+}
+
+function steps(): Result<uint64, ProgramError> {
+	const input = instructionData();
+	let storage: uint8[64] = [];
+	let at: uint64 = 1;
+	while (at < input.length) {
+		const step = try input.readU8(at);
+		const operand = try input.readU8(at + 1);
+		if (step == LOG) {
+			logU64(operand as uint64);
+			at = at + 2;
+		} else if (step == FAIL) {
+			return Result.err(ProgramError.custom(operand as uint32));
+		} else if (step == RETURN) {
+			setReturnData(storage[0..(operand as int32)]);
+			at = at + 2;
+		} else if (step == CALL || step == CALL_AND_CARRY_ON) {
+			const count = (try input.readU8(at + 2)) as int32;
+			const sent = calls(input, at, count);
+			if (step == CALL && !sent.ok) { return sent; }
+			const length = (try input.readU8(at + 3 + (count as uint64) * 2)) as uint64;
+			at = at + 4 + (count as uint64) * 2 + length;
+		} else {
+			const target = try account(operand as int32);
+			if (step == ADD) {
+				target.setLamports(target.lamports() + (try input.readU64(at + 2)));
+				at = at + 10;
+			} else if (step == SUBTRACT) {
+				target.setLamports(target.lamports() - (try input.readU64(at + 2)));
+				at = at + 10;
+			} else if (step == WRITE) {
+				const _written = try target.data().writeU8((try input.readU8(at + 2)) as uint64, try input.readU8(at + 3));
+				at = at + 4;
+			} else if (step == ASSIGN) {
+				target.assign((try account((try input.readU8(at + 2)) as int32)).key());
+				at = at + 3;
+			} else if (step == RESIZE) {
+				const _sized = try target.resize((try input.readU16(at + 2)) as uint64);
+				at = at + 4;
+			} else {
+				return Result.err(ProgramError.invalidInstructionData());
+			}
+		}
+	}
+	return Result.ok(0);
+}
+
 function dispatch(): Result<uint64, ProgramError> {
 	return match (try instructionData().readU8(0)) {
 		NOTHING => Result.ok(0),
@@ -157,6 +234,7 @@ function dispatch(): Result<uint64, ProgramError> {
 		VALIDATE_POINT => validatesPoint(),
 		FORWARD => forward(),
 		FORWARD_AND_CARRY_ON => carryOnAfter(forward()),
+		STEPS => steps(),
 		_ => Result.err(ProgramError.invalidInstructionData()),
 	};
 }

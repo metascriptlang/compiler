@@ -7,6 +7,7 @@ import {
 	createTransactionMessage,
 	getAddressDecoder,
 	getAddressEncoder,
+	getCompiledTransactionMessageDecoder,
 	lamports,
 	pipe,
 	setTransactionMessageFeePayerSigner,
@@ -26,15 +27,17 @@ if (!programPath) {
 const SYSTEM = address("11111111111111111111111111111111");
 const OP = {
 	nothing: 0, overlappingCopy: 1, returnData: 2, logBytes: 3, logAccountData: 4, createAddress: 5, findAddress: 6,
-	validatePoint: 7, forward: 8, forwardAndCarryOn: 9,
+	validatePoint: 7, forward: 8, forwardAndCarryOn: 9, steps: 10,
 };
+const STEP = { add: 1, subtract: 2, write: 3, assign: 4, resize: 5, call: 6, callAndCarryOn: 7, log: 8, fail: 9, returns: 10 };
 const NONE = 255;
 const WRITABLE = 1;
 const SIGNER = 2;
 const LOGGED = /^Program log: 0x0, 0x0, 0x0, 0x0, 0x([0-9a-f]+)$/;
 const encoder = getAddressEncoder();
 const decoder = getAddressDecoder();
-const keypair = (seed) => createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(seed));
+const keypair = (seed) => createKeyPairSignerFromPrivateKeyBytes(
+	new Uint8Array(32).fill(seed & 255).map((byte, index) => seed > 255 && index === seed >> 8 ? byte ^ 0x80 : byte));
 const program = (await keypair(9)).address;
 const other = (await keypair(8)).address;
 const names = new Map([[SYSTEM, "System"], [program, "the probe"], [other, "the callee"]]);
@@ -70,6 +73,21 @@ function concat(...parts) {
 	}
 	return out;
 }
+
+const step = {
+	add: (index, amount) => concat(new Uint8Array([STEP.add, index]), u64(amount)),
+	subtract: (index, amount) => concat(new Uint8Array([STEP.subtract, index]), u64(amount)),
+	write: (index, offset, value) => new Uint8Array([STEP.write, index, offset, value]),
+	assign: (index, to) => new Uint8Array([STEP.assign, index, to]),
+	resize: (index, length) => concat(new Uint8Array([STEP.resize, index]), u16(length)),
+	call: (callee, metas, sent, { carryOn = false } = {}) => concat(
+		new Uint8Array([carryOn ? STEP.callAndCarryOn : STEP.call, callee, metas.length]),
+		...metas.map(([index, flags]) => new Uint8Array([index, flags])), new Uint8Array([sent.length]), sent),
+	log: (value) => new Uint8Array([STEP.log, value]),
+	fail: (code) => new Uint8Array([STEP.fail, code]),
+	returns: (length) => new Uint8Array([STEP.returns, length]),
+};
+const steps = (...parts) => concat(new Uint8Array([OP.steps]), ...parts);
 
 function derived(seed) {
 	return createHash("sha256").update(seed).update(encoder.encode(program)).update("ProgramDerivedAddress").digest();
@@ -121,7 +139,7 @@ async function scenario(label, features, body) {
 
 	const meta = (account, writable, signer = false) => ({ address: account, writable, signer });
 
-	async function send(step, data, metas, expected, because = "") {
+	async function send(step, data, metas, expected, because = "", { leading = 0 } = {}) {
 		const accounts = metas.map((entry) => ({
 			address: entry.address,
 			role: entry.signer
@@ -136,16 +154,21 @@ async function scenario(label, features, body) {
 				{ blockhash: svm.latestBlockhash(), lastValidBlockHeight: 1000n },
 				m,
 			),
+			(m) => Array.from({ length: leading }).reduce((built) => appendTransactionMessageInstruction(
+				{ programAddress: program, accounts: [], data: new Uint8Array([OP.nothing]) }, built), m),
 			(m) => appendTransactionMessageInstruction({ programAddress: program, accounts, data }, m),
 		);
-		const result = svm.sendTransaction(await signTransactionMessageWithSigners(message));
+		const signed = await signTransactionMessageWithSigners(message);
+		const keys = getCompiledTransactionMessageDecoder().decode(signed.messageBytes).staticAccounts;
+		const result = svm.sendTransaction(signed);
 		svm.expireBlockhash();
 		const failed = result.constructor.name === "FailedTransactionMetadata";
 		const logs = (failed ? result.meta() : result).logs();
 		const refusedBy = logs.filter((line) => / failed: /.test(line)).map((line) => line.split(" ")[1])[0] ?? "";
 		const values = logs.map((line) => LOGGED.exec(line)).filter((entry) => entry !== null).map((entry) => BigInt(`0x${entry[1]}`));
+		const raw = failed ? result.err().toString() : "";
 		const error = failed
-			? result.err().toString().replace("TransactionErrorInstructionError { index: 0, error: ", "")
+			? raw.replace(/^TransactionErrorInstructionError \{ index: \d+, error: /, "")
 				.replace("InstructionErrorCustom { code: ", "custom ").replaceAll(" }", "")
 				.replace(/^TransactionError(\w+) \{ account_index: \d+$/, "$1")
 			: "";
@@ -156,7 +179,12 @@ async function scenario(label, features, body) {
 		console.log(`[${features}] [${label}] ${step}: ${shown}${passed ? "" : `  <-- FAILED, expected ${expected} ${because}`}`);
 		if (process.env.HOST_FIDELITY_LOGS) console.log(logs.join("\n"));
 		if (!passed) failures++;
-		return { failed, logs, values };
+		const blamed = /account_index: (\d+)/.exec(raw);
+		return {
+			failed, logs, values, raw,
+			blamed: blamed === null ? null : keys[Number(blamed[1])],
+			returned: (failed ? result.meta() : result).returnData().data(),
+		};
 	}
 
 	function check(what, condition) {
@@ -496,6 +524,36 @@ for (const features of ["all features", "mainnet"]) {
 		await system("Assign on an account not marked writable",
 			[signer(await wallet(), { cpiWritable: false })], assign(program), NOT_ITS_OWNER);
 	});
+	await scenario("a failed call", features, async (t) => {
+		const SOL = 1_000_000_000n;
+		const pays = t.put(await t.fresh(), { balance: SOL });
+		const takes = t.put(await t.fresh(), { balance: SOL });
+		const passed = [t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(takes, true), t.meta(other, false)];
+		const transfer = (amount) => concat(u32(2), u64(amount));
+		const AFTER = 5;
+		const cases = [
+			["a System Transfer of more than the payer holds", step.call, 0, [[1, 3], [2, 1]], transfer(2n * SOL), bySystem("custom 1"), "custom program error: 0x1"],
+			["a System Transfer the payer does not sign", step.call, 0, [[1, 1], [2, 1]], transfer(5), bySystem("MissingRequiredSignature"), "missing required signature"],
+			["a callee that fails with custom error 7", step.call, 3, [], steps(step.fail(7)), "custom 7 by the callee", "custom program error: 0x7"],
+			["a callee that fails with InvalidInstructionData", step.call, 3, [], new Uint8Array([200]), "InvalidInstructionData by the callee", "invalid instruction data"],
+		];
+		for (const [what, call, callee, metas, sent, expected, reason] of cases) {
+			for (const carryOn of [false, true]) {
+				const outcome = await t.send(`${what}, ${carryOn ? "by a program that carries on" : "by a program that returns the error"}`,
+					steps(call(callee, metas, sent, { carryOn }), step.log(AFTER)), passed, expected, reason);
+				t.check("nothing after the call ran", !outcome.values.includes(BigInt(AFTER)));
+				t.check("the transaction reports the callee's error for the top-level instruction, index 0",
+					outcome.raw.startsWith("TransactionErrorInstructionError { index: 0, "));
+				t.check("the caller's last line repeats the callee's error",
+					outcome.logs.at(-1).startsWith(`Program ${program} failed: ${reason}`));
+			}
+		}
+		const second = await t.send("a failed call in the second instruction of a transaction",
+			steps(step.call(0, [[1, 3], [2, 1]], transfer(2n * SOL), { carryOn: true })), passed, bySystem("custom 1"), "", { leading: 1 });
+		t.check("the index is the top-level instruction's, 1", second.raw.startsWith("TransactionErrorInstructionError { index: 1, "));
+		t.check("no lamports moved", t.svm.getAccount(pays).lamports === SOL && t.svm.getAccount(takes).lamports === SOL);
+	});
+
 }
 
 if (failures > 0) {

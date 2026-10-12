@@ -170,6 +170,7 @@ static void msSolHostBase58(const uint8_t* key, char* out) {
 }
 
 static void msSolHostRecordLog(const char* text, size_t length) {
+    if (msSolHostFaultCode != 0) return;
     if (msSolHostLogBytes == 0) {
         char program[64];
         msSolHostBase58((const uint8_t*)msSolHostContext()->programId, program);
@@ -1456,10 +1457,7 @@ static void msSolHostRecordSigners(uint8_t* out, uint64_t signers, uint64_t sign
     }
 }
 
-uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount) {
-    (void)accountInfos;
-    (void)accountInfoCount;
-    const uint64_t* header = (const uint64_t*)instruction;
+static uint64_t msSolHostInvoked(const uint64_t* header, uint64_t signers, uint64_t signerCount) {
     uint64_t signerBytes;
     uint64_t refused = msSolHostSignersRefused(signers, signerCount, &signerBytes);
     if (refused != 0) return refused;
@@ -1498,6 +1496,15 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     return 0;
 }
 
+uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount) {
+    (void)accountInfos;
+    (void)accountInfoCount;
+    if (msSolHostFaultCode != 0) return msSolHostFaultCode;
+    uint64_t status = msSolHostInvoked((const uint64_t*)instruction, signers, signerCount);
+    if (status != 0) msSolHostFault(status, "");
+    return status;
+}
+
 static uint64_t msSolHostSysvarStatus;
 
 void msSolHostSetSysvarStatus(uint64_t status) { msSolHostSysvarStatus = status; }
@@ -1522,6 +1529,7 @@ uint64_t msSolHostGetRent(uint64_t out) {
 }
 
 void msSolHostSetReturnData(const uint8_t* data, int64_t length) {
+    if (msSolHostFaultCode != 0) return;
     if (length < 0 || length > MS_SOL_MAX_RETURN_DATA) {
         msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_set_return_data: Return data too large, more than 1024 bytes");
         return;

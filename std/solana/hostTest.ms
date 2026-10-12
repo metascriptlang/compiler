@@ -1,18 +1,22 @@
 import { sha256 } from "std/crypto/sha256";
 import { isEdwardsPoint } from "std/crypto/ed25519/point";
 import { ProgramError } from "./error";
-import { HostAccount, NOT_SIMULATED, REFUSED, logs, run } from "./host";
+import { HostAccount, NOT_SIMULATED, REFUSED, invocations, logs, run } from "./host";
 import { Pubkey, SYSTEM_PROGRAM_ID } from "./pubkey";
 import {
+	CALL,
+	CALL_AND_CARRY_ON,
 	CREATE_ADDRESS,
 	FIND_ADDRESS,
 	FORWARD,
 	FORWARD_AND_CARRY_ON,
+	LOG,
 	LOG_ACCOUNT_DATA,
 	LOG_BYTES,
 	NONE,
 	OVERLAPPING_COPY,
 	RETURN_DATA,
+	STEPS,
 	VALIDATE_POINT,
 	hostProgramEntry,
 } from "./testHostProgram";
@@ -516,4 +520,48 @@ test "the simulated System Assign answers what the System program answers" {
 	assert foreign.accounts[1].owner.equals(programKey());
 	assert refusedAs(system([held(laden(1, 7))], assignOf(programKey())), "ModifiedProgramId");
 	assert refusedAs(system([readOnly(wallet(1))], assignOf(programKey())), "ModifiedProgramId");
+}
+
+const AFTER: uint8 = 5;
+const WRITABLE: uint8 = 1;
+const SIGNER: uint8 = 2;
+
+function executable(key: Pubkey): HostAccount {
+	return { ...holding(key, keyOf(0), 1), writable: false, executable: true };
+}
+
+function called(callee: uint8, metas: uint8[][], instruction: uint8[], step: uint8 = CALL): uint8[] {
+	const bytes: uint8[] = [step, callee, metas.length as uint8];
+	for (const meta of metas) {
+		bytes.push(meta[0]);
+		bytes.push(meta[1]);
+	}
+	bytes.push(instruction.length as uint8);
+	for (const byte of instruction) { bytes.push(byte); }
+	return bytes;
+}
+
+function stepped(steps: uint8[][], accounts: HostAccount[]): Outcome {
+	const data: uint8[] = [STEPS];
+	for (const step of steps) {
+		for (const byte of step) { data.push(byte); }
+	}
+	return sent(data, accounts);
+}
+
+test "a call that fails ends the run with the callee's error, whether the program returns it or carries on" {
+	for (const step of [CALL, CALL_AND_CARRY_ON]) {
+		const after = (metas: uint8[][], instruction: uint8[]): Outcome => {
+			const steps = [called(0, metas, instruction, step), [LOG, AFTER], called(0, metas, transferOf(5))];
+			return stepped(steps, [executable(SYSTEM_PROGRAM_ID), wallet(1), wallet(2)]);
+		};
+		const signed: uint8[][] = [[1, WRITABLE + SIGNER], [2, WRITABLE]];
+		const unsigned: uint8[][] = [[1, WRITABLE], [2, WRITABLE]];
+		assert tooFewLamports(after(signed, transferOf(2 * SOL)));
+		assert linesStarting("Program log: ") == 0 && invocations().length == 1;
+		assert unsignedFor(after(unsigned, transferOf(5)));
+		assert linesStarting("Program log: ") == 0 && invocations().length == 1;
+		assert passes(after(signed, transferOf(5)));
+		assert linesStarting("Program log: ") == 1 && invocations().length == 2;
+	}
 }
