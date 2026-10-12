@@ -44,7 +44,7 @@ function make(): Result<uint64, ProgramError> {
 	const a = try args<MakeArgs>();
 	const x = try accounts<MakeAccounts>();
 	const made = try createPda<Escrow>(x.maker, x.escrow, ["escrow", x.maker, leBytes(a.seed)]);
-	made.account.data().receive = a.receive;
+	made.asMutable().data().receive = a.receive;
 	…
 }
 
@@ -242,7 +242,7 @@ Any other type, an integer, a boolean or a struct, is a compile error that names
 
 Derivation follows Anchor v2 (`lang-v2/src/cpi.rs` `hash_pda_seeds`, `check_off_curve`, `pda_find_loop`): the seeds, the bump, the program id and `"ProgramDerivedAddress"` go to `sol_sha256`, and the hash to `sol_curve_validate_point`, which answers 0 for a point on the curve; a find tries the bumps 255 down to 1, as agave's `try_find_program_address` does. The address syscalls cost 1,500 CU a call or a try, `sol_sha256` 85 plus a unit per two bytes of a slice (at least 10 a slice) and the curve check 159 (`solana-program-runtime-3.1.14/src/execution_budget.rs`). Measured with `node tools/solana/checkCost.mjs`, LiteSVM 1.4.1, platform-tools v1.57, against the syscall form (the std of `37c0ad284` built by its own compiler): `createPda<T>` 3,574 to 2,430 CU, `pda` 3,362 to 1,048 for a `Mutable<T>` and 1,842 to 703 for a `Delegated<T>`, `pdaWithBump` 1,914 to 792 and 1,898 to 776, every refusal still 2006; the escrow make 27,128 to 22,612, take 18,239 to 11,530, refund 15,131 to 8,342, the `.so` 45,152 to 45,968 bytes (the hashing loop is in the program). The host simulator answers `sol_curve_validate_point` with its own on-curve check. Not measured: a seed list of 15 or 16 seeds, a find that needs many bumps.
 
-`createPda<T>` expands to `createPdaOf<T>`, `instruction<Op>()` to `selectInstruction`, `args<T>()` and `accounts<T>()` to `readArgs`: each macro binds its callee by symbol, so the program imports none of them.
+`createPda<T>` expands to `createPdaOf<T>`, `instruction<Op>()` to `selectLiteralInstruction`, `args<T>()` and `accounts<T>()` to `readArgs`: each macro binds its callee by symbol, so the program imports none of them.
 
 ### Signing
 
@@ -251,7 +251,7 @@ A signed CPI writes its signer seeds where the call is written, as Anchor does w
 ```ms
 const _released = try signed(
 	transferTokens(x.vault, x.takerAtaA, x.mintA, escrowAccount, held),
-	["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
+	["escrow", escrow.maker, leBytes(escrow.seed), [verified.foundBump()]],
 );
 const _sent = try signed(invoke(program, accounts, data), [["identity", [b1]], ["vrf-payer", [b2]]]);
 ```
