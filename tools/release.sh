@@ -142,10 +142,10 @@ target_to_msc_flags() {
     echo "--os=$msc_os --cpu=$msc_cpu"
 }
 
-# Collect std/ files: only .ms and .cms, excluding test.ms and CLAUDE.md
+# Collect std/ files: .ms and its backend tiers (.cms, .jms, .rms), excluding test.ms and CLAUDE.md
 collect_std() {
     local dest="$1"
-    find "$ROOT/std" \( -name "*.ms" -o -name "*.cms" \) \
+    find "$ROOT/std" \( -name "*.ms" -o -name "*.cms" -o -name "*.jms" -o -name "*.rms" \) \
         ! -name "test.ms" ! -name "CLAUDE.md" \
         -print0 | while IFS= read -r -d '' f; do
         local rel="${f#$ROOT/}"
