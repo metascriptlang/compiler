@@ -554,6 +554,41 @@ for (const features of ["all features", "mainnet"]) {
 		t.check("no lamports moved", t.svm.getAccount(pays).lamports === SOL && t.svm.getAccount(takes).lamports === SOL);
 	});
 
+	await scenario("a failed transaction", features, async (t) => {
+		const SOL = 1_000_000_000n;
+		const rent = (space) => t.svm.minimumBalanceForRentExemption(BigInt(space));
+		const pays = t.put(await t.fresh(), { balance: SOL });
+		const takes = t.put(await t.fresh(), { balance: SOL });
+		const own = t.put(await t.fresh(), { data: new Uint8Array(8).fill(1), owner: program, balance: SOL });
+		const made = await t.fresh();
+		const passed = [t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(own, true), t.meta(takes, true), t.meta(made, true, true)];
+		const stored = (account) => t.svm.getAccount(account);
+		const untouched = () => stored(own).lamports === SOL && stored(own).data[0] === 1 && stored(own).data.length === 8
+			&& stored(own).programAddress === program && stored(takes).lamports === SOL && stored(pays).lamports === SOL;
+		const create = concat(u32(0), u64(rent(8)), u64(8), encoder.encode(program));
+		const changes = [step.subtract(2, 5), step.add(3, 5), step.write(2, 0, 9), step.resize(2, 16)];
+		const FAILED = byProbe("custom 7");
+		await t.send("lamports moved, a byte written and the account grown, then an error", steps(...changes, step.fail(7)), passed, FAILED);
+		t.check("every account reads as before", untouched());
+		await t.send("an account created by a call, then an error",
+			steps(step.call(0, [[1, 3], [4, 3]], create), step.fail(7)), passed, FAILED);
+		t.check("the account does not exist", !stored(made).exists && untouched());
+		await t.send("the account drained and given away, then an error",
+			steps(step.subtract(2, SOL), step.add(3, SOL), step.resize(2, 0), step.assign(2, 0), step.fail(7)), passed, FAILED);
+		t.check("every account reads as before", untouched());
+		await t.send("changes, then a call that fails",
+			steps(...changes, step.call(0, [[1, 3], [3, 1], [2, 1]], concat(u32(2), u64(2n * SOL)))), passed, bySystem("custom 1"));
+		t.check("every account reads as before", untouched());
+		await t.send("a call that moves lamports, then changes the runtime refuses",
+			steps(step.call(0, [[1, 3], [3, 1]], concat(u32(2), u64(5))), step.add(2, 1)), passed, "UnbalancedInstruction by the transaction");
+		t.check("every account reads as before", untouched());
+		const returned = await t.send("return data set, then an error", steps(step.returns(4), step.fail(7)), passed, FAILED);
+		t.check("the failed transaction still reports its 4 bytes of return data", returned.returned.length === 4);
+		await t.send("the same changes with no error", steps(...changes), passed, OK);
+		t.check("the changes are stored", stored(own).lamports === SOL - 5n && stored(own).data[0] === 9
+			&& stored(own).data.length === 16 && stored(takes).lamports === SOL + 5n);
+	});
+
 }
 
 if (failures > 0) {

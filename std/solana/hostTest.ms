@@ -4,9 +4,12 @@ import { ProgramError } from "./error";
 import { HostAccount, NOT_SIMULATED, REFUSED, invocations, logs, run } from "./host";
 import { Pubkey, SYSTEM_PROGRAM_ID } from "./pubkey";
 import {
+	ADD,
+	ASSIGN,
 	CALL,
 	CALL_AND_CARRY_ON,
 	CREATE_ADDRESS,
+	FAIL,
 	FIND_ADDRESS,
 	FORWARD,
 	FORWARD_AND_CARRY_ON,
@@ -15,9 +18,12 @@ import {
 	LOG_BYTES,
 	NONE,
 	OVERLAPPING_COPY,
+	RESIZE,
 	RETURN_DATA,
 	STEPS,
+	SUBTRACT,
 	VALIDATE_POINT,
+	WRITE,
 	hostProgramEntry,
 } from "./testHostProgram";
 
@@ -564,4 +570,53 @@ test "a call that fails ends the run with the callee's error, whether the progra
 		assert passes(after(signed, transferOf(5)));
 		assert linesStarting("Program log: ") == 1 && invocations().length == 2;
 	}
+}
+
+function added(index: uint8, amount: uint64): uint8[] {
+	const step: uint8[] = [ADD, index];
+	pushU64(step, amount);
+	return step;
+}
+
+function subtracted(index: uint8, amount: uint64): uint8[] {
+	const step: uint8[] = [SUBTRACT, index];
+	pushU64(step, amount);
+	return step;
+}
+
+function resized(index: uint8, length: uint8): uint8[] { return [RESIZE, index, length, 0]; }
+
+function owned(seed: uint8, fill: uint8 = 0, lamports: uint64 = SOL): HostAccount {
+	return holding(keyOf(seed), programKey(), lamports, [fill, fill, fill, fill, fill, fill, fill, fill]);
+}
+
+test "a run that fails leaves every account as it was before the run" {
+	const fails: uint8[] = [FAIL, 7];
+	const changes: uint8[][] = [subtracted(2, 5), added(3, 5), [WRITE, 2, 0, 9], resized(2, 16)];
+	const create = called(0, [[1, WRITABLE + SIGNER], [4, WRITABLE + SIGNER]], createOf(RENT_OF_8, 8, programKey(), 0));
+	const after = (steps: uint8[][]): Outcome => {
+		return stepped(steps, [executable(SYSTEM_PROGRAM_ID), wallet(1), owned(2, 1), wallet(3), blank(4)]);
+	};
+	const untouched = (outcome: Outcome): boolean => {
+		const own = outcome.accounts[2];
+		const made = outcome.accounts[4];
+		return own.lamports == SOL && own.data.length == 8 && own.data[0] == 1 && own.owner.equals(programKey())
+			&& outcome.accounts[1].lamports == SOL && outcome.accounts[3].lamports == SOL
+			&& made.lamports == 0 && made.data.length == 0 && made.owner.equals(SYSTEM_PROGRAM_ID);
+	};
+	const failed = after([changes[0], changes[1], changes[2], changes[3], fails]);
+	assert answers(failed, ProgramError.custom(7)) && untouched(failed);
+	const created = after([create, fails]);
+	assert answers(created, ProgramError.custom(7)) && untouched(created);
+	const closed = after([subtracted(2, SOL), added(3, SOL), resized(2, 0), [ASSIGN, 2, 0], fails]);
+	assert answers(closed, ProgramError.custom(7)) && untouched(closed);
+	const above = called(0, [[1, WRITABLE + SIGNER], [3, WRITABLE]], transferOf(2 * SOL));
+	const refused = after([changes[0], changes[1], changes[2], changes[3], create, above]);
+	assert tooFewLamports(refused) && untouched(refused);
+	const faulted = after([changes[0], changes[1], changes[2], changes[3], create, called(0, [], [4, 0, 0, 0])]);
+	assert notSimulated(faulted, "System program instruction 4 is not simulated") && untouched(faulted);
+	const kept = after([changes[0], changes[1], changes[2], changes[3], create]);
+	assert passes(kept) && kept.accounts[2].lamports == SOL - 5 && kept.accounts[3].lamports == SOL + 5;
+	assert kept.accounts[2].data.length == 16 && kept.accounts[2].data[0] == 9;
+	assert kept.accounts[4].lamports == RENT_OF_8 && kept.accounts[4].owner.equals(programKey());
 }

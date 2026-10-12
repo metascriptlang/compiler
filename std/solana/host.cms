@@ -188,10 +188,11 @@ export function run(
 	const input = serialized(program, accounts, data);
 	msSolHostEnter(input);
 	entry();
-	readBack(accounts, input, lengths);
 	const faulted = msSolHostFaultCodeOf();
 	if (faulted != 0) { return { result: faulted, fault: msSolHostFaultMessage() }; }
-	return { result: msSolHostResult(), fault: "" };
+	const result = msSolHostResult();
+	if (result == 0) { readBack(accounts, input, lengths); }
+	return { result: result, fault: "" };
 }
 
 export function logs(): string[] {
