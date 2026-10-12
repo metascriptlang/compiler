@@ -442,6 +442,40 @@ export function burnChecked(
 	);
 }
 
+export enum AuthorityType {
+	MintTokens = 0,
+	FreezeAccount = 1,
+	AccountOwner = 2,
+	CloseAccount = 3,
+}
+
+export function setAuthority(
+	program: Pubkey,
+	target: Account,
+	authority: Account,
+	kind: AuthorityType,
+	next: Pubkey | null,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[35] = [];
+	let length = putU8(storage, 0, 6);
+	length = putU8(storage, length, kind as uint8);
+	if (next === null) {
+		length = putU8(storage, length, 0);
+	} else {
+		length = putU8(storage, length, 1);
+		length = putPubkey(storage, length, next);
+	}
+	return invokeSigned(
+		program,
+		[InstructionAccount.writable(target), InstructionAccount.readonlySigner(authority)],
+		storage,
+		length,
+		signers,
+	);
+}
+
 export function initializeAccount3(
 	program: Pubkey,
 	account: Account,
@@ -714,6 +748,50 @@ export function burnTokens(
 ): Result<uint64, ProgramError> {
 	const _signing = try expectSigning(authority, signers);
 	return burned(from, mint, authority, amount, signers);
+}
+
+export function setAuthorityOf(
+	mint: ExternalMutable<Mint>,
+	kind: AuthorityType,
+	authority: Signer,
+	next: Pubkey | null,
+): Result<uint64, ProgramError> {
+	const target = mint.asAccount();
+	return setAuthority(target.owner(), target, authority.asAccount(), kind, next);
+}
+
+export function setAuthorityOf(
+	mint: ExternalMutable<Mint>,
+	kind: AuthorityType,
+	authority: Account,
+	next: Pubkey | null,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	const target = mint.asAccount();
+	return setAuthority(target.owner(), target, authority, kind, next, signers);
+}
+
+export function setAuthorityOf(
+	account: ExternalMutable<TokenAccount>,
+	kind: AuthorityType,
+	authority: Signer,
+	next: Pubkey | null,
+): Result<uint64, ProgramError> {
+	const target = account.asAccount();
+	return setAuthority(target.owner(), target, authority.asAccount(), kind, next);
+}
+
+export function setAuthorityOf(
+	account: ExternalMutable<TokenAccount>,
+	kind: AuthorityType,
+	authority: Account,
+	next: Pubkey | null,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	const target = account.asAccount();
+	return setAuthority(target.owner(), target, authority, kind, next, signers);
 }
 
 export function createAssociatedFor(
@@ -1835,9 +1913,13 @@ when (testBuild) {
 		return run(keyOf(9), accounts, data, burnEntry);
 	}
 
+	function setKeyAt(bytes: uint8[], offset: int32, key: Pubkey): void {
+		for (let index = 0; index < 32; index++) { bytes[offset + index] = key.bytes[index]; }
+	}
+
 	function withDelegate(bytes: uint8[], delegate: Pubkey, allowance: uint64): uint8[] {
 		bytes[72] = 1;
-		for (let index = 0; index < 32; index++) { bytes[76 + index] = delegate.bytes[index]; }
+		setKeyAt(bytes, 76, delegate);
 		for (let index = 0; index < 8; index++) {
 			bytes[121 + index] = ((allowance >> ((index * 8) as uint64)) & 255) as uint8;
 		}
@@ -1893,10 +1975,7 @@ when (testBuild) {
 
 	test "burnTokens under signed burns for a PDA authority and only for the PDA its seeds derive" {
 		const accounts = burnAccounts(TOKEN_2022_PROGRAM_ID);
-		accounts[0].data = tokenAccountData(1, 0, 900, 1);
-		for (let index = 0; index < 32; index++) {
-			accounts[0].data[32 + index] = authorityPda().bytes[index];
-		}
+		setKeyAt(accounts[0].data, 32, authorityPda());
 		accounts[2].key = authorityPda();
 		accounts[2].signer = false;
 		assert burnRun(accounts, 2, 250).result == 0;
@@ -1936,5 +2015,215 @@ when (testBuild) {
 		assert refused.result == ProgramError.incorrectProgramId().code;
 		assert refused.fault.indexOf("ExternalAccountDataModified") >= 0;
 		assert u64At(mixed[0].data, 64) == 900 && u64At(mixed[1].data, 36) == 5000;
+	}
+
+	function authorityStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const kind = (try instructionData().readU8(1)) as AuthorityType;
+		const next: Pubkey | null = (try instructionData().readU8(2)) == 1 ? keyOf(6) : null;
+		const authority = try account(1);
+		if (op == 5) {
+			const target = try account(0);
+			return setAuthority(target.owner(), target, authority, kind, next);
+		}
+		if (op >= 3) {
+			const held = try externalMutable<TokenAccount>(0);
+			if (op == 3) { return setAuthorityOf(held, kind, try signer(1), next); }
+			return signed(setAuthorityOf(held, kind, authority, next), ["auth", [5]]);
+		}
+		const mint = try externalMutable<Mint>(0);
+		if (op == 0) { return setAuthorityOf(mint, kind, try signer(1), next); }
+		if (op == 1) { return setAuthorityOf(mint, kind, authority, next); }
+		return signed(setAuthorityOf(mint, kind, authority, next), ["auth", [5]]);
+	}
+
+	function authorityEntry(): void {
+		const result = authorityStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function signingAs(word: uint64): HostAccount {
+		return { ...holderOf(word, Pubkey.zero(), []), signer: true, writable: false };
+	}
+
+	function mintAuthorityAccounts(program: Pubkey): HostAccount[] {
+		return [holderOf(1, program, mintData(7, 5000, 6)), signingAs(7)];
+	}
+
+	function ownerAuthorityAccounts(program: Pubkey): HostAccount[] {
+		return [holderOf(4, program, tokenAccountData(1, 3, 900, 1)), signingAs(3)];
+	}
+
+	function authorityRun(
+		accounts: HostAccount[],
+		op: uint8,
+		kind: AuthorityType,
+		next: boolean,
+	): HostRun {
+		const data: uint8[] = [op, kind as uint8, next ? 1 : 0];
+		return run(keyOf(9), accounts, data, authorityEntry);
+	}
+
+	test "setAuthorityOf hands a mint's mint authority to another key through the mint's token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = mintAuthorityAccounts(program);
+			assert authorityRun(accounts, 0, AuthorityType.MintTokens, true).result == 0;
+			assert accounts[0].data[0] == 1 && keyAt(accounts[0].data, 4).equals(keyOf(6));
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 2 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable;
+			assert !sent.accounts[0].signer;
+			assert sent.accounts[1].key.equals(keyOf(7)) && sent.accounts[1].signer;
+			assert !sent.accounts[1].writable;
+			const expected: uint8[] = [6, 0, 1];
+			pushKey(expected, keyOf(6));
+			assert sameBytes(sent.data, expected);
+			const former = authorityRun(accounts, 0, AuthorityType.MintTokens, true);
+			assert former.result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "setAuthorityOf with no next authority fixes the supply, and a fixed supply stays fixed" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = mintAuthorityAccounts(program);
+			assert authorityRun(accounts, 0, AuthorityType.MintTokens, false).result == 0;
+			assert accounts[0].data[0] == 0;
+			const left = program.equals(TOKEN_PROGRAM_ID) ? keyOf(7) : Pubkey.zero();
+			assert keyAt(accounts[0].data, 4).equals(left);
+			const cleared: uint8[] = [6, 0, 0];
+			assert sameBytes(invocations()[0].data, cleared);
+			const again = authorityRun(accounts, 0, AuthorityType.MintTokens, true);
+			assert again.result == ProgramError.custom(5).code && accounts[0].data[0] == 0;
+		}
+	}
+
+	test "setAuthorityOf changes a mint's freeze authority only where the mint has one" {
+		const accounts = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		const never = authorityRun(accounts, 0, AuthorityType.FreezeAccount, true);
+		assert never.result == ProgramError.custom(16).code && accounts[0].data[46] == 0;
+		accounts[0].data[46] = 1;
+		setKeyAt(accounts[0].data, 50, keyOf(7));
+		assert authorityRun(accounts, 0, AuthorityType.FreezeAccount, true).result == 0;
+		assert accounts[0].data[46] == 1 && keyAt(accounts[0].data, 50).equals(keyOf(6));
+		assert keyAt(accounts[0].data, 4).equals(keyOf(7));
+		accounts[1].key = keyOf(6);
+		assert authorityRun(accounts, 0, AuthorityType.FreezeAccount, false).result == 0;
+		assert accounts[0].data[46] == 0;
+	}
+
+	test "setAuthorityOf hands a token account to another owner and drops its delegate" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = ownerAuthorityAccounts(program);
+			accounts[0].data = withDelegate(accounts[0].data, keyOf(8), 300);
+			const kept = authorityRun(accounts, 3, AuthorityType.AccountOwner, false);
+			assert kept.result == ProgramError.custom(12).code;
+			assert keyAt(accounts[0].data, 32).equals(keyOf(3)) && accounts[0].data[72] == 1;
+			assert authorityRun(accounts, 3, AuthorityType.AccountOwner, true).result == 0;
+			assert keyAt(accounts[0].data, 32).equals(keyOf(6));
+			assert u64At(accounts[0].data, 64) == 900;
+			assert accounts[0].data[72] == 0 && u64At(accounts[0].data, 121) == 0;
+			assert accounts[0].data[129] == 1 && keyAt(accounts[0].data, 133).equals(keyOf(3));
+			assert invocations()[0].program.equals(program);
+			const former = authorityRun(accounts, 3, AuthorityType.AccountOwner, true);
+			assert former.result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "a close authority is changed by itself when the account has one and by the owner when it has none" {
+		const accounts = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		setKeyAt(accounts[0].data, 133, keyOf(8));
+		const byOwner = authorityRun(accounts, 3, AuthorityType.CloseAccount, true);
+		assert byOwner.result == ProgramError.custom(4).code;
+		accounts[1].key = keyOf(8);
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, false).result == 0;
+		assert accounts[0].data[129] == 0 && keyAt(accounts[0].data, 32).equals(keyOf(3));
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, true).result
+			== ProgramError.custom(4).code;
+		accounts[1].key = keyOf(3);
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, true).result == 0;
+		assert accounts[0].data[129] == 1 && keyAt(accounts[0].data, 133).equals(keyOf(6));
+	}
+
+	test "setAuthorityOf is refused for a frozen account and for an authority the target does not have" {
+		const frozen = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		frozen[0].data[108] = 2;
+		const cold = authorityRun(frozen, 3, AuthorityType.AccountOwner, true);
+		assert cold.result == ProgramError.custom(17).code;
+		assert keyAt(frozen[0].data, 32).equals(keyOf(3));
+		const held = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		for (const kind of [AuthorityType.MintTokens, AuthorityType.FreezeAccount]) {
+			assert authorityRun(held, 3, kind, true).result == ProgramError.custom(15).code;
+		}
+		const minted = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		for (const kind of [AuthorityType.AccountOwner, AuthorityType.CloseAccount]) {
+			assert authorityRun(minted, 0, kind, true).result == ProgramError.custom(15).code;
+		}
+		assert keyAt(minted[0].data, 4).equals(keyOf(7));
+	}
+
+	test "setAuthorityOf by an authority that did not sign is refused before any CPI" {
+		const accounts = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		accounts[1].signer = false;
+		const proof = authorityRun(accounts, 0, AuthorityType.MintTokens, true);
+		assert proof.result == ProgramError.accountNotSigner().code;
+		const bare = authorityRun(accounts, 1, AuthorityType.MintTokens, true);
+		assert bare.result == ProgramError.missingRequiredSignature().code;
+		assert invocations().length == 0 && keyAt(accounts[0].data, 4).equals(keyOf(7));
+	}
+
+	test "setAuthorityOf under signed changes what a PDA of the program holds, mint or token account" {
+		const minted = mintAuthorityAccounts(TOKEN_2022_PROGRAM_ID);
+		setKeyAt(minted[0].data, 4, authorityPda());
+		minted[1].key = authorityPda();
+		minted[1].signer = false;
+		assert authorityRun(minted, 2, AuthorityType.MintTokens, true).result == 0;
+		assert keyAt(minted[0].data, 4).equals(keyOf(6));
+		assert signerIs(invocations()[0], 0, authSigner());
+		const held = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		setKeyAt(held[0].data, 32, authorityPda());
+		setKeyAt(held[0].data, 133, authorityPda());
+		held[1].key = authorityPda();
+		held[1].signer = false;
+		assert authorityRun(held, 4, AuthorityType.CloseAccount, true).result == 0;
+		assert keyAt(held[0].data, 133).equals(keyOf(6));
+		const stranger = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		stranger[1].signer = false;
+		const refused = authorityRun(stranger, 2, AuthorityType.MintTokens, true);
+		assert refused.result == ProgramError.missingRequiredSignature().code;
+		assert refused.fault.indexOf("signer privilege escalated") >= 0;
+		assert keyAt(stranger[0].data, 4).equals(keyOf(7));
+	}
+
+	test "setAuthority on an account that is neither a mint nor a token account, or not initialized, is refused" {
+		const neither: uint64[] = [
+			ProgramError.invalidArgument().code,
+			ProgramError.invalidAccountData().code,
+		];
+		const empty: uint64[] = [
+			ProgramError.uninitializedAccount().code,
+			ProgramError.invalidAccountData().code,
+		];
+		const programs: Pubkey[] = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
+		for (let index = 0; index < 2; index++) {
+			const other = mintAuthorityAccounts(programs[index]);
+			other[0].data.push(0);
+			assert authorityRun(other, 5, AuthorityType.MintTokens, true).result == neither[index];
+			const unminted = mintAuthorityAccounts(programs[index]);
+			unminted[0].data[45] = 0;
+			assert authorityRun(unminted, 5, AuthorityType.MintTokens, true).result == empty[index];
+			const unheld = ownerAuthorityAccounts(programs[index]);
+			unheld[0].data[108] = 0;
+			assert authorityRun(unheld, 5, AuthorityType.AccountOwner, true).result == empty[index];
+		}
+	}
+
+	test "a Token-2022 account with an immutable owner keeps its owner and still takes a close authority" {
+		const accounts = ownerAuthorityAccounts(TOKEN_2022_PROGRAM_ID);
+		for (const byte of [2, 7, 0, 0, 0]) { accounts[0].data.push(byte as uint8); }
+		const kept = authorityRun(accounts, 3, AuthorityType.AccountOwner, true);
+		assert kept.result == ProgramError.custom(34).code;
+		assert keyAt(accounts[0].data, 32).equals(keyOf(3));
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, true).result == 0;
+		assert keyAt(accounts[0].data, 133).equals(keyOf(6));
 	}
 }

@@ -591,6 +591,7 @@ static const uint8_t msSolHostNativeMint2022[32] = {
     0xc6, 0xbb, 0x26, 0x4a, 0xad, 0x90, 0xfa, 0x19, 0xc9, 0xdf, 0x49, 0xd8, 0x5c, 0x3e, 0x5b, 0x5e,
 };
 
+#define MS_SOL_HOST_INVALID_ARGUMENT (2ULL << 32)
 #define MS_SOL_HOST_INVALID_ACCOUNT_DATA (4ULL << 32)
 #define MS_SOL_HOST_INCORRECT_PROGRAM_ID (7ULL << 32)
 #define MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE (8ULL << 32)
@@ -601,11 +602,15 @@ static const uint8_t msSolHostNativeMint2022[32] = {
 #define MS_SOL_HOST_TOKEN_INVALID_MINT 2ULL
 #define MS_SOL_HOST_TOKEN_MINT_MISMATCH 3ULL
 #define MS_SOL_HOST_TOKEN_OWNER_MISMATCH 4ULL
+#define MS_SOL_HOST_TOKEN_FIXED_SUPPLY 5ULL
 #define MS_SOL_HOST_TOKEN_ALREADY_IN_USE 6ULL
 #define MS_SOL_HOST_TOKEN_NATIVE_NOT_SUPPORTED 10ULL
 #define MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION 12ULL
+#define MS_SOL_HOST_TOKEN_AUTHORITY_TYPE_NOT_SUPPORTED 15ULL
+#define MS_SOL_HOST_TOKEN_MINT_CANNOT_FREEZE 16ULL
 #define MS_SOL_HOST_TOKEN_ACCOUNT_FROZEN 17ULL
 #define MS_SOL_HOST_TOKEN_MINT_DECIMALS_MISMATCH 18ULL
+#define MS_SOL_HOST_TOKEN_IMMUTABLE_OWNER 34ULL
 #define MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH 165ULL
 #define MS_SOL_HOST_TOKEN_MINT_LENGTH 82ULL
 #define MS_SOL_HOST_TOKEN_MULTISIG_LENGTH 355ULL
@@ -751,6 +756,28 @@ static int msSolHostOptionIs(const uint8_t* option, const uint8_t* key) {
     return tag == 1 && memcmp(option + 4, key, 32) == 0;
 }
 
+static void msSolHostStoreOption(const uint64_t* header, uint8_t* option, const uint8_t* key) {
+    uint32_t tag = key != NULL;
+    memcpy(option, &tag, 4);
+    if (key != NULL) memcpy(option + 4, key, 32);
+    else if (msSolHostIsToken2022(header)) memset(option + 4, 0, 32);
+}
+
+static int msSolHostHasExtension(const uint8_t* record, uint16_t wanted) {
+    uint64_t length = msSolHostLoadU64(record + 80);
+    const uint8_t* data = record + 88;
+    uint64_t offset = MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH + 1;
+    while (offset + 4 <= length) {
+        uint16_t kind, size;
+        memcpy(&kind, data + offset, 2);
+        memcpy(&size, data + offset + 2, 2);
+        if (kind == 0 || size > length - offset - 4) break;
+        if (kind == wanted) return 1;
+        offset += 4ULL + size;
+    }
+    return 0;
+}
+
 static uint64_t msSolHostAuthorized(const uint64_t* header, uint64_t index, const uint8_t* expected) {
     const uint8_t* authority = msSolHostRecordOf(header, index);
     if (authority == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
@@ -796,11 +823,57 @@ static uint64_t msSolHostBurn(const uint64_t* header, int checked) {
     if (!msSolHostOwnedByCallee(header, source) || !msSolHostOwnedByCallee(header, mint)) return msSolHostForeignAccount(header);
     if (delegated) {
         msSolHostStoreU64(account + 121, allowance - amount);
-        if (allowance == amount) memset(account + 72, 0, 4);
+        if (allowance == amount) msSolHostStoreOption(header, account + 72, NULL);
     }
     msSolHostStoreU64(account + 64, msSolHostLoadU64(account + 64) - amount);
     msSolHostStoreU64(mint + 88 + 36, msSolHostLoadU64(mint + 88 + 36) - amount);
     return 0;
+}
+
+static uint64_t msSolHostAuthorityOf(const uint64_t* header, uint8_t* target, uint8_t* option, const uint8_t* holder, const uint8_t* next) {
+    uint64_t status = msSolHostAuthorized(header, 1, holder);
+    if (status != 0) return status;
+    if (!msSolHostOwnedByCallee(header, target)) return msSolHostForeignAccount(header);
+    msSolHostStoreOption(header, option, next);
+    return 0;
+}
+
+static uint64_t msSolHostSetAuthority(const uint64_t* header) {
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint8_t* target = msSolHostRecordOf(header, 0);
+    if (header[4] < 3 || data[2] > 1 || header[4] < (data[2] == 1 ? 35ULL : 3ULL)) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
+    if (data[1] > 3) {
+        if (msSolHostIsToken2022(header)) msSolHostFault(2, "sol_invoke_signed: a Token-2022 extension authority is not simulated");
+        return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
+    }
+    const uint8_t* next = data[2] == 1 ? data + 3 : NULL;
+    if (target == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
+    uint8_t* fields = target + 88;
+    uint64_t blank = msSolHostIsToken2022(header) ? MS_SOL_HOST_INVALID_ACCOUNT_DATA : MS_SOL_HOST_UNINITIALIZED_ACCOUNT;
+    if (msSolHostHasTokenLayout(header, target, MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH, 2)) {
+        if (fields[108] == 0) return blank;
+        if (fields[108] == 2) return MS_SOL_HOST_TOKEN_ACCOUNT_FROZEN;
+        if (data[1] == 3) return msSolHostAuthorityOf(header, target, fields + 129, fields[129] == 1 ? fields + 133 : fields + 32, next);
+        if (data[1] != 2) return MS_SOL_HOST_TOKEN_AUTHORITY_TYPE_NOT_SUPPORTED;
+        uint64_t status = msSolHostAuthorized(header, 1, fields + 32);
+        if (status != 0) return status;
+        if (msSolHostHasExtension(target, 7)) return MS_SOL_HOST_TOKEN_IMMUTABLE_OWNER;
+        if (next == NULL) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
+        if (!msSolHostOwnedByCallee(header, target)) return msSolHostForeignAccount(header);
+        memcpy(fields + 32, next, 32);
+        msSolHostStoreOption(header, fields + 72, NULL);
+        msSolHostStoreU64(fields + 121, 0);
+        if (fields[109] == 1) msSolHostStoreOption(header, fields + 129, NULL);
+        return 0;
+    }
+    if (msSolHostHasTokenLayout(header, target, MS_SOL_HOST_TOKEN_MINT_LENGTH, 1)) {
+        if (fields[45] == 0) return blank;
+        if (data[1] > 1) return MS_SOL_HOST_TOKEN_AUTHORITY_TYPE_NOT_SUPPORTED;
+        uint8_t* option = data[1] == 0 ? fields : fields + 46;
+        if (option[0] == 0) return data[1] == 0 ? MS_SOL_HOST_TOKEN_FIXED_SUPPLY : MS_SOL_HOST_TOKEN_MINT_CANNOT_FREEZE;
+        return msSolHostAuthorityOf(header, target, option, option + 4, next);
+    }
+    return msSolHostIsToken2022(header) ? MS_SOL_HOST_INVALID_ACCOUNT_DATA : MS_SOL_HOST_INVALID_ARGUMENT;
 }
 
 static uint64_t msSolHostToken(const uint64_t* header) {
@@ -840,6 +913,8 @@ static uint64_t msSolHostToken(const uint64_t* header) {
         if (memcmp(first + 88 + 32, fourth + 8, 32) != 0) return 4;
         if (second[88 + 44] != data[9]) return 18;
         return msSolHostMoveTokens(first, second + 8, third, amount);
+    case 6:
+        return msSolHostSetAuthority(header);
     case 8:
         return msSolHostBurn(header, 0);
     case 15:
