@@ -1678,8 +1678,9 @@ function jsInstanceFiles(): void {
 	const first = "JS-INST first 1 7 own 2 own 1 made=4 counted=1";
 	const second = "JS-INST second 1 true app 3 own 1 made=8 counted=2";
 	const refusal = "invalid object conversion: Box<boolean> is not Box<int32>";
-	const edits = ["app.ms", "appSecondType.ms", "appWrongCast.ms"];
-	const wants = [[first], [first, second], [first, second, refusal]];
+	const third = "JS-INST third #8";
+	const edits = ["app.ms", "appSecondType.ms", "appWrongCast.ms", "appFirstUse.ms"];
+	const wants = [[first], [first, second], [first, second, refusal], [first, second, third]];
 	const libOf: string[] = [];
 	for (let i = 0; i < edits.length; i += 1) {
 		copy(`${FIXTURES}/jsInstanceFiles/${edits[i]}`, `${dir}/app.ms`);
@@ -1691,7 +1692,7 @@ function jsInstanceFiles(): void {
 			if (line.startsWith("JS-INST ")) seen.push(line);
 			if (line.contains("invalid object conversion")) seen.push(line.slice(line.indexOf("invalid object conversion")));
 		}
-		if (seen.join("\n") != wants[i].join("\n") || succeeded(ran) != (i < 2)) {
+		if (seen.join("\n") != wants[i].join("\n") || succeeded(ran) != (edits[i] != "appWrongCast.ms")) {
 			console.log(both(ran));
 			failWith(tag, `${edits[i]} did not run as on the native target`);
 		}

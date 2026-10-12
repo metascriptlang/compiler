@@ -16,6 +16,14 @@ export function count<T>(value: T): T {
 	return value;
 }
 
+function label(n: int32): string {
+	return `#${n}`;
+}
+
+export function describe<T>(value: T): string {
+	return label(made);
+}
+
 export class Box<T> {
 	value: T;
 	id: int32;
