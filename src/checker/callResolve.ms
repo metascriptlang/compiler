@@ -1140,8 +1140,13 @@ function takesOut(ctx: CheckerContext, arg: Node): void {
 	const reads = ctx.initTracker.pendingReads;
 	const at = reads.indexOf(arg);
 	if (at < 0) return;
+	if (!outArgAssigns(ctx, arg)) return;
 	reads.splice(at, 1);
 	markInitialized(ctx.initTracker, (arg.data as IdentifierData).name);
+}
+
+function outArgAssigns(ctx: CheckerContext, arg: Node): boolean {
+	return arg.resolvedSym == null || !requiresInit(ctx, arg.resolvedSym.symbolType);
 }
 
 function markOutArgsAssigned(ctx: CheckerContext, node: Node): void {
@@ -1149,7 +1154,7 @@ function markOutArgsAssigned(ctx: CheckerContext, node: Node): void {
 	for (const arg of (node.data as CallExprData).arguments) {
 		if (arg.kind != NodeKind.OutExpr) continue;
 		const target = (arg.data as OutExprData).outArg;
-		if (target.kind == NodeKind.Identifier) markInitialized(ctx.initTracker, (target.data as IdentifierData).name);
+		if (target.kind == NodeKind.Identifier && outArgAssigns(ctx, target)) markInitialized(ctx.initTracker, (target.data as IdentifierData).name);
 	}
 }
 

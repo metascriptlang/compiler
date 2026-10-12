@@ -59,6 +59,13 @@ test "useBeforeAssign: an out parameter the callee never writes is not refused y
 	assert unassignedReads("function leave(out a: int32, c: boolean): void { if (c) { a = 1; } }", "a") == 0;
 }
 
+test "useBeforeAssign: an out argument does not assign a variable whose type has no default value" {
+	const fns = "class Box { v: int32 = 1; }\nstruct Holder { b: Box; }\nfunction leaveBox(out b: Box): void { }\nfunction leaveHolder(out h: Holder): void { }\n";
+	assert unassignedReads(fns + "function f(): int32 { let b: Box; leaveBox(out b); return b.v; }", "b") == 1;
+	assert unassignedReads(fns + "function f(): int32 { let b: Box; leaveBox(b); return b.v; }", "b") == 1;
+	assert unassignedReads(fns + "function f(): int32 { let h: Holder; leaveHolder(out h); return h.b.v; }", "h") == 1;
+}
+
 test "useBeforeAssign: a field or element write does not assign the variable" {
 	assert unassignedReads("struct P { x: int32; y: int32 }\nfunction f(): int32 { let p: P; p.x = 1; return p.x; }", "p") == 1;
 	assert unassignedReads("function f(): int32 { let a: int32[3]; a[0] = 1; return a[0]; }", "a") == 1;
