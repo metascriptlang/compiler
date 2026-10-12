@@ -19,7 +19,6 @@
 // `mutable` is @inline too, but its probe call is the one direct use of a body that holds the
 // envelope check, the field check and the exclusive claim, and LLVM may keep it out of line: up to
 // nine copies of at most 320 bytes (296 measured, calls into shared cores), zero when inlined.
-// `selectInstruction` is not @inline and has one caller: zero or one copy.
 // RED PRE-FIX: createPdaOf 920 bytes a copy, realloc 824, close 752, verifiedPda 512 and 520,
 // selectInstruction 688, ownProgram 600, __divdi3 linked; a pass-through wrapper (close, realloc,
 // verifiedPda of a Delegated) that takes its result through a temporary measured 112 bytes, 16
@@ -223,7 +222,6 @@ const BOUNDS: Bound[] = [
 	{ family: "Mutable_verifiedPdaWithBump", least: TYPES, copies: TYPES, most: 256 },
 	{ family: "createPdaOf", least: TYPES, copies: TYPES, most: 352 },
 	{ family: "readArgs", least: 0, copies: 0, most: 0 },
-	{ family: "selectInstruction", least: 0, copies: 1, most: 224 },
 	{ family: "External_read", least: 2, copies: 2, most: 192 },
 	{ family: "ExternalMutable_read", least: 2, copies: 2, most: 192 },
 	{ family: "external", least: 0, copies: 0, most: 0 },

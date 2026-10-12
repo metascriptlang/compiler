@@ -141,7 +141,6 @@ export {
 	read,
 	readArgs,
 	realloc,
-	selectInstruction,
 	signer,
 	systemAccount,
 	transferLamports,

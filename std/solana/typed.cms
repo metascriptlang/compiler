@@ -39,7 +39,6 @@ import {
 	ownedAtFailure,
 	ownedFailure,
 	resizedProgramAccount,
-	selectedInstruction,
 	transfer,
 } from "./core";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
@@ -457,11 +456,6 @@ test "literal selection widens the minimum int32 before negation" {
 	const found = selectLiteralInstruction<int32>(-2147483648);
 	assert !found.ok;
 	assert found.error.code == 2147483648;
-}
-
-export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
-	const member = try selectedInstruction(table);
-	return Result.ok(member as E);
 }
 
 macro provenDiscriminatorWord(): Node {

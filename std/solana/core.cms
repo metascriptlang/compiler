@@ -852,19 +852,6 @@ export function instructionHasWord(word: uint64): boolean {
 
 export function instructionHasDiscriminator(): boolean { return msSolInstructionDataLength() >= 8; }
 
-function selectedMember(base: uint64, count: int32): Result<int32, ProgramError> {
-	if (msSolInstructionDataLength() < 8) { return Result.err(ProgramError.instructionMissing()); }
-	const word = msSolLoadU64(msSolInstructionData());
-	for (let member = 0; member < count; member++) {
-		if (msSolLoadU64(base + (member as uint64) * 8) == word) { return Result.ok(member); }
-	}
-	return Result.err(ProgramError.instructionFallbackNotFound());
-}
-
-export function selectedInstruction(table: Readonly<Span<uint8>>): Result<int32, ProgramError> {
-	return selectedMember(msSolSpanAddress(table), table.length >> 3);
-}
-
 function argumentFits(offset: uint64, width: uint64): boolean {
 	const data = instructionData();
 	if (data.length < 8) { return false; }
