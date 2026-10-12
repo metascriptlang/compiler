@@ -1009,6 +1009,7 @@ interface CompileJob {
 	dependencyFile: string;
 	dependenciesKnown: boolean;
 	storeKey: string;
+	slot: number;
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
@@ -1036,7 +1037,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 
 	// === 1. GATHER ===
 	const jobs: CompileJob[] = [];
-	const hitOFiles: string[] = [];
+	const oFiles: string[] = [];
 	let start = 0;
 	let idx = 0;
 	while (idx <= directives.length) {
@@ -1091,15 +1092,16 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					const oFile = probeOFile;
 					if (isCompileCached(oFile, fp)) {
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
-						hitOFiles.push(oFile);
+						oFiles.push(oFile);
 					} else {
 						const storeKey = objectStoreKey(nativeStoreSource(fullPath), ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags);
 						const stored = storeKey == "" ? "" : restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
 						if (stored != "") {
 							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
-							hitOFiles.push(stored);
+							oFiles.push(stored);
 						} else {
-							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey });
+							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey, slot: oFiles.length });
+							oFiles.push("");
 						}
 					}
 				}
@@ -1144,8 +1146,6 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	for (const f of futures) exitCodes.push(await f);
 
 	// === 3. COLLECT (serial from main thread) ===
-	const oFiles: string[] = [];
-	for (const o of hitOFiles) oFiles.push(o);
 	let ci = 0;
 	while (ci < jobs.length) {
 		const j = jobs[ci];
@@ -1161,12 +1161,12 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		if (j.dependenciesKnown) {
 			writeCompileCache(j.oFile, j.fp);
 			publishToStore(j.storeKey, j.oFile, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-			oFiles.push(j.oFile);
+			oFiles[j.slot] = j.oFile;
 		} else {
 			const published = publishFirstCompile(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
 			if (published.ok) {
 				publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-				oFiles.push(published.value);
+				oFiles[j.slot] = published.value;
 			} else {
 				printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
 				stopBuild();
