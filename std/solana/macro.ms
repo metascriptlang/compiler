@@ -130,9 +130,24 @@ export macro instruction(): Node {
 			}
 		}
 	}
+	for (let later = 0; later < decl.enumValues.length; later++) {
+		const value = decl.enumValues[later] as int32;
+		if (value < 0) {
+			error("instruction<" + decl.enumName + ">(): member '" + decl.enumMembers[later] + "' has the value " +
+				String(value) + ", and the values of an instruction enum are zero or more", decl);
+		}
+		for (let earlier = 0; earlier < later; earlier++) {
+			if ((decl.enumValues[earlier] as int32) == value) {
+				error("instruction<" + decl.enumName + ">(): members '" + decl.enumMembers[earlier] + "' and '" +
+					decl.enumMembers[later] + "' have the same value " + String(value) +
+					", so a match on the instruction cannot tell them apart", decl);
+			}
+		}
+	}
 	let selected = ordinal(-(ProgramError.instructionFallbackNotFound().code as int32));
 	for (let member = decl.enumMembers.length - 1; member >= 0; member--) {
-		selected = choose(call(bindSym("instructionHasWord"), [word(tags[member].bytes, 0)]), ordinal(member), selected);
+		selected = choose(call(bindSym("instructionHasWord"), [word(tags[member].bytes, 0)]),
+			ordinal(decl.enumValues[member] as int32), selected);
 	}
 	selected = choose(call(bindSym("instructionHasDiscriminator"), []), selected, ordinal(-(ProgramError.instructionMissing().code as int32)));
 	return {

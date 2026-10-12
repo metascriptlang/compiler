@@ -402,6 +402,57 @@ test "instruction dispatch reads Anchor discriminators and Borsh arguments" {
 	assert taken.result == 0;
 }
 
+export enum SparseOp { Alpha = 5, Beta = 9, Gamma, Zero = 0 }
+export enum ReversedOp { Last = 2, Middle = 1, First = 0 }
+
+function sparseDispatch(): Result<uint64, ProgramError> {
+	return match (try instruction<SparseOp>()) {
+		SparseOp.Alpha => Result.err(ProgramError.custom(5)),
+		SparseOp.Beta => Result.err(ProgramError.custom(9)),
+		SparseOp.Gamma => Result.err(ProgramError.custom(10)),
+		SparseOp.Zero => Result.ok(0),
+	};
+}
+
+function sparseValue(): Result<uint64, ProgramError> {
+	const op = try instruction<SparseOp>();
+	return Result.err(ProgramError.custom(1000 + (op as uint32)));
+}
+
+function reversedDispatch(): Result<uint64, ProgramError> {
+	return match (try instruction<ReversedOp>()) {
+		ReversedOp.Last => Result.err(ProgramError.custom(2)),
+		ReversedOp.Middle => Result.err(ProgramError.custom(1)),
+		ReversedOp.First => Result.ok(0),
+	};
+}
+
+function sparseDispatchEntry(): void { codeOf(sparseDispatch()); }
+function sparseValueEntry(): void { codeOf(sparseValue()); }
+function reversedDispatchEntry(): void { codeOf(reversedDispatch()); }
+
+test "instruction dispatch gives the member an enum with gaps in its values declares, zero included" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, instructionBytes("Alpha", []), sparseDispatchEntry).result == ProgramError.custom(5).code;
+	assert run(programKey(), none, instructionBytes("Beta", []), sparseDispatchEntry).result == ProgramError.custom(9).code;
+	assert run(programKey(), none, instructionBytes("Gamma", []), sparseDispatchEntry).result == ProgramError.custom(10).code;
+	assert run(programKey(), none, instructionBytes("Zero", []), sparseDispatchEntry).result == 0;
+	assert run(programKey(), none, instructionBytes("Alpha", []), sparseValueEntry).result == ProgramError.custom(1005).code;
+	assert run(programKey(), none, instructionBytes("Gamma", []), sparseValueEntry).result == ProgramError.custom(1010).code;
+	assert run(programKey(), none, instructionBytes("Zero", []), sparseValueEntry).result == ProgramError.custom(1000).code;
+	assert run(programKey(), none, instructionBytes("Delta", []), sparseDispatchEntry).result ==
+		ProgramError.instructionFallbackNotFound().code;
+	const short: uint8[] = [1, 2, 3];
+	assert run(programKey(), none, short, sparseDispatchEntry).result == ProgramError.instructionMissing().code;
+}
+
+test "instruction dispatch gives the member an enum declares when its values run against the declaration order" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, instructionBytes("Last", []), reversedDispatchEntry).result == ProgramError.custom(2).code;
+	assert run(programKey(), none, instructionBytes("Middle", []), reversedDispatchEntry).result == ProgramError.custom(1).code;
+	assert run(programKey(), none, instructionBytes("First", []), reversedDispatchEntry).result == 0;
+}
+
 let wrappedByte: uint8 = 0;
 let wrappedWord: uint16 = 0;
 let wrappedWide: uint64 = 0;
