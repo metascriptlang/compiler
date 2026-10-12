@@ -592,6 +592,7 @@ static const uint8_t msSolHostNativeMint2022[32] = {
 };
 
 #define MS_SOL_HOST_INVALID_ARGUMENT (2ULL << 32)
+#define MS_SOL_HOST_INVALID_INSTRUCTION_DATA (3ULL << 32)
 #define MS_SOL_HOST_INVALID_ACCOUNT_DATA (4ULL << 32)
 #define MS_SOL_HOST_INCORRECT_PROGRAM_ID (7ULL << 32)
 #define MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE (8ULL << 32)
@@ -932,6 +933,37 @@ static uint64_t msSolHostSetAuthority(const uint64_t* header) {
     return msSolHostIsToken2022(header) ? MS_SOL_HOST_INVALID_ACCOUNT_DATA : MS_SOL_HOST_INVALID_ARGUMENT;
 }
 
+static uint64_t msSolHostShortData(const uint64_t* header) {
+    return msSolHostIsToken2022(header) ? MS_SOL_HOST_INVALID_INSTRUCTION_DATA : MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
+}
+
+static uint64_t msSolHostInitializeMint2(const uint64_t* header) {
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint8_t* mint = msSolHostRecordOf(header, 0);
+    int extended = msSolHostIsToken2022(header);
+    if (header[4] < 35 || data[34] > 1 || header[4] < (data[34] == 1 ? 67ULL : 35ULL)) return msSolHostShortData(header);
+    if (mint == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
+    if (extended && !msSolHostOwnedByCallee(header, mint)) return MS_SOL_HOST_INCORRECT_PROGRAM_ID;
+    uint64_t length = msSolHostLoadU64(mint + 80);
+    if (length != MS_SOL_HOST_TOKEN_MINT_LENGTH) {
+        if (extended && length > MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH) {
+            msSolHostFault(2, "sol_invoke_signed: InitializeMint2 of a Token-2022 mint with extensions is not simulated");
+        }
+        return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
+    }
+    uint8_t* fields = mint + 88;
+    int belowRent = msSolHostLamports(mint) < (MS_SOL_HOST_TOKEN_MINT_LENGTH + 128) * 3480 * 2;
+    if (extended && belowRent) return MS_SOL_HOST_TOKEN_NOT_RENT_EXEMPT;
+    if (fields[45] != 0) return MS_SOL_HOST_TOKEN_ALREADY_IN_USE;
+    if (belowRent) return MS_SOL_HOST_TOKEN_NOT_RENT_EXEMPT;
+    if (!msSolHostOwnedByCallee(header, mint)) return msSolHostForeignAccount(header);
+    msSolHostStoreOption(header, fields, data + 2);
+    fields[44] = data[1];
+    fields[45] = 1;
+    msSolHostStoreOption(header, fields + 46, data[34] == 1 ? data + 35 : NULL);
+    return 0;
+}
+
 static uint64_t msSolHostToken(const uint64_t* header) {
     if (!msSolHostIsTokenProgram((const uint8_t*)header[0]) || header[4] < 1) return 0;
     const uint8_t* data = (const uint8_t*)header[3];
@@ -981,6 +1013,8 @@ static uint64_t msSolHostToken(const uint64_t* header) {
         return msSolHostBurn(header, 1);
     case 18:
         return msSolHostInitializeAccount3(header, first, second);
+    case 20:
+        return msSolHostInitializeMint2(header);
     default:
         return 0;
     }

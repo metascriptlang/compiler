@@ -1283,6 +1283,8 @@ when (testBuild) {
 			const program = try account(5);
 			return createAssociatedToken(payer, target, authority, mint, system, program);
 		}
+		if (op == 16) { return initializeMint2((try account(5)).key(), mint, 6, authority.key(), null); }
+		if (op == 17) { return initializeMint2((try account(5)).key(), mint, 6, authority.key(), payer.key()); }
 		if (op == 0) { return mintTo(token, mint, target, authority, 500); }
 		if (op == 1) {
 			const extended = TOKEN_2022_PROGRAM_ID;
@@ -1350,18 +1352,74 @@ when (testBuild) {
 		assert sameBytes(closed.data, closeBytes);
 	}
 
+	const MINT_RENT: uint64 = 2 * (82 + 128) * 3480;
+
+	function zeros(count: int32): uint8[] {
+		const bytes: uint8[] = [];
+		pushZeros(bytes, count);
+		return bytes;
+	}
+
+	function blankMintAccounts(program: Pubkey): HostAccount[] {
+		const accounts = cpiAccounts();
+		accounts[0] = { ...holderOf(1, program, zeros(82)), lamports: MINT_RENT };
+		accounts[5].key = program;
+		return accounts;
+	}
+
 	test "initializeMint2 writes 35 bytes without a freeze authority and 67 with one" {
-		assert resultOf(cpiAccounts(), 3, cpiEntry) == 0;
+		assert resultOf(blankMintAccounts(TOKEN_PROGRAM_ID), 3, cpiEntry) == 0;
 		const plain = invocations()[0];
 		assert plain.accounts.length == 1;
 		assert plain.accounts[0].writable && !plain.accounts[0].signer;
 		assert plain.data.length == 35;
 		assert plain.data[0] == 20 && plain.data[1] == 6;
 		assert plain.data[2] == 3 && plain.data[34] == 0;
-		assert resultOf(cpiAccounts(), 4, cpiEntry) == 0;
+		assert resultOf(blankMintAccounts(TOKEN_PROGRAM_ID), 4, cpiEntry) == 0;
 		const frozen = invocations()[0];
 		assert frozen.data.length == 67;
 		assert frozen.data[34] == 1 && frozen.data[35] == 4;
+	}
+
+	test "initializeMint2 gives a blank mint its authorities and decimals, on either token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const plain = blankMintAccounts(program);
+			assert resultOf(plain, 16, cpiEntry) == 0;
+			const mint = plain[0].data;
+			assert mint.length == 82 && mint[0] == 1 && wordAt(keyAt(mint, 4), 0) == 3;
+			assert u64At(mint, 36) == 0 && mint[44] == 6 && mint[45] == 1 && mint[46] == 0;
+			const freezable = blankMintAccounts(program);
+			assert resultOf(freezable, 17, cpiEntry) == 0;
+			assert freezable[0].data[46] == 1 && wordAt(keyAt(freezable[0].data, 50), 0) == 4;
+		}
+	}
+
+	test "initializeMint2 is refused for a mint that is initialized, below rent, of another length or of another program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const extended = program == TOKEN_2022_PROGRAM_ID;
+			const again = blankMintAccounts(program);
+			assert resultOf(again, 16, cpiEntry) == 0;
+			assert resultOf(again, 17, cpiEntry) == ProgramError.custom(6).code;
+			assert again[0].data[46] == 0;
+			again[0].lamports = MINT_RENT - 1;
+			assert resultOf(again, 16, cpiEntry) == ProgramError.custom(extended ? 0 : 6).code;
+			const poor = blankMintAccounts(program);
+			poor[0].lamports = MINT_RENT - 1;
+			assert resultOf(poor, 16, cpiEntry) == ProgramError.custom(0).code;
+			assert poor[0].data[45] == 0;
+			for (const length of [81, 165]) {
+				const sized = blankMintAccounts(program);
+				sized[0].data = zeros(length);
+				assert resultOf(sized, 16, cpiEntry) == ProgramError.invalidAccountData().code;
+			}
+			const foreign = blankMintAccounts(program);
+			foreign[0].owner = extended ? TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
+			const input: uint8[] = [16];
+			const refused = run(keyOf(9), foreign, input, cpiEntry);
+			assert refused.result == ProgramError.incorrectProgramId().code;
+			assert (refused.fault.indexOf("ExternalAccountDataModified") >= 0) == !extended;
+			assert foreign[0].data[45] == 0;
+		}
 	}
 
 	test "createAssociatedTokenIdempotent sends discriminator 1 with the six accounts in order" {
