@@ -326,6 +326,7 @@ export interface JsModuleResult {
 	namespaceModules: string[];
 	namespaceNames: string[][];
 	exportedNames: string[];
+	declaredNames: string[];
 	testNames: string[];
 	testFuncs: string[];
 	smap: SourceInfo;
@@ -381,7 +382,7 @@ export function generateJSModule(
 	}
 	if (bindings == "" && gen.moduleRequests == "" && !hasImport && hasTopLevelAwait(program)) bindings = "export {};\n";
 	insertAfterHeader(gen, headerChunks, gen.moduleRequests + bindings);
-	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, namespaceModules: gen.namespaceModules, namespaceNames: gen.namespaceNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
+	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, namespaceModules: gen.namespaceModules, namespaceNames: gen.namespaceNames, exportedNames: gen.exportedNames, declaredNames: gen.declaredNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
 }
 
 export function hasTopLevelAwait(node: Node): boolean {

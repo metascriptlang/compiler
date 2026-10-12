@@ -59,6 +59,7 @@ export class JSGenerator {
 	moduleRequests: string;     // source imports and re-exports, in source order, hoisted in front of the body
 	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
 	namespaceNames: string[][];
+	declaredNames: string[];    // every module-level binding this file declares
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
@@ -91,7 +92,7 @@ export function createJsTreeLayout(): JsTreeLayout {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [],
+		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
@@ -175,6 +176,10 @@ export function collectDeclaredLocals(node: Node, out: HashSet<string>): void {
 		_ => {},
 	}
 	forEachChild(node, (c: Node): void => { if (c != null) collectDeclaredLocals(c, out); });
+}
+
+export function declareBinding(gen: JSGenerator, name: string): void {
+	if (gen.multiFile && gen.indentLevel == 0) gen.declaredNames.push(name);
 }
 
 export function importSpecifier(name: string, local: string): string {

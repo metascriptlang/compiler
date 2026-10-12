@@ -3826,10 +3826,17 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		moduleTestFuncs.push(res.testFuncs);
 	}
 
-	// Forced exports: names other files reference, or read through a namespace
-	// object, that this file didn't export (private helpers reachable from
-	// generic bodies, instances reused by other modules). A name needed here but not defined here is a compiler
-	// bug — node fails loudly at the gate, by design.
+	// Forced exports: every module-level binding a file declares without
+	// exporting it, so its text does not depend on which of them a generic
+	// body or a macro expansion in another module came to reference. A name
+	// needed here but not defined here is a compiler bug — node fails loudly
+	// at the gate, by design.
+	for (let vi = 0; vi < fileKeys.length; vi += 1) {
+		const needed = fileResults[vi];
+		for (const n of needed.declaredNames) {
+			if (!needed.exportedNames.includes(n) && !fileForced[vi].includes(n)) fileForced[vi].push(n);
+		}
+	}
 	for (let vi = 0; vi < fileKeys.length; vi += 1) {
 		const needed = fileResults[vi];
 		for (let mi = 0; mi < needed.neededModules.length; mi += 1) {
