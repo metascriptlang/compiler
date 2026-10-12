@@ -13,6 +13,8 @@
 #define MS_SOL_MAX_SIGNERS 16
 #define MS_SOL_MAX_SEED_LEN 32
 #define MS_SOL_MAX_RETURN_DATA 1024
+#define MS_SOL_HOST_REFUSED UINT64_MAX
+#define MS_SOL_HOST_NOT_SIMULATED (UINT64_MAX - 1)
 
 typedef struct {
     uint8_t program[32];
@@ -50,9 +52,9 @@ msSolanaContext* msSolHostContext(void) {
     return &msSolHostState;
 }
 
-static void msSolHostFault(uint64_t code, const char* text) {
+static void msSolHostFault(uint64_t result, const char* text) {
     if (msSolHostFaultCode != 0) return;
-    msSolHostFaultCode = code;
+    msSolHostFaultCode = result;
     snprintf(msSolHostFaultText, sizeof(msSolHostFaultText), "%s", text);
 }
 
@@ -225,7 +227,7 @@ uint64_t msSolHostRemainingComputeUnits(void) { return MS_SOL_HOST_COMPUTE_BUDGE
 
 void msSolHostCopy(uint64_t destination, uint64_t source, uint64_t length) {
     if ((destination < source + length) && (source < destination + length)) {
-        msSolHostFault(1, "sol_memcpy_: overlapping copy");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_memcpy_: Overlapping copy");
         return;
     }
     memcpy((void*)destination, (const void*)source, (size_t)length);
@@ -423,12 +425,18 @@ static int msSolHostIsOnCurve(const uint8_t point[32]) {
 
 uint64_t msSolHostCurveValidatePoint(uint64_t curve, uint64_t point, uint64_t result) {
     (void)result;
+    if (curve == 1) {
+        msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, "sol_curve_validate_point: the ristretto curve (1) is not simulated");
+        return 1;
+    }
     if (curve != 0) {
-        msSolHostFault(2, "sol_curve_validate_point: only the edwards curve (0) is simulated");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_curve_validate_point: InvalidAttribute");
         return 1;
     }
     return msSolHostIsOnCurve((const uint8_t*)point) ? 0 : 1;
 }
+
+#define MS_SOL_HOST_SEED_TOO_LONG "Length of the seed is too long for address generation"
 
 static int msSolHostSeedsFit(uint64_t seeds, uint64_t count) {
     if (count > MS_SOL_MAX_SEEDS) return 0;
@@ -455,7 +463,7 @@ static int msSolHostDerive(uint64_t seeds, uint64_t count, const uint8_t* bump, 
 
 uint64_t msSolHostCreateProgramAddress(uint64_t seeds, uint64_t count, uint64_t programId, uint64_t out) {
     if (!msSolHostSeedsFit(seeds, count)) {
-        msSolHostFault(2, "sol_create_program_address: more than 16 seeds or a seed over 32 bytes");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_create_program_address: " MS_SOL_HOST_SEED_TOO_LONG);
         return 1;
     }
     uint8_t address[32];
@@ -466,7 +474,7 @@ uint64_t msSolHostCreateProgramAddress(uint64_t seeds, uint64_t count, uint64_t 
 
 uint64_t msSolHostTryFindProgramAddress(uint64_t seeds, uint64_t count, uint64_t programId, uint64_t out, uint64_t bumpOut) {
     if (!msSolHostSeedsFit(seeds, count)) {
-        msSolHostFault(2, "sol_try_find_program_address: more than 16 seeds or a seed over 32 bytes");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_try_find_program_address: " MS_SOL_HOST_SEED_TOO_LONG);
         return 1;
     }
     uint8_t bump = 255;
@@ -514,7 +522,7 @@ static uint64_t msSolHostResize(uint8_t* record, uint64_t space) {
 static uint64_t msSolHostNotSimulated(const char* program, unsigned instruction, uint64_t status) {
     char text[sizeof(msSolHostFaultText)];
     snprintf(text, sizeof(text), "sol_invoke_signed: %s program instruction %u is not simulated", program, instruction);
-    msSolHostFault(2, text);
+    msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, text);
     return status;
 }
 
@@ -654,7 +662,7 @@ static int msSolHostOwnedByCallee(const uint64_t* header, const uint8_t* record)
 
 static uint64_t msSolHostForeignAccount(const uint64_t* header) {
     if (!msSolHostIsToken2022(header)) {
-        msSolHostFault(5, "sol_invoke_signed: ExternalAccountDataModified: the Token program wrote an account it does not own");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ExternalAccountDataModified: sol_invoke_signed: the Token program wrote an account it does not own");
     }
     return MS_SOL_HOST_INCORRECT_PROGRAM_ID;
 }
@@ -791,7 +799,7 @@ static uint64_t msSolHostAuthorized(const uint64_t* header, uint64_t index, cons
     if (authority == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
     if (memcmp(expected, authority + 8, 32) != 0) return MS_SOL_HOST_TOKEN_OWNER_MISMATCH;
     if (msSolHostOwnedByCallee(header, authority) && msSolHostLoadU64(authority + 80) == MS_SOL_HOST_TOKEN_MULTISIG_LENGTH) {
-        msSolHostFault(2, "sol_invoke_signed: a multisignature token authority is not simulated");
+        msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, "sol_invoke_signed: a multisignature token authority is not simulated");
         return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
     }
     if (((const uint8_t*)(header[1] + index * 16))[9] == 0) return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
@@ -986,7 +994,7 @@ static uint64_t msSolHostTransfer(const uint64_t* header, int checked) {
     }
     if (foreign) return msSolHostForeignAccount(header);
     if (native && msSolHostLamports(source) < amount) {
-        msSolHostFault(5, "sol_invoke_signed: UnbalancedInstruction: the Token program moved more lamports than the native account holds");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "UnbalancedInstruction: sol_invoke_signed: the Token program moved more lamports than the native account holds");
         return MS_SOL_HOST_TOKEN_OVERFLOW;
     }
     if (delegated) {
@@ -1010,7 +1018,7 @@ static uint64_t msSolHostCloseAccount(const uint64_t* header) {
     if (msSolHostSameKey(source, destination)) return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     if (msSolHostIsToken2022(header) && msSolHostOwnedByCallee(header, source)
         && msSolHostHasTokenLayout(header, source, MS_SOL_HOST_TOKEN_MINT_LENGTH, 1) && msSolHostHasExtension(source, 3)) {
-        msSolHostFault(2, "sol_invoke_signed: closing a Token-2022 mint that has a close authority is not simulated");
+        msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, "sol_invoke_signed: closing a Token-2022 mint that has a close authority is not simulated");
         return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     }
     uint64_t status = msSolHostUnpackedAccount(header, source);
@@ -1026,7 +1034,7 @@ static uint64_t msSolHostCloseAccount(const uint64_t* header) {
     uint64_t lamports = msSolHostLamports(source);
     if (lamports > UINT64_MAX - msSolHostLamports(destination)) return MS_SOL_HOST_TOKEN_OVERFLOW;
     if (!msSolHostOwnedByCallee(header, source)) {
-        msSolHostFault(5, "sol_invoke_signed: ExternalAccountLamportSpend: the Token program spent the lamports of an account it does not own");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ExternalAccountLamportSpend: sol_invoke_signed: the Token program spent the lamports of an account it does not own");
         return MS_SOL_HOST_INCORRECT_PROGRAM_ID;
     }
     msSolHostSetLamports(destination, msSolHostLamports(destination) + lamports);
@@ -1050,7 +1058,7 @@ static uint64_t msSolHostSetAuthority(const uint64_t* header) {
     uint8_t* target = msSolHostRecordOf(header, 0);
     if (header[4] < 3 || data[2] > 1 || header[4] < (data[2] == 1 ? 35ULL : 3ULL)) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
     if (data[1] > 3) {
-        if (msSolHostIsToken2022(header)) msSolHostFault(2, "sol_invoke_signed: a Token-2022 extension authority is not simulated");
+        if (msSolHostIsToken2022(header)) msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, "sol_invoke_signed: a Token-2022 extension authority is not simulated");
         return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
     }
     const uint8_t* next = data[2] == 1 ? data + 3 : NULL;
@@ -1093,7 +1101,7 @@ static uint64_t msSolHostInitializeMint2(const uint64_t* header) {
     uint64_t length = msSolHostLoadU64(mint + 80);
     if (length != MS_SOL_HOST_TOKEN_MINT_LENGTH) {
         if (extended && length > MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH) {
-            msSolHostFault(2, "sol_invoke_signed: InitializeMint2 of a Token-2022 mint with extensions is not simulated");
+            msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, "sol_invoke_signed: InitializeMint2 of a Token-2022 mint with extensions is not simulated");
         }
         return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     }
@@ -1143,7 +1151,7 @@ static int msSolHostExtensionNotSimulated(const uint64_t* header) {
             if (msSolHostExtensionInForce(kind, data + offset + 4, size)) {
                 char text[sizeof(msSolHostFaultText)];
                 snprintf(text, sizeof(text), "sol_invoke_signed: Token-2022 extension %u with a setting in force is not simulated", (unsigned)kind);
-                msSolHostFault(2, text);
+                msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, text);
                 return 1;
             }
             offset += 4ULL + size;
@@ -1210,7 +1218,7 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     }
     if (!derived || memcmp(address, associated + 8, 32) != 0) return MS_SOL_HOST_INVALID_SEEDS;
     if (!msSolHostIsTokenProgram(program + 8)) {
-        msSolHostFault(2, "sol_invoke_signed: an associated account under a program that is not a token program is not simulated");
+        msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, "sol_invoke_signed: an associated account under a program that is not a token program is not simulated");
         return MS_SOL_HOST_INCORRECT_PROGRAM_ID;
     }
     uint8_t initialize[33] = {18};
@@ -1224,7 +1232,7 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     }
     if (memcmp(associated + 40, systemProgram, 32) != 0) return MS_SOL_HOST_ILLEGAL_OWNER;
     if (msSolHostLoadU64(associated + 80) != 0) {
-        msSolHostFault(2, "sol_invoke_signed: an associated account at a System-owned address that holds data is not simulated");
+        msSolHostFault(MS_SOL_HOST_NOT_SIMULATED, "sol_invoke_signed: an associated account at a System-owned address that holds data is not simulated");
         return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
     }
     int extended = msSolHostIsToken2022(inner);
@@ -1241,7 +1249,7 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     uint64_t missing = rent > held ? rent - held : 0;
     if (missing != 0) {
         if (((const uint8_t*)header[1])[9] == 0) {
-            msSolHostFault(5, "sol_invoke_signed: PrivilegeEscalation: the Associated Token program funds the account from a payer that did not sign");
+            msSolHostFault(MS_SOL_HOST_REFUSED, "PrivilegeEscalation: sol_invoke_signed: the Associated Token program funds the account from a payer that did not sign");
             return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
         }
         if (msSolHostLamports(payer) < missing) return 1;
@@ -1254,30 +1262,32 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     return msSolHostInitializeAccount3(inner, associated, mint, 1);
 }
 
-static uint64_t msSolHostSignerBytes(uint64_t signers, uint64_t signerCount) {
-    if (signerCount > MS_SOL_MAX_SIGNERS) return UINT64_MAX;
-    uint64_t total = 0;
+static uint64_t msSolHostSignersRefused(uint64_t signers, uint64_t signerCount, uint64_t* recordedBytes) {
+    const uint64_t programId = msSolHostContext()->programId;
+    *recordedBytes = 0;
+    if (signerCount > MS_SOL_MAX_SIGNERS) {
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_invoke_signed: Too many signers");
+        return MS_SOL_HOST_REFUSED;
+    }
     for (uint64_t signer = 0; signer < signerCount; signer++) {
         const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
-        if (entry[1] > MS_SOL_MAX_SEEDS) return UINT64_MAX;
-        total += 8;
+        if (entry[1] > MS_SOL_MAX_SEEDS) return 13ULL << 32;
+        *recordedBytes += 8;
         for (uint64_t seed = 0; seed < entry[1]; seed++) {
             const uint64_t* slice = (const uint64_t*)(entry[0] + seed * 16);
-            if (slice[1] > MS_SOL_MAX_SEED_LEN) return UINT64_MAX;
-            total += 8 + slice[1];
+            if (slice[1] > MS_SOL_MAX_SEED_LEN) {
+                msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_invoke_signed: Could not create program address with signer seeds: " MS_SOL_HOST_SEED_TOO_LONG);
+                return MS_SOL_HOST_REFUSED;
+            }
+            *recordedBytes += 8 + slice[1];
+        }
+        uint8_t address[32];
+        if (!msSolHostDerive(entry[0], entry[1], NULL, programId, address)) {
+            msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_invoke_signed: Could not create program address with signer seeds: Provided seeds do not result in a valid address");
+            return MS_SOL_HOST_REFUSED;
         }
     }
-    return total;
-}
-
-static int msSolHostSignersDerive(uint64_t signers, uint64_t signerCount) {
-    const uint64_t programId = msSolHostContext()->programId;
-    for (uint64_t signer = 0; signer < signerCount; signer++) {
-        const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
-        uint8_t address[32];
-        if (!msSolHostDerive(entry[0], entry[1], NULL, programId, address)) return 0;
-    }
-    return 1;
+    return 0;
 }
 
 static int msSolHostSignsFor(const uint8_t* key, uint64_t signers, uint64_t signerCount) {
@@ -1301,11 +1311,11 @@ static int msSolHostPrivilegesHeld(const uint64_t* header, uint64_t signers, uin
         const uint8_t* meta = (const uint8_t*)(header[1] + index * 16);
         const uint8_t* record = (const uint8_t*)(*(const uint64_t*)meta - 8);
         if (meta[8] != 0 && record[2] == 0) {
-            msSolHostFault(5, "sol_invoke_signed: an account's writable privilege escalated: the instruction did not pass it writable");
+            msSolHostFault(MS_SOL_HOST_REFUSED, "PrivilegeEscalation: sol_invoke_signed: an account's writable privilege escalated: the instruction did not pass it writable");
             return 0;
         }
         if (meta[9] != 0 && record[1] == 0 && !msSolHostSignsFor(record + 8, signers, signerCount)) {
-            msSolHostFault(5, "sol_invoke_signed: an account's signer privilege escalated: it did not sign and no signer seeds derive it");
+            msSolHostFault(MS_SOL_HOST_REFUSED, "PrivilegeEscalation: sol_invoke_signed: an account's signer privilege escalated: it did not sign and no signer seeds derive it");
             return 0;
         }
     }
@@ -1331,12 +1341,9 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     (void)accountInfos;
     (void)accountInfoCount;
     const uint64_t* header = (const uint64_t*)instruction;
-    uint64_t signerBytes = msSolHostSignerBytes(signers, signerCount);
-    if (signerBytes == UINT64_MAX) return 13ULL << 32;
-    if (!msSolHostSignersDerive(signers, signerCount)) {
-        msSolHostFault(4, "sol_invoke_signed: Could not create program address with signer seeds: Provided seeds do not result in a valid address");
-        return 14ULL << 32;
-    }
+    uint64_t signerBytes;
+    uint64_t refused = msSolHostSignersRefused(signers, signerCount, &signerBytes);
+    if (refused != 0) return refused;
     if (msSolHostExecutes((const uint8_t*)header[0]) && !msSolHostPrivilegesHeld(header, signers, signerCount)) {
         return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
     }
@@ -1397,7 +1404,7 @@ uint64_t msSolHostGetRent(uint64_t out) {
 
 void msSolHostSetReturnData(const uint8_t* data, int64_t length) {
     if (length < 0 || length > MS_SOL_MAX_RETURN_DATA) {
-        msSolHostFault(3, "sol_set_return_data: more than 1024 bytes");
+        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_set_return_data: Return data too large, more than 1024 bytes");
         return;
     }
     memcpy(msSolHostReturnData, data, (size_t)length);

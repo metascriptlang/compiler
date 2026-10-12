@@ -55,6 +55,7 @@ export struct HostRun {
 }
 
 export const REFUSED: uint64 = 0xffffffffffffffff;
+export const NOT_SIMULATED: uint64 = 0xfffffffffffffffe;
 
 const MAX_INSTRUCTION_ACCOUNTS: int32 = 255;
 
@@ -188,8 +189,9 @@ export function run(
 	msSolHostEnter(input);
 	entry();
 	readBack(accounts, input, lengths);
-	const fault = msSolHostFaultCodeOf() != 0 ? msSolHostFaultMessage() : "";
-	return { result: msSolHostResult(), fault: fault };
+	const faulted = msSolHostFaultCodeOf();
+	if (faulted != 0) { return { result: faulted, fault: msSolHostFaultMessage() }; }
+	return { result: msSolHostResult(), fault: "" };
 }
 
 export function logs(): string[] {

@@ -47,7 +47,7 @@ when (testBuild) {
 		writable,
 		writableSigner,
 	} from "./typed";
-	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
+	import { HostAccount, NOT_SIMULATED, REFUSED, invocations, logs, run, signerIs, textBytes } from "./host";
 	import {
 		associated,
 		findProgramAddressOf,
@@ -1418,8 +1418,7 @@ when (testBuild) {
 			foreign[0].owner = extended ? TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
 			const input: uint8[] = [16];
 			const refused = run(keyOf(9), foreign, input, cpiEntry);
-			assert refused.result == ProgramError.incorrectProgramId().code;
-			assert (refused.fault.indexOf("ExternalAccountDataModified") >= 0) == !extended;
+			assert refusedWith(refused, ProgramError.incorrectProgramId(), extended ? "" : FOREIGN_WRITE);
 			assert foreign[0].data[45] == 0;
 		}
 	}
@@ -1958,8 +1957,7 @@ when (testBuild) {
 		const elsewhere = vaultAccounts(TOKEN_2022_PROGRAM_ID);
 		elsewhere[1].key = keyOf(2);
 		const refused = run(keyOf(9), elsewhere, data, newTokenEntry);
-		assert refused.result == ProgramError.missingRequiredSignature().code;
-		assert refused.fault.indexOf("signer privilege escalated") >= 0;
+		assert runtimeRefused(refused, ESCALATED);
 		assert elsewhere[1].data.length == 0 && elsewhere[1].owner.isZero();
 	}
 
@@ -2063,8 +2061,7 @@ when (testBuild) {
 		foreign[1].owner = keyOf(9);
 		const input: uint8[] = [4];
 		const refused = run(keyOf(9), foreign, input, newTokenEntry);
-		assert refused.result == ProgramError.incorrectProgramId().code;
-		assert refused.fault.indexOf("ExternalAccountDataModified") >= 0;
+		assert runtimeRefused(refused, FOREIGN_WRITE);
 		assert foreign[1].data[108] == 0;
 	}
 }
@@ -2179,8 +2176,7 @@ when (testBuild) {
 		const stranger = burnAccounts(TOKEN_2022_PROGRAM_ID);
 		stranger[2].signer = false;
 		const refused = burnRun(stranger, 2, 250);
-		assert refused.result == ProgramError.missingRequiredSignature().code;
-		assert refused.fault.indexOf("signer privilege escalated") >= 0;
+		assert runtimeRefused(refused, ESCALATED);
 		assert u64At(stranger[0].data, 64) == 900;
 	}
 
@@ -2220,8 +2216,7 @@ when (testBuild) {
 		const mixed = burnAccounts(TOKEN_PROGRAM_ID);
 		mixed[0].owner = TOKEN_2022_PROGRAM_ID;
 		const refused = burnRun(mixed, 0, 250);
-		assert refused.result == ProgramError.incorrectProgramId().code;
-		assert refused.fault.indexOf("ExternalAccountDataModified") >= 0;
+		assert runtimeRefused(refused, FOREIGN_WRITE);
 		assert u64At(mixed[0].data, 64) == 900 && u64At(mixed[1].data, 36) == 5000;
 	}
 
@@ -2397,8 +2392,7 @@ when (testBuild) {
 		const stranger = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
 		stranger[1].signer = false;
 		const refused = authorityRun(stranger, 2, AuthorityType.MintTokens, true);
-		assert refused.result == ProgramError.missingRequiredSignature().code;
-		assert refused.fault.indexOf("signer privilege escalated") >= 0;
+		assert runtimeRefused(refused, ESCALATED);
 		assert keyAt(stranger[0].data, 4).equals(keyOf(7));
 	}
 
@@ -2626,8 +2620,7 @@ when (testBuild) {
 		stranger[3].signer = false;
 		for (const op of [2, 5]) {
 			const refused = delegateRun(stranger, op as uint8, 300);
-			assert refused.result == ProgramError.missingRequiredSignature().code;
-			assert refused.fault.indexOf("signer privilege escalated") >= 0;
+			assert runtimeRefused(refused, ESCALATED);
 		}
 		assert delegateOf(stranger) == null;
 	}
@@ -2664,17 +2657,17 @@ when (testBuild) {
 
 	test "an instruction a simulated program does not implement fails the run and names the program and the instruction" {
 		const token = rawRun(TOKEN_PROGRAM_ID, [4]);
-		assert token.result == ProgramError.custom(12).code;
+		assert token.result == NOT_SIMULATED;
 		assert token.fault == "sol_invoke_signed: Token program instruction 4 is not simulated";
 		const extended = rawRun(TOKEN_2022_PROGRAM_ID, [30]);
-		assert extended.result == ProgramError.custom(12).code;
+		assert extended.result == NOT_SIMULATED;
 		assert extended.fault == "sol_invoke_signed: Token-2022 program instruction 30 is not simulated";
 		const associated = rawRun(ASSOCIATED_TOKEN_PROGRAM_ID, [2]);
-		assert associated.result == ProgramError.invalidInstructionData().code;
+		assert associated.result == NOT_SIMULATED;
 		assert associated.fault ==
 			"sol_invoke_signed: Associated Token program instruction 2 is not simulated";
 		const system = rawRun(SYSTEM_PROGRAM_ID, [9, 0, 0, 0]);
-		assert system.result == ProgramError.invalidInstructionData().code;
+		assert system.result == NOT_SIMULATED;
 		assert system.fault == "sol_invoke_signed: System program instruction 9 is not simulated";
 	}
 
@@ -2827,13 +2820,21 @@ when (testBuild) {
 		for (let index = 0; index < 8; index++) { bytes[offset + index] = value; }
 	}
 
-	function refusedWith(outcome: HostRun, error: ProgramError, fault: string): boolean {
-		if (outcome.result != error.code) { return false; }
-		return fault == "" ? outcome.fault == "" : outcome.fault.indexOf(fault) >= 0;
+	const FOREIGN_WRITE: string = "ExternalAccountDataModified";
+	const ESCALATED: string = "PrivilegeEscalation";
+
+	function runtimeRefused(outcome: HostRun, runtimeError: string): boolean {
+		return outcome.result == REFUSED && outcome.fault.indexOf(runtimeError) == 0;
 	}
 
-	const FOREIGN_WRITE: string = "ExternalAccountDataModified";
-	const ESCALATED: string = "signer privilege escalated";
+	function notSimulated(outcome: HostRun, what: string): boolean {
+		return outcome.result == NOT_SIMULATED && outcome.fault.indexOf(what) >= 0;
+	}
+
+	function refusedWith(outcome: HostRun, error: ProgramError, runtimeError: string): boolean {
+		if (runtimeError != "") { return runtimeRefused(outcome, runtimeError); }
+		return outcome.result == error.code && outcome.fault == "";
+	}
 
 	test "mintTokens adds the amount to the account and the supply, for the mint authority that signed" {
 		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
@@ -2848,7 +2849,7 @@ when (testBuild) {
 			assert refusedWith(ledgerRun(fixed, 0, 1), ProgramError.custom(5), "");
 			const unsigned = mintingAccounts(program);
 			unsigned[2].signer = false;
-			assert refusedWith(ledgerRun(unsigned, 0, 1), ProgramError.missingRequiredSignature(), ESCALATED);
+			assert runtimeRefused(ledgerRun(unsigned, 0, 1), ESCALATED);
 			assert refusedWith(forwardRun(unsigned, 7, 1), ProgramError.missingRequiredSignature(), "");
 			for (const refused of [stranger, fixed, unsigned]) {
 				assert u64At(refused[1].data, 64) == 0 && u64At(refused[0].data, 36) == 5000;
@@ -2948,7 +2949,7 @@ when (testBuild) {
 			assert refusedWith(ledgerRun(stranger, 2, 1), ProgramError.custom(4), "");
 			const unsigned = movingAccounts(program);
 			unsigned[3].signer = false;
-			assert refusedWith(ledgerRun(unsigned, 2, 1), ProgramError.missingRequiredSignature(), ESCALATED);
+			assert runtimeRefused(ledgerRun(unsigned, 2, 1), ESCALATED);
 			assert refusedWith(forwardRun(checkedOrder(unsigned), 12, 1), ProgramError.missingRequiredSignature(), "");
 			const short = movingAccounts(program);
 			assert refusedWith(ledgerRun(short, 2, 901), ProgramError.custom(1), "");
@@ -3072,7 +3073,7 @@ when (testBuild) {
 		const poor = nativeAccounts(TOKEN_PROGRAM_ID);
 		poor[0].lamports = 100;
 		const unbalanced = ledgerRun(poor, 3, 300);
-		assert unbalanced.result != 0 && unbalanced.fault.indexOf("UnbalancedInstruction") >= 0;
+		assert runtimeRefused(unbalanced, "UnbalancedInstruction");
 		const refused = nativeAccounts(TOKEN_2022_PROGRAM_ID);
 		refused[0].lamports = 100;
 		assert refusedWith(ledgerRun(refused, 3, 300), ProgramError.custom(14), "");
@@ -3181,7 +3182,7 @@ when (testBuild) {
 			assert refusedWith(ledgerRun(delegate, 4, 0), ProgramError.custom(4), "");
 			const unsigned = closingAccounts(program);
 			unsigned[2].signer = false;
-			assert refusedWith(ledgerRun(unsigned, 4, 0), ProgramError.missingRequiredSignature(), ESCALATED);
+			assert runtimeRefused(ledgerRun(unsigned, 4, 0), ESCALATED);
 			assert refusedWith(forwardRun(unsigned, 9, 0), ProgramError.missingRequiredSignature(), "");
 			const blank = closingAccounts(program);
 			blank[0].data[108] = 0;
@@ -3405,7 +3406,7 @@ when (testBuild) {
 			const unsigned = associatedAccounts(program, mintData(7, 500, 6));
 			unsigned[3].signer = false;
 			const escalated = associatedRun(unsigned, 2, 0);
-			assert escalated.result != 0 && escalated.fault.indexOf("PrivilegeEscalation") >= 0;
+			assert runtimeRefused(escalated, ESCALATED);
 			assert untouched(foreignMint) && untouched(blankMint) && untouched(unsigned);
 		}
 	}
@@ -3436,19 +3437,19 @@ when (testBuild) {
 		assert ledgerRun(paused, 3, 1).result == 0;
 		paused[2].data[170 + 32] = 1;
 		const stopped = ledgerRun(paused, 3, 1);
-		assert stopped.result != 0;
+		assert stopped.result == NOT_SIMULATED;
 		assert stopped.fault == "sol_invoke_signed: Token-2022 extension 26 with a setting in force is not simulated";
 		const charged = movingAccounts(TOKEN_2022_PROGRAM_ID);
 		charged[2].data = extendedMint([1]);
 		charged[2].data[170 + 106] = 50;
-		assert ledgerRun(charged, 3, 1).fault.indexOf("extension 1 with a setting in force") >= 0;
+		assert notSimulated(ledgerRun(charged, 3, 1), "extension 1 with a setting in force");
 		const hooked = movingAccounts(TOKEN_2022_PROGRAM_ID);
 		hooked[2].data = extendedMint([14]);
 		hooked[2].data[170 + 32] = 9;
-		assert ledgerRun(hooked, 3, 1).fault.indexOf("extension 14 with a setting in force") >= 0;
+		assert notSimulated(ledgerRun(hooked, 3, 1), "extension 14 with a setting in force");
 		const guarded = extendedSource(11, 1);
 		guarded[0].data[174] = 1;
-		assert ledgerRun(guarded, 3, 1).fault.indexOf("extension 11 with a setting in force") >= 0;
+		assert notSimulated(ledgerRun(guarded, 3, 1), "extension 11 with a setting in force");
 		for (const refused of [charged, hooked, guarded]) { assert unmoved(refused); }
 	}
 }
