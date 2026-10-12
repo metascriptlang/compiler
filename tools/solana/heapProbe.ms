@@ -18,7 +18,7 @@ import {
 	programAddress,
 	programId,
 	putU8,
-	returnData,
+	returnDataFrom,
 	scratch,
 	setReturnData,
 	signed,
@@ -143,11 +143,8 @@ function returnDataLoop(count: uint64): Result<uint64, ProgramError> {
 	for (let index: uint64 = 0; index < count; index++) {
 		const payload: uint8[4] = [1, 2, 3, (index & 0xff) as uint8];
 		setReturnData(payload);
-		const found = returnData();
-		if (found === null) { return Result.err(ProgramError.invalidAccountData()); }
-		if (!found.program.equals(programId()) || found.length != 4) {
-			return Result.err(ProgramError.invalidAccountData());
-		}
+		const found = try returnDataFrom(programId());
+		if (found === null || found.length != 4) { return Result.err(ProgramError.invalidAccountData()); }
 		const word = try found.readU32(0);
 		if (word != (0x00030201 | (((index & 0xff) as uint32) << 24))) {
 			return Result.err(ProgramError.invalidAccountData());
@@ -161,11 +158,8 @@ function fullReturnData(): Result<uint64, ProgramError> {
 	let big: uint8[1024] = [];
 	for (let index = 0; index < 1024; index++) { big[index] = ((index * 7) & 0xff) as uint8; }
 	setReturnData(big);
-	const found = returnData();
-	if (found === null) { return Result.err(ProgramError.invalidAccountData()); }
-	if (found.length != 1024 || !found.program.equals(programId())) {
-		return Result.err(ProgramError.invalidAccountData());
-	}
+	const found = try returnDataFrom(programId());
+	if (found === null || found.length != 1024) { return Result.err(ProgramError.invalidAccountData()); }
 	for (let index = 0; index < 1024; index++) {
 		const byte = try found.readU8(index as uint64);
 		if (byte != big[index]) { return Result.err(ProgramError.invalidAccountData()); }

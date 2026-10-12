@@ -576,6 +576,14 @@ export function returnData(): ReturnData | null {
 	return found;
 }
 
+export function returnDataFrom(program: Pubkey): Result<ReturnData | null, ProgramError> {
+	const found = returnData();
+	if (found !== null && !found.program.equals(program)) {
+		return Result.err(ProgramError.incorrectProgramId());
+	}
+	return Result.ok(found);
+}
+
 function returnDataAddress(
 	found: ReturnData,
 	offset: uint64,

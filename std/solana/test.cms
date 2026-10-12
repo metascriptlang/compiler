@@ -63,6 +63,8 @@ import {
 	logPubkey,
 	clock,
 	returnData,
+	returnDataFrom,
+	SYSTEM_PROGRAM_ID,
 	setReturnData,
 	programId,
 	ProgramAddress,
@@ -1540,6 +1542,60 @@ test "returnData reads back the program, the length and every byte, up to the 1,
 	assert run(programKey(), none, [], returnDataEntry).result == 0;
 	assert run(programKey(), none, [], fullReturnDataEntry).result == 0;
 	assert run(programKey(), none, [], noReturnDataEntry).result == 0;
+}
+
+function returnDataFromStep(): Result<uint64, ProgramError> {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const found = try returnDataFrom(programId());
+	if (found === null) { return Result.err(ProgramError.custom(1)); }
+	if (found.length != 3 || (try found.readU8(2)) != 9) { return Result.err(ProgramError.custom(2)); }
+	return Result.ok(0);
+}
+
+function returnDataFromOtherStep(): Result<uint64, ProgramError> {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const found = try returnDataFrom(keyOf(42));
+	return Result.err(ProgramError.custom(found === null ? 3 : 4));
+}
+
+function returnDataFromNoneStep(): Result<uint64, ProgramError> {
+	const found = try returnDataFrom(programId());
+	return found === null ? Result.ok(0) : Result.err(ProgramError.custom(5));
+}
+
+function returnDataFromInvokedStep(): Result<uint64, ProgramError> {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const _paid = try transferLamports(try writableSigner(0), try writable(1), 300);
+	if ((try returnDataFrom(SYSTEM_PROGRAM_ID)) !== null) { return Result.err(ProgramError.custom(6)); }
+	if ((try returnDataFrom(programId())) !== null) { return Result.err(ProgramError.custom(7)); }
+	return Result.ok(0);
+}
+
+function returnDataFromEntry(): void { codeOf(returnDataFromStep()); }
+function returnDataFromOtherEntry(): void { codeOf(returnDataFromOtherStep()); }
+function returnDataFromNoneEntry(): void { codeOf(returnDataFromNoneStep()); }
+function returnDataFromInvokedEntry(): void { codeOf(returnDataFromInvokedStep()); }
+
+test "returnDataFrom yields the data the named program set" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataFromEntry).result == 0;
+}
+
+test "returnDataFrom refuses data another program set" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataFromOtherEntry).result == ProgramError.incorrectProgramId().code;
+}
+
+test "returnDataFrom is null when no return data is set" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataFromNoneEntry).result == 0;
+}
+
+test "returnDataFrom is null after an invocation that set none, whatever was set before it" {
+	assert run(programKey(), [wallet(1, 1000), wallet(2, 5)], [], returnDataFromInvokedEntry).result == 0;
 }
 
 test "clock reads every field the runtime wrote" {
