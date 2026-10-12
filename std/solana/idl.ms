@@ -355,11 +355,23 @@ export macro anchorIdl(spec: Node): Node {
 	json = json + "],\"errors\":[";
 	if (errorEnum != "") {
 		const errors = getImpl(bindSym(errorEnum))!;
-		let r = 0;
-		while (r < errors.enumMembers.length) {
-			json = json + (r > 0 ? "," : "") + "{\"code\":" + (6000 + r) + ",\"name\":\"" +
-				errors.enumMembers[r] + "\",\"msg\":\"" + errors.enumMembers[r] + "\"}";
-			r = r + 1;
+		for (let r = 0; r < errors.enumMembers.length; r++) {
+			const member = errors.enumMembers[r];
+			const value = errors.enumValues[r] as int64;
+			if (value < 0) {
+				error("anchorIdl: error '" + member + "' of '" + errorEnum + "' has the value " + String(value) +
+					", and the values of an error enum are zero or more: the program returns the code 6000 plus " +
+					"the value, and a code below 6000 is one of the framework's", spec);
+			}
+			for (let earlier = 0; earlier < r; earlier++) {
+				if ((errors.enumValues[earlier] as int64) == value) {
+					error("anchorIdl: errors '" + errors.enumMembers[earlier] + "' and '" + member + "' of '" +
+						errorEnum + "' have the same value " + String(value) + ", so the program returns the code " +
+						String(6000 + value) + " for both and a client cannot tell them apart", spec);
+				}
+			}
+			json = json + (r > 0 ? "," : "") + "{\"code\":" + String(6000 + value) + ",\"name\":\"" +
+				member + "\",\"msg\":\"" + member + "\"}";
 		}
 	}
 	json = json + "],\"types\":[";

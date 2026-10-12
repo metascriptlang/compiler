@@ -511,6 +511,117 @@ test "each discriminator the IDL lists for an enum whose values run against the 
 	}
 }
 
+export enum FailingOp { Fail }
+export enum ContiguousFailure { First, Second, Third }
+export enum SparseFailure { Low = 5, High = 9, Next, None = 0 }
+export enum ReversedFailure { Last = 2, Middle = 1, First = 0 }
+export enum OffsetFailure { Start = 3, Then, After }
+export enum FoldedFailure { Shifted = 1 << 2, Next, Summed = Shifted + 10, Top = 2147483647 }
+
+converter contiguousFailure(error: ContiguousFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter sparseFailure(error: SparseFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter reversedFailure(error: ReversedFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter offsetFailure(error: OffsetFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter foldedFailure(error: FoldedFailure): ProgramError { return ProgramError.userError(error as uint32); }
+
+let raisedContiguous = ContiguousFailure.First;
+let raisedSparse = SparseFailure.Low;
+let raisedReversed = ReversedFailure.Last;
+let raisedOffset = OffsetFailure.Start;
+let raisedFolded = FoldedFailure.Shifted;
+
+function raiseContiguous(): Result<uint64, ContiguousFailure> { return Result.err(raisedContiguous); }
+function raiseSparse(): Result<uint64, SparseFailure> { return Result.err(raisedSparse); }
+function raiseReversed(): Result<uint64, ReversedFailure> { return Result.err(raisedReversed); }
+function raiseOffset(): Result<uint64, OffsetFailure> { return Result.err(raisedOffset); }
+function raiseFolded(): Result<uint64, FoldedFailure> { return Result.err(raisedFolded); }
+
+function contiguousFailureStep(): Result<uint64, ProgramError> { const value = try raiseContiguous(); return Result.ok(value); }
+function sparseFailureStep(): Result<uint64, ProgramError> { const value = try raiseSparse(); return Result.ok(value); }
+function reversedFailureStep(): Result<uint64, ProgramError> { const value = try raiseReversed(); return Result.ok(value); }
+function offsetFailureStep(): Result<uint64, ProgramError> { const value = try raiseOffset(); return Result.ok(value); }
+function foldedFailureStep(): Result<uint64, ProgramError> { const value = try raiseFolded(); return Result.ok(value); }
+
+function contiguousFailureEntry(): void { codeOf(contiguousFailureStep()); }
+function sparseFailureEntry(): void { codeOf(sparseFailureStep()); }
+function reversedFailureEntry(): void { codeOf(reversedFailureStep()); }
+function offsetFailureEntry(): void { codeOf(offsetFailureStep()); }
+function foldedFailureEntry(): void { codeOf(foldedFailureStep()); }
+
+function returnedBy(entry: () => void): uint64 {
+	const none: HostAccount[] = [];
+	return run(programKey(), none, [], entry).result;
+}
+
+function listedFor(idl: string, name: string): uint64 {
+	const parsed = JSON.parseValue(idl);
+	if (!parsed.ok) { return 0; }
+	const errors = parsed.value.errors;
+	for (let i = 0; i < errors.length(); i++) {
+		if (errors.at(i).name.asString() == name) { return ProgramError.custom(errors.at(i).code.asInt64() as uint32).code; }
+	}
+	return 0;
+}
+
+test "the IDL lists for each member of an error enum without explicit values the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "contiguous", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: ContiguousFailure });
+	raisedContiguous = ContiguousFailure.First;
+	assert returnedBy(contiguousFailureEntry) == listedFor(idl, "First");
+	raisedContiguous = ContiguousFailure.Second;
+	assert returnedBy(contiguousFailureEntry) == listedFor(idl, "Second");
+	raisedContiguous = ContiguousFailure.Third;
+	assert returnedBy(contiguousFailureEntry) == listedFor(idl, "Third");
+	assert listedFor(idl, "Third") == ProgramError.custom(6002).code;
+}
+
+test "the IDL lists for each member of an error enum with gaps in its values the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "sparse", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: SparseFailure });
+	raisedSparse = SparseFailure.Low;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "Low");
+	raisedSparse = SparseFailure.High;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "High");
+	raisedSparse = SparseFailure.Next;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "Next");
+	raisedSparse = SparseFailure.None;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "None");
+	assert listedFor(idl, "High") == ProgramError.custom(6009).code;
+}
+
+test "the IDL lists for each member of an error enum whose values run against the declaration order the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "reversed", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: ReversedFailure });
+	raisedReversed = ReversedFailure.Last;
+	assert returnedBy(reversedFailureEntry) == listedFor(idl, "Last");
+	raisedReversed = ReversedFailure.Middle;
+	assert returnedBy(reversedFailureEntry) == listedFor(idl, "Middle");
+	raisedReversed = ReversedFailure.First;
+	assert returnedBy(reversedFailureEntry) == listedFor(idl, "First");
+	assert listedFor(idl, "Last") == ProgramError.custom(6002).code;
+}
+
+test "the IDL lists for each member of an error enum that starts above zero the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "offset", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: OffsetFailure });
+	raisedOffset = OffsetFailure.Start;
+	assert returnedBy(offsetFailureEntry) == listedFor(idl, "Start");
+	raisedOffset = OffsetFailure.Then;
+	assert returnedBy(offsetFailureEntry) == listedFor(idl, "Then");
+	raisedOffset = OffsetFailure.After;
+	assert returnedBy(offsetFailureEntry) == listedFor(idl, "After");
+	assert listedFor(idl, "Start") == ProgramError.custom(6003).code;
+}
+
+test "the IDL lists for each member of an error enum with computed values, up to the largest, the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "folded", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: FoldedFailure });
+	raisedFolded = FoldedFailure.Shifted;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Shifted");
+	raisedFolded = FoldedFailure.Next;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Next");
+	raisedFolded = FoldedFailure.Summed;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Summed");
+	raisedFolded = FoldedFailure.Top;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Top");
+	assert listedFor(idl, "Top") == ProgramError.custom(2147489647).code;
+}
+
 let wrappedByte: uint8 = 0;
 let wrappedWord: uint16 = 0;
 let wrappedWide: uint64 = 0;
