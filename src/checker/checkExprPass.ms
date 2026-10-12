@@ -3445,13 +3445,36 @@ function createSyntheticToken(loc: SourceLocation): Token {
 registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });
 
 
-function structBehindConversion(t: Type | null): Type | null {
+function peelDistinct(t: Type | null): Type | null {
 	let s = skipModifier(t) ?? t;
 	let depth = 0;
 	while (s != null && s.kind == TypeKind.Distinct && s.typeReturn != null && depth < 16) {
 		s = s.typeReturn;
 		depth += 1;
 	}
+	return s;
+}
+
+function isScalarOrSequence(t: Type | null): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Union) {
+		for (const member of t.typeChildren) {
+			if (member.kind != TypeKind.Null && !isScalarOrSequence(peelDistinct(member))) return false;
+		}
+		return true;
+	}
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.String | TypeKind.Boolean | TypeKind.Char | TypeKind.BigInt | TypeKind.Enum
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Float32 | TypeKind.Float64
+			| TypeKind.StringLiteral | TypeKind.EnumLiteral | TypeKind.BooleanLiteral
+			| TypeKind.Array | TypeKind.SizedArray | TypeKind.Tuple => true,
+		_ => false,
+	};
+}
+
+function structBehindConversion(t: Type | null): Type | null {
+	const s = peelDistinct(t);
 	if (s != null && s.kind == TypeKind.GenericInstance && s.typeExtra != null && isValueStructDecl(unwrapRefBase(s.typeExtra))) return s;
 	return s != null && s.kind == TypeKind.Struct ? s : null;
 }
@@ -3477,8 +3500,16 @@ function relatedStructInstances(source: Type, target: Type): boolean {
 function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
 	if (operand.kind == NodeKind.ObjectLiteral) return false;
 	const target = structBehindConversion(targetType);
-	const source = structBehindConversion((srcType.kind == TypeKind.Ref || isMaybeType(srcType)) && srcType.typeReturn != null ? srcType.typeReturn : srcType);
-	if (target == null || source == null) return false;
+	const operandBody = (srcType.kind == TypeKind.Ref || isMaybeType(srcType)) && srcType.typeReturn != null ? srcType.typeReturn : srcType;
+	const source = structBehindConversion(operandBody);
+	if (target == null) return false;
+	if (source == null) {
+		const scalar = peelDistinct(operandBody);
+		if (!isScalarOrSequence(scalar) || !(isStructInstance(target) || isValueStructDecl(target))) return false;
+		addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": only a struct, a distinct of it, or a struct it extends converts to a struct"
+			+ structConversionHelp(ctx, scalar as Type, target), line, column);
+		return true;
+	}
 	if (isStructInstance(source) || isStructInstance(target)) {
 		if (relatedStructInstances(source, target)) return false;
 	} else {

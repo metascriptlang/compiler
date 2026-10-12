@@ -108,6 +108,29 @@ test "fieldVisibility: as converts a struct only to itself, a distinct of it or 
 	assert errorsOf(lib, pre + "const b = d as P;\nconst t = p as T;\nconst back = t as P;\nconst lit = { x: 9 } as P;\nconst raw = { x: 5 };\nconst adopted = raw as P;\nconsole.log(b.x, back.x, lit.x, adopted.x);\n").length == 0;
 }
 
+test "fieldVisibility: as builds a struct from no scalar, string, enum, array, tuple or union of them" {
+	const lib = "export struct P { x: int32; }\nexport struct Box<T> { x: int32; }\nexport struct Proof { private n: int32; }\nexport type D = distinct P;\nexport enum Color { Red, Green }\n";
+	const pre = "import { P, Box, Proof, D, Color } from \"./lib\";\nconst n: int32 = 5;\nconst s = \"a\";\n";
+	const refusal = ": only a struct, a distinct of it, or a struct it extends converts to a struct";
+	assert reports(lib, pre + "const q = (0 as uint64) as Proof;\n", "cannot convert uint64 to Proof" + refusal);
+	assert reports(lib, pre + "const q = (0 as uint64) as Proof;\n", "Proof has private fields, so only the module that declares it builds one");
+	assert reports(lib, pre + "const q = n as P;\n", "cannot convert int32 to P" + refusal);
+	assert reports(lib, pre + "const q = true as P;\n", "cannot convert boolean to P" + refusal);
+	assert reports(lib, pre + "const q = s as P;\n", "cannot convert string to P" + refusal);
+	assert reports(lib, pre + "const q = Color.Red as P;\n", "cannot convert Color to P" + refusal);
+	assert reports(lib, pre + "const q = n as Box<int32>;\n", "cannot convert int32 to Box<int32>" + refusal);
+	assert reports(lib, pre + "const q = n as D;\n", "cannot convert int32 to D" + refusal);
+	assert reports(lib, pre + "const q = [1, 2] as P;\n", "cannot convert int32[] to P" + refusal);
+	assert reports(lib, pre + "function pick(b: boolean): int32 | string { return b ? 1 : \"s\"; }\nconst q = pick(true) as P;\n", "cannot convert int32 | string to P" + refusal);
+	assert reports(lib, pre + "function forge<V>(v: V): P { return v as P; }\nconsole.log(forge<int32>(1).x);\n", "cannot convert int32 to P" + refusal);
+}
+
+test "fieldVisibility: as still takes a struct, a union holding one, or an object literal to a struct" {
+	const lib = "export struct P { x: int32; }\nexport struct Proof { private n: int32; }\nexport type D = distinct P;\n";
+	const pre = "import { P, Proof, D } from \"./lib\";\nconst p: P = { x: 1 };\nfunction pick(b: boolean): P | int32 { return b ? p : 2; }\n";
+	assert errorsOf(lib, pre + "const a = p as P;\nconst b = p as D;\nconst c = pick(true) as P;\nconst d = { x: 7 } as P;\nconsole.log(a.x, c.x, d.x);\n").length == 0;
+}
+
 test "fieldVisibility: as takes a nullable struct to its payload and still refuses an unrelated one" {
 	const lib = "export struct P { x: int32; }\nexport struct Q { x: int32; }\n";
 	const pre = "import { P, Q } from \"./lib\";\nconst m = new Map<string, P>();\nm.set(\"a\", { x: 3 });\nfunction first(n: P | null): P { return n as P; }\nclass Store<K> { cells: Map<K, P> = new Map<K, P>(); at(k: K): P { return this.cells.get(k) as P; } }\n";
