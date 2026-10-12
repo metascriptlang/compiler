@@ -672,6 +672,98 @@ for (const features of ["all features", "mainnet"]) {
 			steps(step.call(0, [[1, 3], [2, 1]], transfer(1n))), [t.meta(SYSTEM, false), t.meta(pays, true, true), t.meta(INCINERATOR, true)], OK);
 	});
 
+	await scenario("the program's own writes", features, async (t) => {
+		const SOL = 1_000_000_000n;
+		const own = async (fill = 0) => t.put(await t.fresh(), { data: new Uint8Array(8).fill(fill), owner: program, balance: SOL });
+		const foreign = async () => t.put(await t.fresh(), { data: new Uint8Array(8), owner: other, balance: SOL });
+		const nothing = new Uint8Array([OP.nothing]);
+		const OWN = 1, WALLET = 2, OWN_READ_ONLY = 3, FOREIGN = 4, FOREIGN_READ_ONLY = 5, OWN_SET = 6, PROGRAM = 7, CALLEE = 0;
+		const AFTER = 5;
+		const AT_ITS_END = "UnbalancedInstruction by the transaction";
+		const does = async (what, sent, expected) => {
+			const passed = [
+				t.meta(other, false), t.meta(await own(), true), t.meta(t.put(await t.fresh(), { balance: SOL }), true),
+				t.meta(await own(), false), t.meta(await foreign(), true), t.meta(await foreign(), false), t.meta(await own(7), true),
+				t.meta(program, false),
+			];
+			const outcome = await t.send(what, sent, passed, expected === OK || expected === AT_ITS_END ? expected : byProbe(expected));
+			if (expected !== OK) t.check("nothing after the refused step ran", !outcome.values.includes(BigInt(AFTER)));
+			return outcome;
+		};
+		const moves = (from, to, ...more) => steps(step.subtract(from, 5), step.add(to, 5), ...more);
+		const call = (metas, options) => step.call(CALLEE, metas, nothing, options);
+
+		await does("a lamport added to its account", steps(step.add(OWN, 1)), AT_ITS_END);
+		await does("a lamport taken out of its account", steps(step.subtract(OWN, 1)), AT_ITS_END);
+		await does("lamports moved from its account to a wallet", moves(OWN, WALLET), OK);
+		await does("lamports moved from its account to an account another program owns", moves(OWN, FOREIGN), OK);
+		await does("lamports moved from a wallet to its account", moves(WALLET, OWN), "ExternalAccountLamportSpend");
+		await does("lamports moved from its account to a read-only account", moves(OWN, FOREIGN_READ_ONLY), "ReadonlyLamportChange");
+		await does("lamports moved from its read-only account", moves(OWN_READ_ONLY, OWN), "ReadonlyLamportChange");
+		await does("lamports moved from a read-only account another program owns", moves(FOREIGN_READ_ONLY, OWN), "ExternalAccountLamportSpend");
+		await does("lamports moved to the executable account of the callee", moves(OWN, CALLEE), "ReadonlyLamportChange");
+		await does("a byte written in its account", steps(step.write(OWN, 0, 9)), OK);
+		await does("a byte written in an account another program owns", steps(step.write(FOREIGN, 0, 9)), "ExternalAccountDataModified");
+		await does("a byte written with the value it had in an account another program owns", steps(step.write(FOREIGN, 0, 0)), OK);
+		await does("a byte written in its read-only account", steps(step.write(OWN_READ_ONLY, 0, 9)), "ReadonlyDataModified");
+		await does("a byte written in a read-only account another program owns", steps(step.write(FOREIGN_READ_ONLY, 0, 9)), "ReadonlyDataModified");
+		await does("its account of zero bytes given to another program", steps(step.assign(OWN, CALLEE)), OK);
+		await does("its account given to the owner it has", steps(step.assign(OWN_SET, PROGRAM)), OK);
+		await does("its account of bytes that are not zero given to another program", steps(step.assign(OWN_SET, CALLEE)), "ModifiedProgramId");
+		await does("its account given away after a byte is written", steps(step.write(OWN, 0, 9), step.assign(OWN, CALLEE)), "ModifiedProgramId");
+		await does("its read-only account given to another program", steps(step.assign(OWN_READ_ONLY, CALLEE)), "ModifiedProgramId");
+		await does("an account another program owns taken for itself", steps(step.assign(FOREIGN, PROGRAM)), "ModifiedProgramId");
+		await does("a wallet taken for itself", steps(step.assign(WALLET, PROGRAM)), "ModifiedProgramId");
+		await does("its account grown", steps(step.resize(OWN, 16)), OK);
+		await does("its account emptied of data", steps(step.resize(OWN, 0)), OK);
+		await does("an account another program owns grown", steps(step.resize(FOREIGN, 16)), "ExternalAccountDataModified");
+		await does("an account another program owns shrunk", steps(step.resize(FOREIGN, 4)), "ExternalAccountDataModified");
+		await does("a wallet grown", steps(step.resize(WALLET, 8)), "ExternalAccountDataModified");
+		await does("its read-only account grown", steps(step.resize(OWN_READ_ONLY, 16)), "ReadonlyDataModified");
+		await does("lamports spent and a byte written in an account another program owns",
+			steps(step.write(FOREIGN, 0, 9), step.subtract(FOREIGN, 5), step.add(OWN, 5)), "ExternalAccountLamportSpend");
+		await does("a byte written in an account another program owns and the account taken",
+			steps(step.assign(FOREIGN, PROGRAM), step.write(FOREIGN, 0, 9)), "ExternalAccountDataModified");
+		await does("an account another program owns grown and a byte written",
+			steps(step.write(FOREIGN, 0, 9), step.resize(FOREIGN, 16)), "ExternalAccountDataModified");
+		await does("a lamport added to its account and a byte written in an account another program owns",
+			steps(step.add(OWN, 1), step.write(FOREIGN, 0, 9)), "ExternalAccountDataModified");
+
+		const W = WRITABLE;
+		await does("lamports moved, then a call that receives both accounts", moves(OWN, WALLET, call([[OWN, W], [WALLET, W]])), OK);
+		await does("lamports moved, then a call that receives both accounts read-only", moves(OWN, WALLET, call([[OWN, 0], [WALLET, 0]])), OK);
+		await does("lamports moved, then a call that receives neither account", moves(OWN, WALLET, call([])), OK);
+		await does("lamports moved, then a call that receives only the account they left",
+			moves(OWN, WALLET, call([[OWN, W]], { carryOn: true }), step.log(AFTER)), "UnbalancedInstruction");
+		await does("lamports moved, then a call that receives only the account they reached, read-only",
+			moves(OWN, WALLET, call([[WALLET, 0]], { carryOn: true }), step.log(AFTER)), "UnbalancedInstruction");
+		await does("a lamport added, a call that does not receive the account, the lamport taken back",
+			steps(step.add(OWN, 1), call([]), step.subtract(OWN, 1)), OK);
+		await does("a lamport added, a call that receives the account, the lamport taken back",
+			steps(step.add(OWN, 1), call([[OWN, W]], { carryOn: true }), step.subtract(OWN, 1), step.log(AFTER)), "UnbalancedInstruction");
+		await does("lamports moved out of a wallet, then a call that receives the wallet",
+			moves(WALLET, OWN, call([[WALLET, W]], { carryOn: true }), step.log(AFTER)), "ExternalAccountLamportSpend");
+		await does("lamports moved to a read-only account, then a call that receives both accounts",
+			moves(OWN, FOREIGN_READ_ONLY, call([[OWN, W], [FOREIGN_READ_ONLY, 0]], { carryOn: true }), step.log(AFTER)), "ReadonlyLamportChange");
+		await does("lamports taken out of a wallet, a call that does not receive it, the lamports put back",
+			steps(step.subtract(WALLET, 5), call([]), step.add(WALLET, 5)), OK);
+		await does("a byte written in an account another program owns, then a call that receives it read-only",
+			steps(step.write(FOREIGN, 0, 9), call([[FOREIGN, 0]], { carryOn: true }), step.log(AFTER)), "ExternalAccountDataModified");
+		await does("a byte written in an account another program owns, a call that does not receive it, the byte restored",
+			steps(step.write(FOREIGN, 0, 9), call([[OWN, W]]), step.write(FOREIGN, 0, 0)), OK);
+		await does("a byte written in its read-only account, then a call that receives it",
+			steps(step.write(OWN_READ_ONLY, 0, 9), call([[OWN_READ_ONLY, 0]], { carryOn: true }), step.log(AFTER)), "ReadonlyDataModified");
+		await does("an account another program owns taken, then a call that receives it",
+			steps(step.assign(FOREIGN, PROGRAM), call([[FOREIGN, 0]], { carryOn: true }), step.log(AFTER)), "ModifiedProgramId");
+		await does("an account another program owns grown, then a call that receives it",
+			steps(step.resize(FOREIGN, 16), call([[FOREIGN, 0]], { carryOn: true }), step.log(AFTER)), "ExternalAccountDataModified");
+		await does("a byte written in an account another program owns, then a call that marks it a signer",
+			steps(step.write(FOREIGN, 0, 9), call([[FOREIGN, SIGNER]], { carryOn: true }), step.log(AFTER)), "PrivilegeEscalation");
+		await does("its account given away, a call that receives it, then a byte written in it",
+			steps(step.assign(OWN, CALLEE), call([[OWN, W]]), step.write(OWN, 0, 9)), "ExternalAccountDataModified");
+		await does("its account given away, a call that does not receive it, then a byte written in it",
+			steps(step.assign(OWN, CALLEE), call([]), step.write(OWN, 0, 9)), "ModifiedProgramId");
+	});
 }
 
 if (failures > 0) {

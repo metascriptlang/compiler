@@ -34,8 +34,13 @@ typedef struct {
 
 typedef struct {
     uint8_t* record;
+    uint64_t index;
+    uint64_t startLamports;
+    uint64_t startLength;
     uint64_t lamports;
     uint64_t length;
+    uint8_t owner[32];
+    uint8_t* data;
 } msSolHostHeld;
 
 static _Alignas(16) uint8_t msSolHostHeap[MS_SOL_HOST_HEAP_SIZE];
@@ -56,8 +61,9 @@ static uint8_t msSolHostReturnData[MS_SOL_MAX_RETURN_DATA];
 static uint64_t msSolHostReturnLength;
 static uint8_t msSolHostReturnProgram[32];
 static uint64_t msSolHostClock[5];
-static msSolHostHeld msSolHostStart[MS_SOL_MAX_ACCOUNTS];
-static uint64_t msSolHostStartCount;
+static msSolHostHeld msSolHostHolds[MS_SOL_MAX_ACCOUNTS];
+static uint64_t msSolHostHoldCount;
+static void msSolHostHoldAccounts(void);
 
 msSolanaContext* msSolHostContext(void) {
     if (msSolHostState.input == 0) {
@@ -107,6 +113,8 @@ static void msSolHostForget(void) {
     free(msSolHostInvocations);
     msSolHostInvocations = NULL;
     msSolHostInvocationCount = 0;
+    for (uint64_t index = 0; index < msSolHostHoldCount; index++) free(msSolHostHolds[index].data);
+    msSolHostHoldCount = 0;
 }
 
 void msSolHostEnter(uint64_t input) {
@@ -116,17 +124,7 @@ void msSolHostEnter(uint64_t input) {
     msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
     msSolParse(msSolHostAccounts);
-    msSolHostStartCount = 0;
-    for (uint64_t index = 0; index < msSolHostState.accountCount; index++) {
-        uint8_t* record = (uint8_t*)msSolHostAccounts[index];
-        uint64_t earlier = 0;
-        while (earlier < index && (uint8_t*)msSolHostAccounts[earlier] != record) earlier++;
-        if (earlier < index) continue;
-        uint64_t lamports, length;
-        memcpy(&lamports, record + 72, 8);
-        memcpy(&length, record + 80, 8);
-        msSolHostStart[msSolHostStartCount++] = (msSolHostHeld){record, lamports, length};
-    }
+    msSolHostHoldAccounts();
     msSolHostRentReadCount = 0;
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
@@ -1409,6 +1407,79 @@ static uint64_t msSolHostSystem(const uint64_t* header) {
     }
 }
 
+static void msSolHostAdopt(msSolHostHeld* held) {
+    const uint8_t* record = held->record;
+    held->lamports = msSolHostLamports(record);
+    held->length = msSolHostLoadU64(record + 80);
+    memcpy(held->owner, record + 40, 32);
+    held->data = (uint8_t*)realloc(held->data, (size_t)held->length + 1);
+    if (held->data == NULL) abort();
+    memcpy(held->data, record + 88, (size_t)held->length);
+}
+
+static void msSolHostHoldAccounts(void) {
+    for (uint64_t index = 0; index < msSolHostState.accountCount; index++) {
+        uint8_t* record = (uint8_t*)msSolHostAccounts[index];
+        uint64_t earlier = 0;
+        while (earlier < index && (uint8_t*)msSolHostAccounts[earlier] != record) earlier++;
+        if (earlier < index) continue;
+        msSolHostHeld* held = &msSolHostHolds[msSolHostHoldCount++];
+        *held = (msSolHostHeld){.record = record, .index = index};
+        msSolHostAdopt(held);
+        held->startLamports = held->lamports;
+        held->startLength = held->length;
+    }
+}
+
+static msSolHostHeld* msSolHostHeldAt(const uint8_t* record) {
+    for (uint64_t index = 0; index < msSolHostHoldCount; index++) {
+        if (msSolHostHolds[index].record == record) return &msSolHostHolds[index];
+    }
+    return NULL;
+}
+
+static int msSolHostTakes(msSolHostHeld* held) {
+    const uint8_t* record = held->record;
+    const int writable = record[2] != 0;
+    const int owned = memcmp(held->owner, (const void*)msSolHostContext()->programId, 32) == 0;
+    const uint64_t lamports = msSolHostLamports(record);
+    const uint64_t length = msSolHostLoadU64(record + 80);
+    const char* refusal = NULL;
+    if (lamports < held->lamports && !owned) {
+        refusal = "ExternalAccountLamportSpend: the program spent lamports of an account it does not own";
+    } else if (lamports != held->lamports && !writable) {
+        refusal = "ReadonlyLamportChange: the program changed the lamports of an account the instruction does not pass writable";
+    } else if (length != held->length || memcmp(record + 88, held->data, (size_t)length) != 0) {
+        if (!writable) refusal = "ReadonlyDataModified: the program changed the data of an account the instruction does not pass writable";
+        else if (!owned) refusal = "ExternalAccountDataModified: the program changed the data of an account it does not own";
+    }
+    if (refusal == NULL && memcmp(record + 40, held->owner, 32) != 0
+        && (!owned || !writable || msSolHostAnyByte(record + 88, 0, length))) {
+        refusal = "ModifiedProgramId: the program may give away only a writable account it owns whose bytes are all zero";
+    }
+    if (refusal == NULL) {
+        msSolHostAdopt(held);
+        return 1;
+    }
+    char text[sizeof(msSolHostFaultText)];
+    snprintf(text, sizeof(text), "%s (account %llu)", refusal, (unsigned long long)held->index);
+    msSolHostFault(MS_SOL_HOST_REFUSED, text);
+    return 0;
+}
+
+static int msSolHostBalanced(void) {
+    unsigned __int128 before = 0;
+    unsigned __int128 now = 0;
+    for (uint64_t index = 0; index < msSolHostHoldCount; index++) {
+        before += msSolHostHolds[index].startLamports;
+        now += msSolHostHolds[index].lamports;
+    }
+    if (before == now) return 1;
+    msSolHostFault(MS_SOL_HOST_REFUSED,
+        "UnbalancedInstruction: the lamports of the instruction's accounts do not sum to what they summed to before it");
+    return 0;
+}
+
 static uint64_t msSolHostSignersRefused(uint64_t signers, uint64_t signerCount, uint64_t* recordedBytes) {
     const uint64_t programId = msSolHostContext()->programId;
     *recordedBytes = 0;
@@ -1491,6 +1562,11 @@ static uint64_t msSolHostInvoked(const uint64_t* header, uint64_t signers, uint6
     if (msSolHostExecutes((const uint8_t*)header[0]) && !msSolHostPrivilegesHeld(header, signers, signerCount)) {
         return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
     }
+    for (uint64_t index = 0; index < header[2]; index++) {
+        msSolHostHeld* held = msSolHostHeldAt(msSolHostRecordOf(header, index));
+        if (held != NULL && !msSolHostTakes(held)) return MS_SOL_HOST_REFUSED;
+    }
+    if (!msSolHostBalanced()) return MS_SOL_HOST_REFUSED;
     msSolHostInvocation* grown = (msSolHostInvocation*)realloc(msSolHostInvocations,
         (size_t)(msSolHostInvocationCount + 1) * sizeof(msSolHostInvocation));
     if (grown == NULL) abort();
@@ -1515,12 +1591,16 @@ static uint64_t msSolHostInvoked(const uint64_t* header, uint64_t signers, uint6
     if (record->signerSeeds == NULL) abort();
     msSolHostRecordSigners(record->signerSeeds, signers, signerCount);
     msSolHostReturnLength = 0;
-    static const uint8_t systemProgram[32] = {0};
     const uint8_t* callee = (const uint8_t*)header[0];
-    if (memcmp(callee, systemProgram, 32) == 0) return msSolHostSystem(header);
-    if (msSolHostIsTokenProgram(callee)) return msSolHostToken(header);
-    if (memcmp(callee, msSolHostAssociatedProgram, 32) == 0) return msSolHostAssociated(header);
-    return 0;
+    uint64_t status = 0;
+    if (memcmp(callee, msSolHostSystemProgram, 32) == 0) status = msSolHostSystem(header);
+    else if (msSolHostIsTokenProgram(callee)) status = msSolHostToken(header);
+    else if (memcmp(callee, msSolHostAssociatedProgram, 32) == 0) status = msSolHostAssociated(header);
+    for (uint64_t index = 0; status == 0 && index < header[2]; index++) {
+        msSolHostHeld* held = msSolHostHeldAt(msSolHostRecordOf(header, index));
+        if (held != NULL) msSolHostAdopt(held);
+    }
+    return status;
 }
 
 uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount) {
@@ -1538,24 +1618,27 @@ static int msSolHostPaysRent(uint64_t lamports, uint64_t length) {
 
 void msSolHostLeave(void) {
     if (msSolHostFaultCode != 0 || msSolHostState.result != 0) return;
-    for (uint64_t index = 0; index < msSolHostStartCount; index++) {
-        const msSolHostHeld* start = &msSolHostStart[index];
-        uint8_t* record = start->record;
+    for (uint64_t index = 0; index < msSolHostHoldCount; index++) {
+        if (!msSolHostTakes(&msSolHostHolds[index])) return;
+    }
+    if (!msSolHostBalanced()) return;
+    for (uint64_t index = 0; index < msSolHostHoldCount; index++) {
+        const msSolHostHeld* held = &msSolHostHolds[index];
+        uint8_t* record = held->record;
         if (record[2] == 0 || memcmp(record + 8, msSolHostIncinerator, 32) == 0) continue;
-        uint64_t lamports = msSolHostLamports(record);
-        uint64_t length = msSolHostLoadU64(record + 80);
-        if (lamports == 0) {
+        if (held->lamports == 0) {
             msSolHostStoreU64(record + 80, 0);
             memset(record + 40, 0, 32);
             continue;
         }
-        if (!msSolHostPaysRent(lamports, length)) continue;
-        if (msSolHostPaysRent(start->lamports, start->length) && length == start->length && lamports <= start->lamports) continue;
+        if (!msSolHostPaysRent(held->lamports, held->length)) continue;
+        if (msSolHostPaysRent(held->startLamports, held->startLength) && held->length == held->startLength
+            && held->lamports <= held->startLamports) continue;
         char text[sizeof(msSolHostFaultText)];
         snprintf(text, sizeof(text),
             "InsufficientFundsForRent: account %llu ends the transaction with %llu lamports, its %llu bytes are rent exempt from %llu",
-            (unsigned long long)index, (unsigned long long)lamports, (unsigned long long)length,
-            (unsigned long long)msSolHostRentExempt(length));
+            (unsigned long long)held->index, (unsigned long long)held->lamports, (unsigned long long)held->length,
+            (unsigned long long)msSolHostRentExempt(held->length));
         msSolHostFault(MS_SOL_HOST_REFUSED, text);
         return;
     }

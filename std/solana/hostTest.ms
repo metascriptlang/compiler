@@ -613,11 +613,14 @@ test "a run that fails leaves every account as it was before the run" {
 	assert answers(created, ProgramError.custom(7)) && untouched(created);
 	const closed = after([subtracted(2, SOL), added(3, SOL), resized(2, 0), [ASSIGN, 2, 0], fails]);
 	assert answers(closed, ProgramError.custom(7)) && untouched(closed);
-	const above = called(0, [[1, WRITABLE + SIGNER], [3, WRITABLE]], transferOf(2 * SOL));
+	const above = called(0, [[1, WRITABLE + SIGNER], [3, WRITABLE], [2, WRITABLE]], transferOf(2 * SOL));
 	const refused = after([changes[0], changes[1], changes[2], changes[3], create, above]);
 	assert tooFewLamports(refused) && untouched(refused);
 	const faulted = after([changes[0], changes[1], changes[2], changes[3], create, called(0, [], [4, 0, 0, 0])]);
 	assert notSimulated(faulted, "System program instruction 4 is not simulated") && untouched(faulted);
+	const pays = called(0, [[1, WRITABLE + SIGNER], [3, WRITABLE]], transferOf(5));
+	const unbalanced = after([pays, added(2, 1)]);
+	assert refusedAs(unbalanced, "UnbalancedInstruction") && untouched(unbalanced);
 	const kept = after([changes[0], changes[1], changes[2], changes[3], create]);
 	assert passes(kept) && kept.accounts[2].lamports == SOL - 5 && kept.accounts[3].lamports == SOL + 5;
 	assert kept.accounts[2].data.length == 16 && kept.accounts[2].data[0] == 9;
@@ -698,4 +701,105 @@ test "lamports the program moves or bytes it adds that leave an account below it
 	assert belowRent(below([subtracted(1, 1), added(2, 1), resized(1, 4)]), 1);
 	const readOnly: HostAccount = { ...owned(1, 0, 1000), writable: false };
 	assert passes(stepped([], [system, readOnly]));
+}
+
+const CALLEE: uint8 = 0;
+const OWN: uint8 = 1;
+const WALLET: uint8 = 2;
+const OWN_READ_ONLY: uint8 = 3;
+const FOREIGN: uint8 = 4;
+const FOREIGN_READ_ONLY: uint8 = 5;
+const OWN_SET: uint8 = 6;
+const PROGRAM: uint8 = 7;
+
+function does(steps: uint8[][]): Outcome {
+	const foreign = holding(keyOf(4), keyOf(8), SOL, zeros(8));
+	const accounts: HostAccount[] = [
+		executable(keyOf(8)),
+		owned(1),
+		{ ...wallet(2), signer: false },
+		{ ...owned(3), writable: false },
+		foreign,
+		{ ...foreign, key: keyOf(5), writable: false },
+		owned(6, 7),
+		executable(programKey()),
+	];
+	return stepped(steps, accounts);
+}
+
+function refuses(steps: uint8[][], runtimeError: string): boolean {
+	return refusedAs(does(steps), runtimeError) && linesStarting("Program log: ") == 0;
+}
+
+function wrote(index: uint8, value: uint8 = 9): uint8[] { return [WRITE, index, 0, value]; }
+
+function gave(index: uint8, to: uint8): uint8[] { return [ASSIGN, index, to]; }
+
+function receiving(metas: uint8[][], step: uint8 = CALL): uint8[] { return called(CALLEE, metas, [0], step); }
+
+test "lamports the program moves are refused at the end of its instruction where the runtime refuses them" {
+	assert refuses([added(OWN, 1)], "UnbalancedInstruction");
+	assert refuses([subtracted(OWN, 1)], "UnbalancedInstruction");
+	const paid = does(moved(OWN, WALLET, 5));
+	assert passes(paid) && paid.accounts[1].lamports == SOL - 5 && paid.accounts[2].lamports == SOL + 5;
+	assert passes(does(moved(OWN, FOREIGN, 5)));
+	assert refuses(moved(WALLET, OWN, 5), "ExternalAccountLamportSpend");
+	assert refuses(moved(OWN, FOREIGN_READ_ONLY, 5), "ReadonlyLamportChange");
+	assert refuses(moved(OWN_READ_ONLY, OWN, 5), "ReadonlyLamportChange");
+	assert refuses(moved(FOREIGN_READ_ONLY, OWN, 5), "ExternalAccountLamportSpend");
+	assert refuses(moved(OWN, CALLEE, 5), "ReadonlyLamportChange");
+}
+
+test "data and owners the program writes are refused at the end of its instruction where the runtime refuses them" {
+	assert passes(does([wrote(OWN)]));
+	assert refuses([wrote(FOREIGN)], "ExternalAccountDataModified");
+	assert passes(does([wrote(FOREIGN, 0)]));
+	assert refuses([wrote(OWN_READ_ONLY)], "ReadonlyDataModified");
+	assert refuses([wrote(FOREIGN_READ_ONLY)], "ReadonlyDataModified");
+	const given = does([gave(OWN, CALLEE)]);
+	assert passes(given) && given.accounts[1].owner.equals(keyOf(8));
+	assert passes(does([gave(OWN_SET, PROGRAM)]));
+	assert refuses([gave(OWN_SET, CALLEE)], "ModifiedProgramId");
+	assert refuses([wrote(OWN), gave(OWN, CALLEE)], "ModifiedProgramId");
+	assert refuses([gave(OWN_READ_ONLY, CALLEE)], "ModifiedProgramId");
+	assert refuses([gave(FOREIGN, PROGRAM)], "ModifiedProgramId");
+	assert refuses([gave(WALLET, PROGRAM)], "ModifiedProgramId");
+	assert passes(does([resized(OWN, 16)]));
+	assert passes(does([resized(OWN, 0)]));
+	assert refuses([resized(FOREIGN, 16)], "ExternalAccountDataModified");
+	assert refuses([resized(FOREIGN, 4)], "ExternalAccountDataModified");
+	assert refuses([resized(WALLET, 8)], "ExternalAccountDataModified");
+	assert refuses([resized(OWN_READ_ONLY, 16)], "ReadonlyDataModified");
+	assert refuses([wrote(FOREIGN), subtracted(FOREIGN, 5), added(OWN, 5)], "ExternalAccountLamportSpend");
+	assert refuses([gave(FOREIGN, PROGRAM), wrote(FOREIGN)], "ExternalAccountDataModified");
+	assert refuses([wrote(FOREIGN), resized(FOREIGN, 16)], "ExternalAccountDataModified");
+	assert refuses([added(OWN, 1), wrote(FOREIGN)], "ExternalAccountDataModified");
+}
+
+test "what the program wrote to the accounts a call receives is judged at the call, and cannot be carried past it" {
+	const out = subtracted(OWN, 5);
+	const into = added(WALLET, 5);
+	const after: uint8[] = [LOG, AFTER];
+	const carried = (metas: uint8[][]): uint8[] => receiving(metas, CALL_AND_CARRY_ON);
+	assert passes(does([out, into, receiving([[OWN, WRITABLE], [WALLET, WRITABLE]])]));
+	assert passes(does([out, into, receiving([[OWN, 0], [WALLET, 0]])]));
+	assert passes(does([out, into, receiving([])]));
+	assert refuses([out, into, carried([[OWN, WRITABLE]]), after], "UnbalancedInstruction");
+	assert invocations().length == 0;
+	assert refuses([out, into, carried([[WALLET, 0]]), after], "UnbalancedInstruction");
+	assert passes(does([added(OWN, 1), receiving([]), subtracted(OWN, 1)]));
+	assert refuses([added(OWN, 1), carried([[OWN, WRITABLE]]), subtracted(OWN, 1), after], "UnbalancedInstruction");
+	const spent = [subtracted(WALLET, 5), added(OWN, 5), carried([[WALLET, WRITABLE]]), after];
+	assert refuses(spent, "ExternalAccountLamportSpend");
+	const credited = [out, added(FOREIGN_READ_ONLY, 5), carried([[OWN, WRITABLE], [FOREIGN_READ_ONLY, 0]]), after];
+	assert refuses(credited, "ReadonlyLamportChange");
+	assert passes(does([subtracted(WALLET, 5), receiving([]), added(WALLET, 5)]));
+	assert refuses([wrote(FOREIGN), carried([[FOREIGN, 0]]), after], "ExternalAccountDataModified");
+	assert invocations().length == 0;
+	assert passes(does([wrote(FOREIGN), receiving([[OWN, WRITABLE]]), wrote(FOREIGN, 0)]));
+	assert refuses([wrote(OWN_READ_ONLY), carried([[OWN_READ_ONLY, 0]]), after], "ReadonlyDataModified");
+	assert refuses([gave(FOREIGN, PROGRAM), carried([[FOREIGN, 0]]), after], "ModifiedProgramId");
+	assert refuses([resized(FOREIGN, 16), carried([[FOREIGN, 0]]), after], "ExternalAccountDataModified");
+	assert refuses([gave(OWN, CALLEE), receiving([[OWN, WRITABLE]]), wrote(OWN)], "ExternalAccountDataModified");
+	assert refuses([gave(OWN, CALLEE), receiving([]), wrote(OWN)], "ModifiedProgramId");
 }

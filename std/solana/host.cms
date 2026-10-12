@@ -303,7 +303,7 @@ function keyOf(word: uint64): Pubkey {
 function holderOf(word: uint64, data: uint8[], signer: boolean, writable: boolean): HostAccount {
 	return {
 		key: keyOf(word),
-		owner: keyOf(7),
+		owner: keyOf(9),
 		lamports: 1000,
 		data: data,
 		signer: signer,
