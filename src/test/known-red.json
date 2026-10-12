@@ -6,7 +6,9 @@
     "762-bitSetMacro [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [js]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [orc]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
-    "767-optionalRefTruthiness [raiser]": {"since":"629cd956","note":"red on main 39c2553d: the Raiser VM prints 'str none none' where C and JS print 'str x none' (an optional string field read as absent); the raiser lane never ran when 41a803c9 landed it; recorded 2026-09-27"}
+    "767-optionalRefTruthiness [raiser]": {"since":"629cd956","note":"red on main 39c2553d: the Raiser VM prints 'str none none' where C and JS print 'str x none' (an optional string field read as absent); the raiser lane never ran when 41a803c9 landed it; recorded 2026-09-27"},
+    "floatingZeroSign [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-loses-negative-zero.md; red on main 80207ca9c as well, the raiser lane first ran on it in the merge-train gate of a9f2914dd; recorded for release 0.3.2, 2026-10-12"},
+    "genericDeclarationEmitsOnlyInstances [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-static-member-in-generic-constructor.md; red on main 80207ca9c as well, the raiser lane never ran when ae964f7b3 landed it; recorded for release 0.3.2, 2026-10-12"}
   },
   "flaky": {
     "1026-spawnChildErrorReachesTheAwait": {"since":"609e4ed8","note":"hangs at random, card 2026-10-03-spawn-child-error-orc-rare-hang.md; [orc] cell TIMEOUT after 300s in the merge gate of de96bc57 while [c]/[danger] passed; an --gc=orc build by the main 609e4ed8 compiler hung 3 of 480 runs (12 concurrent, 30s limit), the candidate 6 of 480, 2026-10-05"},
@@ -14,17 +16,18 @@
     "410-awaitStructSpawnStored": {"since":"e5f0ec68","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; installed msc e5f0ec68 hung 4 of 5 default runs, and [drc]/[orc] hit cell TIMEOUT after 300s while [danger] passed in the same run, 2026-09-24"},
     "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"},
     "746-spawnStoredUnawaited": {"since":"22d2cb8f","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; [danger] cell TIMEOUT after 300s at load ~45 with every thread in msSpawnWorkerRun → write; a --danger build by the origin/main 24422bf5 compiler hung 3 of 48 runs under 60s at load ~20, 2026-09-25"},
+    "hcrSameSecondEdit": {"since":"ea7ae4d17","note":"fails at random, card 2026-10-12-hcr-same-second-edit-flakes.md; 1 green / 2 red over 3 runs of HCR_ONLY=hcrSameSecondEdit with the ea7ae4d17 candidate at load 5-10, green in the merge-train gate of a9f2914dd, 2026-10-12"},
+    "hcrFirstWarmBuild": {"since":"8ae7820f","note":"fails at random, card 2026-10-05-hcr-first-warm-build-relinks-core.md; the core image's object list changed between the cold and the first warm build in 2 of 2 gates at load 20-40, green 5 of 5 outside the gate with the same candidate, 2026-10-04"},
     "src/codegen/raiser/eval.ms > engine: a float32 rounds after every operation that produces one": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; one binary of main e3f842ce + wt/std-solana went 3 green / 2 red over 5 runs of eval.ms at load 30-60, 2026-10-03"},
-    "src/codegen/raiser/eval.ms > engine: two sleepers wake in deadline order, not spawn order": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; same 5 runs as the float32 case, wall-clock deadlines under load 30-60, 2026-10-03"},
-    "hcrFirstWarmBuild": {"since":"8ae7820f","note":"fails at random, card 2026-10-05-hcr-first-warm-build-relinks-core.md; the core image's object list changed between the cold and the first warm build in 2 of 2 gates at load 20-40, green 5 of 5 outside the gate with the same candidate, 2026-10-04"}
+    "src/codegen/raiser/eval.ms > engine: two sleepers wake in deadline order, not spawn order": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; same 5 runs as the float32 case, wall-clock deadlines under load 30-60, 2026-10-03"}
   },
   "fmt": {},
-  "guard": {
-  },
+  "guard": {},
   "hcr": {},
   "san": {
     "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"}
   },
+  "solana": {},
   "suite": {},
   "tests": {
     "src/test/c/actor.ms > E2E C: 100 actors fan-out compiles": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
