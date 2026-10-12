@@ -371,6 +371,9 @@ export function generateJSModule(
 		}
 	}
 	const headerChunks = gen.buf.length;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind == NodeKind.FunctionDecl && stmt.resolvedSym != null) gen.ownFunctions.add(stmt.resolvedSym);
+	}
 	emitNodeDispatch(gen, program);
 	let bindings = "";
 	for (let mi = 0; mi < gen.neededModules.length; mi += 1) {

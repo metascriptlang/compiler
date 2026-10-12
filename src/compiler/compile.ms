@@ -5,7 +5,8 @@ import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, F
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
-import { BinaryExprData, ClassDeclData, DecoratedDeclData, ExportDeclData, ImportDeclData, InterfaceDeclData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { BinaryExprData, ClassDeclData, DecoratedDeclData, ExportDeclData, IdentifierData, ImportDeclData, InterfaceDeclData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
@@ -3644,6 +3645,29 @@ function jsInstanceFiles(modulePaths: string[], moduleCtxs: CheckerContext[]): J
 	return files;
 }
 
+function writtenFunction(stmt: Node): Node | null {
+	let n = stmt;
+	if (n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
+	if (n != null && n.kind == NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
+	return n != null && n.kind == NodeKind.FunctionDecl ? n : null;
+}
+
+// A function the lowerings add at module scope on demand (a struct's
+// equality, an enum's toString) is made once per module that calls it, so
+// each file that calls it carries its own copy and none depends on another's.
+function collectLoweringFunctions(node: Node, added: HashMap<string, Node>, seen: HashSet<string>, into: Node[]): void {
+	if (node.kind == NodeKind.Identifier) {
+		const name = (node.data as IdentifierData).name;
+		const decl = added.get(name);
+		if (decl != null && !seen.has(name)) {
+			seen.add(name);
+			into.push(decl);
+			collectLoweringFunctions(decl, added, seen, into);
+		}
+	}
+	forEachChild(node, (child: Node): void => { collectLoweringFunctions(child, added, seen, into); });
+}
+
 function isNamespaceImport(stmt: Node): boolean {
 	if (stmt.kind != NodeKind.ImportDecl) return false;
 	const names = (stmt.data as ImportDeclData).importNames;
@@ -3784,6 +3808,14 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		}
 		refusePointerOpsOnJs(ctx, unitPrograms[ui]);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
+		const written = new HashSet<Symbol>();
+		const writtenUnresolved = new HashSet<string>();
+		for (const stmt of (unitPrograms[ui].data as ProgramData).programStmts) {
+			const fn = writtenFunction(stmt);
+			if (fn == null) continue;
+			if (fn.resolvedSym != null) written.add(fn.resolvedSym);
+			else writtenUnresolved.add((fn.data as FunctionDeclData).fnName);
+		}
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 
@@ -3798,12 +3830,24 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			own.push(stmt);
 			if (isNamespaceImport(stmt)) namespaceImports.push(stmt);
 		}
+		const added = new HashMap<string, Node>();
+		const addedDecls = new HashSet<Node>();
+		if (moved.length > 0) {
+			for (const stmt of own) {
+				if (stmt.kind != NodeKind.FunctionDecl) continue;
+				const fnName = (stmt.data as FunctionDeclData).fnName;
+				if (stmt.resolvedSym != null ? written.has(stmt.resolvedSym) : writtenUnresolved.has(fnName)) continue;
+				added.set(fnName, stmt);
+				addedDecls.add(stmt);
+			}
+		}
 		for (const stmt of moved) {
 			const name = jsInstanceBindingName(stmt);
 			const file = layout.instanceFileOf.get(name)!;
 			if (fileIndexOf.has(file)) throw new Error(`internal: generic instance ${name} is declared twice in ${modPath}`);
 			const scope: Node[] = [];
 			for (const imp of namespaceImports) scope.push(imp);
+			collectLoweringFunctions(stmt, added, new HashSet<string>(), scope);
 			scope.push(stmt);
 			const specs = importSpecsFrom(layout, mod, file);
 			const program = createNodeAt(NodeKind.Program, { programStmts: scope }, transformed.location);
@@ -3815,8 +3859,19 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			instanceOutRels.push(layout.outRelOf.get(file)!);
 		}
 
+		const kept: Node[] = [];
+		if (moved.length > 0) {
+			const called: Node[] = [];
+			const seen = new HashSet<string>();
+			for (const stmt of own) {
+				if (!addedDecls.has(stmt)) collectLoweringFunctions(stmt, added, seen, called);
+			}
+			for (const stmt of own) {
+				if (!addedDecls.has(stmt) || called.includes(stmt)) kept.push(stmt);
+			}
+		}
 		const specs = importSpecsFrom(layout, mod, modPath);
-		const program = moved.length == 0 ? transformed : createNodeAt(NodeKind.Program, { programStmts: own }, transformed.location);
+		const program = moved.length == 0 ? transformed : createNodeAt(NodeKind.Program, { programStmts: kept }, transformed.location);
 		const res = generateJSModule(program, ctx.jsImportRegistry, modPath, modPath, layout, specs.keys, specs.vals, modExportKeys, modExportVals, modFunctionOwnerNames, isTestBuild, opts.sourcemap);
 		fileIndexOf.set(modPath, fileKeys.length as int32);
 		fileKeys.push(modPath);

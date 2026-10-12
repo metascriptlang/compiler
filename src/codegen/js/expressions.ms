@@ -230,6 +230,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 	if (emitted == "") return safeJsName(name);
 	const home = sym.modulePath != null && sym.modulePath != "" ? sym.modulePath : gen.currentModulePath;
 	if (home == gen.currentModulePath && hasFlag(sym, SymbolFlag.ImportC)) return emitted;
+	if (gen.ownFunctions.has(sym)) return emitted;
 	const file = fileDeclaring(gen, home, emitted);
 	return file != gen.currentFile ? recordNeededImport(gen, file, emitted) : emitted;
 }

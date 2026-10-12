@@ -3,7 +3,7 @@
 // JSGenerator context, low-level emit functions.
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
-import { Node, NodeKind, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData } from "../../ast/node";
+import { Node, NodeKind, Symbol, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
@@ -60,6 +60,7 @@ export class JSGenerator {
 	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
 	namespaceNames: string[][];
 	declaredNames: string[];    // every module-level binding this file declares
+	ownFunctions: HashSet<Symbol>;  // the functions this file's program declares at module level
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
@@ -92,7 +93,7 @@ export function createJsTreeLayout(): JsTreeLayout {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [],
+		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [], ownFunctions: new HashSet<Symbol>(),
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
