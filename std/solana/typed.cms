@@ -1,7 +1,7 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
-import { DeclKind, Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
+import { DeclKind, Node, NodeKind, bindSym, define, expansionFile, getImpl, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
 import { accountAddressOf, keyAddressOf, slottedTable } from "./accountSeeds";
 import { namedWord } from "./discriminator";
@@ -689,16 +689,32 @@ export macro accounts(): Node {
 	const writtenTypes: string[] = [];
 	const fieldDecorators: Node[][] = [];
 	const proofKinds: string[] = [];
-	function unreadableBase(base: string): string {
+	function unreadableBase(from: Node, base: string, found: Node | null): string {
 		if (base.indexOf("<") >= 0) { return "a base with type arguments is not supported; extend a struct that has none"; }
-		return "no struct named '" + base + "' is imported where accounts<T>() is called; import it there under that name";
+		if (found == null) {
+			return "no struct named '" + base + "' is imported where accounts<T>() is called; import it there under that name";
+		}
+		const parent = found!;
+		if (parent.kind !== NodeKind.StructDecl && parent.kind !== NodeKind.InterfaceDecl) {
+			return "'" + base + "' is not a struct where accounts<T>() is called";
+		}
+		const home = from.resolvedSym!.modulePath;
+		const origin = parent.resolvedSym!.modulePath;
+		const calledWhereDeclared = home == expansionFile();
+		const declaredBesideUnderThatName = origin == home && parent.interfaceName == base;
+		if (calledWhereDeclared || declaredBesideUnderThatName) { return ""; }
+		return "'" + base + "' names the struct '" + parent.interfaceName + "' of '" + origin +
+			"' where accounts<T>() is called, which may not be the base '" + from.interfaceName +
+			"' was declared with in '" + home + "'; import the '" + base + "' that module declares under that name or, " +
+			"when it imports '" + base + "' itself, call accounts<T>() there";
 	}
 	function inheritedFirst(from: Node): void {
 		for (const base of from.interfaceExtends) {
 			const parent = getImpl(bindSym(base));
-			if (parent == null) {
+			const unreadable = unreadableBase(from, base, parent);
+			if (unreadable != "") {
 				error("accounts<" + decl.interfaceName + ">(): '" + from.interfaceName + "' extends '" + base +
-					"', whose fields accounts<T>() cannot read: " + unreadableBase(base), shape);
+					"', whose fields accounts<T>() cannot read: " + unreadable, shape);
 			}
 			inheritedFirst(parent!);
 		}
@@ -797,10 +813,11 @@ export macro accounts(): Node {
 			}
 			for (const base of from.interfaceExtends) {
 				const parent = getImpl(bindSym(base));
-				if (parent == null) {
+				const unreadable = unreadableBase(from, base, parent);
+				if (unreadable != "") {
 					error("accounts<" + decl.interfaceName + ">(): field '" + names[owner] + "' holds '" + written +
 						"', and '" + from.interfaceName + "' extends '" + base + "', whose fields accounts<T>() " +
-						"cannot read: " + unreadableBase(base), at);
+						"cannot read: " + unreadable, at);
 				}
 				if (declares(parent!)) { return true; }
 			}
