@@ -4022,6 +4022,33 @@ test "typed proof families validate raw nested booleans and fixed enum arrays" {
 	for (const code of wireProofResults(zero)) { assert code == 0; }
 }
 
+export struct WireRoot { alive: boolean; }
+export struct WireMiddle extends WireRoot { kind: WireSparse; }
+export struct WireLeaf extends WireMiddle { level: uint8; }
+
+export function discriminator(this typeof WireMiddle): Discriminator {
+	return @comptime { return accountDiscriminator("WireMiddle"); };
+}
+export function discriminator(this typeof WireLeaf): Discriminator {
+	return @comptime { return accountDiscriminator("WireLeaf"); };
+}
+
+function wireMiddleEntry(): void { codeOf(owned<WireMiddle>(0)); }
+function wireLeafEntry(): void { codeOf(mutable<WireLeaf>(0)); }
+
+function wireInheritedResults(payload: uint8[]): uint64[] {
+	return [
+		run(programKey(), [holder(1, programKey(), wireBytes<WireMiddle>(payload), false, false)], [], wireMiddleEntry).result,
+		run(programKey(), [holder(1, programKey(), wireBytes<WireLeaf>(payload), false, true)], [], wireLeafEntry).result,
+	];
+}
+
+test "a typed proof validates the raw boolean and enum a data struct inherits one and two structs up" {
+	for (const code of wireInheritedResults([1, 9, 200])) { assert code == 0; }
+	for (const code of wireInheritedResults([2, 9, 200])) { assert code == ProgramError.accountDidNotDeserialize().code; }
+	for (const code of wireInheritedResults([1, 3, 200])) { assert code == ProgramError.accountDidNotDeserialize().code; }
+}
+
 test "raw enum validation checks exact sparse signed and wide membership" {
 	for (const value of [0, 2, 9]) {
 		const bytes = wireBytes<WireSparseAccount>([value as uint8]);
