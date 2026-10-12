@@ -3686,6 +3686,8 @@ function idlRead(idl: JsonValue, fields: JsonValue, bytes: Readonly<Span<uint8>>
 		const kind = fields.at(f).type.asString();
 		let width = 0;
 		if (kind == "u8" || kind == "bool") { width = 1; }
+		if (kind == "u16") { width = 2; }
+		if (kind == "i32") { width = 4; }
 		if (kind == "u64") { width = 8; }
 		if (kind == "pubkey") { width = 32; }
 		if (width == 0) {
@@ -3695,7 +3697,7 @@ function idlRead(idl: JsonValue, fields: JsonValue, bytes: Readonly<Span<uint8>>
 			continue;
 		}
 		let value: uint64 = 0;
-		for (let b = 0; b < width && b < 8; b++) { value |= (bytes[at + b] as uint64) << ((b * 8) as uint64); }
+		for (let b = 0; b < width && b < 8 && at + b < bytes.length; b++) { value |= (bytes[at + b] as uint64) << ((b * 8) as uint64); }
 		text = text + name + "=" + String(value) + " ";
 		at = at + width;
 	}
@@ -4207,6 +4209,86 @@ test "raw enum validation checks exact sparse signed and wide membership" {
 	const wideHole = wireBytes<WireWideAccount>([43, 1]);
 	assert run(programKey(), [holder(1, programKey(), wideHole, false, false)], [], wireWideEntry).result ==
 		ProgramError.accountDidNotDeserialize().code;
+}
+
+export enum WireApart { One = 1, Four = 4 }
+export enum WireBackward { Last = 2, Middle = 1, First = 0 }
+export enum WireCrowded {
+	C000, C001, C002, C003, C004, C005, C006, C007, C008, C009, C010, C011, C012, C013, C014, C015,
+	C016, C017, C018, C019, C020, C021, C022, C023, C024, C025, C026, C027, C028, C029, C030, C031,
+	C032, C033, C034, C035, C036, C037, C038, C039, C040, C041, C042, C043, C044, C045, C046, C047,
+	C048, C049, C050, C051, C052, C053, C054, C055, C056, C057, C058, C059, C060, C061, C062, C063,
+	C064, C065, C066, C067, C068, C069, C070, C071, C072, C073, C074, C075, C076, C077, C078, C079,
+	C080, C081, C082, C083, C084, C085, C086, C087, C088, C089, C090, C091, C092, C093, C094, C095,
+	C096, C097, C098, C099, C100, C101, C102, C103, C104, C105, C106, C107, C108, C109, C110, C111,
+	C112, C113, C114, C115, C116, C117, C118, C119, C120, C121, C122, C123, C124, C125, C126, C127,
+	D000 = 0, D001, D002, D003, D004, D005, D006, D007, D008, D009, D010, D011, D012, D013, D014, D015,
+	D016, D017, D018, D019, D020, D021, D022, D023, D024, D025, D026, D027, D028, D029, D030, D031,
+	D032, D033, D034, D035, D036, D037, D038, D039, D040, D041, D042, D043, D044, D045, D046, D047,
+	D048, D049, D050, D051, D052, D053, D054, D055, D056, D057, D058, D059, D060, D061, D062, D063,
+	D064, D065, D066, D067, D068, D069, D070, D071, D072, D073, D074, D075, D076, D077, D078, D079,
+	D080, D081, D082, D083, D084, D085, D086, D087, D088, D089, D090, D091, D092, D093, D094, D095,
+	D096, D097, D098, D099, D100, D101, D102, D103, D104, D105, D106, D107, D108, D109, D110, D111,
+	D112, D113, D114, D115, D116, D117, D118, D119, D120, D121, D122, D123, D124, D125, D126, D127,
+	Last = 0,
+}
+export struct WireKinds {
+	signed: WireSigned;
+	wide: WireWide;
+	stamp: uint16;
+	apart: WireApart;
+	backward: WireBackward;
+	crowded: WireCrowded;
+	last: uint8;
+}
+
+export function discriminator(this typeof WireKinds): Discriminator {
+	return @comptime { return accountDiscriminator("WireKinds"); };
+}
+
+export struct WireCrowdedPair { crowded: WireCrowded; gap: uint8; wide: uint16; }
+
+function wireKindsBytes(): uint8[] { return wireBytes<WireKinds>([0, 0, 0, 0, 0, 0, 0, 0, 1]); }
+
+function wireKindsStep(): Result<uint64, ProgramError> {
+	const kinds = (try mutable<WireKinds>(0)).data();
+	kinds.signed = WireSigned.Plus;
+	kinds.wide = WireWide.Large;
+	kinds.stamp = 9;
+	kinds.apart = WireApart.Four;
+	kinds.backward = WireBackward.Last;
+	kinds.crowded = WireCrowded.C127;
+	kinds.last = 7;
+	return Result.ok(0);
+}
+
+function wireKindsEntry(): void { codeOf(wireKindsStep()); }
+
+test "the IDL's fields of an account read back the value of each enum member the program stored, at the width the program stores it" {
+	const stored = [holder(1, programKey(), wireKindsBytes(), false, true)];
+	assert run(programKey(), stored, [], wireKindsEntry).result == 0;
+	const parsed = JSON.parseValue(anchorIdl<FailingOp>({
+		name: "kinds", address: "", Fail: [NoArrayAccounts], accounts: [WireKinds], events: [], errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		const kinds = idlRead(parsed.value, idlTypeFields(parsed.value, "WireKinds"), stored[0].data, 8, "");
+		assert kinds.text == "signed=70000 wide=300 stamp=9 apart=4 backward=2 crowded=127 last=7 ";
+		assert kinds.next == stored[0].data.length;
+	}
+}
+
+test "the IDL lays a field out after an enum of many members by the one byte the program stores it in" {
+	const parsed = JSON.parseValue(anchorIdl<FailingOp>({
+		name: "pair", address: "", Fail: [NoArrayAccounts], accounts: [WireCrowdedPair], events: [], errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		const bytes: uint8[] = [127, 5, 44, 1];
+		const pair = idlRead(parsed.value, idlTypeFields(parsed.value, "WireCrowdedPair"), bytes, 0, "");
+		assert pair.text == "crowded=127 gap=5 wide=300 ";
+		assert pair.next == sizeof(WireCrowdedPair) as int32;
+	}
 }
 
 test "power-of-two byte masks validate every lane and ignore plain numeric fields" {

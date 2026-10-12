@@ -1,4 +1,4 @@
-import { Node, NodeKind, bindSym, define, getImpl, getTypeImpl, sameType, stringValue } from "std/meta";
+import { Node, NodeKind, bindSym, define, getImpl, getSize, getTypeImpl, sameType, stringValue } from "std/meta";
 import { Pubkey } from "./pubkey";
 import { Bytes } from "./bytes";
 import {
@@ -7,21 +7,6 @@ import {
 	instructionDiscriminator,
 	snakeCase,
 } from "./discriminator";
-
-function enumWidth(memberCount: int32, values: number[]): int32 {
-	let low = 0;
-	let high = memberCount - 1;
-	if (values.length == memberCount) {
-		for (const value of values) {
-			const v = value as int32;
-			if (v < low) { low = v; }
-			if (v > high) { high = v; }
-		}
-	}
-	if (low >= 0 && high <= 255) { return 1; }
-	if (low >= 0 && high <= 65535) { return 2; }
-	return 4;
-}
 
 export macro anchorIdl(spec: Node): Node {
 	const ops = getTypeArg();
@@ -457,7 +442,7 @@ export macro anchorIdl(spec: Node): Node {
 			if (idlType == "") {
 				const named = getImpl(bindSym(element));
 				if (named != null && named!.kind == NodeKind.EnumDecl) {
-					const width = enumWidth(named!.enumMembers.length, named!.enumValues);
+					const width = getSize(bindSym(element)!);
 					idlType = width == 1 ? "\"u8\"" : width == 2 ? "\"u16\"" : "\"i32\"";
 				}
 			}
@@ -528,7 +513,7 @@ export macro anchorIdl(spec: Node): Node {
 				if (size == 0) {
 					const named = getImpl(bindSym(element));
 					if (named != null && named!.kind == NodeKind.EnumDecl) {
-						size = enumWidth(named!.enumMembers.length, named!.enumValues);
+						size = getSize(bindSym(element)!);
 						align = size;
 					}
 				}
