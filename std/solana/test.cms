@@ -1228,6 +1228,45 @@ test "emit logs Anchor's event discriminator and the Borsh fields as Program dat
 	assert found;
 }
 
+export struct Paid { amount: uint64; }
+export struct PaidTo extends Paid { receiver: Pubkey; done: boolean; }
+
+function paidToEntry(): void {
+	const paid: PaidTo = { amount: 1234, receiver: keyOf(7), done: true };
+	emit<PaidTo>(paid);
+}
+
+test "emit writes the fields an event inherits ahead of its own" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], paidToEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 1;
+	assert lines[0] == "Program data: bZ+QC3gMP1rSBAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ==";
+}
+
+export struct SeedArgs { seed: uint64; }
+export struct FlaggedSeedArgs extends SeedArgs { flag: boolean; }
+
+function flaggedSeedStep(): Result<uint64, ProgramError> {
+	const given = try args<FlaggedSeedArgs>();
+	const flag: uint32 = given.flag ? 1 : 0;
+	return Result.err(ProgramError.custom((given.seed as uint32) * 10 + flag));
+}
+
+function flaggedSeedEntry(): void { codeOf(flaggedSeedStep()); }
+
+test "args reads the fields an argument struct inherits ahead of its own" {
+	const none: HostAccount[] = [];
+	const whole: uint8[] = [7, 0, 0, 0, 0, 0, 0, 0, 1];
+	assert run(programKey(), none, instructionBytes("Any", whole), flaggedSeedEntry).result == ProgramError.custom(71).code;
+	const short: uint8[] = [7, 0, 0, 0, 0, 0, 0, 0];
+	assert run(programKey(), none, instructionBytes("Any", short), flaggedSeedEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+	const notBool: uint8[] = [7, 0, 0, 0, 0, 0, 0, 0, 2];
+	assert run(programKey(), none, instructionBytes("Any", notBool), flaggedSeedEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+}
+
 export struct Wide {
 	small: uint8;
 	signedSmall: int8;
@@ -3001,6 +3040,57 @@ test "@hasOne compares the account's field of that name to the key of the siblin
 	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 4, 0));
 	assert run(programKey(), [ownerWallet(), mine, strangers], [], ownedSafeEntry).result ==
 		ProgramError.userError(3).code;
+}
+
+export struct SignedBase { owner: Signer; }
+export struct SignedChild extends SignedBase { refund: Writable; }
+
+function signedChildStep(): Result<uint64, ProgramError> {
+	const x = try accounts<SignedChild>();
+	if (!x.owner.key().equals(keyOf(2)) || !x.refund.key().equals(keyOf(3))) {
+		return Result.err(ProgramError.custom(1));
+	}
+	return Result.ok(0);
+}
+
+function signedChildEntry(): void { codeOf(signedChildStep()); }
+
+test "accounts<T>() verifies the fields a struct inherits ahead of its own" {
+	assert run(programKey(), [ownerWallet(), wallet(3, 0)], [], signedChildEntry).result == 0;
+	const unsigned = holder(2, Pubkey.zero(), [], false, false);
+	assert run(programKey(), [unsigned, wallet(3, 0)], [], signedChildEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), [ownerWallet(), readOnly(wallet(3, 0))], [], signedChildEntry).result ==
+		ProgramError.constraintMut().code;
+	assert run(programKey(), [ownerWallet()], [], signedChildEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
+}
+
+export struct InheritedRoot { @address(keyOf(2)) owner: Signer; }
+export struct InheritedMiddle extends InheritedRoot { @hasOne(owner) safe: Mutable<Safe>; }
+export struct InheritedLeaf extends InheritedMiddle { refund: Writable; }
+
+function inheritedLeafStep(): Result<uint64, ProgramError> {
+	const x = try accounts<InheritedLeaf>();
+	if (!x.refund.key().equals(keyOf(3))) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(x.safe.data().limit);
+}
+
+function inheritedLeafEntry(): void { codeOf(inheritedLeafStep()); }
+
+test "accounts<T>() runs the checks and decorators of a field declared two structs up" {
+	const safe = safeAt(keyOf(8), keyOf(2), 4, 0);
+	assert run(programKey(), [ownerWallet(), safe, wallet(3, 0)], [], inheritedLeafEntry).result == 0;
+	const unsigned = holder(2, Pubkey.zero(), [], false, false);
+	assert run(programKey(), [unsigned, safe, wallet(3, 0)], [], inheritedLeafEntry).result ==
+		ProgramError.accountNotSigner().code;
+	const stranger = holder(9, Pubkey.zero(), [], true, false);
+	assert run(programKey(), [stranger, safeAt(keyOf(8), keyOf(9), 4, 0), wallet(3, 0)], [], inheritedLeafEntry).result ==
+		ProgramError.constraintAddress().code;
+	assert run(programKey(), [ownerWallet(), safeAt(keyOf(8), keyOf(9), 4, 0), wallet(3, 0)], [], inheritedLeafEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), safe, readOnly(wallet(3, 0))], [], inheritedLeafEntry).result ==
+		ProgramError.constraintMut().code;
 }
 
 export struct Addressed {

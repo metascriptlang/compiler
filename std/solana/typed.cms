@@ -688,7 +688,30 @@ export macro accounts(): Node {
 	const line = shape.line;
 	const column = shape.column;
 	const holder = "$accounts";
-	const names = decl.interfaceFields;
+	const names: string[] = [];
+	const writtenTypes: string[] = [];
+	const fieldDecorators: Node[][] = [];
+	function inheritedFirst(from: Node, names: string[], types: string[], decorators: Node[][]): void {
+		for (const base of from.interfaceExtends) {
+			const parent = getImpl(bindSym(base));
+			if (parent == null) {
+				error("accounts<" + decl.interfaceName + ">(): '" + from.interfaceName + "' extends '" + base +
+					"', whose fields accounts<T>() cannot read: a base is a struct without type arguments, " +
+					"imported where accounts<T>() is called", shape);
+			}
+			inheritedFirst(parent!, names, types, decorators);
+		}
+		for (let own = 0; own < from.interfaceFields.length; own++) {
+			names.push(from.interfaceFields[own]);
+			types.push(from.interfaceFieldTypes[own]);
+			decorators.push(from.interfaceFieldDecorators[own]);
+		}
+	}
+	inheritedFirst(decl, names, writtenTypes, fieldDecorators);
+	if (names.join(",") != shape.typExprFieldNames.join(",")) {
+		error("accounts<" + decl.interfaceName + ">(): the struct and the structs it extends declare the fields '" +
+			names.join(", ") + "', and its type holds '" + shape.typExprFieldNames.join(", ") + "'", shape);
+	}
 
 	function ident(name: string, at: Node): Node {
 		return { kind: NodeKind.Identifier, line: at.line, column: at.column, name: name };
@@ -756,7 +779,7 @@ export macro accounts(): Node {
 	}
 
 	function dataFieldOf(owner: number, property: string, at: Node): boolean {
-		const written = decl.interfaceFieldTypes[owner];
+		const written = writtenTypes[owner];
 		const open = written.indexOf("<");
 		if (open < 0) { return false; }
 		const outer = written.slice(0, open);
@@ -975,14 +998,14 @@ export macro accounts(): Node {
 		kind: NodeKind.IfStmt, line: line, column: column,
 		condition: {
 			kind: NodeKind.BinaryExpr, line: line, column: column, operator: "<",
-			left: call(bindSym("msSolAccountCount")!, [], shape), right: whole(decl.interfaceFields.length, shape),
+			left: call(bindSym("msSolAccountCount")!, [], shape), right: whole(names.length, shape),
 		},
 		consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
 			assignFailure(whole(ProgramError.accountNotEnoughKeys().code as number, shape), shape)] },
 	});
 	let field = 0;
-	while (field < decl.interfaceFields.length) {
-		const written = decl.interfaceFieldTypes[field];
+	while (field < names.length) {
+		const written = writtenTypes[field];
 		let canonical = written;
 		const reflected = shape.typExprFieldTypes[field];
 		if (written.indexOf("<") < 0 && reflected.kind === NodeKind.TypeObject && reflected.typExprTypeName != "") {
@@ -1028,7 +1051,7 @@ export macro accounts(): Node {
 			check!.typeArg = inner;
 		}
 		if (check == null) {
-			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
+			error("accounts<T>(): field '" + names[field] + "' has type '" +
 				written + "'; use Signer, WritableSigner, Writable, WritablePda, SystemAccount, Account, " +
 				"Program<P>, " +
 				"Owned<T>, Mutable<T>, Delegated<T>, External<T> or ExternalMutable<T>", shape);
@@ -1073,9 +1096,9 @@ export macro accounts(): Node {
 	let owner = 0;
 	while (owner < names.length) {
 		const self = names[owner];
-		const selfType = decl.interfaceFieldTypes[owner];
+		const selfType = writtenTypes[owner];
 		const isToken = selfType == "External<TokenAccount>" || selfType == "ExternalMutable<TokenAccount>";
-		const decorators = decl.interfaceFieldDecorators[owner];
+		const decorators = fieldDecorators[owner];
 		let seeded: Node | null = null;
 		let bumped: Node | null = null;
 		const associated: Node[] = [];
@@ -1297,7 +1320,7 @@ export macro accounts(): Node {
 		line: line,
 		column: column,
 		properties: values,
-		keys: decl.interfaceFields,
+		keys: names,
 		keyLocations: [],
 	};
 	const yes: Node = { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: true };
