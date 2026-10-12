@@ -27,6 +27,7 @@ import { analyzeProgram } from "../analyzer/index";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
+import { createJsTreeLayout } from "../codegen/js/emit";
 import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath, loadModule, SourceProvider } from "../module/loader";
 import { createDefaultConfig, Backend, ResolverConfig } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
@@ -366,7 +367,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
-	const res = generateJSModule(transformed, [], modPath, [], [], [], [], [], [], [], true, false);
+	const res = generateJSModule(transformed, [], modPath, modPath, createJsTreeLayout(), [], [], [], [], [], true, false);
 	return Result.ok(res.code);
 }
 
