@@ -298,9 +298,12 @@ export function asWritable<T>(this proof: Mutable<T>): Writable {
 }
 
 export struct Pda<T> {
-	account: Mutable<T>;
-	bump: uint8;
+	private account: Mutable<T>;
+	private bump: uint8;
 }
+
+@inline export function asMutable<T>(this found: Pda<T>): Mutable<T> { return found.account; }
+@inline export function foundBump<T>(this found: Pda<T>): uint8 { return found.bump; }
 
 @inline function programProofAt<P>(address: uint64, out proof: Program<P>): uint64 {
 	const failure = programWordsAtFailure(

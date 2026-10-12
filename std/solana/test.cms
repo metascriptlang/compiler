@@ -853,8 +853,8 @@ function createPdaStep(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
 	const target = try writable(1);
 	const made = try createPda<Counter>(payer, target, ["counter"]);
-	const at = made.account.data();
-	at.value = made.bump as uint64;
+	const at = made.asMutable().data();
+	at.value = made.foundBump() as uint64;
 	return Result.ok(0);
 }
 
@@ -866,7 +866,7 @@ function verifyPdaEntry(): void {
 function verifyPdaStep(): Result<uint64, ProgramError> {
 	const counter = try mutable<Counter>(0);
 	const found = try pda(counter, ["counter"]);
-	return Result.ok(found.bump as uint64);
+	return Result.ok(found.foundBump() as uint64);
 }
 
 function closeEntry(): void {
@@ -942,9 +942,9 @@ export struct DeclaredCounter {
 function declaredCreateStep(): Result<uint64, ProgramError> {
 	const x = try accounts<DeclaredCounter>();
 	const made = try createPda<Counter>(x.payer, x.target, ["counter", x.payer]);
-	if (made.bump != x.target.foundBump()) { return Result.err(ProgramError.invalidSeeds()); }
-	made.account.data().value = made.bump as uint64;
-	const _grown = try realloc(made.account, 148, x.payer);
+	if (made.foundBump() != x.target.foundBump()) { return Result.err(ProgramError.invalidSeeds()); }
+	made.asMutable().data().value = made.foundBump() as uint64;
+	const _grown = try realloc(made.asMutable(), 148, x.payer);
 	return Result.ok(0);
 }
 
@@ -3047,7 +3047,7 @@ function lowerOffCurveBump(owner: Pubkey): uint8 {
 function verifiedStep(): Result<uint64, ProgramError> {
 	const safe = try mutable<Safe>(0);
 	const checked = try pda(safe, ["safe", keyOf(2)]);
-	if (checked.bump != safeAddress(keyOf(2)).bump) { return Result.err(ProgramError.userError(7)); }
+	if (checked.foundBump() != safeAddress(keyOf(2)).bump) { return Result.err(ProgramError.userError(7)); }
 	return Result.ok(0);
 }
 

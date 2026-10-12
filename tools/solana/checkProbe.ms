@@ -197,7 +197,7 @@ function createPdaOne(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
 	const target = try writable(1);
 	const made = try createPda<Pet>(payer, target, ["new", payer]);
-	return Result.ok(made.bump as uint64);
+	return Result.ok(made.foundBump() as uint64);
 }
 
 function createOne(): Result<uint64, ProgramError> {
@@ -211,14 +211,14 @@ function petPda(): Result<uint64, ProgramError> {
 	const pet = try mutable<Pet>(2);
 	const payer = try writableSigner(0);
 	const found = try pda(pet, ["pet", payer]);
-	return Result.ok(found.bump as uint64);
+	return Result.ok(found.foundBump() as uint64);
 }
 
 function petPdaWithBump(): Result<uint64, ProgramError> {
 	const pet = try mutable<Pet>(2);
 	const payer = try writableSigner(0);
 	const found = try pdaWithBump(pet, ["pet", payer], argU8(1));
-	return Result.ok(found.bump as uint64);
+	return Result.ok(found.foundBump() as uint64);
 }
 
 function rolledPda(): Result<uint64, ProgramError> {

@@ -131,7 +131,7 @@ function run${i}(): Result<uint64, ProgramError> {
 	const seen = try owned<Pet${i}>(7);
 	const rolled = try delegated<Pet${i}>(8);
 	const _closed = try close(x.pet, x.payer.asWritable());
-	return Result.ok(made.account.data().bump as uint64 + direct.data().bump as uint64 +
+	return Result.ok(made.asMutable().data().bump as uint64 + direct.data().bump as uint64 +
 		seen.data().bump as uint64 + rolled.data().bump as uint64);
 }
 `;

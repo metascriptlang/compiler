@@ -1,0 +1,51 @@
+// GUARD-OS solana
+// GUARD-CHECK-FAIL solanaPdaForgeRefused.ms:31:
+// GUARD-CHECK-FAIL solanaPdaForgeRefused.ms:32:
+// GUARD-CHECK-FAIL solanaPdaForgeRefused.ms:34:
+// GUARD-CHECK-FAIL solanaPdaForgeRefused.ms:35:
+// GUARD-CHECK-FAIL solanaPdaForgeRefused.ms:36:
+// GUARD-CHECK-FAIL 'account' is a private field of 'Pda'
+// GUARD-CHECK-FAIL 'bump' is a private field of 'Pda'
+// GUARD-CHECK-FAIL cannot convert Mutable<Pet> to Pda<Pet>
+// A Pda<T> comes only from pda, pdaWithBump and createPda<T>, which check the account's address
+// against the seeds: outside std/solana a literal and `as` build none, and the bump and the account
+// of one that was verified are read through foundBump() and asMutable(), never written.
+// RED MEANS: a program pairs any Mutable<T> with any bump as a Pda<T>, or changes the bump of a
+// verified one, and code that takes a Pda<T> signs or stores a bump nothing derived.
+import { Discriminator, Mutable, Pda, ProgramError, accountDiscriminator, failWith, mutable, pda } from "std/solana";
+
+export struct Pet {
+	hearts: uint64;
+}
+
+export function discriminator(this typeof Pet): Discriminator {
+	return @comptime { return accountDiscriminator("Pet"); };
+}
+
+function allowed(found: Pda<Pet>): uint64 {
+	const pet: Mutable<Pet> = found.asMutable();
+	return pet.data().hearts + (found.foundBump() as uint64);
+}
+
+function forged(pet: Mutable<Pet>, found: Pda<Pet>): void {
+	const a: Pda<Pet> = { account: pet, bump: 9 };
+	const b = pet as Pda<Pet>;
+	let c = found;
+	c.bump = 9;
+	const d = found.bump;
+	const e = found.account;
+}
+
+function run(): Result<uint64, ProgramError> {
+	const pet = try mutable<Pet>(0);
+	const found = try pda(pet, ["pet"]);
+	forged(pet, found);
+	return Result.ok(allowed(found));
+}
+
+function main(): void {
+	const result = run();
+	if (!result.ok) { failWith(result.error); }
+}
+
+main();
