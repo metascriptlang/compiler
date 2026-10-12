@@ -1,5 +1,4 @@
 @include("runtime/solana/solana.h");
-@emit("void msSolHostLeave(void);");
 
 import {
 	AccountMeta,
