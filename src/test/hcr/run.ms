@@ -1262,6 +1262,59 @@ function coreOp(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function rewriteCoreNativeHeader(dir: string, include: string): void {
+	const revision = `${performance.now()}`.replaceAll(".", "");
+	put(`${dir}/box/shared.h`, `${include}#define HCR_NATIVE_REV ${revision}\n`);
+	settleSecond();
+}
+
+function coreNative(): void {
+	const tag = "hcrCoreNative";
+	const dir = freshDir(`${TMP}/coreNative`);
+	for (const sub of ["app", "box"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "box/box.ms", "box/native.h", "box/first.c", "box/second.c", "box/extra.h"]) {
+		copy(`${FIXTURES}/coreNative/${f}`, `${dir}/${f}`);
+	}
+	const app = `${dir}/app`;
+	const build = ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`];
+	rewriteCoreNativeHeader(dir, "");
+	mustBuild(tag, app, build, "the first build failed");
+
+	rewriteCoreNativeHeader(dir, "");
+	const ran = msc(app, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-NATIVE ")) seen.push(line);
+	}
+	const want = [
+		"HCR-NATIVE start 3 v1",
+		"HCR-NATIVE reloaded logic v2",
+		"HCR-NATIVE restart required the core image changed (runtime, standard library or toolchain)",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a session that began by recompiling one core native beside a cached one did not reload a module edit, or did not ask for a restart once that native's header was edited");
+	}
+
+	const edits = [
+		{ include: "", label: "v4", what: "its header changed" },
+		{ include: "#include \"extra.h\"\n", label: "v5", what: "its header gained an include" },
+	];
+	for (const edit of edits) {
+		rewriteCoreNativeHeader(dir, edit.include);
+		mustBuild(tag, app, build, `the build after ${edit.what} failed`);
+		const recompiled = linkInputKeys(app);
+		put(`${app}/logic.ms`, `export function label(): string {\n\treturn "${edit.label}";\n}\n`);
+		mustBuild(tag, app, build, "the body-edit build failed");
+		let relinked = 0;
+		for (const key of linkInputKeys(app)) {
+			if (!recompiled.includes(key)) relinked += 1;
+		}
+		need(tag, relinked == 1, `the build after a body edit relinked ${relinked} images, expected only logic's, once one core native was recompiled because ${edit.what}`);
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function globalCell(): void {
 	const tag = "hcrGlobalCell";
 	const dir = freshDir(`${TMP}/globalCell`);
@@ -1534,6 +1587,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrCoreOp", run: coreOp },
+	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
