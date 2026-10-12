@@ -1,7 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
+import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
@@ -51,7 +51,7 @@ import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
-import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl, requiresInit } from "./initTracker";
+import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl } from "./initTracker";
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
@@ -818,6 +818,11 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		node.flags = node.flags.incl(NodeFlag.FirstWrite);
 		markInitialized(ctx.initTracker, d.declName);
 	}
+	if (d.initializer == null && ctx.currentFunction == null
+			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)
+			&& hiddenHolder(ctx, varType, 0) != null) {
+		addError(ctx, `'${d.declName}' is declared without a value: ${noDefaultReason(ctx, varType)} — give it a value where it is declared`, d.nameLocation.line, d.nameLocation.column);
+	}
 	if (node.flags.has(NodeFlag.StaticStorage)) {
 		checkStaticStorageDecl(ctx, node, d);
 	}
@@ -1457,13 +1462,13 @@ function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: st
 		}
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
-		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(member.nodeType)) continue;
+		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(ctx, member.nodeType)) continue;
 		let assigned = true;
 		for (const exit of ctorExits) {
 			if (!exit.includes("this." + pd.propName)) assigned = false;
 		}
 		if (assigned) continue;
-		addError(ctx, `Field '${pd.propName}' has no initializer and is not assigned on every path of the constructor: type '${typeDisplayName(member.nodeType)}' has no default value — initialize it ('${pd.propName}: ${pd.propType} = ...'), assign it in the constructor, or declare it optional with '?'`, member.location.line, member.location.column);
+		addError(ctx, `Field '${pd.propName}' has no initializer and is not assigned on every path of the constructor: ${noDefaultReason(ctx, member.nodeType)} — initialize it ('${pd.propName}: ${pd.propType} = ...'), assign it in the constructor, or declare it optional with '?'`, member.location.line, member.location.column);
 	}
 }
 

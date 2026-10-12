@@ -193,3 +193,46 @@ test "fieldVisibility: code a macro or template expands is checked with the macr
 	assert refusesPrivate(lib, use + "class Plain { read(s: Signer): uint64 { return s.account.address; } }\n", "account");
 	assert refusesPrivate(lib, use + "function local(): void { const proof: Signer = { account: { address: 4 } }; }\n", "account");
 }
+
+const sealedLib = "export struct Proof { private word: uint64; }\nexport struct Mixed { pub: uint64; private word: uint64; }\nexport struct Box<T> { private v: T; }\nexport struct Wrap { n: uint64; p: Proof; }\nexport class Cls { x: uint64 = 1; }\nexport struct Holder { c: Cls; }\n"
+	+ "export function make(): Proof { return { word: 7 }; }\nexport function makeBox<T>(v: T): Box<T> { return { v: v }; }\nexport function needs(p: Proof): uint64 { return 1; }\n"
+	+ "function inside(flag: boolean): uint64 {\n\tlet a: Proof;\n\tif (flag) { a = {} as Proof; } else { a = { word: 1 }; }\n\tconst b: Proof = {};\n\tconst many: Proof[2] = [];\n\tconst more = new Array<Proof>(2);\n\tconst m: Mixed = { pub: 1 };\n\tconst w: Wrap = { n: 1 };\n\tlet bx: Box<uint64>;\n\tbx = { v: 1 };\n\treturn needs(a) + needs(b) + needs(many[0]) + needs(more[0]) + needs(w.p) + m.pub + bx.v + needs({});\n}\nexport const total: uint64 = inside(true);\n";
+const sealedUse = "import { Proof, Mixed, Box, Wrap, Holder, make, makeBox, needs } from \"./lib\";\n";
+const sealedWhy = "has a private field and can only be built by the module that declares it";
+
+test "fieldVisibility: a struct with a private field has no default value outside its module" {
+	const forms: string[] = [
+		"function f(): uint64 { let p: Proof; return needs(p); }\n",
+		"function f(flag: boolean): uint64 { let p: Proof; if (flag) { p = make(); } return needs(p); }\n",
+		"function f(): uint64 { let r: Proof; return needs(r); }\nfunction g(): Proof { let r: Proof; return r; }\n",
+		"function f(): uint64 { return needs({} as Proof); }\n",
+		"function f(): uint64 { const p: Proof = {}; return needs(p); }\n",
+		"function f(): uint64 { return needs({}); }\n",
+		"function f(): uint64 { const m: Mixed = { pub: 1 }; return m.pub; }\n",
+		"function f(): uint64 { const w: Wrap = { n: 1 }; return w.n; }\n",
+		"function f(): uint64 { let b: Box<uint64>; return b.n; }\n",
+		"let sealed: Proof;\nfunction f(): uint64 { return needs(sealed); }\n",
+		"class Keeps { p: Proof; constructor() {} }\n",
+	];
+	for (const form of forms) assert reports(sealedLib, sealedUse + form, sealedWhy), form;
+}
+
+test "fieldVisibility: a sized array or a counted array of a struct with a private field is refused outside its module" {
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { let many: Proof[2]; return needs(many[0]); }\n", sealedWhy);
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many: Proof[2] = []; return needs(many[0]); }\n", "2 of 2 slots are left without a value");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many: Proof[3] = [make()]; return needs(many[0]); }\n", "2 of 3 slots are left without a value");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many = new Array<Proof>(2); return needs(many[0]); }\n", "would fill the array with default values");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many: Proof[] = new Array(2); return needs(many[0]); }\n", "would fill the array with default values");
+}
+
+test "fieldVisibility: a sized array or a counted array of a struct holding a class is refused" {
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { let hs: Holder[2]; return hs[0].c.x; }\n", "may be read before it is assigned");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const hs: Holder[2] = []; return hs[0].c.x; }\n", "2 of 2 slots are left without a value");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const hs = new Array<Holder>(2); return hs[0].c.x; }\n", "would fill the array with default values");
+}
+
+test "fieldVisibility: a value from the declaring module, a full assignment and the declaring module itself are accepted" {
+	assert errorsOf("export const unused = 0;\n", "export const total: uint64 = 0;\n").length == 0;
+	assert errorsOf(sealedLib, sealedUse + "function pass(p: Proof): uint64 { return needs(p); }\nfunction every(flag: boolean): uint64 {\n\tlet x: Proof;\n\tif (flag) { x = make(); } else { x = make(); }\n\treturn needs(x);\n}\nfunction opt(): uint64 {\n\tlet o: Proof | null = null;\n\tif (o != null) return needs(o);\n\treturn 0;\n}\nconst boxed = makeBox<uint64>(3);\nconst full: Proof[2] = [make(), make()];\nconst dyn: Proof[] = [];\ndyn.push(make());\nconst grown = new Array<Proof>();\ngrown.push(make());\nconsole.log(pass(make()) + every(true) + opt() + needs(full[0]) + needs(dyn[0]) + needs(grown[0]));\n").length == 0;
+	assert errorsOf("export const unused = 0;\n", sealedLib).length == 0;
+}

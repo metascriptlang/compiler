@@ -1,6 +1,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, IdentifierData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, lookupSymbol, Scope } from "./symbol";
 import { CheckerContext, addError } from "./context";
+import { skipModifier, isStructType, isMaybeType, typeDisplayName } from "./types";
 
 function unwrapDecl(node: Node | null): Node | null {
 	let n = node;
@@ -279,4 +280,46 @@ function receiverClassOf(callee: Node): Symbol | null {
 	const object = (callee.data as MemberExprData).object;
 	if (object == null || isSuperReceiver(object)) return null;
 	return declaringSymOf(object.nodeType);
+}
+
+// A type has no default value when it holds a function, a ref, or a struct with a field
+// the current module cannot name; a sized array has one when its element has none.
+export function requiresInit(ctx: CheckerContext, t: Type | null): boolean {
+	return noDefaultAt(ctx, t, 0) != null;
+}
+
+function noDefaultAt(ctx: CheckerContext, t: Type | null, depth: int32): Type | null {
+	const inner = skipModifier(t);
+	if (inner == null || depth > 16 || isMaybeType(inner)) return null;
+	if (inner.kind == TypeKind.Function || inner.kind == TypeKind.Ref) return inner;
+	if (inner.kind == TypeKind.SizedArray) return inner.typeValue > 0 && noDefaultAt(ctx, inner.typeReturn, depth + 1) != null ? inner : null;
+	const body = inner.kind == TypeKind.GenericInstance && inner.typeReturn != null ? inner.typeReturn : inner;
+	if (!isStructType(body) || body.typeChildren == null) return null;
+	if (body.typeNames != null && hiddenPrivateField(ctx, declaringSymOf(inner), body.typeNames) != "") return inner;
+	for (const field of body.typeChildren) {
+		if (noDefaultAt(ctx, field, depth + 1) != null) return inner;
+	}
+	return null;
+}
+
+// Why `t` has no default value, for the message that refuses building it.
+export function noDefaultReason(ctx: CheckerContext, t: Type | null): string {
+	const holder = hiddenHolder(ctx, t, 0);
+	if (holder == null) return `type '${typeDisplayName(t)}' has no default value`;
+	const sealed = `has a private field and can only be built by the module that declares it`;
+	return skipModifier(t) == holder ? `type '${typeDisplayName(t)}' ${sealed}` : `type '${typeDisplayName(t)}' holds '${typeDisplayName(holder)}', which ${sealed}`;
+}
+
+export function hiddenHolder(ctx: CheckerContext, t: Type | null, depth: int32): Type | null {
+	const inner = skipModifier(t);
+	if (inner == null || depth > 16 || isMaybeType(inner)) return null;
+	if (inner.kind == TypeKind.SizedArray) return hiddenHolder(ctx, inner.typeReturn, depth + 1);
+	const body = inner.kind == TypeKind.GenericInstance && inner.typeReturn != null ? inner.typeReturn : inner;
+	if (!isStructType(body) || body.typeChildren == null) return null;
+	if (body.typeNames != null && hiddenPrivateField(ctx, declaringSymOf(inner), body.typeNames) != "") return inner;
+	for (const field of body.typeChildren) {
+		const found = hiddenHolder(ctx, field, depth + 1);
+		if (found != null) return found;
+	}
+	return null;
 }

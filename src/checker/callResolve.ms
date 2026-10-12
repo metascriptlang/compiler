@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
@@ -15,7 +15,7 @@ import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalR
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
 import { adoptLiteralArms, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
-import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
+import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
 import { bindFromExplicitTypeArgs, builtinTypeNamed, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -829,6 +829,9 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		if (expected != null && expectedArrInner != null && expectedArrInner.kind == TypeKind.Array && id.name == "Array") {
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
+			if (d.newArguments.length > 0 && hiddenHolder(ctx, expectedArrInner.typeReturn, 0) != null) {
+				addError(ctx, `new Array(count) would fill the array with default values: ${noDefaultReason(ctx, expectedArrInner.typeReturn)} — push values instead`, node.location.line, node.location.column);
+			}
 			return expected;
 		}
 		// new Array<T>() or new Array<T>(size) — resolve element type from explicit type arg
@@ -851,6 +854,9 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				const arrType = createRef(createArray(elemType));
 				node.nodeType = arrType;
 				checkNewArgs(ctx, d.newArguments);
+				if (d.newArguments.length > 0 && requiresInit(ctx, elemType)) {
+					addError(ctx, `new Array<${trimmed}>(count) would fill the array with default values: ${noDefaultReason(ctx, elemType)} — push values instead`, node.location.line, node.location.column);
+				}
 				return arrType;
 			}
 		}
@@ -1014,7 +1020,7 @@ function fieldsWithoutDefault(ctx: CheckerContext, classSym: Symbol, depth: int3
 		}
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
-		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(member.nodeType)) continue;
+		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(ctx, member.nodeType)) continue;
 		missing.push(pd.propName);
 	}
 	return missing;

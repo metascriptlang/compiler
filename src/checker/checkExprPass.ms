@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -27,7 +27,7 @@ import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
 import {
-	markInitialized, isInitialized, getDeclBlock, requiresInit,
+	markInitialized, isInitialized, getDeclBlock,
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
@@ -1704,12 +1704,17 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 				let mi = 0;
 				while (mi < objNames.length) {
 					const wantT = mi < objChildren.length ? objChildren[mi] : null as unknown as Type;
-					if (wantT != null && requiresInit(wantT)) {
-						const want = objNames[mi];
+					const want = objNames[mi];
+					const hidden = hiddenPrivateField(ctx, literalOwnerSym != null ? literalOwnerSym : objE.sym, [want]) != "";
+					if (wantT != null && (hidden || requiresInit(ctx, wantT))) {
 						let present = false;
 						for (const k of d.keys) { if (k == want) { present = true; break; } }
-						if (!present) {
-							addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value — give it in the literal or an initializer in the class, or declare the field optional with '?'`, node.location.line, node.location.column);
+						if (!present && hidden) {
+							addError(ctx, `type '${containerName}' has a private field and can only be built by the module that declares it — obtain one from that module`, node.location.line, node.location.column);
+						} else if (!present && hiddenHolder(ctx, wantT, 0) != null) {
+							addError(ctx, `field '${want}' cannot be left out: ${noDefaultReason(ctx, wantT)} — obtain one from that module`, node.location.line, node.location.column);
+						} else if (!present) {
+							addError(ctx, `field '${want}' must be initialized: ${noDefaultReason(ctx, wantT)} — give it in the literal or an initializer in the class, or declare the field optional with '?'`, node.location.line, node.location.column);
 						}
 					}
 					mi = mi + 1;
@@ -2133,6 +2138,7 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 		? arrExpected.typeReturn
 		: null;
 	if (d.elements.length == 0) {
+		refuseUnfilledSlots(ctx, node, arrExpected, 0);
 		if (arrExpected != null && (arrExpected.kind == TypeKind.SizedArray || arrExpected.kind == TypeKind.Array)) {
 			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
 		} else if (elemExpected != null) {
@@ -2243,6 +2249,7 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 			if (d.elements.length > expectedLen) {
 				addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
 			}
+			refuseUnfilledSlots(ctx, node, arrExpected, d.elements.length);
 			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
 		} else if (arrExpected != null && arrExpected.kind == TypeKind.Array && !hasGenericParams(arrExpected)) {
 			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
@@ -2501,8 +2508,8 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (sym.symbolKind == SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0
 		&& ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction != null
 		&& !isInitialized(ctx.initTracker, d.name) && isLocalToFunction(ctx, d.name, sym)) {
-		if (requiresInit(sym.symbolType)) {
-			addError(ctx, "'" + d.name + "' may be read before it is assigned: type '" + typeDisplayName(sym.symbolType) + "' has no default value", node.location.line, node.location.column);
+		if (requiresInit(ctx, sym.symbolType)) {
+			addError(ctx, "'" + d.name + "' may be read before it is assigned: " + noDefaultReason(ctx, sym.symbolType), node.location.line, node.location.column);
 			markInitialized(ctx.initTracker, d.name);
 		} else if (ctx.strictDefs) {
 			addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
@@ -3616,6 +3623,11 @@ function objectViewOf(ctx: CheckerContext, operand: Node, srcType: Type, targetT
 	if (at < 0 || at >= source.typeChildren.length) return null;
 	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": its field '" + field + "' is " + typeDisplayName(source.typeChildren[at]) + ", and an object type cast reads the object's own fields", line, column);
 	return null;
+}
+
+function refuseUnfilledSlots(ctx: CheckerContext, node: Node, arrType: Type | null, given: int32): void {
+	if (arrType == null || arrType.kind != TypeKind.SizedArray || given >= arrType.typeValue || !requiresInit(ctx, arrType.typeReturn)) return;
+	addError(ctx, `${arrType.typeValue - given} of ${arrType.typeValue} slots are left without a value: ${noDefaultReason(ctx, arrType.typeReturn)} — give every slot a value`, node.location.line, node.location.column);
 }
 
 function refuseHiddenFieldInLiteral(ctx: CheckerContext, ownerSym: Symbol | null, key: string, value: Node, literal: Node, d: ObjectLiteralData, index: int32): void {
