@@ -3444,6 +3444,25 @@ test "accounts<T>() verifies the fields of a base declared in another module, un
 	}
 }
 
+export struct LoneBase { owner: Signer; }
+export struct LoneChild extends LoneBase {}
+
+function loneChildStep(): Result<uint64, ProgramError> {
+	const x = try accounts<LoneChild>();
+	if (!x.owner.key().equals(keyOf(2))) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(0);
+}
+
+function loneChildEntry(): void { codeOf(loneChildStep()); }
+
+test "accounts<T>() verifies the only field of a struct when the struct inherits it" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), [ownerWallet()], [], loneChildEntry).result == 0;
+	assert run(programKey(), [holder(2, Pubkey.zero(), [], false, false)], [], loneChildEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), none, [], loneChildEntry).result == ProgramError.accountNotEnoughKeys().code;
+}
+
 export struct NearKept extends FarKept { limit: uint64; }
 
 export function discriminator(this typeof NearKept): Discriminator {
