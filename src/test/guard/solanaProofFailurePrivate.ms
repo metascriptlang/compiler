@@ -1,6 +1,7 @@
 // GUARD-OS solana
 // GUARD-CHECK-FAIL signerProofFailure
 // GUARD-CHECK-FAIL ownedProofFailure
+// GUARD-CHECK-FAIL 'signer' may be read before it is assigned: type 'Signer' has a private field
 // GUARD-CHECK-FAIL Module 'std/solana' has no export 'closedProgramAccount'
 // GUARD-CHECK-FAIL Module 'std/solana' has no export 'resizedProgramAccount'
 // GUARD-CHECK-FAIL Module 'std/solana' has no export 'createdAccount'
