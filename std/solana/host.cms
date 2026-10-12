@@ -381,7 +381,8 @@ test "a repeated account is serialized once and both indexes reach it" {
 }
 
 test "a CPI is recorded with its program, accounts and data" {
-	const accounts: HostAccount[] = [holderOf(1, [], true, true), holderOf(2, [], false, true)];
+	const payer = { ...holderOf(1, [], true, true), owner: Pubkey.zero() };
+	const accounts: HostAccount[] = [payer, holderOf(2, [], false, true)];
 	const empty: uint8[] = [];
 	const outcome = run(keyOf(9), accounts, empty, payTen);
 	assert outcome.result == 0;

@@ -147,9 +147,10 @@ async function scenario(label, features, body) {
 		const error = failed
 			? result.err().toString().replace("TransactionErrorInstructionError { index: 0, error: ", "")
 				.replace("InstructionErrorCustom { code: ", "custom ").replaceAll(" }", "")
+				.replace(/^TransactionError(\w+) \{ account_index: \d+$/, "$1")
 			: "";
 		const reason = logs.filter((line) => / failed: /.test(line)).map((line) => line.split(" failed: ")[1])[0] ?? "";
-		const answer = failed ? `${error} by ${names.get(refusedBy) ?? refusedBy}` : "ok";
+		const answer = failed ? `${error} by ${refusedBy === "" ? "the transaction" : names.get(refusedBy)}` : "ok";
 		const passed = answer === expected && reason.includes(because);
 		const shown = `${answer}${reason === "" ? "" : ` (${reason})`}`;
 		console.log(`[${features}] [${label}] ${step}: ${shown}${passed ? "" : `  <-- FAILED, expected ${expected} ${because}`}`);
@@ -445,6 +446,12 @@ for (const features of ["all features", "mainnet"]) {
 			await system(`${name} with the payer as the new account, of no bytes, for the System program`,
 				[signer(pays), signer(pays)], build(5, 0, SYSTEM), prefunds ? OK : IN_USE);
 		}
+
+		const BELOW_RENT = "InsufficientFundsForRent by the transaction";
+		await system("CreateAccount for fewer lamports than 8 bytes need to be rent exempt",
+			[signer(pays), signer(await blank())], create(rent(8) - 1n, 8), BELOW_RENT);
+		await system("Transfer that leaves a new account below rent exemption",
+			[signer(pays), t.held(await blank())], transfer(1), BELOW_RENT);
 
 		const sized = await wallet();
 		await system("Allocate", [signer(sized)], allocate(8), OK);

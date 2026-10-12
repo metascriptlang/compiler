@@ -238,7 +238,7 @@ function linesStarting(prefix: string): int32 {
 	return count;
 }
 
-test "a log line is kept whole when it is UTF-8, a zero byte included, and aborts the program when not" {
+test "a log line is kept whole when it is UTF-8, a zero byte included, and aborts when it is not" {
 	assert sent([LOG_BYTES, 0x68, 0xc3, 0xa9]).result == 0 && logs()[0] == "Program log: h\u{e9}";
 	assert sent([LOG_BYTES]).result == 0 && logs()[0] == "Program log: ";
 	assert sent([LOG_BYTES, 0xf4, 0x8f, 0xbf, 0xbf]).result == 0 && logs()[0].length > 13;
@@ -279,4 +279,241 @@ test "the log keeps the lines that fit under 10,000 bytes and says once that it 
 		assert linesStarting("Program log: aa") == fit;
 		assert linesStarting("Log truncated") == entry[2];
 	}
+}
+
+const RENT_OF_8: uint64 = 946560;
+const TOO_LARGE: uint64 = 10485761;
+
+function createOf(amount: uint64, space: uint64, owner: Pubkey, tag: uint8): uint8[] {
+	const data: uint8[] = [tag, 0, 0, 0];
+	pushU64(data, amount);
+	pushU64(data, space);
+	for (const byte of owner.bytes) { data.push(byte); }
+	return data;
+}
+
+function assignOf(owner: Pubkey): uint8[] {
+	const data: uint8[] = [1, 0, 0, 0];
+	for (const byte of owner.bytes) { data.push(byte); }
+	return data;
+}
+
+function allocateOf(space: uint64): uint8[] {
+	const data: uint8[] = [8, 0, 0, 0];
+	pushU64(data, space);
+	return data;
+}
+
+function laden(seed: uint8, fill: uint8 = 0): HostAccount {
+	return { ...wallet(seed), data: [fill, fill, fill, fill, fill, fill, fill, fill] };
+}
+
+function blank(seed: uint8): HostAccount { return { ...wallet(seed), lamports: 0 }; }
+
+function programOwned(seed: uint8[], data: uint8[] = [], lamports: uint64 = SOL): Passed {
+	return flagged(holding(derived(seed), programKey(), lamports, data), true, true);
+}
+
+function unsignedBy(account: HostAccount): Passed { return flagged(account, true, false); }
+
+function readOnly(account: HostAccount): Passed { return flagged(account, false, account.signer); }
+
+function system(passed: Passed[], sent: uint8[], signing: Signing = unsigned()): Outcome {
+	return forwarded(SYSTEM_PROGRAM_ID, passed, sent, signing);
+}
+
+function passes(outcome: Outcome): boolean { return outcome.result == 0 && outcome.fault == ""; }
+
+function answers(outcome: Outcome, error: ProgramError): boolean {
+	return outcome.result == error.code && outcome.fault == "";
+}
+
+function inUse(outcome: Outcome): boolean { return answers(outcome, ProgramError.custom(0)); }
+
+function tooFewLamports(outcome: Outcome): boolean {
+	return answers(outcome, ProgramError.custom(1));
+}
+
+function unsignedFor(outcome: Outcome): boolean {
+	return answers(outcome, ProgramError.missingRequiredSignature());
+}
+
+function short(outcome: Outcome): boolean {
+	return answers(outcome, ProgramError.invalidInstructionData());
+}
+
+test "the simulated System Transfer answers what the System program answers" {
+	const seed = seedWhere(false, 0);
+	const signed = seeded(seed);
+	const to = held(wallet(2));
+	const moved = system([held(wallet(1)), to], transferOf(5));
+	assert passes(moved);
+	assert moved.accounts[1].lamports == SOL - 5 && moved.accounts[2].lamports == SOL + 5;
+	const trailing = transferOf(5);
+	trailing.push(0);
+	assert passes(system([held(wallet(1)), to], trailing));
+	const itself = system([held(wallet(1)), held(wallet(1))], transferOf(5));
+	assert passes(itself) && itself.accounts[1].lamports == SOL;
+	assert tooFewLamports(system([held(wallet(1)), held(wallet(1))], transferOf(2 * SOL)));
+	assert short(system([held(wallet(1)), to], [2, 0, 0, 0, 5, 0, 0, 0]));
+	assert short(system([held(wallet(1))], [2, 0, 0, 0, 5, 0, 0, 0]));
+	assert refusedAs(system([held(wallet(1))], transferOf(5)), "MissingAccount");
+	assert unsignedFor(system([unsignedBy(wallet(1)), to], transferOf(5)));
+	assert unsignedFor(system([unsignedBy(laden(1)), to], transferOf(5)));
+	for (const amount of [5, 0]) {
+		const refused = system([held(laden(1)), to], transferOf(amount as uint64));
+		assert answers(refused, ProgramError.invalidArgument());
+	}
+	const ladenPda = system([programOwned(seed, zeros(8)), to], transferOf(5), signed);
+	assert answers(ladenPda, ProgramError.invalidArgument());
+	assert tooFewLamports(system([held(wallet(1)), to], transferOf(2 * SOL)));
+	assert tooFewLamports(system([programOwned(seed), to], transferOf(2 * SOL), signed));
+	assert tooFewLamports(system([readOnly(wallet(1)), to], transferOf(2 * SOL)));
+	const spent = system([programOwned(seed), to], transferOf(5), signed);
+	assert refusedAs(spent, "ExternalAccountLamportSpend");
+	assert spent.accounts[1].lamports == SOL && spent.accounts[2].lamports == SOL;
+	const pdaReadOnly = flagged(programOwned(seed).account, false, true);
+	const spentReadOnly = system([pdaReadOnly, to], transferOf(5), signed);
+	assert refusedAs(spentReadOnly, "ExternalAccountLamportSpend");
+	assert passes(system([programOwned(seed), to], transferOf(0), signed));
+	for (const amount of [5, 0]) {
+		const sent = transferOf(amount as uint64);
+		assert refusedAs(system([readOnly(wallet(1)), to], sent), "ReadonlyLamportChange");
+		const kept = system([held(wallet(1)), readOnly(wallet(2))], sent);
+		assert refusedAs(kept, "ReadonlyLamportChange");
+		assert kept.accounts[1].lamports == SOL && kept.accounts[2].lamports == SOL;
+	}
+	const brimming = holding(keyOf(3), SYSTEM_PROGRAM_ID, 0xfffffffffffffff0);
+	for (const target of [held(brimming), readOnly(brimming)]) {
+		const overflowed = system([held(wallet(1)), target], transferOf(100));
+		assert answers(overflowed, ProgramError.arithmeticOverflow());
+		assert overflowed.accounts[1].lamports == SOL;
+	}
+}
+
+test "the simulated System account creation answers what the System program answers" {
+	const seed = seedWhere(false, 0);
+	const signed = seeded(seed);
+	for (const prefunds of [false, true]) {
+		const tag: uint8 = prefunds ? 13 : 0;
+		const sized = createOf(RENT_OF_8, 8, programKey(), tag);
+		const creates = (from: Passed, at: Passed, sent: uint8[], signing: Signing): Outcome => {
+			return system(prefunds ? [at, from] : [from, at], sent, signing);
+		};
+		const plain = (payer: Passed, target: Passed, sent: uint8[]): Outcome => {
+			return creates(payer, target, sent, unsigned());
+		};
+		const payer = held(wallet(1));
+		const target = held(blank(2));
+		const made = plain(payer, target, sized);
+		const account = made.accounts[prefunds ? 1 : 2];
+		assert passes(made) && account.owner.equals(programKey()) && account.data.length == 8;
+		assert account.lamports == RENT_OF_8;
+		assert made.accounts[prefunds ? 2 : 1].lamports == SOL - RENT_OF_8;
+		assert passes(plain(payer, target, createOf(0, 0, programKey(), tag)));
+		assert passes(plain(payer, target, createOf(RENT_OF_8, 10240, programKey(), tag)));
+		const cut: uint8[] = [];
+		for (let index = 0; index < 51; index++) { cut.push(sized[index]); }
+		assert short(plain(payer, target, cut));
+		assert refusedAs(system([target], sized), "MissingAccount");
+		assert refusedAs(system([held(laden(2))], sized), "MissingAccount");
+		for (const alone of [blank(2), wallet(2)]) {
+			const outcome = system([held(alone)], createOf(0, 8, programKey(), tag));
+			assert prefunds ? passes(outcome) : refusedAs(outcome, "MissingAccount");
+		}
+
+		const funded = plain(payer, held(wallet(2)), sized);
+		assert prefunds ? passes(funded) : inUse(funded);
+		assert funded.accounts[prefunds ? 1 : 2].lamports == (prefunds ? SOL + RENT_OF_8 : SOL);
+		const unsignedFunded = plain(payer, unsignedBy(wallet(2)), sized);
+		assert prefunds ? unsignedFor(unsignedFunded) : inUse(unsignedFunded);
+		assert unsignedFor(plain(payer, unsignedBy(blank(2)), sized));
+		assert inUse(plain(payer, held(laden(2)), sized));
+		const unsignedLaden = plain(payer, unsignedBy(laden(2)), sized);
+		assert prefunds ? unsignedFor(unsignedLaden) : inUse(unsignedLaden);
+		assert inUse(creates(payer, programOwned(seed), sized, signed));
+		assert inUse(creates(payer, programOwned(seed, [], 0), sized, signed));
+		assert inUse(creates(payer, programOwned(seed, zeros(8), 0), sized, signed));
+		assert inUse(plain(held(laden(1)), held(laden(2)), sized));
+		const tooLarge = createOf(RENT_OF_8, TOO_LARGE, programKey(), tag);
+		assert inUse(plain(payer, held(laden(2)), tooLarge));
+		assert answers(plain(payer, target, tooLarge), ProgramError.custom(3));
+		assert answers(plain(held(laden(1)), target, tooLarge), ProgramError.custom(3));
+		assert refusedAs(plain(payer, readOnly(blank(2)), sized), "ReadonlyDataModified");
+		for (const owner of [programKey(), SYSTEM_PROGRAM_ID]) {
+			const empty = createOf(RENT_OF_8, 0, owner, tag);
+			assert refusedAs(plain(payer, readOnly(blank(2)), empty), "ReadonlyDataModified");
+		}
+
+		const free = createOf(0, 8, programKey(), tag);
+		assert unsignedFor(plain(unsignedBy(wallet(1)), target, sized));
+		assert unsignedFor(plain(unsignedBy(laden(1)), target, sized));
+		const freeUnsigned = plain(unsignedBy(wallet(1)), target, free);
+		assert prefunds ? passes(freeUnsigned) : unsignedFor(freeUnsigned);
+		assert answers(plain(held(laden(1)), target, sized), ProgramError.invalidArgument());
+		const freeLaden = plain(held(laden(1)), target, free);
+		assert prefunds
+			? passes(freeLaden)
+			: answers(freeLaden, ProgramError.invalidArgument());
+		assert tooFewLamports(plain(payer, target, createOf(2 * SOL, 8, programKey(), tag)));
+		assert tooFewLamports(plain(payer, target, createOf(2 * SOL, 10241, programKey(), tag)));
+		const foreignPayer = creates(programOwned(seed), target, sized, signed);
+		assert refusedAs(foreignPayer, "ExternalAccountLamportSpend");
+		assert foreignPayer.accounts[prefunds ? 1 : 2].data.length == 0;
+		assert refusedAs(plain(readOnly(wallet(1)), target, sized), "ReadonlyLamportChange");
+		const grown = plain(payer, target, createOf(RENT_OF_8, 10241, programKey(), tag));
+		assert answers(grown, ProgramError.invalidRealloc());
+		assert grown.accounts[1].lamports + grown.accounts[2].lamports == SOL;
+
+		const same = system([payer, payer], sized);
+		assert prefunds ? answers(same, ProgramError.invalidArgument()) : inUse(same);
+		const sameEmpty = system([payer, payer], createOf(5, 0, programKey(), tag));
+		assert prefunds ? refusedAs(sameEmpty, "ExternalAccountLamportSpend") : inUse(sameEmpty);
+		const sameSystem = system([payer, payer], createOf(5, 0, SYSTEM_PROGRAM_ID, tag));
+		assert prefunds ? passes(sameSystem) : inUse(sameSystem);
+	}
+}
+
+test "the simulated System Allocate answers what the System program answers" {
+	const seed = seedWhere(false, 0);
+	const sized = system([held(wallet(1))], allocateOf(8));
+	assert passes(sized) && sized.accounts[1].data.length == 8;
+	assert sized.accounts[1].owner.equals(SYSTEM_PROGRAM_ID);
+	assert passes(system([held(wallet(1))], allocateOf(0)));
+	assert passes(system([held(wallet(1))], allocateOf(10240)));
+	assert passes(system([held(blank(1))], allocateOf(8)));
+	assert short(system([held(wallet(1))], [8, 0, 0, 0, 8, 0, 0, 0]));
+	assert refusedAs(system([], allocateOf(8)), "MissingAccount");
+	assert unsignedFor(system([unsignedBy(wallet(1))], allocateOf(8)));
+	assert unsignedFor(system([unsignedBy(laden(1))], allocateOf(8)));
+	assert inUse(system([held(laden(1))], allocateOf(16)));
+	assert inUse(system([programOwned(seed)], allocateOf(8), seeded(seed)));
+	assert inUse(system([held(laden(1))], allocateOf(TOO_LARGE)));
+	assert answers(system([held(wallet(1))], allocateOf(TOO_LARGE)), ProgramError.custom(3));
+	for (const space of [8, 0]) {
+		const refused = system([readOnly(wallet(1))], allocateOf(space as uint64));
+		assert refusedAs(refused, "ReadonlyDataModified");
+	}
+	assert answers(system([held(wallet(1))], allocateOf(10241)), ProgramError.invalidRealloc());
+}
+
+test "the simulated System Assign answers what the System program answers" {
+	const seed = seedWhere(false, 0);
+	const given = system([held(wallet(1))], assignOf(programKey()));
+	assert passes(given) && given.accounts[1].owner.equals(programKey());
+	assert passes(system([held(laden(1))], assignOf(programKey())));
+	assert passes(system([unsignedBy(wallet(1))], assignOf(SYSTEM_PROGRAM_ID)));
+	assert passes(system([readOnly(wallet(1))], assignOf(SYSTEM_PROGRAM_ID)));
+	const cut = assignOf(programKey());
+	cut.pop();
+	assert short(system([held(wallet(1))], cut));
+	assert short(system([], cut));
+	assert refusedAs(system([], assignOf(programKey())), "MissingAccount");
+	assert unsignedFor(system([unsignedBy(wallet(1))], assignOf(programKey())));
+	assert unsignedFor(system([unsignedBy(programOwned(seed).account)], assignOf(keyOf(8))));
+	const foreign = system([programOwned(seed)], assignOf(keyOf(8)), seeded(seed));
+	assert refusedAs(foreign, "ModifiedProgramId");
+	assert foreign.accounts[1].owner.equals(programKey());
+	assert refusedAs(system([held(laden(1, 7))], assignOf(programKey())), "ModifiedProgramId");
+	assert refusedAs(system([readOnly(wallet(1))], assignOf(programKey())), "ModifiedProgramId");
 }

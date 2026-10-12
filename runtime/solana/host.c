@@ -567,66 +567,6 @@ static uint64_t msSolHostNotSimulated(const char* program, unsigned instruction,
     return status;
 }
 
-static uint64_t msSolHostSystem(const uint64_t* header) {
-    static const uint8_t systemProgram[32] = {0};
-    if (header[4] < 4) return MS_SOL_HOST_INVALID_INSTRUCTION_DATA;
-    const uint8_t* data = (const uint8_t*)header[3];
-    uint32_t tag;
-    memcpy(&tag, data, 4);
-    uint8_t* first = msSolHostRecordOf(header, 0);
-    uint8_t* second = msSolHostRecordOf(header, 1);
-    uint64_t amount = 0;
-    if (header[4] >= 12) memcpy(&amount, data + 4, 8);
-    switch (tag) {
-    case 0: {
-        if (first == NULL || second == NULL || header[4] < 52) return 3ULL << 32;
-        if (msSolHostLamports(second) != 0) return 1ULL << 32;
-        if (msSolHostLamports(first) < amount) return 1;
-        uint64_t space;
-        memcpy(&space, data + 12, 8);
-        uint64_t status = msSolHostResize(second, space);
-        if (status != 0) return status;
-        msSolHostSetLamports(first, msSolHostLamports(first) - amount);
-        msSolHostSetLamports(second, amount);
-        memcpy(second + 40, data + 20, 32);
-        return 0;
-    }
-    case 13: {
-        if (first == NULL || header[4] < 52) return 3ULL << 32;
-        uint64_t length, space;
-        memcpy(&length, first + 80, 8);
-        memcpy(&space, data + 12, 8);
-        if (length != 0 || memcmp(first + 40, systemProgram, 32) != 0) return 1ULL << 32;
-        if (space > MS_SOL_MAX_PERMITTED_DATA_INCREASE) return 20ULL << 32;
-        if (amount != 0 && (second == NULL || second == first)) return 3ULL << 32;
-        if (amount != 0 && msSolHostLamports(second) < amount) return 1;
-        uint64_t current = msSolHostLamports(first);
-        if (amount > UINT64_MAX - current) return 24ULL << 32;
-        uint64_t status = msSolHostResize(first, space);
-        if (status != 0) return status;
-        if (amount != 0) msSolHostSetLamports(second, msSolHostLamports(second) - amount);
-        msSolHostSetLamports(first, current + amount);
-        memcpy(first + 40, data + 20, 32);
-        return 0;
-    }
-    case 1:
-        if (first == NULL || header[4] < 36) return 3ULL << 32;
-        memcpy(first + 40, data + 4, 32);
-        return 0;
-    case 2:
-        if (first == NULL || second == NULL) return 3ULL << 32;
-        if (msSolHostLamports(first) < amount) return 1;
-        msSolHostSetLamports(first, msSolHostLamports(first) - amount);
-        msSolHostSetLamports(second, msSolHostLamports(second) + amount);
-        return 0;
-    case 8:
-        if (first == NULL) return 3ULL << 32;
-        return msSolHostResize(first, amount);
-    default:
-        return msSolHostNotSimulated("System", tag, MS_SOL_HOST_INVALID_INSTRUCTION_DATA);
-    }
-}
-
 static const uint8_t msSolHostTokenProgram[32] = {
     0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93, 0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
     0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91, 0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
@@ -1301,6 +1241,123 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     msSolHostSetLamports(associated, held + missing);
     memcpy(associated + 40, program + 8, 32);
     return msSolHostInitializeAccount3(inner, associated, mint, 1);
+}
+
+#define MS_SOL_HOST_SYSTEM_ALREADY_IN_USE (1ULL << 32)
+#define MS_SOL_HOST_SYSTEM_TOO_FEW_LAMPORTS 1ULL
+#define MS_SOL_HOST_SYSTEM_INVALID_DATA_LENGTH 3ULL
+#define MS_SOL_HOST_SYSTEM_MAX_SPACE (10ULL * 1024 * 1024)
+#define MS_SOL_HOST_ARITHMETIC_OVERFLOW (24ULL << 32)
+
+typedef struct {
+    uint8_t* record;
+    uint64_t lamports;
+    uint64_t space;
+    const uint8_t* owner;
+    int signer;
+    int writable;
+} msSolHostSystemAccount;
+
+static const uint8_t msSolHostSystemProgram[32] = {0};
+
+static uint64_t msSolHostRefuses(const char* text) {
+    msSolHostFault(MS_SOL_HOST_REFUSED, text);
+    return MS_SOL_HOST_REFUSED;
+}
+
+static int msSolHostSystemOwns(const msSolHostSystemAccount* account) {
+    return memcmp(account->owner, msSolHostSystemProgram, 32) == 0;
+}
+
+static uint64_t msSolHostSystemAllocate(msSolHostSystemAccount* account, uint64_t space) {
+    if (!account->signer) return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
+    if (account->space != 0 || !msSolHostSystemOwns(account)) return MS_SOL_HOST_SYSTEM_ALREADY_IN_USE;
+    if (space > MS_SOL_HOST_SYSTEM_MAX_SPACE) return MS_SOL_HOST_SYSTEM_INVALID_DATA_LENGTH;
+    if (!account->writable) {
+        return msSolHostRefuses("ReadonlyDataModified: sol_invoke_signed: the System program sized an account the instruction does not pass writable");
+    }
+    account->space = space;
+    return 0;
+}
+
+static uint64_t msSolHostSystemAssign(msSolHostSystemAccount* account, const uint8_t* owner) {
+    if (memcmp(account->owner, owner, 32) == 0) return 0;
+    if (!account->signer) return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
+    if (!msSolHostSystemOwns(account) || !account->writable
+        || msSolHostAnyByte(account->record + 88, 0, msSolHostLoadU64(account->record + 80))) {
+        return msSolHostRefuses("ModifiedProgramId: sol_invoke_signed: the System program may not change the owner of this account");
+    }
+    account->owner = owner;
+    return 0;
+}
+
+static uint64_t msSolHostSystemTransfer(msSolHostSystemAccount* from, msSolHostSystemAccount* to, uint64_t amount) {
+    if (!from->signer) return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
+    if (from->space != 0) return MS_SOL_HOST_INVALID_ARGUMENT;
+    if (amount > from->lamports) return MS_SOL_HOST_SYSTEM_TOO_FEW_LAMPORTS;
+    if (amount != 0 && !msSolHostSystemOwns(from)) {
+        return msSolHostRefuses("ExternalAccountLamportSpend: sol_invoke_signed: the System program spent the lamports of an account it does not own");
+    }
+    if (!from->writable) {
+        return msSolHostRefuses("ReadonlyLamportChange: sol_invoke_signed: the System program debits an account the instruction does not pass writable");
+    }
+    from->lamports -= amount;
+    if (amount > UINT64_MAX - to->lamports) return MS_SOL_HOST_ARITHMETIC_OVERFLOW;
+    if (!to->writable) {
+        return msSolHostRefuses("ReadonlyLamportChange: sol_invoke_signed: the System program credits an account the instruction does not pass writable");
+    }
+    to->lamports += amount;
+    return 0;
+}
+
+static uint64_t msSolHostSystem(const uint64_t* header) {
+    static const uint64_t dataLength[14] = {[0] = 52, [1] = 36, [2] = 12, [8] = 12, [13] = 52};
+    if (header[4] < 4) return MS_SOL_HOST_INVALID_INSTRUCTION_DATA;
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint32_t tag;
+    memcpy(&tag, data, 4);
+    if (tag > 13 || dataLength[tag] == 0) return msSolHostNotSimulated("System", tag, MS_SOL_HOST_INVALID_INSTRUCTION_DATA);
+    if (header[4] < dataLength[tag]) return MS_SOL_HOST_INVALID_INSTRUCTION_DATA;
+    const uint64_t amount = tag == 1 ? 0 : msSolHostLoadU64(data + 4);
+    msSolHostSystemAccount accounts[2];
+    uint64_t count = 0;
+    while (count < 2 && msSolHostRecordOf(header, count) != NULL) {
+        uint8_t* record = msSolHostRecordOf(header, count);
+        const uint8_t* meta = (const uint8_t*)(header[1] + count * 16);
+        accounts[count++] = (msSolHostSystemAccount){
+            record, msSolHostLamports(record), msSolHostLoadU64(record + 80), record + 40, meta[9] != 0, meta[8] != 0,
+        };
+    }
+    if (count < (tag == 0 || tag == 2 || (tag == 13 && amount != 0) ? 2 : 1)) {
+        return msSolHostRefuses("MissingAccount: sol_invoke_signed: the System program instruction names fewer accounts than it reads");
+    }
+    msSolHostSystemAccount* first = &accounts[0];
+    msSolHostSystemAccount* second = count == 2 && accounts[1].record != first->record ? &accounts[1] : first;
+    uint64_t status = 0;
+    switch (tag) {
+    case 0:
+        if (second->lamports != 0) return MS_SOL_HOST_SYSTEM_ALREADY_IN_USE;
+        status = msSolHostSystemAllocate(second, msSolHostLoadU64(data + 12));
+        if (status == 0) status = msSolHostSystemAssign(second, data + 20);
+        if (status == 0) status = msSolHostSystemTransfer(first, second, amount);
+        break;
+    case 13:
+        status = msSolHostSystemAllocate(first, msSolHostLoadU64(data + 12));
+        if (status == 0) status = msSolHostSystemAssign(first, data + 20);
+        if (status == 0 && amount != 0) status = msSolHostSystemTransfer(second, first, amount);
+        break;
+    case 1: status = msSolHostSystemAssign(first, data + 4); break;
+    case 2: status = msSolHostSystemTransfer(first, second, amount); break;
+    default: status = msSolHostSystemAllocate(first, amount); break;
+    }
+    if (status == 0) status = msSolHostResize(first->record, first->space);
+    if (status == 0) status = msSolHostResize(second->record, second->space);
+    if (status != 0) return status;
+    for (msSolHostSystemAccount* account = first; ; account = second) {
+        msSolHostSetLamports(account->record, account->lamports);
+        memmove(account->record + 40, account->owner, 32);
+        if (account == second) return 0;
+    }
 }
 
 static uint64_t msSolHostSignersRefused(uint64_t signers, uint64_t signerCount, uint64_t* recordedBytes) {
