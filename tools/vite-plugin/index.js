@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
-import { join, resolve, dirname, relative } from "node:path";
+import { join, resolve, dirname, relative, basename } from "node:path";
 import MagicString from "magic-string";
 
 const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
@@ -16,6 +16,21 @@ function canon(p) {
 function stripQuery(id) {
 	const q = id.indexOf("?");
 	return q === -1 ? id : id.slice(0, q);
+}
+
+// A generic instance with a file of its own has no source file of its own, so
+// its id is the source of the module declaring the generic plus this query.
+// The emitted file's own path would put the id under node_modules, where Vite
+// serves a module as an immutable dependency.
+const INSTANCE_RE = /[?&]instance=([^&]+)/;
+
+function instanceOf(id) {
+	const m = INSTANCE_RE.exec(id);
+	return m ? m[1] : "";
+}
+
+function withInstance(path, instance) {
+	return instance ? `${path}?instance=${instance}` : path;
 }
 
 export default function metascript(options = {}) {
@@ -50,8 +65,9 @@ export default function metascript(options = {}) {
 		}
 		const manifest = JSON.parse(readFileSync(join(outDir, "_manifest.json"), "utf8"));
 		const bySource = new Map();
+		const byInstance = new Map();
 		const byOutput = new Map();
-		for (const m of manifest.modules) {
+		const read = (m, instance) => {
 			const file = canon(join(outDir, m.out));
 			const mapFile = `${file}.map`;
 			const code = readFileSync(file, "utf8").replace(/\n*\/\/# sourceMappingURL=[^\n]*\n?/, "\n");
@@ -60,13 +76,24 @@ export default function metascript(options = {}) {
 				: null;
 			if (map) map = { ...map, sources: map.sources.map(source => resolve(dirname(file), source).replace(/\\/g, "/")) };
 			const source = canon(m.source);
-			bySource.set(source, file);
-			byOutput.set(file, { source, code, map });
+			byOutput.set(file, { source, instance, code, map });
+			return file;
+		};
+		for (const m of manifest.modules) bySource.set(canon(m.source), read(m, ""));
+		for (const m of manifest.instances ?? []) {
+			const instance = basename(m.out, ".js");
+			byInstance.set(instance, read(m, instance));
 		}
-		emitted = { bySource, byOutput };
+		emitted = { bySource, byInstance, byOutput };
 		// Vite only watches inside root, so .ms sources living outside it have
 		// to be registered explicitly or an edit never reaches the handler.
 		if (server) server.watcher.add([...bySource.keys()]);
+	}
+
+	function outputOf(id) {
+		if (emitted === null) return undefined;
+		const instance = instanceOf(id);
+		return instance ? emitted.byInstance.get(instance) : emitted.bySource.get(canon(stripQuery(id)));
 	}
 
 	return {
@@ -102,18 +129,21 @@ export default function metascript(options = {}) {
 			}
 			const changed = new Set();
 			for (const [file, output] of emitted.byOutput) {
-				if (previous.byOutput.get(file)?.code !== output.code) changed.add(output.source);
+				if (previous.byOutput.get(file)?.code !== output.code) changed.add(output);
 			}
 			for (const [file, output] of previous.byOutput) {
 				if (emitted.byOutput.has(file)) continue;
-				changed.add(output.source);
+				changed.add(output);
 				if (existsSync(file)) unlinkSync(file);
 				if (existsSync(`${file}.map`)) unlinkSync(`${file}.map`);
 			}
 			const modules = new Set();
-			for (const file of changed) {
-				const loaded = ctx.server.moduleGraph.getModulesByFile(file.replace(/\\/g, "/"));
-				if (loaded) for (const module of loaded) modules.add(module);
+			for (const output of changed) {
+				const loaded = ctx.server.moduleGraph.getModulesByFile(output.source.replace(/\\/g, "/"));
+				if (!loaded) continue;
+				for (const module of loaded) {
+					if (instanceOf(module.id ?? "") === output.instance) modules.add(module);
+				}
 			}
 			if (compileFailed && modules.size === 0) ctx.server.ws.send({ type: "update", updates: [] });
 			compileFailed = false;
@@ -125,15 +155,14 @@ export default function metascript(options = {}) {
 		// generated .js unless the map is handed over here. Dev goes through the
 		// same hook, which also spares the browser a second request for it.
 		load(id) {
-			const source = canon(stripQuery(id));
-			const output = emitted?.bySource.get(source);
+			const output = outputOf(id);
 			const module = output ? emitted.byOutput.get(output) : null;
 			return module ? { code: module.code, map: module.map } : null;
 		},
 
 		transform(code, id) {
 			const source = canon(stripQuery(id));
-			const output = emitted?.bySource.get(source);
+			const output = outputOf(id);
 			if (!output) return null;
 			let rewritten = null;
 			for (const statement of this.parse(code).body) {
@@ -144,7 +173,7 @@ export default function metascript(options = {}) {
 				let path = relative(dirname(source), target.source).replace(/\\/g, "/");
 				if (!path.startsWith(".")) path = "./" + path;
 				if (!rewritten) rewritten = new MagicString(code);
-				rewritten.overwrite(specifier.start, specifier.end, JSON.stringify(path));
+				rewritten.overwrite(specifier.start, specifier.end, JSON.stringify(withInstance(path, target.instance)));
 			}
 			return rewritten ? { code: rewritten.toString(), map: rewritten.generateMap({ hires: true, source: id, includeContent: true }) } : null;
 		},
@@ -156,7 +185,9 @@ export default function metascript(options = {}) {
 			if (!existsSync(file)) return null;
 			if (entry === null) entry = file;
 			if (emitted === null) emit();
-			return emitted.bySource.has(file) ? file.replace(/\\/g, "/") : null;
+			const instance = instanceOf(source);
+			if (!emitted.bySource.has(file) || (instance && !emitted.byInstance.has(instance))) return null;
+			return withInstance(file.replace(/\\/g, "/"), instance);
 		},
 	};
 }
