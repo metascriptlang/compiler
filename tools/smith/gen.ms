@@ -23,6 +23,8 @@ enum EntKind {
 	ClosureArray,
 	UnionVar,
 	BoxVar,
+	StructVar,
+	ClassVar,
 }
 
 struct Ent {
@@ -529,6 +531,7 @@ class Gen {
 		const fam = this.pickFam();
 		if (fam == Fam.Closure) { return this.closureExpr(t, depth); }
 		if (fam == Fam.Union) { return this.unionExpr(t, depth); }
+		if (fam == Fam.Agg) { return this.aggExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -637,6 +640,103 @@ class Gen {
 		return "new BoxG<" + T + ">(" + this.expr(t, depth + 1) + ").get()";
 	}
 
+	aggHelpers(t: Ty): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		this.useHelper("InS" + X, "struct InS" + X + " { c: " + T + "; d: " + T + "; }\n" +
+			"struct PtS" + X + " { a: " + T + "; n: InS" + X + "; }\n" +
+			"function mkS" + X + "(a: " + T + ", c: " + T + ", d: " + T + "): PtS" + X + " { return { a: a, n: { c: c, d: d } }; }\n" +
+			"function setS" + X + "(ref s: PtS" + X + ", x: " + T + "): void { s.n.d = s.a; s.a = x; }\n" +
+			"function eqS" + X + "(s: PtS" + X + ", r: PtS" + X + ", x: " + T + ", y: " + T + "): " + T + " { return s == r ? x : y; }\n" +
+			"class CellC" + X + " {\n" +
+			"\tv: " + T + ";\n" +
+			"\tp: PtS" + X + ";\n" +
+			"\tconstructor(v: " + T + ") { this.v = v; this.p = mkS" + X + "(v, v, v); }\n" +
+			"\tget(): " + T + " { return this.v; }\n" +
+			"\tput(x: " + T + "): CellC" + X + " { this.p.n.c = this.v; this.v = x; return this; }\n" +
+			"}\n");
+		return X;
+	}
+
+	structField(): string { return [".a", ".n.c", ".n.d"][this.rng.below(3)]; }
+
+	structValue(t: Ty, depth: int32): string {
+		const vars = this.entsOf(EntKind.StructVar, t);
+		if (vars.length > 0 && this.rng.chance(70)) { return vars[this.rng.below(vars.length)].name; }
+		return "mkS" + tyTitle(t) + "(" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+	}
+
+	aggExpr(t: Ty, depth: int32): string {
+		const X = this.aggHelpers(t);
+		const structs = this.entsOf(EntKind.StructVar, t);
+		const cells = this.entsOf(EntKind.ClassVar, t);
+		const k = this.pickW(W.AggField, W.AggEq);
+		if (k == 0) {
+			if (structs.length > 0 && (cells.length == 0 || this.rng.chance(50))) {
+				return structs[this.rng.below(structs.length)].name + this.structField();
+			}
+			if (cells.length > 0) {
+				return cells[this.rng.below(cells.length)].name + (this.rng.chance(50) ? ".v" : ".p" + this.structField());
+			}
+		}
+		if (k == 1) {
+			const cell = cells.length > 0 ? cells[this.rng.below(cells.length)].name : "new CellC" + X + "(" + this.expr(t, depth + 1) + ")";
+			if (this.rng.chance(50)) { return cell + ".get()"; }
+			return cell + ".put(" + this.expr(t, depth + 1) + ").p" + this.structField();
+		}
+		if (k == 3 && !isFloat(t)) {
+			return "eqS" + X + "(" + this.structValue(t, depth) + ", " + this.structValue(t, depth) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		return this.structValue(t, depth) + this.structField();
+	}
+
+	aggStatement(t: Ty, indent: string): string {
+		const X = this.aggHelpers(t);
+		const structs = this.entsOf(EntKind.StructVar, t);
+		const cells = this.entsOf(EntKind.ClassVar, t);
+		const k = this.pickW(W.AggStruct, W.AggPoke);
+		if (k >= 1 && k <= 3 && structs.length > 0) {
+			const s = structs[this.rng.below(structs.length)].name;
+			const other = structs[this.rng.below(structs.length)].name;
+			if (k == 1) {
+				const form = this.rng.below(3);
+				if (form == 0) { return indent + s + " = " + other + ";\n"; }
+				const name = this.entName("s");
+				const value = form == 1 ? other : "{ ..." + other + ", a: " + this.expr(t, 0) + " }";
+				this.ents.push({ kind: EntKind.StructVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return indent + "let " + name + ": PtS" + X + " = " + value + ";\n";
+			}
+			if (k == 2) {
+				if (this.rng.chance(25)) { return indent + s + ".n = " + other + ".n;\n"; }
+				return indent + s + this.structField() + " = " + this.expr(t, 0) + ";\n";
+			}
+			return indent + "setS" + X + "(" + s + ", " + this.expr(t, 0) + ");\n";
+		}
+		if (k >= 5 && cells.length > 0) {
+			const c = cells[this.rng.below(cells.length)].name;
+			if (k == 5) {
+				const name = this.entName("k");
+				this.ents.push({ kind: EntKind.ClassVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return indent + "const " + name + " = " + c + ";\n";
+			}
+			const form = this.rng.below(4);
+			if (form == 0) { return indent + c + ".v = " + this.expr(t, 0) + ";\n"; }
+			if (form == 1) { return indent + c + ".p" + this.structField() + " = " + this.expr(t, 0) + ";\n"; }
+			if (form == 2) { return indent + c + ".p = " + this.structValue(t, 0) + ";\n"; }
+			return indent + c + ".put(" + this.expr(t, 0) + ");\n";
+		}
+		if (k >= 4) {
+			const name = this.entName("k");
+			const text = indent + "const " + name + " = new CellC" + X + "(" + this.expr(t, 0) + ");\n";
+			this.ents.push({ kind: EntKind.ClassVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+			return text;
+		}
+		const name = this.entName("s");
+		const text = indent + "let " + name + ": PtS" + X + " = mkS" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ");\n";
+		this.ents.push({ kind: EntKind.StructVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return text;
+	}
+
 	maker(t: Ty): Routine {
 		const name = "mk" + String(this.makerCount);
 		this.makerCount = this.makerCount + 1;
@@ -711,6 +811,7 @@ class Gen {
 			return indent + "const " + name + ": ((x: " + T + ") => " + T + ")[] = [];\n" +
 				indent + "for (let " + j + ": int32 = 0; " + j + " < " + String(n) + "; " + j + "++) { " + name + ".push(" + body.text + "); }\n";
 		}
+		if (fam == Fam.Agg) { return this.aggStatement(t, indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -1049,7 +1150,7 @@ test "default weights keep the pre-weight stream" {
 	const closureSizes = [11356, 11418, 13350, 9328];
 	const closure = withWeights("fams=closure");
 	for (let i = 0; i < 4; i++) {
-		assert generate((i + 1) as uint64, Features.defaults()).byteLength == sizes[i];
+		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic")).byteLength == sizes[i];
 		assert generate((i + 1) as uint64, closure).byteLength == closureSizes[i];
 	}
 }
@@ -1174,8 +1275,49 @@ test "fams=none emits no closure, union or generic construct" {
 			assert !text.contains("(q");
 			assert !text.contains("| string | null");
 			assert !text.contains("BoxG");
+			assert !text.contains("PtS");
 		}
 	}
+}
+
+test "the aggregate family alone reaches each of its shapes" {
+	const f = withWeights("fams=agg types=int32,uint8 stmts=8 w.stmt.fam=80");
+	const shapes = [": PtS", " = mkS", "{ ...s", ".n = s", "\tsetS", " = new CellC", ".p = ", ".put(", ".get()", "eqS", ".n.c", ".v = "];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	let alias = false;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+		for (const line of text.split("\n")) {
+			const t = line.trim();
+			if (t.startsWith("const k") && t.contains(" = k") && t.endsWith(";") && t.length < 16) { alias = true; }
+		}
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+	assert alias;
+}
+
+test "struct equality is never drawn for a float field" {
+	const f = withWeights("fams=agg types=float64 w.agg.eq=100");
+	for (let seed = 1; seed < 21; seed++) {
+		assert countOf(generate(seed as uint64, f), "eqSFloat64(") <= 1;
+	}
+}
+
+test "the aggregate weights choose between struct and class statements" {
+	const structs = withWeights("fams=agg types=int32 w.agg.class=0 w.agg.alias=0 w.agg.poke=0");
+	const cells = withWeights("fams=agg types=int32 w.agg.struct=0 w.agg.copy=0 w.agg.write=0 w.agg.ref=0");
+	let s = 0;
+	let k = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		const a = generate(seed as uint64, structs);
+		const b = generate(seed as uint64, cells);
+		assert !a.contains("const k");
+		assert !b.contains("let s");
+		s += countOf(a, "let s");
+		k += countOf(b, "const k");
+	}
+	assert s > 20 && k > 20;
 }
 
 test "each family alone reaches the program" {
