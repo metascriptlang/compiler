@@ -67,7 +67,7 @@ import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, i
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -1007,7 +1007,6 @@ interface CompileJob {
 	fileFlags: string;
 	fp: string;            // precomputed fingerprint; written post-compile
 	dependencyFile: string;
-	dependenciesKnown: boolean;
 	storeKey: string;
 	slot: number;
 }
@@ -1082,7 +1081,6 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
 				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary, isCppFile(fullPath));
 				const dependencyFile = nativeDepFile(fullPath, probeKey);
-				const dependenciesKnown = nativeDependenciesKnown(fullPath, probeKey);
 				const probeFp = computeFingerprint(fullPath, probeKey);
 				const probeOFile = stableOFileFp(fullPath, probeFp);
 				if (!_compiledOFiles.has(dependencyFile)) {
@@ -1100,7 +1098,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
 							oFiles.push(stored);
 						} else {
-							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey, slot: oFiles.length });
+							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, storeKey, slot: oFiles.length });
 							oFiles.push("");
 						}
 					}
@@ -1158,19 +1156,13 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
 		const dirs = objectSearchDirs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
-		if (j.dependenciesKnown) {
-			writeCompileCache(j.oFile, j.fp);
-			publishToStore(j.storeKey, j.oFile, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-			oFiles[j.slot] = j.oFile;
+		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
+		if (published.ok) {
+			publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
+			oFiles[j.slot] = published.value;
 		} else {
-			const published = publishFirstCompile(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
-			if (published.ok) {
-				publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-				oFiles[j.slot] = published.value;
-			} else {
-				printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
-				stopBuild();
-			}
+			printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
+			stopBuild();
 		}
 		ci = ci + 1;
 	}
