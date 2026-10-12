@@ -45,6 +45,14 @@ export macro anchorIdl(spec: Node): Node {
 			"when it imports '" + base + "' itself, call anchorIdl there";
 	}
 
+	function refuseNamesake(name: string, type: Node, holder: string): void {
+		const meant = bindSym(name);
+		if (meant == null || sameType(meant, type)) { return; }
+		error("anchorIdl: " + holder + ", and where anchorIdl is called '" + name + "' means another type, '" +
+			meant!.resolvedSym!.name + "' of '" + meant!.resolvedSym!.modulePath + "'; import the '" + name +
+			"' the field was declared with under that name, or call anchorIdl in the module that declares the field", spec);
+	}
+
 	function inheritedFirst(from: Node, names: string[], types: string[], decorators: Node[][]): void {
 		for (const base of from.interfaceExtends) {
 			const parent = getImpl(bindSym(base));
@@ -78,7 +86,9 @@ export macro anchorIdl(spec: Node): Node {
 		return written == "Pubkey";
 	}
 
-	function valueSeed(expr: Node, need: string, fields: string[], fieldTypes: string[], argNames: string[], argTypes: string[]): string {
+	function valueSeed(
+		expr: Node, need: string, fields: string[], fieldTypes: string[], held: Node, argNames: string[], argTypes: string[],
+	): string {
 		if (expr.kind === NodeKind.Identifier) {
 			if (need == "key" && nameIndex(fields, expr.name) >= 0) {
 				return "{\"kind\":\"account\",\"path\":\"" + snakeCase(expr.name) + "\"}";
@@ -98,6 +108,8 @@ export macro anchorIdl(spec: Node): Node {
 		const wrapper = open < 0 ? "" : written.slice(0, open);
 		if (wrapper != "Owned" && wrapper != "Mutable" && wrapper != "Delegated") { return ""; }
 		const dataName = written.slice(open + 1, written.length - 1);
+		refuseNamesake(dataName, held.typExprFieldTypes[nameIndex(held.typExprFieldNames, base)].typExprArgs[0],
+			"account '" + base + "' holds '" + written + "'");
 		const data = getImpl(bindSym(dataName));
 		if (data == null) { return ""; }
 		const dataFields: string[] = [];
@@ -109,7 +121,7 @@ export macro anchorIdl(spec: Node): Node {
 			"\",\"account\":\"" + dataName + "\"}";
 	}
 
-	function seedJson(seed: Node, fields: string[], fieldTypes: string[], argNames: string[], argTypes: string[]): string {
+	function seedJson(seed: Node, fields: string[], fieldTypes: string[], held: Node, argNames: string[], argTypes: string[]): string {
 		if (seed.kind === NodeKind.StringLiteral) { return constSeed(stringValue(seed).asBytes()); }
 		if (seed.kind === NodeKind.ArrayLiteral) {
 			const bytes: uint8[] = [];
@@ -118,7 +130,7 @@ export macro anchorIdl(spec: Node): Node {
 				const element = seed.elements[i];
 				if (element.kind !== NodeKind.NumberLiteral || element.intVal < 0 || element.intVal > 255) {
 					if (seed.elements.length == 1) {
-						return valueSeed(element, "u8", fields, fieldTypes, argNames, argTypes);
+						return valueSeed(element, "u8", fields, fieldTypes, held, argNames, argTypes);
 					}
 					return "";
 				}
@@ -129,24 +141,24 @@ export macro anchorIdl(spec: Node): Node {
 		}
 		if (seed.kind === NodeKind.CallExpr) {
 			if (seed.callee.kind === NodeKind.Identifier && seed.callee.name == "leBytes" && seed.arguments.length == 1) {
-				return valueSeed(seed.arguments[0], "le", fields, fieldTypes, argNames, argTypes);
+				return valueSeed(seed.arguments[0], "le", fields, fieldTypes, held, argNames, argTypes);
 			}
 			if (seed.callee.kind === NodeKind.MemberExpr && seed.callee.property == "key" &&
 				seed.arguments.length == 0 && seed.callee.object.kind === NodeKind.Identifier) {
-				return valueSeed(seed.callee.object, "key", fields, fieldTypes, argNames, argTypes);
+				return valueSeed(seed.callee.object, "key", fields, fieldTypes, held, argNames, argTypes);
 			}
 			return "";
 		}
-		return valueSeed(seed, "key", fields, fieldTypes, argNames, argTypes);
+		return valueSeed(seed, "key", fields, fieldTypes, held, argNames, argTypes);
 	}
 
-	function pdaJson(decorators: Node[], fields: string[], fieldTypes: string[], argNames: string[], argTypes: string[]): string {
+	function pdaJson(decorators: Node[], fields: string[], fieldTypes: string[], held: Node, argNames: string[], argTypes: string[]): string {
 		for (const d of decorators) {
 			if (d.macroName != "seeds") { continue; }
 			let list = "";
 			let i = 0;
 			while (i < d.macroArgs.length) {
-				const one = seedJson(d.macroArgs[i], fields, fieldTypes, argNames, argTypes);
+				const one = seedJson(d.macroArgs[i], fields, fieldTypes, held, argNames, argTypes);
 				if (one == "") { return ""; }
 				list = list + (i > 0 ? "," : "") + one;
 				i = i + 1;
@@ -244,6 +256,7 @@ export macro anchorIdl(spec: Node): Node {
 		json = json + "{\"name\":\"" + snakeCase(op) + "\",\"discriminator\":" + tag +
 			",\"accounts\":[";
 		const accountsDecl = getImpl(bindSym(pair[0].name))!;
+		const accountsHeld = getTypeImpl(bindSym(pair[0].name))!;
 		let argsDecl: Node | null = null;
 		const argNames: string[] = [];
 		const argTypes: string[] = [];
@@ -281,7 +294,7 @@ export macro anchorIdl(spec: Node): Node {
 			let fixed = declaredAddress(decorators, spec);
 			if (fixed == "" && base == "Program") { fixed = knownProgram(inner); }
 			if (fixed != "") { account = account + ",\"address\":\"" + fixed + "\""; }
-			const pda = pdaJson(decorators, accountNames, accountWritten, argNames, argTypes);
+			const pda = pdaJson(decorators, accountNames, accountWritten, accountsHeld, argNames, argTypes);
 			if (pda != "") { account = account + ",\"pda\":" + pda; }
 			json = json + (f > 0 ? "," : "") + account + "}";
 			f = f + 1;
@@ -435,6 +448,9 @@ export macro anchorIdl(spec: Node): Node {
 						written + "'; an account or event field array must be one T[N]", spec);
 				}
 			}
+			const held = laidOut!.typExprFieldTypes[f];
+			const one = held.kind == NodeKind.TypeArray ? held.typExprElement : held;
+			const holder = "field '" + fields[f] + "' of '" + typeName + "' has type '" + written + "'";
 			let idlType = "";
 			if (element == "uint8") { idlType = "\"u8\""; }
 			if (element == "uint16") { idlType = "\"u16\""; }
@@ -447,6 +463,7 @@ export macro anchorIdl(spec: Node): Node {
 			if (element == "boolean") { idlType = "\"bool\""; }
 			if (element == "Pubkey") { idlType = "\"pubkey\""; }
 			if (element.startsWith("BitSet<") && element.endsWith(">")) {
+				refuseNamesake(element.slice(7, element.length - 1), one.typExprArgs[0], holder);
 				const members = getImpl(bindSym(element.slice(7, element.length - 1)));
 				if (members == null || members!.kind != NodeKind.EnumDecl) {
 					error("anchorIdl: field '" + fields[f] + "' of '" + typeName + "' is a BitSet " +
@@ -460,6 +477,7 @@ export macro anchorIdl(spec: Node): Node {
 				if (memberCount <= 8) { idlType = "\"u8\""; }
 			}
 			if (idlType == "") {
+				refuseNamesake(element, one, holder);
 				const named = getImpl(bindSym(element));
 				if (named != null && named!.kind == NodeKind.EnumDecl) {
 					const width = getSize(bindSym(element)!);
