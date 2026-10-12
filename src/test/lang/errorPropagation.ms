@@ -22,6 +22,39 @@ function statementTryGuarded(ok: boolean): Result<string, string> {
 	return Result.ok("after");
 }
 
+let lazyTryCalls: int32 = 0;
+
+function lazyTryStep(ok: boolean): Result<int32, string> {
+	lazyTryCalls += 1;
+	return ok ? Result.ok(3) : Result.err("step failed");
+}
+
+function lazyTryArm(skip: boolean, ok: boolean): Result<int32, string> {
+	const p = skip ? 7 : try lazyTryStep(ok);
+	return Result.ok(p);
+}
+
+function lazyTryAnd(skip: boolean, ok: boolean): Result<boolean, string> {
+	const p = !skip && (try lazyTryStep(ok)) == 3;
+	return Result.ok(p);
+}
+
+function lazyTryCatchValue(ok: boolean): Result<int32, string> {
+	const p = try lazyTryStep(ok) catch (try lazyTryStep(false));
+	return Result.ok(p);
+}
+
+function lazyTryWhile(rounds: int32, ok: boolean): Result<int32, string> {
+	let i = 0;
+	while (i < rounds && (try lazyTryStep(ok)) == 3) { i += 1; }
+	return Result.ok(i);
+}
+
+function lazyTryMatchArm(skip: boolean): Result<int32, string> {
+	const p = match (skip) { true => 7, _ => try lazyTryStep(false) };
+	return Result.ok(p);
+}
+
 enum ErrorConversionAccountError { MissingSigner, WrongOwner }
 
 enum ErrorConversionPetError { Account, Dead }
@@ -220,4 +253,54 @@ test "errorPropagation: a try in a generic function converts per instance" {
 	assert !err.ok && err.error == ErrorConversionPetError.Account;
 	const same = errorConversionFeedGeneric<ErrorConversionAccountError>(true, ErrorConversionAccountError.MissingSigner);
 	assert !same.ok && same.error == ErrorConversionAccountError.WrongOwner;
+}
+
+test "errorPropagation: a try in a ternary arm that is not taken does not run" {
+	lazyTryCalls = 0;
+	const r = lazyTryArm(true, false);
+	assert r.ok;
+	assert lazyTryCalls == 0;
+}
+
+test "errorPropagation: a try in the taken ternary arm returns its error" {
+	lazyTryCalls = 0;
+	const r = lazyTryArm(false, false);
+	assert !r.ok;
+	assert lazyTryCalls == 1;
+}
+
+test "errorPropagation: a try after a short circuit does not run" {
+	lazyTryCalls = 0;
+	const r = lazyTryAnd(true, false);
+	assert r.ok;
+	assert lazyTryCalls == 0;
+}
+
+test "errorPropagation: a try in a catch value runs only when the first fails" {
+	lazyTryCalls = 0;
+	const r = lazyTryCatchValue(true);
+	assert r.ok;
+	assert lazyTryCalls == 1;
+	lazyTryCalls = 0;
+	const bad = lazyTryCatchValue(false);
+	assert !bad.ok;
+	assert lazyTryCalls == 2;
+}
+
+test "errorPropagation: a try in a while condition runs once per iteration" {
+	lazyTryCalls = 0;
+	const r = lazyTryWhile(3, true);
+	assert r.ok;
+	if (r.ok) assert r.value == 3;
+	assert lazyTryCalls == 3;
+	const bad = lazyTryWhile(3, false);
+	assert !bad.ok;
+}
+
+test "errorPropagation: a try in a match expression arm lowers and returns its error" {
+	lazyTryCalls = 0;
+	assert lazyTryMatchArm(true).ok;
+	assert lazyTryCalls == 0;
+	assert !lazyTryMatchArm(false).ok;
+	assert lazyTryCalls == 1;
 }
