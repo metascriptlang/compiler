@@ -13,6 +13,7 @@ import {
 	External,
 	ExternalMutable,
 	Program,
+	Signer,
 	Writable,
 	WritableSigner,
 	asAccount,
@@ -414,6 +415,33 @@ export function closeAccount(
 	);
 }
 
+export function burnChecked(
+	program: Pubkey,
+	account: Account,
+	mint: Account,
+	authority: Account,
+	amount: uint64,
+	decimals: uint8,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[10] = [];
+	let length = putU8(storage, 0, 15);
+	length = putU64(storage, length, amount);
+	length = putU8(storage, length, decimals);
+	return invokeSigned(
+		program,
+		[
+			InstructionAccount.writable(account),
+			InstructionAccount.writable(mint),
+			InstructionAccount.readonlySigner(authority),
+		],
+		storage,
+		length,
+		signers,
+	);
+}
+
 export function initializeAccount3(
 	program: Pubkey,
 	account: Account,
@@ -598,6 +626,16 @@ function tokenAccountSpace(mint: Account): uint64 {
 	return TOKEN_ACCOUNT_LENGTH + ACCOUNT_TYPE_BYTE + entries;
 }
 
+function expectSigning(
+	account: Account,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<void, ProgramError> {
+	if (signers.length == 0 && !account.isSigner()) {
+		return Result.err(ProgramError.missingRequiredSignature());
+	}
+	return Result.ok(null);
+}
+
 function createdTokenAccount(
 	payer: WritableSigner,
 	target: Account,
@@ -634,10 +672,48 @@ export function createTokenAccount(
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const target = account.asAccount();
-	if (signers.length == 0 && !target.isSigner()) {
-		return Result.err(ProgramError.missingRequiredSignature());
-	}
+	const _signing = try expectSigning(target, signers);
 	return createdTokenAccount(payer, target, mint, owner, signers);
+}
+
+function burned(
+	from: ExternalMutable<TokenAccount>,
+	mint: ExternalMutable<Mint>,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<uint64, ProgramError> {
+	const minted = mint.asAccount();
+	const decoded = try minted.readMint();
+	return burnChecked(
+		minted.owner(),
+		from.asAccount(),
+		minted,
+		authority,
+		amount,
+		decoded.decimals,
+		signers,
+	);
+}
+
+export function burnTokens(
+	from: ExternalMutable<TokenAccount>,
+	mint: ExternalMutable<Mint>,
+	authority: Signer,
+	amount: uint64,
+): Result<uint64, ProgramError> {
+	return burned(from, mint, authority.asAccount(), amount, []);
+}
+
+export function burnTokens(
+	from: ExternalMutable<TokenAccount>,
+	mint: ExternalMutable<Mint>,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	return burned(from, mint, authority, amount, signers);
 }
 
 export function createAssociatedFor(
@@ -1243,7 +1319,6 @@ when (testBuild) {
 }
 
 when (testBuild) {
-	import { Signer } from "./typed";
 	export struct TransferAccounts {
 		owner: Signer;
 		from: ExternalMutable<TokenAccount>;
@@ -1718,5 +1793,148 @@ when (testBuild) {
 		assert refused.result == ProgramError.incorrectProgramId().code;
 		assert refused.fault.indexOf("ExternalAccountDataModified") >= 0;
 		assert foreign[1].data[108] == 0;
+	}
+}
+
+when (testBuild) {
+	import { signer } from "./typed";
+	import { programAddressOf } from "./macro";
+	import { HostRun } from "./host";
+
+	function burnStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const amount = try instructionData().readU64(1);
+		const authority = try account(2);
+		if (op == 3) {
+			const program = (try account(1)).owner();
+			return burnChecked(program, try account(0), try account(1), authority, amount, 5);
+		}
+		const from = try externalMutable<TokenAccount>(0);
+		const mint = try externalMutable<Mint>(1);
+		if (op == 0) { return burnTokens(from, mint, try signer(2), amount); }
+		if (op == 1) { return burnTokens(from, mint, authority, amount); }
+		return signed(burnTokens(from, mint, authority, amount), ["auth", [5]]);
+	}
+
+	function burnEntry(): void {
+		const result = burnStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function burnAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(4, program, tokenAccountData(1, 3, 900, 1)),
+			holderOf(1, program, mintData(7, 5000, 6)),
+			{ ...holderOf(3, Pubkey.zero(), []), signer: true, writable: false },
+		];
+	}
+
+	function burnRun(accounts: HostAccount[], op: uint8, amount: uint64): HostRun {
+		const data: uint8[] = [op];
+		pushU64(data, amount);
+		return run(keyOf(9), accounts, data, burnEntry);
+	}
+
+	function withDelegate(bytes: uint8[], delegate: Pubkey, allowance: uint64): uint8[] {
+		bytes[72] = 1;
+		for (let index = 0; index < 32; index++) { bytes[76 + index] = delegate.bytes[index]; }
+		for (let index = 0; index < 8; index++) {
+			bytes[121 + index] = ((allowance >> ((index * 8) as uint64)) & 255) as uint8;
+		}
+		return bytes;
+	}
+
+	function authorityPda(): Pubkey {
+		const found = programAddressOf(keyOf(9), ["auth", [5]]);
+		return found.ok ? found.value : Pubkey.zero();
+	}
+
+	test "burnTokens takes the amount from the account and the supply, with the mint's decimals and token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = burnAccounts(program);
+			assert burnRun(accounts, 0, 250).result == 0;
+			assert u64At(accounts[0].data, 64) == 650 && u64At(accounts[1].data, 36) == 4750;
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 3 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(4)) && sent.accounts[0].writable;
+			assert sent.accounts[1].key.equals(keyOf(1)) && sent.accounts[1].writable;
+			assert !sent.accounts[0].signer && !sent.accounts[1].signer;
+			assert sent.accounts[2].key.equals(keyOf(3)) && sent.accounts[2].signer;
+			assert !sent.accounts[2].writable;
+			const burnBytes: uint8[] = [15, 250, 0, 0, 0, 0, 0, 0, 0, 6];
+			assert sameBytes(sent.data, burnBytes);
+		}
+	}
+
+	test "burnTokens is refused for more than the account holds, another authority, another mint and a frozen account" {
+		const beyond = burnAccounts(TOKEN_PROGRAM_ID);
+		assert burnRun(beyond, 0, 901).result == ProgramError.custom(1).code;
+		const stranger = burnAccounts(TOKEN_PROGRAM_ID);
+		stranger[2].key = keyOf(5);
+		assert burnRun(stranger, 0, 250).result == ProgramError.custom(4).code;
+		const otherMint = burnAccounts(TOKEN_PROGRAM_ID);
+		otherMint[1].key = keyOf(6);
+		assert burnRun(otherMint, 0, 250).result == ProgramError.custom(3).code;
+		const frozen = burnAccounts(TOKEN_PROGRAM_ID);
+		frozen[0].data[108] = 2;
+		assert burnRun(frozen, 0, 250).result == ProgramError.custom(17).code;
+		for (const refused of [beyond, stranger, otherMint, frozen]) {
+			assert u64At(refused[0].data, 64) == 900 && u64At(refused[1].data, 36) == 5000;
+		}
+	}
+
+	test "burnTokens by an authority that did not sign is refused before any CPI" {
+		const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+		accounts[2].signer = false;
+		assert burnRun(accounts, 0, 250).result == ProgramError.accountNotSigner().code;
+		assert burnRun(accounts, 1, 250).result == ProgramError.missingRequiredSignature().code;
+		assert invocations().length == 0 && u64At(accounts[0].data, 64) == 900;
+	}
+
+	test "burnTokens under signed burns for a PDA authority and only for the PDA its seeds derive" {
+		const accounts = burnAccounts(TOKEN_2022_PROGRAM_ID);
+		accounts[0].data = tokenAccountData(1, 0, 900, 1);
+		for (let index = 0; index < 32; index++) {
+			accounts[0].data[32 + index] = authorityPda().bytes[index];
+		}
+		accounts[2].key = authorityPda();
+		accounts[2].signer = false;
+		assert burnRun(accounts, 2, 250).result == 0;
+		assert u64At(accounts[0].data, 64) == 650 && u64At(accounts[1].data, 36) == 4750;
+		assert signerIs(invocations()[0], 0, authSigner());
+		const stranger = burnAccounts(TOKEN_2022_PROGRAM_ID);
+		stranger[2].signer = false;
+		const refused = burnRun(stranger, 2, 250);
+		assert refused.result == ProgramError.missingRequiredSignature().code;
+		assert refused.fault.indexOf("signer privilege escalated") >= 0;
+		assert u64At(stranger[0].data, 64) == 900;
+	}
+
+	test "a delegate burns within its allowance, which the burn spends" {
+		const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+		accounts[0].data = withDelegate(tokenAccountData(1, 8, 900, 1), keyOf(3), 300);
+		assert burnRun(accounts, 0, 301).result == ProgramError.custom(1).code;
+		assert u64At(accounts[0].data, 121) == 300 && u64At(accounts[0].data, 64) == 900;
+		assert burnRun(accounts, 0, 100).result == 0;
+		assert u64At(accounts[0].data, 64) == 800 && u64At(accounts[0].data, 121) == 200;
+		assert accounts[0].data[72] == 1;
+		assert burnRun(accounts, 0, 200).result == 0;
+		assert u64At(accounts[0].data, 64) == 600 && u64At(accounts[0].data, 121) == 0;
+		assert accounts[0].data[72] == 0;
+		assert burnRun(accounts, 0, 1).result == ProgramError.custom(4).code;
+	}
+
+	test "burnChecked is refused for decimals that are not the mint's, a native account and an account of another token program" {
+		const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+		assert burnRun(accounts, 3, 250).result == ProgramError.custom(18).code;
+		const native = burnAccounts(TOKEN_PROGRAM_ID);
+		native[0].data[109] = 1;
+		assert burnRun(native, 0, 250).result == ProgramError.custom(10).code;
+		const mixed = burnAccounts(TOKEN_PROGRAM_ID);
+		mixed[0].owner = TOKEN_2022_PROGRAM_ID;
+		const refused = burnRun(mixed, 0, 250);
+		assert refused.result == ProgramError.incorrectProgramId().code;
+		assert refused.fault.indexOf("ExternalAccountDataModified") >= 0;
+		assert u64At(mixed[0].data, 64) == 900 && u64At(mixed[1].data, 36) == 5000;
 	}
 }

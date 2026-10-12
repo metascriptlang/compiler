@@ -595,10 +595,17 @@ static const uint8_t msSolHostNativeMint2022[32] = {
 #define MS_SOL_HOST_INCORRECT_PROGRAM_ID (7ULL << 32)
 #define MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE (8ULL << 32)
 #define MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS (11ULL << 32)
+#define MS_SOL_HOST_UNINITIALIZED_ACCOUNT (10ULL << 32)
 #define MS_SOL_HOST_TOKEN_NOT_RENT_EXEMPT (1ULL << 32)
+#define MS_SOL_HOST_TOKEN_INSUFFICIENT_FUNDS 1ULL
 #define MS_SOL_HOST_TOKEN_INVALID_MINT 2ULL
+#define MS_SOL_HOST_TOKEN_MINT_MISMATCH 3ULL
+#define MS_SOL_HOST_TOKEN_OWNER_MISMATCH 4ULL
 #define MS_SOL_HOST_TOKEN_ALREADY_IN_USE 6ULL
+#define MS_SOL_HOST_TOKEN_NATIVE_NOT_SUPPORTED 10ULL
 #define MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION 12ULL
+#define MS_SOL_HOST_TOKEN_ACCOUNT_FROZEN 17ULL
+#define MS_SOL_HOST_TOKEN_MINT_DECIMALS_MISMATCH 18ULL
 #define MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH 165ULL
 #define MS_SOL_HOST_TOKEN_MINT_LENGTH 82ULL
 #define MS_SOL_HOST_TOKEN_MULTISIG_LENGTH 355ULL
@@ -723,6 +730,79 @@ static uint64_t msSolHostInitializeAccount3(const uint64_t* header, uint8_t* acc
     return 0;
 }
 
+static uint64_t msSolHostInitialized(const uint64_t* header, const uint8_t* record, uint64_t base, uint8_t accountType, uint64_t initializedAt) {
+    if (record == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
+    if (!msSolHostHasTokenLayout(header, record, base, accountType)) return MS_SOL_HOST_INVALID_ACCOUNT_DATA;
+    if (record[88 + initializedAt] == 0) return MS_SOL_HOST_UNINITIALIZED_ACCOUNT;
+    return 0;
+}
+
+static uint64_t msSolHostTokenAccount(const uint64_t* header, const uint8_t* record) {
+    return msSolHostInitialized(header, record, MS_SOL_HOST_TOKEN_ACCOUNT_LENGTH, 2, 108);
+}
+
+static uint64_t msSolHostMint(const uint64_t* header, const uint8_t* record) {
+    return msSolHostInitialized(header, record, MS_SOL_HOST_TOKEN_MINT_LENGTH, 1, 45);
+}
+
+static int msSolHostOptionIs(const uint8_t* option, const uint8_t* key) {
+    uint32_t tag;
+    memcpy(&tag, option, 4);
+    return tag == 1 && memcmp(option + 4, key, 32) == 0;
+}
+
+static uint64_t msSolHostAuthorized(const uint64_t* header, uint64_t index, const uint8_t* expected) {
+    const uint8_t* authority = msSolHostRecordOf(header, index);
+    if (authority == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
+    if (memcmp(expected, authority + 8, 32) != 0) return MS_SOL_HOST_TOKEN_OWNER_MISMATCH;
+    if (msSolHostOwnedByCallee(header, authority) && msSolHostLoadU64(authority + 80) == MS_SOL_HOST_TOKEN_MULTISIG_LENGTH) {
+        msSolHostFault(2, "sol_invoke_signed: a multisignature token authority is not simulated");
+        return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
+    }
+    if (((const uint8_t*)(header[1] + index * 16))[9] == 0) return MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE;
+    return 0;
+}
+
+static uint64_t msSolHostBurn(const uint64_t* header, int checked) {
+    static const uint8_t systemProgram[32] = {0};
+    static const uint8_t incinerator[32] = {
+        0x00, 0x33, 0x90, 0x72, 0x8d, 0x34, 0x11, 0x60, 0x79, 0xbd, 0xc9, 0x11, 0xbf, 0xff, 0x00, 0xdb,
+        0xd4, 0x4d, 0x2e, 0xcd, 0xcc, 0xf7, 0x9c, 0xa6, 0xe1, 0x00, 0x38, 0xe1, 0x00, 0x00, 0x00, 0x00,
+    };
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint8_t* source = msSolHostRecordOf(header, 0);
+    uint8_t* mint = msSolHostRecordOf(header, 1);
+    const uint8_t* authority = msSolHostRecordOf(header, 2);
+    if (header[4] < (checked ? 10ULL : 9ULL)) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
+    uint64_t amount = msSolHostLoadU64(data + 1);
+    uint64_t status = msSolHostTokenAccount(header, source);
+    if (status == 0) status = msSolHostMint(header, mint);
+    if (status != 0) return status;
+    if (authority == NULL) return MS_SOL_HOST_NOT_ENOUGH_ACCOUNT_KEYS;
+    uint8_t* account = source + 88;
+    if (account[108] == 2) return MS_SOL_HOST_TOKEN_ACCOUNT_FROZEN;
+    if (account[109] == 1) return MS_SOL_HOST_TOKEN_NATIVE_NOT_SUPPORTED;
+    if (msSolHostLoadU64(account + 64) < amount) return MS_SOL_HOST_TOKEN_INSUFFICIENT_FUNDS;
+    if (memcmp(mint + 8, account, 32) != 0) return MS_SOL_HOST_TOKEN_MINT_MISMATCH;
+    if (checked && data[9] != mint[88 + 44]) return MS_SOL_HOST_TOKEN_MINT_DECIMALS_MISMATCH;
+    int anyoneBurns = memcmp(account + 32, systemProgram, 32) == 0 || memcmp(account + 32, incinerator, 32) == 0;
+    int delegated = !anyoneBurns && msSolHostOptionIs(account + 72, authority + 8);
+    if (!anyoneBurns) {
+        status = msSolHostAuthorized(header, 2, delegated ? account + 76 : account + 32);
+        if (status != 0) return status;
+    }
+    uint64_t allowance = msSolHostLoadU64(account + 121);
+    if (delegated && allowance < amount) return MS_SOL_HOST_TOKEN_INSUFFICIENT_FUNDS;
+    if (!msSolHostOwnedByCallee(header, source) || !msSolHostOwnedByCallee(header, mint)) return msSolHostForeignAccount(header);
+    if (delegated) {
+        msSolHostStoreU64(account + 121, allowance - amount);
+        if (allowance == amount) memset(account + 72, 0, 4);
+    }
+    msSolHostStoreU64(account + 64, msSolHostLoadU64(account + 64) - amount);
+    msSolHostStoreU64(mint + 88 + 36, msSolHostLoadU64(mint + 88 + 36) - amount);
+    return 0;
+}
+
 static uint64_t msSolHostToken(const uint64_t* header) {
     if (!msSolHostIsTokenProgram((const uint8_t*)header[0]) || header[4] < 1) return 0;
     const uint8_t* data = (const uint8_t*)header[3];
@@ -760,6 +840,10 @@ static uint64_t msSolHostToken(const uint64_t* header) {
         if (memcmp(first + 88 + 32, fourth + 8, 32) != 0) return 4;
         if (second[88 + 44] != data[9]) return 18;
         return msSolHostMoveTokens(first, second + 8, third, amount);
+    case 8:
+        return msSolHostBurn(header, 0);
+    case 15:
+        return msSolHostBurn(header, 1);
     case 18:
         return msSolHostInitializeAccount3(header, first, second);
     default:
