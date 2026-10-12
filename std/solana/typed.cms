@@ -689,13 +689,16 @@ export macro accounts(): Node {
 	const writtenTypes: string[] = [];
 	const fieldDecorators: Node[][] = [];
 	const proofKinds: string[] = [];
+	function unreadableBase(base: string): string {
+		if (base.indexOf("<") >= 0) { return "a base with type arguments is not supported; extend a struct that has none"; }
+		return "no struct named '" + base + "' is imported where accounts<T>() is called; import it there under that name";
+	}
 	function inheritedFirst(from: Node): void {
 		for (const base of from.interfaceExtends) {
 			const parent = getImpl(bindSym(base));
 			if (parent == null) {
 				error("accounts<" + decl.interfaceName + ">(): '" + from.interfaceName + "' extends '" + base +
-					"', whose fields accounts<T>() cannot read: a base is a struct without type arguments, " +
-					"imported where accounts<T>() is called", shape);
+					"', whose fields accounts<T>() cannot read: " + unreadableBase(base), shape);
 			}
 			inheritedFirst(parent!);
 		}
@@ -797,7 +800,7 @@ export macro accounts(): Node {
 				if (parent == null) {
 					error("accounts<" + decl.interfaceName + ">(): field '" + names[owner] + "' holds '" + written +
 						"', and '" + from.interfaceName + "' extends '" + base + "', whose fields accounts<T>() " +
-						"cannot read: a base is a struct without type arguments, imported where accounts<T>() is called", at);
+						"cannot read: " + unreadableBase(base), at);
 				}
 				if (declares(parent!)) { return true; }
 			}

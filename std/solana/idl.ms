@@ -29,9 +29,11 @@ export macro anchorIdl(spec: Node): Node {
 		for (const base of from.interfaceExtends) {
 			const parent = getImpl(bindSym(base));
 			if (parent == null) {
+				const cause = base.indexOf("<") >= 0
+					? "a base with type arguments is not supported; extend a struct that has none"
+					: "no struct named '" + base + "' is imported where anchorIdl is called; import it there under that name";
 				error("anchorIdl: '" + from.interfaceName + "' extends '" + base +
-					"', whose fields anchorIdl cannot read: a base is a struct without type arguments, " +
-					"imported where anchorIdl is called", spec);
+					"', whose fields anchorIdl cannot read: " + cause, spec);
 			}
 			inheritedFirst(parent!, names, types, decorators);
 		}

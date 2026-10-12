@@ -1,8 +1,8 @@
 // GUARD-OS solana
-// GUARD-CHECK-FAIL 'Guarded' extends 'Gate<Signer>', whose fields accounts<T>() cannot read
-// GUARD-CHECK-FAIL field 'vault' holds 'Owned<Boxed>', and 'Boxed' extends 'Box<Pubkey>', whose fields accounts<T>() cannot read
-// GUARD-CHECK-FAIL 'FarDerived' extends 'FarBase', whose fields accounts<T>() cannot read
-// GUARD-CHECK-FAIL field 'vault' holds 'Owned<FarKeptChild>', and 'FarKeptChild' extends 'FarKept', whose fields accounts<T>() cannot read
+// GUARD-CHECK-FAIL 'Guarded' extends 'Gate<Signer>', whose fields accounts<T>() cannot read: a base with type arguments is not supported; extend a struct that has none
+// GUARD-CHECK-FAIL field 'vault' holds 'Owned<Boxed>', and 'Boxed' extends 'Box<Pubkey>', whose fields accounts<T>() cannot read: a base with type arguments is not supported; extend a struct that has none
+// GUARD-CHECK-FAIL 'FarDerived' extends 'FarBase', whose fields accounts<T>() cannot read: no struct named 'FarBase' is imported where accounts<T>() is called; import it there under that name
+// GUARD-CHECK-FAIL field 'vault' holds 'Owned<FarKeptChild>', and 'FarKeptChild' extends 'FarKept', whose fields accounts<T>() cannot read: no struct named 'FarKept' is imported where accounts<T>() is called; import it there under that name
 // GUARD-CHECK-FAIL imported where accounts<T>() is called
 // accounts<T>() verifies the fields a struct inherits ahead of its own, from each base's
 // declaration. A base whose declaration it cannot read is refused: one with type arguments, and

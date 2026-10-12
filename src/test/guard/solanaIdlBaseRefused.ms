@@ -1,7 +1,7 @@
-// GUARD-CHECK-FAIL anchorIdl: 'Guarded' extends 'Gate<Signer>', whose fields anchorIdl cannot read
-// GUARD-CHECK-FAIL anchorIdl: 'Boxed' extends 'Box<Pubkey>', whose fields anchorIdl cannot read
-// GUARD-CHECK-FAIL anchorIdl: 'FarDerived' extends 'FarBase', whose fields anchorIdl cannot read
-// GUARD-CHECK-FAIL anchorIdl: 'FarKeptChild' extends 'FarKept', whose fields anchorIdl cannot read
+// GUARD-CHECK-FAIL anchorIdl: 'Guarded' extends 'Gate<Signer>', whose fields anchorIdl cannot read: a base with type arguments is not supported; extend a struct that has none
+// GUARD-CHECK-FAIL anchorIdl: 'Boxed' extends 'Box<Pubkey>', whose fields anchorIdl cannot read: a base with type arguments is not supported; extend a struct that has none
+// GUARD-CHECK-FAIL anchorIdl: 'FarDerived' extends 'FarBase', whose fields anchorIdl cannot read: no struct named 'FarBase' is imported where anchorIdl is called; import it there under that name
+// GUARD-CHECK-FAIL anchorIdl: 'FarKeptChild' extends 'FarKept', whose fields anchorIdl cannot read: no struct named 'FarKept' is imported where anchorIdl is called; import it there under that name
 // anchorIdl lists the accounts and the data fields a struct inherits ahead of its own, from each
 // base's declaration. A base whose declaration it cannot read is refused: one with type
 // arguments, and one declared in another module that is not imported where anchorIdl is called.
