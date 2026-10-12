@@ -1,14 +1,15 @@
 import {
 	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
 	CallExprData, MemberExprData, ArrayAccessData, BinaryExprData,
-	OutExprData, HiddenDerefData, VariableDeclData, FunctionDeclData, BlockStmtData,
-	createNodeAt,
+	OutExprData, HiddenDerefData, VariableDeclData, FunctionDeclData, BlockStmtData, ProgramData, SwitchCaseData,
+	DeclKind, createNodeAt,
 } from "../../ast/node";
-import { TransformContext } from "../context";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
-import { makeIdentResolved, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef } from "../util";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef } from "../util";
 import { indexedType } from "../coercion/accessJS";
 
+let varParamCtx: TransformContext = null as unknown as TransformContext;
 let boxedSyms: Symbol[] = [];
 let fnStack: Node[] = [];
 let prologueFns: Node[] = [];
@@ -175,9 +176,46 @@ function pairize(arg: Node): Node {
 	return arg;
 }
 
+function declaredType(decl: Node): Type | null {
+	if (decl.nodeType != null) return decl.nodeType;
+	return decl.resolvedSym != null ? decl.resolvedSym.symbolType : null;
+}
+
+function fillBoxes(stmts: Node[]): Node[] {
+	const result: Node[] = [];
+	for (const stmt of stmts) {
+		if (stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null && isBoxed(stmt.resolvedSym)
+			&& (stmt.data as VariableDeclData).initializer == null) {
+			const t = declaredType(stmt);
+			const sym = freshTempSym(varParamCtx, "boxInit", t);
+			const fill = makeVarDecl(sym.name, null as unknown as Node, DeclKind.Let, stmt.location);
+			fill.resolvedSym = sym;
+			fill.nodeType = t;
+			result.push(fill);
+			const read = makeIdentResolved(sym, stmt.location);
+			read.nodeType = t;
+			(stmt.data as VariableDeclData).initializer = read;
+		}
+		result.push(stmt);
+	}
+	return result;
+}
+
 function rw(node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.OutExpr) return rw((node.data as OutExprData).outArg);
+	if (node.kind == NodeKind.Program) {
+		const pd = node.data as ProgramData;
+		pd.programStmts = fillBoxes(pd.programStmts);
+	}
+	if (node.kind == NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		bd.statements = fillBoxes(bd.statements);
+	}
+	if (node.kind == NodeKind.SwitchCase) {
+		const cd = node.data as SwitchCaseData;
+		cd.caseStmts = fillBoxes(cd.caseStmts);
+	}
 	if (node.kind == NodeKind.HiddenAddr) {
 		const result = pairize(node);
 		result.nodeType = node.nodeType;
@@ -221,6 +259,9 @@ function rw(node: Node): Node {
 		if (s != null && isBoxed(s) && d.initializer != null) {
 			d.initializer = cellLit(d.initializer, node);
 		}
+		if (s != null && isBoxed(s) && d.initializer == null) {
+			reportTransformError(varParamCtx, "internal: a local whose address is taken is declared where the JS box cannot be filled", node.location);
+		}
 		return node;
 	}
 	mapChildren(node, rw);
@@ -228,6 +269,7 @@ function rw(node: Node): Node {
 }
 
 export function lowerJsVarParam(program: Node, ctx: TransformContext): Node {
+	varParamCtx = ctx;
 	boxedSyms = [];
 	fnStack = [];
 	prologueFns = [];
