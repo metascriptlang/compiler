@@ -82,14 +82,14 @@ function signedSixteen(a: Account, b: Account): Result<uint64, ProgramError> {
 }
 
 function listed(a: Account, count: int32): Result<uint64, ProgramError> {
-	let metas: InstructionAccount[64];
+	let metas: InstructionAccount[64] = [];
 	for (let index = 0; index < 64; index++) { metas[index] = InstructionAccount.writable(a); }
 	let storage: uint8[1024] = [];
 	return invokeList(programId(), metas[0..count], storage, putU8(storage, 0, 1));
 }
 
 function committed(payer: Account, context: Account, vault: Account, count: int32): Result<uint64, ProgramError> {
-	let list: Account[16];
+	let list: Account[16] = [];
 	for (let index = 0; index < 16; index++) { list[index] = payer; }
 	return commit(payer, list[0..count], context, vault);
 }

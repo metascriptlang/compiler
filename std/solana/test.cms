@@ -3075,7 +3075,7 @@ function forwarded(first: Account, signers: Readonly<Span<SignerSeeds>> = []): R
 }
 
 function listed(first: Account, count: uint64): Result<uint64, ProgramError> {
-	let metas: InstructionAccount[65];
+	let metas: InstructionAccount[65] = [];
 	for (let index = 0; index < 65; index++) {
 		metas[index] = InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0);
 	}

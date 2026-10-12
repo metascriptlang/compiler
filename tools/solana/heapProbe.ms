@@ -91,7 +91,7 @@ function limitCall(which: uint64): Result<uint64, ProgramError> {
 
 function wideList(count: int32): Result<uint64, ProgramError> {
 	const self = try account(0);
-	let metas: InstructionAccount[65];
+	let metas: InstructionAccount[65] = [];
 	for (let index = 0; index < 65; index++) { metas[index] = InstructionAccount.readonly(self); }
 	let storage: uint8[3] = [];
 	const length = putU8(storage, putU8(storage, putU8(storage, 0, 12), 0), 0);

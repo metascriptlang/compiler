@@ -56,7 +56,7 @@ function scheduleCommit(
 	if (prefix + (committed.length as uint64) > MAX_COMMIT_ACCOUNTS) {
 		return Result.err(ProgramError.invalidArgument());
 	}
-	let metas: InstructionAccount[16];
+	let metas: InstructionAccount[16] = [];
 	metas[0] = InstructionAccount.flagged(payer, payer.isWritable(), true);
 	metas[1] = InstructionAccount.writable(magicContextAccount);
 	if (feeVault !== null) { metas[2] = InstructionAccount.writable(feeVault); }
@@ -191,7 +191,7 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const count = taskAccounts.length as uint64;
 	if (1 + count > MAX_TASK_ACCOUNTS) { return Result.err(ProgramError.invalidArgument()); }
-	let metas: InstructionAccount[16];
+	let metas: InstructionAccount[16] = [];
 	metas[0] = InstructionAccount.writableSigner(payer);
 	let storage: uint8[1024] = [];
 	let length = putU32(storage, 0, 6);
@@ -841,7 +841,7 @@ when (testBuild) {
 		const payer = try account(0);
 		const context = try account(1);
 		const vault = try account(2);
-		let list: Account[16];
+		let list: Account[16] = [];
 		for (let index = 0; index < 16; index++) { list[index] = try account(3 + index); }
 		const some = list[0..(count as int32)];
 		if (withVault == 1) { return commit(payer, some, context, vault); }
