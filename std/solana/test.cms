@@ -95,7 +95,7 @@ import { SignerSeeds, findExpected, seedText, tableAddress } from "./seed";
 import { seedTable, slottedTable } from "./accountSeeds";
 import { canonicalBump, canonicalBumpOwned, canonicalBumpProven, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, slottedCanonicalBump, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
-import { HostAccount, invocations, logs, rentReads, run, setClock, setSysvarStatus, signerIs, textBytes } from "./host";
+import { HostAccount, REFUSED, invocations, logs, rentReads, run, setClock, setSysvarStatus, signerIs, textBytes } from "./host";
 import {
 	address,
 	args,
@@ -2617,8 +2617,7 @@ test "a signer of seventeen seeds or of a thirty-three byte seed is refused, six
 		ProgramError.maxSeedLengthExceeded().code;
 	assert invocations().length == 0;
 	const wide: uint8[] = [12];
-	assert run(programKey(), accounts, wide, signingEntry).result ==
-		ProgramError.maxSeedLengthExceeded().code;
+	assert run(programKey(), accounts, wide, signingEntry).result == REFUSED;
 	assert invocations().length == 0;
 	const sixteen: uint8[] = [13];
 	assert run(programKey(), accounts, sixteen, signingEntry).result == 0;
@@ -2875,7 +2874,7 @@ test "createPda at an address on the curve fails inside the CPI and creates noth
 	for (const funded of [0, 1, 10000000]) {
 		const accounts = [wallet(1, 10000000), vaultFundedAt(vaultHashAt(255), funded as uint64)];
 		const outcome = run(programKey(), accounts, [], createVaultPdaEntry);
-		assert outcome.result == ProgramError.invalidSeeds().code;
+		assert outcome.result == REFUSED;
 		assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
 		assert invocations().length == 0;
 		assert accounts[1].lamports == funded as uint64 && accounts[1].data.length == 0 && accounts[1].owner.equals(Pubkey.zero());
@@ -2913,7 +2912,7 @@ test "signedPda signs a transfer with the canonical bump it found" {
 test "signedPda sends an address on the curve to the runtime, which refuses it, and sends a lower alias nowhere" {
 	const onCurve = [vaultFundedAt(vaultHashAt(255), 1000), wallet(2, 5000)];
 	const outcome = run(programKey(), onCurve, [], signedVaultEntry);
-	assert outcome.result == ProgramError.invalidSeeds().code;
+	assert outcome.result == REFUSED;
 	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
 	assert invocations().length == 0 && onCurve[0].lamports == 1000 && onCurve[1].lamports == 5000;
 	for (const key of [vaultHashAt(vaultAliasBump()), keyOf(77)]) {
@@ -2927,7 +2926,7 @@ test "signedPda sends an address on the curve to the runtime, which refuses it, 
 test "a signer whose seeds hash onto the curve is refused by the host before the call is recorded" {
 	const accounts = [wallet(1, 10000), wallet(2, 5000)];
 	const outcome = run(programKey(), accounts, [], onCurveSignerEntry);
-	assert outcome.result == ProgramError.invalidSeeds().code;
+	assert outcome.result == REFUSED;
 	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
 	assert invocations().length == 0 && accounts[0].lamports == 10000 && accounts[1].lamports == 5000;
 }
