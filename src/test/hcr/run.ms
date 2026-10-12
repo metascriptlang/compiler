@@ -2,6 +2,7 @@
 // Env: MSC=<path to msc> (default: ./msc, else installed msc).
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
+import { sleepAsync } from "std/core/promise";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -443,8 +444,7 @@ export function hcrValue(): int32 {
 }
 
 function settleSecond(): void {
-	const until = performance.now() + 1100;
-	while (performance.now() < until) {}
+	await sleepAsync(1100);
 }
 
 // The entry image is the output the project record names, and an edit of another module leaves it
