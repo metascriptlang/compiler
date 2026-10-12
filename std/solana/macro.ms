@@ -1,4 +1,4 @@
-import { Node, NodeFlag, NodeKind, bindSym, define, getType, stringValue } from "std/meta";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, sameType, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
@@ -415,6 +415,18 @@ export macro emit(value: Node): Node {
 	}
 	if (value.kind !== NodeKind.Identifier) {
 		error("emit<E>(value): pass the event as a local variable", value);
+	}
+	let given = getType(value);
+	if (given != null && given.kind === NodeKind.TypeGeneric && given.typExprArgs.length == 1 &&
+		given.typExprBase.kind === NodeKind.Identifier && given.typExprBase.name == "Ptr") {
+		given = given.typExprArgs[0];
+	}
+	if (!sameType(given, shape)) {
+		let givenName = "value of another type";
+		if (given != null && given.kind === NodeKind.Identifier) { givenName = given.name; }
+		if (given != null && given.kind === NodeKind.TypeObject) { givenName = given.typExprTypeName; }
+		error("emit<" + shape.typExprTypeName + ">(value): '" + value.name + "' is a " + givenName +
+			", not a " + shape.typExprTypeName, value);
 	}
 	const line = value.line;
 	const column = value.column;

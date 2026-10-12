@@ -1244,6 +1244,21 @@ test "emit writes the fields an event inherits ahead of its own" {
 	assert lines[0] == "Program data: bZ+QC3gMP1rSBAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ==";
 }
 
+function storedCounterEntry(): void {
+	const counter = owned<Counter>(0);
+	if (!counter.ok) { failWith(counter.error); return; }
+	const stored = counter.value.data();
+	emit<Counter>(stored);
+}
+
+test "emit reads an event through the pointer to an account's data" {
+	const counter = holder(2, programKey(), counterBytes(counterTag(), 3, 48), false, false);
+	assert run(programKey(), [counter], [], storedCounterEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 1;
+	assert lines[0] == "Program data: fpJvTqpKDPgDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+}
+
 export struct SeedArgs { seed: uint64; }
 export struct FlaggedSeedArgs extends SeedArgs { flag: boolean; }
 
