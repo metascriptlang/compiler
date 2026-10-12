@@ -612,6 +612,13 @@ function exitOnCheckerErrorsFrom(ctx: CheckerContext, base: int32, modPath: stri
 	throw new Error(BUILD_STOPPED);
 }
 
+function coreBeforeImages(paths: string[], imagePaths: string[]): int32[] {
+	const order: int32[] = [];
+	for (let at: int32 = 0; at < paths.length; at += 1) if (!imagePaths.includes(paths[at])) order.push(at);
+	for (let at: int32 = 0; at < paths.length; at += 1) if (imagePaths.includes(paths[at])) order.push(at);
+	return order;
+}
+
 function programWithInstances(program: Node, instances: Node[] | null): Node {
 	if (instances == null || instances.length == 0) return program;
 	const stmts: Node[] = [];
@@ -2649,7 +2656,10 @@ setGlobalHookOwners(sharedHookOwners);
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}
-	const firstModule = checkedMods.length > 0 ? checkedMods[0].modPath : "";
+	const checkedPaths: string[] = [];
+	for (const cm of checkedMods) checkedPaths.push(cm.modPath);
+	const lowerOrder = coreBeforeImages(checkedPaths, reloadable);
+	const firstModule = lowerOrder.length > 0 ? checkedMods[lowerOrder[0]].modPath : "";
 	const typeRowsOf = new HashMap<string, GenericTypeInstRow[]>();
 	const sharedOrder: string[] = [];
 	const sharedFromReloadable: GenericTypeInstRow[] = [];
@@ -2702,7 +2712,9 @@ setGlobalHookOwners(sharedHookOwners);
 			}
 		}
 	}
-	for (const cm of checkedMods) {
+	const loweredByPath = new HashMap<string, Node>();
+	for (const at of lowerOrder) {
+		const cm = checkedMods[at];
 		const program = cm.program;
 		const ctx = cm.ctx;
 		const modPath = cm.modPath;
@@ -2755,7 +2767,12 @@ setGlobalHookOwners(sharedHookOwners);
 		if (opts.showTime && (modT1 - modT0) > 50) {
 			printTiming(modPath, modT0);
 		}
-
+		loweredByPath.set(modPath, nativeLowered);
+	}
+	for (const cm of checkedMods) {
+		const ctx = cm.ctx;
+		const modPath = cm.modPath;
+		const nativeLowered = loweredByPath.get(modPath)!;
 		if (opts.targetOs == "solana" && !(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
 			for (const hitNode of collectWritableModuleBindings(nativeLowered)) {
 				const d = hitNode.data as VariableDeclData;
