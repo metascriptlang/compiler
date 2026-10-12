@@ -177,6 +177,7 @@ function pairize(arg: Node): Node {
 
 function rw(node: Node): Node {
 	if (node == null) return node;
+	if (node.kind == NodeKind.OutExpr) return rw((node.data as OutExprData).outArg);
 	if (node.kind == NodeKind.HiddenAddr) {
 		const result = pairize(node);
 		result.nodeType = node.nodeType;
