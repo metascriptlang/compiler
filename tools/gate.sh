@@ -1722,7 +1722,7 @@ solana_check() {
   local name=$1 rc
   shift
   "$@"; rc=$?
-  [ "$rc" -eq 0 ] || printf 'FAIL %s: exit %s\n' "$name" "$rc"
+  [ "$rc" -eq 0 ] || printf 'FAIL solana %s: exit %s\n' "$name" "$rc"
   return "$rc"
 }
 
