@@ -2623,3 +2623,58 @@ when (testBuild) {
 		assert delegateOf(stranger) == null;
 	}
 }
+
+when (testBuild) {
+	function rawStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		let storage: uint8[8] = [];
+		let length: uint64 = 0;
+		for (let at: uint64 = 0; at < input.length; at++) {
+			length = putU8(storage, length, try input.readU8(at));
+		}
+		const target = try account(0);
+		const callee = (try account(1)).key();
+		return invoke(callee, [InstructionAccount.writable(target)], storage, length);
+	}
+
+	function rawEntry(): void {
+		const result = rawStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function rawRun(program: Pubkey, data: uint8[]): HostRun {
+		const callee: HostAccount = {
+			...holderOf(6, keyOf(0), []),
+			key: program,
+			writable: false,
+			executable: true,
+		};
+		const accounts = [holderOf(1, program, mintData(3, 500, 6)), callee];
+		return run(keyOf(9), accounts, data, rawEntry);
+	}
+
+	test "an instruction a simulated program does not implement fails the run and names the program and the instruction" {
+		const token = rawRun(TOKEN_PROGRAM_ID, [4]);
+		assert token.result == ProgramError.custom(12).code;
+		assert token.fault == "sol_invoke_signed: Token program instruction 4 is not simulated";
+		const extended = rawRun(TOKEN_2022_PROGRAM_ID, [30]);
+		assert extended.result == ProgramError.custom(12).code;
+		assert extended.fault == "sol_invoke_signed: Token-2022 program instruction 30 is not simulated";
+		const associated = rawRun(ASSOCIATED_TOKEN_PROGRAM_ID, [2]);
+		assert associated.result == ProgramError.invalidInstructionData().code;
+		assert associated.fault ==
+			"sol_invoke_signed: Associated Token program instruction 2 is not simulated";
+		const system = rawRun(SYSTEM_PROGRAM_ID, [9, 0, 0, 0]);
+		assert system.result == ProgramError.invalidInstructionData().code;
+		assert system.fault == "sol_invoke_signed: System program instruction 9 is not simulated";
+	}
+
+	test "instruction data that names no instruction is refused as the token and System programs refuse it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const empty = rawRun(program, []);
+			assert empty.result == ProgramError.custom(12).code && empty.fault == "";
+		}
+		const short = rawRun(SYSTEM_PROGRAM_ID, [2, 0, 0]);
+		assert short.result == ProgramError.invalidInstructionData().code && short.fault == "";
+	}
+}

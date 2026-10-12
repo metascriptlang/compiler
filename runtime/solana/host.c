@@ -509,9 +509,18 @@ static uint64_t msSolHostResize(uint8_t* record, uint64_t space) {
     return 0;
 }
 
+#define MS_SOL_HOST_INVALID_INSTRUCTION_DATA (3ULL << 32)
+
+static uint64_t msSolHostNotSimulated(const char* program, unsigned instruction, uint64_t status) {
+    char text[sizeof(msSolHostFaultText)];
+    snprintf(text, sizeof(text), "sol_invoke_signed: %s program instruction %u is not simulated", program, instruction);
+    msSolHostFault(2, text);
+    return status;
+}
+
 static uint64_t msSolHostSystem(const uint64_t* header) {
     static const uint8_t systemProgram[32] = {0};
-    if (memcmp((const void*)header[0], systemProgram, 32) != 0 || header[4] < 4) return 0;
+    if (header[4] < 4) return MS_SOL_HOST_INVALID_INSTRUCTION_DATA;
     const uint8_t* data = (const uint8_t*)header[3];
     uint32_t tag;
     memcpy(&tag, data, 4);
@@ -565,7 +574,7 @@ static uint64_t msSolHostSystem(const uint64_t* header) {
         if (first == NULL) return 3ULL << 32;
         return msSolHostResize(first, amount);
     default:
-        return 0;
+        return msSolHostNotSimulated("System", tag, MS_SOL_HOST_INVALID_INSTRUCTION_DATA);
     }
 }
 
@@ -592,7 +601,6 @@ static const uint8_t msSolHostNativeMint2022[32] = {
 };
 
 #define MS_SOL_HOST_INVALID_ARGUMENT (2ULL << 32)
-#define MS_SOL_HOST_INVALID_INSTRUCTION_DATA (3ULL << 32)
 #define MS_SOL_HOST_INVALID_ACCOUNT_DATA (4ULL << 32)
 #define MS_SOL_HOST_INCORRECT_PROGRAM_ID (7ULL << 32)
 #define MS_SOL_HOST_MISSING_REQUIRED_SIGNATURE (8ULL << 32)
@@ -965,7 +973,7 @@ static uint64_t msSolHostInitializeMint2(const uint64_t* header) {
 }
 
 static uint64_t msSolHostToken(const uint64_t* header) {
-    if (!msSolHostIsTokenProgram((const uint8_t*)header[0]) || header[4] < 1) return 0;
+    if (header[4] < 1) return MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION;
     const uint8_t* data = (const uint8_t*)header[3];
     uint8_t* first = msSolHostRecordOf(header, 0);
     uint8_t* second = msSolHostRecordOf(header, 1);
@@ -1016,13 +1024,16 @@ static uint64_t msSolHostToken(const uint64_t* header) {
     case 20:
         return msSolHostInitializeMint2(header);
     default:
-        return 0;
+        return msSolHostNotSimulated(msSolHostIsToken2022(header) ? "Token-2022" : "Token", data[0],
+            MS_SOL_HOST_TOKEN_INVALID_INSTRUCTION);
     }
 }
 
 static uint64_t msSolHostAssociated(const uint64_t* header) {
-    if (memcmp((const void*)header[0], msSolHostAssociatedProgram, 32) != 0) return 0;
     const uint8_t* data = (const uint8_t*)header[3];
+    if (header[4] >= 1 && data[0] > 1) {
+        return msSolHostNotSimulated("Associated Token", data[0], MS_SOL_HOST_INVALID_INSTRUCTION_DATA);
+    }
     uint8_t* payer = msSolHostRecordOf(header, 0);
     uint8_t* associated = msSolHostRecordOf(header, 1);
     uint8_t* wallet = msSolHostRecordOf(header, 2);
@@ -1159,10 +1170,12 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     if (record->signerSeeds == NULL) abort();
     msSolHostRecordSigners(record->signerSeeds, signers, signerCount);
     msSolHostReturnLength = 0;
-    uint64_t status = msSolHostSystem(header);
-    if (status == 0) status = msSolHostToken(header);
-    if (status == 0) status = msSolHostAssociated(header);
-    return status;
+    static const uint8_t systemProgram[32] = {0};
+    const uint8_t* callee = (const uint8_t*)header[0];
+    if (memcmp(callee, systemProgram, 32) == 0) return msSolHostSystem(header);
+    if (msSolHostIsTokenProgram(callee)) return msSolHostToken(header);
+    if (memcmp(callee, msSolHostAssociatedProgram, 32) == 0) return msSolHostAssociated(header);
+    return 0;
 }
 
 static uint64_t msSolHostSysvarStatus;
