@@ -694,7 +694,7 @@ export macro accounts(): Node {
 	const names: string[] = [];
 	const writtenTypes: string[] = [];
 	const fieldDecorators: Node[][] = [];
-	function inheritedFirst(from: Node, names: string[], types: string[], decorators: Node[][]): void {
+	function inheritedFirst(from: Node): void {
 		for (const base of from.interfaceExtends) {
 			const parent = getImpl(bindSym(base));
 			if (parent == null) {
@@ -702,15 +702,15 @@ export macro accounts(): Node {
 					"', whose fields accounts<T>() cannot read: a base is a struct without type arguments, " +
 					"imported where accounts<T>() is called", shape);
 			}
-			inheritedFirst(parent!, names, types, decorators);
+			inheritedFirst(parent!);
 		}
 		for (let own = 0; own < from.interfaceFields.length; own++) {
 			names.push(from.interfaceFields[own]);
-			types.push(from.interfaceFieldTypes[own]);
-			decorators.push(from.interfaceFieldDecorators[own]);
+			writtenTypes.push(from.interfaceFieldTypes[own]);
+			fieldDecorators.push(from.interfaceFieldDecorators[own]);
 		}
 	}
-	inheritedFirst(decl, names, writtenTypes, fieldDecorators);
+	inheritedFirst(decl);
 	if (names.join(",") != shape.typExprFieldNames.join(",")) {
 		error("accounts<" + decl.interfaceName + ">(): the struct and the structs it extends declare the fields '" +
 			names.join(", ") + "', and its type holds '" + shape.typExprFieldNames.join(", ") + "'", shape);
