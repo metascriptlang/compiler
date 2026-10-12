@@ -40,6 +40,23 @@ export macro anchorIdl(spec: Node): Node {
 		return -1;
 	}
 
+	function inheritedFirst(from: Node, names: string[], types: string[], decorators: Node[][]): void {
+		for (const base of from.interfaceExtends) {
+			const parent = getImpl(bindSym(base));
+			if (parent == null) {
+				error("anchorIdl: '" + from.interfaceName + "' extends '" + base +
+					"', whose fields anchorIdl cannot read: a base is a struct without type arguments, " +
+					"imported where anchorIdl is called", spec);
+			}
+			inheritedFirst(parent!, names, types, decorators);
+		}
+		for (let own = 0; own < from.interfaceFields.length; own++) {
+			names.push(from.interfaceFields[own]);
+			types.push(from.interfaceFieldTypes[own]);
+			decorators.push(from.interfaceFieldDecorators[own]);
+		}
+	}
+
 	function constSeed(bytes: Readonly<Span<uint8>>): string {
 		let list = "";
 		let i = 0;
@@ -78,8 +95,11 @@ export macro anchorIdl(spec: Node): Node {
 		const dataName = written.slice(open + 1, written.length - 1);
 		const data = getImpl(bindSym(dataName));
 		if (data == null) { return ""; }
-		const member = nameIndex(data!.interfaceFields, expr.property);
-		if (member < 0 || !encodesRaw(need, data!.interfaceFieldTypes[member])) { return ""; }
+		const dataFields: string[] = [];
+		const dataTypes: string[] = [];
+		inheritedFirst(data!, dataFields, dataTypes, []);
+		const member = nameIndex(dataFields, expr.property);
+		if (member < 0 || !encodesRaw(need, dataTypes[member])) { return ""; }
 		return "{\"kind\":\"account\",\"path\":\"" + snakeCase(base) + "." + snakeCase(expr.property) +
 			"\",\"account\":\"" + dataName + "\"}";
 	}
@@ -162,23 +182,6 @@ export macro anchorIdl(spec: Node): Node {
 			}
 		}
 		return "";
-	}
-
-	function inheritedFirst(from: Node, names: string[], types: string[], decorators: Node[][]): void {
-		for (const base of from.interfaceExtends) {
-			const parent = getImpl(bindSym(base));
-			if (parent == null) {
-				error("anchorIdl: '" + from.interfaceName + "' extends '" + base +
-					"', whose fields anchorIdl cannot read: a base is a struct without type arguments, " +
-					"imported where anchorIdl is called", spec);
-			}
-			inheritedFirst(parent!, names, types, decorators);
-		}
-		for (let own = 0; own < from.interfaceFields.length; own++) {
-			names.push(from.interfaceFields[own]);
-			types.push(from.interfaceFieldTypes[own]);
-			decorators.push(from.interfaceFieldDecorators[own]);
-		}
 	}
 	let name = "program";
 	const declared = define("programId");

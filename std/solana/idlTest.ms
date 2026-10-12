@@ -59,7 +59,7 @@ struct OddAccounts {
 
 function computed(value: uint64): uint8[8] { return leBytes(value); }
 
-enum InheritedOp { One, Two }
+enum InheritedOp { One, Two, Three }
 
 struct PayerAccounts {
 	payer: WritableSigner;
@@ -80,11 +80,21 @@ struct TwoLevelAccounts extends AuthorityAccounts {
 	@seeds("vault", payer, config.maker) @bump vault: Writable;
 }
 
+struct Stamped { seed: uint64; maker: Pubkey; }
+struct Bumped extends Stamped { bump: uint8; }
+struct Flagged extends Bumped { flag: uint8; }
+
+struct InheritedSeedAccounts {
+	@seeds("one", leBytes(bumped.seed)) @bump(bumped.bump) bumped: Mutable<Bumped>;
+	@seeds("two", flagged.maker, [flagged.flag], leBytes(flagged.seed)) @bump(flagged.bump) flagged: Mutable<Flagged>;
+}
+
 function inheritedIdl(): string {
 	return anchorIdl<InheritedOp>({
 		name: "inherited",
 		One: [OneLevelAccounts, MakeArgs],
 		Two: [TwoLevelAccounts],
+		Three: [InheritedSeedAccounts],
 		accounts: [Escrow],
 		events: [],
 		errors: "",
@@ -176,4 +186,20 @@ test "two levels of extends list the accounts base before derived, and a seed re
 		"{\"kind\":\"const\",\"value\":[118,97,117,108,116]}," +
 		"{\"kind\":\"account\",\"path\":\"payer\"}," +
 		"{\"kind\":\"account\",\"path\":\"config.maker\",\"account\":\"Escrow\"}]}}],\"args\"") >= 0;
+}
+
+test "a seed that names a field the account's data inherits one struct up is an account seed" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("{\"name\":\"bumped\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[111,110,101]}," +
+		"{\"kind\":\"account\",\"path\":\"bumped.seed\",\"account\":\"Bumped\"}]}}") >= 0;
+}
+
+test "a seed reaches the fields the account's data declares and inherits one and two structs up" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("{\"name\":\"flagged\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[116,119,111]}," +
+		"{\"kind\":\"account\",\"path\":\"flagged.maker\",\"account\":\"Flagged\"}," +
+		"{\"kind\":\"account\",\"path\":\"flagged.flag\",\"account\":\"Flagged\"}," +
+		"{\"kind\":\"account\",\"path\":\"flagged.seed\",\"account\":\"Flagged\"}]}}") >= 0;
 }
