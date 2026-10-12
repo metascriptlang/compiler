@@ -347,8 +347,8 @@ upload_release() {
         # that would silently ship untested binaries to stable users.
         # If a hotfix without bumping version is genuinely needed, demote first:
         #   gh release edit "$tag" --latest=false --prerelease
-        is_latest=$(gh release view "$tag" --json isLatest --jq '.isLatest' 2>/dev/null)
-        if [ "$is_latest" = "true" ]; then
+        latest_tag=$(gh release view --json tagName --jq '.tagName')
+        if [ "$latest_tag" = "$tag" ]; then
             echo "  error: Release $tag is currently marked Latest."
             echo "         Refusing to overwrite stable assets."
             echo "         Bump VERSION in src/compiler/usage.ms before re-running."
