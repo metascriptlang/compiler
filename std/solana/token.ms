@@ -3,6 +3,8 @@ import {
 	Bytes,
 	InstructionAccount,
 	System,
+	createProgramAccount,
+	putPubkey,
 	putU64,
 	putU8,
 	unchecked,
@@ -16,7 +18,7 @@ import {
 	asAccount,
 } from "./typed";
 import { ProgramError } from "./error";
-import { invokeSigned } from "./invoke";
+import { invoke, invokeSigned } from "./invoke";
 import { associatedTokenAddress, isTokenProgram } from "./mint";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
 import { SignerSeeds } from "./seed";
@@ -412,6 +414,23 @@ export function closeAccount(
 	);
 }
 
+export function initializeAccount3(
+	program: Pubkey,
+	account: Account,
+	mint: Account,
+	owner: Pubkey,
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[33] = [];
+	const length = putPubkey(storage, putU8(storage, 0, 18), owner);
+	return invoke(
+		program,
+		[InstructionAccount.writable(account), InstructionAccount.readonly(mint)],
+		storage,
+		length,
+	);
+}
+
 function createAssociated(
 	payer: Account,
 	associated: Account,
@@ -556,6 +575,69 @@ export function closeTokenAccount(
 ): Result<uint64, ProgramError> {
 	const closing = account.asAccount();
 	return closeAccount(closing.owner(), closing, destination.asAccount(), authority, signers);
+}
+
+const TOKEN_ACCOUNT_LENGTH: uint64 = 165;
+const ACCOUNT_TYPE_BYTE: uint64 = 1;
+const TRANSFER_FEE_AMOUNT_ENTRY: uint64 = 4 + 8;
+const NON_TRANSFERABLE_AND_IMMUTABLE_OWNER_ENTRIES: uint64 = 4 + 4;
+const TRANSFER_HOOK_ACCOUNT_ENTRY: uint64 = 4 + 1;
+const PAUSABLE_ACCOUNT_ENTRY: uint64 = 4;
+
+function entryWhen(mint: Account, kind: ExtensionType, entry: uint64): uint64 {
+	return mint.mintExtension(kind).ok ? entry : 0;
+}
+
+function tokenAccountSpace(mint: Account): uint64 {
+	if (!mint.isOwnedBy(TOKEN_2022_PROGRAM_ID)) { return TOKEN_ACCOUNT_LENGTH; }
+	const entries = entryWhen(mint, ExtensionType.TransferFeeConfig, TRANSFER_FEE_AMOUNT_ENTRY) +
+		entryWhen(mint, ExtensionType.NonTransferable, NON_TRANSFERABLE_AND_IMMUTABLE_OWNER_ENTRIES) +
+		entryWhen(mint, ExtensionType.TransferHook, TRANSFER_HOOK_ACCOUNT_ENTRY) +
+		entryWhen(mint, ExtensionType.Pausable, PAUSABLE_ACCOUNT_ENTRY);
+	if (entries == 0) { return TOKEN_ACCOUNT_LENGTH; }
+	return TOKEN_ACCOUNT_LENGTH + ACCOUNT_TYPE_BYTE + entries;
+}
+
+function createdTokenAccount(
+	payer: WritableSigner,
+	target: Account,
+	mint: External<Mint>,
+	owner: Pubkey,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<uint64, ProgramError> {
+	const minted = mint.asAccount();
+	const program = minted.owner();
+	const _created = try createProgramAccount(
+		payer.asAccount(),
+		target,
+		tokenAccountSpace(minted),
+		program,
+		signers,
+	);
+	return initializeAccount3(program, target, minted, owner);
+}
+
+export function createTokenAccount(
+	payer: WritableSigner,
+	account: WritableSigner,
+	mint: External<Mint>,
+	owner: Pubkey,
+): Result<uint64, ProgramError> {
+	return createdTokenAccount(payer, account.asAccount(), mint, owner, []);
+}
+
+export function createTokenAccount(
+	payer: WritableSigner,
+	account: Writable,
+	mint: External<Mint>,
+	owner: Pubkey,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const target = account.asAccount();
+	if (signers.length == 0 && !target.isSigner()) {
+		return Result.err(ProgramError.missingRequiredSignature());
+	}
+	return createdTokenAccount(payer, target, mint, owner, signers);
 }
 
 export function createAssociatedFor(
@@ -1388,5 +1470,253 @@ when (testBuild) {
 		assert accounts[1].owner.equals(TOKEN_PROGRAM_ID) && accounts[1].data.length == 82;
 		assert accounts[1].lamports == 2 * (82 + 128) * 3480;
 		assert accounts[0].lamports == 10000000 - (accounts[1].lamports - 5);
+	}
+}
+
+when (testBuild) {
+	import { signedPda } from "./macro";
+	import { ProgramAddress } from "./pda";
+
+	const TOKEN_ACCOUNT_RENT: uint64 = 2 * (165 + 128) * 3480;
+
+	function u64At(bytes: uint8[], offset: int32): uint64 {
+		let value: uint64 = 0;
+		for (let index = offset + 7; index >= offset; index--) {
+			value = (value << 8) | (bytes[index] as uint64);
+		}
+		return value;
+	}
+
+	function keyAt(bytes: uint8[], offset: int32): Pubkey {
+		let key = Pubkey.zero();
+		for (let index = 0; index < 32; index++) { key.bytes[index] = bytes[offset + index]; }
+		return key;
+	}
+
+	function newTokenStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const owner = keyOf(8);
+		if (op == 4) {
+			return initializeAccount3(TOKEN_PROGRAM_ID, try account(1), try account(2), owner);
+		}
+		const payer = try writableSigner(0);
+		const mint = try external<Mint>(2);
+		if (op == 0) {
+			return createTokenAccount(payer, try writableSigner(1), mint, owner);
+		}
+		const fresh = try writable(1);
+		if (op == 1) { return createTokenAccount(payer, fresh, mint, owner); }
+		if (op == 2) {
+			return signedPda(
+				createTokenAccount(payer, fresh, mint, owner),
+				fresh.asAccount(),
+				["vault", mint],
+			);
+		}
+		const bump = try instructionData().readU8(1);
+		return signed(createTokenAccount(payer, fresh, mint, owner), ["vault", mint, [bump]]);
+	}
+
+	function newTokenEntry(): void {
+		const result = newTokenStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function newTokenAccounts(program: Pubkey, mint: uint8[]): HostAccount[] {
+		const payer: HostAccount = {
+			...holderOf(4, Pubkey.zero(), []),
+			lamports: 10000000,
+			signer: true,
+		};
+		const fresh: HostAccount = { ...holderOf(2, Pubkey.zero(), []), lamports: 0, signer: true };
+		return [payer, fresh, holderOf(1, program, mint)];
+	}
+
+	function vaultAddress(): ProgramAddress {
+		const mint = keyOf(1);
+		const found = findProgramAddressOf(keyOf(9), ["vault", mint]);
+		return found.ok ? found.value : { key: Pubkey.zero(), bump: 0 };
+	}
+
+	function keyBytes(key: Pubkey): uint8[] {
+		const bytes: uint8[] = [];
+		pushKey(bytes, key);
+		return bytes;
+	}
+
+	function vaultAccounts(program: Pubkey): HostAccount[] {
+		const accounts = newTokenAccounts(program, mintData(7, 500, 6));
+		accounts[1].key = vaultAddress().key;
+		accounts[1].signer = false;
+		return accounts;
+	}
+
+	function isFreshTokenAccount(holder: HostAccount, program: Pubkey, length: int32): boolean {
+		return holder.owner.equals(program) && holder.data.length == length &&
+			keyAt(holder.data, 0).equals(keyOf(1)) && keyAt(holder.data, 32).equals(keyOf(8)) &&
+			u64At(holder.data, 64) == 0 && holder.data[108] == 1 && u64At(holder.data, 72) == 0 &&
+			holder.data[129] == 0 && holder.data[109] == 0;
+	}
+
+	test "createTokenAccount creates the account for the mint's token program and initializes it for the mint and the owner" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = newTokenAccounts(program, mintData(7, 500, 6));
+			assert resultOf(accounts, 0, newTokenEntry) == 0;
+			assert isFreshTokenAccount(accounts[1], program, 165);
+			assert accounts[1].lamports == TOKEN_ACCOUNT_RENT;
+			assert accounts[0].lamports == 10000000 - TOKEN_ACCOUNT_RENT;
+			const calls = invocations();
+			assert calls.length == 2 && calls[0].program.isZero() && calls[0].data[0] == 13;
+			assert calls[0].data[12] == 165 && keyAt(calls[0].data, 20).equals(program);
+			const initialized = calls[1];
+			assert initialized.program.equals(program) && initialized.accounts.length == 2;
+			assert initialized.accounts[0].key.equals(keyOf(2)) && initialized.accounts[0].writable;
+			assert !initialized.accounts[0].signer;
+			assert initialized.accounts[1].key.equals(keyOf(1));
+			assert !initialized.accounts[1].writable && !initialized.accounts[1].signer;
+			assert initialized.data.length == 33 && initialized.data[0] == 18;
+			assert keyAt(initialized.data, 1).equals(keyOf(8));
+		}
+	}
+
+	test "createTokenAccount at an address that did not sign and has no seeds is refused before any CPI" {
+		const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mintData(7, 500, 6));
+		accounts[1].signer = false;
+		assert resultOf(accounts, 0, newTokenEntry) == ProgramError.accountNotSigner().code;
+		assert resultOf(accounts, 1, newTokenEntry) == ProgramError.missingRequiredSignature().code;
+		assert invocations().length == 0 && accounts[1].data.length == 0;
+	}
+
+	test "createTokenAccount under signedPda creates the account at the canonical address of the seeds" {
+		const accounts = vaultAccounts(TOKEN_PROGRAM_ID);
+		assert resultOf(accounts, 2, newTokenEntry) == 0;
+		assert isFreshTokenAccount(accounts[1], TOKEN_PROGRAM_ID, 165);
+		const created = invocations()[0];
+		assert created.signers == 1;
+		const seeds: uint8[][] = [textBytes("vault"), keyBytes(keyOf(1)), [vaultAddress().bump]];
+		assert signerIs(created, 0, seeds);
+		assert invocations()[1].signers == 0;
+		const elsewhere = vaultAccounts(TOKEN_PROGRAM_ID);
+		elsewhere[1].key = keyOf(2);
+		assert resultOf(elsewhere, 2, newTokenEntry) == ProgramError.constraintSeeds().code;
+		assert invocations().length == 0;
+	}
+
+	test "createTokenAccount under signed creates the account only at the address its seeds sign for" {
+		const accounts = vaultAccounts(TOKEN_2022_PROGRAM_ID);
+		const data: uint8[] = [3, vaultAddress().bump];
+		assert run(keyOf(9), accounts, data, newTokenEntry).result == 0;
+		assert isFreshTokenAccount(accounts[1], TOKEN_2022_PROGRAM_ID, 165);
+		const elsewhere = vaultAccounts(TOKEN_2022_PROGRAM_ID);
+		elsewhere[1].key = keyOf(2);
+		const refused = run(keyOf(9), elsewhere, data, newTokenEntry);
+		assert refused.result == ProgramError.missingRequiredSignature().code;
+		assert refused.fault.indexOf("signer privilege escalated") >= 0;
+		assert elsewhere[1].data.length == 0 && elsewhere[1].owner.isZero();
+	}
+
+	test "createTokenAccount refuses an address that already holds a token account and leaves it intact" {
+		const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mintData(7, 500, 6));
+		accounts[1].owner = TOKEN_PROGRAM_ID;
+		accounts[1].data = tokenAccountData(1, 3, 77, 1);
+		accounts[1].lamports = TOKEN_ACCOUNT_RENT;
+		assert resultOf(accounts, 0, newTokenEntry) == ProgramError.custom(0).code;
+		assert u64At(accounts[1].data, 64) == 77 && keyAt(accounts[1].data, 32).equals(keyOf(3));
+		assert resultOf(accounts, 4, newTokenEntry) == ProgramError.custom(6).code;
+		assert u64At(accounts[1].data, 64) == 77 && keyAt(accounts[1].data, 32).equals(keyOf(3));
+	}
+
+	function mintExtensionLength(kind: int32): int32 {
+		return match (kind) {
+			1 => 108,
+			3 => 32,
+			14 => 64,
+			26 => 33,
+			6 => 1,
+			_ => 0,
+		};
+	}
+
+	function extendedMint(kinds: int32[]): uint8[] {
+		const bytes = mintData(7, 500, 6);
+		pushZeros(bytes, 83);
+		bytes.push(1);
+		for (const kind of kinds) {
+			pushU16(bytes, kind as uint64);
+			pushU16(bytes, mintExtensionLength(kind) as uint64);
+			pushZeros(bytes, mintExtensionLength(kind));
+		}
+		return bytes;
+	}
+
+	test "createTokenAccount sizes a Token-2022 account for the account extensions its mint requires" {
+		const cases: int32[][] = [[1], [9], [14], [26], [3], [1, 9, 14, 26]];
+		const sizes: int32[] = [178, 174, 171, 170, 165, 195];
+		for (let index = 0; index < cases.length; index++) {
+			const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, extendedMint(cases[index]));
+			assert resultOf(accounts, 0, newTokenEntry) == 0;
+			assert accounts[1].data.length == sizes[index];
+			assert invocations()[0].data[12] == sizes[index];
+			assert accounts[1].lamports == 2 * ((sizes[index] as uint64) + 128) * 3480;
+			assert sizes[index] == 165 || accounts[1].data[165] == 2;
+		}
+	}
+
+	test "a Token-2022 account created for a mint with a default account state starts in that state" {
+		const frozen = extendedMint([6]);
+		frozen[170] = 2;
+		const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, frozen);
+		assert resultOf(accounts, 0, newTokenEntry) == 0;
+		assert accounts[1].data.length == 165 && accounts[1].data[108] == 2;
+	}
+
+	test "a token account created for the native mint holds the lamports above its rent reserve" {
+		const native = Pubkey.parse("So11111111111111111111111111111111111111112");
+		assert native.ok;
+		if (native.ok) {
+			const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mintData(7, 0, 9));
+			accounts[2].key = native.value;
+			accounts[1].lamports = TOKEN_ACCOUNT_RENT + 5000;
+			assert resultOf(accounts, 0, newTokenEntry) == 0;
+			assert accounts[0].lamports == 10000000;
+			assert accounts[1].lamports == TOKEN_ACCOUNT_RENT + 5000;
+			assert u64At(accounts[1].data, 64) == 5000 && accounts[1].data[109] == 1;
+			assert u64At(accounts[1].data, 113) == TOKEN_ACCOUNT_RENT;
+		}
+	}
+
+	function blankTokenAccounts(mint: uint8[]): HostAccount[] {
+		const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mint);
+		accounts[1].owner = TOKEN_PROGRAM_ID;
+		accounts[1].data = tokenAccountData(0, 0, 0, 0);
+		accounts[1].lamports = TOKEN_ACCOUNT_RENT;
+		return accounts;
+	}
+
+	test "initializeAccount3 is refused by the token program for a mint that is not initialized, a mint of another program and an account below rent" {
+		assert resultOf(blankTokenAccounts(mintData(7, 500, 6)), 4, newTokenEntry) == 0;
+		const blank = mintData(7, 500, 6);
+		blank[45] = 0;
+		assert resultOf(blankTokenAccounts(blank), 4, newTokenEntry) == ProgramError.custom(2).code;
+		const foreign = blankTokenAccounts(mintData(7, 500, 6));
+		foreign[2].owner = TOKEN_2022_PROGRAM_ID;
+		assert resultOf(foreign, 4, newTokenEntry) == ProgramError.incorrectProgramId().code;
+		const poor = blankTokenAccounts(mintData(7, 500, 6));
+		poor[1].lamports = TOKEN_ACCOUNT_RENT - 1;
+		assert resultOf(poor, 4, newTokenEntry) == ProgramError.custom(0).code;
+		assert poor[1].data[108] == 0;
+		const short = blankTokenAccounts(mintData(7, 500, 6));
+		short[1].data.pop();
+		assert resultOf(short, 4, newTokenEntry) == ProgramError.invalidAccountData().code;
+	}
+
+	test "initializeAccount3 on an account the token program does not own is refused as the runtime refuses the write" {
+		const foreign = blankTokenAccounts(mintData(7, 500, 6));
+		foreign[1].owner = keyOf(9);
+		const input: uint8[] = [4];
+		const refused = run(keyOf(9), foreign, input, newTokenEntry);
+		assert refused.result == ProgramError.incorrectProgramId().code;
+		assert refused.fault.indexOf("ExternalAccountDataModified") >= 0;
+		assert foreign[1].data[108] == 0;
 	}
 }
