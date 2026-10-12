@@ -242,8 +242,7 @@ printed stdout byte-identical to its JS run. The timeout came from the loaded ma
 not from the compiler.
 
 **Still open:** observation coverage (locals and closure state that never reach the
-output). The 100-seed execution campaign, closure-only campaign, driver controls, SAN
-and reducer remain unrun or unimplemented at this checkpoint. Old bundles keep their
+output). The two campaigns are in §G0 campaigns below. Old bundles keep their
 source and identity; they are not rewritten for the changed generator.
 
 ### Per-construct weights (G3, first half) — measured 2026-10-08
@@ -279,6 +278,49 @@ aims calls by also narrowing `types`, `expr` and `stmts`. Markers are regex coun
 of generated text, not generator decisions; negative-literal casts inflate the
 convert and binary counts, which is conservative for the aimed construct. Bash
 and script sources of the measurement are in `out/smith/weights/` (untracked).
+
+### G0 campaigns — measured 2026-10-12
+
+Generator tree `c34c8641e34a7b9bf17a4585af9e87f78f4616fe`; subject and harness the installed `msc` v0.3.2, BUILD
+`ea7ae4d17` (hash `b980a820_4a4ca578:22547904`); lanes c / orc / danger / js / esm;
+`MSCORPUS_JOBS=4`; macOS arm64, 14 cores, load average 6–12, no gate in
+`~/.metascript/gates` from start to end (one started a minute after the second run).
+
+```sh
+MSC=~/.metascript/bin/msc MSCORPUS_JOBS=4 msc run tools/smith/main.ms run 1 100 --swarm
+MSC=~/.metascript/bin/msc MSCORPUS_JOBS=4 msc run tools/smith/main.ms run 1 100 --features="fams=closure"
+```
+
+| campaign | wall | CPU (user+sys) | programs / wall hour | programs / CPU hour | clean | findings | timeout |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| swarm, seeds 1..100 | 136 s | 465 s | 2,650 | 774 | 96 | 4 | 0 |
+| `fams=closure`, seeds 1..100 | 187 s | 500 s | 1,925 | 720 | 98 | 2 | 0 |
+
+The six findings are four compiler bugs. Each was matched by its symptom in the bundle,
+not by its verdict line:
+
+| inbox card | swarm | closure | bundle verdict |
+|---|---:|---:|---|
+| `2026-10-08-js-double-negation-emits-decrement` | 2 (seeds 23, 64) | 1 (seed 31) | seeds 64 and 31 crash on JS (`SyntaxError`); seed 23 is wrong-code, `(-(-g3))` emitted as `--g3` |
+| `2026-10-08-ternary-hoist-lost-when-else-holds-a-nested-ternary` | 1 (seed 58) | 0 | C build fails |
+| `2026-10-08-capture-free-lambda-links-child-env-to-missing-envP` | 1 (seed 80) | 0 | C build fails |
+| `2026-10-12-c-compound-assignment-reads-target-after-the-right-side` (new) | 0 | 1 (seed 43) | wrong-code `c orc danger \| js esm` |
+
+So the rate is **4 distinct bugs in 965 CPU-seconds**, about 15 per CPU hour, and one of
+them new: at this size a second batch of the same vector mostly re-finds the same bugs.
+One bug owns half the bundles, and the ternary-hoist bug that the 2026-10-08 extreme
+vectors hit often appears in 1 of 200 default-size programs. A program that fails to
+build on C or to load on JS runs nothing on that lane, so each of these four bundles
+may hide a second divergence; no arm with the masking construct switched off
+(`w.expr.unary=0` for the double negation) was run to measure that.
+
+Seed 43 went through `reduce`: 11,668 → 2,970 bytes in about 8 minutes, then the run was
+stopped because a gate took the machine, and the last cut to a 7-line repro was by hand
+(the card holds it). Seed 23 was classified by reading the emitted JS, not reduced.
+
+Not measured: an idle machine, `--san`, the Raiser lane, other seed ranges or batch
+sizes, the masking arm above, and any vector other than these two. Bundles are under
+`out/smith/bundles/` and the two run logs under `out/smith/g0/` (untracked).
 
 ## Approved order and NEW MECHANISM decisions
 
