@@ -1233,6 +1233,30 @@ function coreCell(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function coreOp(): void {
+	const tag = "hcrCoreOp";
+	const dir = freshDir(`${TMP}/coreOp`);
+	for (const sub of ["app", "lib"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "lib/lib.ms", "logicEdit.ms"]) {
+		copy(`${FIXTURES}/coreOp/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-OP ")) seen.push(line);
+	}
+	const want = [
+		"HCR-OP start row s+ 2 column wide 7",
+		"HCR-OP cleared none none 0",
+		"HCR-OP reloaded logic column s++ 12",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "lifted operations a project image needs first and a core module needs later did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function globalCell(): void {
 	const tag = "hcrGlobalCell";
 	const dir = freshDir(`${TMP}/globalCell`);
@@ -1504,6 +1528,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
+	{ name: "hcrCoreOp", run: coreOp },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
