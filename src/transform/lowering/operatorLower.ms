@@ -19,7 +19,7 @@
 import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
 import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
-import { walkNode } from "../walker";
+import { walkNode, hasEffect } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -330,7 +330,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		if (folded != null) {
 			if (cloneIfPure(folded) != null) return makeBool(isNotEqual, loc);
 			if (ctx.jsBackend || ctx.raiserBackend) return node;
-			reportTransformError(ctx, "internal: a null comparison on an operand with effects reached operatorLower unspilled", loc);
+			if (hasEffect(folded)) reportTransformError(ctx, "internal: a null comparison on an operand with effects reached operatorLower unspilled", loc);
 			return makeBool(isNotEqual, loc);
 		}
 		// Maybe<T>: x !== null → x.present, x === null → !x.present
