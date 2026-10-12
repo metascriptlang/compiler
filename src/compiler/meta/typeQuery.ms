@@ -106,10 +106,11 @@ export function peelToImpl(t: Type, ctx: CheckerContext): Type | null {
 
 function hostBindSym(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
-	if (ctx == null || args.length < 1 || args[0].kind != RaiserValueKind.String) return raiserNil();
-	const sym = lookupSymbol(ctx.table, args[0].strVal);
+	if (ctx == null || args.length < 2 || args[0].kind != RaiserValueKind.String) return raiserNil();
+	const bound = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int32 : args[1].intVal as int32;
+	const sym = bound >= 0 ? boundSymAt(bound) : lookupSymbol(ctx.table, args[0].strVal);
 	if (sym == null) return raiserNil();
-	const ident = createNodeAt(NodeKind.Identifier, { name: sym.name }, makeLoc(activeMetaLine(), activeMetaColumn()));
+	const ident = createNodeAt(NodeKind.Identifier, { name: bound >= 0 ? args[0].strVal : sym.name }, makeLoc(activeMetaLine(), activeMetaColumn()));
 	ident.resolvedSym = sym;
 	ident.flags = ident.flags.incl(NodeFlag.BoundSym);
 	return emitNode(ident);

@@ -52,7 +52,7 @@ export function intValue(n: Node): int64 { return msNodeIntValue(n); }
 export function floatValue(n: Node): float64 { return msNodeFloatValue(n); }
 export function stringValue(n: Node): string { return msNodeStringValue(n); }
 
-extern function msMetaBindSym(name: string): Node | null;
+extern function msMetaBindSym(name: string, bound: int32): Node | null;
 extern function msMetaGetType(n: Node, impl: boolean): Node | null;
 extern function msMetaGetImpl(n: Node): Node | null;
 extern function msMetaResolveType(text: string): Node | null;
@@ -63,7 +63,7 @@ extern function msMetaGetSize(n: Node): int32;
 extern function msMetaGetAlign(n: Node): int32;
 extern function msMetaGetOffset(n: Node, field: string): int32;
 
-export function bindSym(name: string): Node | null { return msMetaBindSym(name); }
+export function bindSym(name: string): Node | null { return msMetaBindSym(name, -1); }
 export function getType(n: Node | null): Node | null { if (n == null) return null; return msMetaGetType(n, false); }
 export function getTypeImpl(n: Node | null): Node | null { if (n == null) return null; return msMetaGetType(n, true); }
 export function getImpl(n: Node | null): Node | null { if (n == null) return null; return msMetaGetImpl(n); }
