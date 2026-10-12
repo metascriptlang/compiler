@@ -3,14 +3,13 @@
 
 import { DeclKind, Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
-import { accountAddressOf, keyAddressOf, seedTable } from "./accountSeeds";
+import { accountAddressOf, keyAddressOf, slottedTable } from "./accountSeeds";
 import { namedWord } from "./discriminator";
 import { ProgramError } from "./error";
 import { accountFieldsValid, zeroAccountFieldsValid } from "./accountValidation";
 import {
 	Account,
 	SlottedSeeds,
-	canonicalBump,
 	canonicalBumpProven,
 	closedProgramAccount,
 	createdAccount,
@@ -30,6 +29,7 @@ import {
 	seedsFoldedGivenFailure,
 	seedsGivenFailure,
 	seedsGivenProvenFailure,
+	slottedCanonicalBump,
 	keysEqual,
 	unchecked,
 	keyIsZero,
@@ -50,7 +50,6 @@ import {
 	bytesAddress,
 	fillWithBump,
 	findAddress,
-	ownProgram,
 	seedKey,
 	signerOfBumped,
 	tableAddress,
@@ -63,8 +62,7 @@ extern function msSolLoadU64(address: uint64): uint64;
 extern function msSolLoadU32(address: uint64): uint32;
 extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
-
-const UNDUPLICATED_SIGNER_WRITABLE: uint32 = 0x0101ff;
+extern function msSolClaimRecord(address: uint64): void;
 
 export struct Signer { private account: Account; }
 export struct WritableSigner { private account: Account; }
@@ -161,7 +159,7 @@ export function signer(index: int32): Result<Signer, ProgramError> {
 }
 
 @inline function writableSignerProofAt(address: uint64, out proof: WritableSigner): uint64 {
-	if ((msSolLoadU32(address) & 0x00ffffff) == UNDUPLICATED_SIGNER_WRITABLE) {
+	if (msSolLoadU32(address + 1) == 0x0101) {
 		proof = { account: { address: address } };
 		return 0;
 	}
@@ -187,6 +185,10 @@ export function writableSigner(index: int32): Result<WritableSigner, ProgramErro
 }
 
 @inline function writableProofAt(address: uint64, out proof: Writable): uint64 {
+	if (msSolLoadU32(address + 2) == 1) {
+		proof = { account: { address: address } };
+		return 0;
+	}
 	const duplicated = duplicateFailure(address);
 	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
@@ -218,13 +220,10 @@ export function writablePda(index: int32): Result<WritablePda, ProgramError> {
 }
 
 // The proof keeps the canonical bump the declared `@seeds(..) @bump` found: Anchor's `ctx.bumps.<field>`.
-export function seedsFoundFailure(ref proof: WritablePda, seeds: Readonly<Span<SeedSlice>>): uint64 {
-	const found = findAddress(seeds, ownProgram());
+export function seedsFoundFailure(ref proof: WritablePda, seeds: SlottedSeeds): uint64 {
+	const found = slottedCanonicalBump(proof.account, seeds);
 	if (!found.ok) { return found.error.code; }
-	if (!keysEqual(proof.account.keyAddress(), bytesAddress(found.value.key.bytes))) {
-		return ProgramError.constraintSeeds().code;
-	}
-	proof.bump = found.value.bump;
+	proof.bump = found.value;
 	return 0;
 }
 
@@ -357,9 +356,8 @@ export struct Pda<T> {
 	const failure = mutableEnvelopeAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
 	if (failure != 0) { return failure; }
 	if (!accountFieldsValid<T>(address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
-	const claimed = exclusiveWritable({ address: address });
-	if (!claimed.ok) { return claimed.error.code; }
-	proof = { account: claimed.value };
+	msSolClaimRecord(address);
+	proof = { account: { address: address } };
 	return 0;
 }
 
@@ -596,7 +594,7 @@ export function createPdaAt<T>(
 
 export function verifiedPda<T>(
 	this account: Mutable<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<Pda<T>, ProgramError> {
 	const bump = try canonicalBumpProven(account.account, seeds);
 	return Result.ok({ account: account, bump: bump });
@@ -604,7 +602,7 @@ export function verifiedPda<T>(
 
 export function verifiedPdaWithBump<T>(
 	this account: Mutable<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 	bump: uint8,
 ): Result<Pda<T>, ProgramError> {
 	const given = try givenBumpOwned(account.account, seeds, bump);
@@ -613,14 +611,14 @@ export function verifiedPdaWithBump<T>(
 
 export function verifiedPda<T>(
 	this account: Delegated<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<uint8, ProgramError> {
-	return canonicalBump(account.account, seeds);
+	return slottedCanonicalBump(account.account, seeds);
 }
 
 export function verifiedPdaWithBump<T>(
 	this account: Delegated<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
 	return givenBump(account.account, seeds, bump);
@@ -1200,7 +1198,7 @@ export macro accounts(): Node {
 				list.push(rewrite(seeded.macroArgs[seed]));
 				seed = seed + 1;
 			}
-			const table = call(bindSym("seedTable")!, [{
+			const table = call(bindSym("slottedTable")!, [{
 				kind: NodeKind.ArrayLiteral,
 				line: seeded.line,
 				column: seeded.column,

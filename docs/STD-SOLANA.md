@@ -112,7 +112,7 @@ A verifier is the only way to get a proof, and a function that needs a property 
 | `ExternalMutable<T>` | `externalMutable<T>(i)` | `#[account(mut)] InterfaceAccount<T>` | as `External<T>`, then writable (2000), then exclusive (builtin 12) |
 | `Delegated<T>` | `delegated<T>(i)` | `UncheckedAccount` with `seeds`, then `T::try_deserialize` (MagicBlock `magic-actions` `UpdateLeaderboard`) | present, owner is the delegation program (3007), 8 bytes of data (3001), `T.discriminator()` (3002), `8 + sizeof(T)` bytes and valid field values (3003); the address is checked by `pda`/`pdaWithBump` (2006) |
 
-- **Exclusive.** The runtime marks a duplicated account in the input buffer as a pointer to the first record. `msSolParse` writes `0xfe` into the first record's marker byte (`MS_SOL_DUPLICATED_RECORD`), so every writable proof (`Writable`, `WritableSigner`, `WritablePda`, `Mutable`, `ExternalMutable`) whose account appears at more than one index, in the declared struct or as a trailing account, is `ConstraintDuplicateMutableAccount` (2040), and a repeat between read-only fields stays allowed: Anchor v2 sets the dispatch bitvec for both the repeating index and the one it repeats, then refuses when it meets a `mut` field (`lang-v2/src/dispatch.rs:108-111`, `cursor.rs:170-171`, `context.rs:144`). A `Mutable` or `ExternalMutable` proof also claims its account by writing the marker byte, so a second mutable proof for the same index is `AccountBorrowFailed`; this is Pinocchio's borrow state, which lives in the same byte. Anchor 0.31.1 accepts the duplicate unless the program writes a constraint; two `Ptr<T>` into one account is how a player fights their own pet. A trailing account that repeats a declared writable field is refused when the field is proved, not when the trailing accounts are read, which is stricter than v2's lazy `remaining_accounts()` walk.
+- **Exclusive.** The runtime marks a duplicated account in the input buffer as a pointer to the first record. The entry parse writes 2 (`MS_SOL_DUPLICATED_RECORD`) into byte 4 of the first record, the first of four padding bytes the runtime writes as zero and never reads back, so every writable proof (`Writable`, `WritableSigner`, `WritablePda`, `Mutable`, `ExternalMutable`) whose account appears at more than one index, in the declared struct or as a trailing account, is `ConstraintDuplicateMutableAccount` (2040), and a repeat between read-only fields stays allowed: Anchor v2 sets the dispatch bitvec for both the repeating index and the one it repeats, then refuses when it meets a `mut` field (`lang-v2/src/dispatch.rs:108-111`, `cursor.rs:170-171`, `context.rs:144`). A `Mutable` or `ExternalMutable` proof also claims its account by writing 1 into the same byte, so a second mutable proof for the same index is `AccountBorrowFailed`. Pinocchio keeps its borrow state in byte 0, the runtime's duplicate marker; byte 4 sits beside the signer, writable and executable bytes, so one 32-bit load at byte 1 or 2 proves the flags and an unclaimed, unrepeated account together, and byte 0 stays as the runtime wrote it. Anchor 0.31.1 accepts the duplicate unless the program writes a constraint; two `Ptr<T>` into one account is how a player fights their own pet. A trailing account that repeats a declared writable field is refused when the field is proved, not when the trailing accounts are read, which is stricter than v2's lazy `remaining_accounts()` walk.
 - **A `Delegated<T>` field of `accounts<T>()` is pinned** by `@seeds`+`@bump` or by `@address`; without one, any account the delegation program owns with `T`'s discriminator and size would pass, so the struct is a compile error naming the field (`solanaDecoratorRefused.ms`). The seeds may read the account's own data (`@seeds("pet", pet.mint) @bump(pet.bump) pet: Delegated<Pet>`). `delegated<T>(i)` called directly stays, and `pda`/`pdaWithBump` bind its address afterwards.
 - **Weakening.** `asSigner()` and `asWritable()` turn a `WritableSigner` (or a `Mutable<T>`) into the weaker proof a callee asks for. There is no conversion the other way.
 - **Constraints** that need more than the field's type are decorators on the field (below). The calls they replace stay for code that decides at run time: `pda`/`pdaWithBump` (2006, seeds as in §4), `expectHasOne` (2001), `expectAddress` (2012), and in `token.ms` `expectAssociated` (3014), `expectTokenMint` (2014), `expectTokenOwner` (2015).
@@ -183,7 +183,7 @@ An account type is a fixed-size value struct declared in a module shared by the 
 
 - `create<T>` and `createPda<T>` follow Anchor's `init` (`anchor-syn-0.31.1/src/codegen/accounts/constraints.rs` `generate_create_account`): a target with no lamports is created with `create_account`; a prefunded one is topped up to rent exemption, allocated and assigned. Paying with the account being created is 4101 (the raw `createProgramAccount` and `createProgramAccountSeeded` answer InvalidArgument, `lang-v2/src/cpi.rs:454`), and a space below 8 is AccountDataTooSmall because the discriminator is 8 bytes. The discriminator is written after the account exists; `createPda` takes the canonical bump, signs with the seeds and that bump, and refuses another address (2006).
 - `close` is Anchor's (`anchor-lang-0.31.1/src/common.rs` `close`): every lamport to the destination, assigned to the System program, data resized to zero. Closing onto itself is 2011; a destination that would overflow is `ArithmeticOverflow` where Anchor's `unwrap` panics. Before it moves anything it refuses a target or destination that is not writable (2000) and a target this program does not own (3007), and it writes `0xff` over the 8 discriminator bytes before the resize, as `lang-v2/src/accounts/slab.rs` `close` does, so a revived account does not read as its old self.
-- `realloc` follows `realloc_account` (`lang-v2/src/cpi.rs:529-580`): growth transfers only the rent deficit from the payer through the System program (a payer that is the account itself with a deficit is InvalidArgument), a shrink refunds `min(old rent - new rent, lamports above the new rent)` to the payer and skips the writes when the payer is the account, a same-size call moves no lamports, the refund is checked (ArithmeticOverflow). It refuses growth past 10,240 bytes in one instruction (3016) and a new size other than the current one below `8 + sizeof(T)` (AccountDataTooSmall, `lang-v2/src/accounts/slab.rs:975-985`).
+- `realloc` follows `realloc_account` (`lang-v2/src/cpi.rs:529-580`): growth transfers only the rent deficit from the payer through the System program (a payer that is the account itself with a deficit is InvalidArgument), a shrink refunds `min(old rent - new rent, lamports above the new rent)` to the payer and skips the writes when the payer is the account, a same-size call moves no lamports, the refund is checked (ArithmeticOverflow). It refuses growth past 10,240 bytes in one instruction (3016). Under it, `Account.resize` counts this program's own growth in bytes 5 to 7 of the record and also bounds every growth by where the record ends in the input (`msSolDataRoom`): a callee that grew the account, a `createAccount` CPI for one, moves the length without moving that count, and the end of the record is the one bound it cannot move. `realloc` also refuses a new size other than the current one below `8 + sizeof(T)` (AccountDataTooSmall, `lang-v2/src/accounts/slab.rs:975-985`).
 
 ### Portable account bytes
 
@@ -264,8 +264,8 @@ A PDA that signs the CPI which follows its find needs no `sol_curve_validate_poi
 
 The condition is that the found bump flows into the signer table of the CPI with nothing done with the address in between, so the skip exists in two places and nowhere else:
 
-- `createPda<T>`: `createdPdaAccount` finds with `findExpectedFailureAt` into the slot of the caller's seed table and signs the `CreateAccountAllowPrefund` with that table.
-- `signedPda(call, pda, seeds)`: `signed` for one PDA whose bump the std finds. `seeds` is one list without the bump; the macro appends a one-byte slot, `foundSigner` writes the found bump into it and the call receives that table as its signers, with the `try` of the find in the argument list so a failed find returns before the call is made.
+- `createPda<T>`: `createdPdaAccount` finds with `msSolFindExpectedStaged` in the caller's own seed table, which leaves the bump in the byte the table's bump slice names, and signs the `CreateAccountAllowPrefund` with that table.
+- `signedPda(call, pda, seeds)`: `signed` for one PDA whose bump the std finds. `seeds` is one list without the bump; `slottedTable` appends the bump's slice and a byte for it, `foundSigner` leaves the found bump in that byte and the call receives that table as its signers, with the `try` of the find in the argument list so a failed find returns before the call is made.
 
 ```ms
 return signedPda(
@@ -652,7 +652,7 @@ SDK instruction CU higher. It is not a completed optimization or delivery.
 
 ### Parser marker reuse — measured 2026-10-08
 
-`runtime/solana/solana.h:msSolParse` now reads each kept slot's duplicate
+`runtime/solana/solana.h:msSolParseAccounts` now reads each kept slot's duplicate
 marker once, resolves its lookup and advances its cursor in the same branch.
 The reference cursor's `next` uses the same resolve/advance ordering
 (`lang-v2/src/cursor.rs:135–179` in the archived reference). No entry ABI,
@@ -756,16 +756,32 @@ also increased size/CU. Both cursor prototypes and both extra context fields wer
 removed, including their heap-layout change. Artifacts remain in ignored
 `out/solana/goalAudit/prop-lazy{,-inline}*`; no new lazy accessor is promoted.
 
-The smaller R2-only experiment keeps eager frame-table parsing and the legacy
-host parser. `msSolStart` in `runtime/solana/solana.h` uses the direct instruction
-pointer, with the emitted two-argument entry in `src/codegen/c/index.ms`.
-A missing R2 pointer is rejected before entering the program, not silently
-accepted through an alternate decoder. SIMD-0321 is required for this experiment;
-feature-disabled VM behavior is not established. An ignored copy of the harness
-explicitly deactivated `5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL`
-and printed `isActive=false`, but both old and R2-only prop artifacts still passed
-with unchanged CU (`r2-feature-disabled-{old,new}.log`). Thus that toggle did not
-exercise missing R2; it must not be reported as a demonstrated refusal.
+The smaller R2-only experiment keeps eager frame-table parsing. `msSolStart` in
+`runtime/solana/solana.h` uses the direct instruction pointer, with the emitted
+two-argument entry in `src/codegen/c/index.ms`. A runtime that leaves r2 empty
+takes the one-argument path instead: the entry walks past the accounts to the
+instruction data with `msSolInstructionDataOf`, the walk the host parser
+`msSolParse` takes on every host test. Which runtimes leave r2 empty: agave 4.0.x
+sets it only under feature `5xXZc66h4UdB6Yq7FzdBxBiRAFMMScMLwHxk2QZDaNZL`
+(`solana-program-runtime` 4.0.0 `src/vm.rs:264-267`; the VM starts every register
+at zero, `solana-sbpf` `src/vm.rs:317`, and the x86 JIT loads r2 from that array),
+and 4.1.0 and later set it unconditionally (`src/vm.rs:309`). A MagicBlock
+ephemeral rollup runs a 4.0 fork with the same gate (`magicblock-svm` 0395009
+`program-runtime/src/vm.rs:265`) and activates ten features on an empty set
+(`magicblock-processor/src/lib.rs:45-66`), so r2 is zero there. The entry refused
+that case from `f97ae2bc2`, and every instruction on the devnet ER failed with
+`InvalidInstructionData` after 4 CU (Hibernal, 2026-10-12). Measured 2026-10-12
+with a Rust harness on the `litesvm` 0.13.1 crate (program-runtime 4.0.0), a probe
+logging the account count, data length, data sum, program id and last account,
+for 0, 1 and 3 accounts (one repeated), data of 0, 1 and 100 bytes, built with
+the default maximum and with `MS_SOL_MAX_ACCOUNTS=1`: with the feature off the old
+entry fails all 18 at 3-4 CU and the new one returns the same logs as with r2 on,
+for 15 to 24 CU more, 39 when it walks two records past the maximum; with r2 on
+the two entries differ by one CU either way. The walk is not gated: the gate's
+LiteSVM 1.4.1 and `solana-test-validator` 4.2.2 both run a runtime that always
+sets r2 (the feature deactivated in genesis, the old entry still passed), and the
+pin `src/test/guard/solanaEntryAccountTable.ms` checks the emitted entry. When no
+supported runtime is older than 4.1 the walk is dead code on SBF.
 
 Builds use `./msc-entry-proto build examples/anchorBench/<fixture>/program.ms
 --os=solana --danger --cc=<v1.57-clang> -d:programId=<matched-id>
@@ -1122,7 +1138,7 @@ Not measured: a non-bench program that checks `Owned` or `Mutable` fields with n
 
 Program bytes, base to the PDA commit to the last one: hello 4048, 3696, 3872; vault 3784, 3464, 3872; nested 6112, 5808, 5848; prop-amm 5504, 5288, 5352; multisig 15392, 13976, 14480.
 
-- **Entry parse.** `msSolStart(input, table, instructionData)` takes the loader's `input` as a parameter and parses the accounts in one loop with account 0 taken as a full record (the loader never sends a duplicate first); `msSolanaEnter()` no longer stores the input pointer, and the host parser `msSolParse` uses the same loop.
+- **Entry parse.** `msSolStart(input, table, instructionData)` takes the loader's `input` as a parameter and parses the accounts in one loop with account 0 taken as a full record (the loader never sends a duplicate first); `msSolanaEnter()` no longer stores the input pointer, and the host parser `msSolParse` walks to the instruction data with the same `msSolInstructionDataOf` the entry uses when r2 is empty.
 - **Accounts kernels.** `accounts<T>()` reads the table address and count once, compares the count with the field count once, and reads each `Signer`, `WritableSigner`, `Writable`, `Program<P>`, `Owned<T>` and `Mutable<T>` slot with a kernel that takes the address (`std/solana/typed.cms`, `*ProofAt`); the index verifiers (`signer(i)` and the rest) call the same kernels, except `owned<T>(i)` and `mutable<T>(i)`, which keep their calls into the shared cores. `programDataFailure` tests `length < 8 + size` once and a `@noinline` function picks the same code as before (3001, 3002 or 3003). `msSolAccountAt` tells the compiler a slot below the count is not zero. Making `ownedFailure`, `delegatedFailure`, `mutableEnvelopeFailure` and `programDataFailure` `@inline` gave the same CU and failed `solanaGenericSize.ms` (`owned` 9 copies of 488 bytes where 0 are allowed, `.text` 89,672 against a 90,000 bound), so only the address forms are inline; the guard is green with `.text` 78,768 (78,800 on the base).
 - **Arguments.** `argU8`/`16`/`32`/`64`, `argBoolValid` and `argPubkey` test the bounds once instead of building an address and testing it against zero; the instruction data length is the word before the data (the context field is gone).
 - **Create.** `createAccountAllowPrefund` writes the owner as four words, `createPda` appends a one-byte slot to the seed list and `slottedSeeds` wraps the table in `SlottedSeeds`, a struct with private fields that `createdPdaAccount` takes: the found bump is written into the caller's own table, with no zeroed 16-entry table and no copy. A caller cannot hand `createdPdaAccount` an unslotted table, because nothing but `slottedSeeds` makes a `SlottedSeeds` and `solanaProofFailurePrivate.ms` requires that `std/solana` does not export it; a host test with a one-byte seed of its own checks that the slot is a separate entry.
@@ -1154,3 +1170,111 @@ The rule and its condition are in §4, Signing ("The curve check at the matching
 - Checks run: `std/solana/index.cms` 390 tests, `test.cms` 547, `idlTest.ms` 396, `accountCodecTest.ms` 402 and 109 on `--target=js`, the escrow program and IDL, hello, `vrf.ms`, `token.ms`, `magicblock.ms`, `delegation.ms` and `src/test/c/solanaVaultHost.ms`; 81 guard cells (the `solana*` guards and the other probes that name `std/solana`) and the new `solanaSignedPdaRefused.ms`; `checkCost.mjs` with every refusal code unchanged; `escrow.mjs` and `accountValues.mjs` (16,905 cases) on both stds with identical output.
 
 Not measured: a signer that is an on-curve address in a CPI to a program other than the System program (the runtime derives signers before any callee runs, read in `solana-program-runtime` 3.0 to 3.1.14, not replayed per callee); `signedPda` with a callee other than `transfer`; `--danger`; `delegateSeeds.mjs`; a find that needs many bumps on the host simulator; the JS backend.
+
+### CU pass on the entry loop, the context, PDA staging and cold-edge sinking — measured 2026-10-12
+
+`--os=solana --release`, LiteSVM 1.4.1, platform-tools v1.57, the five anchorBench programs at their ids, `BENCH_REFUSALS=1 node tools/solana/anchorBench.mjs`. Base is `95ddecc7b` built by the installed compiler of that commit; "runtime" is this tree's merged bitcode compiled without the new flag, "this tree" with it. 0 failures; the 106 refusals are all refused with unchanged accounts, and each error string equals the base's (106 of 106 compared by instruction and fault through `BENCH_JSON`).
+
+| Instruction CU | base | runtime | this tree | Anchor v2 |
+|---|---|---|---|---|
+| hello init | 1443 | 1440 | 1434 | 1441 |
+| vault deposit; withdraw | 1631; 451 | 1625; 444 | 1621; 441 | 1602; 418 |
+| nested initialize; increment; reset | 2768; 188; 183 | 2765; 182; 177 | 2762; 174; 171 | 2840; 866; 861 |
+| prop-amm update; initialize; rotate | 104; 1397; 127 | 98; 1393; 121 | 93; 1390; 117 | 81; 1398; 93 |
+| multisig create; deposit; set_label; execute | 2492; 2315; 486; 2609 | 2491; 2299; 471; 2610 | 2487; 2295; 466; 2604 | 2762; 2292; 621; 2991 |
+
+Program bytes, base to this tree (Anchor v2): hello 2960 to 3024 (6400), vault 3096 to 3104 (5632), nested 5240 to 5304 (12256), prop-amm 3984 to 4088 (8448), multisig 11240 to 11192 (30496). Eight of the thirteen instructions are below the reference; vault deposit and withdraw, multisig deposit and prop-amm update and rotate are above it by 19, 23, 3, 12 and 24.
+
+- **Entry loop.** `msSolParseAccounts` takes account 0 before the loop and tests the end after each store, so it never computes the address past the last record: the instruction data comes from the loader's second argument. The host parser `msSolParse` walks from the last record instead.
+- **Context.** The SBF context holds `arenaUsed`, an offset that starts at 0 on the heap the loader zeroes, in place of an absolute position that `msSolanaEnter` stored at every entry; `msSolanaEnter` is gone. The program id is no field: `msSolProgramId` reads it behind the instruction data (the length word is at `data - 8`), two loads and an add at a use against a load, an add and a store at every entry.
+- **PDA staging.** `msSolSeedStage` reads the caller's table through a typed pointer and copies a slice field by field. The integer address it used (`table + index * 16 + 8`) kept LLVM from forwarding a seed the caller had just written, and the struct copy was a `memcpy` that reloaded the length it had just checked (multisig create 2491 to 2487, execute 2612 to 2604 for the field copy alone). The find functions inline the staging into their caller and call a walk that takes the staged slices.
+- **Cold-edge sinking.** `SBF_SINK_TO_COLD_EDGES` in `src/compiler/cc.ms`: LLVM's machine sinking leaves a constant that only a failing branch reads above the branch unless the edge is likely enough to be worth a new block; on SBF that is one instruction on every success path for each check. The table's last two columns are its effect: 3 to 8 CU an instruction, 8 to 48 bytes a program.
+
+`node tools/solana/checkCost.mjs` on the default build (no `--release`), totals base to this tree: idle 176 to 174, `accounts<Everything>` 840 to 846, `createPda<Pet>` 2189 unchanged, `pda` 937 to 938 and 735 to 734 for a `Delegated<T>`, `instruction<Dispatch>` 344 to 326, `accounts<3 fields>` with `@seeds @bump` 884 to 886, the rest within 3; with `--release` 121 to 118, 595 to 599, 1705 to 1697, 698 to 681 and 509 to 489, 128 to 124, 681 to 665. Its table is reset to the default-build totals of this tree. The two seven-field structs that pin a `Delegated<T>` by `@seeds @bump` are the ones that rise, by 4 to 6 CU; the cause is not attributed (the program id read at each use is the suspect).
+
+Rejected, each measured on the same five programs:
+
+- **`noinline` canonical walk.** With `msSolWalkCanonical` kept out of line, a caller that is inlined into its handler stages literal seeds with no copy: vault 1601; 421, below the reference on deposit. A program that calls `seedsCanonicalFailure` from three sites keeps that function out of line and pays the second call: `accounts<Everything>` 595 to 611 with `--release` and 840 to 866 on the default build, where `checkCost.mjs` fails eight ops. Passing the program id into the walk to shrink the wrapper changed neither. The walk is left to the inliner; `noinline` on `msSolWalkExpected` cost multisig execute 25 CU and 296 bytes.
+- **Account table in the heap.** The table as the arena's first allocation at a constant address (no `accountTable` field, no 2 KiB of entry frame): hello 1437 against 1434, multisig create 2496 against 2491 and execute 2617 against 2612, the rest within 2 either way.
+- **Entry loop without the peeled first account** (a break in each arm, `slot == table` tested in the loop): 1 to 14 CU worse on every instruction; LLVM recomputed the table base and spilled the heap base.
+- **Other code generator options**, tried on the merged bitcode: `-phi-elim-split-all-critical-edges`, `-enable-tail-merge=false` and `-tail-dup-size` changed nothing or lost; `-inline-threshold=500` changed nothing and 2000 helped only nested, for 304 bytes.
+
+Why prop-amm update and rotate stay above the reference: its ELFs are built without a writable check on `mut` and without the duplicate-marker compare, about 4 CU of update; rotate pays about 15 for the `Pubkey` argument, which `args<T>()` returns in a `Result` whose payload starts at offset 9 (compiler inbox `2026-10-12-result-payload-of-byte-alignment-sits-at-offset-9.md`).
+
+Checks run on this tree's candidate compiler: `std/solana/test.cms` 588 tests, `index.cms` 390, `vrf.ms` 402, `idlTest.ms` 396, `accountCodecTest.ms` 402, the escrow program and IDL and hello host tests; `accountCodecTest.ms` on `--target=js` 109; the 87 guard cells of the 65 `solana*` guards; `accountValues.mjs` (16,905 cases), `escrow.mjs`, `heapExhausted.mjs`; `src/compiler/cc.ms` tests.
+
+Not measured: `--danger` (refused on `--os=solana`), platform-tools other than v1.57, a find that needs many bumps, `foreignDeploy.mjs` in this pass, a program the size of Hibernal's, where the count of `@seeds @bump` sites decides whether the inliner fuses the walk.
+
+### CU pass on the entry parse, the borrow byte and constant placement; the resize bound; a Pinocchio baseline — measured 2026-10-12
+
+Same build, harness and reference ELFs as the section above; "before" is `80207ca9c`. The Pinocchio column is `tools/solana/pinocchio/`: hand-written Pinocchio 0.11.2 programs for prop-amm and vault that make this std's checks in its order with its codes (list, build and versions in that README), run in the same `anchorBench.mjs` call. 0 failures with refusals on; the four variants of a suite end in equal states and `std` and `pinocchio` answer the same code in all 37 fault cases of the two suites.
+
+| Instruction CU | before | this tree | Anchor v2 | Pinocchio, equal checks |
+|---|---|---|---|---|
+| hello init | 1434 | 1406 | 1441 | |
+| vault deposit; withdraw | 1621; 441 | 1592; 423 | 1602; 418 | 1593; 404 |
+| nested initialize; increment; reset | 2762; 174; 171 | 2722; 147; 144 | 2840; 866; 861 | |
+| prop-amm update; initialize; rotate | 93; 1390; 117 | 77; 1367; 101 | 81; 1398; 93 | 91; 1375; 95 |
+| multisig create; deposit; set_label; execute | 2487; 2295; 466; 2604 | 2467; 2266; 448; 2581 | 2762; 2292; 621; 2991 | |
+
+Program bytes, before to this tree (Anchor v2; Pinocchio): hello 3024 to 3200 (6400), vault 3104 to 3344 (5632; 5544), nested 5304 to 5384 (12256), prop-amm 4088 to 4264 (8448; 6672), multisig 11192 to 11368 (30496). Eleven of the thirteen instructions are below Anchor v2; vault withdraw (5 above, 19 above Pinocchio) and prop-amm rotate (8 above, 6 above Pinocchio) are not. Pinocchio's lazy entrypoint measured worse than its eager one on all five instructions (update 103, rotate 108, withdraw 415).
+
+Stacked in this order, each row the whole tree at that step (hello; vault; nested; prop-amm; multisig):
+
+| step | CU |
+|---|---|
+| entry parse and its bound | 1420; 1609, 431; 2748, 162, 159; 81, 1376, 105; 2480, 2281, 456, 2597 |
+| borrow byte, key compare, CPI flags (and the resize bound) | 1408; 1598, 427; 2725, 153, 150; 79, 1368, 103; 2468, 2269, 451, 2584 |
+| constants at their use | 1406; 1592, 423; 2722, 147, 144; 77, 1367, 101; 2467, 2266, 448, 2581 |
+
+- **Entry parse.** `msSolParseAccounts` takes accounts 1 to 3 at constant table slots before the general loop and leaves it at the first duplicate; Pinocchio's entrypoint unrolls its parse by the account count (`pinocchio-0.11.2/src/entrypoint/mod.rs:315-359`, `process_n_accounts`). Host and SBF share the function.
+- **Its bound.** With the default table of 255 the parse refuses a larger count (`__builtin_trap`) in place of clamping: one branch against four instructions on every instruction, and the bound on the table no longer rests on the loader, which refuses such an instruction before the program runs (agave 3.1.14 `program-runtime/src/serialization.rs:235-238`). A smaller `MS_SOL_MAX_ACCOUNTS` keeps the clamp, so accounts past the table are still ignored. Without any bound update is 80 against 81; not taken.
+- **Borrow byte.** Duplicate and claim state moved from the runtime's marker byte 0 to padding byte 4 (0 free, 1 claimed, 2 repeated). `WritableSigner` is `load32(record + 1) == 0x0101`, `Writable` and `Mutable` take `load32(record + 2) == 1` first and fall to the byte-wise checks, which name the failure, when it does not hold (an executable account, a claimed or repeated one, or one already resized). `Mutable` claims with one store after its envelope has proved the byte free.
+- **Key compare.** `keysFailure` compares four words in place instead of calling `keysEqual`; it reaches `@hasOne` and `@address` (nested increment and reset).
+- **CPI flags.** `msSolInvokeMetas` copies record bytes 1 to 4 into `SolAccountInfo`'s three flags and one byte of its padding with one load and store, as Pinocchio does (`solana-instruction-view-2.1.0/src/cpi.rs:137-142`). Leaving the flags and `rent_epoch` unwritten measured 16 CU a CPI on the previous tree and agave 3.1.14 never reads them (`program-runtime/src/cpi.rs`); not taken, the struct would hold uninitialised `bool`s on a runtime that was not read.
+- **Constants at their use.** `SBF_KEEP_CONSTANTS_AT_USE` in `src/compiler/cc.ms` (`-csuses-threshold=0`): machine CSE folded equal error-code constants into the first one, which sits above the checks; kept apart, the sinking flag moves each onto its failing edge. No instruction rose.
+
+**Resize bound (a fix, not a saving).** `Account.resize` counted its own growth and refused past 10,240, but a callee changes the length without moving that count: after a `createAccount` CPI for 48 bytes, `resize(10288)` returned ok on `80207ca9c` and zeroed the key of the account that follows in the input; after one for 10,240 bytes, `resize(20480)` zeroed that account's key and lamports as the program saw them (the runtime then failed the instruction with InvalidRealloc, so nothing reached the chain unless the program shrank the account again before returning). `resize` now also refuses a growth past the end of the account's record in the input (`msSolDataRoom`: the next record's address from the account table, less the duplicate slots and the rent epoch between, or the instruction data for the last account). The host simulator's System program had been moving the caller's count, which the runtime does not do, so host tests could not see it; it now bounds by the same room. Pin: `tools/solana/resizeAfterCpi.mjs` on `tools/solana/resizeProbe.ms`, in the gate's solana lane: three layouts (a record follows, a duplicate then a record, the instruction data) by four sizes, 24 checks, 14 of them red on `80207ca9c`; host variant in `std/solana/test.cms`. The room includes the record's alignment padding, so a growth by a callee and this program together may pass 10,240 by at most 7 bytes here and is refused by the runtime at exit. Pinocchio stores each account's length in the record's padding at entry for this (`sdk/src/entrypoint/mod.rs:294-299` at `0dace48`, feature `account-resize`), a load and a store an account on every instruction; the room costs nothing outside a growth.
+
+`node tools/solana/checkCost.mjs` on the default build, totals before to this tree: idle 174 to 166, `mutable<Pet>` 269 to 259, `accounts<Everything>` 846 to 810, `accounts<3 fields>` 306 to 271 and with `@hasOne` 331 to 289, `accounts<7 fields> + @address` 877 to 833, `createPda<Pet>` 2189 to 2168, `close<Pet>` 433 to 426, `realloc<Pet>` 504 to 549: a growth pays the room, about 53. The table in `checkCost.mjs` is reset to these.
+
+Rejected or not taken, each measured:
+
+- **The peel as a `slot == end` loop**: update 86 against 84 before the bound was changed; a constant slot per iteration is what LLVM unrolls. Passing the context into the parse changed nothing.
+- **`resize` in one function**: with the room test inline in `resize`, `close<Pet>` rose 19 (its `resize(0)` stopped being inlined); growth is now the out-of-line `grown`. The room helper inlined into it: 2 worse.
+- **`+alu32` on the merged bitcode**: 70 CU over the thirteen on the previous tree (set_label 466 to 419), but it emits JMP32 instructions, which LiteSVM 1.4.1 runs and which were not checked against a validator.
+- **Removing `llvm.lifetime` markers from the merged bitcode**: 25 over the thirteen in the analysis lane, not re-run; it needs a new build step.
+- **The rent sysvar's address as an immediate through inline assembly**: 1 on a create.
+- **A seed table hashed in place** (an analysis lane's prototype on the previous tree, not re-run: vault 1604; 422, multisig create 2462): three canonical rows of `checkCost.mjs` rose 4 to 7 and `WritablePda` was not converted. Taken in another form in the section below.
+
+Where the rest is, by a tracer over the disassembly of both ELFs on the previous tree (written for the baseline, reconciled with the measured CU on twelve success paths, its attribution not re-derived): the PDA check of vault withdraw is 68 instructions against Pinocchio's 45 (the seed table is staged by the caller, then copied by `seedsCanonicalFailure`); rotate copies its `Pubkey` argument in seven pieces (compiler inbox `2026-10-12-result-payload-of-byte-alignment-sits-at-offset-9.md`); the exit is 6 to 10 instructions against 3 to 5 (the result and the rejection byte are read back from the context).
+
+Checks run on this tree's candidate compiler: the host tests of the section above with `std/solana/test.cms` at 589; `src/compiler/cc.ms` tests; the 87 guard cells of the 64 `solana*` guards; `accountValues.mjs` (16,905 cases), `escrow.mjs`, `heapExhausted.mjs`, `resizeAfterCpi.mjs`; `checkCost.mjs` green on this tree and red on the build that kept `resize` in one function.
+
+Not verified: a real validator and other validator clients (the byte-4 state rests on the runtime not reading record bytes 0 to 7 back, read in agave 3.1.14 `serialization.rs:594-603`; the one-word flag copy on its not reading `SolAccountInfo`'s padding); Pinocchio programs for hello, nested and multisig; error codes the bench has no fault case for (2040, 3001, 3003, 3008, 3009 on the Pinocchio side); `foreignDeploy.mjs`.
+
+### PDA seeds hashed in the caller's table; the empty-r2 check ahead of the parse — measured 2026-10-12
+
+Same harness, reference ELFs and Pinocchio programs as the section above, whose "this tree" is the first row. The second row adds the seed table on the same base; the third is this tree, rebased onto `a5d5faf08`, which brought the entry's walk for a runtime that leaves r2 empty. With refusals on the std variant fails no case; run beside the reference, the command prints four failures of the Anchor v2 variant in multisig's on-curve cases, as before.
+
+| Instruction CU | hello | vault | nested | prop-amm | multisig |
+|---|---|---|---|---|---|
+| section above | 1406 | 1592; 423 | 2722; 147; 144 | 77; 1367; 101 | 2467; 2266; 448; 2581 |
+| seed table in place | 1406 | 1577; 404 | 2722; 147; 144 | 77; 1367; 101 | 2444; 2266; 444; 2540 |
+| this tree | 1406 | 1577; 404 | 2722; 147; 144 | 77; 1369; 101 | 2444; 2266; 444; 2540 |
+| Anchor v2 | 1441 | 1602; 418 | 2840; 866; 861 | 81; 1398; 93 | 2762; 2292; 621; 2991 |
+| Pinocchio, equal checks | | 1593; 404 | | 91; 1375; 95 | |
+
+Program bytes in the same three steps: hello 3200, 3200, 3344; vault 3344, 3496, 3640; nested 5384, 5384, 5528; prop-amm 4264, 4264, 4424; multisig 11368, 11328, 11472. Twelve of the thirteen instructions are below Anchor v2 and vault withdraw equals Pinocchio; prop-amm rotate is 8 above Anchor v2 and 6 above Pinocchio (the `Result` payload copy, compiler inbox `2026-10-12-result-payload-of-byte-alignment-sits-at-offset-9.md`).
+
+- **Seed table in place.** `slottedTable([...])` (`std/solana/accountSeeds.ms`) builds the seed list with three free slices after it and one byte for the bump, and `slottedSeeds` wraps it in `SlottedSeeds`. `msSolSeedStageInPlace` checks the count and every length with the `msSolSeedStage` the copied path uses, then writes the bump's slice, the program and the tag into the free slices: the hash reads the caller's own table, where the canonical check had copied it into a second one. The walks count in the byte the bump's slice names, so on success it holds the found bump and the seeds with the next slice are the signer table. `pda`, `pdaWithBump`, `createPda`, `signedPda`, `WritablePda` and the `@seeds` fields of `accounts<T>` go through it; `verifiedPda` and `verifiedPdaWithBump` take `SlottedSeeds`, which only `slottedTable` builds, so a call that passed `seedTable(...)` to them is written `pda(...)`. The copied path stays for a table that is not a literal list: `canonicalBump(account, Span)`, `findAddress`, `findExpected`, `createAddressWithBump`.
+- **Refusals unchanged.** Sixteen seeds and a seed over 32 bytes answer `maxSeedLengthExceeded`, another address 2006 (`std/solana/test.cms`, the slotted table against the copied one); `seedsGivenFailure` compares the hash to the key and then curve-checks the key, where it derived, curve-checked and compared.
+- **`checkCost.mjs`.** Totals, section above to this tree: `accounts<Everything>` 810 to 763, `createPda<Pet>` 2168 to 2102, `pda` 926 to 911 (Mutable) and 724 to 709 (Delegated), `pdaWithBump` 670 to 610 and 773 to 715, `@seeds @bump(account.field)` 545 to 494, `@seeds @bump` 852 to 814, `accounts<7 fields>` 833 to 786 with `@address` and 804 to 757 without. No row rose; the table is reset to these.
+- **Vault bytes.** 152 more: the canonical find is inlined at both of vault's sites, where one `seedsCanonicalFailure` was shared.
+- **Empty-r2 check.** As rebased, `msSolStart` kept the parse's last record live for the walk that finds the instruction data when r2 is empty: hello 1409, rotate 104, bytes 3416; 3688; 5576; 4552; 11512. `msSolInstructionDataOf(input)` walks the input from its start, so the check runs ahead of the parse as it did when the entry refused an empty r2: the two return to 1406 and 101, prop-amm initialize is 2 higher, and every program is 40 to 128 bytes smaller. The same walk after the parse measured update 79, initialize 1369, rotate 103.
+
+Forms of the seed table rejected in the lane that wrote it, not re-run here: four free slices with the bump byte in the fourth (vault 1579; 406, the canonical rows of `checkCost.mjs` 5 to 10 higher); the canonical find out of line (vault 3408 bytes, 1584; 414); staging called from `core.cms` instead of `seed.cms` (multisig 11528 bytes, execute 2566); `canonicalBumpProven` as `@inline` (`solanaGenericSize` red: 696 bytes a copy against a bound of 256).
+
+Checks run on this tree's candidate compiler: the host tests of the sections above with `std/solana/test.cms` at 590; the 87 guard cells of the 64 `solana*` guards; `accountValues.mjs`, `escrow.mjs`, `heapExhausted.mjs`, `resizeAfterCpi.mjs`; `checkCost.mjs` with every row at its total.
+
+Not verified: a real validator; `magicblock.ms`, `delegation.ms` and `mint.ms` beyond their type-check and the host tests; the empty-r2 branch on SBF, which no check here runs (LiteSVM 1.4.1 sets r2, and `solanaEntryAccountTable.ms` reads the emitted entry): its walk is the one the host parser takes on every host test.

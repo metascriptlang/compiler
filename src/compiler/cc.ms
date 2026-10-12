@@ -65,6 +65,12 @@ function checkZigCC(): boolean {
 
 const SBF_TARGET = "sbpfv3-solana-solana";
 const LLD_KEEP_TRAP_CALLEE = "--undefined=abort";
+// Every SBF instruction costs one compute unit. LLVM's default keeps a constant that only a failing branch reads
+// before that branch, to spare the failing edge a jump; this puts it on the edge, off the path that succeeds.
+const SBF_SINK_TO_COLD_EDGES = "-machine-sink-split-probability-threshold=100";
+// LLVM folds equal cheap constants into the first one loaded, which sits before the branches that fail; this
+// keeps each constant at its own use, where the sinking above can move it (measured: docs/STD-SOLANA.md).
+const SBF_KEEP_CONSTANTS_AT_USE = "-csuses-threshold=0";
 
 let _sbfClang = "";
 let _sbfClangChecked = false;
@@ -341,7 +347,7 @@ function mergeSbfBitcode(lld: string, clang: string, oFiles: string[], outBinary
 	const m = execFileCapture(lld, mergeArgs);
 	if (!m.ok) return Result.err(m.error);
 	const object = `${outBinary}.lto.o`;
-	const c = runCc({ path: clang, args: [] }, ["-target", SBF_TARGET, `-O${level}`, "-fPIC", "-fdata-sections", "-ffunction-sections", "-c", bitcode, "-o", object]);
+	const c = runCc({ path: clang, args: [] }, ["-target", SBF_TARGET, `-O${level}`, "-fPIC", "-fdata-sections", "-ffunction-sections", "-mllvm", SBF_SINK_TO_COLD_EDGES, "-mllvm", SBF_KEEP_CONSTANTS_AT_USE, "-c", bitcode, "-o", object]);
 	if (!c.ok) return Result.err(c.error);
 	return Result.ok(object);
 }
@@ -603,6 +609,8 @@ export function cliCompileFlags(opts: CliOptions): string {
 		// Per-symbol sections so the --gc-sections at link time can strip what
 		// the program does not reach.
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
+		flags = appendFlag(flags, `-mllvm ${SBF_SINK_TO_COLD_EDGES}`);
+		flags = appendFlag(flags, `-mllvm ${SBF_KEEP_CONSTANTS_AT_USE}`);
 		if (sbfLto(opts.lto)) flags = appendFlag(flags, "-flto");
 		const rtDir = resolveRuntimeDir();
 		if (rtDir != "") flags = appendFlag(appendFlag(flags, "-isystem"), quoteCcArg(`${rtDir}/runtime/freestanding`));
@@ -1375,6 +1383,20 @@ test "an SBF build with LTO compiles bitcode, and one without LTO native objects
 	resolveLto(plain);
 	assert plain.lto == "off";
 	assert cliCompileFlags(plain).indexOf("-flto", 0) < 0;
+}
+
+test "an SBF build asks the code generator to keep a failing branch's constant on its edge, with and without LTO" {
+	for (const args of [["--os=solana", "--release"], ["--os=solana", "--release", "--lto=off"]]) {
+		const opts = newCliOptions();
+		assert applyArgs(opts, args, 0).ok;
+		resolveLto(opts);
+		assert cliCompileFlags(opts).indexOf(`-mllvm ${SBF_SINK_TO_COLD_EDGES}`, 0) >= 0;
+		assert cliCompileFlags(opts).indexOf(`-mllvm ${SBF_KEEP_CONSTANTS_AT_USE}`, 0) >= 0;
+	}
+	const host = newCliOptions();
+	assert applyArgs(host, ["--release"], 0).ok;
+	assert cliCompileFlags(host).indexOf("machine-sink", 0) < 0;
+	assert cliCompileFlags(host).indexOf("csuses", 0) < 0;
 }
 
 test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {

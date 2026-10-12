@@ -142,10 +142,10 @@ target_to_msc_flags() {
     echo "--os=$msc_os --cpu=$msc_cpu"
 }
 
-# Collect std/ files: only .ms and .cms, excluding test.ms and CLAUDE.md
+# Collect std/ files: .ms and its backend tiers (.cms, .jms, .rms), excluding test.ms and CLAUDE.md
 collect_std() {
     local dest="$1"
-    find "$ROOT/std" \( -name "*.ms" -o -name "*.cms" \) \
+    find "$ROOT/std" \( -name "*.ms" -o -name "*.cms" -o -name "*.jms" -o -name "*.rms" \) \
         ! -name "test.ms" ! -name "CLAUDE.md" \
         -print0 | while IFS= read -r -d '' f; do
         local rel="${f#$ROOT/}"
@@ -347,8 +347,8 @@ upload_release() {
         # that would silently ship untested binaries to stable users.
         # If a hotfix without bumping version is genuinely needed, demote first:
         #   gh release edit "$tag" --latest=false --prerelease
-        is_latest=$(gh release view "$tag" --json isLatest --jq '.isLatest' 2>/dev/null)
-        if [ "$is_latest" = "true" ]; then
+        latest_tag=$(gh release view --json tagName --jq '.tagName')
+        if [ "$latest_tag" = "$tag" ]; then
             echo "  error: Release $tag is currently marked Latest."
             echo "         Refusing to overwrite stable assets."
             echo "         Bump VERSION in src/compiler/usage.ms before re-running."

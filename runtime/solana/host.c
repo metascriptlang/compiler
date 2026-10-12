@@ -501,13 +501,10 @@ static void msSolHostSetLamports(uint8_t* record, uint64_t value) {
 static uint64_t msSolHostResize(uint8_t* record, uint64_t space) {
     uint64_t length;
     memcpy(&length, record + 80, 8);
-    int32_t delta;
-    memcpy(&delta, record + 4, 4);
-    int64_t next = (int64_t)delta + (int64_t)space - (int64_t)length;
-    if (next > (int64_t)MS_SOL_MAX_PERMITTED_DATA_INCREASE) return 20ULL << 32;
-    if (space > length) memset(record + 88 + length, 0, (size_t)(space - length));
-    int32_t stored = (int32_t)next;
-    memcpy(record + 4, &stored, 4);
+    if (space > length) {
+        if (space > msSolDataRoom((uint64_t)(uintptr_t)record)) return 20ULL << 32;
+        memset(record + 88 + length, 0, (size_t)(space - length));
+    }
     memcpy(record + 80, &space, 8);
     return 0;
 }

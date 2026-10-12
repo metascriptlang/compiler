@@ -72,6 +72,7 @@ void msArenaReset(void);
 #elif defined(MSOS_SOLANA)
 
 #define MS_SOLANA_HEAP_START 0x300000000ULL
+#define MS_SOLANA_INPUT_START 0x400000000ULL
 #ifndef MS_SOLANA_HEAP_SIZE
 #define MS_SOLANA_HEAP_SIZE (32 * 1024)
 #endif
@@ -79,11 +80,10 @@ void msArenaReset(void);
 typedef struct {
     uint64_t input;
     uint64_t result;
-    uint64_t arenaPosition;
+    uint64_t arenaUsed;
     uint64_t accountCount;
     uint64_t accountTable;
     uint64_t instructionData;
-    uint64_t programId;
     bool err;
     msException* currException;
     uint64_t rent[3];
@@ -95,10 +95,8 @@ static inline msSolanaContext* msSolanaCurrentContext(void) {
     return context;
 }
 
-static inline void msSolanaEnter(void) {
-    msSolanaContext* context = msSolanaCurrentContext();
-    context->arenaPosition = sizeof(msSolanaContext);
-}
+/* The runtime hands every instruction a zeroed heap, so a context whose fields start at zero costs no store. */
+#define MS_SOLANA_ARENA_SIZE (MS_SOLANA_HEAP_SIZE - sizeof(msSolanaContext))
 
 static inline uint64_t msSolanaResult(void) {
     return msSolanaCurrentContext()->result;
@@ -135,7 +133,7 @@ __attribute__((weak, noinline, noreturn)) void msSolanaHeapExhausted(uint64_t as
     at = msSolanaPutText(line, at, " KiB program heap is exhausted (asked ");
     at = msSolanaPutDecimal(line, at, asked);
     at = msSolanaPutText(line, at, " more bytes at ");
-    at = msSolanaPutDecimal(line, at, msSolanaCurrentContext()->arenaPosition);
+    at = msSolanaPutDecimal(line, at, sizeof(msSolanaContext) + msSolanaCurrentContext()->arenaUsed);
     at = msSolanaPutText(line, at, ")");
     ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(line, at);
     abort();
@@ -145,13 +143,13 @@ _Static_assert(MS_SOLANA_HEAP_SIZE % 8 == 0, "the bump pointer stays 8-aligned, 
 
 static inline void* msArenaAlloc(size_t size) {
     msSolanaContext* context = msSolanaCurrentContext();
-    uint64_t position = context->arenaPosition;
-    if (size > MS_SOLANA_HEAP_SIZE - position) msSolanaHeapExhausted(size);
-    void* p = (char*)MS_SOLANA_HEAP_START + position;
+    uint64_t used = context->arenaUsed;
+    if (size > MS_SOLANA_ARENA_SIZE - used) msSolanaHeapExhausted(size);
+    void* p = (char*)MS_SOLANA_HEAP_START + sizeof(msSolanaContext) + used;
     /* Keeps the heap base in one register: LLVM folds it into every field offset
        as a 16-byte lddw otherwise (+1.8 KB on the escrow, measured 2026-10-03). */
     __asm__("" : "+r"(p));
-    context->arenaPosition = position + ((size + 7) & ~(size_t)7);
+    context->arenaUsed = used + ((size + 7) & ~(size_t)7);
     return p;
 }
 
@@ -188,7 +186,7 @@ static inline void* msRealloc(void* old, size_t old_size, size_t new_size) {
 }
 
 #ifdef MSOS_SOLANA
-static inline void msArenaReset(void) { msSolanaCurrentContext()->arenaPosition = sizeof(msSolanaContext); }
+static inline void msArenaReset(void) { msSolanaCurrentContext()->arenaUsed = 0; }
 #else
 static inline void msArenaReset(void) { _ms_arena_pos = 0; }
 #endif

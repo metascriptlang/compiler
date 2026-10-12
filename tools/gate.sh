@@ -1765,6 +1765,8 @@ solana_replays() {
   else
     rc=1
   fi
+  solana_check resize-build "$CAND" build tools/solana/resizeProbe.ms --os=solana --output="$dir/resizeProbe.so" \
+    && { solana_check resize-replay node tools/solana/resizeAfterCpi.mjs "$dir/resizeProbe.so" || rc=1; } || rc=1
   return $rc
 }
 

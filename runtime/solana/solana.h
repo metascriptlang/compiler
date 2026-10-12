@@ -9,7 +9,10 @@
 #define MS_SOL_ACCOUNT_HEADER_SIZE 88ULL
 #define MS_SOL_MAX_PERMITTED_DATA_INCREASE 10240ULL
 #define MS_SOL_DUPLICATE_MARKER 0xFF
-#define MS_SOL_DUPLICATED_RECORD 0xFE
+#define MS_SOL_BORROW_OFFSET 4
+#define MS_SOL_CLAIMED_RECORD 1
+#define MS_SOL_DUPLICATED_RECORD 2
+#define MS_SOL_PEELED_ACCOUNTS 4
 
 #ifndef MS_SOL_MAX_ACCOUNTS
 #define MS_SOL_MAX_ACCOUNTS 255
@@ -28,7 +31,7 @@ static inline uint64_t msSolAlloc(uint64_t size) {
 }
 
 static inline uint64_t msSolScratch(uint64_t size) {
-    if (size > MS_SOLANA_HEAP_SIZE - msSolanaCurrentContext()->arenaPosition) return 0;
+    if (size > MS_SOLANA_ARENA_SIZE - msSolanaCurrentContext()->arenaUsed) return 0;
     return (uint64_t)msArenaAlloc((size_t)size);
 }
 
@@ -102,56 +105,110 @@ static inline const uint8_t* msSolNextRecord(const uint8_t* cursor) {
     return cursor + 8;
 }
 
+static inline const uint8_t* msSolPastRecord(const uint8_t* record) {
+    return (const uint8_t*)(((uint64_t)record + *(const uint64_t*)(record + 80) +
+        (MS_SOL_ACCOUNT_HEADER_SIZE + MS_SOL_MAX_PERMITTED_DATA_INCREASE + 15)) & ~(uint64_t)7);
+}
+
+/* Returns the last record it read, not the one after it: the instruction data comes from the runtime, so the
+   walk past the final account would be paid for nothing. */
 static inline __attribute__((always_inline)) const uint8_t* msSolParseAccounts(const uint8_t* input, uint64_t* table) {
     msSolanaContext* context = msSolContext();
     const uint8_t* cursor = input + 8;
     const uint64_t count = *(const uint64_t*)input;
+#if MS_SOL_MAX_ACCOUNTS == 255
+    /* The loader refuses more than 255 accounts before the program runs (agave serialization.rs), so the default
+       table's bound is one branch; a clamp measured 4 instructions on every instruction. */
+    if (count > MS_SOL_MAX_ACCOUNTS) __builtin_trap();
+    const uint64_t kept = count;
+#else
     const uint64_t kept = count < MS_SOL_MAX_ACCOUNTS ? count : MS_SOL_MAX_ACCOUNTS;
-    uint64_t* slot = table;
-    uint64_t* end = table + kept;
-    while (slot < end) {
-        const uint8_t marker = cursor[0];
-        if (marker == MS_SOL_DUPLICATE_MARKER || slot == table) {
-            *slot = (uint64_t)cursor;
-            cursor = (const uint8_t*)(((uint64_t)cursor + *(const uint64_t*)(cursor + 80) +
-                (MS_SOL_ACCOUNT_HEADER_SIZE + MS_SOL_MAX_PERMITTED_DATA_INCREASE + 15)) & ~(uint64_t)7);
-        } else {
-            *slot = table[marker];
-            *(uint8_t*)table[marker] = MS_SOL_DUPLICATED_RECORD;
-            cursor += 8;
+#endif
+    *table = (uint64_t)cursor;
+    if (kept > 1) {
+        uint64_t* slot = table + MS_SOL_PEELED_ACCOUNTS;
+        cursor = msSolPastRecord(cursor);
+        for (uint64_t index = 1; index < MS_SOL_PEELED_ACCOUNTS; index++) {
+            if (cursor[0] != MS_SOL_DUPLICATE_MARKER) {
+                slot = table + index;
+                break;
+            }
+            table[index] = (uint64_t)cursor;
+            if (kept == index + 1) goto parsed;
+            cursor = msSolPastRecord(cursor);
         }
-        slot++;
+        uint64_t* end = table + kept;
+        for (;;) {
+            const uint8_t marker = cursor[0];
+            if (marker == MS_SOL_DUPLICATE_MARKER) {
+                *slot++ = (uint64_t)cursor;
+                if (slot == end) break;
+                cursor = msSolPastRecord(cursor);
+            } else {
+                *slot++ = table[marker];
+                ((uint8_t*)table[marker])[MS_SOL_BORROW_OFFSET] = MS_SOL_DUPLICATED_RECORD;
+                if (slot == end) break;
+                cursor += 8;
+            }
+        }
     }
+parsed:
     context->accountCount = kept;
     context->accountTable = (uint64_t)table;
     return cursor;
 }
 
+static inline __attribute__((noinline)) const uint8_t* msSolInstructionDataOf(const uint8_t* input) {
+    const uint8_t* cursor = input + 8;
+    for (uint64_t left = *(const uint64_t*)input; left > 0; left--) cursor = msSolNextRecord(cursor);
+    return cursor + 8;
+}
+
+#ifndef MSOS_SOLANA
 static inline __attribute__((noinline)) void msSolParse(uint64_t* table) {
     msSolanaContext* context = msSolContext();
     const uint8_t* input = (const uint8_t*)context->input;
-    const uint8_t* cursor = msSolParseAccounts(input, table);
-    const uint64_t count = *(const uint64_t*)input;
-    for (uint64_t index = context->accountCount; index < count; index++) cursor = msSolNextRecord(cursor);
-    const uint64_t length = *(const uint64_t*)cursor;
-    cursor += 8;
-    context->instructionData = (uint64_t)cursor;
-    context->programId = (uint64_t)cursor + length;
-}
-
-static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
     msSolParseAccounts(input, table);
-    msSolanaContext* context = msSolContext();
+    const uint8_t* instructionData = msSolInstructionDataOf(input);
     context->instructionData = (uint64_t)instructionData;
     context->programId = (uint64_t)instructionData + *(const uint64_t*)(instructionData - 8);
 }
+#endif
 
-static inline uint64_t msSolAccountCount(void) {
-    return msSolContext()->accountCount;
+static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
+    if (!instructionData) instructionData = msSolInstructionDataOf(input);
+    msSolParseAccounts(input, table);
+    msSolContext()->instructionData = (uint64_t)instructionData;
 }
 
 static inline uint64_t msSolAccountTable(void) {
     return msSolContext()->accountTable;
+}
+
+/* A callee can grow an account without this program counting it, so the room for an account's data is read
+   from where the next record starts in the input: the length the instruction began with plus the runtime's
+   reserve, never from a running count. */
+static inline __attribute__((noinline)) uint64_t msSolDataRoom(uint64_t record) {
+    const msSolanaContext* context = msSolContext();
+    const uint64_t* table = (const uint64_t*)context->accountTable;
+    const uint64_t count = context->accountCount;
+    uint64_t index = 0;
+    while (index < count && table[index] != record) index++;
+    if (index == count) return 0;
+    uint64_t next = index + 1;
+    while (next < count && table[next] <= record) next++;
+    uint64_t end = context->instructionData - 8;
+    if (next < count) end = table[next];
+#ifdef MSOS_SOLANA
+    else if (*(const uint64_t*)MS_SOLANA_INPUT_START != count) return 0;
+#else
+    else if (*(const uint64_t*)context->input != count) return 0;
+#endif
+    return end - 8 * (next - index) - (record + MS_SOL_ACCOUNT_HEADER_SIZE);
+}
+
+static inline uint64_t msSolAccountCount(void) {
+    return msSolContext()->accountCount;
 }
 
 static inline uint64_t msSolAccountAt(uint64_t index) {
@@ -171,7 +228,12 @@ static inline uint64_t msSolInstructionDataLength(void) {
 }
 
 static inline uint64_t msSolProgramId(void) {
+#ifdef MSOS_SOLANA
+    const uint64_t data = msSolContext()->instructionData;
+    return data + *(const uint64_t*)(data - 8);
+#else
     return msSolContext()->programId;
+#endif
 }
 
 static inline void msSolSetResult(uint64_t code) {
@@ -202,6 +264,10 @@ static inline uint64_t msSolLoadU64(uint64_t address) {
     uint64_t value;
     __builtin_memcpy(&value, (const void*)address, 8);
     return value;
+}
+
+static inline void msSolClaimRecord(uint64_t address) {
+    ((uint8_t*)address)[MS_SOL_BORROW_OFFSET] = MS_SOL_CLAIMED_RECORD;
 }
 
 static inline void msSolStoreU8(uint64_t address, uint8_t value) {
@@ -392,24 +458,46 @@ typedef struct {
 #define MS_SOL_MAX_SEEDS 16
 #define MS_SOL_MAX_SEED_LENGTH 32
 
-static inline uint64_t msSolSeedStage(msSolSeed* input, uint64_t table, uint64_t count, uint64_t limit) {
+#define MS_SOL_STAGED static inline __attribute__((always_inline))
+
+/* Staging is inlined into the caller, where the seed count and every literal length are constants: the checks fold
+   away and each slice is written once, into the array the hash reads. */
+MS_SOL_STAGED uint64_t msSolSeedStage(msSolSeed* input, uint64_t table, uint64_t count, uint64_t limit) {
+    const msSolSeed* seeds = (const msSolSeed*)(uintptr_t)table;
     if (count > limit) return 0;
     for (uint64_t index = 0; index < count; index++) {
-        const uint64_t length = msSolLoadU64(table + index * 16 + 8);
+        const uint64_t length = seeds[index].length;
         if (length > MS_SOL_MAX_SEED_LENGTH) return 0;
-        input[index].address = msSolLoadU64(table + index * 16);
+        input[index].address = seeds[index].address;
         input[index].length = length;
     }
     return 1;
 }
 
-static inline uint64_t msSolSeedTail(msSolSeed* input, uint64_t at, uint64_t program) {
+MS_SOL_STAGED uint64_t msSolSeedTail(msSolSeed* input, uint64_t at, uint64_t program) {
     static const char tag[] = "ProgramDerivedAddress";
     input[at].address = program;
     input[at].length = 32;
     input[at + 1].address = (uint64_t)(uintptr_t)tag;
     input[at + 1].length = sizeof(tag) - 1;
     return at + 2;
+}
+
+/* The bump's slice, one byte at `bump`, then the program and the tag. */
+MS_SOL_STAGED void msSolSeedSlot(msSolSeed* input, uint64_t at, uint64_t bump, uint64_t program) {
+    input[at].address = bump;
+    input[at].length = 1;
+    msSolSeedTail(input, at + 1, program);
+}
+
+/* A table the caller built with three free slices after its seeds is staged where it is, with nothing copied.
+   Answers the number of seeds, or MS_SOL_MAX_SEEDS for a table that cannot be hashed. */
+MS_SOL_STAGED uint64_t msSolSeedStageInPlace(uint64_t table, uint64_t count, uint64_t bump, uint64_t program) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    const uint64_t used = count - 3;
+    if (count < 3 || !msSolSeedStage(input, table, used, MS_SOL_MAX_SEEDS - 1)) return MS_SOL_MAX_SEEDS;
+    msSolSeedSlot(input, used, bump, program);
+    return used;
 }
 
 /* The sha256 of the seeds, the bump when it is at most 255, the program and the tag: 0 with the hash in out, 2 when
@@ -435,72 +523,93 @@ static inline uint64_t msSolDeriveAddress(uint64_t table, uint64_t count, uint64
     return msSolCurveValidatePoint(0, out, 0) != 0 ? 0 : 1;
 }
 
-/* The canonical bump of seeds that carry none: 0 and the bump through bumpOut, 1 when every bump is on the curve, 2 as above. */
-static inline uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t out, uint64_t bumpOut) {
-    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
-    uint8_t bump = 255;
-    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    input[count].address = (uint64_t)(uintptr_t)&bump;
-    input[count].length = 1;
-    const uint64_t total = msSolSeedTail(input, count + 1, program);
+static inline bool msSolKeyIs(uint64_t key, uint64_t expected) {
+    return msSolLoadU64(key) == msSolLoadU64(expected) && msSolLoadU64(key + 8) == msSolLoadU64(expected + 8) &&
+        msSolLoadU64(key + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(key + 24) == msSolLoadU64(expected + 24);
+}
+
+/* The bump walks below take staged slices and count the byte at bumpOut, which the bump's slice names, down from
+   255: it holds the bump they stop at. */
+static __attribute__((noinline)) uint64_t msSolWalkAny(msSolSeed* input, uint64_t at, uint64_t out, uint64_t bumpOut) {
     for (uint64_t counter = 255; counter > 0; counter--) {
-        bump = (uint8_t)counter;
-        msSolSha256((uint64_t)(uintptr_t)input, total, out);
-        if (msSolCurveValidatePoint(0, out, 0) != 0) {
-            msSolStoreU8(bumpOut, bump);
-            return 0;
-        }
+        msSolStoreU8(bumpOut, (uint8_t)counter);
+        msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
+        if (msSolCurveValidatePoint(0, out, 0) != 0) return 0;
     }
     return 1;
 }
 
-/* msSolFindAddress for a key the caller names: 0 and its bump when it is the canonical address, 1 when it is not.
-   The matching hash skips the curve check, because a key on the curve cannot sign: the runtime refuses the first
-   CPI signed with these seeds. Every bump above it is still checked, so a non-canonical key is refused. */
-static inline uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
-    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+static inline uint64_t msSolWalkExpected(msSolSeed* input, uint64_t at, uint64_t expected, uint64_t bumpOut) {
     uint8_t hash[32];
     const uint64_t out = (uint64_t)(uintptr_t)hash;
-    uint8_t bump = 255;
-    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    input[count].address = (uint64_t)(uintptr_t)&bump;
-    input[count].length = 1;
-    const uint64_t total = msSolSeedTail(input, count + 1, program);
     for (uint64_t counter = 255; counter > 0; counter--) {
-        bump = (uint8_t)counter;
-        msSolSha256((uint64_t)(uintptr_t)input, total, out);
-        if (msSolLoadU64(out) == msSolLoadU64(expected) && msSolLoadU64(out + 8) == msSolLoadU64(expected + 8) &&
-            msSolLoadU64(out + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(out + 24) == msSolLoadU64(expected + 24)) {
-            msSolStoreU8(bumpOut, bump);
-            return 0;
-        }
+        msSolStoreU8(bumpOut, (uint8_t)counter);
+        msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
+        if (msSolKeyIs(out, expected)) return 0;
         if (msSolCurveValidatePoint(0, out, 0) != 0) return 1;
     }
     return 1;
 }
 
-/* msSolFindAddress for a key the caller names, curve-checked at the matching bump too: 0 when the canonical address is
-   expected, 3 when it is not, 1 when every bump is on the curve, 2 as msSolHashAddress. */
-static inline uint64_t msSolFindCanonicalAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
-    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+static inline uint64_t msSolWalkCanonical(msSolSeed* input, uint64_t at, uint64_t expected, uint64_t bumpOut) {
     uint8_t hash[32];
     const uint64_t out = (uint64_t)(uintptr_t)hash;
-    uint8_t bump = 255;
-    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
-    input[count].address = (uint64_t)(uintptr_t)&bump;
-    input[count].length = 1;
-    const uint64_t total = msSolSeedTail(input, count + 1, program);
     for (uint64_t counter = 255; counter > 0; counter--) {
-        bump = (uint8_t)counter;
-        msSolSha256((uint64_t)(uintptr_t)input, total, out);
-        if (msSolCurveValidatePoint(0, out, 0) != 0) {
-            if (!(msSolLoadU64(out) == msSolLoadU64(expected) && msSolLoadU64(out + 8) == msSolLoadU64(expected + 8) &&
-                  msSolLoadU64(out + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(out + 24) == msSolLoadU64(expected + 24))) return 3;
-            if (bumpOut != 0) msSolStoreU8(bumpOut, bump);
-            return 0;
-        }
+        msSolStoreU8(bumpOut, (uint8_t)counter);
+        msSolSha256((uint64_t)(uintptr_t)input, at + 3, out);
+        if (msSolCurveValidatePoint(0, out, 0) != 0) return msSolKeyIs(out, expected) ? 0 : 3;
     }
     return 1;
+}
+
+/* The canonical bump of seeds that carry none: 0 and the bump through bumpOut, 1 when every bump is on the curve, 2 as above. */
+MS_SOL_STAGED uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t out, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    msSolSeedSlot(input, count, bumpOut, program);
+    return msSolWalkAny(input, count, out, bumpOut);
+}
+
+/* msSolFindAddress for a key the caller names: 0 and its bump when it is the canonical address, 1 when it is not.
+   The matching hash skips the curve check, because a key on the curve cannot sign: the runtime refuses the first
+   CPI signed with these seeds. Every bump above it is still checked, so a non-canonical key is refused. */
+MS_SOL_STAGED uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    msSolSeedSlot(input, count, bumpOut, program);
+    return msSolWalkExpected(input, count, expected, bumpOut);
+}
+
+/* msSolFindAddress for a key the caller names, curve-checked at the matching bump too: 0 when the canonical address is
+   expected, 3 when it is not, 1 when every bump is on the curve, 2 as msSolHashAddress. */
+MS_SOL_STAGED uint64_t msSolFindCanonicalAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    msSolSeed input[MS_SOL_MAX_SEEDS + 2];
+    if (!msSolSeedStage(input, table, count, MS_SOL_MAX_SEEDS - 1)) return 2;
+    msSolSeedSlot(input, count, bumpOut, program);
+    return msSolWalkCanonical(input, count, expected, bumpOut);
+}
+
+/* The finds and the hash of a table msSolSeedStageInPlace staged, which answered `used`: 2 when it refused the table. */
+MS_SOL_STAGED uint64_t msSolFindExpectedStaged(uint64_t table, uint64_t used, uint64_t expected) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    if (used >= MS_SOL_MAX_SEEDS) return 2;
+    return msSolWalkExpected(input, used, expected, input[used].address);
+}
+
+MS_SOL_STAGED uint64_t msSolFindCanonicalStaged(uint64_t table, uint64_t used, uint64_t expected) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    if (used >= MS_SOL_MAX_SEEDS) return 2;
+    return msSolWalkCanonical(input, used, expected, input[used].address);
+}
+
+/* 0 when the sha256 of the seeds and `bump` is `expected`, 3 when it is not. No curve check. */
+MS_SOL_STAGED uint64_t msSolHashIsStaged(uint64_t table, uint64_t used, uint64_t bump, uint64_t expected) {
+    msSolSeed* input = (msSolSeed*)(uintptr_t)table;
+    uint8_t hash[32];
+    if (used >= MS_SOL_MAX_SEEDS) return 2;
+    msSolStoreU8(input[used].address, (uint8_t)bump);
+    msSolSha256(table, used + 3, (uint64_t)(uintptr_t)hash);
+    return msSolKeyIs((uint64_t)(uintptr_t)hash, expected) ? 0 : 3;
 }
 
 #define MS_SOL_MAX_CPI_ACCOUNTS 64
@@ -512,10 +621,12 @@ typedef struct {
     uint64_t data;
     uint64_t owner;
     uint64_t rentEpoch;
-    uint8_t signer;
-    uint8_t writable;
-    uint8_t executable;
+    /* SolAccountInfo's is_signer, is_writable, executable and one byte of its padding: bytes 1 to 4 of the
+       account record, in that order. */
+    uint32_t recordFlags;
 } msSolCpiAccount;
+_Static_assert(__builtin_offsetof(msSolCpiAccount, recordFlags) == 48 && sizeof(msSolCpiAccount) == 56,
+    "msSolCpiAccount is the runtime's SolAccountInfo");
 
 typedef struct {
     uint64_t program;
@@ -537,9 +648,7 @@ static __attribute__((noinline)) uint64_t msSolInvokeMetas(uint64_t program, uin
         infos[index].data = record + 88;
         infos[index].owner = record + 40;
         infos[index].rentEpoch = 0;
-        infos[index].signer = msSolLoadU8(record + 1);
-        infos[index].writable = msSolLoadU8(record + 2);
-        infos[index].executable = msSolLoadU8(record + 3);
+        infos[index].recordFlags = msSolLoadU32(record + 1);
     }
     msSolCpiInstruction instruction = { program, metas, count, data, length };
     return msSolInvokeSigned((uint64_t)(uintptr_t)&instruction, (uint64_t)(uintptr_t)infos, count, signers, signerCount);

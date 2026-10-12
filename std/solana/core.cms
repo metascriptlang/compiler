@@ -18,15 +18,15 @@ import {
 	SeedSlice,
 	SeedTable,
 	SignerSeeds,
-	createAddressWithBump,
 	fillWithBump,
-	findExpectedFailureAt,
 	findCanonicalFailureAt,
-	hashAddressWithBump,
-	hashFailureAt,
+	findCanonicalStagedFailure,
+	findExpectedStagedFailure,
+	hashStagedFailure,
 	ownProgram,
 	signerOf,
 	signerOfBumped,
+	stagedInPlace,
 	tableAddress,
 } from "./seed";
 
@@ -66,15 +66,18 @@ extern function msSolStoreU64(address: uint64, value: uint64): void;
 extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
 extern function msSolScratch(size: uint64): uint64;
 extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
+extern function msSolDataRoom(record: uint64): uint64;
 extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
 extern function msSolLogPubkey(address: uint64): void;
 extern function msSolLogData(address: uint64, length: uint64): void;
 extern function msSolLogComputeUnits(): void;
 extern function msSolRemainingComputeUnits(): uint64;
 extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
+extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolRentAddress(): uint64;
+extern function msSolCurveValidatePoint(curve: uint64, point: uint64, result: uint64): uint64;
 extern function msSolSetReturnData(data: Readonly<Span<uint8>>): void;
 extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
 
@@ -217,16 +220,32 @@ export function assign(this account: Account, newOwner: Pubkey): void {
 	storePubkey(newOwner, account.address + 40);
 }
 
+const GROWTH_MASK: uint32 = 0xffffff;
+
+function growthOf(packed: uint32): int64 {
+	const stored: int64 = (packed >> 8) as int64;
+	return stored <= 10240 ? stored : stored - 16777216;
+}
+
+function withGrowth(packed: uint32, growth: int64): uint32 {
+	return (packed & 0xff) | ((((growth as int32) as uint32) & GROWTH_MASK) << 8);
+}
+
+@noinline function grown(account: Account, currentLength: uint64, newLength: uint64): Result<uint64, ProgramError> {
+	const packed = msSolLoadU32(account.address + 4);
+	const growth: int64 = growthOf(packed) + ((newLength - currentLength) as int64);
+	if (growth > 10240 || newLength > msSolDataRoom(account.address)) { return Result.err(ProgramError.invalidRealloc()); }
+	msSolFill(account.address + 88 + currentLength, 0, newLength - currentLength);
+	msSolStoreU32(account.address + 4, withGrowth(packed, growth));
+	msSolStoreU64(account.address + 80, newLength);
+	return Result.ok(newLength);
+}
+
 export function resize(this account: Account, newLength: uint64): Result<uint64, ProgramError> {
 	const currentLength = account.dataLength();
-	const growth: int64 = (newLength as int64) - (currentLength as int64);
-	const previousDelta: int64 = (msSolLoadU32(account.address + 4) as int32) as int64;
-	const nextDelta: int64 = previousDelta + growth;
-	if (nextDelta > 10240) { return Result.err(ProgramError.invalidRealloc()); }
-	if (newLength > currentLength) {
-		msSolFill(account.address + 88 + currentLength, 0, newLength - currentLength);
-	}
-	msSolStoreU32(account.address + 4, (nextDelta as int32) as uint32);
+	if (newLength > currentLength) { return grown(account, currentLength, newLength); }
+	const packed = msSolLoadU32(account.address + 4);
+	msSolStoreU32(account.address + 4, withGrowth(packed, growthOf(packed) - ((currentLength - newLength) as int64)));
 	msSolStoreU64(account.address + 80, newLength);
 	return Result.ok(newLength);
 }
@@ -633,21 +652,21 @@ export function keyIsZero(address: uint64): boolean {
 		msSolLoadU64(address + 24)) == 0;
 }
 
-const DUPLICATED_RECORD: uint8 = 0xfe;
+const DUPLICATED_RECORD: uint8 = 2;
 
 @inline export function duplicateFailure(address: uint64): uint64 {
-	return msSolLoadU8(address) == DUPLICATED_RECORD ? ProgramError.constraintDuplicateMutableAccount().code : 0;
+	return msSolLoadU8(address + 4) == DUPLICATED_RECORD ? ProgramError.constraintDuplicateMutableAccount().code : 0;
 }
 
 @noinline function borrowFailure(address: uint64): uint64 {
-	return msSolLoadU8(address) == DUPLICATED_RECORD
+	return msSolLoadU8(address + 4) == DUPLICATED_RECORD
 		? ProgramError.constraintDuplicateMutableAccount().code
 		: ProgramError.accountBorrowFailed().code;
 }
 
 function claimExclusive(address: uint64): boolean {
-	if (msSolLoadU8(address) != 0xff) { return false; }
-	msSolStoreU8(address, 0);
+	if (msSolLoadU8(address + 4) != 0) { return false; }
+	msSolStoreU8(address + 4, 1);
 	return true;
 }
 
@@ -773,8 +792,9 @@ export function mutableEnvelopeFailure(
 ): uint64 {
 	const failure = programDataFailure(address, msSolProgramId(), discriminator, size);
 	if (failure != 0) { return failure; }
+	if (msSolLoadU32(address + 2) == 1) { return 0; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
-	if (msSolLoadU8(address) != 0xff) { return borrowFailure(address); }
+	if (msSolLoadU8(address + 4) != 0) { return borrowFailure(address); }
 	return 0;
 }
 
@@ -956,13 +976,14 @@ export struct SlottedSeeds {
 	private used: uint64;
 }
 
-// Only `createPda` builds one: its seed list ends with the one-byte entry the found bump is written into.
-export function slottedSeeds(seeds: Readonly<Span<SeedSlice>>): SlottedSeeds {
-	return { table: tableAddress(seeds), used: (seeds.length as uint64) - 1 };
+// Only `slottedTable` builds one: a seed list with three free slices after it and a byte for the bump. The hash reads
+// that table in place and leaves the bump in the byte, so the seeds and the next slice sign for the address.
+@inline export function slottedSeeds(seeds: Readonly<Span<SeedSlice>>, bump: Readonly<Span<uint8>>): SlottedSeeds {
+	return { table: msSolSeedsAddress(seeds), used: stagedInPlace(seeds, bump) };
 }
 
-@inline function foundIntoSlot(key: uint64, seeds: SlottedSeeds): uint64 {
-	return findExpectedFailureAt(seeds.table, seeds.used, ownProgram(), key, msSolLoadU64(seeds.table + seeds.used * 16));
+@inline function slotBump(seeds: SlottedSeeds): uint8 {
+	return msSolLoadU8(msSolLoadU64(seeds.table + seeds.used * 16));
 }
 
 export function createdPdaAccount(
@@ -972,18 +993,18 @@ export function createdPdaAccount(
 	space: uint64,
 	discriminator: uint64,
 ): Result<DerivedAccount, ProgramError> {
-	const failure = foundIntoSlot(target.keyAddress(), seeds);
+	const failure = seedsCanonicalProvenFailure(target.keyAddress(), seeds);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	const one: SignerSeeds[1] = [{ address: seeds.table, length: seeds.used + 1 }];
 	const created = try initialized(payer, target, space, discriminator, one);
-	return Result.ok({ account: created, bump: msSolLoadU8(msSolLoadU64(seeds.table + seeds.used * 16)) });
+	return Result.ok({ account: created, bump: slotBump(seeds) });
 }
 
 // Only `signedPda(call, pda, seeds)` calls this, with the table it passes to that call as its signers. The matching hash
 // skips the curve check because the runtime derives every signer before it runs the callee and refuses an address on the
 // curve; an `ok` here proves nothing about the address until that CPI has run.
 export function foundSigner(account: Account, seeds: SlottedSeeds): Result<SignerSeeds, ProgramError> {
-	const failure = foundIntoSlot(account.keyAddress(), seeds);
+	const failure = seedsCanonicalProvenFailure(account.keyAddress(), seeds);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok({ address: seeds.table, length: seeds.used + 1 });
 }
@@ -1014,54 +1035,38 @@ export function createdPdaAccountAt(
 	return Result.ok(bump[0]);
 }
 
-// The account is proven owned by this program, so its address is off the curve and the matching bump
-// needs no sol_curve_validate_point; every higher bump is still curve-checked inside the find.
-@inline export function canonicalBumpProven(
-	account: Account,
-	seeds: Readonly<Span<SeedSlice>>,
-): Result<uint8, ProgramError> {
-	let bump: uint8[1] = [0];
-	const failure = findExpectedFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), account.keyAddress(), msSolSpanAddress(bump));
+@inline export function slottedCanonicalBump(account: Account, seeds: SlottedSeeds): Result<uint8, ProgramError> {
+	const failure = seedsCanonicalFailure(account.keyAddress(), seeds);
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(bump[0]);
+	return Result.ok(slotBump(seeds));
 }
 
-@inline export function canonicalBumpOwned(
-	account: Account,
-	seeds: Readonly<Span<SeedSlice>>,
-): Result<uint8, ProgramError> {
+// The account is proven owned by this program, so its address is off the curve and the matching bump
+// needs no sol_curve_validate_point; every higher bump is still curve-checked inside the find.
+export function canonicalBumpProven(account: Account, seeds: SlottedSeeds): Result<uint8, ProgramError> {
+	const failure = seedsCanonicalProvenFailure(account.keyAddress(), seeds);
+	if (failure != 0) { return Result.err({ code: failure }); }
+	return Result.ok(slotBump(seeds));
+}
+
+@inline export function canonicalBumpOwned(account: Account, seeds: SlottedSeeds): Result<uint8, ProgramError> {
 	if (!keysEqual(account.address + 40, ownProgram())) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
 	return canonicalBumpProven(account, seeds);
 }
 
-export function givenBump(
-	account: Account,
-	seeds: Readonly<Span<SeedSlice>>,
-	bump: uint8,
-): Result<uint8, ProgramError> {
-	const derived = createAddressWithBump(seeds, bump, ownProgram());
-	if (!derived.ok || derived.value != account.key()) {
-		return Result.err(ProgramError.constraintSeeds());
-	}
+export function givenBump(account: Account, seeds: SlottedSeeds, bump: uint8): Result<uint8, ProgramError> {
+	const failure = seedsGivenFailure(account.keyAddress(), seeds, bump);
+	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(bump);
 }
 
 // An account owned by this program sits at an address that signed or that invoke_signed created, and neither
 // exists on the curve, so a hash match proves off-curve without sol_curve_validate_point.
-export function givenBumpOwned(
-	account: Account,
-	seeds: Readonly<Span<SeedSlice>>,
-	bump: uint8,
-): Result<uint8, ProgramError> {
-	if (!keysEqual(account.address + 40, ownProgram())) {
-		return Result.err(ProgramError.accountOwnedByWrongProgram());
-	}
-	const derived = hashAddressWithBump(seeds, bump, ownProgram());
-	if (!derived.ok || derived.value != account.key()) {
-		return Result.err(ProgramError.constraintSeeds());
-	}
+export function givenBumpOwned(account: Account, seeds: SlottedSeeds, bump: uint8): Result<uint8, ProgramError> {
+	const failure = seedsGivenOwnedFailure(account, seeds, bump);
+	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(bump);
 }
 
@@ -1125,7 +1130,11 @@ export function expectHasOne(actual: Pubkey, expected: Pubkey): Result<void, Pro
 }
 
 @inline export function keysFailure(actual: uint64, expected: uint64, failure: uint64): uint64 {
-	return keysEqual(actual, expected) ? 0 : failure;
+	if (msSolLoadU64(actual) != msSolLoadU64(expected)) { return failure; }
+	if (msSolLoadU64(actual + 8) != msSolLoadU64(expected + 8)) { return failure; }
+	if (msSolLoadU64(actual + 16) != msSolLoadU64(expected + 16)) { return failure; }
+	if (msSolLoadU64(actual + 24) != msSolLoadU64(expected + 24)) { return failure; }
+	return 0;
 }
 
 export function keysMatch(actual: uint64, expected: uint64, failure: uint64): Result<void, ProgramError> {
@@ -1144,49 +1153,30 @@ export function keysMatch(actual: uint64, expected: uint64, failure: uint64): Re
 	return Result.ok(null);
 }
 
-export function seedsGivenFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>, bump: uint8): uint64 {
-	const derived = createAddressWithBump(seeds, bump, ownProgram());
-	if (!derived.ok || !keysEqual(msSolSpanAddress(derived.value.bytes), key)) {
+export function seedsGivenFailure(key: uint64, seeds: SlottedSeeds, bump: uint8): uint64 {
+	if (seedsGivenProvenFailure(key, seeds, bump) != 0 || msSolCurveValidatePoint(0, key, 0) == 0) {
 		return ProgramError.constraintSeeds().code;
 	}
 	return 0;
 }
 
-@inline export function seedsGivenProvenFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>, bump: uint8): uint64 {
-	let derived = Pubkey.zero();
-	if (hashFailureAt(tableAddress(seeds), seeds.length as uint64, bump as uint64, ownProgram(), derived) != 0 ||
-		!keysEqual(msSolSpanAddress(derived.bytes), key)) {
-		return ProgramError.constraintSeeds().code;
-	}
-	return 0;
+@inline export function seedsGivenProvenFailure(key: uint64, seeds: SlottedSeeds, bump: uint8): uint64 {
+	return hashStagedFailure(seeds.table, seeds.used, bump as uint64, key);
 }
 
-@inline export function seedsGivenOwnedFailure(account: Account, seeds: Readonly<Span<SeedSlice>>, bump: uint8): uint64 {
+@inline export function seedsGivenOwnedFailure(account: Account, seeds: SlottedSeeds, bump: uint8): uint64 {
 	if (!keysEqual(account.address + 40, ownProgram())) {
 		return ProgramError.accountOwnedByWrongProgram().code;
 	}
 	return seedsGivenProvenFailure(account.keyAddress(), seeds, bump);
 }
 
-export function seedsGiven(key: uint64, seeds: Readonly<Span<SeedSlice>>, bump: uint8): Result<void, ProgramError> {
-	const code = seedsGivenFailure(key, seeds, bump);
-	if (code != 0) { return Result.err({ code: code }); }
-	return Result.ok(null);
+@inline export function seedsCanonicalFailure(key: uint64, seeds: SlottedSeeds): uint64 {
+	return findCanonicalStagedFailure(seeds.table, seeds.used, key);
 }
 
-@inline export function seedsCanonicalFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>): uint64 {
-	return findCanonicalFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), key, 0);
-}
-
-@inline export function seedsCanonicalProvenFailure(key: uint64, seeds: Readonly<Span<SeedSlice>>): uint64 {
-	let bump: uint8[1] = [0];
-	return findExpectedFailureAt(tableAddress(seeds), seeds.length as uint64, ownProgram(), key, msSolSpanAddress(bump));
-}
-
-export function seedsCanonical(key: uint64, seeds: Readonly<Span<SeedSlice>>): Result<void, ProgramError> {
-	const code = seedsCanonicalFailure(key, seeds);
-	if (code != 0) { return Result.err({ code: code }); }
-	return Result.ok(null);
+@inline export function seedsCanonicalProvenFailure(key: uint64, seeds: SlottedSeeds): uint64 {
+	return findExpectedStagedFailure(seeds.table, seeds.used, key);
 }
 
 @inline export function seedsFoldedFailure(
