@@ -1314,7 +1314,7 @@ when (testBuild) {
 			executable: true,
 		};
 		return [
-			holderOf(1, TOKEN_PROGRAM_ID, mintData(7, 500, 6)),
+			holderOf(1, TOKEN_PROGRAM_ID, mintData(3, 500, 6)),
 			holderOf(2, TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 0, 1)),
 			{ ...holderOf(3, keyOf(0), []), signer: true, writable: false },
 			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true },
@@ -1334,7 +1334,9 @@ when (testBuild) {
 		const mintBytes: uint8[] = [7, 0xf4, 1, 0, 0, 0, 0, 0, 0];
 		assert sameBytes(minted.data, mintBytes);
 
-		assert resultOf(cpiAccounts(), 1, cpiEntry) == 0;
+		const extended = cpiAccounts();
+		for (const index of [0, 1, 3]) { extended[index].owner = TOKEN_2022_PROGRAM_ID; }
+		assert resultOf(extended, 1, cpiEntry) == 0;
 		const moved = invocations()[0];
 		assert moved.program.equals(TOKEN_2022_PROGRAM_ID);
 		assert moved.accounts[0].key.equals(keyOf(4)) && moved.accounts[0].writable;
@@ -1477,7 +1479,7 @@ when (testBuild) {
 				accounts[1].lamports = 0;
 				accounts[3].lamports = 10000000;
 			}
-			if (op == 14) { accounts[3].owner = TOKEN_PROGRAM_ID; }
+			if (op == 8 || op == 14) { accounts[3].owner = TOKEN_PROGRAM_ID; }
 			assert resultOf(accounts, op as uint8, cpiEntry) == 0;
 			const calls = invocations();
 			assert calls.length == 1 && calls[0].signers == 1;
@@ -2676,5 +2678,545 @@ when (testBuild) {
 		}
 		const short = rawRun(SYSTEM_PROGRAM_ID, [2, 0, 0]);
 		assert short.result == ProgramError.invalidInstructionData().code && short.fault == "";
+	}
+}
+
+when (testBuild) {
+	import { accountCount } from "./core";
+
+	function ledgerStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		const op = try input.readU8(0);
+		const amount = try input.readU64(1);
+		if (op == 0) {
+			const mint = try externalMutable<Mint>(0);
+			return mintTokens(mint, try externalMutable<TokenAccount>(1), try account(2), amount);
+		}
+		if (op == 1) {
+			const program = (try account(3)).key();
+			return mintTo(program, try account(0), try account(1), try account(2), amount);
+		}
+		if (op == 2) {
+			const from = try externalMutable<TokenAccount>(0);
+			const to = try externalMutable<TokenAccount>(1);
+			return transferTokens(from, to, try external<Mint>(2), try account(3), amount);
+		}
+		if (op == 3) {
+			return transferChecked(
+				(try account(4)).key(),
+				try account(0),
+				try account(2),
+				try account(1),
+				try account(3),
+				amount,
+				try input.readU8(9),
+			);
+		}
+		if (op == 4) {
+			const closing = try externalMutable<TokenAccount>(0);
+			return closeTokenAccount(closing, try writable(1), try account(2));
+		}
+		if (op == 6) {
+			let storage: uint8[10] = [];
+			let length = putU8(storage, 0, 12);
+			length = putU64(storage, length, amount);
+			length = putU8(storage, length, 6);
+			const held = InstructionAccount.writable(try account(0));
+			const mint = InstructionAccount.readonly(try account(2));
+			const authority = InstructionAccount.readonlySigner(try account(3));
+			return invoke((try account(4)).key(), [held, mint, held, authority], storage, length);
+		}
+		if (op == 7) {
+			let storage: uint8[1] = [];
+			const length = putU8(storage, 0, 9);
+			const held = InstructionAccount.writable(try account(0));
+			const authority = InstructionAccount.readonlySigner(try account(2));
+			return invoke((try account(3)).key(), [held, held, authority], storage, length);
+		}
+		return closeAccount((try account(3)).key(), try account(0), try account(1), try account(2));
+	}
+
+	function ledgerEntry(): void {
+		const result = ledgerStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function ledgerRun(accounts: HostAccount[], op: uint8, amount: uint64, decimals: uint8 = 6): HostRun {
+		const data: uint8[] = [op];
+		pushU64(data, amount);
+		data.push(decimals);
+		return run(keyOf(9), accounts, data, ledgerEntry);
+	}
+
+	function asPassed(held: Account): InstructionAccount {
+		return InstructionAccount.flagged(held, held.isWritable(), held.isSigner());
+	}
+
+	function forwardStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		let storage: uint8[16] = [];
+		let length: uint64 = 0;
+		for (let at: uint64 = 0; at < input.length; at++) {
+			length = putU8(storage, length, try input.readU8(at));
+		}
+		const last = accountCount() - 1;
+		const callee = (try account(last)).key();
+		const first = asPassed(try account(0));
+		const second = asPassed(try account(1));
+		const third = asPassed(try account(2));
+		if (last == 3) { return invoke(callee, [first, second, third], storage, length); }
+		return invoke(callee, [first, second, third, asPassed(try account(3))], storage, length);
+	}
+
+	function forwardEntry(): void {
+		const result = forwardStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function forwardRun(accounts: HostAccount[], instruction: uint8, amount: uint64): HostRun {
+		const data: uint8[] = [instruction];
+		pushU64(data, amount);
+		if (instruction == 12) { data.push(6); }
+		return run(keyOf(9), accounts, data, forwardEntry);
+	}
+
+	function programAccount(program: Pubkey): HostAccount {
+		return { ...holderOf(6, keyOf(0), []), key: program, writable: false, executable: true };
+	}
+
+	function otherTokenProgram(program: Pubkey): Pubkey {
+		return program == TOKEN_PROGRAM_ID ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+	}
+
+	function mintingAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(1, program, mintData(3, 5000, 6)),
+			holderOf(4, program, tokenAccountData(1, 8, 0, 1)),
+			signingAs(3),
+			programAccount(program),
+		];
+	}
+
+	function movingAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(4, program, tokenAccountData(1, 3, 900, 1)),
+			holderOf(5, program, tokenAccountData(1, 6, 0, 1)),
+			{ ...holderOf(1, program, mintData(7, 5000, 6)), writable: false },
+			signingAs(3),
+			programAccount(program),
+		];
+	}
+
+	function closingAccounts(program: Pubkey): HostAccount[] {
+		return [
+			{ ...holderOf(4, program, tokenAccountData(1, 3, 0, 1)), lamports: TOKEN_ACCOUNT_RENT },
+			holderOf(7, Pubkey.zero(), []),
+			signingAs(3),
+			programAccount(program),
+		];
+	}
+
+	function fillU64(bytes: uint8[], offset: int32, value: uint8): void {
+		for (let index = 0; index < 8; index++) { bytes[offset + index] = value; }
+	}
+
+	function refusedWith(outcome: HostRun, error: ProgramError, fault: string): boolean {
+		if (outcome.result != error.code) { return false; }
+		return fault == "" ? outcome.fault == "" : outcome.fault.indexOf(fault) >= 0;
+	}
+
+	const FOREIGN_WRITE: string = "ExternalAccountDataModified";
+	const ESCALATED: string = "signer privilege escalated";
+
+	test "mintTokens adds the amount to the account and the supply, for the mint authority that signed" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = mintingAccounts(program);
+			assert ledgerRun(accounts, 0, 500).result == 0;
+			assert u64At(accounts[1].data, 64) == 500 && u64At(accounts[0].data, 36) == 5500;
+			const stranger = mintingAccounts(program);
+			stranger[2].key = keyOf(5);
+			assert refusedWith(ledgerRun(stranger, 0, 1), ProgramError.custom(4), "");
+			const fixed = mintingAccounts(program);
+			fixed[0].data[0] = 0;
+			assert refusedWith(ledgerRun(fixed, 0, 1), ProgramError.custom(5), "");
+			const unsigned = mintingAccounts(program);
+			unsigned[2].signer = false;
+			assert refusedWith(ledgerRun(unsigned, 0, 1), ProgramError.missingRequiredSignature(), ESCALATED);
+			assert refusedWith(forwardRun(unsigned, 7, 1), ProgramError.missingRequiredSignature(), "");
+			for (const refused of [stranger, fixed, unsigned]) {
+				assert u64At(refused[1].data, 64) == 0 && u64At(refused[0].data, 36) == 5000;
+			}
+		}
+	}
+
+	test "mintTokens is refused for a frozen or native account, another mint, accounts that are not initialized and a supply beyond 2^64 - 1" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const frozen = mintingAccounts(program);
+			frozen[1].data[108] = 2;
+			frozen[1].data[109] = 1;
+			assert refusedWith(ledgerRun(frozen, 0, 1), ProgramError.custom(17), "");
+			const native = mintingAccounts(program);
+			native[1].data[109] = 1;
+			native[1].data[0] = 9;
+			assert refusedWith(ledgerRun(native, 0, 1), ProgramError.custom(10), "");
+			const otherMint = mintingAccounts(program);
+			otherMint[1].data[0] = 9;
+			otherMint[2].key = keyOf(5);
+			assert refusedWith(ledgerRun(otherMint, 0, 1), ProgramError.custom(3), "");
+			const blank = mintingAccounts(program);
+			blank[1].data[108] = 0;
+			assert refusedWith(ledgerRun(blank, 1, 1), ProgramError.uninitializedAccount(), "");
+			const unminted = mintingAccounts(program);
+			unminted[0].data[45] = 0;
+			assert refusedWith(ledgerRun(unminted, 1, 1), ProgramError.uninitializedAccount(), "");
+			const swapped = mintingAccounts(program);
+			swapped[1].data = mintData(3, 5000, 6);
+			assert refusedWith(ledgerRun(swapped, 1, 1), ProgramError.invalidAccountData(), "");
+			const full = mintingAccounts(program);
+			fillU64(full[0].data, 36, 255);
+			assert refusedWith(ledgerRun(full, 0, 1), ProgramError.custom(14), "");
+			full[2].key = keyOf(5);
+			assert refusedWith(ledgerRun(full, 0, 1), ProgramError.custom(4), "");
+			assert forwardRun(mintingAccounts(program), 7, 0).result == 0;
+		}
+	}
+
+	test "an account balance beyond 2^64 - 1 wraps under the Token program and is refused by Token-2022" {
+		const wrapped = mintingAccounts(TOKEN_PROGRAM_ID);
+		fillU64(wrapped[1].data, 64, 255);
+		assert ledgerRun(wrapped, 0, 2).result == 0 && u64At(wrapped[1].data, 64) == 1;
+		const kept = mintingAccounts(TOKEN_2022_PROGRAM_ID);
+		fillU64(kept[1].data, 64, 255);
+		assert refusedWith(ledgerRun(kept, 0, 2), ProgramError.custom(14), "");
+		assert kept[1].data[64] == 255 && u64At(kept[0].data, 36) == 5000;
+	}
+
+	test "minting to an account or of a mint the other token program owns is refused as each token program refuses it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const fault = program == TOKEN_PROGRAM_ID ? FOREIGN_WRITE : "";
+			const foreign = mintingAccounts(program);
+			foreign[1].owner = otherTokenProgram(program);
+			assert refusedWith(ledgerRun(foreign, 0, 1), ProgramError.incorrectProgramId(), fault);
+			assert refusedWith(ledgerRun(foreign, 0, 0), ProgramError.incorrectProgramId(), "");
+			const foreignMint = mintingAccounts(program);
+			foreignMint[0].owner = otherTokenProgram(program);
+			assert refusedWith(ledgerRun(foreignMint, 1, 1), ProgramError.incorrectProgramId(), fault);
+			const frozen = mintingAccounts(program);
+			frozen[1].owner = otherTokenProgram(program);
+			frozen[1].data[108] = 2;
+			const expected = program == TOKEN_PROGRAM_ID ? ProgramError.custom(17) : ProgramError.incorrectProgramId();
+			assert refusedWith(ledgerRun(frozen, 0, 1), expected, "");
+			for (const refused of [foreign, foreignMint, frozen]) {
+				assert u64At(refused[1].data, 64) == 0 && u64At(refused[0].data, 36) == 5000;
+			}
+		}
+	}
+
+	function checkedOrder(accounts: HostAccount[]): HostAccount[] {
+		return [accounts[0], accounts[2], accounts[1], accounts[3], accounts[4]];
+	}
+
+	function uncheckedOrder(accounts: HostAccount[]): HostAccount[] {
+		return [accounts[0], accounts[1], accounts[3], accounts[4]];
+	}
+
+	function heldBy(accounts: HostAccount[], index: int32): uint64 {
+		return u64At(accounts[index].data, 64);
+	}
+
+	function unmoved(accounts: HostAccount[]): boolean {
+		return heldBy(accounts, 0) == 900 && heldBy(accounts, 1) == 0;
+	}
+
+	test "transferTokens moves the amount for the owner that signed, with the mint's decimals" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = movingAccounts(program);
+			assert ledgerRun(accounts, 2, 300).result == 0;
+			assert heldBy(accounts, 0) == 600 && heldBy(accounts, 1) == 300;
+			const plain = uncheckedOrder(movingAccounts(program));
+			assert forwardRun(plain, 3, 100).result == 0;
+			assert heldBy(plain, 0) == 800 && heldBy(plain, 1) == 100;
+			const stranger = movingAccounts(program);
+			stranger[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(stranger, 2, 1), ProgramError.custom(4), "");
+			const unsigned = movingAccounts(program);
+			unsigned[3].signer = false;
+			assert refusedWith(ledgerRun(unsigned, 2, 1), ProgramError.missingRequiredSignature(), ESCALATED);
+			assert refusedWith(forwardRun(checkedOrder(unsigned), 12, 1), ProgramError.missingRequiredSignature(), "");
+			const short = movingAccounts(program);
+			assert refusedWith(ledgerRun(short, 2, 901), ProgramError.custom(1), "");
+			assert refusedWith(forwardRun(uncheckedOrder(short), 3, 901), ProgramError.custom(1), "");
+			const decimals = movingAccounts(program);
+			assert refusedWith(ledgerRun(decimals, 3, 1, 5), ProgramError.custom(18), "");
+			decimals[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(decimals, 3, 1, 5), ProgramError.custom(18), "");
+			for (const refused of [stranger, unsigned, short, decimals]) { assert unmoved(refused); }
+		}
+	}
+
+	test "transferTokens is refused for a frozen account, another mint and accounts that are not token accounts, in each token program's order" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const legacy = program == TOKEN_PROGRAM_ID;
+			const frozenSource = movingAccounts(program);
+			frozenSource[0].data[108] = 2;
+			assert refusedWith(ledgerRun(frozenSource, 2, 901), ProgramError.custom(17), "");
+			const frozenTarget = movingAccounts(program);
+			frozenTarget[1].data[108] = 2;
+			assert refusedWith(ledgerRun(frozenTarget, 2, 1), ProgramError.custom(17), "");
+			frozenTarget[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(frozenTarget, 2, 1), ProgramError.custom(legacy ? 17 : 4), "");
+			const otherMint = movingAccounts(program);
+			otherMint[2].key = keyOf(2);
+			assert refusedWith(ledgerRun(otherMint, 3, 1), ProgramError.custom(3), "");
+			assert refusedWith(ledgerRun(otherMint, 3, 901), ProgramError.custom(1), "");
+			const otherTarget = movingAccounts(program);
+			otherTarget[1].data[0] = 2;
+			assert refusedWith(ledgerRun(otherTarget, 3, 1), ProgramError.custom(3), "");
+			assert refusedWith(ledgerRun(otherTarget, 3, 901), ProgramError.custom(1), "");
+			assert refusedWith(forwardRun(uncheckedOrder(otherTarget), 3, 1), ProgramError.custom(3), "");
+			otherTarget[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(otherTarget, 3, 1), ProgramError.custom(legacy ? 3 : 4), "");
+			const blankSource = movingAccounts(program);
+			blankSource[0].data[108] = 0;
+			assert refusedWith(ledgerRun(blankSource, 3, 1), ProgramError.uninitializedAccount(), "");
+			const blankTarget = movingAccounts(program);
+			blankTarget[1].data[108] = 0;
+			assert refusedWith(ledgerRun(blankTarget, 3, 1), ProgramError.uninitializedAccount(), "");
+			const expected = legacy ? ProgramError.uninitializedAccount() : ProgramError.custom(1);
+			assert refusedWith(ledgerRun(blankTarget, 3, 901), expected, "");
+			const mintAsTarget = movingAccounts(program);
+			mintAsTarget[1].data = mintData(7, 5000, 6);
+			assert refusedWith(ledgerRun(mintAsTarget, 3, 1), ProgramError.invalidAccountData(), "");
+			for (const refused of [frozenSource, frozenTarget, otherMint, otherTarget]) { assert unmoved(refused); }
+		}
+	}
+
+	test "a transfer that touches an account of the other token program is refused as each token program refuses it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const legacy = program == TOKEN_PROGRAM_ID;
+			const fault = legacy ? FOREIGN_WRITE : "";
+			for (const index of [0, 1]) {
+				const foreign = movingAccounts(program);
+				foreign[index].owner = otherTokenProgram(program);
+				assert refusedWith(ledgerRun(foreign, 3, 1), ProgramError.incorrectProgramId(), fault);
+				assert unmoved(foreign);
+			}
+			const nothing = movingAccounts(program);
+			nothing[1].owner = otherTokenProgram(program);
+			assert refusedWith(ledgerRun(nothing, 3, 0), ProgramError.incorrectProgramId(), "");
+			const frozen = movingAccounts(program);
+			frozen[0].owner = otherTokenProgram(program);
+			frozen[0].data[108] = 2;
+			assert refusedWith(ledgerRun(frozen, 3, 1), legacy ? ProgramError.custom(17) : ProgramError.incorrectProgramId(), "");
+			const stranger = movingAccounts(program);
+			stranger[0].owner = otherTokenProgram(program);
+			stranger[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(stranger, 3, 1), legacy ? ProgramError.custom(4) : ProgramError.incorrectProgramId(), "");
+			const foreignMint = movingAccounts(program);
+			foreignMint[2].owner = otherTokenProgram(program);
+			const outcome = ledgerRun(foreignMint, 3, 1);
+			if (legacy) {
+				assert outcome.result == 0 && outcome.fault == "" && heldBy(foreignMint, 1) == 1;
+			} else {
+				assert refusedWith(outcome, ProgramError.incorrectProgramId(), "") && unmoved(foreignMint);
+			}
+		}
+	}
+
+	test "a transfer of an account to itself changes nothing and keeps the balance and authority refusals" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = movingAccounts(program);
+			const moved = ledgerRun(accounts, 6, 300);
+			assert moved.result == 0 && moved.fault == "" && unmoved(accounts);
+			assert refusedWith(ledgerRun(accounts, 6, 901), ProgramError.custom(1), "");
+			accounts[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(accounts, 6, 1), ProgramError.custom(4), "");
+		}
+	}
+
+	function nativeAccounts(program: Pubkey): HostAccount[] {
+		const accounts = movingAccounts(program);
+		accounts[0].data[109] = 1;
+		accounts[0].lamports = 5000;
+		return accounts;
+	}
+
+	test "a transfer from a native account moves its lamports with the amount" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = nativeAccounts(program);
+			assert ledgerRun(accounts, 3, 300).result == 0;
+			assert heldBy(accounts, 0) == 600 && heldBy(accounts, 1) == 300;
+			assert accounts[0].lamports == 4700 && accounts[1].lamports == 1300;
+			const toNative = movingAccounts(program);
+			toNative[1].data[109] = 1;
+			assert ledgerRun(toNative, 3, 300).result == 0;
+			assert heldBy(toNative, 1) == 300 && toNative[0].lamports == 1000 && toNative[1].lamports == 1000;
+		}
+	}
+
+	test "a balance or a lamport count a transfer cannot hold is answered as each token program answers it" {
+		const wrapped = movingAccounts(TOKEN_PROGRAM_ID);
+		fillU64(wrapped[1].data, 64, 255);
+		assert ledgerRun(wrapped, 3, 2).result == 0 && heldBy(wrapped, 1) == 1 && heldBy(wrapped, 0) == 898;
+		const kept = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		fillU64(kept[1].data, 64, 255);
+		assert refusedWith(ledgerRun(kept, 3, 2), ProgramError.custom(14), "");
+		assert heldBy(kept, 0) == 900 && kept[1].data[64] == 255;
+		const poor = nativeAccounts(TOKEN_PROGRAM_ID);
+		poor[0].lamports = 100;
+		const unbalanced = ledgerRun(poor, 3, 300);
+		assert unbalanced.result != 0 && unbalanced.fault.indexOf("UnbalancedInstruction") >= 0;
+		const refused = nativeAccounts(TOKEN_2022_PROGRAM_ID);
+		refused[0].lamports = 100;
+		assert refusedWith(ledgerRun(refused, 3, 300), ProgramError.custom(14), "");
+		assert unmoved(poor) && unmoved(refused) && poor[0].lamports == 100 && refused[1].lamports == 1000;
+	}
+
+	function withAccountExtension(bytes: uint8[], kind: int32, length: int32): uint8[] {
+		bytes.push(2);
+		pushU16(bytes, 7);
+		pushU16(bytes, 0);
+		pushU16(bytes, kind as uint64);
+		pushU16(bytes, length as uint64);
+		pushZeros(bytes, length);
+		return bytes;
+	}
+
+	function extendedSource(kind: int32, length: int32): HostAccount[] {
+		const accounts = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		accounts[0].data = withAccountExtension(accounts[0].data, kind, length);
+		return accounts;
+	}
+
+	test "a Token-2022 account of a non-transferable mint moves nothing, after the frozen and balance refusals" {
+		const accounts = extendedSource(13, 0);
+		assert refusedWith(ledgerRun(accounts, 2, 1), ProgramError.custom(37), "");
+		assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 1), ProgramError.custom(37), "");
+		assert refusedWith(ledgerRun(accounts, 3, 1, 5), ProgramError.custom(37), "");
+		assert refusedWith(ledgerRun(accounts, 2, 901), ProgramError.custom(1), "");
+		const otherMint = extendedSource(13, 0);
+		otherMint[2].key = keyOf(2);
+		assert refusedWith(ledgerRun(otherMint, 3, 1), ProgramError.custom(37), "");
+		const stranger = extendedSource(13, 0);
+		stranger[3].key = keyOf(8);
+		assert refusedWith(ledgerRun(stranger, 2, 1), ProgramError.custom(37), "");
+		const frozen = extendedSource(13, 0);
+		frozen[0].data[108] = 2;
+		assert refusedWith(ledgerRun(frozen, 2, 1), ProgramError.custom(17), "");
+		assert refusedWith(forwardRun(uncheckedOrder(frozen), 3, 1), ProgramError.custom(17), "");
+		assert unmoved(accounts);
+	}
+
+	test "a Token-2022 account whose mint has a fee, a hook or a pause switch is transferred only with its mint" {
+		const kinds: int32[] = [2, 15, 27];
+		const lengths: int32[] = [8, 1, 0];
+		for (let index = 0; index < kinds.length; index++) {
+			const accounts = extendedSource(kinds[index], lengths[index]);
+			assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 1), ProgramError.custom(31), "");
+			assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 901), ProgramError.custom(1), "");
+			const stranger = extendedSource(kinds[index], lengths[index]);
+			stranger[3].key = keyOf(8);
+			assert refusedWith(forwardRun(uncheckedOrder(stranger), 3, 1), ProgramError.custom(31), "");
+			const frozen = extendedSource(kinds[index], lengths[index]);
+			frozen[0].data[108] = 2;
+			assert refusedWith(forwardRun(uncheckedOrder(frozen), 3, 1), ProgramError.custom(17), "");
+			assert unmoved(accounts);
+			assert ledgerRun(accounts, 2, 40).result == 0;
+			assert heldBy(accounts, 0) == 860 && heldBy(accounts, 1) == 40;
+		}
+	}
+
+	function closed(accounts: HostAccount[], gained: uint64): boolean {
+		return accounts[0].lamports == 0 && accounts[0].data.length == 0 &&
+			accounts[0].owner == Pubkey.zero() && accounts[1].lamports == 1000 + gained;
+	}
+
+	function kept(accounts: HostAccount[]): boolean {
+		return accounts[0].lamports == TOKEN_ACCOUNT_RENT && accounts[0].data.length == 165 &&
+			accounts[1].lamports == 1000;
+	}
+
+	test "closeTokenAccount pays the account's lamports out for its close authority, or its owner when it has none" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = closingAccounts(program);
+			assert ledgerRun(accounts, 4, 0).result == 0 && closed(accounts, TOKEN_ACCOUNT_RENT);
+			const ownerOnly = closingAccounts(program);
+			ownerOnly[0].data[129] = 0;
+			assert ledgerRun(ownerOnly, 4, 0).result == 0 && closed(ownerOnly, TOKEN_ACCOUNT_RENT);
+			const appointed = closingAccounts(program);
+			setKeyAt(appointed[0].data, 133, keyOf(8));
+			assert refusedWith(ledgerRun(appointed, 4, 0), ProgramError.custom(4), "") && kept(appointed);
+			appointed[2].key = keyOf(8);
+			assert ledgerRun(appointed, 4, 0).result == 0 && closed(appointed, TOKEN_ACCOUNT_RENT);
+			const frozen = closingAccounts(program);
+			frozen[0].data[108] = 2;
+			assert ledgerRun(frozen, 4, 0).result == 0 && closed(frozen, TOKEN_ACCOUNT_RENT);
+			const native = closingAccounts(program);
+			native[0].data[109] = 1;
+			native[0].data[64] = 44;
+			assert ledgerRun(native, 4, 0).result == 0 && closed(native, TOKEN_ACCOUNT_RENT);
+		}
+	}
+
+	test "closeTokenAccount is refused for a balance, another signer, a delegate, an unsigned authority and accounts that are not token accounts" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const holding = closingAccounts(program);
+			holding[0].data[64] = 1;
+			assert refusedWith(ledgerRun(holding, 4, 0), ProgramError.custom(11), "");
+			holding[2].key = keyOf(8);
+			assert refusedWith(ledgerRun(holding, 4, 0), ProgramError.custom(11), "");
+			const stranger = closingAccounts(program);
+			stranger[2].key = keyOf(8);
+			assert refusedWith(ledgerRun(stranger, 4, 0), ProgramError.custom(4), "");
+			const delegate = closingAccounts(program);
+			delegate[0].data = withDelegate(delegate[0].data, keyOf(8), 5);
+			delegate[2].key = keyOf(8);
+			assert refusedWith(ledgerRun(delegate, 4, 0), ProgramError.custom(4), "");
+			const unsigned = closingAccounts(program);
+			unsigned[2].signer = false;
+			assert refusedWith(ledgerRun(unsigned, 4, 0), ProgramError.missingRequiredSignature(), ESCALATED);
+			assert refusedWith(forwardRun(unsigned, 9, 0), ProgramError.missingRequiredSignature(), "");
+			const blank = closingAccounts(program);
+			blank[0].data[108] = 0;
+			assert refusedWith(ledgerRun(blank, 5, 0), ProgramError.uninitializedAccount(), "");
+			const mint = closingAccounts(program);
+			mint[0].data = mintData(3, 0, 6);
+			assert refusedWith(ledgerRun(mint, 5, 0), ProgramError.invalidAccountData(), "");
+			assert refusedWith(ledgerRun(closingAccounts(program), 7, 0), ProgramError.invalidAccountData(), "");
+			assert refusedWith(ledgerRun(blank, 7, 0), ProgramError.invalidAccountData(), "");
+			for (const refused of [holding, stranger, delegate, unsigned, blank]) { assert kept(refused); }
+		}
+	}
+
+	test "closing an account of the other token program is refused as each token program refuses it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const legacy = program == TOKEN_PROGRAM_ID;
+			const foreign = closingAccounts(program);
+			foreign[0].owner = otherTokenProgram(program);
+			const fault = legacy ? "ExternalAccountLamportSpend" : "";
+			assert refusedWith(ledgerRun(foreign, 5, 0), ProgramError.incorrectProgramId(), fault);
+			assert kept(foreign);
+			foreign[0].data[64] = 1;
+			const expected = legacy ? ProgramError.custom(11) : ProgramError.incorrectProgramId();
+			assert refusedWith(ledgerRun(foreign, 5, 0), expected, "");
+		}
+	}
+
+	test "an account the System program or the incinerator owns closes only into the incinerator, for any signer" {
+		const incinerator = Pubkey.parse("1nc1nerator11111111111111111111111111111111");
+		assert incinerator.ok;
+		if (incinerator.ok) {
+			for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+				for (const holder of [Pubkey.zero(), incinerator.value]) {
+					const accounts = closingAccounts(program);
+					setKeyAt(accounts[0].data, 32, holder);
+					assert refusedWith(ledgerRun(accounts, 5, 0), ProgramError.invalidAccountData(), "");
+					assert kept(accounts);
+					accounts[1].key = incinerator.value;
+					accounts[2].key = keyOf(8);
+					assert ledgerRun(accounts, 5, 0).result == 0 && closed(accounts, TOKEN_ACCOUNT_RENT);
+				}
+			}
+		}
 	}
 }

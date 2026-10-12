@@ -1232,6 +1232,32 @@ for (const extensions of [[1], [3], [6], [9], [14], [26], [1, 3, 14, 26], [1, 9]
 		await t.send("close an empty account", OP.close, [t.meta(spare, true), t.meta(receiver, true),
 			t.meta(t.owner.address, false, true), t.meta(TOKEN_2022, false)], new Uint8Array());
 		t.check("the empty account is gone", !t.svm.getAccount(spare).exists);
+		const refusal = fixed ? custom(37, TOKEN_2022) : needsMint ? custom(31, TOKEN_2022) : null;
+		if (refusal !== null) {
+			const stranger = [moving[0], moving[1], moving[2], t.meta(t.payer.address, false, true)];
+			const checked = (amount, decimals) => concat(new Uint8Array([12]), u64(amount), new Uint8Array([decimals]));
+			const bare = (metas) => [metas[0], metas[1], metas[3]];
+			const plain = (amount) => concat(new Uint8Array([3]), u64(amount));
+			if (fixed) {
+				await t.forward("TransferChecked beyond the balance", TOKEN_2022, moving.slice(0, 4), checked(1000, 6),
+					custom(1, TOKEN_2022));
+				await t.forward("TransferChecked with wrong decimals", TOKEN_2022, moving.slice(0, 4), checked(1, 5), refusal);
+				const other = await t.mint(6, 0);
+				await t.forward("TransferChecked with another mint", TOKEN_2022,
+					[moving[0], moving[1], t.meta(other, false), moving[3]], checked(1, 6), refusal);
+				await t.forward("TransferChecked by a stranger", TOKEN_2022, stranger, checked(1, 6), refusal);
+			}
+			await t.forward("Transfer beyond the balance", TOKEN_2022, bare(moving), plain(1000), custom(1, TOKEN_2022));
+			await t.forward("Transfer by a stranger", TOKEN_2022, bare(stranger), plain(1), refusal);
+			const frozen = t.svm.getAccount(from).data.slice();
+			frozen[108] = 2;
+			t.put(from, frozen);
+			await t.forward("Transfer from a frozen account", TOKEN_2022, bare(moving), plain(1), custom(17, TOKEN_2022));
+			if (fixed) {
+				await t.forward("TransferChecked from a frozen account", TOKEN_2022, moving.slice(0, 4), checked(1, 6),
+					custom(17, TOKEN_2022));
+			}
+		}
 	});
 }
 
