@@ -459,6 +459,58 @@ test "instruction dispatch gives the member an enum declares when its values run
 	assert run(programKey(), none, instructionBytes("First", []), reversedDispatchEntry).result == 0;
 }
 
+function ranByIdl(idl: JsonValue, entry: () => void): string {
+	const none: HostAccount[] = [];
+	let ran = "";
+	for (let i = 0; i < idl.instructions.length(); i++) {
+		const listed = idl.instructions.at(i);
+		const data: uint8[] = [];
+		for (let b = 0; b < 8; b++) { data.push(listed.discriminator.at(b).asInt32() as uint8); }
+		ran = ran + listed.name.asString() + "=" + String(run(programKey(), none, data, entry).result) + " ";
+	}
+	return ran;
+}
+
+test "each discriminator the IDL lists for an enum with gaps in its values runs the arm of the member it names" {
+	const parsed = JSON.parseValue(anchorIdl<SparseOp>({
+		name: "sparse",
+		address: "",
+		Alpha: [NoArrayAccounts],
+		Beta: [NoArrayAccounts],
+		Gamma: [NoArrayAccounts],
+		Zero: [NoArrayAccounts],
+		accounts: [],
+		events: [],
+		errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		assert ranByIdl(parsed.value, sparseDispatchEntry) == "alpha=" + String(ProgramError.custom(5).code) +
+			" beta=" + String(ProgramError.custom(9).code) + " gamma=" + String(ProgramError.custom(10).code) + " zero=0 ";
+		assert ranByIdl(parsed.value, sparseValueEntry) == "alpha=" + String(ProgramError.custom(1005).code) +
+			" beta=" + String(ProgramError.custom(1009).code) + " gamma=" + String(ProgramError.custom(1010).code) +
+			" zero=" + String(ProgramError.custom(1000).code) + " ";
+	}
+}
+
+test "each discriminator the IDL lists for an enum whose values run against the declaration order runs the arm of the member it names" {
+	const parsed = JSON.parseValue(anchorIdl<ReversedOp>({
+		name: "reversed",
+		address: "",
+		Last: [NoArrayAccounts],
+		Middle: [NoArrayAccounts],
+		First: [NoArrayAccounts],
+		accounts: [],
+		events: [],
+		errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		assert ranByIdl(parsed.value, reversedDispatchEntry) == "last=" + String(ProgramError.custom(2).code) +
+			" middle=" + String(ProgramError.custom(1).code) + " first=0 ";
+	}
+}
+
 let wrappedByte: uint8 = 0;
 let wrappedWord: uint16 = 0;
 let wrappedWide: uint64 = 0;
