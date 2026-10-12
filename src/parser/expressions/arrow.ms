@@ -3,8 +3,8 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, isIdentLike } from "../util";
+import { ParserState, createState, current, advance, isAtEnd, peek, markState, rewindState } from "../context";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr, exprNode } from "./util";
 
@@ -68,9 +68,11 @@ function scanParenForArrow(state: ParserState): boolean {
 	return false;
 }
 
-export function isArrowFunction(state: ParserState): boolean {
+export enum ArrowShape { No, Yes, Maybe }
+
+export function arrowShape(state: ParserState): ArrowShape {
 	// Must start with (
-	if (current(state).kind != TokenKind.LParen) { return false; }
+	if (current(state).kind != TokenKind.LParen) { return ArrowShape.No; }
 
 	const p1 = peek(state, 1);
 	// () =>  (zero params) — also handle () : Type => via scanParenForArrow,
@@ -80,41 +82,47 @@ export function isArrowFunction(state: ParserState): boolean {
 	// parsing and blows up on the unexpected `:`. Bug F.
 	if (p1.kind == TokenKind.RParen) {
 		const p2 = peek(state, 2);
-		if (p2.kind == TokenKind.Arrow) return true;
-		if (p2.kind == TokenKind.Colon) return scanParenForArrow(state);
+		if (p2.kind == TokenKind.Arrow) return ArrowShape.Yes;
+		if (p2.kind == TokenKind.Colon) return scanParenForArrow(state) ? ArrowShape.Yes : ArrowShape.No;
 	}
 
 	// Rest params: (...args) =>
-	if (p1.kind == TokenKind.DotDotDot) { return true; }
+	if (p1.kind == TokenKind.DotDotDot) { return ArrowShape.Yes; }
 
 	// Destructured params: ({ ... }) => or ([ ... ]) =>
 	// Ambiguous with paren-wrapped object/array literal expression — must verify '=>' follows
 	if (p1.kind == TokenKind.LBrace || p1.kind == TokenKind.LBracket) {
-		return scanParenForArrow(state);
+		return scanParenForArrow(state) ? ArrowShape.Maybe : ArrowShape.No;
 	}
 
 	// Must have identifier as first param
-	if (!isIdentLike(p1)) { return false; }
+	if (!isIdentLike(p1)) { return ArrowShape.No; }
 
 	const p2 = peek(state, 2);
-	// (ident) =>  (single untyped param)
-	if (p2.kind == TokenKind.RParen && peek(state, 3).kind == TokenKind.Arrow) {
-		return true;
+	// (ident) =>  (single untyped param), (ident) : Type =>  (untyped param, return type)
+	if (p2.kind == TokenKind.RParen) {
+		const p3 = peek(state, 3).kind;
+		if (p3 == TokenKind.Arrow) return ArrowShape.Maybe;
+		if (p3 == TokenKind.Colon) return scanParenForArrow(state) ? ArrowShape.Maybe : ArrowShape.No;
 	}
 
 	// (ident,  (multiple params — comma is never valid start of paren subexpr)
-	if (p2.kind == TokenKind.Comma) { return true; }
+	if (p2.kind == TokenKind.Comma) { return ArrowShape.Maybe; }
 
 	// (ident:  (typed param — colon never valid after bare ident in expression)
-	if (p2.kind == TokenKind.Colon) { return true; }
+	if (p2.kind == TokenKind.Colon) { return ArrowShape.Yes; }
 
 	// (ident = ...) — default param value. Ambiguous with paren-wrapped assignment expr.
-	if (p2.kind == TokenKind.Assign) { return scanParenForArrow(state); }
+	if (p2.kind == TokenKind.Assign) { return scanParenForArrow(state) ? ArrowShape.Maybe : ArrowShape.No; }
 
 	// (ident?...) — optional param marker (TS-only, currently unsupported but reserved)
-	if (p2.kind == TokenKind.Question) { return scanParenForArrow(state); }
+	if (p2.kind == TokenKind.Question) { return scanParenForArrow(state) ? ArrowShape.Maybe : ArrowShape.No; }
 
-	return false;
+	return ArrowShape.No;
+}
+
+export function isArrowFunction(state: ParserState): boolean {
+	return arrowShape(state) != ArrowShape.No;
 }
 
 // ===== Arrow Function Parser =====
@@ -125,8 +133,41 @@ export function parseArrowFunction(
 	blockParser: BlockParser,
 	flags: string
 ): ExprResult {
+	return parseArrowCore(state, exprParser, blockParser, flags, true, false);
+}
+
+// A parenthesized form the lookahead cannot settle: parse it as an arrow, and give back a
+// null value with the parser rewound when it is something else. `allowReturnType` is false
+// in the true arm of a conditional, where `(x): T =>` is accepted only if a `:` follows.
+export function tryParseArrowFunction(
+	state: ParserState,
+	exprParser: ExprParser,
+	blockParser: BlockParser,
+	flags: string,
+	allowReturnType: boolean
+): ExprResult {
+	const mark = markState(state);
+	const result = parseArrowCore(state, exprParser, blockParser, flags, allowReturnType, true);
+	if (result.ok && result.value == null) rewindState(state, mark);
+	return result;
+}
+
+function returnColonEndsConditional(state: ParserState, allowReturnType: boolean, hasReturnColon: boolean): boolean {
+	return !allowReturnType && hasReturnColon && (isAtEnd(state) || current(state).kind != TokenKind.Colon);
+}
+
+function parseArrowCore(
+	state: ParserState,
+	exprParser: ExprParser,
+	blockParser: BlockParser,
+	flags: string,
+	allowReturnType: boolean,
+	speculative: boolean
+): ExprResult {
+	const rejected: ExprResult = Result.ok(null as unknown as Expression);
 	const arrowToken = current(state);
 	const raw = parseParamList(state, "");
+	if (speculative && !getLastParamsClosed()) return rejected;
 	const arrowParamTypeExprs = getLastParamTypeExprs();
 	const arrowParamLocs = getLastParamLocations();
 	const arrowPatterns = getLastParamPatterns();
@@ -142,17 +183,21 @@ export function parseArrowFunction(
 	}
 
 	// Optional return type annotation: (): string => ...
+	const hasReturnColon = !isAtEnd(state) && current(state).kind == TokenKind.Colon;
 	const arrowReturnType = captureOptionalType(state);
 	const arrowRetTypeExpr = getLastTypeExpr();
 
 	if (isAtEnd(state) || current(state).kind != TokenKind.Arrow) {
+		if (speculative) return rejected;
 		return Result.err(`Expected '=>' in arrow function at line ${current(state).line}`);
 	}
 
 	advance(state); // consume =>
 	// Body: block { ... } or expression
 	if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
-		const body = prependParamPatterns(try blockParser(state), arrowPatterns, arrowParamLocs);
+		const blockBody = try blockParser(state);
+		if (returnColonEndsConditional(state, allowReturnType, hasReturnColon)) return rejected;
+		const body = prependParamPatterns(blockBody, arrowPatterns, arrowParamLocs);
 		const arrowNode1 = createNode(NodeKind.ArrowFunction, {
 			arrowParams,
 			arrowParamTypes,
@@ -167,7 +212,10 @@ export function parseArrowFunction(
 		return Result.ok(arrowNode1);
 	}
 
-	const body = prependParamPatterns(try exprParser(state, 0), arrowPatterns, arrowParamLocs);
+	state.noArrowReturnType = allowReturnType ? 0 : 1;
+	const bodyExpr = try exprParser(state, 0);
+	if (returnColonEndsConditional(state, allowReturnType, hasReturnColon)) return rejected;
+	const body = prependParamPatterns(bodyExpr, arrowPatterns, arrowParamLocs);
 	const arrowNode2 = createNode(NodeKind.ArrowFunction, {
 		arrowParams,
 		arrowParamTypes,
@@ -191,7 +239,8 @@ export function parseBareIdentArrow(
 	state: ParserState,
 	exprParser: ExprParser,
 	blockParser: BlockParser,
-	flags: string
+	flags: string,
+	allowReturnType: boolean
 ): ExprResult {
 	const identToken = current(state);
 	advance(state); // consume Ident
@@ -218,6 +267,7 @@ export function parseBareIdentArrow(
 		return Result.ok(blockNode);
 	}
 
+	state.noArrowReturnType = allowReturnType ? 0 : 1;
 	const exprBody = try exprParser(state, 0);
 	const exprNode = createNode(NodeKind.ArrowFunction, {
 		arrowParams: [identToken.value],
@@ -359,3 +409,5 @@ test "true arm paren object, next line an arrow" { assert armKinds("c ? ({ a: 1 
 test "false arm keeps return type" { assert armKinds("c ? 1 : (n): string => n") == "other/arrow"; }
 test "call in true arm takes a return type" { assert trueArmCallArgIsArrow("c ? f((n): string => n) : 1"); }
 test "true arm block body arrow ended by colon" { assert armKinds("a ? (x): string => { return x; } : null") == "arrow/other"; }
+
+test "rewound speculation gives back the token it split" { assert armKinds("t ? (y) : a < b >= c > d => d") == "other/other"; }
