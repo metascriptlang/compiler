@@ -105,17 +105,17 @@ state. A single syntax hit does not verify a row.
 | id | surface / safety axis to vary | proposed oracle / reference | present Smith state |
 |---|---|---|---|
 | H1 | sized integers, float64; add float32, char, bigint, boolean/null/void; spelling and width edges | P; R1/R2 + DESIGN numeric guards | Arithmetic types source-present; additional types not implemented. |
-| H2 | string/character/UTF-8 operations, templates and escaping, regex literals | P on specified byte/index space, S for owned values; R1/R8 | Strings only incidental to union helpers/prints; standalone family absent. |
+| H2 | string/character/UTF-8 operations, templates and escaping, regex literals | P on specified byte/index space, S for owned values; R1/R8 | Strings only incidental to union helpers/prints; standalone family absent. Surface measured (§Surfaces measured). |
 | H3 | arithmetic/comparison/bitwise/logical/ternary; all compound/update forms; nullish/optional access and operator overloads | P, explicit legal effect order; R4/R6/R7 | Scalar subset source-present, many operators absent. |
 | H4 | blocks, if/match, bounded for/while/do, for-of/in, break/continue, early return, unreachable and switch spelling | P/S, explicit fuel; R4/R5 | if, for, scalar match, loop exits and return subset source-present. |
 | H5 | routines and function values: inference/annotations, arrows/nested declarations, defaults/rest/overloads, finite recursion | P/S, depth/work fuel and exact captures; R4/R6 | Acyclic numeric functions and closure subset source-present. |
-| H6 | struct/interface/class values, fields/methods/static init/constructors, inheritance, visibility, object spread and alias/value-copy meaning | P/S; R1/R7, managed ownership not C pointer assumptions | Generic Box class only; broader aggregate shapes absent. |
+| H6 | struct/interface/class values, fields/methods/static init/constructors, inheritance, visibility, object spread and alias/value-copy meaning | P/S; R1/R7, managed ownership not C pointer assumptions | Generic Box class, plus the `agg` family (§Aggregate family): nested struct copies, `ref`, spread, `==`, class aliases. Inheritance, statics, interfaces absent. |
 | H7 | enums/BitSet, aliases/distinct/delegation, literal and discriminated types, intersections/conditional/mapped/utility types, unknown/never | P for observable meaning, D for refusal; R1/R4 | None as independent families. |
 | H8 | nullable/union narrowing and reassignment, Result/try and typed errors | P/S; R4/R5 | Scalar-or-string-or-null union subset source-present; Result absent. |
 | H9 | generics: inference/explicit args, constraints, nested/recursive instances, generic structs/interfaces/classes/methods | P/S, finite instantiation fuel; R1/R4/R6 | id/twice/pick/Box subset source-present. |
-| H10 | dynamic/fixed arrays, Vec/Span, tuples, Map/Set/Record; iteration/destructuring/default/rest/spread/index bounds | P/S, ownership and backing lifetimes; R5/R7 | Small generic arrays/closure arrays incidental; independent collections absent. |
+| H10 | dynamic/fixed arrays, Vec/Span, tuples, Map/Set/Record; iteration/destructuring/default/rest/spread/index bounds | P/S, ownership and backing lifetimes; R5/R7 | Small generic arrays/closure arrays incidental; independent collections absent. Surface measured (§Surfaces measured). |
 | H11 | conversions/coercions, extension/static/ref receivers, convention protocols, user operators | P/S or D, explicit width/type axis; R1/R7 | Numeric conversion helpers only. |
-| H12 | move/ref/out/readonly/borrow/cursor, custom lifecycle hooks; field/element sinks, cleanup after branch/loop/escape | P/S, lifetime/provenance facts; R5/R6/R7 | Scalar capture/maker/loop-closure shapes source-present; owning aggregate lifecycle absent. |
+| H12 | move/ref/out/readonly/borrow/cursor, custom lifecycle hooks; field/element sinks, cleanup after branch/loop/escape | P/S, lifetime/provenance facts; R5/R6/R7 | Scalar capture/maker/loop-closure shapes source-present; owning aggregate lifecycle absent. Surface measured: hooks are not a parity oracle (§Surfaces measured). |
 | H13 | throw/catch/finally/defer, typed throw vs Result, unwinding of partially built values | P/S and D where required; R4/R5 | Not implemented. |
 | H14 | generators/yield/delegation, iterators, nested routines across resume | P/S on supporting lanes; bounded resumes; R4/R5/R6 | Not implemented; Raiser capability must be probed, not presumed. |
 | H15 | modules/import/export/re-export/alias/cycle and backend-specific module selection | P/S with complete project bundle; R1/R6 | Single-file source only. |
@@ -321,6 +321,124 @@ stopped because a gate took the machine, and the last cut to a 7-line repro was 
 Not measured: an idle machine, `--san`, the Raiser lane, other seed ranges or batch
 sizes, the masking arm above, and any vector other than these two. Bundles are under
 `out/smith/bundles/` and the two run logs under `out/smith/g0/` (untracked).
+
+### Aggregate family (G3) — measured 2026-10-12
+
+`fams=agg` (`Fam.Agg`, `Gen.aggExpr` / `Gen.aggStatement` in `gen.ms`) adds, per scalar
+type, a nested value struct, a class that holds one, and helpers that copy, spread,
+compare, pass by `ref` and alias them. It is in the default family set and in the swarm
+draw, with 12 new weights `w.fam.agg` and `w.agg.*` (46 in all). Struct `==` is not drawn
+for `float64` fields: NaN inside a struct was not measured. Generator tree
+`f520d514854c99dbc06c858f99df9c713cd2d94c`; installed `msc` BUILD `ea7ae4d17`.
+
+| check | result |
+|---|---|
+| `gen <seed>` before and after, seeds 1..100, `cmp`: `fams=closure,union,generic` / `fams=none` / `fams=closure` / `fams=union types=int32,uint8` / `fams=generic stmts=8 depth=4 expr=4` / `fams=closure,union,generic plant=backend` | **600/600** identical: a vector without `agg` keeps its program |
+| `msc test tools/smith/gen.ms`, C / `--target=js` | **344/344**, **107/107** |
+| 3 mutants (`==` drawn for float, statement weights ignored, helpers emitted without the family) | **3/3 red**, each on its own guard |
+| `msc check` of `fams=agg`, seeds 1..20 | **20/20 clean** |
+| `run 1 12 --features="fams=agg"` | 12 clean |
+| `run 1 40 --features="fams=agg types=int32,uint8 stmts=8 w.stmt.fam=80"`, `MSCORPUS_JOBS=2` | 161 s, 39 clean, 1 wrong-code (seed 11) |
+| `run 1 40 --features="fams=closure,union,generic,agg stmts=6 w.fam.agg=3"`, `MSCORPUS_JOBS=2` | 36 clean, 4 crashes, all known: ternary hoist 3 (seeds 7, 15, 40), double negation 1 (seed 37) |
+
+Seed 11 is a new compiler bug, not an aggregate one: a struct-valued argument is hoisted
+on C and runs before an earlier operand that reads a global
+(inbox `2026-10-12-c-hoisted-argument-runs-before-an-earlier-variable-read`). The batches
+ran beside another session's gate (load 6–37), so their wall times are not throughput.
+
+With the default nine types a struct variable is rarely used again: 40 default-size
+`fams=agg types=int32,uint8` programs hold 4 spreads, 3 `ref` calls and no nested-struct
+copy; the aimed vector above holds 29, 83 and 23. Aim with `types`, `stmts` and
+`w.stmt.fam`, as for calls.
+
+Not covered by the family: inheritance, statics, getters and setters, interfaces, structs
+in arrays or closures as a drawn shape, `float64` struct equality. Not measured: SAN,
+Raiser, any batch larger than 40.
+
+### Surfaces measured for the next families — 2026-10-12
+
+Four probe sets, one per family, each run on C debug, C `--danger --cc=clang` and JS
+(node 24.1.0) with the installed `msc` BUILD `ea7ae4d17`; the ownership set also on
+`--gc=orc`. Probes and per-lane outputs are under `out/smith/g3/{h6,h10,h2,h12}/`
+(untracked). Every finding below was run again by hand before its card was written.
+"Raw" means byte-identical output on every lane measured.
+
+**H6 struct / class.** Raw: field read and write to three nesting levels over all nine
+scalar types; struct copy on assignment, argument, return, array element, class field and
+`slice`; `ref` / `out` / `readonly` struct parameters of free functions; spread; struct
+`==` (structural, also nested and with string fields); class and interface aliasing and
+identity `==`; constructors, field initializers, statics, single and multi-level
+inheritance with override and `super(…)`, getters and setters, visibility, `instanceof`.
+Refused by the checker, so never emitted: a write through a by-value struct parameter, a
+`for…of` variable or a `const` struct; a `const` passed to `ref`; methods or defaults in a
+`struct`.
+
+| never emit until fixed | split | inbox |
+|---|---|---|
+| `super.m()` | fails on every lane | `2026-10-07-super-method-call-fails-on-c-and-js` |
+| `ref` parameter on a class method | C runs, JS `SyntaxError` | `2026-10-12-js-ref-parameter-on-a-class-method-emits-invalid-js` |
+| overridable method called from a base constructor | C reads 0, JS `TypeError` | `2026-10-12-base-constructor-virtual-call-reads-subclass-field-differently-on-js` |
+| `this.x = …` before `super()` | C keeps the initializer, JS `ReferenceError` | `2026-10-12-this-before-super-passes-the-checker` |
+
+**H10 collections.** Raw: `T[]` literal, `push`, in-range index, `length`, both loop
+forms, `slice`, `concat`, `indexOf`, `includes` (no NaN), `reverse`, `map`, `join(sep)`,
+`splice`, `fill`, shrinking `setLength`; aliasing on assignment, argument, capture and
+return; arrays of arrays; `Map` and `Set` with string, integer and float keys including
+insertion order after deletes and a rehash at 60 keys; tuples and `T[N]` as values;
+one-level destructuring with defaults and rest; spread into literals and rest parameters.
+Needs a guard, because the lanes differ only on the erroneous input: an index outside
+`0..length-1` (debug and JS throw, danger continues or segfaults), `pop` / `shift` / `at`
+on an empty or short array, a destructuring pattern longer than the array, a length
+change during the array's own `for…of`. Absent from the std, so refused: `filter`,
+`reduce`, `sort`, `find`, `some`, `every`, `forEach`, `unshift`, `map` with an index.
+
+| never emit until fixed | split | inbox |
+|---|---|---|
+| member access on `Map.get` or any `P \| null` / `T[] \| null` without a null check | checker accepts; debug panics, danger segfaults | `2026-10-12-member-access-on-nullable-class-or-array-passes-the-checker` |
+| growing `setLength` | C zero-fills, JS `undefined` | `2026-10-12-js-array-setlength-grow-leaves-undefined-slots` |
+| `"text" + collection` | C `<object>`, JS contents | `2026-10-12-string-concat-of-a-collection-prints-object-on-c-and-contents-on-js` |
+| `includes(NaN)` | C false, JS true | `2026-10-12-array-includes-nan-is-false-on-c-and-true-on-js` |
+| writing a Map or Set inside its own `for…of` | C live table, JS snapshot | `2026-10-12-mutating-a-map-or-set-during-for-of-differs-between-c-and-js` |
+| nested destructuring, elided slot | refused / internal warning | `2026-10-12-nested-array-destructuring-binds-no-inner-names` |
+
+**H2 strings.** Raw, for ASCII and for BMP non-ASCII text: `+`, `+=`, templates,
+`String(x)` of every numeric type and boolean, `.length` (UTF-16 units on every lane),
+`s[i]` / `charAt` / `charCodeAt` in and out of range with an index of `int32` or narrower,
+`slice`, `substring`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`,
+`split` with a non-empty separator, `join`, `trim*`, `toUpperCase` / `toLowerCase`
+(ASCII letters only, on every lane), `repeat`, `padStart` / `padEnd`, `replace`,
+`replaceAll`, `==`, `<` `>`, every escape form, string keys in `Map` / `Set`, parsing of
+plain decimal text.
+
+| never emit until fixed | split | inbox |
+|---|---|---|
+| `s[i]` with an `int64`, `uint64` or `number` index | JS `TypeError` | `2026-10-12-js-string-index-with-an-int64-or-number-index-throws` |
+| `<` `>` or `sort` when a string may hold an astral character | C code-point order, JS UTF-16 order | `2026-10-12-string-ordering-differs-for-astral-against-high-bmp` |
+| `split("")`, `reverse()` on non-ASCII text | bytes, different on each backend | `2026-10-12-string-split-empty-and-reverse-work-on-bytes-for-non-ascii` |
+| `parseInt` / `parseFloat` / `Number` of text that is not a plain decimal in range | different values | `2026-10-12-number-parsing-of-non-decimal-text-differs-between-c-and-js` |
+| cutting or printing half of an astral character | different bytes | `2026-09-27-surrogate-concat-roundtrip` |
+
+**H12 ownership and lifecycle.** User hooks (`onDestroy`, `onCopy`, `onMove`, `onMoved`)
+run on C only; on JS no hook runs and every hook counter stays 0. So neither a print from
+a hook nor a count kept by one is a parity oracle: this family is judged by the SAN lane
+alone, and its programs must keep hook effects out of stdout. On C the destroy order and
+the per-shape copy / move counts were identical on debug, danger and orc for about 20
+shapes. Raw on every lane including JS: `ref` and `out` on scalars, strings, structs,
+arrays, fields and elements of free functions; `readonly`; `f(move a)` to a plain
+parameter. Use after `move` is refused by the C analyzer and accepted by `msc check` and
+JS (`docs/LANG.md` says the JS backend does not check moves), so a generator never reads a
+moved variable.
+
+| never emit until fixed | split | inbox |
+|---|---|---|
+| one struct variable to a `ref` and a by-value parameter of the same call | JS aliases the by-value one | `2026-10-12-js-by-value-struct-argument-aliases-a-ref-argument-of-the-same-variable` |
+| `new Box(move a)` | copies; the hook runs twice | `2026-10-12-move-into-a-constructor-argument-copies-and-leaves-the-source-readable` |
+
+Not measured by any of the four sets: Raiser, SAN or leaks (one ASan build of four
+ownership probes was clean), ESM, `--release`, Windows, Linux, generics over these types,
+`Vec` / `Span` / `Record` / `Borrow`, `onTrace` / `onClone`, async. Each "raw" row was
+varied over a second type and one nesting level, not over every type; the danger lane's
+out-of-range behaviour was seen once per case, not sampled.
 
 ## Approved order and NEW MECHANISM decisions
 
