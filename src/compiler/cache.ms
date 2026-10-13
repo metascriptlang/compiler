@@ -934,13 +934,7 @@ function getCompilerHash(ccOption: number, ccBinary: string): string {
 	let path = command.ok ? command.value.path : name;
 	const resolved = findOnPath(path);
 	if (resolved != "") path = resolved;
-	let version = command.ok ? "" : command.error.message;
-	if (command.ok) {
-		const args = command.value.args;
-		args.push("--version");
-		const r = execFileCapture(path, args);
-		version = r.ok ? r.value : r.error.errorOutput;
-	}
+	const version = ccContentIdentity(ccOption, ccBinary);
 	_compilerHashKey = name;
 	_compilerHash = compilerIdentity(name, path, fileSize(path), modifiedTime(path), version);
 	return _compilerHash;
