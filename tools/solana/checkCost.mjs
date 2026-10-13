@@ -61,34 +61,36 @@ const OPS = [
 	["accounts<7 fields>, no @address", 23],
 ];
 
-// Totals of each op when this table was last set (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
+// Totals of each op when this table was last set, 2026-10-12 (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
 // The three structs holding `rolled: Delegated<Pet>` were reset on 2026-10-10, when a Delegated field became pinned by
 // `@seeds @bump`: the canonical search costs about 430 CU that the unpinned field never paid.
+// `realloc<Pet>` rose by 45 on 2026-10-12: a growth now finds where the account's record ends in the input, the
+// bound a callee's growth cannot move (tools/solana/resizeAfterCpi.mjs).
 const BASELINE = {
-	"idle": 264,
-	"owned<Pet>": 370,
-	"mutable<Pet>": 380,
-	"delegated<Pet>": 376,
-	"accounts<Everything>": 1019,
-	"args<Parameters>": 536,
-	"createPda<Pet>": 3854,
-	"create<Pet>": 2061,
-	"pda (Mutable)": 3641,
-	"pdaWithBump (Mutable)": 2198,
-	"pda (Delegated)": 2128,
-	"pdaWithBump (Delegated)": 2189,
-	"realloc<Pet>": 643,
-	"close<Pet>": 547,
-	"instruction<Dispatch> (last)": 402,
-	"external<Mint>": 483,
-	"externalMutable<TokenAccount>": 510,
-	"accounts<3 fields>": 508,
-	"accounts<3 fields> + @seeds @bump(account.field)": 2229,
-	"accounts<3 fields> + @seeds @bump": 3685,
-	"accounts<3 fields> + @hasOne": 555,
-	"accounts<3 fields> + @constraint": 528,
-	"accounts<7 fields> + @address": 1050,
-	"accounts<7 fields>, no @address": 1011,
+	"idle": 166,
+	"owned<Pet>": 230,
+	"mutable<Pet>": 259,
+	"delegated<Pet>": 229,
+	"accounts<Everything>": 763,
+	"args<Parameters>": 304,
+	"createPda<Pet>": 2102,
+	"create<Pet>": 1820,
+	"pda (Mutable)": 911,
+	"pdaWithBump (Mutable)": 610,
+	"pda (Delegated)": 709,
+	"pdaWithBump (Delegated)": 715,
+	"realloc<Pet>": 549,
+	"close<Pet>": 426,
+	"instruction<Dispatch> (last)": 318,
+	"external<Mint>": 358,
+	"externalMutable<TokenAccount>": 397,
+	"accounts<3 fields>": 271,
+	"accounts<3 fields> + @seeds @bump(account.field)": 494,
+	"accounts<3 fields> + @seeds @bump": 814,
+	"accounts<3 fields> + @hasOne": 289,
+	"accounts<3 fields> + @constraint": 258,
+	"accounts<7 fields> + @address": 786,
+	"accounts<7 fields>, no @address": 757,
 };
 
 function u64(value) {

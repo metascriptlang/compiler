@@ -103,8 +103,6 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	if (elem.kind == TypeKind.String) {
 		return makeRcInfo(RcKind.Named, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink", true);
 	}
-	// Nested array elements (e.g. string[][]) — inner arrays are value-type structs.
-	// Reference: forallElements recursively calls fillBody per element.
 	if (elem.kind == TypeKind.Array) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 	if (elem.kind == TypeKind.Tuple) {
 		if (!classifyType(elem, ctx).needsCleanup) {

@@ -5,7 +5,7 @@ import { refusePrivateField, declaresReadonlyField, hiddenPrivateField, declarin
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, isIterator, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, isLockedRef, spelled, peelThrough, PEEL_ALL, literalBase, getResultErrType, isValuePointee, classParentOf, getIteratorYieldType, isNullableShape } from "./types";
+import { peelTransparentInstance, isIterator, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, isLockedRef, spelled, peelThrough, PEEL_ALL, literalBase, getResultErrType, isValuePointee, classParentOf, getIteratorYieldType, isNullableShape } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor } from "./context";
 import { isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch, scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates, CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
@@ -1825,6 +1825,17 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 }
 
+// A direct `null as T` needs a T that admits null. Through `unknown` the cast only
+// reinterprets a pointer, so it stays open for the kinds whose slot is one.
+function nullCastAllowed(target: Type, throughUnknown: boolean): boolean {
+	const refusal = unknownRefusal(target);
+	const bare = skipModifier(target) ?? target;
+	if (throughUnknown) {
+		return (refusal != UnknownRefusal.Value && !isArrayShaped(bare) && !isStdCollection(bare)) || isFunctionKind(target);
+	}
+	return refusal != UnknownRefusal.Value && refusal != UnknownRefusal.Builtin && bare.kind != TypeKind.Ref;
+}
+
 function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	let d = node.data as TypeAssertionData;
 	// Non-null assertion `expr!` (sentinel asType "!"): strip the nullable
@@ -1932,10 +1943,9 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (!isUnresolvedType(targetType) && targetType.kind != TypeKind.Null
 		&& d.asExpr != null && d.asExpr.kind == NodeKind.NullLiteral) {
 		const throughUnknown = srcType != null && isUnknownType(srcType);
-		if (!hasGenericParams(targetType) && !isAssignable(nullType(), targetType)
-			&& unknownRefusal(targetType) == UnknownRefusal.Value && !(throughUnknown && isFunctionKind(targetType))) {
+		if (!hasGenericParams(targetType) && !isAssignable(nullType(), targetType) && !nullCastAllowed(targetType, throughUnknown)) {
 			const held = throughUnknown ? "unknown" : "null";
-			addError(ctx, "cannot cast " + held + " to the value type " + typeDisplayName(targetType) + " — it holds no null; write `" + typeDisplayName(targetType) + " | null`", asLoc.line, asLoc.column);
+			addError(ctx, "cannot cast " + held + " to " + typeDisplayName(targetType) + " — it holds no null; write `" + typeDisplayName(targetType) + " | null`", asLoc.line, asLoc.column);
 			node.nodeType = targetType;
 			return;
 		}
@@ -2933,7 +2943,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// IMPORTANT: only param types are contextually inferred. Return type is still inferred
 	// from body, because contextual return types may be generic (`() => T`) and would shadow
 	// the concrete inference from the body that downstream passes (lambda lifting) rely on.
-	let ctxParamTypes: Type[] = null as unknown as Type[];
+	let ctxParamTypes: Type[] = [];
 	// A `fn | null` formal is a Maybe struct — peel it so the arrow is typed from the inner fn.
 	let fnExpected = expectedType != null ? peelTransparentInstance(expectedType) : null;
 	if (fnExpected != null && isMaybeType(fnExpected) && fnExpected.typeReturn != null) {

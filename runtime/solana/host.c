@@ -69,6 +69,11 @@ uint64_t msSolHostAlloc(uint64_t size) {
     return address;
 }
 
+uint64_t msSolHostScratch(uint64_t size) {
+    if (size > MS_SOL_HOST_HEAP_SIZE - msSolHostContext()->arenaPosition) return 0;
+    return msSolHostAlloc(size);
+}
+
 static void msSolHostForget(void) {
     for (uint64_t index = 0; index < msSolHostLogCount; index++) free(msSolHostLogLines[index]);
     free(msSolHostLogLines);
@@ -496,13 +501,10 @@ static void msSolHostSetLamports(uint8_t* record, uint64_t value) {
 static uint64_t msSolHostResize(uint8_t* record, uint64_t space) {
     uint64_t length;
     memcpy(&length, record + 80, 8);
-    int32_t delta;
-    memcpy(&delta, record + 4, 4);
-    int64_t next = (int64_t)delta + (int64_t)space - (int64_t)length;
-    if (next > (int64_t)MS_SOL_MAX_PERMITTED_DATA_INCREASE) return 20ULL << 32;
-    if (space > length) memset(record + 88 + length, 0, (size_t)(space - length));
-    int32_t stored = (int32_t)next;
-    memcpy(record + 4, &stored, 4);
+    if (space > length) {
+        if (space > msSolDataRoom((uint64_t)(uintptr_t)record)) return 20ULL << 32;
+        memset(record + 88 + length, 0, (size_t)(space - length));
+    }
     memcpy(record + 80, &space, 8);
     return 0;
 }
@@ -693,6 +695,16 @@ static uint64_t msSolHostSignerBytes(uint64_t signers, uint64_t signerCount) {
     return total;
 }
 
+static int msSolHostSignersDerive(uint64_t signers, uint64_t signerCount) {
+    const uint64_t programId = msSolHostContext()->programId;
+    for (uint64_t signer = 0; signer < signerCount; signer++) {
+        const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
+        uint8_t address[32];
+        if (!msSolHostDerive(entry[0], entry[1], NULL, programId, address)) return 0;
+    }
+    return 1;
+}
+
 static void msSolHostRecordSigners(uint8_t* out, uint64_t signers, uint64_t signerCount) {
     for (uint64_t signer = 0; signer < signerCount; signer++) {
         const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
@@ -714,6 +726,10 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     const uint64_t* header = (const uint64_t*)instruction;
     uint64_t signerBytes = msSolHostSignerBytes(signers, signerCount);
     if (signerBytes == UINT64_MAX) return 13ULL << 32;
+    if (!msSolHostSignersDerive(signers, signerCount)) {
+        msSolHostFault(4, "sol_invoke_signed: Could not create program address with signer seeds: Provided seeds do not result in a valid address");
+        return 14ULL << 32;
+    }
     msSolHostInvocation* grown = (msSolHostInvocation*)realloc(msSolHostInvocations,
         (size_t)(msSolHostInvocationCount + 1) * sizeof(msSolHostInvocation));
     if (grown == NULL) abort();

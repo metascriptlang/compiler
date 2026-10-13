@@ -394,7 +394,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	// Skip for member access (char before cursor is '.') and import triggers.
 	const lineOffset = sgGetLineOffset(source, pos.line);
 	const charBefore = pos.col > 0 ? source.byteAt(lineOffset + pos.col - 1) : 0;
-	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null as unknown as string[];
+	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null;
 	if (prefix.length == 0 && charBefore != ".".code && prebuiltItems != null && prebuiltItems.length > 0) {
 		const limited = prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems;
 		cache.uri = pos.uri;

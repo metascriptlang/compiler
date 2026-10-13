@@ -8,7 +8,8 @@
 // A host without the SBF toolchain prints GUARD-SKIP after the emission checks, which the runner
 // reports as unscored.
 //
-// RED MEANS: the entry stopped declaring the table or parsing into it before MsMain, or an
+// RED MEANS: the entry stopped declaring the table or parsing into it before MsMain, refuses a
+// runtime without the instruction-data pointer in r2 (a MagicBlock ephemeral rollup), or an
 // out-of-range maximum builds.
 import { execFileResult, ExecFileResult, cwd, exit, env } from "std/process";
 import { writeFile, ensureDir, removeAll, exists, readFile } from "std/fs";
@@ -59,11 +60,14 @@ if (entry < 0) {
 }
 const body = text.slice(entry, text.length);
 const declared = body.indexOf("uint64_t accounts[MS_SOL_MAX_ACCOUNTS];");
-const parsed = body.indexOf("msSolStart(accounts, instructionData);");
+const parsed = body.indexOf("msSolStart(input, accounts, instructionData);");
 const started = body.indexOf("MsMain();");
 if (declared < 0) report("the entry does not declare the account table in its frame");
 if (parsed < 0) report("the entry does not parse the input into the table");
 if (started < 0) report("the entry does not call MsMain");
+if (body.slice(0, started < 0 ? body.length : started).contains("if (!instructionData) return")) {
+	report("the entry refuses a runtime that leaves r2 empty instead of finding the instruction data in the input");
+}
 if (declared >= 0 && parsed >= 0 && started >= 0 && !(declared < parsed && parsed < started)) {
 	report("the entry must declare the table, parse into it, then call MsMain");
 }

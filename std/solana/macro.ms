@@ -1,10 +1,10 @@
-import { Node, NodeKind, bindSym, define, getType, getTypeImpl, stringValue } from "std/meta";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
 import { readFile } from "std/fs";
-import { SEED_LIST_REQUIRED, seedTable } from "./accountSeeds";
+import { SEED_LIST_REQUIRED, seedTable, slottedTable } from "./accountSeeds";
 import {
 	argBool,
 	argBoolValid,
@@ -22,7 +22,10 @@ import {
 	argsFit,
 	instructionHasDiscriminator,
 	instructionHasWord,
+	SCRATCH_MAX_COUNT,
+	foundSigner,
 	logEvent,
+	scratchAddress,
 } from "./core";
 import {
 	createPdaAt,
@@ -349,6 +352,62 @@ export macro tokenAuthority(use: Node): Node {
 	error("@tokenAuthority is a field decorator that accounts<T>() reads; it is not called", use);
 }
 
+export macro scratch(count: Node): Node {
+	const element = getTypeArg();
+	let typeName = "";
+	if (element.kind === NodeKind.Identifier) { typeName = element.name; }
+	if (element.kind === NodeKind.TypeObject) { typeName = element.typExprTypeName; }
+	if (typeName == "") {
+		error("scratch<T>(count): T is a named type with no managed memory: a number, boolean, Pubkey, " +
+			"or a struct or fixed array of those", element);
+	}
+	function readsTwice(value: Node): boolean {
+		if (value.kind === NodeKind.NumberLiteral || value.kind === NodeKind.Identifier) { return true; }
+		if (value.kind === NodeKind.MemberExpr) { return readsTwice(value.object); }
+		if (value.kind === NodeKind.TypeAssertion) { return readsTwice(value.asExpr); }
+		if (value.kind === NodeKind.BinaryExpr) { return readsTwice(value.left) && readsTwice(value.right); }
+		return false;
+	}
+	if (!readsTwice(count)) {
+		error("scratch<T>(count): count is evaluated twice, so it is made of numbers, locals, fields, casts and " +
+			"arithmetic; bind a call to a const first", count);
+	}
+	const line = count.line;
+	const column = count.column;
+	const address: Node = {
+		kind: NodeKind.CallExpr,
+		line: line,
+		column: column,
+		callee: bindSym("scratchAddress"),
+		arguments: [{ kind: NodeKind.TypeAssertion, line: line, column: column, asExpr: count, asType: "uint64" }],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+	address.typeArg = typeName;
+	const found: Node = { kind: NodeKind.TryExpr, line: line, column: column, tryArg: address, hasCatch: false, catchVal: address };
+	const pointer: Node = {
+		kind: NodeKind.TypeAssertion,
+		line: line,
+		column: column,
+		asExpr: found,
+		asType: "Ptr<" + typeName + "[" + String(SCRATCH_MAX_COUNT as int32) + "]>",
+	};
+	const whole: Node = { kind: NodeKind.HiddenDeref, line: line, column: column, expr: pointer };
+	whole.flags = whole.flags.incl(NodeFlag.ExplicitDeref);
+	const zero: Node = {
+		kind: NodeKind.NumberLiteral,
+		line: line,
+		column: column,
+		value: 0,
+		isFloat: false,
+		intVal: 0,
+		outOfRangeText: "",
+		isBitPattern: false,
+	};
+	const range: Node = { kind: NodeKind.BinaryExpr, line: line, column: column, operator: "..", left: zero, right: count };
+	return { kind: NodeKind.ArrayAccess, line: line, column: column, array: whole, index: range };
+}
+
 export macro emit(value: Node): Node {
 	const shape = getTypeArg();
 	if (shape.kind !== NodeKind.TypeObject) {
@@ -660,7 +719,7 @@ export macro pda(account: Node, seeds: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,
 			column: seeds.column,
-			callee: bindSym("seedTable"),
+			callee: bindSym("slottedTable"),
 			arguments: [seeds],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
@@ -687,7 +746,7 @@ export macro pdaWithBump(account: Node, seeds: Node, bump: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,
 			column: seeds.column,
-			callee: bindSym("seedTable"),
+			callee: bindSym("slottedTable"),
 			arguments: [seeds],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
@@ -832,7 +891,7 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: seeds.line,
 			column: seeds.column,
-			callee: bindSym("seedTable"),
+			callee: bindSym("slottedTable"),
 			arguments: [seeds],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
@@ -889,7 +948,31 @@ export macro createMintPda(
 	};
 }
 
-export macro signed(call: Node, seeds: Node): Node {
+export macro signedPda(call: Node, pda: Node, seeds: Node): Node {
+	// The signer table of one PDA, found where the call that signs with it is written: a failure of the find
+	// returns from the enclosing function before the call runs.
+	function foundSigning(pda: Node, seeds: Node): Node {
+		const found: Node = {
+			kind: NodeKind.CallExpr,
+			line: pda.line,
+			column: pda.column,
+			callee: bindSym("foundSigner"),
+			arguments: [pda, {
+				kind: NodeKind.CallExpr,
+				line: seeds.line,
+				column: seeds.column,
+				callee: bindSym("slottedTable"),
+				arguments: [seeds],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+		return { kind: NodeKind.TryExpr, line: pda.line, column: pda.column, tryArg: found, hasCatch: false, catchVal: found };
+	}
+
+	const plain = pda.kind === NodeKind.NullLiteral;
 	if (call.kind !== NodeKind.CallExpr) {
 		error("signed(call, seeds): the first argument is the call that signs, written " +
 			"with its own arguments: signed(transfer(from, to, 10), [\"vault\", [bump]])", call);
@@ -955,8 +1038,15 @@ export macro signed(call: Node, seeds: Node): Node {
 	}
 	const lists: Node[] = signers == 0 ? [seeds] : seeds.elements;
 	const table: Node[] = [];
+	if (!plain) {
+		if (signers != 0) {
+			error("signedPda(call, pda, seeds): one PDA signs, so the seeds are one list of seeds " +
+				"without the bump, and this is a list of signers", seeds);
+		}
+		table.push(foundSigning(pda, seeds));
+	}
 	position = 0;
-	while (position < lists.length) {
+	while (plain && position < lists.length) {
 		const list = lists[position];
 		table.push({
 			kind: NodeKind.CallExpr,
@@ -999,6 +1089,18 @@ export macro signed(call: Node, seeds: Node): Node {
 	};
 	signing.typeArg = call.typeArg;
 	return signing;
+}
+
+export macro signed(call: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("signedPda"),
+		arguments: [call, { kind: NodeKind.NullLiteral, line: call.line, column: call.column, nullPlaceholder: true }, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
 }
 
 export macro delegate(accounts: Node, seeds: Node, bump: Node, config: Node): Node {

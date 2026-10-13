@@ -734,7 +734,7 @@ function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[],
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
 function declaredDefaults(defSym: Symbol | null): Node[] | null {
 	if (defSym == null) return null;
-	if (defSym.defaultParams != null && defSym.defaultParams.length > 0) return defSym.defaultParams;
+	if (defSym.defaultParams.length > 0) return defSym.defaultParams;
 	if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
 		const declData = defSym.declNode.data as FunctionDeclData;
 		if (declData.fnDefaults != null) return declData.fnDefaults;
@@ -750,7 +750,7 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	const fnDefaults = declaredDefaults(defSym);
 	// Pass parameter types so default expressions get correct type hints
 	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
-	let paramTypes: Type[] = null as unknown as Type[];
+	let paramTypes: Type[] = [];
 	let paramNames: string[] | null = null;
 	if (defSym != null && defSym.symbolType != null && defSym.symbolType.typeChildren != null) {
 		paramTypes = defSym.symbolType.typeChildren;
@@ -932,7 +932,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	const classSym = d.newCallee.resolvedSym;
 	const hasCtor = classSym != null && hasFlag(classSym, SymbolFlag.HasConstructor);
 	const declaredCtor = ctorRoutineOf(classSym);
-	let ctorFormals: Type[] = null as unknown as Type[];
+	let ctorFormals: Type[] | null = null;
 	if (hasCtor && classSym != null) {
 		const rawCtorTypes = ctorFormalTypes(declaredCtor);
 		if (rawCtorTypes != null && rawCtorTypes.length > 0) {
@@ -1290,7 +1290,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (d.arguments.length < expectedCount) {
 			const owner = constructorDeclaringClass(parentSym) ?? parentSym;
 			const defaultsFrom = owner == parentSym ? parentCtor : ctorRoutineOf(owner);
-			if (defaultsFrom != null && defaultsFrom.defaultParams != null && defaultsFrom.defaultParams.length > 0) {
+			if (defaultsFrom != null && defaultsFrom.defaultParams.length > 0) {
 				fillDefaults(ctx, d.arguments, defaultsFrom.defaultParams, expectedCount, 0, ctorParamTypes!, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
 			}
 		}
@@ -3470,7 +3470,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 	for (const cand of cands) {
 		const candType = cand.symbolType;
 		if (candType == null || candType.kind != TypeKind.Function) continue;
-		const score = scoreCandidateWithSkip(candType.typeChildren, baseArgs, getMinArity(candType), null as unknown as boolean[]);
+		const score = scoreCandidateWithSkip(candType.typeChildren, baseArgs, getMinArity(candType));
 		if (score.exactMatches < 0) continue;
 		const cmp = best == null ? 1 : cmpCandidates(score, bestScore, candType, best.symbolType);
 		if (cmp > 0) {

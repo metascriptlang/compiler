@@ -484,7 +484,7 @@ The pin is `src/test/guard/solanaStripDeployArtifact.ms`.
 ### Solana entry holds the account table in its frame — measured 2026-10-04
 
 The emitted `entrypoint` (`genProjectDispatcher`, `src/codegen/c/index.ms`) declares
-`uint64_t accounts[MS_SOL_MAX_ACCOUNTS]` and hands it to `msSolParse` (`runtime/solana/solana.h`)
+`uint64_t accounts[MS_SOL_MAX_ACCOUNTS]` and hands it to `msSolStart` (`runtime/solana/solana.h`)
 before `MsMain()`. The accessors read the table through the context and parse nothing, so no
 instruction takes its account table from the 32 KiB heap. Pins:
 `src/test/guard/solanaEntryAccountTable.ms` (the emitted entry; a maximum the runtime cannot send
@@ -497,8 +497,9 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
   at most 255 accounts: a 256th is `MaxAccountsExceeded` before the program runs
   (agave `program-runtime/src/serialization.rs:23,201-202`).
 - **Here.** `MS_SOL_MAX_ACCOUNTS` is 255 unless `--passC=-DMS_SOL_MAX_ACCOUNTS=n` says otherwise
-  (the reference's second macro argument); `0` and `256` and up are a build error. `msSolParse`
-  keeps the first `n` accounts and walks past the rest to the instruction data. The host simulator
+  (the reference's second macro argument); `0` and `256` and up are a build error. `msSolStart`
+  keeps the first `n` accounts; when the runtime leaves r2 empty it walks past the rest to the
+  instruction data. The host simulator
   parses accepted inputs the same way into a static table, but `run` refuses more than 255 accounts
   with `REFUSED` and `MaxAccountsExceeded` before calling the program, as the runtime does.
 - **Measured** on the base `4e78ec143` plus this change, platform-tools v1.57, LiteSVM 1.4.1,
@@ -566,10 +567,15 @@ both produced **7,928 B** and completed the merge. Their compute units were not 
   `scheduled` overflowed by 896 bytes in `solanaAccountLists`, `solanaCpiFrame` and
   `solanaOverloadedAggregateReturn`, and `entrypoint` by 64 in `solanaMemBuiltins`. The std cores
   that build a CPI or an event on the stack are `@noinline` (`invokeList` in `std/solana/cpi.cms`,
-  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`), and
-  the emitted `MsMain` is `__attribute__((noinline))` under `--os=solana`, so the entry's frame is
-  the account table alone: the escrow's `entrypoint` is the same 11 instructions with and without
-  LTO (the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). A CPI's account infos
+  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`). The
+  emitted `MsMain` was `__attribute__((noinline))` under `--os=solana`, so the entry's frame was
+  the account table alone (the escrow's `entrypoint` the same 11 instructions with and without
+  LTO: the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). It is now inlined
+  into `entrypoint` by the LTO merge, and when that overflows the entry frame the build prints
+  `note: the entry frame overflowed with MsMain inlined; rebuilding MsMain out of line` on stderr
+  and recompiles the dispatcher with `-DMS_SOL_MAIN_NOINLINE`, which restores the attribute
+  (`solanaMainInlines.ms`; measured numbers in `docs/BUILD-PERF.md` "Measured 2026-10-11 — MsMain
+  inlined"). A CPI's account infos
   live in the fixed 64-slot frame of `msSolInvokeMetas`, so a 64-account CPI written beside a
   one-byte buffer builds (`solanaCpiFrame.ms`) and the 65th is the macro's error. `solanaGenericSize.ms` reads per-copy
   symbol sizes and builds with `--lto=off`.

@@ -38,6 +38,8 @@ import "./genericRoutineInstances";
 import "./lexicalIdentity";
 import "./macroCodecWitness";
 import "./macroConverterValues";
+import "./macroEmitInstance";
+import "./macroEmitLaterModule";
 import "./macroFlowExpansion";
 import "./macroHiddenConversions";
 import "./macroLiteralValues";

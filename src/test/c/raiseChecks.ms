@@ -1,4 +1,5 @@
 import { compileToC } from "../helpers";
+import { hostTargetInfo } from "../../checker/types";
 
 function functionBody(code: string, name: string): string {
 	for (const line of code.split("\n")) {
@@ -129,4 +130,128 @@ test "raiseChecks: a dispatched method keeps its check, a method with no overrid
 	assert result.ok, result.error;
 	assert checksIn(result.value, "useShape") == 1;
 	assert checksIn(result.value, "usePoint") == 0;
+}
+
+const CLOSURE_HOLD_SRC = `
+function holdsClosure(x: int32): int32 {
+	const g = () => x + 1;
+	return x + 2;
+}
+function holdsBare(x: int32): int32 {
+	const g = () => 7;
+	return x + 2;
+}
+function useHolds(n: int32): int32 {
+	const a = holdsClosure(n);
+	const b = holdsBare(a);
+	return a + b;
+}
+console.log(String(useHolds(1)));
+`;
+
+test "raiseChecks: a closure value destroyed at scope exit does not make its routine raise" {
+	const result = compileToC(CLOSURE_HOLD_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useHolds") == 0;
+	assert checksIn(result.value, "holdsClosure") == 0;
+	assert checksIn(result.value, "holdsBare") == 0;
+}
+
+const IIFE_SRC = `
+function plain(x: int32): int32 { return x + 1; }
+function boom(x: int32): int32 {
+	if (x > 100) throw new Error("big");
+	return x + 1;
+}
+function iifeQuiet(x: int32): int32 { return (() => plain(x))(); }
+function iifeBare(): int32 { return (() => plain(3))(); }
+function iifeWithArg(x: int32): int32 { return ((y: int32) => plain(y + x))(2); }
+function iifeNested(x: int32): int32 { return (() => (() => plain(x))())(); }
+function iifeRaises(x: int32): int32 { return (() => boom(x))(); }
+function iifeThrows(x: int32): int32 {
+	return (() => { if (x > 100) throw new Error("big"); return x; })();
+}
+function iifeNestedRaises(x: int32): int32 { return (() => (() => boom(x))())(); }
+function useQuiet(n: int32): int32 {
+	const a = iifeQuiet(n);
+	const b = iifeBare();
+	const c = iifeWithArg(a);
+	const d = iifeNested(c);
+	return a + b + c + d;
+}
+function useRaises(n: int32): int32 {
+	const a = iifeRaises(n);
+	return a + 1;
+}
+function useThrows(n: int32): int32 {
+	const a = iifeThrows(n);
+	return a + 1;
+}
+function useNestedRaises(n: int32): int32 {
+	const a = iifeNestedRaises(n);
+	return a + 1;
+}
+console.log(String(useQuiet(1) + useRaises(2) + useThrows(3) + useNestedRaises(4)));
+`;
+
+test "raiseChecks: a closure called where it is written takes its routine's verdict" {
+	const result = compileToC(IIFE_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useQuiet") == 0;
+	assert checksIn(result.value, "iifeQuiet") == 0;
+	assert checksIn(result.value, "iifeNested") == 0;
+}
+
+test "raiseChecks: a closure called where it is written keeps the check when its body raises, nested or not" {
+	const result = compileToC(IIFE_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useRaises") == 1;
+	assert checksIn(result.value, "useThrows") == 1;
+	assert checksIn(result.value, "useNestedRaises") == 1;
+}
+
+const MANUAL_IIFE_SRC = `
+function plain(x: int32): int32 { return x + 1; }
+function boom(x: int32): int32 {
+	if (x > 100) throw new Error("big");
+	return x + 1;
+}
+function bareQuiet(): int32 { return (() => plain(2))(); }
+function bareRaises(n: int32): int32 { return (() => boom(n))(); }
+function tryQuiet(): Result<int32, string> {
+	const v = try (() => {
+		const r: Result<int32, string> = Result.ok(plain(1));
+		return r;
+	})();
+	return Result.ok(v + 1);
+}
+function useBareQuiet(): int32 {
+	const a = bareQuiet();
+	return a + 1;
+}
+function useBareRaises(n: int32): int32 {
+	const a = bareRaises(n);
+	return a + 1;
+}
+function useTryQuiet(): int32 {
+	const a = tryQuiet();
+	return a.ok ? 1 : 0;
+}
+console.log(String(useBareQuiet() + useBareRaises(1) + useTryQuiet()));
+`;
+
+test "raiseChecks: under manual memory a closure called where it is written takes its routine's verdict" {
+	const result = compileToC(MANUAL_IIFE_SRC, hostTargetInfo(), true);
+	assert result.ok, result.error;
+	assert result.value.indexOf("env = NULL }.env") >= 0;
+	assert checksIn(result.value, "bareQuiet") == 0;
+	assert checksIn(result.value, "tryQuiet") == 0;
+	assert checksIn(result.value, "useBareQuiet") == 0;
+	assert checksIn(result.value, "useTryQuiet") == 0;
+}
+
+test "raiseChecks: under manual memory a closure called where it is written keeps the check when its body raises" {
+	const result = compileToC(MANUAL_IIFE_SRC, hostTargetInfo(), true);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useBareRaises") == 1;
 }

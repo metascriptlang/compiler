@@ -946,7 +946,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.inferredReturnStmts = [];
 		const _igb0 = performance.now();
 		const outerGensym = beginGensymUnit();
-		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, cloned);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
@@ -1306,7 +1306,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 		const ctorParams: string[] = ["this"];
 		for (const p of fnParams) { ctorParams.push(p); }
 		const outerGensym = beginGensymUnit();
-		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
+		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null);
 		rewindTemplateGensym(outerGensym);
 		checkRoutineBorrows(bodyCtx, ctorDeclNode);
 		bodyCtx.modulePath = savedModulePath;

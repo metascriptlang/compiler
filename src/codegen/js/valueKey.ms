@@ -8,9 +8,9 @@
 // objects and functions, NaN never equal to itself), and a key that can hold NaN
 // goes through a native Map/Set subclass that never finds NaN.
 
-import { Type, TypeKind, TypeFlag, NodeFlag } from "../../ast/node";
+import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { NewExprData, CallExprData, Node } from "../../ast/node";
-import { distinctBody, setRepr } from "../../checker/types";
+import { distinctBody, setRepr, isStdCollectionKind } from "../../checker/types";
 import { emit, emitNode, emitJoinedNodes, JSGenerator } from "./emit";
 import { valueCopyFnName } from "./valueCopy";
 
@@ -209,10 +209,8 @@ export function emitCollectionNew(gen: JSGenerator, node: Node): boolean {
 	const d = node.data as NewExprData;
 	const called = d.newCallee.resolvedSym;
 	const sym = called != null && called.instantiatedFrom != null ? called.instantiatedFrom : called;
-	if (sym == null || sym.declNode == null || !sym.declNode.flags.has(NodeFlag.ExternC)) return false;
+	if (sym == null || !isStdCollectionKind(sym.builtinKind)) return false;
 	const isMap = sym.builtinKind == "IndexableMap";
-	const isSet = sym.builtinKind == "SetCollection";
-	if (!isMap && !isSet) return false;
 	const keyType = keyTypeOfCollection(node.nodeType);
 	const shape = valueKeyShape(keyType);
 	if (shape == null) {

@@ -53,6 +53,7 @@ import { exec, execFileCapture, execFileResult, exit, env, platform, cmdExists, 
 import { readFile, writeFile, readDir, exists, ensureDir, remove, isDir } from "std/fs";
 import { writeStderr } from "std/io";
 import { isNotFound } from "std/io/errors";
+import { sleepAsync } from "std/core/promise";
 
 const PROG_DIR = "src/test/corpus/programs/";
 const OUT_DIR = "out/corpus/";
@@ -367,6 +368,13 @@ function ensureWintime(): boolean {
 function pollSleep(posixSecs: string, winMs: int32): void {
 	if (IS_WIN) { runCapture(winPath(WINTIME) + " --sleep-ms " + winMs); return; }
 	runCapture("sleep " + posixSecs);
+}
+
+// Main thread only. A poll that spawns its own sleep takes process starts from
+// the builds it waits on: this host starts about 12 a second from one launcher
+// and 30 from eight (measured 2026-10-10), and every exec here is two of them.
+function nap(ms: int32): void {
+	await sleepAsync(ms);
 }
 
 // A binary older than the tree reports the PREVIOUS compiler's behaviour as
@@ -745,7 +753,7 @@ function readExit(c: Cell): int32 {
 		if (r.ok) { return r.value.trim().parseInt() as int32; }
 		tries = tries + 1;
 		if (tries >= 20) { return -1; }
-		pollSleep("0.05", 50);
+		nap(50);
 	}
 }
 
@@ -1278,7 +1286,7 @@ function main(): void {
 		const marker = builtText(jobs[ci]);
 		if (marker == "") {
 			launchQueued(running, queued, t, parityDone);
-			pollSleep("0.05", 50);
+			nap(50);
 			continue;
 		}
 		const code = marker.trim().split(" ")[0].parseInt() as int32;
@@ -1310,14 +1318,14 @@ function main(): void {
 
 	// drain the parallel tail
 	while (queued.length > 0 || activeCount(running) > 0) {
-		pollSleep("0.1", 100);
+		nap(100);
 		launchQueued(running, queued, t, parityDone);
 	}
 
 	// serial cells: one at a time on an otherwise idle machine
 	for (const c of pendingSerial) {
 		launchCell(c);
-		while (!cellDone(c) && !cellTimedOut(c)) { pollSleep("0.05", 50); }
+		while (!cellDone(c) && !cellTimedOut(c)) { nap(50); }
 		if (cellTimedOut(c)) { failCellTimeout(c, t); continue; }
 		settleCell(c, t, parityDone);
 	}

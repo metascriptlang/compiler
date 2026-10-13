@@ -324,3 +324,59 @@ test "closureCalling: a distinct thunk widens, and field closures and methods ta
 	const holder = new FunctionFormalHolder();
 	assert holder.run(functionFormalDouble) === 8;
 }
+
+function immediateStep(n: int32): int32 {
+	if (n > 100) throw new Error("step too big");
+	return n + 1;
+}
+
+function immediateQuiet(x: int32): int32 {
+	return (() => x + 1)();
+}
+
+function immediateRaises(x: int32): int32 {
+	return (() => immediateStep(x))();
+}
+
+function immediateNestedRaises(x: int32): int32 {
+	return (() => (() => immediateStep(x))())();
+}
+
+function immediateThrows(x: int32): int32 {
+	return (() => { if (x > 100) throw new Error("closure throws"); return x; })();
+}
+
+function immediateCaught(x: int32): string {
+	try {
+		return immediateNestedRaises(x).toString();
+	} catch (e) {
+		return "caught";
+	}
+}
+
+test "closureCalling: an immediately invoked closure returns its value, nested or not" {
+	assert immediateQuiet(1) == 2;
+	assert immediateRaises(1) == 2;
+	assert immediateNestedRaises(1) == 2;
+	assert immediateThrows(5) == 5;
+	assert ((y: int32) => immediateQuiet(y) + 10)(3) == 14;
+}
+
+test "closureCalling: an immediately invoked closure that raises reaches the enclosing catch" {
+	assert immediateCaught(1) == "2";
+	assert immediateCaught(500) == "caught";
+	let seen = "";
+	try {
+		immediateRaises(500);
+	} catch (e) {
+		seen = "direct";
+	}
+	assert seen == "direct";
+	try {
+		immediateThrows(500);
+		seen = "missed";
+	} catch (e) {
+		seen = "thrown";
+	}
+	assert seen == "thrown";
+}

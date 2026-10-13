@@ -1,0 +1,28 @@
+[package]
+name = "vault-pinocchio"
+version = "0.1.0"
+description = "Hand-written Pinocchio vault making the checks of examples/anchorBench/vault/program.ms"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+name = "vault_pinocchio"
+
+[features]
+lazy = []
+
+[dependencies]
+pinocchio = { version = "=0.11.2", default-features = false, features = ["copy"] }
+pinocchio-system = "=0.6.1"
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+
+[workspace]
+
+[profile.release]
+overflow-checks = false
+lto = "fat"
+codegen-units = 1
+opt-level = 3

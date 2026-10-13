@@ -35,6 +35,56 @@ extern char **environ;
 #endif
 #endif
 
+#if defined(__ANDROID__) && __ANDROID_API__ < 34
+/* bionic has posix_spawn from API 28 and posix_spawn_file_actions_addchdir_np from API 34.
+ * Below 34 the same calls run on fork + exec: the child touches only async-signal-safe
+ * calls, and an exec that fails exits 127 instead of failing the spawn. */
+typedef struct {
+	int count;
+	struct { int kind; int fd; int target; const char *path; } steps[8];
+} msSpawnActions;
+
+static inline int msSpawnActionsInit(msSpawnActions *actions) { actions->count = 0; return 0; }
+static inline int msSpawnActionsDestroy(msSpawnActions *actions) { (void)actions; return 0; }
+static inline int msSpawnActionsAdd(msSpawnActions *actions, int kind, int fd, int target, const char *path) {
+	if (actions->count == 8) return ENOMEM;
+	actions->steps[actions->count].kind = kind;
+	actions->steps[actions->count].fd = fd;
+	actions->steps[actions->count].target = target;
+	actions->steps[actions->count].path = path;
+	actions->count += 1;
+	return 0;
+}
+
+static inline int msSpawnFork(pid_t *pid, const char *file, int searchPath, const msSpawnActions *actions, char *const argv[], char *const envp[]) {
+	pid_t child = fork();
+	if (child < 0) return errno;
+	if (child == 0) {
+		for (int i = 0; actions != NULL && i < actions->count; i++) {
+			int failed = 0;
+			if (actions->steps[i].kind == 0) failed = close(actions->steps[i].fd);
+			else if (actions->steps[i].kind == 1) failed = dup2(actions->steps[i].fd, actions->steps[i].target) < 0;
+			else failed = chdir(actions->steps[i].path);
+			if (failed) _exit(127);
+		}
+		if (searchPath) execvpe(file, argv, envp);
+		else execve(file, argv, envp);
+		_exit(127);
+	}
+	*pid = child;
+	return 0;
+}
+
+#define posix_spawn_file_actions_t msSpawnActions
+#define posix_spawn_file_actions_init(actions) msSpawnActionsInit(actions)
+#define posix_spawn_file_actions_destroy(actions) msSpawnActionsDestroy(actions)
+#define posix_spawn_file_actions_addclose(actions, fd) msSpawnActionsAdd(actions, 0, fd, 0, NULL)
+#define posix_spawn_file_actions_adddup2(actions, fd, target) msSpawnActionsAdd(actions, 1, fd, target, NULL)
+#define posix_spawn_file_actions_addchdir_np(actions, path) msSpawnActionsAdd(actions, 2, 0, 0, path)
+#define posix_spawn(pid, file, actions, attr, argv, envp) msSpawnFork(pid, file, 0, actions, argv, envp)
+#define posix_spawnp(pid, file, actions, attr, argv, envp) msSpawnFork(pid, file, 1, actions, argv, envp)
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

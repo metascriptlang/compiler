@@ -96,7 +96,7 @@ function placeOwnedInstances(units: CheckedUnit[], classesBesideGeneric: boolean
 	}
 }
 
-export function compileToC(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
+export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false): CompileResult {
 	resetBuildState();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
@@ -116,6 +116,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	if (unit == null) return Result.err(uncheckedError(mod));
 	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+	if (manualGc) checkerCtx.gcMode = GcMode.Manual;
 	placeOwnedInstances([unit], false);
 
 	const monoed = monomorphizeProgram(unit.program, checkerCtx);

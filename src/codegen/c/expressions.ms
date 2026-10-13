@@ -2340,9 +2340,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// field (Nim nimNewObjUninit parity). The NullLiteral-skip logic below
 					// relies on the field already being zero, so we must also require that
 					// no property in this literal is a bare NullLiteral.
-					const innerStruct = (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
+					const litType = node.nodeType != null && unwrapRefNullUnion(node.nodeType) != null ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
+					const innerStruct = (litType != null && litType.kind == TypeKind.Ref) ? litType.typeReturn : litType;
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
-					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null as unknown as string[];
+					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null;
 					// Bare-NullLiteral keys are skipped by the assignment loop below and
 					// rely on the field being pre-zeroed; that's incompatible with Uninit.
 					let hasNullProp = false;

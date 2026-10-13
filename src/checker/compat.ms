@@ -530,14 +530,14 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return false;
 	}
 
-	// null assignable to legacy nullable kinds (value-struct/array/span).
-	// TS-strict shift: Ref/Ptr are NO LONGER auto-nullable — callers must use
-	// `T | null` (handled by the Union-target check above) to opt into nullability.
+	// A type written without `| null` holds no null: callers use `T | null`
+	// (handled by the Union-target check above) to opt into nullability.
 	// Cursor<T> is the deliberate exception (allowsNil arm at function entry).
 	// Void target lets callers write `Result.ok(null)` for Result<void, E> (§7.5).
 	if (source.kind == TypeKind.Null) {
+		if (isMaybeType(target)) return true;
 		return match (target.kind) {
-			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Void => true,
+			TypeKind.Void => true,
 			_ => false,
 		};
 	}
@@ -1377,8 +1377,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 	// Null to nullable (mirrors isAssignableInner's null-source switch).
 	if (actual.kind == TypeKind.Null) {
-		if (formal.kind == TypeKind.Struct || formal.kind == TypeKind.Array ||
-			formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span ||
+		if (isMaybeType(formal) ||
 			formal.kind == TypeKind.Function || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr ||
 			formal.kind == TypeKind.Void) {
 			return TypeRelation.Subtype;
@@ -1520,14 +1519,14 @@ export function isNoMatch(score: CandidateScore): boolean {
 // Maps TypeRelation → counter increments matching standard reference implementation.
 // minArity: minimum required args (default = paramTypes.length, i.e. all required).
 export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], minArity: number): CandidateScore {
-	return scoreCandidateWithSkip(paramTypes, argTypes, minArity, null as unknown as boolean[]);
+	return scoreCandidateWithSkip(paramTypes, argTypes, minArity);
 }
 
 // Score variant that treats args marked in skipMask as unconditional Subtype
 // matches (context-sensitive args in two-pass overload resolution — object
 // literals and arrow functions are re-checked with the winner's param types in
 // Pass 2, so Pass 1 scoring must not reject them for partial/incomplete typing).
-export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[], literalRels: int32[] | null = null): CandidateScore {
+export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], minArity: number, skipMask: boolean[] = [], literalRels: int32[] | null = null): CandidateScore {
 	const score = emptyCandidateScore();
 	if (argTypes.length < minArity || argTypes.length > paramTypes.length) {
 		score.exactMatches = -1;
@@ -1535,7 +1534,7 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 	}
 	// Score only provided args (default-filled params don't contribute)
 	for (let i = 0; i < argTypes.length; i += 1) {
-		if (skipMask != null && i < skipMask.length && skipMask[i]) {
+		if (i < skipMask.length && skipMask[i]) {
 			score.subtypeMatches = score.subtypeMatches + 1;
 			continue;
 		}
@@ -1771,8 +1770,9 @@ test "numeric widening" {
 }
 
 test "null to nullable" {
-	assert isAssignable(nullType(), createStruct("Foo", [], [], false));
-	assert isAssignable(nullType(), createArray(numberType()));
+	assert !isAssignable(nullType(), createStruct("Foo", [], [], false));
+	assert !isAssignable(nullType(), createArray(numberType()));
+	assert isAssignable(nullType(), createUnion([createArray(numberType()), nullType()]));
 	assert !isAssignable(nullType(), numberType());
 }
 
@@ -1854,7 +1854,7 @@ test "unknown = generic" {
 
 test "an integer into a float formal is a conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) == TypeRelation.Convertible; }
 
-test "null to object" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) == TypeRelation.Subtype; }
+test "null does not relate to an object that holds no null" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) == TypeRelation.None; }
 
 test "two object types of the same shape relate exactly, a different shape does not" {
 	const a = createRef(createStruct("", ["a", "x"], [createPrimitive(TypeKind.Int32), stringType()], true));
@@ -1917,14 +1917,14 @@ test "unknown ok compatible" {
 }
 
 test "same enum name" {
-	const e1 = createEnum("Color", ["Red", "Green"], null as unknown as number[]);
-	const e2 = createEnum("Color", ["Red", "Green"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red", "Green"]);
+	const e2 = createEnum("Color", ["Red", "Green"]);
 	assert isAssignable(e1, e2);
 }
 
 test "different enum name" {
-	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
-	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red"]);
+	const e2 = createEnum("Shape", ["Circle"]);
 	assert !isAssignable(e1, e2);
 }
 
@@ -1954,9 +1954,11 @@ test "null accepted by Ref|Null union" {
 	assert isAssignable(nullType(), u);
 }
 
-test "null to sized array" { assert isAssignable(nullType(), createSizedArray(numberType(), 4)); }
+test "null to sized array" { assert !isAssignable(nullType(), createSizedArray(numberType(), 4)); }
 
-test "null to span" { assert isAssignable(nullType(), createSpan(numberType())); }
+test "null to span" { assert !isAssignable(nullType(), createSpan(numberType())); }
+
+test "null to void" { assert isAssignable(nullType(), voidType()); }
 
 test "array to span" {
 	const arr = createArray(numberType());
@@ -2009,52 +2011,52 @@ test "different distinct name" {
 }
 
 test "enum exact" {
-	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
-	const e2 = createEnum("Color", ["Red"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red"]);
+	const e2 = createEnum("Color", ["Red"]);
 	assert typeRelation(e1, e2) == TypeRelation.Exact;
 }
 
 test "enum mismatch" {
-	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
-	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
+	const e1 = createEnum("Color", ["Red"]);
+	const e2 = createEnum("Shape", ["Circle"]);
 	assert typeRelation(e1, e2) == TypeRelation.None;
 }
 
 test "enum literal same member exact" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a1 = createEnumLiteral(e, "A");
 	const a2 = createEnumLiteral(e, "A");
 	assert typeRelation(a1, a2) == TypeRelation.Exact;
 }
 
 test "enum literal different members none" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	const b = createEnumLiteral(e, "B");
 	assert typeRelation(a, b) == TypeRelation.None;
 }
 
 test "enum literal subtype of enum" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	assert typeRelation(e, a) == TypeRelation.Subtype;
 }
 
 test "enum not assignable to enum literal" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	assert typeRelation(a, e) == TypeRelation.None;
 }
 
 test "enum literal isAssignable to enum" {
-	const e = createEnum("K", ["A", "B"], null as unknown as number[]);
+	const e = createEnum("K", ["A", "B"]);
 	const a = createEnumLiteral(e, "A");
 	assert isAssignable(a, e);
 }
 
 test "enum literal cross-enum none" {
-	const k = createEnum("K", ["A"], null as unknown as number[]);
-	const m = createEnum("M", ["A"], null as unknown as number[]);
+	const k = createEnum("K", ["A"]);
+	const m = createEnum("M", ["A"]);
 	const ka = createEnumLiteral(k, "A");
 	const ma = createEnumLiteral(m, "A");
 	assert typeRelation(ka, ma) == TypeRelation.None;

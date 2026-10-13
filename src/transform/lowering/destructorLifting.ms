@@ -2054,6 +2054,8 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const nullableRef = unwrapRefNullUnion(t);
+	if (nullableRef != null) { liftTypeOps(nullableRef, lctx, loc); return; }
 	refuseArrayOfHookedDistinct(t, lctx, loc);
 		// Skip match-type variant structs (typeName like "Alias.Key") — their
 		// hooks are emitted via the parent Union's `<Union>_v<N>` helper

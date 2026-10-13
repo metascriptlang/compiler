@@ -3,14 +3,14 @@
 
 import { DeclKind, Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
-import { accountAddressOf, keyAddressOf, seedTable } from "./accountSeeds";
+import { accountAddressOf, keyAddressOf, slottedTable } from "./accountSeeds";
 import { namedWord } from "./discriminator";
 import { ProgramError } from "./error";
 import { accountFieldsValid, zeroAccountFieldsValid } from "./accountValidation";
 import {
 	Account,
-	canonicalBump,
-	canonicalBumpOwned,
+	SlottedSeeds,
+	canonicalBumpProven,
 	closedProgramAccount,
 	createdAccount,
 	createdPdaAccount,
@@ -24,17 +24,20 @@ import {
 	conditionFailure,
 	keysFailure,
 	seedsCanonicalFailure,
-	seedsCanonicalOwnedFailure,
+	seedsCanonicalProvenFailure,
 	seedsFoldedFailure,
 	seedsFoldedGivenFailure,
 	seedsGivenFailure,
 	seedsGivenProvenFailure,
+	slottedCanonicalBump,
 	keysEqual,
 	unchecked,
 	keyIsZero,
+	mutableEnvelopeAtFailure,
 	mutableEnvelopeFailure,
+	programWordsAtFailure,
+	ownedAtFailure,
 	ownedFailure,
-	programWordsFailure,
 	resizedProgramAccount,
 	selectedInstruction,
 	transfer,
@@ -47,15 +50,19 @@ import {
 	bytesAddress,
 	fillWithBump,
 	findAddress,
-	ownProgram,
 	seedKey,
 	signerOfBumped,
 	tableAddress,
 } from "./seed";
 
 extern function msSolAccountAt(index: uint64): uint64;
+extern function msSolAccountTable(): uint64;
+extern function msSolAccountCount(): uint64;
+extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolLoadU32(address: uint64): uint32;
 extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
+extern function msSolClaimRecord(address: uint64): void;
 
 export struct Signer { private account: Account; }
 export struct WritableSigner { private account: Account; }
@@ -132,12 +139,16 @@ export function asAccount<T>(this proof: External<T>): Account { return proof.ac
 export function asAccount<T>(this proof: ExternalMutable<T>): Account { return proof.account; }
 export function asAccount<T>(this proof: Delegated<T>): Account { return proof.account; }
 
-@inline function signerProofFailure(index: int32, out proof: Signer): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+@inline function signerProofAt(address: uint64, out proof: Signer): uint64 {
 	if (msSolLoadU8(address + 1) == 0) { return ProgramError.accountNotSigner().code; }
 	proof = { account: { address: address } };
 	return 0;
+}
+
+@inline function signerProofFailure(index: int32, out proof: Signer): uint64 {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	return signerProofAt(address, proof);
 }
 
 export function signer(index: int32): Result<Signer, ProgramError> {
@@ -147,15 +158,23 @@ export function signer(index: int32): Result<Signer, ProgramError> {
 	return Result.ok(proof);
 }
 
-@inline function writableSignerProofFailure(index: int32, out proof: WritableSigner): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+@inline function writableSignerProofAt(address: uint64, out proof: WritableSigner): uint64 {
+	if (msSolLoadU32(address + 1) == 0x0101) {
+		proof = { account: { address: address } };
+		return 0;
+	}
 	if (msSolLoadU8(address + 1) == 0) { return ProgramError.accountNotSigner().code; }
 	const duplicated = duplicateFailure(address);
 	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
 	proof = { account: { address: address } };
 	return 0;
+}
+
+@inline function writableSignerProofFailure(index: int32, out proof: WritableSigner): uint64 {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	return writableSignerProofAt(address, proof);
 }
 
 export function writableSigner(index: int32): Result<WritableSigner, ProgramError> {
@@ -165,14 +184,22 @@ export function writableSigner(index: int32): Result<WritableSigner, ProgramErro
 	return Result.ok(proof);
 }
 
-@inline function writableProofFailure(index: int32, out proof: Writable): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+@inline function writableProofAt(address: uint64, out proof: Writable): uint64 {
+	if (msSolLoadU32(address + 2) == 1) {
+		proof = { account: { address: address } };
+		return 0;
+	}
 	const duplicated = duplicateFailure(address);
 	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
 	proof = { account: { address: address } };
 	return 0;
+}
+
+@inline function writableProofFailure(index: int32, out proof: Writable): uint64 {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	return writableProofAt(address, proof);
 }
 
 @inline function writablePdaProofFailure(index: int32, out proof: WritablePda): uint64 {
@@ -193,13 +220,10 @@ export function writablePda(index: int32): Result<WritablePda, ProgramError> {
 }
 
 // The proof keeps the canonical bump the declared `@seeds(..) @bump` found: Anchor's `ctx.bumps.<field>`.
-export function seedsFoundFailure(ref proof: WritablePda, seeds: Readonly<Span<SeedSlice>>): uint64 {
-	const found = findAddress(seeds, ownProgram());
+export function seedsFoundFailure(ref proof: WritablePda, seeds: SlottedSeeds): uint64 {
+	const found = slottedCanonicalBump(proof.account, seeds);
 	if (!found.ok) { return found.error.code; }
-	if (!keysEqual(proof.account.keyAddress(), bytesAddress(found.value.key.bytes))) {
-		return ProgramError.constraintSeeds().code;
-	}
-	proof.bump = found.value.bump;
+	proof.bump = found.value;
 	return 0;
 }
 
@@ -278,19 +302,23 @@ export struct Pda<T> {
 	bump: uint8;
 }
 
-@inline function programProofFailure<P>(index: int32, out proof: Program<P>): uint64 {
-	let found: Account;
-	const failure = programWordsFailure(
-		index,
+@inline function programProofAt<P>(address: uint64, out proof: Program<P>): uint64 {
+	const failure = programWordsAtFailure(
+		address,
 		@comptime { return P.id().word(0); },
 		@comptime { return P.id().word(1); },
 		@comptime { return P.id().word(2); },
 		@comptime { return P.id().word(3); },
-		found,
 	);
 	if (failure != 0) { return failure; }
-	proof = { account: found };
+	proof = { account: { address: address } };
 	return 0;
+}
+
+@inline function programProofFailure<P>(index: int32, out proof: Program<P>): uint64 {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	return programProofAt<P>(address, proof);
 }
 
 @inline export function program<P>(index: int32): Result<Program<P>, ProgramError> {
@@ -298,6 +326,14 @@ export struct Pda<T> {
 	const failure = programProofFailure<P>(index, proof);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
+}
+
+@inline function ownedProofAt<T>(address: uint64, out proof: Owned<T>): uint64 {
+	const failure = ownedAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+	if (failure != 0) { return failure; }
+	if (!accountFieldsValid<T>(address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
+	proof = { account: { address: address } };
+	return 0;
 }
 
 @inline function ownedProofFailure<T>(index: int32, out proof: Owned<T>): uint64 {
@@ -314,6 +350,15 @@ export struct Pda<T> {
 	const failure = ownedProofFailure<T>(index, proof);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
+}
+
+@inline function mutableProofAt<T>(address: uint64, out proof: Mutable<T>): uint64 {
+	const failure = mutableEnvelopeAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+	if (failure != 0) { return failure; }
+	if (!accountFieldsValid<T>(address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
+	msSolClaimRecord(address);
+	proof = { account: { address: address } };
+	return 0;
 }
 
 @inline function mutableProofFailure<T>(index: int32, out proof: Mutable<T>): uint64 {
@@ -507,7 +552,7 @@ export function create<T>(
 export function createPdaOf<T>(
 	payer: WritableSigner,
 	target: Writable,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<Pda<T>, ProgramError> {
 	const _zeroFields = zeroAccountFieldsValid<T>();
 	const space = 8 + (sizeof(T) as uint64);
@@ -549,15 +594,15 @@ export function createPdaAt<T>(
 
 export function verifiedPda<T>(
 	this account: Mutable<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<Pda<T>, ProgramError> {
-	const bump = try canonicalBumpOwned(account.account, seeds);
+	const bump = try canonicalBumpProven(account.account, seeds);
 	return Result.ok({ account: account, bump: bump });
 }
 
 export function verifiedPdaWithBump<T>(
 	this account: Mutable<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 	bump: uint8,
 ): Result<Pda<T>, ProgramError> {
 	const given = try givenBumpOwned(account.account, seeds, bump);
@@ -566,14 +611,14 @@ export function verifiedPdaWithBump<T>(
 
 export function verifiedPda<T>(
 	this account: Delegated<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 ): Result<uint8, ProgramError> {
-	return canonicalBump(account.account, seeds);
+	return slottedCanonicalBump(account.account, seeds);
 }
 
 export function verifiedPdaWithBump<T>(
 	this account: Delegated<T>,
-	seeds: Readonly<Span<SeedSlice>>,
+	seeds: SlottedSeeds,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
 	return givenBump(account.account, seeds, bump);
@@ -925,6 +970,16 @@ export macro accounts(): Node {
 	}));
 	chain.push(declare(failure, "uint64", whole(0, shape)));
 	chain.push(declare(holder, decl.interfaceName, null as unknown as Node));
+	chain.push(declare("$table", "uint64", call(bindSym("msSolAccountTable")!, [], shape)));
+	chain.push({
+		kind: NodeKind.IfStmt, line: line, column: column,
+		condition: {
+			kind: NodeKind.BinaryExpr, line: line, column: column, operator: "<",
+			left: call(bindSym("msSolAccountCount")!, [], shape), right: whole(decl.interfaceFields.length, shape),
+		},
+		consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
+			assignFailure(whole(ProgramError.accountNotEnoughKeys().code as number, shape), shape)] },
+	});
 	let field = 0;
 	while (field < decl.interfaceFields.length) {
 		const written = decl.interfaceFieldTypes[field];
@@ -996,7 +1051,18 @@ export macro accounts(): Node {
 		if (base == "Program") { direct = bindSym("programProofFailure"); }
 		if (base == "External") { direct = bindSym("externalProofFailure"); }
 		if (base == "ExternalMutable") { direct = bindSym("externalMutableProofFailure"); }
-		const verdict = call(direct!, [index, proof], shape);
+		let atKernel: Node | null = null;
+		if (base == "Signer") { atKernel = bindSym("signerProofAt"); }
+		if (base == "Mutable") { atKernel = bindSym("mutableProofAt"); }
+		if (base == "WritableSigner") { atKernel = bindSym("writableSignerProofAt"); }
+		if (base == "Writable") { atKernel = bindSym("writableProofAt"); }
+		if (base == "Program") { atKernel = bindSym("programProofAt"); }
+		if (base == "Owned") { atKernel = bindSym("ownedProofAt"); }
+		const slot = call(bindSym("msSolLoadU64")!, [{
+			kind: NodeKind.BinaryExpr, line: line, column: column, operator: "+",
+			left: ident("$table", shape), right: whole(field * 8, shape),
+		}], shape);
+		const verdict = atKernel == null ? call(direct!, [index, proof], shape) : call(atKernel!, [slot, proof], shape);
 		if (base == "External" || base == "ExternalMutable") { verdict.arguments.push(ident(rejected, shape)); }
 		verdict.typeArg = inner;
 		chain.push(guard(assignFailure(verdict, shape)));
@@ -1132,7 +1198,7 @@ export macro accounts(): Node {
 				list.push(rewrite(seeded.macroArgs[seed]));
 				seed = seed + 1;
 			}
-			const table = call(bindSym("seedTable")!, [{
+			const table = call(bindSym("slottedTable")!, [{
 				kind: NodeKind.ArrayLiteral,
 				line: seeded.line,
 				column: seeded.column,
@@ -1207,7 +1273,7 @@ export macro accounts(): Node {
 					checks.push(attempt(call(bindSym("seedsFoundFailure")!, [member(ident(holder, seeded), self, seeded), table], seeded), seeded));
 				} else {
 					checks.push(attempt(call(
-						programOwned ? bindSym("seedsCanonicalOwnedFailure")! : bindSym("seedsCanonicalFailure")!,
+						programOwned ? bindSym("seedsCanonicalProvenFailure")! : bindSym("seedsCanonicalFailure")!,
 						[key, table],
 						seeded,
 					), seeded));

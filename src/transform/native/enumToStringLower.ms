@@ -176,7 +176,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		if (enumNode != null) {
 			const d = enumNode.data as EnumDeclData;
 			const loc = enumNode.location;
-			const toStringFn = makeEnumToString(null, d.enumName + "_toString", createEnum(d.enumName, d.enumMembers, null as unknown as number[]), loc);
+			const toStringFn = makeEnumToString(null, d.enumName + "_toString", createEnum(d.enumName, d.enumMembers), loc);
 			newStmts.push(toStringFn);
 		}
 		i = i + 1;

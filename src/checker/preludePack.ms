@@ -674,9 +674,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 				for (const sf of s.staticFields) enqSym(sf, false);
 			}
 			enqNode(s.declNode);
-			if (s.defaultParams != null) {
-				for (const dp of s.defaultParams) enqNode(dp);
-			}
+			for (const dp of s.defaultParams) enqNode(dp);
 			continue;
 		}
 		if (nodeCursor < nodes.length) {
@@ -753,7 +751,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		if (s.staticFields != null) {
 			for (const sf of s.staticFields) stf.push(idxSym(sf));
 		}
-		const dp = s.defaultParams != null ? idxs(s.defaultParams) : "-";
+		const dp = idxs(s.defaultParams);
 		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}`);
 	}
 
@@ -1063,10 +1061,10 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.SwitchCase) return { caseTests: parseNodeArr(f[0], nodes), caseStmts: parseNodeArr(f[1], nodes), isDefault: f[2] == "1" } as NodeData;
 	if (kind == NodeKind.UnreachableStmt) return { unreachableMsg: unescapeP(f[0]) } as NodeData;
 	if (kind == NodeKind.MatchStmt) return { matchStmtDisc: nd(f[0].parseInt() as int32, nodes) as Node, matchStmtCases: parseNodeArr(f[1], nodes) } as NodeData;
-	if (kind == NodeKind.ImportDecl) return { importNames: splitCsv(f[0]), importAliases: splitCsv(f[1]), importSource: unescapeP(f[2]), nameLocations: f[3] == "-" ? null as unknown as SourceLocation[] : parseLocs(f[3]) } as NodeData;
+	if (kind == NodeKind.ImportDecl) return { importNames: splitCsv(f[0]), importAliases: splitCsv(f[1]), importSource: unescapeP(f[2]), nameLocations: parseLocs(f[3]) } as NodeData;
 	if (kind == NodeKind.ExportDecl) return { exportedDecl: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeAliasDecl) return { aliasName: unescapeP(f[0]), aliasType: unescapeP(f[1]), aliasIsDistinct: f[2] == "1", aliasGenericParams: unescapeP(f[3]), discriminantName: unescapeP(f[4]), discriminantType: unescapeP(f[5]), variantKeys: splitCsv(f[6]), variantTypes: splitCsv(f[7]), nameLocation: parseLoc(f[8]) } as NodeData;
-	if (kind == NodeKind.EnumDecl) return { enumName: unescapeP(f[0]), enumMembers: splitCsv(f[1]), enumValues: parseFloatsCsv(f[2]), nameLocation: parseLoc(f[3]), memberLocations: f[4] == "-" ? null as unknown as SourceLocation[] : parseLocs(f[4]), enumInits: parseNodeArr(f[5], nodes) } as NodeData;
+	if (kind == NodeKind.EnumDecl) return { enumName: unescapeP(f[0]), enumMembers: splitCsv(f[1]), enumValues: parseFloatsCsv(f[2]), nameLocation: parseLoc(f[3]), memberLocations: parseLocs(f[4]), enumInits: parseNodeArr(f[5], nodes) } as NodeData;
 	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return { interfaceName: unescapeP(f[0]), interfaceFields: splitCsv(f[1]), interfaceFieldTypes: splitCsv(f[2]), interfaceExtends: splitCsv(f[3]), nameLocation: parseLoc(f[4]), interfaceFieldVisibility: splitCsv(f[5]), interfaceFieldDecorators: parseNestedNodeArrs(f[6], nodes) } as NodeData;
 	if (kind == NodeKind.ClassDecl) return { className: unescapeP(f[0]), classDisplayName: unescapeP(f[1]), classExtends: unescapeP(f[2]), classBody: parseNodeArr(f[3], nodes), nameLocation: parseLoc(f[4]) } as NodeData;
 	if (kind == NodeKind.PropertyDecl) return { propName: unescapeP(f[0]), propType: unescapeP(f[1]), propIsStatic: f[2] == "1", propIsReadonly: f[3] == "1", propVisibility: unescapeP(f[4]), propInitializer: nd(f[5].parseInt() as int32, nodes) as Node } as NodeData;
@@ -1269,7 +1267,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		s.staticFields = stf;
 		s.staticOwner = symOwnerIdx[i] >= 0 && symOwnerIdx[i] < syms.length ? syms[symOwnerIdx[i]] : null;
 		s.declNode = symDeclIdx[i] >= 0 && symDeclIdx[i] < nodes.length ? nodes[symDeclIdx[i]] : null as unknown as Node;
-		s.defaultParams = symDpRaw[i] == "-" ? null as unknown as Node[] : parseNodeArr(symDpRaw[i], nodes);
+		s.defaultParams = parseNodeArr(symDpRaw[i], nodes);
 	}
 	if (packDebug) console.log(`[pack:r] T+S linked ms=${performance.now() - _r0}`);
 
@@ -1278,8 +1276,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		n.nodeType = nodeTypeRef[i] >= 0 && nodeTypeRef[i] < types.length ? types[nodeTypeRef[i]] : null as unknown as Type;
 		n.resolvedSym = nodeSymRef[i] >= 0 && nodeSymRef[i] < syms.length ? syms[nodeSymRef[i]] : null as unknown as Symbol;
 		n.typeExpr = nd(nodeTeRef[i], nodes) as Node;
-		n.typeExprs = nodeTesRaw[i] == "-" ? null as unknown as Node[] : parseNodeArr(nodeTesRaw[i], nodes);
-		n.paramLocations = nodePlsRaw[i] == "-" ? null as unknown as SourceLocation[] : parseLocs(nodePlsRaw[i]);
+		n.typeExprs = nodeTesRaw[i] == "-" ? null : parseNodeArr(nodeTesRaw[i], nodes);
+		n.paramLocations = nodePlsRaw[i] == "-" ? null : parseLocs(nodePlsRaw[i]);
 		if (nodePssRaw[i] != "-") {
 			const pss: Symbol[] = [];
 			for (const k of parseIntsCsv(nodePssRaw[i])) {

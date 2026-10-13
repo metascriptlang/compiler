@@ -8,7 +8,7 @@ import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAn
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
-import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arrow";
+import { ArrowShape, arrowShape, parseArrowFunction, tryParseArrowFunction, parseBareIdentArrow } from "./arrow";
 import { parseObjectLiteral } from "./object";
 import { parseJsxRoot } from "./jsx";
 import { parseExprList, parseCallExpr, takeListEndComments } from "./call";
@@ -54,6 +54,7 @@ registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(toke
 // syntax: expr = primary (postfix)* (binop primary (postfix)*)* ('?' expr ':' expr)?
 // syntax: postfix = '(' args ')' | '.' ID | '?.' ID | '[' expr ']' | '++' | '--' | 'as' type
 function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
+	const arrowReturnTypeBan = state.noArrowReturnType;
 	let left = try parsePrimary(state);
 
 	// Postfix operators: call, member access, optional chaining, array indexing, update
@@ -202,6 +203,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 		if (isRightAssociative(op.kind)) {
 			nextPrec = prec;
 		}
+		if (isRightAssociative(op.kind) && op.kind != TokenKind.StarStar) state.noArrowReturnType = arrowReturnTypeBan;
 		const right = try parseExprWithPrec(state, nextPrec);
 		if (afterOperator.length > 0) {
 			for (const c of right.comments) afterOperator.push(c);
@@ -221,10 +223,12 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 		if (ternaryPrec >= minPrec) {
 			const qToken = current(state);
 			advance(state);
+			state.noArrowReturnType = 1;
 			const consequent = try parseExprWithPrec(state, 0);
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
 				advance(state);
 			}
+			state.noArrowReturnType = arrowReturnTypeBan;
 			const alternate = try parseExprWithPrec(state, ternaryPrec);
 			left = createNode(NodeKind.ConditionalExpr, {
 				ternaryCondition: left,
@@ -287,6 +291,8 @@ function rewrapUnderAssertion(operand: Node, wrap: (inner: Node) => Node): Node 
 
 function parsePrimary(state: ParserState): ExprResult {
 	const token = current(state);
+	const allowArrowReturnType = state.noArrowReturnType == 0;
+	state.noArrowReturnType = 0;
 
 	// JSX — the lexer emits JsxTagStart only for JSX, so no disambiguation here.
 	if (token.kind == TokenKind.JsxTagStart) {
@@ -340,7 +346,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// trailing `=>` belongs to the match arm, so `2 when flag => 200` must parse
 	// the guard as `flag`, not as the arrow function `flag => 200`.
 	if (token.kind == TokenKind.Ident && peek(state, 1).kind == TokenKind.Arrow && state.noBareArrow == 0) {
-		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "");
+		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
 	}
 
 	if (token.kind == TokenKind.Ident ||
@@ -352,8 +358,13 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	// Arrow function or parenthesized expression
 	if (token.kind == TokenKind.LParen) {
-		if (isArrowFunction(state)) {
+		const shape = arrowShape(state);
+		if (shape == ArrowShape.Yes) {
 			return parseArrowFunction(state, parseExprWithPrec, blockParser, "");
+		}
+		if (shape == ArrowShape.Maybe) {
+			const arrow = tryParseArrowFunction(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
+			if (!arrow.ok || arrow.value != null) return arrow;
 		}
 		advance(state);
 		const expr = try parseExprWithPrec(state, 0);
@@ -525,13 +536,18 @@ function parsePrimary(state: ParserState): ExprResult {
 		// as the plain bare-ident arrow above — match-guard `=>` ownership)
 		if (isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.Arrow && state.noBareArrow == 0) {
 			advance(state); // consume 'async'
-			return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "async");
+			return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "async", allowArrowReturnType);
 		}
 		// async arrow: async () => ... or async (x) => ...; `async(x)` alone is a call
 		if (peek(state, 1).kind == TokenKind.LParen) {
 			advance(state); // consume 'async'
-			if (isArrowFunction(state)) {
+			const shape = arrowShape(state);
+			if (shape == ArrowShape.Yes) {
 				return parseArrowFunction(state, parseExprWithPrec, blockParser, "async");
+			}
+			if (shape == ArrowShape.Maybe) {
+				const arrow = tryParseArrowFunction(state, parseExprWithPrec, blockParser, "async", allowArrowReturnType);
+				if (!arrow.ok || arrow.value != null) return arrow;
 			}
 			return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
 		}

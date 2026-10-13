@@ -4,6 +4,8 @@ import { LiteSVM } from "litesvm";
 import {
 	AccountRole,
 	address,
+	getAddressDecoder,
+	getAddressEncoder,
 	appendTransactionMessageInstruction,
 	createKeyPairSignerFromPrivateKeyBytes,
 	createTransactionMessage,
@@ -14,6 +16,7 @@ import {
 	signTransactionMessageWithSigners,
 } from "@solana/kit";
 import { SUITES, SYSTEM, mainnetFeatures } from "./anchorSuites.mjs";
+import { onCurve, hashAt } from "./onCurve.mjs";
 
 function accountSnapshot(svm, keys) {
 	return keys.map(key => {
@@ -26,7 +29,11 @@ function accountSnapshot(svm, keys) {
 const faults = process.env.BENCH_REFUSALS ? [
 	"empty-data", "unknown-tag", "readonly", "missing-signer", "wrong-owner", "bad-discriminator", "wrong-program-id",
 	"missing-account", "short-args", "bad-utf8", "label-too-long", "invalid-threshold",
+	"oncurve-pda", "oncurve-pda-at-rent", "oncurve-pda-above-rent",
 ] : [];
+
+const BAD_SEEDS_LOG = "Could not create program address with signer seeds";
+const CPI_DEPTH_TWO = "invoke [2]";
 
 const variants = process.argv.slice(2).map((arg) => {
 	const [suite, label, encoding, path] = arg.split(":");
@@ -128,6 +135,32 @@ for (const variant of variants) {
 			data = new Uint8Array(data);
 			data[variant.encoding === "anchor" ? 8 : 1] = 0;
 		}
+		let onCurveBump = null;
+		if (fault?.startsWith("oncurve-pda")) {
+			if (suite.name !== "multisig" || !["create", "execute_transfer"].includes(kase.name)) continue;
+			if (fault !== "oncurve-pda" && kase.name !== "create") continue;
+			const encoder = getAddressEncoder();
+			const program = Buffer.from(encoder.encode(programId));
+			const index = kase.name === "create" ? 1 : 2;
+			const seeds = kase.name === "create"
+				? [Buffer.from("multisig"), Buffer.from(encoder.encode(payer.address))]
+				: [Buffer.from("vault"), Buffer.from(encoder.encode(built.accounts[0].account))];
+			let canonical = 255;
+			while (onCurve(hashAt(seeds, canonical, program))) canonical--;
+			onCurveBump = canonical + 1;
+			if (onCurveBump > 255) {
+				console.log(`FAIL ${variant.suite}:${variant.label} ${kase.name}/${fault}: the seeds have no on-curve bump above the canonical one`);
+				failures++;
+				continue;
+			}
+			const target = getAddressDecoder().decode(hashAt(seeds, onCurveBump, program));
+			built.accounts[index].account = target;
+			const rent = svm.minimumBalanceForRentExemption(398n);
+			const balance = kase.name === "execute_transfer" ? 1_000_000_000n
+				: fault === "oncurve-pda-at-rent" ? rent : fault === "oncurve-pda-above-rent" ? rent * 2n : 0n;
+			if (balance > 0n) svm.setAccount({ address: target, data: new Uint8Array(0), executable: false,
+				lamports: lamports(balance), programAddress: SYSTEM, space: 0n });
+		}
 		const watched = [...new Set([...originalKeys, ...built.accounts.map(m => m.account)]
 			.filter(key => key !== payer.address && key !== SYSTEM))];
 		const before = accountSnapshot(svm, watched);
@@ -158,6 +191,14 @@ for (const variant of variants) {
 			if (!failed || !unchanged) {
 				console.log(`FAIL ${variant.suite}:${variant.label} ${kase.name}/${fault}: refused=${failed} unchanged=${unchanged}`);
 				failures++;
+			}
+			if (onCurveBump !== null) {
+				const logs = meta.logs().join("\n");
+				if (process.env.BENCH_LOGS) console.log(`--- ${variant.suite}:${variant.label} ${kase.name}/${fault}\n${logs}`);
+				if (!logs.includes(BAD_SEEDS_LOG) || logs.includes(CPI_DEPTH_TWO)) {
+					console.log(`FAIL ${variant.suite}:${variant.label} ${kase.name}/${fault}: the runtime must refuse the signer before any CPI runs\n${logs}`);
+					failures++;
+				}
 			}
 			continue;
 		}

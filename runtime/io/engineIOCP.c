@@ -226,7 +226,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	req->fd = fd;
 	req->buf = (char*)malloc((size_t)maxBytes + 1);
 	req->len = maxBytes;
-	msFuture_msString* fut = msFutureCreateT(msFuture_msString);
+	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
 
 	msIocpOv* iov = allocOv(e, req);
@@ -342,7 +342,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	req->fd = handle;
 	req->buf = (char*)malloc(MS_FS_WATCH_BUFFER);
 	req->len = MS_FS_WATCH_BUFFER;
-	msFuture_msString* fut = msFutureCreateT(msFuture_msString);
+	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
 	msIocpOv* iov = allocOv(e, req);
 	BOOL armed = ReadDirectoryChangesW((HANDLE)(intptr_t)handle, req->buf, MS_FS_WATCH_BUFFER, recursive != 0,

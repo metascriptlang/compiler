@@ -85,9 +85,9 @@ import {
 	invokeList,
 	invokeSigned,
 } from "./index";
-import { SignerSeeds, hashAddressWithBump, seedText } from "./seed";
-import { seedTable } from "./accountSeeds";
-import { closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, unchecked } from "./core";
+import { SignerSeeds, findExpected, seedText, tableAddress } from "./seed";
+import { seedTable, slottedTable } from "./accountSeeds";
+import { canonicalBump, canonicalBumpOwned, canonicalBumpProven, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, slottedCanonicalBump, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
 import { HostAccount, invocations, logs, rentReads, run, setClock, signerIs, textBytes } from "./host";
 import {
@@ -103,9 +103,13 @@ import {
 	programAddress,
 	programAddressOf,
 	seeds,
+	scratch,
 	signed,
+	signedPda,
 } from "./macro";
 import { anchorIdl } from "./idl";
+import { HYDRA_PROGRAM_ID } from "./hydra";
+import { MAGIC_PROGRAM_ID, MAGIC_VAULT_ID } from "./magicblock";
 import { Node, NodeKind, bindSym } from "std/meta";
 import { sha256 } from "std/crypto/sha256";
 import { isEdwardsPoint } from "std/crypto/ed25519/point";
@@ -115,6 +119,7 @@ extern function msSolProgramId(): uint64;
 extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
 extern function msSolStoreU8(address: uint64, value: uint8): void;
 extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolHashAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
 
 
 export struct Counter {
@@ -947,6 +952,26 @@ function richCounter(length: int32, lamports: uint64): HostAccount {
 	return counter;
 }
 
+function growCreatedStep(): Result<uint64, ProgramError> {
+	const target = (try instructionData().readU16(0)) as uint64;
+	const fresh = try account(1);
+	const _created = try createAccount(try account(0), fresh, 100, 48, programKey());
+	const _grown = try fresh.resize(target);
+	return Result.ok(0);
+}
+
+function growCreatedEntry(): void { codeOf(growCreatedStep()); }
+
+test "an account a CPI created grows only into the bytes the runtime reserved for it before the CPI" {
+	const kept = [wallet(1, 10000000), wallet(2, 0), wallet(3, 77)];
+	assert run(programKey(), kept, sizeBytes(10240), growCreatedEntry).result == 0;
+	assert kept[1].data.length == 10240 && kept[2].lamports == 77;
+	for (const beyond of [10241, 10248, 10288, 20480]) {
+		const refused = [wallet(1, 10000000), wallet(2, 0), wallet(3, 77)];
+		assert run(programKey(), refused, sizeBytes(beyond), growCreatedEntry).result == ProgramError.invalidRealloc().code;
+	}
+}
+
 const tenSol: uint64 = 10000000000;
 const fiveSol: uint64 = 5000000000;
 
@@ -1140,6 +1165,9 @@ test "accounts<T>() verifies each field by its proof type, in declaration order"
 		ProgramError.invalidProgramId().code;
 	const short = [owner, counter];
 	assert run(programKey(), short, [], bumpAccountsEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
+	const shortAndUnsigned = [unsignedOwner, counter];
+	assert run(programKey(), shortAndUnsigned, [], bumpAccountsEntry).result ==
 		ProgramError.accountNotEnoughKeys().code;
 }
 
@@ -2007,7 +2035,7 @@ function keyBytes(key: Pubkey): uint8[] {
 }
 
 function vaultSigner(): uint8[][] {
-	return [textBytes("vault"), keyBytes(keyOf(5)), [7]];
+	return [textBytes("vault"), keyBytes(keyOf(5)), [5]];
 }
 
 function counterSigner(): uint8[][] {
@@ -2054,18 +2082,18 @@ function signingStep(): Result<uint64, ProgramError> {
 	const op = try instructionData().readU8(0);
 	const first = try account(0);
 	const second = try account(1);
-	if (op == 0) { return signed(transfer(first, second, 10), ["vault", keyOf(5), [7]]); }
+	if (op == 0) { return signed(transfer(first, second, 10), ["vault", keyOf(5), [5]]); }
 	if (op == 1) {
-		return signed(createAccount(first, second, 100, 8, keyOf(9)), ["vault", keyOf(5), [7]]);
+		return signed(createAccount(first, second, 100, 8, keyOf(9)), ["vault", keyOf(5), [5]]);
 	}
-	if (op == 2) { return signed(assignTo(second, keyOf(9)), ["vault", keyOf(5), [7]]); }
-	if (op == 3) { return signed(allocate(second, 16), ["vault", keyOf(5), [7]]); }
+	if (op == 2) { return signed(assignTo(second, keyOf(9)), ["vault", keyOf(5), [5]]); }
+	if (op == 3) { return signed(allocate(second, 16), ["vault", keyOf(5), [5]]); }
 	if (op == 4) {
-		return signed(createProgramAccount(first, second, 16, keyOf(9)), ["vault", keyOf(5), [7]]);
+		return signed(createProgramAccount(first, second, 16, keyOf(9)), ["vault", keyOf(5), [5]]);
 	}
-	if (op == 5) { return signed(ping(second), ["vault", keyOf(5), [7]]); }
+	if (op == 5) { return signed(ping(second), ["vault", keyOf(5), [5]]); }
 	if (op == 6) {
-		return signed(ping(second), [["vault", keyOf(5), [7]], ["counter", [7]]]);
+		return signed(ping(second), [["vault", keyOf(5), [5]], ["counter", [7]]]);
 	}
 	if (op == 11) {
 		return signed(ping(second), [
@@ -2077,15 +2105,15 @@ function signingStep(): Result<uint64, ProgramError> {
 	}
 	if (op == 13) {
 		return signed(ping(second), [
-			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+			[16], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
 		]);
 	}
 	if (op == 8) { return signed(ping(second), ["k", first, second, [7]]); }
 	if (op == 14) { return forwardSigned(ping(second), ["k", first, second, [7]]); }
-	if (op == 9) { return signed(ping(second), [[7]]); }
+	if (op == 9) { return signed(ping(second), [[6]]); }
 	if (op == 10) {
 		const wide: uint64 = 258;
-		return signed(ping(second), [["a", leBytes(wide)], [[1], [2]], [first, "z"]]);
+		return signed(ping(second), [["b", leBytes(wide)], [[1], [4]], [first, "z"]]);
 	}
 	return ping(second);
 }
@@ -2118,12 +2146,12 @@ test "a signer list takes a string, an account, a byte array, and a list of list
 	assert signerIs(calls[0], 0, [textBytes("k"), keyBytes(keyOf(1)), keyBytes(keyOf(2)), [7]]);
 	signingRun(9, wallet(2, 5000));
 	calls = invocations();
-	assert calls.length == 1 && calls[0].signers == 1 && signerIs(calls[0], 0, [[7]]);
+	assert calls.length == 1 && calls[0].signers == 1 && signerIs(calls[0], 0, [[6]]);
 	signingRun(10, wallet(2, 5000));
 	calls = invocations();
 	assert calls.length == 1 && calls[0].signers == 3;
-	assert signerIs(calls[0], 0, [textBytes("a"), [2, 1, 0, 0, 0, 0, 0, 0]]);
-	assert signerIs(calls[0], 1, [[1], [2]]);
+	assert signerIs(calls[0], 0, [textBytes("b"), [2, 1, 0, 0, 0, 0, 0, 0]]);
+	assert signerIs(calls[0], 1, [[1], [4]]);
 	assert signerIs(calls[0], 2, [keyBytes(keyOf(1)), textBytes("z")]);
 }
 
@@ -2288,6 +2316,214 @@ test "createPda signs with its seeds and the found bump" {
 		assert calls.length == 1 && calls[0].signers == 1;
 		assert signerIs(calls[0], 0, [textBytes("counter"), [derived.value.bump]]);
 	}
+}
+
+function createPdaByteSeedStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, ["counter", [7]]);
+	return Result.ok(0);
+}
+
+function createPdaByteSeedEntry(): void { codeOf(createPdaByteSeedStep()); }
+
+test "createPda keeps a one-byte seed of its own apart from the slot the found bump goes into" {
+	const derived = findProgramAddressOf(programKey(), ["counter", [7]]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaByteSeedEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [7], [derived.value.bump]]);
+	}
+}
+
+function createPdaFifteenStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	return Result.ok(0);
+}
+
+function createPdaFifteenEntry(): void { codeOf(createPdaFifteenStep()); }
+
+function createPdaSixteenStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]);
+	return Result.ok(0);
+}
+
+function createPdaSixteenEntry(): void { codeOf(createPdaSixteenStep()); }
+
+test "createPda signs with fifteen seeds and the bump, and refuses sixteen seeds before it creates anything" {
+	const derived = findProgramAddressOf(programKey(), [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaFifteenEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1 && calls[0].signerSeeds[0].length == 16;
+	}
+	const refused = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), refused, [], createPdaSixteenEntry).result == ProgramError.maxSeedLengthExceeded().code;
+	assert invocations().length == 0;
+}
+
+function vaultHashAt(bump: uint8): Pubkey {
+	let preimage: uint8[] = [118, 97, 117, 108, 116];
+	for (const byte of keyOf(5).bytes) { preimage.push(byte); }
+	preimage.push(bump);
+	for (const byte of programKey().bytes) { preimage.push(byte); }
+	for (const byte of "ProgramDerivedAddress".asBytes()) { preimage.push(byte); }
+	return { bytes: sha256(preimage).bytes };
+}
+
+function vaultCanonicalBump(): uint8 {
+	for (let bump = 255; bump >= 1; bump--) {
+		if (!isEdwardsPoint(vaultHashAt(bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function vaultAliasBump(): uint8 {
+	for (let bump = (vaultCanonicalBump() as int32) - 1; bump >= 1; bump--) {
+		if (!isEdwardsPoint(vaultHashAt(bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function vaultFundedAt(key: Pubkey, lamports: uint64): HostAccount {
+	return { ...blank(key), lamports: lamports };
+}
+
+test "the vault seeds put an on-curve hash above the canonical bump and an off-curve alias below it" {
+	assert isEdwardsPoint(vaultHashAt(255).bytes);
+	assert vaultCanonicalBump() < 255 && vaultCanonicalBump() > 1;
+	assert vaultAliasBump() > 0 && vaultAliasBump() < vaultCanonicalBump();
+	assert !isEdwardsPoint(vaultHashAt(vaultAliasBump()).bytes);
+}
+
+function findExpectedEntry(): void {
+	const seeds = seedTable(["vault", keyOf(5)]);
+	const program = msSolProgramId();
+	const canonical = vaultCanonicalBump();
+	const found = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(canonical).bytes));
+	if (!found.ok || found.value != canonical) { failWith(ProgramError.userError(1)); return; }
+	const above = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(255).bytes));
+	if (!above.ok || above.value != 255) { failWith(ProgramError.userError(2)); return; }
+	const alias = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(vaultAliasBump()).bytes));
+	if (alias.ok || alias.error.code != ProgramError.invalidSeeds().code) { failWith(ProgramError.userError(3)); return; }
+	const elsewhere = findExpected(seeds, program, msSolSpanAddress(keyOf(77).bytes));
+	if (elsewhere.ok) { failWith(ProgramError.userError(4)); return; }
+	const sixteen = findExpected(seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]), program, msSolSpanAddress(keyOf(77).bytes));
+	if (sixteen.ok || sixteen.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(5)); }
+}
+
+test "findExpected takes the canonical bump, lets an on-curve hash above it match, and refuses a lower off-curve alias and sixteen seeds" {
+	assert run(programKey(), [], [], findExpectedEntry).result == 0;
+}
+
+function createVaultPdaStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, ["vault", keyOf(5)]);
+	return Result.ok(0);
+}
+
+function createVaultPdaEntry(): void { codeOf(createVaultPdaStep()); }
+
+test "createPda at the canonical address signs with the canonical bump" {
+	const accounts = [wallet(1, 10000000), blank(vaultHashAt(vaultCanonicalBump()))];
+	assert run(programKey(), accounts, [], createVaultPdaEntry).result == 0;
+	const calls = invocations();
+	assert calls.length == 1 && signerIs(calls[0], 0, [textBytes("vault"), keyBytes(keyOf(5)), [vaultCanonicalBump()]]);
+}
+
+test "createPda at an address on the curve fails inside the CPI and creates nothing, funded or not" {
+	for (const funded of [0, 1, 10000000]) {
+		const accounts = [wallet(1, 10000000), vaultFundedAt(vaultHashAt(255), funded as uint64)];
+		const outcome = run(programKey(), accounts, [], createVaultPdaEntry);
+		assert outcome.result == ProgramError.invalidSeeds().code;
+		assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+		assert invocations().length == 0;
+		assert accounts[1].lamports == funded as uint64 && accounts[1].data.length == 0 && accounts[1].owner.equals(Pubkey.zero());
+		assert accounts[0].lamports == 10000000;
+	}
+}
+
+test "createPda refuses a lower off-curve alias and another address with ConstraintSeeds before any CPI" {
+	for (const key of [vaultHashAt(vaultAliasBump()), keyOf(77)]) {
+		const accounts = [wallet(1, 10000000), blank(key)];
+		const outcome = run(programKey(), accounts, [], createVaultPdaEntry);
+		assert outcome.result == ProgramError.constraintSeeds().code && outcome.fault == "";
+		assert invocations().length == 0;
+		assert accounts[1].lamports == 0 && accounts[1].data.length == 0;
+	}
+}
+
+function signedVaultStep(): Result<uint64, ProgramError> {
+	const vault = try account(0);
+	const recipient = try account(1);
+	return signedPda(transfer(vault, recipient, 10), vault, ["vault", keyOf(5)]);
+}
+
+function signedVaultEntry(): void { codeOf(signedVaultStep()); }
+
+test "signedPda signs a transfer with the canonical bump it found" {
+	const accounts = [vaultFundedAt(vaultHashAt(vaultCanonicalBump()), 1000), wallet(2, 5000)];
+	assert run(programKey(), accounts, [], signedVaultEntry).result == 0;
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("vault"), keyBytes(keyOf(5)), [vaultCanonicalBump()]]);
+	assert accounts[0].lamports == 990 && accounts[1].lamports == 5010;
+}
+
+test "signedPda sends an address on the curve to the runtime, which refuses it, and sends a lower alias nowhere" {
+	const onCurve = [vaultFundedAt(vaultHashAt(255), 1000), wallet(2, 5000)];
+	const outcome = run(programKey(), onCurve, [], signedVaultEntry);
+	assert outcome.result == ProgramError.invalidSeeds().code;
+	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+	assert invocations().length == 0 && onCurve[0].lamports == 1000 && onCurve[1].lamports == 5000;
+	for (const key of [vaultHashAt(vaultAliasBump()), keyOf(77)]) {
+		const refused = [vaultFundedAt(key, 1000), wallet(2, 5000)];
+		const second = run(programKey(), refused, [], signedVaultEntry);
+		assert second.result == ProgramError.constraintSeeds().code && second.fault == "";
+		assert invocations().length == 0 && refused[0].lamports == 1000 && refused[1].lamports == 5000;
+	}
+}
+
+test "a signer whose seeds hash onto the curve is refused by the host before the call is recorded" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const outcome = run(programKey(), accounts, [], onCurveSignerEntry);
+	assert outcome.result == ProgramError.invalidSeeds().code;
+	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+	assert invocations().length == 0 && accounts[0].lamports == 10000 && accounts[1].lamports == 5000;
+}
+
+function onCurveSignerEntry(): void {
+	const first = account(0);
+	const second = account(1);
+	if (!first.ok || !second.ok) { return; }
+	codeOf(signed(transfer(first.value, second.value, 10), ["vault", keyOf(5), [255]]));
+}
+
+function canonicalBumpOwnedEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const bump = canonicalBumpOwned(slot.value, slottedTable(["vault", keyOf(5)]));
+	if (!bump.ok) { failWith(bump.error); return; }
+	if (bump.value != vaultCanonicalBump()) { failWith(ProgramError.userError(1)); }
+}
+
+test "canonicalBumpOwned compares the owner itself, then finds the canonical bump" {
+	const key = vaultHashAt(vaultCanonicalBump());
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), key)], [], canonicalBumpOwnedEntry).result == 0;
+	assert run(programKey(), [atKey(holder(1, Pubkey.zero(), [], false, false), key)], [], canonicalBumpOwnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [atKey(holder(1, keyOf(77), [], false, false), key)], [], canonicalBumpOwnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
 }
 
 function sameBytes(left: uint8[], right: uint8[]): boolean {
@@ -3383,7 +3619,7 @@ function ownerFirstEntry(): void {
 	const found = safeAddress(keyOf(2));
 	const slot = unchecked(0);
 	if (!slot.ok) { failWith(slot.error); return; }
-	const code = seedsGivenOwnedFailure(slot.value, seedTable(["safe", keyOf(2)]), found.bump);
+	const code = seedsGivenOwnedFailure(slot.value, slottedTable(["safe", keyOf(2)]), found.bump);
 	if (code != 0) { failWith({ code: code }); }
 }
 
@@ -3403,7 +3639,7 @@ function ownedWrongBumpEntry(): void {
 	const found = safeAddress(keyOf(2));
 	const slot = unchecked(0);
 	if (!slot.ok) { failWith(slot.error); return; }
-	const code = seedsGivenOwnedFailure(slot.value, seedTable(["safe", keyOf(2)]), found.bump - 1);
+	const code = seedsGivenOwnedFailure(slot.value, slottedTable(["safe", keyOf(2)]), found.bump - 1);
 	if (code != 0) { failWith({ code: code }); }
 }
 
@@ -3418,15 +3654,16 @@ test "the hash-only given-bump check answers ConstraintSeeds for another bump or
 }
 
 function onCurveEntry(): void {
-	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
 	const slot = unchecked(0);
-	const hashed = hashAddressWithBump(seeds, 255, msSolProgramId());
-	if (!slot.ok || !hashed.ok) { failWith(ProgramError.invalidSeeds()); return; }
-	msSolCopy(slot.value.address + 8, msSolSpanAddress(hashed.value.bytes), 32);
-	if (seedsGivenOwnedFailure(slot.value, seeds, 255) != 0) { failWith(ProgramError.userError(1)); return; }
-	if (seedsGivenFailure(slot.value.keyAddress(), seeds, 255) != ProgramError.constraintSeeds().code) {
-		failWith(ProgramError.userError(2));
+	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	if (!slot.ok || msSolHashAddress(tableAddress(seeds), 15, 255, msSolProgramId(), slot.value.keyAddress()) != 0) {
+		failWith(ProgramError.invalidSeeds());
+		return;
 	}
+	const owned = seedsGivenOwnedFailure(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]), 255);
+	if (owned != 0) { failWith(ProgramError.userError(1)); return; }
+	const given = seedsGivenFailure(slot.value.keyAddress(), slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]), 255);
+	if (given != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); }
 }
 
 test "an account not proven owned keeps the curve check, an owned one does not need it" {
@@ -3434,13 +3671,55 @@ test "an account not proven owned keeps the curve check, an owned one does not n
 	assert run(hostProgram(), [onCurve], [], onCurveEntry).result == 0;
 }
 
+function canonicalBumpEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const found = safeAddress(keyOf(2));
+	const same = canonicalBump(slot.value, seedTable(["safe", keyOf(2)]));
+	if (!same.ok || same.value != found.bump) { failWith(ProgramError.userError(1)); return; }
+	const other = canonicalBump(slot.value, seedTable(["safe", keyOf(3)]));
+	if (other.ok || other.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); return; }
+	const many = canonicalBump(slot.value, seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (many.ok || many.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(3)); return; }
+	const wide = canonicalBump(slot.value, seedTable([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]]));
+	if (wide.ok || wide.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(4)); }
+}
+
+test "canonicalBump finds the bump of the account it is given and refuses another, too many seeds and a wide seed with their codes" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), found.key)], [], canonicalBumpEntry).result == 0;
+}
+
+function slottedBumpEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const found = safeAddress(keyOf(2));
+	const same = slottedCanonicalBump(slot.value, slottedTable(["safe", keyOf(2)]));
+	if (!same.ok || same.value != found.bump) { failWith(ProgramError.userError(1)); return; }
+	const other = slottedCanonicalBump(slot.value, slottedTable(["safe", keyOf(3)]));
+	if (other.ok || other.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); return; }
+	const many = slottedCanonicalBump(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (many.ok || many.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(3)); return; }
+	const wide = slottedCanonicalBump(slot.value, slottedTable([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]]));
+	if (wide.ok || wide.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(4)); return; }
+	const proven = canonicalBumpProven(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (proven.ok || proven.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(5)); return; }
+	const given = seedsGivenFailure(slot.value.keyAddress(), slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]), found.bump);
+	if (given != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(6)); }
+}
+
+test "a slotted table finds the bump of its account and refuses another, sixteen seeds and a wide seed with the codes of the copied table" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), found.key)], [], slottedBumpEntry).result == 0;
+}
+
 function mutableBumpEntry(): void {
 	const found = safeAddress(keyOf(2));
 	const safe = mutable<Safe>(0);
 	if (!safe.ok) { failWith(safe.error); return; }
-	const checked = safe.value.verifiedPdaWithBump(seedTable(["safe", keyOf(2)]), found.bump);
+	const checked = safe.value.verifiedPdaWithBump(slottedTable(["safe", keyOf(2)]), found.bump);
 	if (!checked.ok) { failWith(checked.error); return; }
-	const wrong = safe.value.verifiedPdaWithBump(seedTable(["safe", keyOf(2)]), found.bump - 1);
+	const wrong = safe.value.verifiedPdaWithBump(slottedTable(["safe", keyOf(2)]), found.bump - 1);
 	if (wrong.ok) { failWith(ProgramError.userError(1)); return; }
 	if (wrong.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); }
 }
@@ -3622,4 +3901,107 @@ test "a create on an account closed earlier in the same instruction is refused: 
 	const accounts = [counter, wallet(2, 50), wallet(3, 10000000)];
 	assert run(programKey(), accounts, [], closeThenCreateEntry).result ==
 		ProgramError.accountBorrowFailed().code;
+}
+
+struct Crit {
+	hp: uint32;
+	alive: boolean;
+	owner: Pubkey;
+	rolls: uint16[3];
+}
+
+let scratchFirstSeen: uint64 = 0;
+let scratchSecondSeen: uint64 = 0;
+let scratchFirstKept: uint64 = 0;
+let scratchLengths: uint64 = 0;
+
+function scratchStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU8(0);
+	const first = scratch<Crit>(count as int32);
+	for (const crit of first) {
+		scratchFirstSeen = scratchFirstSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
+	}
+	for (let index = 0; index < first.length; index++) {
+		first[index].hp = 100 + (index as uint32);
+		first[index].rolls[2] = 7;
+		first[index].alive = true;
+		first[index].owner.bytes[31] = 3;
+	}
+	const second = scratch<Crit>(count as int32);
+	for (const crit of second) {
+		scratchSecondSeen = scratchSecondSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
+	}
+	for (let index = 0; index < second.length; index++) { second[index].hp = 5; }
+	for (const crit of first) { scratchFirstKept = scratchFirstKept + (crit.hp as uint64); }
+	const bytes = scratch<uint8>(3);
+	bytes[2] = 9;
+	scratchLengths = (first.length as uint64) * 100 + (second.length as uint64) * 10 + (bytes.length as uint64);
+	return Result.ok(0);
+}
+
+function scratchEntry(): void { codeOf(scratchStep()); }
+
+test "scratch hands out zeroed spans of the length asked for that never overlap" {
+	const input: uint8[] = [10];
+	assert run(programKey(), [], input, scratchEntry).result == 0;
+	assert scratchFirstSeen == 0 && scratchSecondSeen == 0;
+	assert scratchFirstKept == 1045;
+	assert scratchLengths == 10 * 100 + 10 * 10 + 3;
+}
+
+function scratchSizeStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU16(0);
+	const big = scratch<uint8>(count as int32);
+	if (big.length > 0) { big[big.length - 1] = 1; }
+	const tail = try instructionData().readU8(2);
+	if (tail == 1) {
+		const more = scratch<uint8>(1);
+		more[0] = 1;
+	}
+	return Result.ok(0);
+}
+
+function scratchSizeEntry(): void { codeOf(scratchSizeStep()); }
+
+function scratchSizeRun(count: int32, tail: uint8): uint64 {
+	const input: uint8[] = [(count & 255) as uint8, ((count >> 8) & 255) as uint8, tail];
+	return run(programKey(), [], input, scratchSizeEntry).result;
+}
+
+test "scratch answers InvalidArgument when the heap cannot hold the request, and takes what fits to the last byte" {
+	assert scratchSizeRun(0, 1) == 0;
+	let fits = 0;
+	let refused = 32768;
+	while (refused - fits > 1) {
+		const middle = (fits + refused) / 2;
+		if (scratchSizeRun(middle, 0) == 0) { fits = middle; } else { refused = middle; }
+	}
+	assert fits > 32000 && fits < 32768;
+	assert scratchSizeRun(refused, 0) == ProgramError.invalidArgument().code;
+	assert scratchSizeRun(fits, 0) == 0;
+	assert scratchSizeRun(fits, 1) == ProgramError.invalidArgument().code;
+	assert scratchSizeRun(fits - 8, 1) == 0;
+	assert scratchSizeRun(65535, 0) == ProgramError.invalidArgument().code;
+}
+
+function scratchNegativeStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU8(0);
+	const wide: int32 = (count as int32) - 1;
+	const none = scratch<uint8>(wide);
+	return Result.ok(none.length as uint64);
+}
+
+function scratchNegativeEntry(): void { codeOf(scratchNegativeStep()); }
+
+test "scratch refuses a negative count and gives an empty span for zero" {
+	const zero: uint8[] = [1];
+	assert run(programKey(), [], zero, scratchNegativeEntry).result == 0;
+	const negative: uint8[] = [0];
+	assert run(programKey(), [], negative, scratchNegativeEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "the MagicBlock and Hydra modules are linked into this test run, so their host tests run with it" {
+	assert HYDRA_PROGRAM_ID != MAGIC_PROGRAM_ID && MAGIC_VAULT_ID != MAGIC_PROGRAM_ID;
 }

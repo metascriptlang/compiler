@@ -101,8 +101,8 @@ answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = refuse at once, < 0 = skip the load check)
-      GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers
-      MSCORPUS_BUILD_JOBS optional corpus build ceiling, kept across phases
+      GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
+      MSCORPUS_BUILD_JOBS width of selector emit and corpus build workers, kept across phases; it replaces the GATE_PAR cap on them
       these limits do not cap aggregate processes or compiler-internal parallelism
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
@@ -832,10 +832,12 @@ trim_controls() {
   return 0
 }
 
+build_width() { cap_jobs "$(share_of_cores "$1")" "${corpus_build_limit:-${GATE_PAR:-}}"; }
+
 emit_width() {
   local share=2
   [ "$(find "${SLOTS_DIR:-/nonexistent}" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 1 ] || share=1
-  cap_jobs "$(share_of_cores "$share")" "${GATE_PAR:-}"
+  build_width "$share"
 }
 
 emit_batch() {
@@ -1252,7 +1254,7 @@ FAKE
 )
 
 emit_width_self_test() (
-  local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" full half
+  local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
   SLOTS_DIR="$d/slots" GATES_DIR="$d/gates"
   mkdir -p "$SLOTS_DIR/0" "$GATES_DIR"
@@ -1262,6 +1264,8 @@ emit_width_self_test() (
   [ "$full" -eq "$(cores)" ] || { printf 'FAIL emit width: a selector alone got %s of %s cores\n' "$full" "$(cores)"; bad=1; }
   [ "$(cores)" -lt 2 ] || [ "$half" -lt "$full" ] || { printf 'FAIL emit width: a selector beside another lane kept %s cores\n' "$half"; bad=1; }
   GATE_PAR=2; [ "$(emit_width)" -le 2 ] || { printf 'FAIL emit width: GATE_PAR did not cap the selector\n'; bad=1; }
+  corpus_build_limit=5
+  [ "$(cores)" -lt 6 ] || [ "$(build_width 2)" -gt 2 ] || { printf 'FAIL emit width: an explicit build width did not replace the GATE_PAR cap\n'; bad=1; }
   rm -rf "$d"
   return $bad
 )
@@ -1751,21 +1755,27 @@ solana_replays() {
     && solana_check idl-build "$CAND" build examples/escrow/idl.cms --output="$dir/escrow-idl" \
     && solana_check idl-run "$dir/escrow-idl" >"$dir/escrow-idl.json"; then
     solana_check escrow-replay node tools/solana/escrow.mjs "$dir/escrow.so" "$dir/escrow-idl.json" || rc=1
+    solana_check escrow-release-build "$CAND" build examples/escrow/program.ms --os=solana --release --output="$dir/escrowRelease.so" \
+      && { solana_check escrow-release-replay node tools/solana/escrow.mjs "$dir/escrowRelease.so" "$dir/escrow-idl.json" || rc=1; } || rc=1
   else
     rc=1
   fi
+  solana_check multisig-build "$CAND" build examples/anchorBench/multisig/program.ms --os=solana --release --output="$dir/multisig.so" \
+    && { solana_check multisig-oncurve-replay env BENCH_REFUSALS=1 node tools/solana/anchorBench.mjs "multisig:std:anchor:$dir/multisig.so" || rc=1; } || rc=1
   if solana_check heap-build "$CAND" build tools/solana/heapProbe.ms --os=solana --output="$dir/heapProbe.so"; then
     solana_check heap-replay node tools/solana/heapExhausted.mjs "$dir/heapProbe.so" || rc=1
   else
     rc=1
   fi
+  solana_check resize-build "$CAND" build tools/solana/resizeProbe.ms --os=solana --output="$dir/resizeProbe.so" \
+    && { solana_check resize-replay node tools/solana/resizeAfterCpi.mjs "$dir/resizeProbe.so" || rc=1; } || rc=1
   return $rc
 }
 
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
+  for entry in std/solana/test.cms std/solana/index.cms std/solana/vrf.ms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
     examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done
@@ -2022,7 +2032,7 @@ lane_body() {
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
-PHASES=("build" "tools boundary suite hcr tests fmt" "corpus guard" "san" "solana")
+PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "solana")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
@@ -2045,7 +2055,7 @@ for phase in "${PHASES[@]}"; do
   for lane in $todo; do case "$lane" in corpus|san) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
-  MSCORPUS_BUILD_JOBS=$(cap_jobs "$(share_of_cores "$heavy")" "${GATE_PAR:-}" "$corpus_build_limit") || exit $?
+  MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
   select_pid=""
   case " $todo " in *" suite "*|*" tests "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
@@ -2057,7 +2067,7 @@ for phase in "${PHASES[@]}"; do
     log="$OUT/$lane.log"
     : >"$OUT/$lane.scope"
     case "$lane" in build|tools) ;; *) need_cand "$lane" ;; esac
-    case "$lane" in corpus|san|tests)
+    case "$lane" in corpus|san)
       if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
       narrow="" only_csv="" lanes_csv=""

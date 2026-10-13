@@ -395,6 +395,7 @@ export struct HashSetEntry<T> {
 	key: T;
 }
 
+@builtin("StdSet")
 export class HashSet<T> {
 	data: Vec<HashSetEntry<T>>;
 	size: int32;
@@ -771,6 +772,7 @@ export struct OrderedSetEntry<T> {
 	key: T;
 }
 
+@builtin("StdSet")
 export class Set<T> {
 	entries: Vec<OrderedSetEntry<T>>;
 	indices: Vec<int32>;

@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, CallExprData, TryCatchStmtData, ExportDeclData, DecoratedDeclData, MacroInvocationData, ExprStmtData, VariableDeclData, ReturnStmtData, BinaryExprData, Symbol, SymbolKind, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, CallExprData, TryCatchStmtData, ExportDeclData, DecoratedDeclData, MacroInvocationData, ExprStmtData, VariableDeclData, ReturnStmtData, BinaryExprData, ObjectLiteralData, OutExprData, HiddenDerefData, Symbol, SymbolKind, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -12,9 +12,65 @@ interface RoutineInfo {
 }
 
 let _raisesNothing: HashSet<Symbol> = new HashSet<Symbol>();
+let _closureTargets: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
+let _tempWrites: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
 
 export function resetRaises(): void {
 	_raisesNothing = new HashSet<Symbol>();
+	_closureTargets = new HashMap<Symbol, Symbol>();
+	_tempWrites = new HashMap<Symbol, int32>();
+}
+
+function closurePairTarget(value: Readonly<Node> | null): Symbol | null {
+	if (value == null || value.kind != NodeKind.ObjectLiteral || !value.flags.has(NodeFlag.Closure)) return null;
+	const d = value.data as ObjectLiteralData;
+	for (let i = 0; i < d.keys.length; i += 1) {
+		if (d.keys[i] != "fn") continue;
+		const fn = d.properties[i];
+		const sym = fn.resolvedSym;
+		if (fn.kind == NodeKind.Identifier && sym != null && sym.symbolKind == SymbolKind.Function) return sym;
+	}
+	return null;
+}
+
+function tempOf(target: Node | null): Symbol | null {
+	if (target == null || target.kind != NodeKind.Identifier) return null;
+	const sym = target.resolvedSym;
+	return sym != null && sym.symbolKind == SymbolKind.Temp ? sym : null;
+}
+
+function noteTempWrite(sym: Symbol, value: Node | null): void {
+	const seen = _tempWrites.get(sym);
+	_tempWrites.set(sym, seen == null ? 1 : seen + 1);
+	const target = closurePairTarget(value);
+	if (target != null) _closureTargets.set(sym, target);
+}
+
+function noteTempWrites(node: Node): void {
+	if (node.kind == NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		if (node.resolvedSym != null && node.resolvedSym!.symbolKind == SymbolKind.Temp && d.initializer != null && d.initializer.kind != NodeKind.NullLiteral) {
+			noteTempWrite(node.resolvedSym!, d.initializer);
+		}
+	} else if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		const sym = tempOf(d.left);
+		if (sym != null) noteTempWrite(sym, d.operator == "=" ? d.right : null);
+	} else if (node.kind == NodeKind.OutExpr) {
+		const sym = tempOf((node.data as OutExprData).outArg);
+		if (sym != null) noteTempWrite(sym, null);
+	} else if (node.kind == NodeKind.HiddenAddr) {
+		const sym = tempOf((node.data as HiddenDerefData).expr);
+		if (sym != null) noteTempWrite(sym, null);
+	}
+}
+
+function calleeTarget(call: Readonly<Node>): Symbol | null {
+	const callee = (call.data as CallExprData).callee;
+	const sym = callee.resolvedSym;
+	if (sym == null) return closurePairTarget(callee);
+	const bound = _closureTargets.get(sym);
+	return bound != null && _tempWrites.get(sym) == 1 ? bound : sym;
 }
 
 // A routine value handed to an extern can be called from inside it.
@@ -34,11 +90,11 @@ function isDispatched(sym: Symbol): boolean {
 
 function classifyCall(call: Readonly<Node>): CallRaise {
 	const cd = call.data as CallExprData;
-	const sym = cd.callee.resolvedSym;
+	const sym = calleeTarget(call);
 	if (sym == null) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Throws)) return CallRaise.Can;
-	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(cd.arguments) ? CallRaise.Can : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.DestroyOp) || hasFlag(sym, SymbolFlag.WasMovedOp)) return CallRaise.Never;
+	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(cd.arguments) ? CallRaise.Can : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.NeverRaises)) return CallRaise.Never;
 	if (sym.symbolKind != SymbolKind.Function) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Async) || hasFlag(sym, SymbolFlag.StateMachine)) return CallRaise.Can;
@@ -69,7 +125,7 @@ function scanBody(node: Node, caught: boolean, info: RoutineInfo, routines: Hash
 			info.raises = true;
 		} else if (node.kind == NodeKind.CallExpr) {
 			const verdict = classifyCall(node);
-			const callee = (node.data as CallExprData).callee.resolvedSym;
+			const callee = calleeTarget(node);
 			if (verdict == CallRaise.Can) info.raises = true;
 			else if (verdict == CallRaise.AsBody) {
 				if (routines.has(callee!)) info.callees.push(callee!);
@@ -82,6 +138,7 @@ function scanBody(node: Node, caught: boolean, info: RoutineInfo, routines: Hash
 
 function collectRoutines(node: Node, found: Node[]): void {
 	if (node == null) return;
+	noteTempWrites(node);
 	if (node.kind == NodeKind.FunctionDecl && node.resolvedSym != null && (node.data as FunctionDeclData).fnBody != null) {
 		found.push(node);
 	}
@@ -175,7 +232,7 @@ function markStatementValues(node: Node): void {
 
 export function callCanRaise(call: Readonly<Node>): boolean {
 	const verdict = classifyCall(call);
-	if (verdict == CallRaise.AsBody) return !_raisesNothing.has((call.data as CallExprData).callee.resolvedSym!);
+	if (verdict == CallRaise.AsBody) return !_raisesNothing.has(calleeTarget(call)!);
 	return verdict == CallRaise.Can;
 }
 

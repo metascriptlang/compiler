@@ -1284,13 +1284,13 @@ function patternWritesInto(target: Node, refNode: Node): boolean {
 }
 
 function calleeParams(callee: Node | null): Type[] {
-	if (callee == null) return null as unknown as Type[];
+	if (callee == null) return [];
 	let fnType = callee.nodeType;
 	if ((fnType == null || fnType.kind != TypeKind.Function)
 			&& callee.kind == NodeKind.Identifier && callee.resolvedSym != null) {
 		fnType = callee.resolvedSym.symbolType;
 	}
-	if (fnType == null || fnType.kind != TypeKind.Function) return null as unknown as Type[];
+	if (fnType == null || fnType.kind != TypeKind.Function) return [];
 	return fnType.typeChildren;
 }
 

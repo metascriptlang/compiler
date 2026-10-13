@@ -26,12 +26,12 @@ test "isAssignable: Struct → Struct (same type)" {
 // Our hasFlag/setFlag should accept the enum type directly.
 
 test "isAssignable: Enum → number is NOT allowed" {
-	const e = createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]);
+	const e = createEnum("Color", ["Red", "Green", "Blue"]);
 	assert !isAssignable(e, numberType());
 }
 
 test "isAssignable: Enum → Enum same name" {
-	const e = createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]);
+	const e = createEnum("Color", ["Red", "Green", "Blue"]);
 	assert isAssignable(e, e);
 }
 

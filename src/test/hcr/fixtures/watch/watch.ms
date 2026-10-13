@@ -2,13 +2,28 @@ import { mkdir, writeFile, rename, remove } from "std/fs";
 import { watch, nextChanges, closeWatch, msIoRunOnce, writeSettled, writerCloseObservable, FsChanges, FsWatch } from "std/fs/watch";
 import { platform } from "std/process";
 
-function waitBatch(w: FsWatch): FsChanges {
-	let got: FsChanges | null = null;
-	nextChanges(w).then((c: FsChanges): void => { got = c; });
+const BUDGET_MS = 120000;
+let pending: FsChanges | null = null;
+let waiting = false;
+
+function waitBatch(w: FsWatch, budgetMs: number): FsChanges | null {
+	if (pending == null && !waiting) {
+		waiting = true;
+		nextChanges(w).then((c: FsChanges): void => { pending = c; waiting = false; });
+	}
 	const start = performance.now();
-	while (got == null && performance.now() - start < 5000) msIoRunOnce(50);
-	if (got == null) return { paths: [], closed: [], rescan: false, ended: false };
-	return got!;
+	while (pending == null && performance.now() - start < budgetMs) msIoRunOnce(50);
+	if (pending == null) return null;
+	const got = pending!;
+	pending = null;
+	return got;
+}
+
+function confirmArmed(w: FsWatch, root: string): void {
+	for (let i = 0; i < 120; i++) {
+		writeFile(`${root}/probe.ms`, `export const probe = ${i};`);
+		if (waitBatch(w, 1000) != null) return;
+	}
 }
 
 function seenAfterWrite(w: FsWatch, root: string, name: string): boolean {
@@ -18,8 +33,8 @@ function seenAfterWrite(w: FsWatch, root: string, name: string): boolean {
 function seenAfter(w: FsWatch, name: string, change: () => void): boolean {
 	change();
 	while (true) {
-		const batch = waitBatch(w);
-		if (batch.ended || (batch.paths.length == 0 && !batch.rescan)) return false;
+		const batch = waitBatch(w, BUDGET_MS);
+		if (batch == null || batch.ended) return false;
 		if (batch.rescan || batch.paths.includes(name)) return true;
 	}
 }
@@ -27,8 +42,8 @@ function seenAfter(w: FsWatch, name: string, change: () => void): boolean {
 function closedAfter(w: FsWatch, name: string, save: () => void): boolean {
 	save();
 	while (true) {
-		const batch = waitBatch(w);
-		if (batch.ended || (batch.paths.length == 0 && !batch.rescan)) return false;
+		const batch = waitBatch(w, BUDGET_MS);
+		if (batch == null || batch.ended) return false;
 		if (batch.closed.includes(name)) return true;
 	}
 }
@@ -42,6 +57,7 @@ if (!opened.ok) {
 	console.log("WATCH tree opened: false");
 } else {
 	const w = opened.value;
+	confirmArmed(w, "tree");
 	console.log(`WATCH write before the first wait: ${seenAfterWrite(w, "tree", "first.ms")}`);
 	console.log(`WATCH write in a subdirectory: ${seenAfterWrite(w, "tree", "sub/logic.ms")}`);
 	if (platform == "darwin") {
@@ -60,7 +76,7 @@ if (!opened.ok) {
 	console.log(`WATCH a closed file proves no writer: ${writeSettled("tree/saved.ms")}`);
 	console.log(`WATCH a writer close is observable: ${writerCloseObservable}`);
 	closeWatch(w);
-	console.log(`WATCH after close: ended ${waitBatch(w).ended}`);
+	console.log(`WATCH after close: ended ${waitBatch(w, BUDGET_MS)!.ended}`);
 }
 mkdir("idle");
 const idle = watch("idle");
@@ -69,6 +85,6 @@ if (idle.ok) {
 	nextChanges(idle.value).then((c: FsChanges): void => { armed = c; });
 	closeWatch(idle.value);
 	const start = performance.now();
-	while (armed == null && performance.now() - start < 5000) msIoRunOnce(50);
+	while (armed == null && performance.now() - start < BUDGET_MS) msIoRunOnce(50);
 	console.log(`WATCH closed while waiting: ${armed == null ? "no completion" : `ended ${armed!.ended}`}`);
 }

@@ -9,10 +9,13 @@
 // GUARD-CHECK-FAIL Module 'std/solana' has no export 'mutableFailure'
 // GUARD-CHECK-FAIL Module 'std/solana' has no export 'seedsGivenProvenFailure'
 // GUARD-CHECK-FAIL Module 'std/solana' has no export 'createPdaAt'
+// GUARD-CHECK-FAIL Module 'std/solana' has no export 'slottedSeeds'
 // GUARD-CHECK-FAIL Module 'std/solana' has no export 'keysEqual'
+// GUARD-CHECK-FAIL Module 'std/solana' has no export 'foundSigner'
+// GUARD-CHECK-FAIL Module 'std/solana' has no export 'canonicalBumpProven'
 import { Signer, signerProofFailure } from "std/solana/typed";
 import { Owned, ownedProofFailure } from "std/solana";
-import { closedProgramAccount, resizedProgramAccount, createdAccount, createdPdaAccount, createAccountAllowPrefund, mutableFailure, seedsGivenProvenFailure, createPdaAt, keysEqual } from "std/solana";
+import { closedProgramAccount, resizedProgramAccount, createdAccount, createdPdaAccount, createAccountAllowPrefund, mutableFailure, seedsGivenProvenFailure, createPdaAt, slottedSeeds, keysEqual, foundSigner, canonicalBumpProven } from "std/solana";
 
 struct PrivateFactoryPet { value: uint64; }
 

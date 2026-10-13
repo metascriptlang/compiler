@@ -360,7 +360,8 @@ export function genProjectDispatcher(
 	addNewline(b);
 
 	// MsMain — exposed for targets where user provides own entry point
-	addLine(b, targetOs == "solana" ? "__attribute__((noinline)) void MsMain(void) {" : "void MsMain(void) {");
+	if (targetOs == "solana") addLine(b, "#ifdef MS_SOL_MAIN_NOINLINE\n__attribute__((noinline))\n#endif");
+	addLine(b, "void MsMain(void) {");
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
 	addLine(b, "  msTestErrorFlag();");
@@ -396,10 +397,8 @@ export function genProjectDispatcher(
 		},
 		"solana" => {
 			addLine(b, "uint64_t entrypoint(const uint8_t* input, const uint8_t* instructionData) {");
-			addLine(b, "  if (!instructionData) return 3ULL << 32;");
 			addLine(b, "  uint64_t accounts[MS_SOL_MAX_ACCOUNTS];");
-			addLine(b, "  msSolanaEnter(input);");
-			addLine(b, "  msSolStart(accounts, instructionData);");
+			addLine(b, "  msSolStart(input, accounts, instructionData);");
 			addLine(b, "  MsMain();");
 			addLine(b, "  return msSolanaResult();");
 			addLine(b, "}");

@@ -248,7 +248,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	req->fd = fd;
 	req->buf = (char*)malloc((size_t)maxBytes + 1);
 	req->len = maxBytes;
-	msFuture_msString* fut = msFutureCreateT(msFuture_msString);
+	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
 
 	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
@@ -483,7 +483,7 @@ static void fsWatchArm(msIoEngine* e, msFsWatcher* w, msIoRequest* req) {
 }
 
 void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
-	msFuture_msString* fut = msFutureCreateT(msFuture_msString);
+	msFuture_msString* fut = msIoStringFutureCreate();
 	if (handle < 0 || handle >= _msFsWatcherCount || !_msFsWatchers[handle].open) {
 		msFutureCompleteT(fut, MS_EMPTY_STRING);
 		return fut;

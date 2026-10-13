@@ -62,7 +62,7 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -1802,7 +1802,7 @@ function hcrImagePath(outBinary: string, moduleId: string): string {
 function hcrCoreImagePath(outBinary: string, targetOs: string): string {
 	const stem = `${hcrImageStem(outBinary)}.core`;
 	if (targetOs == "windows") return `${stem}.dll`;
-	if (targetOs == "linux") return `${stem}.so`;
+	if (targetOs == "linux" || targetOs == "android") return `${stem}.so`;
 	if (targetOs == "darwin" || targetOs == "macos") return `${stem}.dylib`;
 	return "";
 }
@@ -1814,6 +1814,7 @@ test "HCR core image takes the target's shared-library extension, not the output
 	assert hcrCoreImagePath("out/module.hcr", "windows") == "out/module.core.dll";
 	assert hcrCoreImagePath("out/module.dll", "windows") == "out/module.core.dll";
 	assert hcrCoreImagePath("out/app", "linux") == "out/app.core.so";
+	assert hcrCoreImagePath("out/libapp.so", "android") == "out/libapp.core.so";
 }
 
 function linkHcrImage(objects: string[], externalInputs: string[], image: string, flags: string, opts: CliOptions): void {
@@ -1856,7 +1857,7 @@ function linkHcrImages(
 		coreInput = `${hcrImageStem(outBinary)}.core.lib`;
 		coreFlags = appendFlag(coreFlags, "-Wl,--export-all-symbols");
 		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,--out-implib,${coreInput}`));
-	} else if (opts.targetOs == "linux") {
+	} else if (opts.targetOs == "linux" || opts.targetOs == "android") {
 		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,-soname,${basename(core)}`));
 		imageFlags = appendFlag(imageFlags, "-Wl,-rpath,$ORIGIN");
 	} else if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
@@ -1963,7 +1964,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	const imagePaths: string[] = [];
 	for (const module of modules) {
 		imagePaths.push(module.modulePath);
-		facts.hcrModules.add(module.modulePath);
+		facts.hcrModules.set(module.modulePath, module.moduleId);
 	}
 	for (const info of facts.typeInfoOrder) {
 		for (const module of modules) {
@@ -2021,11 +2022,11 @@ function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], s
 	return Result.ok(modules);
 }
 
-function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi {
+function hcrManifestById(manifests: HcrModuleAbi[], moduleId: string): HcrModuleAbi | null {
 	for (const manifest of manifests) {
 		if (manifest.moduleId == moduleId) return manifest;
 	}
-	return null as unknown as HcrModuleAbi;
+	return null;
 }
 function hcrBundlesMatch(current: HcrModuleAbi[], candidate: HcrModuleAbi[]): boolean {
 	if (current.length != candidate.length) return false;
@@ -3029,6 +3030,8 @@ resetLiftedOps();
 	// that linked an orc dispatcher into a drc build (undefined msOrcCollect).
 	const hcrImageSlots: int32[] = [];
 	let hcrCoreSlot: int32 = -1;
+	let dispatcherSource = "";
+	let dispatcherSlot: int32 = -1;
 	if (hcrImages) {
 		const coreModules: string[] = [];
 		for (const mp of aliveModules) {
@@ -3047,13 +3050,15 @@ resetLiftedOps();
 		}
 	} else {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		pushDispatcherJob(cJobs, oSlots, "_dispatch", genProjectDispatcher(
+		dispatcherSource = genProjectDispatcher(
 			aliveModules,
 			entryPath,
 			opts.targetOs,
 			opts.appMode == "lib" || opts.appMode == "staticlib",
 			moduleOutputs,
-		), allFlags, opts);
+		);
+		dispatcherSlot = oSlots.length;
+		pushDispatcherJob(cJobs, oSlots, "_dispatch", dispatcherSource, allFlags, opts);
 	}
 
 	// DISPATCH + COLLECT — parallel cc over the runtime thread pool, publish
@@ -3158,7 +3163,24 @@ resetLiftedOps();
 			throw new Error(BUILD_STOPPED);
 		}
 	} else if (opts.targetOs == "solana") {
-		const linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
+		let linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
+		if (!linkRes.ok && dispatcherSlot >= 0 && reportsSbfFrameOverflow(linkRes.error)) {
+			printDiag(`${yellow("note")}: the entry frame overflowed with MsMain inlined; rebuilding MsMain out of line`);
+			const retryJobs: ModuleCompileJob[] = [];
+			const retrySlots: string[][] = [];
+			pushDispatcherJob(retryJobs, retrySlots, "_dispatch", dispatcherSource, appendFlag(allFlags, SBF_MAIN_NOINLINE_FLAG), opts);
+			const retryCodes = dispatchCompileJobs(retryJobs, opts.mode, opts.ccCompiler, opts.ccBinary, true);
+			for (const code of retryCodes) {
+				if (code != 0) {
+					printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
+					throw new Error(BUILD_STOPPED);
+				}
+			}
+			const retried = retryJobs.length > 0 ? retryJobs[0].oFile : retrySlots[0][0];
+			const stale = oSlots[dispatcherSlot][0];
+			oFiles = oFiles.map((o: string): string => o == stale ? retried : o);
+			linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
+		}
 		if (!linkRes.ok) {
 			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
