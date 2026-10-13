@@ -61,3 +61,20 @@ test "outParameterWrites: a callee that never writes a no-default type is refuse
 	const entries: MapEntry[] = [{ entryPath: "src/lib.ms", entrySource: lib }, { entryPath: "src/main.ms", entrySource: forged }];
 	assert count(entries, "'p' is not assigned on every path") == 1;
 }
+
+test "outParameterWrites: the keyword belongs to an out parameter only" {
+	const fns = "function plain(x: int32): void { }\nfunction viaRef(ref x: int32): void { x = 1; }\nfunction viaOut(out x: int32): void { x = 1; }\n";
+	const bad = "'out' is written only for an out parameter";
+	assert refused(fns + "function f(): void { let a: int32 = 0; plain(out a); }", bad) == 1;
+	assert refused(fns + "function f(): void { let a: int32 = 0; viaRef(out a); }", bad) == 1;
+	assert refused(fns + "function f(): void { let a: int32 = 0; viaOut(out a); viaOut(a); viaRef(a); }", bad) == 0;
+	assert refused(fns + "function f(): int32 { let a: int32; plain(out a); return a; }", "'a' may be read before it is assigned") == 1;
+}
+
+test "outParameterWrites: a callee that can throw does not assign the caller's variable across a catch" {
+	const fns = "function fill(out x: int32, c: boolean): void { if (c) { throw new Error(\"e\"); } x = 1; }\n";
+	const read = "'a' may be read before it is assigned";
+	assert refused(fns + "function f(): int32 { let a: int32; try { fill(out a, true); } catch (e) { } return a; }", read) == 1;
+	assert refused(fns + "function f(): int32 { let a: int32; try { fill(out a, false); return a; } catch (e) { return 0; } }", read) == 0;
+	assert refused(fns + "function f(): int32 { let a: int32; try { fill(out a, true); } catch (e) { a = 2; } return a; }", read) == 0;
+}

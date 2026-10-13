@@ -1127,7 +1127,6 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 		r = seen;
 	}
 	refuseHiddenMethodCall(ctx, node);
-	markOutArgsAssigned(ctx, node);
 	_cceTime = _cceTime + (performance.now() - _cc0);
 	return evalCompileTimeCall(ctx, node, foldTypeTrait(ctx, node, r));
 }
@@ -1145,23 +1144,8 @@ function settleUnassignedArgs(ctx: CheckerContext, from: int32): void {
 function takesOut(ctx: CheckerContext, arg: Node): void {
 	const reads = ctx.initTracker.pendingReads;
 	const at = reads.indexOf(arg);
-	if (at < 0) return;
-	if (!outArgAssigns(ctx, arg)) return;
-	reads.splice(at, 1);
-	markInitialized(ctx.initTracker, (arg.data as IdentifierData).name);
-}
-
-function outArgAssigns(ctx: CheckerContext, arg: Node): boolean {
-	return arg.resolvedSym == null || !requiresInit(ctx, arg.resolvedSym.symbolType);
-}
-
-function markOutArgsAssigned(ctx: CheckerContext, node: Node): void {
-	if (node.kind != NodeKind.CallExpr) return;
-	for (const arg of (node.data as CallExprData).arguments) {
-		if (arg.kind != NodeKind.OutExpr) continue;
-		const target = (arg.data as OutExprData).outArg;
-		if (target.kind == NodeKind.Identifier && outArgAssigns(ctx, target)) markInitialized(ctx.initTracker, (target.data as IdentifierData).name);
-	}
+	if (at >= 0) reads.splice(at, 1);
+	if (arg.kind == NodeKind.Identifier) markInitialized(ctx.initTracker, (arg.data as IdentifierData).name);
 }
 
 export function typeTraitOf(node: Node): Symbol | null {
@@ -2181,10 +2165,15 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				}
 			}
 			// Reference parity: var/out params require lvalue argument
+			if (!isOutParam(paramType) && pi < args.length && args[pi].kind == NodeKind.OutExpr) {
+				addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": 'out' is written only for an out parameter, and this parameter is not one", node.location.line, node.location.column);
+			}
 			if (paramType.kind == TypeKind.Var && pi < args.length) {
 				let lvArg = args[pi];
 				if (lvArg.kind == NodeKind.OutExpr) { lvArg = (lvArg.data as OutExprData).outArg; }
-				if (isOutParam(paramType)) takesOut(ctx, lvArg);
+				if (isOutParam(paramType)) {
+					takesOut(ctx, lvArg);
+				}
 				if (!isLocation(lvArg)) {
 					const calleeName = getCalleeName(d.callee);
 					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);

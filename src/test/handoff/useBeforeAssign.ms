@@ -47,23 +47,18 @@ test "useBeforeAssign: an out argument assigns the variable after the call" {
 	assert unassignedReads("function one(out a: int32, v: int32): void { a = v; }\nfunction f(): int32 { let a: int32; one(out a, a); return a; }", "a") == 1;
 }
 
-test "useBeforeAssign: an out parameter takes an unassigned variable with or without the keyword, a ref parameter does not" {
+test "useBeforeAssign: an out parameter takes an unassigned variable with or without the keyword, a ref parameter does not (and refuses the keyword)" {
 	const fns = "function setTo(out a: int32, v: int32): void { a = v; }\nfunction bump(ref a: int32): void { a = a + 1; }\nfunction fill<T>(out a: T, v: T): void { a = v; }\n";
 	assert unassignedReads(fns + "function f(): int32 { let a: int32; setTo(a, 3); return a; }", "a") == 0;
 	assert unassignedReads(fns + "function f(): int32 { let a: int32; fill<int32>(a, 3); fill<int32>(a, 4); return a; }", "a") == 0;
 	assert unassignedReads(fns + "function f(): int32 { let a: int32; bump(a); return a; }", "a") == 1;
-	assert unassignedReads(fns + "function f(): int32 { let a: int32; bump(out a); return a; }", "a") == 0;
 }
 
-test "useBeforeAssign: an out parameter the callee never writes is not refused yet" {
-	assert unassignedReads("function leave(out a: int32, c: boolean): void { if (c) { a = 1; } }", "a") == 0;
-}
-
-test "useBeforeAssign: an out argument does not assign a variable whose type has no default value" {
-	const fns = "class Box { v: int32 = 1; }\nstruct Holder { b: Box; }\nfunction leaveBox(out b: Box): void { }\nfunction leaveHolder(out h: Holder): void { }\n";
-	assert unassignedReads(fns + "function f(): int32 { let b: Box; leaveBox(out b); return b.v; }", "b") == 1;
-	assert unassignedReads(fns + "function f(): int32 { let b: Box; leaveBox(b); return b.v; }", "b") == 1;
-	assert unassignedReads(fns + "function f(): int32 { let h: Holder; leaveHolder(out h); return h.b.v; }", "h") == 1;
+test "useBeforeAssign: an out argument assigns a variable whose type has no default value, the callee must write it" {
+	const fns = "class Box { v: int32 = 1; }\nstruct Holder { b: Box; }\nfunction fillBox(out b: Box): void { b = new Box(); }\nfunction fillHolder(out h: Holder): void { h = { b: new Box() }; }\n";
+	assert unassignedReads(fns + "function f(): int32 { let b: Box; fillBox(out b); return b.v; }", "b") == 0;
+	assert unassignedReads(fns + "function f(): int32 { let b: Box; fillBox(b); return b.v; }", "b") == 0;
+	assert unassignedReads(fns + "function f(): int32 { let h: Holder; fillHolder(out h); return h.b.v; }", "h") == 0;
 }
 
 test "useBeforeAssign: a field or element write does not assign the variable" {
