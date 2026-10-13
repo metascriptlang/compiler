@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser bytecode compiler cannot compile a `try` in a match expression arm (inbox 2026-10-14-raiser-try-in-a-match-arm-cannot-compile)
 // @stdout: rows=41 wrong=0
 // note: a `try` in a position that is not evaluated (ternary arm, `&&` / `||` / `??` operand, catch value, an `if` / `while` / `do while` / `for` condition after a short circuit, a call argument, a `match` expression arm, an awaited operand) runs its operand and returns its error only when that position is evaluated; the loop conditions run per iteration and the switch discriminant and match arm lower instead of reaching codegen. Each row prints only when it is wrong, with the number of operand calls it made.
 

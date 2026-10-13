@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser runs `arr[g()] = await h()` with h before g (inbox 2026-10-14-raiser-await-assign-evaluates-the-index-after-the-await)
 // @stdout: rows=34 wrong=0
 // note: operands evaluate left to right around a hoisted `try`: everything written to its left runs before its operand, an error return of the `try` happens before anything to its right runs, and a value read to its left is read before the `try` operand can change it. The `await` rows are the control: the same positions with the mechanism that already orders its left operands. Each row prints only when it is wrong, with the order of operand calls it made.
 
