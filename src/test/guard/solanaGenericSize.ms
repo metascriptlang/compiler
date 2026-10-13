@@ -238,7 +238,7 @@ const ONE_COPY: Bound[] = [
 	{ family: "account", least: 0, copies: 0, most: 256 },
 ];
 
-const TEXT_MOST = 95000;
+const TEXT_MOST = 91000;
 
 removeAll(dir);
 ensureDir(dir);
