@@ -12,7 +12,7 @@ import {
 import { ProgramError } from "./error";
 import { invokeSigned } from "./invoke";
 import { findProgramAddress, findProgramAddressOf, signed } from "./macro";
-import { Pubkey, pubkeyOf } from "./pubkey";
+import { Pubkey, SLOTHASHES_ID, SYSTEM_PROGRAM_ID, pubkeyOf } from "./pubkey";
 import { SeedSlice, SignerSeeds, seedBytes, seedText, signerOf } from "./seed";
 
 when (testBuild) {
@@ -66,6 +66,10 @@ function requested(
 ): Result<uint64, ProgramError> {
 	const identity = try findProgramAddress(["identity"]);
 	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
+	if (!accounts.oracleQueue.isWritable()) { return Result.err(ProgramError.constraintMut()); }
+	if (!accounts.oracleQueue.isOwnedBy(VRF_PROGRAM_ID)) { return Result.err(ProgramError.accountOwnedByWrongProgram()); }
+	if (!accounts.systemProgram.key().equals(SYSTEM_PROGRAM_ID)) { return Result.err(ProgramError.invalidProgramId()); }
+	if (!accounts.slotHashes.key().equals(SLOTHASHES_ID)) { return Result.err(ProgramError.constraintAddress()); }
 	if (payerSigners.length > 1) { return Result.err(ProgramError.invalidArgument()); }
 	let storage: uint8[1024] = [];
 	const length = requested(storage, callerSeed, callbackDiscriminator, callbackAccounts, callbackArguments);
@@ -126,10 +130,10 @@ when (testBuild) {
 		return keyOf(9);
 	}
 
-	function holder(key: Pubkey, signer: boolean, writable: boolean): HostAccount {
+	function holder(key: Pubkey, signer: boolean, writable: boolean, owner: Pubkey = Pubkey.zero()): HostAccount {
 		return {
 			key: key,
-			owner: Pubkey.zero(),
+			owner: owner,
 			lamports: 1000,
 			data: [],
 			signer: signer,
@@ -154,9 +158,9 @@ when (testBuild) {
 		return [
 			holder(keyOf(1), true, true),
 			holder(identity, false, false),
-			holder(VRF_EPHEMERAL_QUEUE_ID, false, true),
-			holder(Pubkey.zero(), false, false),
-			holder(keyOf(4), false, false),
+			holder(VRF_EPHEMERAL_QUEUE_ID, false, true, VRF_PROGRAM_ID),
+			holder(SYSTEM_PROGRAM_ID, false, false),
+			holder(SLOTHASHES_ID, false, false),
 			holder(keyOf(5), false, true),
 		];
 	}
@@ -370,6 +374,34 @@ when (testBuild) {
 	test "requestRandomness refuses an identity that is not the program's" {
 		assert requestRun(requestAccounts(keyOf(2)), 0) == ProgramError.invalidSeeds().code;
 		assert invocations().length == 0;
+	}
+
+	test "requestRandomness refuses a queue the VRF program does not own or that is read-only" {
+		const foreign = requestAccounts(identityOf(programKey()));
+		foreign[2] = holder(VRF_BASE_QUEUE_ID, false, true, keyOf(7));
+		assert requestRun(foreign, 0) == ProgramError.accountOwnedByWrongProgram().code;
+		const readonly = requestAccounts(identityOf(programKey()));
+		readonly[2] = holder(VRF_BASE_QUEUE_ID, false, false, VRF_PROGRAM_ID);
+		assert requestRun(readonly, 0) == ProgramError.constraintMut().code;
+		const base = requestAccounts(identityOf(programKey()));
+		base[2] = holder(VRF_BASE_QUEUE_ID, false, true, VRF_PROGRAM_ID);
+		assert requestRun(base, 0) == 0;
+		assert invocations().length == 1;
+	}
+
+	test "requestRandomness refuses a system program or slot hashes account at another address" {
+		const fakeSystem = requestAccounts(identityOf(programKey()));
+		fakeSystem[3] = holder(keyOf(4), false, false);
+		assert requestRun(fakeSystem, 0) == ProgramError.invalidProgramId().code;
+		assert invocations().length == 0;
+		const fakeHashes = requestAccounts(identityOf(programKey()));
+		fakeHashes[4] = holder(keyOf(4), false, false);
+		assert requestRun(fakeHashes, 0) == ProgramError.constraintAddress().code;
+		assert invocations().length == 0;
+		const swapped = requestAccounts(identityOf(programKey()));
+		swapped[3] = holder(SLOTHASHES_ID, false, false);
+		swapped[4] = holder(SYSTEM_PROGRAM_ID, false, false);
+		assert requestRun(swapped, 0) == ProgramError.invalidProgramId().code;
 	}
 
 	function callbackStep(): Result<uint64, ProgramError> {
