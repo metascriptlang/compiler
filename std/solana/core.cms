@@ -474,6 +474,12 @@ export function createAccount(
 	newOwner: Pubkey,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
+	const held = target.lamports();
+	if (held != 0) {
+		if (lamports > held) { const _topped = try transfer(payer, target, lamports - held, signers); }
+		const _sized = try allocate(target, space, signers);
+		return assignTo(target, newOwner, signers);
+	}
 	let storage: uint8[52] = [];
 	let length = putU32(storage, 0, 0);
 	length = putU64(storage, length, lamports);

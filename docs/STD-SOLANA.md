@@ -619,8 +619,8 @@ existing checked CPI machinery; there is no new compiler pass, proof constructor
 or invented CPI protocol. Its52B payload is opcode13/lamports/space/owner, target
 first and optional funding payer second. Rent shortfall is computed without
 unsigned subtraction wrap, signer seeds forwarded unchanged and init's existing
-payer==target refusal/exclusive-claim ordering retained. Public legacy
-`createAccount` remains unchanged. This path requires the System prefund feature
+payer==target refusal/exclusive-claim ordering retained. Public
+`createAccount` creates an empty address with System instruction 0 as before; an address that already holds lamports (anyone can send some first, which makes instruction 0 fail with Custom(0)) is topped up to the requested balance, then allocated and assigned, with no dependency on the prefund feature (`tools/solana/createAccountPrefund.mjs`, LiteSVM). The prefund path requires the System prefund feature
 on the target cluster; an unsupported CPI fails, with no silent fallback.
 
 TDD: the two wire/seed regression cases fail against the prior SDK

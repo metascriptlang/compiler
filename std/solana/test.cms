@@ -3066,6 +3066,21 @@ test "createAccount sends the System program two writable signers and 52 bytes" 
 	assert sameBytes(sent.data, joined(head, owner9()));
 }
 
+test "createAccount on an address that already holds lamports tops up the shortfall, then allocates and assigns" {
+	assert recordedRun(0, wallet(2, 1)) == 0;
+	let calls = invocations();
+	assert calls.length == 3;
+	const topUp: uint8[] = [2, 0, 0, 0, 127, 113, 14, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, topUp);
+	assert calls[1].data[0] == 8 && calls[2].data[0] == 1;
+	assert calls[0].accounts[0].key.equals(keyOf(1)) && calls[0].accounts[1].key.equals(keyOf(2));
+	assert calls[1].accounts[0].key.equals(keyOf(2)) && calls[2].accounts[0].key.equals(keyOf(2));
+
+	assert recordedRun(0, wallet(2, 946560)) == 0;
+	calls = invocations();
+	assert calls.length == 2 && calls[0].data[0] == 8 && calls[1].data[0] == 1;
+}
+
 test "assign, transfer and allocate send the System program their accounts and data" {
 	assert recordedRun(1, wallet(2, 1000000000)) == 0;
 	let sent = invocations()[0];
