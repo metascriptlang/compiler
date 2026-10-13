@@ -9,7 +9,6 @@ export {
 	AssociatedToken,
 	Bytes,
 	Clock,
-	CpiAccount,
 	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
 	MAX_CPI_ACCOUNTS,
@@ -149,7 +148,6 @@ export {
 	verifiedPda,
 	verifiedPdaWithBump,
 	writable,
-	writablePda,
 	writableSigner,
 } from "./typed";
 export * from "./macro";

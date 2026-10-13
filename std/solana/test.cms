@@ -1,9 +1,9 @@
 @include("runtime/solana/solana.h");
 
 import {
-	External, Signer as ChainAuth, WritablePda as DerivedSlot, accounts, external, externalMutable, writablePda,
+	External, Signer as ChainAuth, WritablePda as DerivedSlot, accounts, external, externalMutable,
 } from "./typed";
-import { argBoolValid, argBytesFit, argU8, argU16, argU64 } from "./core";
+import { argBoolValid, argBytesFit, argU8, argU16, argU64, recordAddress } from "./core";
 import { scopedKeysResult } from "./testArgumentScope";
 import { FarBase, FarDerived, FarKept, FarPinned, FarPinnedChild } from "./testBaseScope";
 import {
@@ -91,7 +91,7 @@ import {
 	invokeList,
 	invokeSigned,
 } from "./index";
-import { SignerSeeds, findExpected, seedText, tableAddress } from "./seed";
+import { SignerSeeds, bytesAddress, createAddressWithBump, findExpected, seedText, tableAddress } from "./seed";
 import { seedTable, slottedTable } from "./accountSeeds";
 import { canonicalBump, canonicalBumpOwned, canonicalBumpProven, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, slottedCanonicalBump, unchecked } from "./core";
 import { verifiedPdaWithBump } from "./typed";
@@ -1159,6 +1159,11 @@ export struct AliasedCounter {
 	@seeds("counter", payer) @bump target: DerivedSlot;
 }
 
+export struct SignerThenPda {
+	signer: ChainAuth;
+	@seeds("slot") @bump slot: DerivedSlot;
+}
+
 function aliasedCreateStep(): Result<uint64, ProgramError> {
 	const x = try accounts<AliasedCounter>();
 	const made = try createPda<Counter>(x.payer, x.target, ["counter", x.payer]);
@@ -1338,11 +1343,11 @@ function mutableThenWritableEntry(): void { duplicateEntry<MutableThenWritable>(
 function writableThenMutableEntry(): void { duplicateEntry<WritableThenMutable>(); }
 function oneWritableEntry(): void { duplicateEntry<OneWritable>(); }
 function writableThenSignerPairEntry(): void { duplicateEntry<WritableThenSignerPair>(); }
-function writablePdaAfterSignerEntry(): void {
-	const first = signer(0);
-	if (!first.ok) { failWith(first.error); return; }
-	codeOf(writablePda(1));
+function pdaAfterSignerStep(): Result<uint64, ProgramError> {
+	const _found = try accounts<SignerThenPda>();
+	return Result.ok(0);
 }
+function writablePdaAfterSignerEntry(): void { codeOf(pdaAfterSignerStep()); }
 function externalMutableTwiceEntry(): void {
 	const first = externalMutable<OkVerifier>(0);
 	if (!first.ok) { failWith(first.error); return; }
@@ -1719,13 +1724,13 @@ function inputBufferEntry(): void {
 	const first = account(0);
 	if (!first.ok) { failWith(ProgramError.custom(1)); return; }
 	const held = first.value;
-	if (held.data().address != held.address + 88) { failWith(ProgramError.custom(2)); return; }
+	if (held.data().address != held.recordAddress() + 88) { failWith(ProgramError.custom(2)); return; }
 	const data = instructionData();
 	if (data.address + data.length != msSolProgramId()) { failWith(ProgramError.custom(3)); return; }
 	const inner = data.range(1, 2);
 	if (!inner.ok || inner.value.address != data.address + 1) { failWith(ProgramError.custom(4)); return; }
 	const meta = InstructionAccount.writable(held);
-	if (meta.key != held.address + 8) { failWith(ProgramError.custom(5)); }
+	if (meta.pubkey() != held.key()) { failWith(ProgramError.custom(5)); }
 }
 
 test "every view and address a program can hold points into the input buffer the runtime built" {
@@ -3075,9 +3080,9 @@ function forwarded(first: Account, signers: Readonly<Span<SignerSeeds>> = []): R
 }
 
 function listed(first: Account, count: uint64): Result<uint64, ProgramError> {
-	let metas: InstructionAccount[65] = [];
+	let metas: InstructionAccount[] = [];
 	for (let index = 0; index < 65; index++) {
-		metas[index] = InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0);
+		metas.push(InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0));
 	}
 	let storage: uint8[4] = [];
 	return invokeList(keyOf(9), metas[0..(count as int32)], storage, putU8(storage, 0, 1));
@@ -4373,7 +4378,7 @@ function wireRetryEntry(): void {
 	if (rejected.error.code != ProgramError.accountDidNotDeserialize().code) { failWith(rejected.error); return; }
 	const raw = account(0);
 	if (!raw.ok) { failWith(raw.error); return; }
-	msSolStoreU8(raw.value.address + 96, 0);
+	msSolStoreU8(raw.value.recordAddress() + 96, 0);
 	codeOf(mutable<WirePet>(0));
 }
 
@@ -4381,7 +4386,7 @@ function wireBorrowPrecedenceEntry(): void {
 	const first = mutable<WirePet>(0);
 	if (!first.ok) { failWith(first.error); return; }
 	const raw = first.value.asAccount();
-	msSolStoreU8(raw.address + 96, 2);
+	msSolStoreU8(raw.recordAddress() + 96, 2);
 	const second = mutable<WirePet>(0);
 	if (second.ok) { failWith(ProgramError.custom(52)); return; }
 	if (second.error.code != ProgramError.accountBorrowFailed().code) { failWith(second.error); }
@@ -4820,7 +4825,8 @@ test "createProgramAccount refuses the payer as its own target, as Anchor v2 doe
 
 function seededSelfCreateStep(): Result<uint64, ProgramError> {
 	const payer = try account(0);
-	return createProgramAccountSeeded(payer, payer, 8, programId(), [seedText("pet")], 255);
+	const bump = try createProgramAccountSeeded(payer, payer, 8, programId(), [seedText("pet")]);
+	return Result.ok(bump as uint64);
 }
 
 function seededSelfCreateEntry(): void { codeOf(seededSelfCreateStep()); }
@@ -4829,6 +4835,41 @@ test "createProgramAccountSeeded refuses the payer as its own target" {
 	const accounts = [wallet(1, 10000000)];
 	assert run(programKey(), accounts, [], seededSelfCreateEntry).result == ProgramError.invalidArgument().code;
 	assert accounts[0].owner == Pubkey.zero();
+}
+
+function seededCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	const target = try account(1);
+	const _bump = try createProgramAccountSeeded(payer, target, 16, programId(), [seedText("pet")]);
+	return Result.ok(0);
+}
+
+function seededCreateEntry(): void { codeOf(seededCreateStep()); }
+
+function nonCanonicalPetKey(canonical: ProgramAddress): Pubkey {
+	for (let bump = canonical.bump - 1; bump > 0; bump--) {
+		const other = createAddressWithBump([seedText("pet")], bump, bytesAddress(programKey().bytes));
+		if (other.ok) { return other.value; }
+	}
+	return Pubkey.zero();
+}
+
+test "createProgramAccountSeeded signs with the canonical bump it derives and refuses a target at another bump of the same seeds" {
+	const canonical = findProgramAddressOf(programKey(), ["pet"]);
+	assert canonical.ok;
+	if (canonical.ok) {
+		const payer = wallet(1, 10000000);
+		const made = [payer, blank(canonical.value.key)];
+		assert run(programKey(), made, [], seededCreateEntry).result == 0;
+		assert signerIs(invocations()[0], 0, [textBytes("pet"), [canonical.value.bump]]);
+		assert made[1].owner == programKey();
+		const other = nonCanonicalPetKey(canonical.value);
+		assert other != canonical.value.key;
+		const refused = [wallet(1, 10000000), blank(other)];
+		assert run(programKey(), refused, [], seededCreateEntry).result == ProgramError.constraintSeeds().code;
+		assert invocations().length == 0;
+		assert refused[1].owner == Pubkey.zero();
+	}
 }
 
 function shortCreateStep(): Result<uint64, ProgramError> {
@@ -4888,9 +4929,9 @@ test "closedProgramAccount refuses a target another program owns and moves nothi
 
 function closeScrubStep(): Result<uint64, ProgramError> {
 	const target = try account(0);
-	const before = msSolLoadU64(target.address + 88);
+	const before = msSolLoadU64(target.recordAddress() + 88);
 	const moved = try closedProgramAccount(target, try account(1));
-	if (msSolLoadU64(target.address + 88) == before) { return Result.err(ProgramError.userError(1)); }
+	if (msSolLoadU64(target.recordAddress() + 88) == before) { return Result.err(ProgramError.userError(1)); }
 	return Result.ok(moved);
 }
 

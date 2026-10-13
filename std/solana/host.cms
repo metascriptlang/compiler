@@ -11,6 +11,7 @@ import {
 	logU64,
 	transfer,
 	writableAccount,
+	recordAddress,
 } from "./core";
 import { ProgramError } from "./error";
 import { Pubkey } from "./pubkey";
@@ -329,7 +330,7 @@ function addToCounter(): void {
 function secondStep(): Result<uint64, ProgramError> {
 	const first = try account(0);
 	const second = try writableAccount(1);
-	if (first.address != second.address) { return Result.err(ProgramError.invalidArgument()); }
+	if (first.recordAddress() != second.recordAddress()) { return Result.err(ProgramError.invalidArgument()); }
 	return second.data().writeU64(0, 42);
 }
 

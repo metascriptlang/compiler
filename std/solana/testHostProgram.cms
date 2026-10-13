@@ -2,7 +2,7 @@
 
 import { Bytes, putU8 } from "./buffer";
 import { account, accountCount, failWith, instructionData, logU64, setReturnData } from "./core";
-import { InstructionAccount, invokeList } from "./cpi";
+import { InstructionAccount, invokeList } from "./core";
 import { ProgramError } from "./error";
 import { SeedSlice, SignerSeeds, signerOf } from "./seed";
 
@@ -132,11 +132,11 @@ function forward(): Result<uint64, ProgramError> {
 		from.setLamports(0);
 	}
 	const callee = (try account(0)).key();
-	let metas: InstructionAccount[MAX_FORWARDED] = [];
+	let metas: InstructionAccount[] = [];
 	for (let index = 0; index < count; index++) {
 		const flags = try input.readU8((3 + index) as uint64);
 		const held = try account(index + 1);
-		metas[index] = InstructionAccount.flagged(held, (flags & 1) != 0, (flags & 2) != 0);
+		metas.push(InstructionAccount.flagged(held, (flags & 1) != 0, (flags & 2) != 0));
 	}
 	let storage: uint8[96] = [];
 	let length: uint64 = 0;
@@ -149,7 +149,7 @@ function forward(): Result<uint64, ProgramError> {
 	}
 	let signers: SignerSeeds[SLOTS] = [];
 	for (let index = 0; index < SLOTS; index++) { signers[index] = signerOf(slices[0..seedCount]); }
-	return invokeList(callee, metas[0..count], storage, length, signers[0..signerCount]);
+	return invokeList(callee, metas, storage, length, signers[0..signerCount]);
 }
 
 function carryOnAfter(_sent: Result<uint64, ProgramError>): Result<uint64, ProgramError> {
@@ -160,12 +160,12 @@ function carryOnAfter(_sent: Result<uint64, ProgramError>): Result<uint64, Progr
 function calls(input: Bytes, at: uint64, count: int32): Result<uint64, ProgramError> {
 	if (count > MAX_FORWARDED) { return Result.err(ProgramError.invalidInstructionData()); }
 	const callee = (try account((try input.readU8(at + 1)) as int32)).key();
-	let metas: InstructionAccount[MAX_FORWARDED] = [];
+	let metas: InstructionAccount[] = [];
 	for (let index = 0; index < count; index++) {
 		const entry = at + 3 + (index as uint64) * 2;
 		const held = try account((try input.readU8(entry)) as int32);
 		const flags = try input.readU8(entry + 1);
-		metas[index] = InstructionAccount.flagged(held, (flags & 1) != 0, (flags & 2) != 0);
+		metas.push(InstructionAccount.flagged(held, (flags & 1) != 0, (flags & 2) != 0));
 	}
 	const sent = at + 3 + (count as uint64) * 2;
 	const length = (try input.readU8(sent)) as uint64;
@@ -173,7 +173,7 @@ function calls(input: Bytes, at: uint64, count: int32): Result<uint64, ProgramEr
 	for (let offset: uint64 = 0; offset < length; offset++) {
 		const _put = putU8(storage, offset, try input.readU8(sent + 1 + offset));
 	}
-	return invokeList(callee, metas[0..count], storage, length);
+	return invokeList(callee, metas, storage, length);
 }
 
 function steps(): Result<uint64, ProgramError> {
