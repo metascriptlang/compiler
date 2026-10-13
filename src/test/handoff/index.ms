@@ -89,6 +89,7 @@ import "./comptimeValues";
 import "./declarationBoundaries";
 import "./declaredSubscript";
 import "./rangeSliceSource";
+import "./staticClassTypeParam";
 import "./directiveStatement";
 import "./delegateDeclarations";
 import "./editorRecovery";
