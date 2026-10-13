@@ -548,7 +548,7 @@ const MAX_PERMITTED_DATA_LENGTH: uint64 = 10485760;
 const ACCOUNT_STORAGE_OVERHEAD: uint64 = 128;
 const MAX_LAMPORTS_PER_BYTE: uint64 = 0xffffffffffffffff / (2 * (MAX_PERMITTED_DATA_LENGTH + ACCOUNT_STORAGE_OVERHEAD));
 
-function rentFor(dataLength: uint64): Result<uint64, ProgramError> {
+@inline function rentFor(dataLength: uint64): Result<uint64, ProgramError> {
 	if (dataLength > MAX_PERMITTED_DATA_LENGTH) { return Result.err(ProgramError.invalidArgument()); }
 	const rent = msSolRentAddress();
 	if (rent == 0) { return Result.err(ProgramError.unsupportedSysvar()); }
