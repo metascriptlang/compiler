@@ -667,7 +667,7 @@ function foldBooleanLiterals(members: Type[]): boolean {
 		if (isBoolean) placed = true;
 		kept += 1;
 	}
-	members.length = kept;
+	members.shrink(kept);
 	return true;
 }
 

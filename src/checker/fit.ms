@@ -101,7 +101,7 @@ function dropSubclassMembers(members: Type[]): void {
 			kept += 1;
 		}
 	}
-	members.length = kept;
+	members.shrink(kept);
 }
 
 function derivesFrom(sub: Type, sup: Type): boolean {

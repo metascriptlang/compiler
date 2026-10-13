@@ -327,7 +327,7 @@ export function pushLoop(s: RaiserCompState, startIp: int32, label: string): voi
 export function popLoop(s: RaiserCompState): RaiserLoopInfo {
 	const len = s.loopStack.items.length;
 	const info = s.loopStack.items[len - 1];
-	s.loopStack.items.length = len - 1;
+	s.loopStack.items.shrink(len - 1);
 	return info;
 }
 

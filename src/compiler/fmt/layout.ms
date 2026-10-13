@@ -86,7 +86,7 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 		if (remaining < 0) return false;
 
 		const cmd = stack[stack.length - 1];
-		stack.length = stack.length - 1;
+		stack.shrink(stack.length - 1);
 		const doc = cmd.doc;
 
 		if (doc == null) continue;
@@ -223,7 +223,7 @@ export function formatDocAt(doc: Doc, options: FormatOptions, baseIndent: string
 
 	while (stack.length > 0) {
 		const cmd = stack[stack.length - 1];
-		stack.length = stack.length - 1;
+		stack.shrink(stack.length - 1);
 		const d = cmd.doc;
 
 		if (d == null || d.kind == DocKind.Nil || d.kind == DocKind.BreakParent) continue;

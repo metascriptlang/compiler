@@ -1025,7 +1025,7 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 	if (copy.nodeType != null) copy = fitNode(bodyCtx, copy, fieldType, copy.nodeType);
 	if (bodyCtx.errors.length > errBefore) {
 		const first = bodyCtx.errors[errBefore].message;
-		bodyCtx.errors.length = errBefore;
+		bodyCtx.errors.shrink(errBefore);
 		addError(ctx, `the initializer of field '${fieldName}' of '${classSym.name}', run for this literal: ${first}`, loc.line, loc.column);
 	}
 	bodyCtx.modulePath = savedModulePath;

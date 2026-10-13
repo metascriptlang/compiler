@@ -400,7 +400,7 @@ function vmFireDueTimer(vm: RaiserVM): void {
 	if (items.length == 0 || items[0].dueMs > msMonoTimeMs()) return;
 	const timer = items[0];
 	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
-	items.length = items.length - 1;
+	items.shrink(items.length - 1);
 	futureComplete(vm, timer.future, raiserNil());
 }
 
@@ -464,7 +464,7 @@ function popSafePoint(vm: RaiserVM): number {
 function unwindFrame(vm: RaiserVM): void {
 	const len = vm.callStack.items.length;
 	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.length = len - 1;
+	vm.callStack.items.shrink(len - 1);
 	vm.funcIdx = frame.funcIdx;
 	vm.ip = frame.returnIp;
 	vm.baseReg = frame.baseReg;
@@ -1268,7 +1268,7 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	// Pop frame
 	const len = vm.callStack.items.length;
 	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.length = len - 1;
+	vm.callStack.items.shrink(len - 1);
 
 	// Copy return value to caller's dest register (fresh object avoids aliasing)
 	const retCopy = raiserNil();

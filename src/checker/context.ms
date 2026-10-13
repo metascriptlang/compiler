@@ -381,7 +381,7 @@ export function truncateExtensions(registry: ExtensionRegistry, count: int32): v
 		}
 		i -= 1;
 	}
-	registry.methods.length = count;
+	registry.methods.shrink(count);
 	registry.byNameNext.length = count;
 	registry.byNamePrev.length = count;
 }

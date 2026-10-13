@@ -307,7 +307,7 @@ export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserV
 export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: int64): void {
 	const items = heap.arrays[handle].items;
 	if (newLen < items.length) {
-		items.setLength(newLen as number);
+		items.shrink(newLen < 0 ? 0 : newLen);
 	} else {
 		while (items.length < newLen) {
 			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
