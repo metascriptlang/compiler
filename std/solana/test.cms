@@ -1516,6 +1516,20 @@ test "logText writes a literal and the bytes of a buffer as one Program log line
 	assert lines[3] == "Program log: memo: paid";
 }
 
+function logRawEntry(): void {
+	logText(instructionData());
+}
+
+test "logText of bytes that are not UTF-8 logs them as a Program data line instead of ending the instruction" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [0xff, 0xff], logRawEntry).result == 0;
+	assert logs()[0] == "Program data: //8=";
+	assert run(programKey(), none, [0x6f, 0x6b, 0xed, 0xa0, 0x80], logRawEntry).result == 0;
+	assert logs()[0] == "Program data: b2vtoIA=";
+	assert run(programKey(), none, [0x68, 0xc3, 0xa9], logRawEntry).result == 0;
+	assert logs()[0] == "Program log: hé";
+}
+
 export struct Paid { amount: uint64; }
 export struct PaidTo extends Paid { receiver: Pubkey; done: boolean; }
 
