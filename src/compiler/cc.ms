@@ -489,14 +489,18 @@ export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boo
 
 export function modeFlags(mode: number): string {
 	return match (mode) {
-		2 => " -O3 -w -DNDEBUG -ffp-contract=off",
-		1 => " -O2 -w -DNDEBUG -ffp-contract=off",
-		_ => " -O0 -g -ffp-contract=off",
+		2 => " -O3 -w -DNDEBUG -ffp-contract=off -fno-strict-aliasing",
+		1 => " -O2 -w -DNDEBUG -ffp-contract=off -fno-strict-aliasing",
+		_ => " -O0 -g -ffp-contract=off -fno-strict-aliasing",
 	};
 }
 
 test "every build mode keeps a*b+c as two roundings" {
 	for (const mode of [0, 1, 2]) assert modeFlags(mode).indexOf("-ffp-contract=off") >= 0;
+}
+
+test "every build mode lets one memory be read through another type" {
+	for (const mode of [0, 1, 2]) assert modeFlags(mode).indexOf("-fno-strict-aliasing") >= 0;
 }
 
 // -- LTO capability + strategy --
