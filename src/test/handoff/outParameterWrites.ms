@@ -23,6 +23,15 @@ test "outParameterWrites: an out parameter the body never writes is an error" {
 	assert unwritten("function leave(out x: int32, out y: int32): void { x = 1; }", "y") == 1;
 }
 
+test "outParameterWrites: an out parameter is read only after the body writes it" {
+	const early = "may be read before it is assigned";
+	assert refused("function f(out x: int32): void { console.log(x); x = 1; }", early) == 1;
+	assert refused("function f(out x: int32): void { x += 1; }", early) == 1;
+	assert refused("class K { m(out x: string): void { console.log(x); x = \"a\"; } }", early) == 1;
+	assert refused("function f(out x: int32): void { x = 3; console.log(x); }", early) == 0;
+	assert refused("function f(out x: int32 | null): void { console.log(x); x = 2; }", early) == 0;
+}
+
 test "outParameterWrites: a write on one path only is an error, at the end and at an early return" {
 	assert unwritten("function f(out x: int32, c: boolean): void { if (c) { x = 1; } }", "x") == 1;
 	assert unwritten("function f(out x: int32, c: boolean): void { if (c) { return; } x = 1; }", "x") == 1;
