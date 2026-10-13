@@ -448,10 +448,7 @@ export function vmOrphanFailures(vm: RaiserVM): string[] {
 
 // --- Exceptions ---
 // A per-frame stack of safepoints, each holding the ip of the handler metadata
-// its `Try` registered, plus one in-flight exception. A `finally` can be
-// entered from an unwind or from a return; `savedIp` is the instruction it
-// hands control back to when it ends, so FinallyEnd re-executes the Throw that
-// is still searching or the Ret that is still returning.
+// its `Try` registered, plus one in-flight exception.
 
 function popSafePoint(vm: RaiserVM): number {
 	const n = vm.safePoints.length;
@@ -1184,7 +1181,10 @@ function runStrandSlice(vm: RaiserVM): void {
 			// Only reached when the guarded region completed without raising.
 			popSafePoint(vm);
 		} else if (op == RaiserOpcode.FinallyEnd) {
-			if (vm.savedIp >= 0) {
+			if (vm.unwinding) {
+				vm.savedIp = -1;
+				unwindStep(vm);
+			} else if (vm.savedIp >= 0) {
 				vm.ip = vm.savedIp;
 				vm.savedIp = -1;
 			}
