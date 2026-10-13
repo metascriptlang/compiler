@@ -18,7 +18,7 @@ function setInt(out v: int32): void { v = 42; }
 function setPt(out p: Pt2): void { p = { x: 7, y: 8 }; }
 function setStr(out s: string): void { s = "written"; }
 function bumpRef(ref v: int32): void { v = v + 1; }
-function bumpOut(out v: int32): void { v = v + 1; }
+function bumpOut(out v: int32): void { v = 41; v = v + 1; }
 function inner(ref v: int32): void { v = v + 1; }
 function outer(ref v: int32): void { inner(v); inner(v); }
 
@@ -49,7 +49,7 @@ function refBareReadWrite(): boolean {
 function outReadWrite(): boolean {
 	let b: int32 = 10;
 	bumpOut(out b);
-	return b == 11;
+	return b == 42;
 }
 
 function memberLvalue(): boolean {
