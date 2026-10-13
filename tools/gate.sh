@@ -1773,6 +1773,11 @@ solana_replays() {
     && { solana_check fidelity-replay node tools/solana/hostFidelity.mjs "$dir/hostFidelityProbe.so" || rc=1; } || rc=1
   solana_check token-build "$CAND" build tools/solana/tokenOpsProbe.ms --os=solana --release --output="$dir/tokenOpsProbe.so" \
     && { solana_check token-replay node tools/solana/tokenOps.mjs "$dir/tokenOpsProbe.so" || rc=1; } || rc=1
+  local pin
+  for pin in logText:logTextProbe createAccountPrefund:createAccountPrefundProbe failFirst:failFirstProbe arrayCount:arrayCountProbe; do
+    solana_check "${pin%%:*}-build" "$CAND" build "tools/solana/${pin#*:}.ms" --os=solana --release --output="$dir/${pin#*:}.so" \
+      && { solana_check "${pin%%:*}-replay" node "tools/solana/${pin%%:*}.mjs" "$dir/${pin#*:}.so" || rc=1; } || rc=1
+  done
   return $rc
 }
 
