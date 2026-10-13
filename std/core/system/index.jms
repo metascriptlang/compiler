@@ -335,6 +335,14 @@ function msChkIndex(i: int64, len: int64): int64 {
 }
 
 @compilerFunc
+function msChkCount(n: int64): int64 {
+	@emit(`if (${n} < 0) ${msDefect}("value " + ${n} + " not in range 0 .. 9223372036854775807");
+	if (${n} > 4294967295) ${msDefect}("over- or underflow");
+	return ${n};`);
+	unreachable;
+}
+
+@compilerFunc
 function msSpanAt(v: unknown, i: int64): unknown {
 	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
 	return ${v}.base[${v}.off + Number(${i})];`);

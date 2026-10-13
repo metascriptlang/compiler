@@ -289,6 +289,7 @@ function vmError(vm: RaiserVM, msg: string): void {
 }
 
 const MAX_CALL_DEPTH = 1024;
+const MAX_ARRAY_COUNT = 4294967295;
 
 // --- Execute ---
 
@@ -1502,6 +1503,11 @@ function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (lenVal.kind != RaiserValueKind.Int) {
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
 	}
+	if (inst.c == 1) {
+		if (lenVal.intVal < 0) vmError(vm, `value ${lenVal.intVal} not in range 0 .. 9223372036854775807`);
+		else if (lenVal.intVal > MAX_ARRAY_COUNT) vmError(vm, "over- or underflow");
+		return;
+	}
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot set the length of a slice"); return;
 	}
@@ -2321,6 +2327,48 @@ test "ArraySetLen truncates" {
 		[raiserInt(7), raiserInt(1)]
 	));
 	assert vm.exitValue.intVal == 1;
+}
+
+test "ArraySetLen with C = 1 refuses a negative count" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(-1)]
+	));
+	assert vm.halted;
+	assert vm.error == "value -1 not in range 0 .. 9223372036854775807";
+}
+
+test "ArraySetLen with C = 1 refuses a count past 2^32 - 1" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(4294967296)]
+	));
+	assert vm.error == "over- or underflow";
+}
+
+test "ArraySetLen with C = 1 accepts a valid count without growing" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.ArrayLen, 2, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(3)]
+	));
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 0;
 }
 
 test "ArraySetLen nil-extends" {
