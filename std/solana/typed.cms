@@ -1208,7 +1208,8 @@ export macro accounts(): Node {
 	while (owner < names.length) {
 		const self = names[owner];
 		const selfType = writtenTypes[owner];
-		const isToken = selfType == "External<TokenAccount>" || selfType == "ExternalMutable<TokenAccount>";
+		const isToken = selfType == "External<TokenAccount>" || selfType == "ExternalMutable<TokenAccount>" ||
+			selfType == "External<InterfaceTokenAccount>" || selfType == "ExternalMutable<InterfaceTokenAccount>";
 		const decorators = fieldDecorators[owner];
 		let seeded: Node | null = null;
 		let bumped: Node | null = null;
@@ -1286,7 +1287,7 @@ export macro accounts(): Node {
 			}
 			if (name == "associated" || name == "tokenMint" || name == "tokenAuthority") {
 				if (!isToken) {
-					error(where + ": the field must be External<TokenAccount> or ExternalMutable<TokenAccount>", d);
+					error(where + ": the field must be External or ExternalMutable of TokenAccount or InterfaceTokenAccount", d);
 				}
 				if (name == "associated") {
 					if (args.length == 3) {

@@ -70,6 +70,13 @@ export struct Mint {
 	freezeAuthority: Pubkey | null;
 }
 
+export struct InterfaceMint {
+	mintAuthority: Pubkey | null;
+	supply: uint64;
+	decimals: uint8;
+	freezeAuthority: Pubkey | null;
+}
+
 export struct GroupMemberPointer {
 	authority: Pubkey | null;
 	memberAddress: Pubkey | null;
@@ -91,6 +98,20 @@ export struct TokenAccount {
 	delegatedAmount: uint64;
 	closeAuthority: Pubkey | null;
 }
+
+export struct InterfaceTokenAccount {
+	mint: Pubkey;
+	owner: Pubkey;
+	amount: uint64;
+	delegate: Pubkey | null;
+	state: TokenAccountState;
+	nativeReserve: uint64 | null;
+	delegatedAmount: uint64;
+	closeAuthority: Pubkey | null;
+}
+
+type AnyMint = Mint | InterfaceMint;
+type AnyTokenAccount = TokenAccount | InterfaceTokenAccount;
 
 export enum ExtensionType {
 	Uninitialized = 0,
@@ -274,6 +295,51 @@ function extensionIn(data: Bytes, kind: ExtensionType): Result<Bytes, ProgramErr
 	}
 	if (offset == tlv.length) { return Result.err(extensionNotFound()); }
 	return Result.err(ProgramError.invalidAccountData());
+}
+
+function unsupportedExtension(): ProgramError {
+	return ProgramError.custom(4200);
+}
+
+function isKind(found: uint64, kind: ExtensionType): boolean {
+	return found == ((kind as int32) as uint64);
+}
+
+function inertMintExtension(found: uint64): boolean {
+	return isKind(found, ExtensionType.MintCloseAuthority) ||
+		isKind(found, ExtensionType.InterestBearingConfig) ||
+		isKind(found, ExtensionType.MetadataPointer) ||
+		isKind(found, ExtensionType.TokenMetadata) ||
+		isKind(found, ExtensionType.GroupPointer) ||
+		isKind(found, ExtensionType.TokenGroup) ||
+		isKind(found, ExtensionType.GroupMemberPointer) ||
+		isKind(found, ExtensionType.TokenGroupMember) ||
+		isKind(found, ExtensionType.ScaledUiAmount);
+}
+
+function inertAccountExtension(found: uint64): boolean {
+	return isKind(found, ExtensionType.ImmutableOwner) ||
+		isKind(found, ExtensionType.MemoTransfer) ||
+		isKind(found, ExtensionType.CpiGuard);
+}
+
+function inertExtensions(data: Bytes, accountType: uint8): Result<void, ProgramError> {
+	if (data.length <= 165) { return Result.ok(null); }
+	const tlv = try data.range(166, data.length - 166);
+	let offset: uint64 = 0;
+	while (tlv.length - offset >= 4) {
+		const found = (try tlv.readU16(offset)) as uint64;
+		const length = (try tlv.readU16(offset + 2)) as uint64;
+		if (found == 0) { return Result.ok(null); }
+		if (length > tlv.length - offset - 4) {
+			return Result.err(ProgramError.invalidAccountData());
+		}
+		const inert = accountType == 1 ? inertMintExtension(found) : inertAccountExtension(found);
+		if (!inert) { return Result.err(unsupportedExtension()); }
+		offset = offset + 4 + length;
+	}
+	if (offset != tlv.length) { return Result.err(ProgramError.invalidAccountData()); }
+	return Result.ok(null);
 }
 
 function withExtensions(
@@ -603,12 +669,11 @@ export function createAssociatedTokenIdempotent(
 }
 
 export function acceptsOwner(this typeof Mint, owner: Pubkey): boolean {
-	return isTokenProgram(owner);
+	return owner.equals(TOKEN_PROGRAM_ID);
 }
 
 export function decode(this typeof Mint, data: Bytes): Result<Mint, ProgramError> {
-	const fits = data.length == 82 || (try hasExtensionLayout(data, 1) catch false);
-	if (!fits) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	if (data.length != 82) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	const decoded = mintFields(data);
 	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return decoded;
@@ -616,7 +681,7 @@ export function decode(this typeof Mint, data: Bytes): Result<Mint, ProgramError
 
 export function verify(this typeof Mint, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID)) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
 	if (!mintReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
@@ -624,12 +689,11 @@ export function verify(this typeof Mint, index: int32): Result<Account, ProgramE
 }
 
 export function acceptsOwner(this typeof TokenAccount, owner: Pubkey): boolean {
-	return isTokenProgram(owner);
+	return owner.equals(TOKEN_PROGRAM_ID);
 }
 
 export function decode(this typeof TokenAccount, data: Bytes): Result<TokenAccount, ProgramError> {
-	const fits = data.length == 165 || (try hasExtensionLayout(data, 2) catch false);
-	if (!fits) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	if (data.length != 165) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	const decoded = tokenAccountFields(data);
 	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return decoded;
@@ -637,26 +701,93 @@ export function decode(this typeof TokenAccount, data: Bytes): Result<TokenAccou
 
 export function verify(this typeof TokenAccount, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID)) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
 	if (!tokenAccountReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return Result.ok(found);
 }
 
-function tokenProgramOf(mint: External<Mint>): Pubkey {
+export function acceptsOwner(this typeof InterfaceMint, owner: Pubkey): boolean {
+	return isTokenProgram(owner);
+}
+
+export function decode(this typeof InterfaceMint, data: Bytes): Result<InterfaceMint, ProgramError> {
+	const fits = data.length == 82 || (try hasExtensionLayout(data, 1) catch false);
+	if (!fits || !inertExtensions(data, 1).ok) {
+		return Result.err(ProgramError.accountDidNotDeserialize());
+	}
+	const decoded = mintFields(data);
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const mint = decoded.value;
+	return Result.ok({
+		mintAuthority: mint.mintAuthority,
+		supply: mint.supply,
+		decimals: mint.decimals,
+		freezeAuthority: mint.freezeAuthority,
+	});
+}
+
+export function verify(this typeof InterfaceMint, index: int32): Result<Account, ProgramError> {
+	const found = try unchecked(index);
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	if (!mintReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const _inert = try inertExtensions(found.data(), 1);
+	return Result.ok(found);
+}
+
+export function acceptsOwner(this typeof InterfaceTokenAccount, owner: Pubkey): boolean {
+	return isTokenProgram(owner);
+}
+
+export function decode(
+	this typeof InterfaceTokenAccount,
+	data: Bytes,
+): Result<InterfaceTokenAccount, ProgramError> {
+	const fits = data.length == 165 || (try hasExtensionLayout(data, 2) catch false);
+	if (!fits || !inertExtensions(data, 2).ok) {
+		return Result.err(ProgramError.accountDidNotDeserialize());
+	}
+	const decoded = tokenAccountFields(data);
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const held = decoded.value;
+	return Result.ok({
+		mint: held.mint,
+		owner: held.owner,
+		amount: held.amount,
+		delegate: held.delegate,
+		state: held.state,
+		nativeReserve: held.nativeReserve,
+		delegatedAmount: held.delegatedAmount,
+		closeAuthority: held.closeAuthority,
+	});
+}
+
+export function verify(this typeof InterfaceTokenAccount, index: int32): Result<Account, ProgramError> {
+	const found = try unchecked(index);
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	if (!tokenAccountReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const _inert = try inertExtensions(found.data(), 2);
+	return Result.ok(found);
+}
+
+function tokenProgramOf<M extends AnyMint>(mint: External<M>): Pubkey {
 	return mint.asAccount().owner();
 }
 
-function mintDecimals(mint: External<Mint>): Result<uint8, ProgramError> {
+function mintDecimals<M extends AnyMint>(mint: External<M>): Result<uint8, ProgramError> {
 	const decoded = try mint.asAccount().readMint();
 	return Result.ok(decoded.decimals);
 }
 
-export function transferTokens(
-	from: ExternalMutable<TokenAccount>,
-	to: ExternalMutable<TokenAccount>,
-	mint: External<Mint>,
+export function transferTokens<A extends AnyTokenAccount, B extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	to: ExternalMutable<B>,
+	mint: External<M>,
 	authority: Account,
 	amount: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -674,9 +805,9 @@ export function transferTokens(
 	);
 }
 
-export function mintTokens(
-	mint: ExternalMutable<Mint>,
-	to: ExternalMutable<TokenAccount>,
+export function mintTokens<M extends AnyMint, A extends AnyTokenAccount>(
+	mint: ExternalMutable<M>,
+	to: ExternalMutable<A>,
 	authority: Account,
 	amount: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -685,8 +816,8 @@ export function mintTokens(
 	return mintTo(target.owner(), target, to.asAccount(), authority, amount, signers);
 }
 
-export function closeTokenAccount(
-	account: ExternalMutable<TokenAccount>,
+export function closeTokenAccount<A extends AnyTokenAccount>(
+	account: ExternalMutable<A>,
 	destination: Writable,
 	authority: Account,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -696,25 +827,6 @@ export function closeTokenAccount(
 }
 
 const TOKEN_ACCOUNT_LENGTH: uint64 = 165;
-const ACCOUNT_TYPE_BYTE: uint64 = 1;
-const TRANSFER_FEE_AMOUNT_ENTRY: uint64 = 4 + 8;
-const NON_TRANSFERABLE_AND_IMMUTABLE_OWNER_ENTRIES: uint64 = 4 + 4;
-const TRANSFER_HOOK_ACCOUNT_ENTRY: uint64 = 4 + 1;
-const PAUSABLE_ACCOUNT_ENTRY: uint64 = 4;
-
-function entryWhen(mint: Account, kind: ExtensionType, entry: uint64): uint64 {
-	return mint.mintExtension(kind).ok ? entry : 0;
-}
-
-function tokenAccountSpace(mint: Account): uint64 {
-	if (!mint.isOwnedBy(TOKEN_2022_PROGRAM_ID)) { return TOKEN_ACCOUNT_LENGTH; }
-	const entries = entryWhen(mint, ExtensionType.TransferFeeConfig, TRANSFER_FEE_AMOUNT_ENTRY) +
-		entryWhen(mint, ExtensionType.NonTransferable, NON_TRANSFERABLE_AND_IMMUTABLE_OWNER_ENTRIES) +
-		entryWhen(mint, ExtensionType.TransferHook, TRANSFER_HOOK_ACCOUNT_ENTRY) +
-		entryWhen(mint, ExtensionType.Pausable, PAUSABLE_ACCOUNT_ENTRY);
-	if (entries == 0) { return TOKEN_ACCOUNT_LENGTH; }
-	return TOKEN_ACCOUNT_LENGTH + ACCOUNT_TYPE_BYTE + entries;
-}
 
 function expectSigning(
 	account: Account,
@@ -726,10 +838,10 @@ function expectSigning(
 	return Result.ok(null);
 }
 
-function createdTokenAccount(
+function createdTokenAccount<M extends AnyMint>(
 	payer: WritableSigner,
 	target: Account,
-	mint: External<Mint>,
+	mint: External<M>,
 	owner: Pubkey,
 	signers: Readonly<Span<SignerSeeds>>,
 ): Result<uint64, ProgramError> {
@@ -738,26 +850,26 @@ function createdTokenAccount(
 	const _created = try createProgramAccount(
 		payer.asAccount(),
 		target,
-		tokenAccountSpace(minted),
+		TOKEN_ACCOUNT_LENGTH,
 		program,
 		signers,
 	);
 	return initializeAccount3(program, target, minted, owner);
 }
 
-export function createTokenAccount(
+export function createTokenAccount<M extends AnyMint>(
 	payer: WritableSigner,
 	account: WritableSigner,
-	mint: External<Mint>,
+	mint: External<M>,
 	owner: Pubkey,
 ): Result<uint64, ProgramError> {
 	return createdTokenAccount(payer, account.asAccount(), mint, owner, []);
 }
 
-export function createTokenAccount(
+export function createTokenAccount<M extends AnyMint>(
 	payer: WritableSigner,
 	account: Writable,
-	mint: External<Mint>,
+	mint: External<M>,
 	owner: Pubkey,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
@@ -766,9 +878,9 @@ export function createTokenAccount(
 	return createdTokenAccount(payer, target, mint, owner, signers);
 }
 
-function burned(
-	from: ExternalMutable<TokenAccount>,
-	mint: ExternalMutable<Mint>,
+function burned<A extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	mint: ExternalMutable<M>,
 	authority: Account,
 	amount: uint64,
 	signers: Readonly<Span<SignerSeeds>>,
@@ -786,18 +898,18 @@ function burned(
 	);
 }
 
-export function burnTokens(
-	from: ExternalMutable<TokenAccount>,
-	mint: ExternalMutable<Mint>,
+export function burnTokens<A extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	mint: ExternalMutable<M>,
 	authority: Signer,
 	amount: uint64,
 ): Result<uint64, ProgramError> {
 	return burned(from, mint, authority.asAccount(), amount, []);
 }
 
-export function burnTokens(
-	from: ExternalMutable<TokenAccount>,
-	mint: ExternalMutable<Mint>,
+export function burnTokens<A extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	mint: ExternalMutable<M>,
 	authority: Account,
 	amount: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -806,53 +918,31 @@ export function burnTokens(
 	return burned(from, mint, authority, amount, signers);
 }
 
-export function setAuthorityOf(
-	mint: ExternalMutable<Mint>,
+export function setAuthorityOf<T extends AnyMint | AnyTokenAccount>(
+	target: ExternalMutable<T>,
 	kind: AuthorityType,
 	authority: Signer,
 	next: Pubkey | null,
 ): Result<uint64, ProgramError> {
-	const target = mint.asAccount();
-	return setAuthority(target.owner(), target, authority.asAccount(), kind, next);
+	const held = target.asAccount();
+	return setAuthority(held.owner(), held, authority.asAccount(), kind, next);
 }
 
-export function setAuthorityOf(
-	mint: ExternalMutable<Mint>,
+export function setAuthorityOf<T extends AnyMint | AnyTokenAccount>(
+	target: ExternalMutable<T>,
 	kind: AuthorityType,
 	authority: Account,
 	next: Pubkey | null,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const _signing = try expectSigning(authority, signers);
-	const target = mint.asAccount();
-	return setAuthority(target.owner(), target, authority, kind, next, signers);
+	const held = target.asAccount();
+	return setAuthority(held.owner(), held, authority, kind, next, signers);
 }
 
-export function setAuthorityOf(
-	account: ExternalMutable<TokenAccount>,
-	kind: AuthorityType,
-	authority: Signer,
-	next: Pubkey | null,
-): Result<uint64, ProgramError> {
-	const target = account.asAccount();
-	return setAuthority(target.owner(), target, authority.asAccount(), kind, next);
-}
-
-export function setAuthorityOf(
-	account: ExternalMutable<TokenAccount>,
-	kind: AuthorityType,
-	authority: Account,
-	next: Pubkey | null,
-	signers: Readonly<Span<SignerSeeds>> = [],
-): Result<uint64, ProgramError> {
-	const _signing = try expectSigning(authority, signers);
-	const target = account.asAccount();
-	return setAuthority(target.owner(), target, authority, kind, next, signers);
-}
-
-function approved(
-	source: ExternalMutable<TokenAccount>,
-	mint: External<Mint>,
+function approved<A extends AnyTokenAccount, M extends AnyMint>(
+	source: ExternalMutable<A>,
+	mint: External<M>,
 	delegate: Account,
 	authority: Account,
 	amount: uint64,
@@ -871,9 +961,9 @@ function approved(
 	);
 }
 
-export function approveDelegate(
-	source: ExternalMutable<TokenAccount>,
-	mint: External<Mint>,
+export function approveDelegate<A extends AnyTokenAccount, M extends AnyMint>(
+	source: ExternalMutable<A>,
+	mint: External<M>,
 	delegate: Account,
 	authority: Signer,
 	amount: uint64,
@@ -881,9 +971,9 @@ export function approveDelegate(
 	return approved(source, mint, delegate, authority.asAccount(), amount, []);
 }
 
-export function approveDelegate(
-	source: ExternalMutable<TokenAccount>,
-	mint: External<Mint>,
+export function approveDelegate<A extends AnyTokenAccount, M extends AnyMint>(
+	source: ExternalMutable<A>,
+	mint: External<M>,
 	delegate: Account,
 	authority: Account,
 	amount: uint64,
@@ -893,16 +983,16 @@ export function approveDelegate(
 	return approved(source, mint, delegate, authority, amount, signers);
 }
 
-export function revokeDelegate(
-	source: ExternalMutable<TokenAccount>,
+export function revokeDelegate<A extends AnyTokenAccount>(
+	source: ExternalMutable<A>,
 	authority: Signer,
 ): Result<uint64, ProgramError> {
 	const held = source.asAccount();
 	return revoke(held.owner(), held, authority.asAccount());
 }
 
-export function revokeDelegate(
-	source: ExternalMutable<TokenAccount>,
+export function revokeDelegate<A extends AnyTokenAccount>(
+	source: ExternalMutable<A>,
 	authority: Account,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
@@ -911,11 +1001,11 @@ export function revokeDelegate(
 	return revoke(held.owner(), held, authority, signers);
 }
 
-export function createAssociatedFor(
+export function createAssociatedFor<M extends AnyMint>(
 	payer: WritableSigner,
 	associated: Writable,
 	wallet: Account,
-	mint: External<Mint>,
+	mint: External<M>,
 	systemProgram: Program<System>,
 	tokenProgram: Account,
 ): Result<uint64, ProgramError> {
@@ -932,10 +1022,10 @@ export function createAssociatedFor(
 	);
 }
 
-export function expectAssociated(
+export function expectAssociated<M extends AnyMint>(
 	tokenAccount: Pubkey,
 	wallet: Pubkey,
-	mint: External<Mint>,
+	mint: External<M>,
 ): Result<void, ProgramError> {
 	const mintKey = mint.asAccount().key();
 	const derived = try associatedTokenAddress(wallet, mintKey, tokenProgramOf(mint));
@@ -945,12 +1035,12 @@ export function expectAssociated(
 	return Result.ok(null);
 }
 
-export function expectTokenMint(token: TokenAccount, mint: Pubkey): Result<void, ProgramError> {
+export function expectTokenMint<A extends AnyTokenAccount>(token: A, mint: Pubkey): Result<void, ProgramError> {
 	if (token.mint != mint) { return Result.err(ProgramError.constraintTokenMint()); }
 	return Result.ok(null);
 }
 
-export function expectTokenOwner(token: TokenAccount, owner: Pubkey): Result<void, ProgramError> {
+export function expectTokenOwner<A extends AnyTokenAccount>(token: A, owner: Pubkey): Result<void, ProgramError> {
 	if (token.owner != owner) { return Result.err(ProgramError.constraintTokenOwner()); }
 	return Result.ok(null);
 }
@@ -1263,19 +1353,19 @@ when (testBuild) {
 			);
 		}
 		if (op == 12) {
-			const minting = try externalMutable<Mint>(0);
-			const receiving = try externalMutable<TokenAccount>(1);
+			const minting = try externalMutable<InterfaceMint>(0);
+			const receiving = try externalMutable<InterfaceTokenAccount>(1);
 			return signed(mintTokens(minting, receiving, authority, 500), ["auth", [5]]);
 		}
 		if (op == 13) {
-			const closing = try externalMutable<TokenAccount>(1);
+			const closing = try externalMutable<InterfaceTokenAccount>(1);
 			const destination = try writable(3);
 			return signed(closeTokenAccount(closing, destination, authority), ["auth", [5]]);
 		}
 		if (op == 14) {
-			const from = try externalMutable<TokenAccount>(3);
-			const to = try externalMutable<TokenAccount>(1);
-			const typed = try external<Mint>(0);
+			const from = try externalMutable<InterfaceTokenAccount>(3);
+			const to = try externalMutable<InterfaceTokenAccount>(1);
+			const typed = try external<InterfaceMint>(0);
 			return signed(transferTokens(from, to, typed, authority, 250), ["auth", [5]]);
 		}
 		if (op == 15) {
@@ -1593,9 +1683,9 @@ when (testBuild) {
 when (testBuild) {
 	export struct TransferAccounts {
 		owner: Signer;
-		from: ExternalMutable<TokenAccount>;
-		to: ExternalMutable<TokenAccount>;
-		mint: External<Mint>;
+		from: ExternalMutable<InterfaceTokenAccount>;
+		to: ExternalMutable<InterfaceTokenAccount>;
+		mint: External<InterfaceMint>;
 	}
 
 	function typedTransferStep(): Result<uint64, ProgramError> {
@@ -1652,9 +1742,9 @@ when (testBuild) {
 
 	export struct DecoratedTokens {
 		owner: Signer;
-		mint: External<Mint>;
-		@associated(mint, owner) own: ExternalMutable<TokenAccount>;
-		@tokenMint(mint) @tokenAuthority(owner) plain: ExternalMutable<TokenAccount>;
+		mint: External<InterfaceMint>;
+		@associated(mint, owner) own: ExternalMutable<InterfaceTokenAccount>;
+		@tokenMint(mint) @tokenAuthority(owner) plain: ExternalMutable<InterfaceTokenAccount>;
 	}
 
 	function decoratedStep(): Result<uint64, ProgramError> {
@@ -1720,13 +1810,13 @@ when (testBuild) {
 		const op = try instructionData().readU8(0);
 		const found = try account(0);
 		if (op == 0) {
-			const lean = Mint.verify(0);
+			const lean = InterfaceMint.verify(0);
 			const full = found.readMint();
 			if (lean.ok != full.ok) { return Result.err(ProgramError.custom(8)); }
 			if (!lean.ok) { return Result.err(ProgramError.custom(7)); }
 			return Result.ok(0);
 		}
-		const lean = TokenAccount.verify(0);
+		const lean = InterfaceTokenAccount.verify(0);
 		const full = found.readTokenAccount();
 		if (lean.ok != full.ok) { return Result.err(ProgramError.custom(8)); }
 		if (!lean.ok) { return Result.err(ProgramError.custom(7)); }
@@ -1770,6 +1860,114 @@ when (testBuild) {
 			}
 		}
 		assert accepted > 20 && refused > 100;
+	}
+
+	function kindStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const data = (try account(0)).data();
+		if (op == 0) { const _checked = try Mint.verify(0); }
+		if (op == 1) { const _checked = try InterfaceMint.verify(0); }
+		if (op == 2) { const _checked = try TokenAccount.verify(0); }
+		if (op == 3) { const _checked = try InterfaceTokenAccount.verify(0); }
+		if (op == 4 && !Mint.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		if (op == 5 && !InterfaceMint.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		if (op == 6 && !TokenAccount.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		if (op == 7 && !InterfaceTokenAccount.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		return Result.ok(0);
+	}
+
+	function kindEntry(): void {
+		const result = kindStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function verdict(program: Pubkey, data: uint8[], op: uint8): uint64 {
+		return resultOf([holderOf(1, program, data)], op, kindEntry);
+	}
+
+	function extendedAccount(kinds: int32[]): uint8[] {
+		const bytes = tokenAccountData(1, 3, 900, 1);
+		bytes.push(2);
+		for (const kind of kinds) {
+			pushU16(bytes, kind as uint64);
+			pushU16(bytes, 0);
+		}
+		return bytes;
+	}
+
+	test "Mint and TokenAccount accept only the legacy program's exact layout" {
+		const wrong = ProgramError.accountOwnedByWrongProgram().code;
+		const unreadable = ProgramError.accountDidNotDeserialize().code;
+		assert verdict(TOKEN_PROGRAM_ID, mintData(7, 500, 6), 0) == 0;
+		assert verdict(TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 900, 1), 2) == 0;
+		assert verdict(TOKEN_2022_PROGRAM_ID, mintData(7, 500, 6), 0) == wrong;
+		assert verdict(TOKEN_2022_PROGRAM_ID, tokenAccountData(1, 3, 900, 1), 2) == wrong;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([3]), 0) == wrong;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([7]), 2) == wrong;
+		assert verdict(TOKEN_PROGRAM_ID, extendedMint([3]), 0) == unreadable;
+		assert verdict(TOKEN_PROGRAM_ID, extendedAccount([7]), 2) == unreadable;
+		assert verdict(Pubkey.zero(), mintData(7, 500, 6), 0) == wrong;
+		assert verdict(TOKEN_PROGRAM_ID, mintData(7, 500, 6), 4) == 0;
+		assert verdict(TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 900, 1), 6) == 0;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([3]), 4) == 1;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([7]), 6) == 1;
+	}
+
+	test "InterfaceMint and InterfaceTokenAccount accept either program and the extensions that change no transfer" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			assert verdict(program, mintData(7, 500, 6), 1) == 0;
+			assert verdict(program, tokenAccountData(1, 3, 900, 1), 3) == 0;
+		}
+		assert verdict(Pubkey.zero(), mintData(7, 500, 6), 1) == ProgramError.accountOwnedByWrongProgram().code;
+		assert verdict(TOKEN_PROGRAM_ID, extendedMint([3]), 1) == ProgramError.accountDidNotDeserialize().code;
+		for (const kinds of [[3], [10], [18], [19], [20], [21], [22], [23], [25], [3, 10, 18, 25]]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint(kinds), 1) == 0;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint(kinds), 5) == 0;
+		}
+		for (const kinds of [[7], [8], [11], [7, 8, 11]]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount(kinds), 3) == 0;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount(kinds), 7) == 0;
+		}
+	}
+
+	test "InterfaceMint refuses every extension that is not known to leave a transfer and a balance as they read" {
+		const refused = ProgramError.custom(4200).code;
+		for (const kind of [1, 4, 6, 9, 12, 14, 16, 24, 26, 28, 29, 1000]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind]), 1) == refused;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind]), 5) == 1;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([3, kind]), 1) == refused;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind, 3]), 1) == refused;
+		}
+		for (const kind of [2, 5, 7, 8, 11, 13, 15, 17, 27]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind]), 1) == refused;
+		}
+	}
+
+	test "InterfaceTokenAccount refuses every account extension that moves, holds back or hides an amount" {
+		const refused = ProgramError.custom(4200).code;
+		for (const kind of [2, 5, 13, 15, 17, 27, 28, 29, 1000]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([kind]), 3) == refused;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([kind]), 7) == 1;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([7, kind]), 3) == refused;
+		}
+		for (const kind of [1, 3, 10, 18]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([kind]), 3) == refused;
+		}
+	}
+
+	test "a malformed extension table is an invalid account, not an accepted or a refused extension" {
+		const invalid = ProgramError.invalidAccountData().code;
+		const over = extendedMint([3]);
+		over[168] = 200;
+		assert verdict(TOKEN_2022_PROGRAM_ID, over, 1) == invalid;
+		const trailing = extendedMint([3]);
+		pushZeros(trailing, 0);
+		trailing.push(0xff);
+		trailing.push(0xff);
+		assert verdict(TOKEN_2022_PROGRAM_ID, trailing, 1) == invalid;
+		const padded = extendedMint([3]);
+		pushZeros(padded, 8);
+		assert verdict(TOKEN_2022_PROGRAM_ID, padded, 1) == 0;
 	}
 
 	function wrongProgramStep(): Result<uint64, ProgramError> {
@@ -1847,7 +2045,7 @@ when (testBuild) {
 			return initializeAccount3(TOKEN_PROGRAM_ID, try account(1), try account(2), owner);
 		}
 		const payer = try writableSigner(0);
-		const mint = try external<Mint>(2);
+		const mint = try external<InterfaceMint>(2);
 		if (op == 0) {
 			return createTokenAccount(payer, try writableSigner(1), mint, owner);
 		}
@@ -1979,6 +2177,9 @@ when (testBuild) {
 			14 => 64,
 			26 => 33,
 			6 => 1,
+			10 => 52,
+			18 => 64,
+			25 => 56,
 			_ => 0,
 		};
 	}
@@ -1995,25 +2196,21 @@ when (testBuild) {
 		return bytes;
 	}
 
-	test "createTokenAccount sizes a Token-2022 account for the account extensions its mint requires" {
-		const cases: int32[][] = [[1], [9], [14], [26], [3], [1, 9, 14, 26]];
-		const sizes: int32[] = [178, 174, 171, 170, 165, 195];
-		for (let index = 0; index < cases.length; index++) {
-			const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, extendedMint(cases[index]));
+	test "createTokenAccount sizes a Token-2022 account at 165 bytes for a mint whose extensions require none" {
+		for (const kinds of [[] as int32[], [3], [10], [18], [25], [3, 10, 18, 25]]) {
+			const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, kinds.length == 0 ? mintData(7, 500, 6) : extendedMint(kinds));
 			assert resultOf(accounts, 0, newTokenEntry) == 0;
-			assert accounts[1].data.length == sizes[index];
-			assert invocations()[0].data[12] == sizes[index];
-			assert accounts[1].lamports == 2 * ((sizes[index] as uint64) + 128) * 3480;
-			assert sizes[index] == 165 || accounts[1].data[165] == 2;
+			assert accounts[1].data.length == 165 && invocations()[0].data[12] == 165;
+			assert accounts[1].lamports == 2 * (165 + 128) * 3480;
 		}
 	}
 
-	test "a Token-2022 account created for a mint with a default account state starts in that state" {
-		const frozen = extendedMint([6]);
-		frozen[170] = 2;
-		const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, frozen);
-		assert resultOf(accounts, 0, newTokenEntry) == 0;
-		assert accounts[1].data.length == 165 && accounts[1].data[108] == 2;
+	test "createTokenAccount refuses a Token-2022 mint with a fee, a hook, a pause switch, a fixed owner or a default state" {
+		for (const kinds of [[1], [9], [14], [26], [6], [3, 1]]) {
+			const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, extendedMint(kinds));
+			assert resultOf(accounts, 0, newTokenEntry) == ProgramError.custom(4200).code;
+			assert invocations().length == 0 && accounts[1].data.length == 0;
+		}
 	}
 
 	test "a token account created for the native mint holds the lamports above its rent reserve" {
@@ -2079,8 +2276,8 @@ when (testBuild) {
 			const program = (try account(1)).owner();
 			return burnChecked(program, try account(0), try account(1), authority, amount, 5);
 		}
-		const from = try externalMutable<TokenAccount>(0);
-		const mint = try externalMutable<Mint>(1);
+		const from = try externalMutable<InterfaceTokenAccount>(0);
+		const mint = try externalMutable<InterfaceMint>(1);
 		if (op == 0) { return burnTokens(from, mint, try signer(2), amount); }
 		if (op == 1) { return burnTokens(from, mint, authority, amount); }
 		return signed(burnTokens(from, mint, authority, amount), ["auth", [5]]);
@@ -2230,11 +2427,11 @@ when (testBuild) {
 			return setAuthority(target.owner(), target, authority, kind, next);
 		}
 		if (op >= 3) {
-			const held = try externalMutable<TokenAccount>(0);
+			const held = try externalMutable<InterfaceTokenAccount>(0);
 			if (op == 3) { return setAuthorityOf(held, kind, try signer(1), next); }
 			return signed(setAuthorityOf(held, kind, authority, next), ["auth", [5]]);
 		}
-		const mint = try externalMutable<Mint>(0);
+		const mint = try externalMutable<InterfaceMint>(0);
 		if (op == 0) { return setAuthorityOf(mint, kind, try signer(1), next); }
 		if (op == 1) { return setAuthorityOf(mint, kind, authority, next); }
 		return signed(setAuthorityOf(mint, kind, authority, next), ["auth", [5]]);
@@ -2432,7 +2629,7 @@ when (testBuild) {
 	function delegateStep(): Result<uint64, ProgramError> {
 		const op = try instructionData().readU8(0);
 		const amount = try instructionData().readU64(1);
-		const source = try externalMutable<TokenAccount>(0);
+		const source = try externalMutable<InterfaceTokenAccount>(0);
 		const delegate = try account(2);
 		const authority = try account(3);
 		if (op == 3) { return revokeDelegate(source, try signer(3)); }
@@ -2450,9 +2647,9 @@ when (testBuild) {
 				5,
 			);
 		}
-		const mint = try external<Mint>(1);
+		const mint = try external<InterfaceMint>(1);
 		if (op == 7) {
-			const to = try externalMutable<TokenAccount>(4);
+			const to = try externalMutable<InterfaceTokenAccount>(4);
 			return transferTokens(source, to, mint, delegate, amount);
 		}
 		if (op == 0) { return approveDelegate(source, mint, delegate, try signer(3), amount); }
@@ -2689,17 +2886,27 @@ when (testBuild) {
 		const op = try input.readU8(0);
 		const amount = try input.readU64(1);
 		if (op == 0) {
-			const mint = try externalMutable<Mint>(0);
-			return mintTokens(mint, try externalMutable<TokenAccount>(1), try account(2), amount);
+			const mint = try externalMutable<InterfaceMint>(0);
+			return mintTokens(mint, try externalMutable<InterfaceTokenAccount>(1), try account(2), amount);
 		}
 		if (op == 1) {
 			const program = (try account(3)).key();
 			return mintTo(program, try account(0), try account(1), try account(2), amount);
 		}
 		if (op == 2) {
+			const from = try externalMutable<InterfaceTokenAccount>(0);
+			const to = try externalMutable<InterfaceTokenAccount>(1);
+			return transferTokens(from, to, try external<InterfaceMint>(2), try account(3), amount);
+		}
+		if (op == 20) {
 			const from = try externalMutable<TokenAccount>(0);
 			const to = try externalMutable<TokenAccount>(1);
 			return transferTokens(from, to, try external<Mint>(2), try account(3), amount);
+		}
+		if (op == 21) {
+			const from = try externalMutable<TokenAccount>(0);
+			const to = try externalMutable<InterfaceTokenAccount>(1);
+			return transferTokens(from, to, try external<InterfaceMint>(2), try account(3), amount);
 		}
 		if (op == 3) {
 			return transferChecked(
@@ -2713,7 +2920,7 @@ when (testBuild) {
 			);
 		}
 		if (op == 4) {
-			const closing = try externalMutable<TokenAccount>(0);
+			const closing = try externalMutable<InterfaceTokenAccount>(0);
 			return closeTokenAccount(closing, try writable(1), try account(2));
 		}
 		if (op == 6) {
@@ -2807,6 +3014,20 @@ when (testBuild) {
 			signingAs(3),
 			programAccount(program),
 		];
+	}
+
+	test "transferTokens moves the amount through the legacy types and through a mix of legacy and interface types" {
+		for (const op of [20 as uint8, 21 as uint8]) {
+			const accounts = movingAccounts(TOKEN_PROGRAM_ID);
+			assert ledgerRun(accounts, op, 300).result == 0;
+			assert heldBy(accounts, 0) == 600 && heldBy(accounts, 1) == 300;
+		}
+		const extended = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		assert refusedWith(ledgerRun(extended, 20, 300), ProgramError.accountOwnedByWrongProgram(), "");
+		assert unmoved(extended) && invocations().length == 0;
+		const mixed = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		assert refusedWith(ledgerRun(mixed, 21, 300), ProgramError.accountOwnedByWrongProgram(), "");
+		assert unmoved(mixed);
 	}
 
 	function closingAccounts(program: Pubkey): HostAccount[] {
@@ -3099,39 +3320,35 @@ when (testBuild) {
 		return accounts;
 	}
 
-	test "a Token-2022 account of a non-transferable mint moves nothing, after the frozen and balance refusals" {
-		const accounts = extendedSource(13, 0);
-		assert refusedWith(ledgerRun(accounts, 2, 1), ProgramError.custom(37), "");
-		assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 1), ProgramError.custom(37), "");
-		assert refusedWith(ledgerRun(accounts, 3, 1, 5), ProgramError.custom(37), "");
-		assert refusedWith(ledgerRun(accounts, 2, 901), ProgramError.custom(1), "");
-		const otherMint = extendedSource(13, 0);
-		otherMint[2].key = keyOf(2);
-		assert refusedWith(ledgerRun(otherMint, 3, 1), ProgramError.custom(37), "");
-		const stranger = extendedSource(13, 0);
-		stranger[3].key = keyOf(8);
-		assert refusedWith(ledgerRun(stranger, 2, 1), ProgramError.custom(37), "");
-		const frozen = extendedSource(13, 0);
-		frozen[0].data[108] = 2;
-		assert refusedWith(ledgerRun(frozen, 2, 1), ProgramError.custom(17), "");
-		assert refusedWith(forwardRun(uncheckedOrder(frozen), 3, 1), ProgramError.custom(17), "");
-		assert unmoved(accounts);
+	test "InterfaceTokenAccount refuses a Token-2022 account that carries a transfer-changing extension, before anything is sent" {
+		const kinds: int32[] = [13, 2, 15, 27];
+		const lengths: int32[] = [0, 8, 1, 0];
+		for (let index = 0; index < kinds.length; index++) {
+			const accounts = extendedSource(kinds[index], lengths[index]);
+			assert refusedWith(ledgerRun(accounts, 2, 1), ProgramError.custom(4200), "");
+			assert invocations().length == 0;
+			assert unmoved(accounts);
+		}
 	}
 
-	test "a Token-2022 account whose mint has a fee, a hook or a pause switch is transferred only with its mint" {
+	test "the Token-2022 program itself refuses a non-transferable account, a fee, hook or pause account without its mint" {
+		const accounts = extendedSource(13, 0);
+		assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 1), ProgramError.custom(37), "");
+		assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 901), ProgramError.custom(1), "");
 		const kinds: int32[] = [2, 15, 27];
 		const lengths: int32[] = [8, 1, 0];
 		for (let index = 0; index < kinds.length; index++) {
+			const bare = extendedSource(kinds[index], lengths[index]);
+			assert refusedWith(forwardRun(uncheckedOrder(bare), 3, 1), ProgramError.custom(31), "");
+			assert unmoved(bare);
+		}
+	}
+
+	test "InterfaceTokenAccount accepts the account extensions that change no transfer and moves with its mint" {
+		const kinds: int32[] = [7, 8, 11];
+		const lengths: int32[] = [0, 1, 1];
+		for (let index = 0; index < kinds.length; index++) {
 			const accounts = extendedSource(kinds[index], lengths[index]);
-			assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 1), ProgramError.custom(31), "");
-			assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 901), ProgramError.custom(1), "");
-			const stranger = extendedSource(kinds[index], lengths[index]);
-			stranger[3].key = keyOf(8);
-			assert refusedWith(forwardRun(uncheckedOrder(stranger), 3, 1), ProgramError.custom(31), "");
-			const frozen = extendedSource(kinds[index], lengths[index]);
-			frozen[0].data[108] = 2;
-			assert refusedWith(forwardRun(uncheckedOrder(frozen), 3, 1), ProgramError.custom(17), "");
-			assert unmoved(accounts);
 			assert ledgerRun(accounts, 2, 40).result == 0;
 			assert heldBy(accounts, 0) == 860 && heldBy(accounts, 1) == 40;
 		}
