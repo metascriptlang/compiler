@@ -27,6 +27,7 @@ export interface InitTracker {
 	pendingReads: Node[];      // those of argIdents read while unassigned, settled when the call resolves
 	declScopes: string[];      // parallel with declBlocks: var name at declaration
 	declBlocks: number[];      // block depth where each variable was declared
+	outParams: string[];       // out parameters of the routine being checked: each must be written before every exit
 }
 
 // ===== Constructors =====
@@ -41,6 +42,7 @@ export function createInitTracker(): InitTracker {
 		pendingReads: [],
 		declScopes: [],
 		declBlocks: [],
+		outParams: [],
 	};
 }
 
@@ -64,6 +66,18 @@ export function saveInitState(t: InitTracker): int32 {
 // Reference parity: restore init state
 export function restoreInitState(t: InitTracker, state: int32): void {
 	t.initialized.length = state;
+}
+
+// First out parameter of the current routine that is not written on the path being checked, or "".
+export function unwrittenOutParam(t: InitTracker): string {
+	for (const name of t.outParams) {
+		if (!hasName(t.initialized, name)) return name;
+	}
+	return "";
+}
+
+export function isOutParamName(t: InitTracker, name: string): boolean {
+	return hasName(t.outParams, name);
 }
 
 // ===== Scope Tracking (for nfFirstWrite) =====

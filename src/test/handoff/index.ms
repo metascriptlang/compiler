@@ -132,6 +132,7 @@ import "./readonlyViewRefArgument";
 import "./nullFirstTernaryArg";
 import "./fieldVisibility";
 import "./useBeforeAssign";
+import "./outParameterWrites";
 import "./typeNameValue";
 import "./routineInterface";
 import "./enumConversionRange";

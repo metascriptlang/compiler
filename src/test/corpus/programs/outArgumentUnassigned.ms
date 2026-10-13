@@ -25,8 +25,8 @@ function setFloat(out a: float64): void { a = 2.5; }
 function setBool(out a: boolean): void { a = true; }
 function setStr(out a: string): void { a = "hi"; }
 function setPt(out p: Pt): void { p = { x: 1, y: 2 }; }
-function setSized(out a: int32[4]): void { a[1] = 7; a[3] = 2; }
-function setSizedPts(out a: Pt[2]): void { a[1].y = 4; }
+function setSized(out a: int32[4]): void { a = [0, 7, 0, 2]; }
+function setSizedPts(out a: Pt[2]): void { a = [{ x: 0, y: 0 }, { x: 0, y: 4 }]; }
 function setCell(out c: Cell | null): void { const n = new Cell(); n.v = 3; c = n; }
 function setTwo(out a: int32, out b: string): void { a = 5; b = "x"; }
 function setPassed(out a: int32): void { setInt(out a, 6); }
