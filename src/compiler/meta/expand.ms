@@ -1544,9 +1544,11 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 		const cd = node.data as CallExprData;
 		// bindSym("name") — Nim semBindSym model: resolve the name in the macro's
 		// DECLARING module scope at bake time, register the real Symbol, and
-		// splice an Identifier literal carrying its handle. valueToNode rebinds
-		// the Symbol on the way out; the checker sees NodeFlag.BoundSym and skips
-		// the user-scope lookup — no imports needed, no user-local name capture.
+		// splice a host call that builds the bound Identifier from its handle, so
+		// the macro body reads the same resolvedSym the computed form returns.
+		// valueToNode rebinds the Symbol on the way out; the checker sees
+		// NodeFlag.BoundSym and skips the user-scope lookup — no imports needed,
+		// no user-local name capture.
 		if (cd.callee.kind == NodeKind.Identifier
 				&& (cd.callee.data as IdentifierData).name == "bindSym"
 				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
@@ -1564,17 +1566,23 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			if (boundSym.symbolKind != SymbolKind.Macro) {
 				ensureShaped(boundSym, bindCtx);
 			}
+			const nodeSym = lookupSymbolInDefiningScope(bindCtx.table, macroSym.name, "Node");
+			const metaDir = nodeSym == null ? "" : nodeSym.modulePath.slice(0, nodeSym.modulePath.lastIndexOf("/") + 1);
+			const metaCtx = metaDir == "" ? null : lookupModuleCtx(metaDir + "index.ms");
+			const hostSym = metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
+			if (hostSym == null) {
+				addError(ctx, `Macro '${macroName}': bindSym('${symName}') needs 'Node' imported from "std/meta" in the macro's module`, node.location.line, node.location.column);
+				return node;
+			}
 			const bloc = node.location;
-			const bkeys: string[] = ["kind", "line", "column", "name", "symHandle"];
-			const bvalues: Node[] = [
-				enumOrdinalAs("NodeKind", NodeKind.Identifier as number, bloc),
-				mkNumber(atCallSite().line, bloc),
-				mkNumber(atCallSite().column, bloc),
-				mkString(symName, bloc),
-				mkNumber(registerBoundSym(boundSym), bloc),
-			];
+			const callee = createNodeAt(NodeKind.Identifier, { name: "msMetaBindSym" }, bloc);
+			callee.resolvedSym = hostSym;
+			callee.flags = callee.flags.incl(NodeFlag.BoundSym);
 			return createNodeAt(NodeKind.TypeAssertion, {
-				asExpr: createNodeAt(NodeKind.ObjectLiteral, { properties: bvalues, keys: bkeys, keyLocations: [] }, bloc),
+				asExpr: createNodeAt(NodeKind.CallExpr, {
+					callee: callee,
+					arguments: [mkString(symName, bloc), mkNumber(registerBoundSym(boundSym), bloc)],
+				}, bloc),
 				asType: "Node",
 			}, bloc);
 		}

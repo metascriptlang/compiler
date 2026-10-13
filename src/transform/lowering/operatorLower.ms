@@ -19,7 +19,7 @@
 import { Node, NodeKind, BinaryExprData, ExprStmtData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag } from "../../ast/node";
 import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
-import { walkNode } from "../walker";
+import { walkNode, hasEffect } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { cloneIfPure } from "../coercion/intArithJS";
@@ -324,7 +324,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		if (folded != null) {
 			if (cloneIfPure(folded) != null) return makeBool(isNotEqual, loc);
 			if (ctx.jsBackend || ctx.raiserBackend) return node;
-			reportTransformError(ctx, "internal: a null comparison on an operand with effects reached operatorLower unspilled", loc);
+			if (hasEffect(folded)) reportTransformError(ctx, "internal: a null comparison on an operand with effects reached operatorLower unspilled", loc);
 			return makeBool(isNotEqual, loc);
 		}
 		// Maybe<T>: x !== null → x.present, x === null → !x.present
@@ -436,6 +436,7 @@ import { defineSymbol, makeSymbol, lookupSymbol, SymbolTable } from "../../check
 import { forEachChild } from "../../ast/visitor";
 import { createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind } from "../testUtil";
+import { ExprStmtData } from "../../ast/node";
 
 function bindFromTable(node: Node, table: SymbolTable): void {
 	if (node.kind == NodeKind.Identifier) {
@@ -771,4 +772,23 @@ test "interface !== null constant-folds to true" {
 	const result = lowerBound(pr.value, ctx);
 	// Should constant-fold to BooleanLiteral(true)
 	assert firstExprKind(result) == NodeKind.BooleanLiteral;
+}
+
+function unspilledNullCheckErrors(input: string): int32 {
+	const checkerCtx = createContext();
+	checkerCtx.extensionRegistry = createExtensionRegistry();
+	const pr = parseInput(input);
+	if (!pr.ok) return -1;
+	const comparison = (getStmts(pr.value)[0].data as ExprStmtData).expr;
+	(comparison.data as BinaryExprData).left.nodeType = createStruct("Token", [], [], true);
+	lowerOperators(pr.value, createTransformContextWithChecker(checkerCtx));
+	return checkerCtx.errors.length as int32;
+}
+
+test "a never-null call that reaches the null comparison unspilled is refused" {
+	assert unspilledNullCheckErrors("make() !== null;") == 1;
+}
+
+test "a never-null read through a cast folds its null comparison without a spill" {
+	assert unspilledNullCheckErrors("(env as Env).token !== null;") == 0;
 }
