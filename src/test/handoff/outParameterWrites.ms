@@ -78,3 +78,28 @@ test "outParameterWrites: a callee that can throw does not assign the caller's v
 	assert refused(fns + "function f(): int32 { let a: int32; try { fill(out a, false); return a; } catch (e) { return 0; } }", read) == 0;
 	assert refused(fns + "function f(): int32 { let a: int32; try { fill(out a, true); } catch (e) { a = 2; } return a; }", read) == 0;
 }
+
+test "outParameterWrites: a method's out parameter is declared in its body and held to the same rule" {
+	assert unwritten("class K { never(out x: int32): void { } }", "x") == 1;
+	assert unwritten("class K { one(out x: int32, c: boolean): void { if (c) { x = 1; } } }", "x") == 1;
+	assert unwritten("class K { good(out x: int32, c: boolean): void { if (c) { x = 1; } else { x = 2; } } }", "x") == 0;
+	assert refused("class K { good(out x: int32): void { x = 1; } }", "Undefined variable") == 0;
+	assert refused("class K { bump(ref x: int32): void { x += 1; } }", "Undefined variable") == 0;
+}
+
+test "outParameterWrites: a generic class's method keeps its out parameter on every instance" {
+	const cls = "class G<T> { never(out x: T): void { } }\n";
+	assert unwritten(cls + "function f(): void { let s: string; new G<string>().never(out s); }", "x") >= 1;
+	assert unwritten("class G<T> { put(out x: T, v: T): void { x = v; } }\nfunction f(): void { let s: string; new G<string>().put(out s, \"a\"); }", "x") == 0;
+}
+
+test "outParameterWrites: a method call takes the out keyword only for an out parameter" {
+	const cls = "class K { plain(x: int32): void { } fill(out x: int32): void { x = 1; } }\n";
+	assert refused(cls + "function f(): void { let a: int32 = 0; new K().plain(out a); }", "'out' is written only for an out parameter") == 1;
+	assert refused(cls + "function f(): int32 { let a: int32; new K().fill(out a); return a; }", "may be read before it is assigned") == 0;
+}
+
+test "outParameterWrites: a constructor parameter cannot be out or ref" {
+	assert refused("class C { constructor(out x: int32) { x = 1; } }", "a constructor parameter cannot be 'out' or 'ref'") == 1;
+	assert refused("class C { constructor(ref x: int32) { x = 1; } }", "a constructor parameter cannot be 'out' or 'ref'") == 1;
+}
