@@ -88,6 +88,7 @@ import "./comptimeMacroValues";
 import "./comptimeValues";
 import "./declarationBoundaries";
 import "./declaredSubscript";
+import "./rangeSliceSource";
 import "./directiveStatement";
 import "./delegateDeclarations";
 import "./editorRecovery";
