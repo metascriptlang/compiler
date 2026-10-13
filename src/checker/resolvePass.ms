@@ -10,6 +10,7 @@ import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { isSysType, peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createUnionInOrder, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { getIdentId } from "./idents";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { forEachChild } from "../ast/visitor";
@@ -986,6 +987,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				addError(ctx, `generic type '${trimmed}' requires ${count} type argument(s)`, line, col);
 				return errorType();
 			}
+			if (sym != null && isStaticHiddenTypeParam(ctx, trimmed, sym)) {
+				if (line > 0) addError(ctx, `a static member cannot reference the class type parameter '${trimmed}': one static is shared by every instantiation of the class`, line, col);
+				return errorType();
+			}
 			if (sym != null) {
 				markUsedIn(ctx, sym);
 				// Demand-driven: ensure shaped before using
@@ -1012,6 +1017,12 @@ function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
 	markUsedIn(ctx, nsSym);
 	noteImported(ctx, exported.sym);
 	return exported.sym;
+}
+
+function isStaticHiddenTypeParam(ctx: CheckerContext, name: string, sym: Symbol): boolean {
+	const boundary = ctx.staticInitBoundary;
+	return boundary != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.GenericParam
+		&& boundary.symbols.get(getIdentId(ctx.table.identCache, name)) == sym;
 }
 
 function lookupTypeSym(ctx: CheckerContext, name: string): Symbol | null {
@@ -2523,8 +2534,11 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				// Resolve static property type and update the staticFields symbol
 				let staticType = inferredType();
 				if (pd.propType != "") {
+					const savedBoundary = ctx.staticInitBoundary;
+					ctx.staticInitBoundary = ctx.table.current;
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					ctx.staticInitBoundary = savedBoundary;
 					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
@@ -2738,8 +2752,11 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			if (pd.propIsStatic) {
 				let staticType = inferredType();
 				if (pd.propType != "") {
+					const savedBoundary = ctx.staticInitBoundary;
+					ctx.staticInitBoundary = ctx.table.current;
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					ctx.staticInitBoundary = savedBoundary;
 					refuseViewField(ctx, pd.propName, d.actorName, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
