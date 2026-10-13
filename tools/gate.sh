@@ -1755,6 +1755,8 @@ solana_replays() {
     && solana_check idl-build "$CAND" build examples/escrow/idl.cms --output="$dir/escrow-idl" \
     && solana_check idl-run "$dir/escrow-idl" >"$dir/escrow-idl.json"; then
     solana_check escrow-replay node tools/solana/escrow.mjs "$dir/escrow.so" "$dir/escrow-idl.json" || rc=1
+    solana_check escrow-release-build "$CAND" build examples/escrow/program.ms --os=solana --release --output="$dir/escrowRelease.so" \
+      && { solana_check escrow-release-replay node tools/solana/escrow.mjs "$dir/escrowRelease.so" "$dir/escrow-idl.json" || rc=1; } || rc=1
   else
     rc=1
   fi
