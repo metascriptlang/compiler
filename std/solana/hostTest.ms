@@ -673,7 +673,10 @@ function moved(from: uint8, to: uint8, amount: uint64): uint8[][] {
 
 test "the rent the simulator asks is the rent minimumBalance reads on the host" {
 	assert rentOf(8) == RENT_OF_8;
-	for (const space of [0, 8, 165, 10240, 10485760]) { assert rentOf(space as uint64) == minimumBalance(space as uint64); }
+	for (const space of [0, 8, 165, 10240, 10485760]) {
+		const floor = minimumBalance(space as uint64);
+		assert floor.ok && rentOf(space as uint64) == floor.value;
+	}
 }
 
 test "an account the System program creates or funds below its rent fails the run, as the transaction fails" {

@@ -11,7 +11,7 @@ function growAfterCreate(space: uint64, target: uint64, freshIndex: int32, neigh
 	const neighbour = try account(neighbourIndex);
 	logU64(msSolLoadU64(neighbour.recordAddress() + 8));
 	logU64(neighbour.lamports());
-	const _created = try createAccount(payer, fresh, minimumBalance(20480), space, programId());
+	const _created = try createAccount(payer, fresh, try minimumBalance(20480), space, programId());
 	const grown = fresh.resize(target);
 	logU64(grown.ok ? 1 : 0);
 	logU64(msSolLoadU64(neighbour.recordAddress() + 8));

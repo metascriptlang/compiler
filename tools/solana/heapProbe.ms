@@ -115,7 +115,7 @@ function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
 
 function rentLoop(count: uint64): Result<uint64, ProgramError> {
 	let sum: uint64 = 0;
-	for (let index: uint64 = 0; index < count; index++) { sum = sum + minimumBalance(index); }
+	for (let index: uint64 = 0; index < count; index++) { sum = sum + (try minimumBalance(index)); }
 	logU64(sum);
 	logU64(msSolAlloc(0));
 	return Result.ok(0);
@@ -130,7 +130,7 @@ struct Probed {
 function clockLoop(count: uint64): Result<uint64, ProgramError> {
 	let sum: uint64 = 0;
 	for (let index: uint64 = 0; index < count; index++) {
-		const now = clock();
+		const now = try clock();
 		sum = sum + now.slot + now.epoch + now.leaderScheduleEpoch;
 		sum = sum + (now.unixTimestamp as uint64) + (now.epochStartTimestamp as uint64);
 	}

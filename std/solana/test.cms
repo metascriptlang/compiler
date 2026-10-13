@@ -65,6 +65,7 @@ import {
 	instructionData,
 	logPubkey,
 	logText,
+	logU64,
 	clock,
 	returnData,
 	returnDataFrom,
@@ -1225,7 +1226,7 @@ function richCounter(length: int32, lamports: uint64): HostAccount {
 function growCreatedStep(): Result<uint64, ProgramError> {
 	const target = (try instructionData().readU16(0)) as uint64;
 	const fresh = try account(1);
-	const _created = try createAccount(try account(0), fresh, minimumBalance(10240), 48, programKey());
+	const _created = try createAccount(try account(0), fresh, try minimumBalance(10240), 48, programKey());
 	const _grown = try fresh.resize(target);
 	return Result.ok(0);
 }
@@ -1250,10 +1251,10 @@ test "realloc to a larger size moves only the rent deficit, and nothing when the
 	assert run(programKey(), rich, sizeBytes(148), reallocSizedEntry).result == 0;
 	assert rich[0].data.length == 148;
 	assert rich[0].lamports == fiveSol && rich[1].lamports == tenSol;
-	const poorHeld = minimumBalance(100);
+	const poorHeld = rentFloor(100);
 	const poor = [richCounter(48, poorHeld), wallet(2, tenSol)];
 	assert run(programKey(), poor, sizeBytes(148), reallocSizedEntry).result == 0;
-	const deficit = minimumBalance(148) - poorHeld;
+	const deficit = rentFloor(148) - poorHeld;
 	assert poor[0].lamports == poorHeld + deficit && poor[1].lamports == tenSol - deficit;
 }
 
@@ -1265,14 +1266,14 @@ test "realloc to the same size moves no lamports from a rich account" {
 }
 
 test "realloc to a smaller size refunds only the rent of the removed bytes, capped by what sits above the new floor" {
-	const reclaim = minimumBalance(148) - minimumBalance(48);
+	const reclaim = rentFloor(148) - rentFloor(48);
 	const rich = [richCounter(148, fiveSol), wallet(2, tenSol)];
 	assert run(programKey(), rich, sizeBytes(48), reallocSizedEntry).result == 0;
 	assert rich[0].data.length == 48;
 	assert rich[0].lamports == fiveSol - reclaim && rich[1].lamports == tenSol + reclaim;
-	const tight = [richCounter(148, minimumBalance(48) + 100), wallet(2, tenSol)];
+	const tight = [richCounter(148, rentFloor(48) + 100), wallet(2, tenSol)];
 	assert run(programKey(), tight, sizeBytes(48), reallocSizedEntry).result == 0;
-	assert tight[0].lamports == minimumBalance(48) && tight[1].lamports == tenSol + 100;
+	assert tight[0].lamports == rentFloor(48) && tight[1].lamports == tenSol + 100;
 	const under = [richCounter(148, 500), wallet(2, tenSol)];
 	assert run(programKey(), under, sizeBytes(48), reallocSizedEntry).fault.startsWith("InsufficientFundsForRent");
 	assert under[0].lamports == 500 && under[1].lamports == tenSol;
@@ -1860,7 +1861,9 @@ test "clock reads every field the runtime wrote" {
 }
 
 function clockEntry(): void {
-	const now = clock();
+	const read = clock();
+	if (!read.ok) { failWith(read.error); return; }
+	const now = read.value;
 	if (now.slot != 77) { failWith(ProgramError.custom(1)); }
 	if (now.epochStartTimestamp != -5) { failWith(ProgramError.custom(2)); }
 	if (now.epoch != 3) { failWith(ProgramError.custom(3)); }
@@ -1875,29 +1878,50 @@ function resultWithSysvarStatus(status: uint64, accounts: HostAccount[], entry: 
 	return outcome.result;
 }
 
-function deadlineEntry(): void {
-	if (clock().unixTimestamp > 1700000000) { failWith(ProgramError.custom(1)); }
+function deadlineStep(): Result<uint64, ProgramError> {
+	const now = try clock();
+	logU64(7);
+	if (now.unixTimestamp > 1700000000) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(0);
 }
+
+function deadlineEntry(): void { codeOf(deadlineStep()); }
 
 test "a clock the runtime did not write fails the instruction instead of reading as time zero" {
 	setClock({ slot: 77, epochStartTimestamp: -5, epoch: 3, leaderScheduleEpoch: 4, unixTimestamp: 1700000001 });
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], deadlineEntry).result == ProgramError.custom(1).code;
+	assert logs().length == 1;
 	assert resultWithSysvarStatus(2, none, deadlineEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
 	assert resultWithSysvarStatus(1, none, deadlineEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
 	assert run(programKey(), none, [], deadlineEntry).result == ProgramError.custom(1).code;
 }
 
-function rentFloorEntry(): void {
-	const _floor = minimumBalance(100);
+function rentFloorStep(): Result<uint64, ProgramError> {
+	const floor = try minimumBalance(100);
+	logU64(floor);
+	return Result.ok(floor);
 }
+
+function rentFloorEntry(): void { codeOf(rentFloorStep()); }
 
 test "a rent the runtime did not write fails the instruction instead of pricing every account at zero" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], rentFloorEntry).result == 0;
+	assert logs().length == 1;
 	assert resultWithSysvarStatus(2, none, rentFloorEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
 	assert resultWithSysvarStatus(1, none, rentFloorEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
 	assert run(programKey(), none, [], rentFloorEntry).result == 0;
+}
+
+function rentFloor(space: uint64): uint64 {
+	const floor = minimumBalance(space);
+	if (!floor.ok) { failWith(floor.error); return 0; }
+	return floor.value;
 }
 
 const MAX_DATA_LENGTH: uint64 = 10485760;
@@ -1905,19 +1929,20 @@ const MAX_DATA_LENGTH: uint64 = 10485760;
 function rentOfLengthEntry(): void {
 	const lengths: uint64[] = [MAX_DATA_LENGTH + 1, 0xffffffffffffff80, 0xffffffffffffffff, 0x7fffffffffffffff];
 	for (const length of lengths) {
-		if (minimumBalance(length) != 0xffffffffffffffff) { failWith(ProgramError.custom(1)); }
+		const refused = minimumBalance(length);
+		if (refused.ok || refused.error.code != ProgramError.invalidArgument().code) { failWith(ProgramError.custom(1)); return; }
 	}
 }
 
 function rentAtBoundEntry(): void {
 	const atBound = minimumBalance(MAX_DATA_LENGTH);
-	if (atBound != (MAX_DATA_LENGTH + 128) * 6960) { failWith(ProgramError.custom(1)); }
+	if (!atBound.ok || atBound.value != (MAX_DATA_LENGTH + 128) * 6960) { failWith(ProgramError.custom(1)); }
 }
 
 test "minimumBalance refuses a length above the runtime's account size limit instead of wrapping" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], rentAtBoundEntry).result == 0;
-	assert run(programKey(), none, [], rentOfLengthEntry).result == ProgramError.invalidArgument().code;
+	assert run(programKey(), none, [], rentOfLengthEntry).result == 0;
 }
 
 function oversizedCreateStep(): Result<uint64, ProgramError> {
@@ -1935,23 +1960,6 @@ test "createProgramAccount refuses a space above the limit before it sends any i
 	const funded = [wallet(1, 10000000), blank(keyOf(3))];
 	assert run(programKey(), funded, [], oversizedCreateEntry).result == ProgramError.invalidArgument().code;
 	assert invocations().length == 0;
-}
-
-function maskedClockEntry(): void {
-	if (clock().unixTimestamp < 1700000000) { failWith(ProgramError.custom(1)); }
-}
-
-function maskedRentEntry(): void {
-	const floor = minimumBalance(100);
-	if (floor == 0xffffffffffffffff) { failWith(ProgramError.custom(2)); }
-}
-
-test "a later failWith does not replace the error a failed sysvar read recorded" {
-	setClock({ slot: 77, epochStartTimestamp: -5, epoch: 3, leaderScheduleEpoch: 4, unixTimestamp: 1700000001 });
-	const none: HostAccount[] = [];
-	assert resultWithSysvarStatus(2, none, maskedClockEntry) == ProgramError.unsupportedSysvar().code;
-	assert resultWithSysvarStatus(2, none, maskedRentEntry) == ProgramError.unsupportedSysvar().code;
-	assert run(programKey(), none, [], maskedClockEntry).result == 0;
 }
 
 function failTwiceEntry(): void {
