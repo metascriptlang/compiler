@@ -75,6 +75,7 @@ extern function msSolCopy(destination: uint64, source: uint64, length: uint64): 
 extern function msSolScratch(size: uint64): uint64;
 extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
 extern function msSolDataRoom(record: uint64): uint64;
+extern function msSolResult(): uint64;
 extern function msSolLog(address: uint64, length: uint64): void;
 extern function msSolStringAddress(text: string): uint64;
 extern function msSolStringLength(text: string): uint64;
@@ -193,7 +194,7 @@ export function scratchAddress<T>(count: uint64): Result<uint64, ProgramError> {
 }
 
 export function failWith(error: ProgramError): void {
-	msSolSetResult(error.code);
+	if (msSolResult() == 0) { msSolSetResult(error.code); }
 }
 
 function loadPubkey(address: uint64): Pubkey {

@@ -1937,6 +1937,33 @@ test "createProgramAccount refuses a space above the limit before it sends any i
 	assert invocations().length == 0;
 }
 
+function maskedClockEntry(): void {
+	if (clock().unixTimestamp < 1700000000) { failWith(ProgramError.custom(1)); }
+}
+
+function maskedRentEntry(): void {
+	const floor = minimumBalance(100);
+	if (floor == 0xffffffffffffffff) { failWith(ProgramError.custom(2)); }
+}
+
+test "a later failWith does not replace the error a failed sysvar read recorded" {
+	setClock({ slot: 77, epochStartTimestamp: -5, epoch: 3, leaderScheduleEpoch: 4, unixTimestamp: 1700000001 });
+	const none: HostAccount[] = [];
+	assert resultWithSysvarStatus(2, none, maskedClockEntry) == ProgramError.unsupportedSysvar().code;
+	assert resultWithSysvarStatus(2, none, maskedRentEntry) == ProgramError.unsupportedSysvar().code;
+	assert run(programKey(), none, [], maskedClockEntry).result == 0;
+}
+
+function failTwiceEntry(): void {
+	failWith(ProgramError.custom(5));
+	failWith(ProgramError.custom(6));
+}
+
+test "failWith keeps the first error of the instruction" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], failTwiceEntry).result == ProgramError.custom(5).code;
+}
+
 test "create<T> fails the instruction when the runtime did not write the rent" {
 	const funded = [wallet(1, 10000000), blank(keyOf(3))];
 	assert resultWithSysvarStatus(2, funded, createEntry) == ProgramError.unsupportedSysvar().code;
