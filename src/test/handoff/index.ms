@@ -133,6 +133,7 @@ import "./nullFirstTernaryArg";
 import "./fieldVisibility";
 import "./useBeforeAssign";
 import "./outParameterWrites";
+import "./arrayLengthGrowth";
 import "./typeNameValue";
 import "./routineInterface";
 import "./enumConversionRange";

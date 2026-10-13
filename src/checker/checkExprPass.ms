@@ -941,6 +941,12 @@ function checkHiddenDeref(ctx: CheckerContext, node: Node, expectedType: Type | 
 	return;
 }
 
+function refuseLengthGrowth(ctx: CheckerContext, d: BinaryExprData, arrType: Type): void {
+	if (arrType.kind != TypeKind.Array || !requiresInit(ctx, arrType.typeReturn)) return;
+	if (d.operator == "=" && d.right.kind == NodeKind.NumberLiteral && (d.right.data as NumberLiteralData).value == 0) return;
+	addError(ctx, `'length' cannot be assigned on an array whose elements have no default value, because it could grow: ${noDefaultReason(ctx, arrType.typeReturn)} — push values to grow, shrink(n) to cut, or length = 0 to empty it`, d.left.location.line, d.left.location.column);
+}
+
 function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as BinaryExprData;
 	// Ref parity: leftPartOfAsgn
@@ -996,6 +1002,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			} else if (md.object.nodeType.kind == TypeKind.Array && d.operator != "=") {
 				addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + d.operator.slice(0, d.operator.length - 1) + " n' instead", d.left.location.line, d.left.location.column);
 			}
+			refuseLengthGrowth(ctx, d, md.object.nodeType);
 		}
 		const discUnion = literalDiscriminantOwner(md);
 		if (discUnion != null) {
