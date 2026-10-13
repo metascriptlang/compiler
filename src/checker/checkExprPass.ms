@@ -2315,6 +2315,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	}
 	if (mapObjType != null && mapObjType.kind == TypeKind.GenericInstance
 		&& isIndexableMapType(mapObjType)
+		&& !isRangeIndex(d.index)
 		&& ctx.initTracker.leftPartOfAsgn == 0) {
 		const loc = node.location;
 		const memberTok = createToken(TokenKind.Ident, "", loc.line);
@@ -2380,8 +2381,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (idxType != null && idxType.kind == TypeKind.Number && d.index.kind != NodeKind.BinaryExpr) {
 		d.index = wrapInConv(d.index, createPrimitive(TypeKind.Int64));
 	}
-	const rangeIndex = d.index.kind == NodeKind.BinaryExpr
-		&& ((d.index.data as BinaryExprData).operator == ".." || (d.index.data as BinaryExprData).operator == "...");
+	const rangeIndex = isRangeIndex(d.index);
 	if (arrType.kind == TypeKind.Tuple && arrType.typeChildren != null && !rangeIndex) {
 		node.nodeType = tupleIndexType(ctx, arrType, d, node); return;
 	}
@@ -2390,6 +2390,10 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
 		if (bd.operator == ".." || bd.operator == "...") {
+			if (!isSliceSource(arrType)) {
+				addError(ctx, "cannot slice '" + typeDisplayName(arrType) + "' with '" + bd.operator + "': only an array, a Span or a string has the length that bounds a slice", node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
 			accessType = arrType.kind == TypeKind.String ? createReadonlyView(createSpan(charType()))
 				: createSpan(getElementType(arrType));
 		} else if (arrType.kind == TypeKind.String) {
@@ -2404,6 +2408,19 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 	}
 	node.nodeType = accessType;
 	node.nodeType = accessType; return;
+}
+
+function isRangeIndex(index: Node): boolean {
+	return index.kind == NodeKind.BinaryExpr
+		&& ((index.data as BinaryExprData).operator == ".." || (index.data as BinaryExprData).operator == "...");
+}
+
+function isSliceSource(t: Type): boolean {
+	const held = skipModifier(t) ?? t;
+	const base = held.kind == TypeKind.Ref && held.typeReturn != null ? held.typeReturn : held;
+	const k = base.kind;
+	return k == TypeKind.Array || k == TypeKind.SizedArray || k == TypeKind.Span || k == TypeKind.String
+		|| k == TypeKind.GenericParam || k == TypeKind.Error || isUnresolvedType(base) || hasGenericParams(base);
 }
 
 function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
