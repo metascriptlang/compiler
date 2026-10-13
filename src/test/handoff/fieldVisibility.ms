@@ -165,6 +165,13 @@ test "fieldVisibility: as converts a generic struct instance only to itself, a d
 	assert reports(lib, pre + "function forge<T>(raw: P): Box<T> { return raw as Box<T>; }\nconsole.log(forge<A>(p).x);\n", "cannot convert P to Box<A>");
 }
 
+test "fieldVisibility: as unwraps a generic distinct of a generic struct to the struct it wraps" {
+	const lib = "export struct A { a: int32; }\nexport struct B { b: int32; }\nexport struct Box<T> { v: T; }\nexport type Boxed<T> = distinct Box<T>;\n";
+	const pre = "import { A, B, Box, Boxed } from \"./lib\";\nconst ba: Box<A> = { v: { a: 9 } };\n";
+	assert errorsOf(lib, pre + "function unbox<T>(b: Boxed<T>): T { const x = b as Box<T>; return x.v; }\nconst w = ba as Boxed<A>;\nconst back = w as Box<A>;\nconsole.log(unbox(w).a, back.v.a);\n").length == 0;
+	assert reports(lib, pre + "const w = ba as Boxed<A>;\nconst q = w as Box<B>;\n", "cannot convert Boxed<A> to Box<B>");
+}
+
 test "fieldVisibility: a refused struct conversion says who builds a struct with private fields" {
 	const lib = "export struct Account { address: uint64; }\nexport struct Signer { private account: Account; }\nexport struct P { x: int32; }\nexport struct Q { x: int32; }\n";
 	const pre = "import { Account, Signer, P, Q } from \"./lib\";\nconst raw: Account = { address: 1 };\nconst p: P = { x: 3 };\n";
