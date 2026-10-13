@@ -134,6 +134,7 @@ import "./fieldVisibility";
 import "./useBeforeAssign";
 import "./outParameterWrites";
 import "./arrayLengthGrowth";
+import "./relationalOperands";
 import "./typeNameValue";
 import "./routineInterface";
 import "./enumConversionRange";
