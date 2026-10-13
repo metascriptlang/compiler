@@ -18,8 +18,9 @@
 // the input parser is inlined into more than one function, or dispatch pulled in a signed division.
 // `owned`, `delegated` and `mutable` are @inline too, but each probe call is the one direct use of a
 // body that holds the lookup core call, the field check and (mutable) the exclusive claim, and LLVM
-// may keep it out of line: up to nine copies of at most 256 bytes (owned and delegated, 224
-// measured) or 320 (mutable, 232 measured), zero when inlined. The .text bound carries those copies.
+// may keep it out of line: up to nine copies of at most 256 bytes (owned and delegated, 208
+// measured) or 320 (mutable, 240 measured), zero when inlined. The .text bound carries those copies
+// (94,328 measured, 86,528 on the previous tree).
 // `selectLiteralInstruction` is not @inline and has one caller: zero or one copy, 136 bytes measured.
 // RED PRE-FIX: createPdaOf 920 bytes a copy, realloc 824, close 752, verifiedPda 512 and 520,
 // selectInstruction 688, ownProgram 600, __divdi3 linked; a pass-through wrapper (close, realloc,
@@ -237,7 +238,7 @@ const ONE_COPY: Bound[] = [
 	{ family: "account", least: 0, copies: 0, most: 256 },
 ];
 
-const TEXT_MOST = 92500;
+const TEXT_MOST = 95000;
 
 removeAll(dir);
 ensureDir(dir);

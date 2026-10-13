@@ -16,6 +16,7 @@ import {
 	createdPdaAccount,
 	createdPdaAccountAt,
 	delegatedFailure,
+	delegatedAtFailure,
 	duplicateFailure,
 	exclusiveWritable,
 	givenBump,
@@ -34,8 +35,10 @@ import {
 	unchecked,
 	keyIsZero,
 	mutableEnvelopeFailure,
+	mutableEnvelopeAtFailure,
 	programWordsAtFailure,
 	ownedFailure,
+	ownedAtFailure,
 	accountAt,
 	recordAddress,
 	resizedProgramAccount,
@@ -304,7 +307,10 @@ export struct Pda<T> {
 }
 
 @inline function ownedProof<T>(index: int32, out failure: uint64): Owned<T> {
-	const found = ownedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	const found = accountAt(index, failure);
+	if (failure == 0) {
+		failure = ownedAtFailure(found.recordAddress(), provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+	}
 	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
 		failure = ProgramError.accountDidNotDeserialize().code;
 	}
@@ -313,44 +319,58 @@ export struct Pda<T> {
 
 @inline export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = ownedProof<T>(index, failure);
+	const found = ownedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
+		failure = ProgramError.accountDidNotDeserialize().code;
+	}
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	return Result.ok({ account: found });
 }
 
 @inline function mutableProof<T>(index: int32, out failure: uint64): Mutable<T> {
-	const found = mutableEnvelopeFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	const found = accountAt(index, failure);
 	if (failure == 0) {
 		const address = found.recordAddress();
-		if (!accountFieldsValid<T>(address + 96)) {
+		failure = mutableEnvelopeAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+		if (failure == 0 && !accountFieldsValid<T>(address + 96)) {
 			failure = ProgramError.accountDidNotDeserialize().code;
-		} else {
-			msSolClaimRecord(address);
 		}
+		if (failure == 0) { msSolClaimRecord(address); }
 	}
 	return { account: found };
 }
 
 @inline export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = mutableProof<T>(index, failure);
+	const found = mutableEnvelopeFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
+		failure = ProgramError.accountDidNotDeserialize().code;
+	}
+	if (failure == 0) { msSolClaimRecord(found.recordAddress()); }
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	return Result.ok({ account: found });
 }
 
 @inline function delegatedProof<T>(index: int32, out failure: uint64): Delegated<T> {
-	const found = delegatedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
-	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
-		failure = ProgramError.accountDidNotDeserialize().code;
+	const found = accountAt(index, failure);
+	if (failure == 0) {
+		const address = found.recordAddress();
+		failure = delegatedAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+		if (failure == 0 && !accountFieldsValid<T>(address + 96)) {
+			failure = ProgramError.accountDidNotDeserialize().code;
+		}
 	}
 	return { account: found };
 }
 
 @inline export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = delegatedProof<T>(index, failure);
+	const found = delegatedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
+		failure = ProgramError.accountDidNotDeserialize().code;
+	}
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	return Result.ok({ account: found });
 }
 
 // Only the failure paths hold this: the account is built for a proof that is refused.
