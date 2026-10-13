@@ -40,6 +40,10 @@ import {
 	ownedFailure,
 	ownedAtFailure,
 	accountAt,
+	accountIn,
+	heldUpTo,
+	heldNow,
+	Held,
 	recordAddress,
 	resizedProgramAccount,
 	transfer,
@@ -134,15 +138,15 @@ export function asAccount<T>(this proof: External<T>): Account { return proof.ac
 export function asAccount<T>(this proof: ExternalMutable<T>): Account { return proof.account; }
 export function asAccount<T>(this proof: Delegated<T>): Account { return proof.account; }
 
-@inline function signerProof(index: int32, out failure: uint64): Signer {
-	const found = accountAt(index, failure);
+@inline function signerProof(index: int32, held: Held, out failure: uint64): Signer {
+	const found = accountIn(index, held, failure);
 	if (failure == 0 && msSolLoadU8(found.recordAddress() + 1) == 0) { failure = ProgramError.accountNotSigner().code; }
 	return { account: found };
 }
 
 export function signer(index: int32): Result<Signer, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = signerProof(index, failure);
+	const proof = signerProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
@@ -156,15 +160,15 @@ export function signer(index: int32): Result<Signer, ProgramError> {
 	return 0;
 }
 
-@inline function writableSignerProof(index: int32, out failure: uint64): WritableSigner {
-	const found = accountAt(index, failure);
+@inline function writableSignerProof(index: int32, held: Held, out failure: uint64): WritableSigner {
+	const found = accountIn(index, held, failure);
 	if (failure == 0) { failure = writableSignerFailure(found.recordAddress()); }
 	return { account: found };
 }
 
 export function writableSigner(index: int32): Result<WritableSigner, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = writableSignerProof(index, failure);
+	const proof = writableSignerProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
@@ -177,14 +181,14 @@ export function writableSigner(index: int32): Result<WritableSigner, ProgramErro
 	return 0;
 }
 
-@inline function writableProof(index: int32, out failure: uint64): Writable {
-	const found = accountAt(index, failure);
+@inline function writableProof(index: int32, held: Held, out failure: uint64): Writable {
+	const found = accountIn(index, held, failure);
 	if (failure == 0) { failure = writableFailure(found.recordAddress()); }
 	return { account: found };
 }
 
-@inline function writablePdaProof(index: int32, out failure: uint64): WritablePda {
-	const found = accountAt(index, failure);
+@inline function writablePdaProof(index: int32, held: Held, out failure: uint64): WritablePda {
+	const found = accountIn(index, held, failure);
 	if (failure == 0) {
 		const address = found.recordAddress();
 		const duplicated = duplicateFailure(address);
@@ -196,7 +200,7 @@ export function writableSigner(index: int32): Result<WritableSigner, ProgramErro
 
 function writablePda(index: int32): Result<WritablePda, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = writablePdaProof(index, failure);
+	const proof = writablePdaProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
@@ -219,20 +223,20 @@ export function seedsFoldedPdaFailure(
 
 export function writable(index: int32): Result<Writable, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = writableProof(index, failure);
+	const proof = writableProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
 
-@inline function systemProof(index: int32, out failure: uint64): SystemAccount {
-	const found = accountAt(index, failure);
+@inline function systemProof(index: int32, held: Held, out failure: uint64): SystemAccount {
+	const found = accountIn(index, held, failure);
 	if (failure == 0 && !keyIsZero(found.recordAddress() + 40)) { failure = ProgramError.accountNotSystemOwned().code; }
 	return { account: found };
 }
 
 export function systemAccount(index: int32): Result<SystemAccount, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = systemProof(index, failure);
+	const proof = systemProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
@@ -285,8 +289,8 @@ export struct Pda<T> {
 @inline export function asMutable<T>(this found: Pda<T>): Mutable<T> { return found.account; }
 @inline export function foundBump<T>(this found: Pda<T>): uint8 { return found.bump; }
 
-@inline function programProof<P>(index: int32, out failure: uint64): Program<P> {
-	const found = accountAt(index, failure);
+@inline function programProof<P>(index: int32, held: Held, out failure: uint64): Program<P> {
+	const found = accountIn(index, held, failure);
 	if (failure == 0) {
 		failure = programWordsAtFailure(
 			found.recordAddress(),
@@ -301,13 +305,13 @@ export struct Pda<T> {
 
 @inline export function program<P>(index: int32): Result<Program<P>, ProgramError> {
 	let failure: uint64 = 0;
-	const proof = programProof<P>(index, failure);
+	const proof = programProof<P>(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
 
-@inline function ownedProof<T>(index: int32, out failure: uint64): Owned<T> {
-	const found = accountAt(index, failure);
+@inline function ownedProof<T>(index: int32, held: Held, out failure: uint64): Owned<T> {
+	const found = accountIn(index, held, failure);
 	if (failure == 0) {
 		failure = ownedAtFailure(found.recordAddress(), provenDiscriminatorWord<T>(), sizeof(T) as uint64);
 	}
@@ -327,8 +331,8 @@ export struct Pda<T> {
 	return Result.ok({ account: found });
 }
 
-@inline function mutableProof<T>(index: int32, out failure: uint64): Mutable<T> {
-	const found = accountAt(index, failure);
+@inline function mutableProof<T>(index: int32, held: Held, out failure: uint64): Mutable<T> {
+	const found = accountIn(index, held, failure);
 	if (failure == 0) {
 		const address = found.recordAddress();
 		failure = mutableEnvelopeAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
@@ -351,8 +355,8 @@ export struct Pda<T> {
 	return Result.ok({ account: found });
 }
 
-@inline function delegatedProof<T>(index: int32, out failure: uint64): Delegated<T> {
-	const found = accountAt(index, failure);
+@inline function delegatedProof<T>(index: int32, held: Held, out failure: uint64): Delegated<T> {
+	const found = accountIn(index, held, failure);
 	if (failure == 0) {
 		const address = found.recordAddress();
 		failure = delegatedAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
@@ -379,7 +383,7 @@ export struct Pda<T> {
 	return accountAt(index, lookup);
 }
 
-@inline function externalProof<T>(index: int32, out failure: uint64, out rejected: boolean): External<T> {
+@inline function externalProof<T>(index: int32, held: Held, out failure: uint64, out rejected: boolean): External<T> {
 	rejected = false;
 	failure = 0;
 	const verified = T.verify(index);
@@ -402,7 +406,7 @@ export struct Pda<T> {
 	return Result.ok({ account: verified });
 }
 
-@inline function externalMutableProof<T>(index: int32, out failure: uint64, out rejected: boolean): ExternalMutable<T> {
+@inline function externalMutableProof<T>(index: int32, held: Held, out failure: uint64, out rejected: boolean): ExternalMutable<T> {
 	rejected = false;
 	failure = 0;
 	const verified = T.verify(index);
@@ -453,8 +457,8 @@ test "literal selection widens the minimum int32 before negation" {
 	assert found.error.code == 2147483648;
 }
 
-@inline function uncheckedProof(index: int32, out failure: uint64): Account {
-	return accountAt(index, failure);
+@inline function uncheckedProof(index: int32, held: Held, out failure: uint64): Account {
+	return accountIn(index, held, failure);
 }
 
 macro provenDiscriminatorWord(): Node {
@@ -554,7 +558,7 @@ macro singleAccountBody(index: Node): Node {
 		if (typeArg != "") { made.typeArg = typeArg; }
 		return made;
 	}
-	const args: Node[] = [index, ident(failure)];
+	const args: Node[] = [index, call(bindSym("heldNow")!, [], ""), ident(failure)];
 	if (base == "External" || base == "ExternalMutable") { args.push(ident(rejected)); }
 	const refused: Node = {
 		kind: NodeKind.BinaryExpr, line: line, column: column, operator: "||",
@@ -1116,6 +1120,7 @@ export macro accounts(): Node {
 			assignFailure(whole(ProgramError.accountNotEnoughKeys().code as number, shape), shape)] },
 	});
 	chain.push(refuseFailed());
+	chain.push(declare("$held", "", call(bindSym("heldUpTo")!, [whole(names.length, shape)], shape)));
 	let field = 0;
 	while (field < names.length) {
 		const written = writtenTypes[field];
@@ -1195,7 +1200,7 @@ export macro accounts(): Node {
 		if (base == "Program") { direct = bindSym("programProof"); }
 		if (base == "External") { direct = bindSym("externalProof"); }
 		if (base == "ExternalMutable") { direct = bindSym("externalMutableProof"); }
-		const verdict = call(direct!, [index, ident(failure, shape)], shape);
+		const verdict = call(direct!, [index, ident("$held", shape), ident(failure, shape)], shape);
 		if (base == "External" || base == "ExternalMutable") { verdict.arguments.push(ident(rejected, shape)); }
 		verdict.typeArg = inner;
 		chain.push(declare(slotOf(names[field]), "", verdict));

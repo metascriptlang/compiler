@@ -58,6 +58,7 @@ extern function msSolInvokeMetas(
 ): uint64;
 extern function msSolAccountCount(): uint64;
 extern function msSolAccountAt(index: uint64): uint64;
+extern function msSolAccountSlot(index: uint64): uint64;
 extern function msSolInstructionData(): uint64;
 extern function msSolInstructionDataLength(): uint64;
 extern function msSolProgramId(): uint64;
@@ -850,6 +851,27 @@ function programDataFailure(
 	const address = msSolAccountAt(index as uint64);
 	failure = address == 0 ? ProgramError.accountNotEnoughKeys().code : 0;
 	return { address: address };
+}
+
+// A count of accounts the runtime parsed: only heldUpTo and heldNow build one, from the true count, so an
+// index below it names a record the runtime parsed and the table read needs no zero check of its own.
+export struct Held { private count: uint64; }
+
+@inline export function heldUpTo(wanted: uint64): Held {
+	const present = msSolAccountCount();
+	return { count: present < wanted ? present : wanted };
+}
+
+@inline export function heldNow(): Held { return { count: msSolAccountCount() }; }
+
+@inline export function accountIn(index: int32, held: Held, out failure: uint64): Account {
+	const slot = index as uint64;
+	if (slot >= held.count) {
+		failure = ProgramError.accountNotEnoughKeys().code;
+		return { address: 0 };
+	}
+	failure = 0;
+	return { address: msSolAccountSlot(slot) };
 }
 
 @inline export function recordAddress(this account: Account): uint64 { return account.address; }

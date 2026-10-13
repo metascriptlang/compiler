@@ -221,6 +221,10 @@ static inline uint64_t msSolAccountAt(uint64_t index) {
     return address;
 }
 
+static inline uint64_t msSolAccountSlot(uint64_t index) {
+    return ((const uint64_t*)msSolContext()->accountTable)[index];
+}
+
 static inline uint64_t msSolInstructionData(void) {
     return msSolContext()->instructionData;
 }
