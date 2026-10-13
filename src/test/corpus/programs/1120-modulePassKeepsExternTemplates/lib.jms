@@ -1,0 +1,6 @@
+extern function bump(n: number): number from "(n => n + 1)(#)";
+export extern function mix(a: number, b: number): number from "(#) * 10 + (#)";
+
+export function twice(n: number): number {
+	return bump(bump(n));
+}
