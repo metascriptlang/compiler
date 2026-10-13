@@ -1717,7 +1717,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// the arg). The shared `tryInstantiateGenericCallee` helper handles
 		// both binding sources. Runs BEFORE the explicit-arg branch so the
 		// typed mono path is uniform regardless of `<T>` presence.
-		if (hasGenericParams(calleeType)
+		if (isGenericRoutine(calleeType, node.resolvedSym)
 				&& node.resolvedSym != null && node.resolvedSym.declNode != null
 				&& node.resolvedSym.declNode.kind == NodeKind.MethodDecl
 				&& (node.resolvedSym.declNode.data as MethodDeclData).methodIsStatic) {
@@ -1728,7 +1728,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
 			}
 		}
-		if (hasGenericParams(calleeType) && node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
+		if (isGenericRoutine(calleeType, node.resolvedSym) && node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
 				&& node.resolvedSym.declNode != null && node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
 			const staticInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType);
 			if (staticInst != null) {
@@ -1737,7 +1737,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				return inferGenericReturn(ctx, calleeType, argTypes, expectedType, node);
 			}
 		}
-		if (hasGenericParams(calleeType) && !node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
+		if (isGenericRoutine(calleeType, node.resolvedSym) && !node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
 				&& node.resolvedSym.declNode != null && (declTakesReceiver(node.resolvedSym.declNode) || isGenericInstanceMethod(node.resolvedSym))) {
 			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, extRecvBindings);
 			if (extInst != null) {
@@ -2611,6 +2611,11 @@ function getGenericDeclFlags(declNode: Node): string {
 	if (declNode.kind == NodeKind.FunctionDecl) return (declNode.data as FunctionDeclData).fnFlags;
 	if (declNode.kind == NodeKind.MethodDecl) return (declNode.data as MethodDeclData).methodFlags;
 	return "";
+}
+
+function isGenericRoutine(calleeType: Type | null, sym: Symbol | null): boolean {
+	if (hasGenericParams(calleeType)) return true;
+	return sym != null && sym.declNode != null && isGenericFn(getGenericDeclFlags(sym.declNode));
 }
 
 function isGenericInstanceMethod(sym: Symbol): boolean {
