@@ -883,15 +883,15 @@ export function unchecked(index: int32): Result<Account, ProgramError> {
 	return Result.ok(found);
 }
 
-@inline export function programFailure(index: int32, id: Pubkey, out found: Account): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	if (!keysEqual(address + 8, msSolSpanAddress(id.bytes))) {
-		return ProgramError.invalidProgramId().code;
+@inline export function programFailure(index: int32, id: Pubkey, out failure: uint64): Account {
+	const found = accountAt(index, failure);
+	if (failure != 0) { return found; }
+	if (!keysEqual(found.address + 8, msSolSpanAddress(id.bytes))) {
+		failure = ProgramError.invalidProgramId().code;
+	} else if (msSolLoadU8(found.address + 3) == 0) {
+		failure = ProgramError.invalidProgramExecutable().code;
 	}
-	if (msSolLoadU8(address + 3) == 0) { return ProgramError.invalidProgramExecutable().code; }
-	found = { address: address };
-	return 0;
+	return found;
 }
 
 // The same checks with the program id given as its four little-endian words, so a typed Program<P>
@@ -908,8 +908,8 @@ export function unchecked(index: int32): Result<Account, ProgramError> {
 }
 
 export function programAccount(index: int32, id: Pubkey): Result<Account, ProgramError> {
-	let found: Account;
-	const failure = programFailure(index, id, found);
+	let failure: uint64;
+	const found = programFailure(index, id, failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found);
 }
