@@ -2178,7 +2178,7 @@ test "an object key refuses a declared-looking name that has no symbol" {
 }
 
 test "two symbols of one name cannot hold one op key" {
-	const t = createEnum("OpIdentityProbe", ["A"], null as unknown as number[]);
+	const t = createEnum("OpIdentityProbe", ["A"]);
 	const a = makeSymbol("OpIdentityProbe_toString", SymbolKind.Function, t, false);
 	const b = makeSymbol("OpIdentityProbe_toString", SymbolKind.Function, t, false);
 	setOpByKey(t, AttachedOp.AttachedToString, a);
