@@ -642,7 +642,7 @@ export function takeDefaultArgTemps(ctx: CheckerContext, mark: int32): Node[] {
 		const n = ctx.pendingHoisted[i];
 		if (isDefaultArgTemp(n)) taken.push(n); else kept.push(n);
 	}
-	ctx.pendingHoisted.length = mark;
+	ctx.pendingHoisted.shrink(mark);
 	for (const n of kept) ctx.pendingHoisted.push(n);
 	return taken;
 }
@@ -696,7 +696,7 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 		const diagnosticMark = defCtx.errors.length;
 		callCheckExpr(defCtx, cloned, expectedType);
 		const fitted = expectedType != null && !hasGenericParams(expectedType) ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
-		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.length = diagnosticMark;
+		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.shrink(diagnosticMark);
 		args.push(fitted);
 		argIdx = argIdx + 1;
 	}
@@ -1119,7 +1119,7 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 		for (const arg of (node.data as CallExprData).arguments) if (arg.kind == NodeKind.Identifier) tracker.argIdents.push(arg);
 	}
 	let r = checkCallExprInner(ctx, node, expectedType);
-	tracker.argIdents.length = identsFrom;
+	tracker.argIdents.shrink(identsFrom);
 	settleUnassignedArgs(ctx, readsFrom);
 	const seen = node.kind == NodeKind.CallExpr && isUnresolvedType(r) ? callSelfReadType((node.data as CallExprData).callee) : null;
 	if (seen != null) {
@@ -1138,7 +1138,7 @@ function settleUnassignedArgs(ctx: CheckerContext, from: int32): void {
 		const id = read.data as IdentifierData;
 		if (read.resolvedSym != null) refuseUnassignedRead(ctx, read, id.name, read.resolvedSym.symbolType);
 	}
-	reads.length = from;
+	reads.shrink(from);
 }
 
 function takesOut(ctx: CheckerContext, arg: Node): void {

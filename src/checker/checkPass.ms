@@ -1165,7 +1165,7 @@ function settleSelfReads(ctx: CheckerContext, sym: Symbol): void {
 				r.read.location.line, r.read.location.column);
 		}
 	}
-	_selfReads.length = kept;
+	_selfReads.shrink(kept);
 }
 
 function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
@@ -1254,7 +1254,7 @@ function settleDiscardedCalls(sym: Symbol): void {
 			kept += 1;
 		}
 	}
-	_discardedInFlightCalls.length = kept;
+	_discardedInFlightCalls.shrink(kept);
 }
 
 function refuseInferenceCycle(ctx: CheckerContext, at: number, read: Node): void {
@@ -2157,7 +2157,7 @@ function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32, from: int32
 		for (let h = from; h < ctx.pendingHoisted.length; h = h + 1) rebuilt.push(ctx.pendingHoisted[h]);
 		for (const t of ctx.pendingTrailing) rebuilt.push(t);
 	}
-	ctx.pendingHoisted.length = from;
+	ctx.pendingHoisted.shrink(from);
 	ctx.pendingTrailing.length = 0;
 	stmts.length = 0;
 	for (const s of rebuilt) stmts.push(s);
@@ -2685,7 +2685,7 @@ function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Typ
 	const probe = cloneNodeForCheck(def);
 	checkExpr(ctx, probe, paramType);
 	if (probe.nodeType != null) fitNode(ctx, probe, paramType, probe.nodeType);
-	ctx.pendingHoisted.length = hoistMark;
+	ctx.pendingHoisted.shrink(hoistMark);
 	noteDefaultCheckedAtDeclaration(def);
 }
 
