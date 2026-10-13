@@ -340,7 +340,9 @@ function writeThroughSecond(): void {
 }
 
 function logSlot(): void {
-	logU64(clock().slot);
+	const now = clock();
+	if (!now.ok) { failWith(now.error); return; }
+	logU64(now.value.slot);
 }
 
 function payStep(): Result<uint64, ProgramError> {
