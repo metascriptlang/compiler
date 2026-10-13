@@ -23,8 +23,8 @@ import {
 } from "std/solana";
 import {
 	AuthorityType,
-	Mint,
-	TokenAccount,
+	InterfaceMint,
+	InterfaceTokenAccount,
 	approveChecked,
 	approveDelegate,
 	burnChecked,
@@ -79,14 +79,14 @@ const FORWARD: uint8 = 28;
 function createAtKeypair(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
 	const fresh = try writableSigner(1);
-	const mint = try external<Mint>(2);
+	const mint = try external<InterfaceMint>(2);
 	return createTokenAccount(payer, fresh, mint, try instructionData().readPubkey(1));
 }
 
 function createAtPda(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
 	const vault = try writable(1);
-	const mint = try external<Mint>(2);
+	const mint = try external<InterfaceMint>(2);
 	return signedPda(
 		createTokenAccount(payer, vault, mint, try instructionData().readPubkey(1)),
 		vault.asAccount(),
@@ -102,14 +102,14 @@ function initializeRaw(): Result<uint64, ProgramError> {
 }
 
 function burn(): Result<uint64, ProgramError> {
-	const from = try externalMutable<TokenAccount>(0);
-	const mint = try externalMutable<Mint>(1);
+	const from = try externalMutable<InterfaceTokenAccount>(0);
+	const mint = try externalMutable<InterfaceMint>(1);
 	return burnTokens(from, mint, try signer(2), try instructionData().readU64(1));
 }
 
 function burnAsPda(): Result<uint64, ProgramError> {
-	const from = try externalMutable<TokenAccount>(0);
-	const mint = try externalMutable<Mint>(1);
+	const from = try externalMutable<InterfaceTokenAccount>(0);
+	const mint = try externalMutable<InterfaceMint>(1);
 	const authority = try account(2);
 	const amount = try instructionData().readU64(1);
 	return signedPda(burnTokens(from, mint, authority, amount), authority, ["authority"]);
@@ -144,17 +144,17 @@ function nextAuthority(): Result<Pubkey | null, ProgramError> {
 }
 
 function setMintAuthority(): Result<uint64, ProgramError> {
-	const mint = try externalMutable<Mint>(0);
+	const mint = try externalMutable<InterfaceMint>(0);
 	return setAuthorityOf(mint, try authorityKind(), try signer(1), try nextAuthority());
 }
 
 function setAccountAuthority(): Result<uint64, ProgramError> {
-	const held = try externalMutable<TokenAccount>(0);
+	const held = try externalMutable<InterfaceTokenAccount>(0);
 	return setAuthorityOf(held, try authorityKind(), try signer(1), try nextAuthority());
 }
 
 function setMintAuthorityAsPda(): Result<uint64, ProgramError> {
-	const mint = try externalMutable<Mint>(0);
+	const mint = try externalMutable<InterfaceMint>(0);
 	const authority = try account(1);
 	const kind = try authorityKind();
 	const next = try nextAuthority();
@@ -168,15 +168,15 @@ function setAuthorityRaw(): Result<uint64, ProgramError> {
 }
 
 function approve(): Result<uint64, ProgramError> {
-	const source = try externalMutable<TokenAccount>(0);
-	const mint = try external<Mint>(1);
+	const source = try externalMutable<InterfaceTokenAccount>(0);
+	const mint = try external<InterfaceMint>(1);
 	const amount = try instructionData().readU64(1);
 	return approveDelegate(source, mint, try account(2), try signer(3), amount);
 }
 
 function approveAsPda(): Result<uint64, ProgramError> {
-	const source = try externalMutable<TokenAccount>(0);
-	const mint = try external<Mint>(1);
+	const source = try externalMutable<InterfaceTokenAccount>(0);
+	const mint = try external<InterfaceMint>(1);
 	const delegate = try account(2);
 	const authority = try account(3);
 	const amount = try instructionData().readU64(1);
@@ -201,19 +201,19 @@ function approveRaw(): Result<uint64, ProgramError> {
 }
 
 function revokeBySigner(): Result<uint64, ProgramError> {
-	return revokeDelegate(try externalMutable<TokenAccount>(0), try signer(1));
+	return revokeDelegate(try externalMutable<InterfaceTokenAccount>(0), try signer(1));
 }
 
 function revokeAsPda(): Result<uint64, ProgramError> {
-	const source = try externalMutable<TokenAccount>(0);
+	const source = try externalMutable<InterfaceTokenAccount>(0);
 	const authority = try account(1);
 	return signedPda(revokeDelegate(source, authority), authority, ["authority"]);
 }
 
 function transfer(): Result<uint64, ProgramError> {
-	const from = try externalMutable<TokenAccount>(0);
-	const to = try externalMutable<TokenAccount>(1);
-	const mint = try external<Mint>(2);
+	const from = try externalMutable<InterfaceTokenAccount>(0);
+	const to = try externalMutable<InterfaceTokenAccount>(1);
+	const mint = try external<InterfaceMint>(2);
 	return transferTokens(from, to, mint, try account(3), try instructionData().readU64(1));
 }
 
@@ -229,14 +229,14 @@ function createAssociatedRaw(): Result<uint64, ProgramError> {
 }
 
 function mint(): Result<uint64, ProgramError> {
-	const minted = try externalMutable<Mint>(0);
-	const to = try externalMutable<TokenAccount>(1);
+	const minted = try externalMutable<InterfaceMint>(0);
+	const to = try externalMutable<InterfaceTokenAccount>(1);
 	return mintTokens(minted, to, try account(2), try instructionData().readU64(1));
 }
 
 function mintAsPda(): Result<uint64, ProgramError> {
-	const minted = try externalMutable<Mint>(0);
-	const to = try externalMutable<TokenAccount>(1);
+	const minted = try externalMutable<InterfaceMint>(0);
+	const to = try externalMutable<InterfaceTokenAccount>(1);
 	const authority = try account(2);
 	const amount = try instructionData().readU64(1);
 	return signedPda(mintTokens(minted, to, authority, amount), authority, ["authority"]);
@@ -249,9 +249,9 @@ function mintRaw(): Result<uint64, ProgramError> {
 }
 
 function transferAsPda(): Result<uint64, ProgramError> {
-	const from = try externalMutable<TokenAccount>(0);
-	const to = try externalMutable<TokenAccount>(1);
-	const minted = try external<Mint>(2);
+	const from = try externalMutable<InterfaceTokenAccount>(0);
+	const to = try externalMutable<InterfaceTokenAccount>(1);
+	const minted = try external<InterfaceMint>(2);
 	const authority = try account(3);
 	const amount = try instructionData().readU64(1);
 	return signedPda(transferTokens(from, to, minted, authority, amount), authority, ["authority"]);
@@ -270,12 +270,12 @@ function transferRaw(): Result<uint64, ProgramError> {
 }
 
 function close(): Result<uint64, ProgramError> {
-	const closing = try externalMutable<TokenAccount>(0);
+	const closing = try externalMutable<InterfaceTokenAccount>(0);
 	return closeTokenAccount(closing, try writable(1), try account(2));
 }
 
 function closeAsPda(): Result<uint64, ProgramError> {
-	const closing = try externalMutable<TokenAccount>(0);
+	const closing = try externalMutable<InterfaceTokenAccount>(0);
 	const destination = try writable(1);
 	const authority = try account(2);
 	return signedPda(closeTokenAccount(closing, destination, authority), authority, ["authority"]);
@@ -290,7 +290,7 @@ function createAssociatedTyped(): Result<uint64, ProgramError> {
 		try writableSigner(0),
 		try writable(1),
 		try account(2),
-		try external<Mint>(3),
+		try external<InterfaceMint>(3),
 		try program<System>(4),
 		try account(5),
 	);

@@ -36,7 +36,8 @@ const OP = {
 	initializeMintRaw: 27, forward: 28,
 };
 const KIND = { mintTokens: 0, freezeAccount: 1, accountOwner: 2, closeAccount: 3 };
-const MINT_EXTENSION_LENGTH = { 1: 108, 3: 32, 6: 1, 9: 0, 14: 64, 26: 33 };
+const MINT_EXTENSION_LENGTH = { 1: 108, 3: 32, 6: 1, 9: 0, 10: 52, 12: 32, 14: 64, 18: 64, 25: 56, 26: 33 };
+const ACCOUNT_EXTENSION_LENGTH = { 2: 8, 7: 0, 13: 0, 15: 1, 27: 0 };
 const DEFAULT_ACCOUNT_STATE = 6;
 const FROZEN = 2;
 const encoder = getAddressEncoder();
@@ -133,6 +134,21 @@ function tokenFields(stored) {
 		delegatedAmount: view.getBigUint64(121, true),
 		closeAuthority: optionalKey(129),
 	};
+}
+
+function accountWithExtensions(mint, holder, kinds) {
+	const base = tokenData(mint, holder, 0);
+	if (kinds.length === 0) return base;
+	const data = new Uint8Array(166 + kinds.reduce((total, kind) => total + 4 + ACCOUNT_EXTENSION_LENGTH[kind], 0));
+	data.set(base, 0);
+	data[165] = 2;
+	let offset = 166;
+	for (const kind of kinds) {
+		new DataView(data.buffer).setUint16(offset, kind, true);
+		new DataView(data.buffer).setUint16(offset + 2, ACCOUNT_EXTENSION_LENGTH[kind], true);
+		offset += 4 + ACCOUNT_EXTENSION_LENGTH[kind];
+	}
+	return data;
 }
 
 function extensionKinds(data) {
@@ -1293,35 +1309,25 @@ for (const [name, tokenProgram] of [["token", TOKEN], ["token-2022", TOKEN_2022]
 	});
 }
 
-await scenario("token-2022: account extensions the mint requires", TOKEN_2022, async (t) => {
-	const cases = [
-		{ mint: [1], length: 178, account: [2] },
-		{ mint: [9], length: 174, account: [13, 7] },
-		{ mint: [14], length: 171, account: [15] },
-		{ mint: [26], length: 170, account: [27] },
-		{ mint: [3], length: 165, account: [] },
-		{ mint: [6], length: 165, account: [], state: 2 },
-		{ mint: [1, 9, 14, 26], length: 195, account: [2, 13, 7, 15, 27] },
-	];
-	const immutable = await t.fresh();
-	const fixedOwnerMint = await t.mint(6, 1_000_000, [9]);
-	await t.send("an account of a non-transferable mint", OP.createAtKeypair, [
-		t.meta(t.payer.address, true, true),
-		t.meta(immutable.address, true, true),
-		t.meta(fixedOwnerMint, false),
-		t.meta(SYSTEM, false),
-		t.meta(TOKEN_2022, false),
-	], encoder.encode(t.owner.address));
-	const handOver = [t.meta(immutable.address, true), t.meta(t.owner.address, false, true), t.meta(TOKEN_2022, false)];
-	await t.send("the owner of an account with an immutable owner", OP.setAccountAuthority, handOver,
-		concat(new Uint8Array([KIND.accountOwner, 1]), encoder.encode(t.payer.address)), custom(34, TOKEN_2022));
-	await t.send("the close authority of an account with an immutable owner", OP.setAccountAuthority, handOver,
-		concat(new Uint8Array([KIND.closeAccount, 1]), encoder.encode(t.payer.address)));
-	t.check("the account keeps its owner and names its close authority",
-		tokenFields(t.svm.getAccount(immutable.address)).owner === t.owner.address
-			&& tokenFields(t.svm.getAccount(immutable.address)).closeAuthority === t.payer.address);
+const INERT_MINT_EXTENSIONS = [3, 10, 18, 25];
+const REFUSED_MINT_EXTENSIONS = [[1], [6], [9], [14], [26], [1, 3, 14, 26], [1, 9], [3, 12]];
+const REQUIRED_ACCOUNT_EXTENSIONS = { 1: [2], 9: [13, 7], 14: [15], 26: [27] };
+const UNSUPPORTED = 4200;
 
-	for (const { mint: extensions, length, account, state = 1 } of cases) {
+await scenario("token-2022: account extensions the mint requires", TOKEN_2022, async (t) => {
+	for (const extensions of REFUSED_MINT_EXTENSIONS) {
+		const mint = await t.mint(6, 1_000_000, extensions);
+		const created = await t.fresh();
+		await t.send(`a mint with extensions ${extensions.join(",")} is refused`, OP.createAtKeypair, [
+			t.meta(t.payer.address, true, true),
+			t.meta(created.address, true, true),
+			t.meta(mint, false),
+			t.meta(SYSTEM, false),
+			t.meta(TOKEN_2022, false),
+		], encoder.encode(t.owner.address), custom(UNSUPPORTED, program));
+		t.check("and no account is created", !t.svm.getAccount(created.address).exists);
+	}
+	for (const extensions of [...INERT_MINT_EXTENSIONS.map((kind) => [kind]), INERT_MINT_EXTENSIONS]) {
 		const mint = await t.mint(6, 1_000_000, extensions);
 		const created = await t.fresh();
 		await t.send(`a mint with extensions ${extensions.join(",")}`, OP.createAtKeypair, [
@@ -1332,14 +1338,13 @@ await scenario("token-2022: account extensions the mint requires", TOKEN_2022, a
 			t.meta(TOKEN_2022, false),
 		], encoder.encode(t.owner.address));
 		const stored = t.svm.getAccount(created.address);
-		const kinds = stored.exists ? extensionKinds(stored.data) : [];
-		t.check(`the account is ${length} bytes with extensions ${account.join(",") || "none"}`,
-			stored.exists && stored.data.length === length && kinds.join(",") === account.join(",")
-				&& (length === 165 || stored.data[165] === 2) && tokenFields(stored).state === state);
+		t.check("the account is 165 bytes with no account extension, initialized",
+			stored.exists && stored.data.length === 165 && tokenFields(stored).state === 1);
 	}
 });
 
-for (const extensions of [[1], [3], [6], [9], [14], [26], [1, 3, 14, 26], [1, 9]]) {
+for (const extensions of [...INERT_MINT_EXTENSIONS.map((kind) => [kind]), ...REFUSED_MINT_EXTENSIONS]) {
+	const refused = REFUSED_MINT_EXTENSIONS.some((set) => set.join() === extensions.join());
 	await scenario(`token-2022: a mint with zeroed extensions ${extensions.join(",")}`, TOKEN_2022, async (t) => {
 		const mint = await t.mint(6, 0, extensions);
 		if (extensions.includes(DEFAULT_ACCOUNT_STATE)) {
@@ -1348,8 +1353,13 @@ for (const extensions of [[1], [3], [6], [9], [14], [26], [1, 3, 14, 26], [1, 9]
 			t.put(mint, data);
 		}
 		const amountOf = (account) => tokenFields(t.svm.getAccount(account)).amount;
+		const required = extensions.flatMap((kind) => REQUIRED_ACCOUNT_EXTENSIONS[kind] ?? []);
 		const create = async (holder) => {
 			const made = await t.fresh();
+			if (refused) {
+				t.put(made.address, accountWithExtensions(mint, holder, required));
+				return made.address;
+			}
 			await t.send("create a token account", OP.createAtKeypair, [
 				t.meta(t.payer.address, true, true),
 				t.meta(made.address, true, true),
@@ -1362,13 +1372,19 @@ for (const extensions of [[1], [3], [6], [9], [14], [26], [1, 3, 14, 26], [1, 9]
 		const from = await create(t.owner.address);
 		const to = await create(t.payer.address);
 		const spare = await create(t.owner.address);
-		await t.send("mint", OP.mint, [t.meta(mint, true), t.meta(from, true), t.meta(t.owner.address, false, true),
-			t.meta(TOKEN_2022, false)], u64(100));
+		await t.send(refused ? "mint, sent raw" : "mint", refused ? OP.mintRaw : OP.mint,
+			[t.meta(mint, true), t.meta(from, true), t.meta(t.owner.address, false, true), t.meta(TOKEN_2022, false)], u64(100));
 		t.check("100 minted", amountOf(from) === 100n && supplyOf(t.svm.getAccount(mint)) === 100n);
 		const moving = [t.meta(from, true), t.meta(to, true), t.meta(mint, false), t.meta(t.owner.address, false, true),
 			t.meta(TOKEN_2022, false)];
 		const fixed = extensions.includes(9);
-		await t.send("transfer", OP.transfer, moving, u64(40), fixed ? custom(37, TOKEN_2022) : null);
+		if (refused) {
+			await t.send("transfer through the interface types", OP.transfer, moving, u64(40), custom(UNSUPPORTED, program));
+			await t.send("transfer, sent raw", OP.transferRaw, moving, concat(u64(40), new Uint8Array([6])),
+				fixed ? custom(37, TOKEN_2022) : null);
+		} else {
+			await t.send("transfer", OP.transfer, moving, u64(40));
+		}
 		t.check(fixed ? "a non-transferable mint moves nothing" : "40 moved, with no fee withheld",
 			amountOf(from) === (fixed ? 100n : 60n) && amountOf(to) === (fixed ? 0n : 40n));
 		const needsMint = [1, 14, 26].some((kind) => extensions.includes(kind));
@@ -1376,7 +1392,7 @@ for (const extensions of [[1], [3], [6], [9], [14], [26], [1, 3, 14, 26], [1, 9]
 			concat(new Uint8Array([3]), u64(1)), fixed ? custom(37, TOKEN_2022) : needsMint ? custom(31, TOKEN_2022) : null);
 		const receiver = (await t.fresh()).address;
 		t.svm.airdrop(receiver, lamports(1_000_000n));
-		await t.send("close an empty account", OP.close, [t.meta(spare, true), t.meta(receiver, true),
+		await t.send("close an empty account", refused ? OP.closeRaw : OP.close, [t.meta(spare, true), t.meta(receiver, true),
 			t.meta(t.owner.address, false, true), t.meta(TOKEN_2022, false)], new Uint8Array());
 		t.check("the empty account is gone", !t.svm.getAccount(spare).exists);
 		const refusal = fixed ? custom(37, TOKEN_2022) : needsMint ? custom(31, TOKEN_2022) : null;
@@ -1410,13 +1426,10 @@ for (const extensions of [[1], [3], [6], [9], [14], [26], [1, 3, 14, 26], [1, 9]
 
 await scenario("token-2022: associated account extensions the mint requires", TOKEN_2022, async (t) => {
 	const cases = [
-		{ mint: [1], length: 182, account: [7, 2] },
-		{ mint: [9], length: 174, account: [7, 13] },
-		{ mint: [14], length: 175, account: [7, 15] },
-		{ mint: [26], length: 174, account: [7, 27] },
 		{ mint: [3], length: 170, account: [7] },
-		{ mint: [6], length: 170, account: [7], state: 2 },
-		{ mint: [1, 9, 14, 26], length: 195, account: [7, 2, 13, 15, 27] },
+		{ mint: [10], length: 170, account: [7] },
+		{ mint: [18], length: 170, account: [7] },
+		{ mint: [25], length: 170, account: [7] },
 	];
 	for (const { mint: extensions, length, account, state = 1 } of cases) {
 		const mint = await t.mint(6, 1_000_000, extensions);
