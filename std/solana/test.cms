@@ -1900,6 +1900,43 @@ test "a rent the runtime did not write fails the instruction instead of pricing 
 	assert run(programKey(), none, [], rentFloorEntry).result == 0;
 }
 
+const MAX_DATA_LENGTH: uint64 = 10485760;
+
+function rentOfLengthEntry(): void {
+	const lengths: uint64[] = [MAX_DATA_LENGTH + 1, 0xffffffffffffff80, 0xffffffffffffffff, 0x7fffffffffffffff];
+	for (const length of lengths) {
+		if (minimumBalance(length) != 0xffffffffffffffff) { failWith(ProgramError.custom(1)); }
+	}
+}
+
+function rentAtBoundEntry(): void {
+	const atBound = minimumBalance(MAX_DATA_LENGTH);
+	if (atBound != (MAX_DATA_LENGTH + 128) * 6960) { failWith(ProgramError.custom(1)); }
+}
+
+test "minimumBalance refuses a length above the runtime's account size limit instead of wrapping" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], rentAtBoundEntry).result == 0;
+	assert run(programKey(), none, [], rentOfLengthEntry).result == ProgramError.invalidArgument().code;
+}
+
+function oversizedCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	const target = try account(1);
+	return createProgramAccount(payer, target, MAX_DATA_LENGTH + 1, keyOf(9));
+}
+
+function oversizedCreateEntry(): void {
+	const result = oversizedCreateStep();
+	failWith(result.ok ? ProgramError.custom(1) : result.error);
+}
+
+test "createProgramAccount refuses a space above the limit before it sends any instruction" {
+	const funded = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), funded, [], oversizedCreateEntry).result == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
+}
+
 test "create<T> fails the instruction when the runtime did not write the rent" {
 	const funded = [wallet(1, 10000000), blank(keyOf(3))];
 	assert resultWithSysvarStatus(2, funded, createEntry) == ProgramError.unsupportedSysvar().code;

@@ -537,18 +537,30 @@ export function allocate(
 	);
 }
 
-export function minimumBalance(dataLength: uint64): uint64 {
+const MAX_PERMITTED_DATA_LENGTH: uint64 = 10485760;
+const ACCOUNT_STORAGE_OVERHEAD: uint64 = 128;
+const MAX_LAMPORTS_PER_BYTE: uint64 = 0xffffffffffffffff / (2 * (MAX_PERMITTED_DATA_LENGTH + ACCOUNT_STORAGE_OVERHEAD));
+
+function rentFor(dataLength: uint64): Result<uint64, ProgramError> {
+	if (dataLength > MAX_PERMITTED_DATA_LENGTH) { return Result.err(ProgramError.invalidArgument()); }
 	const rent = msSolRentAddress();
-	if (rent == 0) {
-		failWith(ProgramError.unsupportedSysvar());
-		return 0;
-	}
+	if (rent == 0) { return Result.err(ProgramError.unsupportedSysvar()); }
 	const lamportsPerByte = msSolLoadU64(rent);
+	if (lamportsPerByte > MAX_LAMPORTS_PER_BYTE) { return Result.err(ProgramError.arithmeticOverflow()); }
 	const thresholdBits = msSolLoadU64(rent + 8);
 	const twoBits: uint64 = 0x4000000000000000;
-	const bytes = dataLength + 128;
-	if (thresholdBits == twoBits) { return 2 * bytes * lamportsPerByte; }
-	return bytes * lamportsPerByte;
+	const bytes = dataLength + ACCOUNT_STORAGE_OVERHEAD;
+	if (thresholdBits == twoBits) { return Result.ok(2 * bytes * lamportsPerByte); }
+	return Result.ok(bytes * lamportsPerByte);
+}
+
+export function minimumBalance(dataLength: uint64): uint64 {
+	const required = rentFor(dataLength);
+	if (!required.ok) {
+		failWith(required.error);
+		return 0xffffffffffffffff;
+	}
+	return required.value;
 }
 
 export function createProgramAccount(
@@ -559,7 +571,7 @@ export function createProgramAccount(
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	if (keysEqual(payer.keyAddress(), target.keyAddress())) { return Result.err(ProgramError.invalidArgument()); }
-	return createAccountAllowPrefund(payer, target, minimumBalance(space), space, msSolSpanAddress(newOwner.bytes), signers);
+	return createAccountAllowPrefund(payer, target, try rentFor(space), space, msSolSpanAddress(newOwner.bytes), signers);
 }
 
 @inline export function createAccountAllowPrefund(
@@ -1009,7 +1021,7 @@ export function argBytes(offset: uint64): Bytes {
 		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
 	}
 	if (space < 8) { return Result.err(ProgramError.accountDataTooSmall()); }
-	const _made = try createAccountAllowPrefund(funding, created, minimumBalance(space), space, msSolProgramId(), signers);
+	const _made = try createAccountAllowPrefund(funding, created, try rentFor(space), space, msSolProgramId(), signers);
 	msSolStoreU64(created.address + 88, discriminator);
 	if (!claimExclusive(created.address)) { return Result.err(ProgramError.accountBorrowFailed()); }
 	return Result.ok(created);
@@ -1160,14 +1172,14 @@ export function resizedProgramAccount(
 	}
 	const payerIsAccount = funding.address == target.address;
 	const held = target.lamports();
-	const required = minimumBalance(space);
+	const required = try rentFor(space);
 	if (space > current) {
 		if (required > held) {
 			if (payerIsAccount) { return Result.err(ProgramError.invalidArgument()); }
 			const _funded = try transfer(funding, target, required - held);
 		}
 	} else if (space < current && !payerIsAccount) {
-		const reclaimable = minimumBalance(current) - required;
+		const reclaimable = (try rentFor(current)) - required;
 		const above = held > required ? held - required : 0;
 		const refund = reclaimable < above ? reclaimable : above;
 		const payerLamports = funding.lamports();
