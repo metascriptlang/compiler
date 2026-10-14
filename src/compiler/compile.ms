@@ -1004,6 +1004,7 @@ interface CompileJob {
 	dependencyFile: string;
 	dependenciesKnown: boolean;
 	storeKey: string;
+	linkSlot: int32;
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
@@ -1014,7 +1015,8 @@ interface CompileJob {
 //   2. DISPATCH (parallel) — spawn one worker per cache miss. Each worker calls
 //      compileCFile() on its own thread — real thread-level parallelism.
 //   3. COLLECT (serial, main thread) — waitFor each future in input order, check
-//      exit codes, publish cache entries, emit oFiles deterministically.
+//      exit codes, publish cache entries, fill each job's slot so oFiles keep
+//      directive order whichever files hit the cache.
 // --emit=c is emit-only: write generated C, compile/link nothing.
 // Compiling @compile'd C here would (a) drop .o files beside the source, not in
 // out/, and (b) fail for targets whose sysroot lives in the host build tool
@@ -1031,7 +1033,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 
 	// === 1. GATHER ===
 	const jobs: CompileJob[] = [];
-	const hitOFiles: string[] = [];
+	const oFiles: string[] = [];
 	let start = 0;
 	let idx = 0;
 	while (idx <= directives.length) {
@@ -1086,15 +1088,16 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					const oFile = probeOFile;
 					if (isCompileCached(oFile, fp)) {
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
-						hitOFiles.push(oFile);
+						oFiles.push(oFile);
 					} else {
 						const storeKey = objectStoreKey(nativeStoreSource(fullPath), ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags);
 						const stored = storeKey == "" ? "" : restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
 						if (stored != "") {
 							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
-							hitOFiles.push(stored);
+							oFiles.push(stored);
 						} else {
-							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey });
+							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey, linkSlot: oFiles.length as int32 });
+							oFiles.push("");
 						}
 					}
 				}
@@ -1139,8 +1142,6 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	for (const f of futures) exitCodes.push(await f);
 
 	// === 3. COLLECT (serial from main thread) ===
-	const oFiles: string[] = [];
-	for (const o of hitOFiles) oFiles.push(o);
 	let ci = 0;
 	while (ci < jobs.length) {
 		const j = jobs[ci];
@@ -1156,12 +1157,12 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		if (j.dependenciesKnown) {
 			writeCompileCache(j.oFile, j.fp);
 			publishToStore(j.storeKey, j.oFile, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-			oFiles.push(j.oFile);
+			oFiles[j.linkSlot] = j.oFile;
 		} else {
 			const published = publishFirstCompile(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
 			if (published.ok) {
 				publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-				oFiles.push(published.value);
+				oFiles[j.linkSlot] = published.value;
 			} else {
 				printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
 				stopBuild();

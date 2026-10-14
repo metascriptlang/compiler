@@ -161,13 +161,7 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		// (injectdestructors.nim:1028). A fresh RC call under a conv still produces an owned
 		// value; a byte-view conv only makes the RESULT a borrow, not the inner call.
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
-		// `!x` / `-x` / `~x` (UnaryExpr) — transparent for ownership like the wrappers above:
-		// the operator consumes the operand's VALUE, but a fresh RC call nested inside the
-		// operand still produces an owned temp that needs capture. Without this case the walk
-		// hits `_ => node` and STOPS at the operator, so e.g. `if (!f(g()))` never reaches the
-		// owned `g()` → its temp leaks. Nim never hits this: `not` is nkPrefix ∈ nkCallKinds, so
-		// it flows through the same per-arg recursion as any call (p(arg, normal) + ensureDestruction).
-		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx, mode),
+		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx),
 		_ => node,
 	};
 	// ONE place (Reference parity: Nim's p() calls ensureDestruction from the central processor in
@@ -270,9 +264,9 @@ function isUnionProjection(node: Node): boolean {
 	return !isTagCarriedUnion(target);
 }
 
-function processUnaryWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+function processUnaryWrapper(node: Node, dctx: DrcContext): Node {
 	const u = node.data as UnaryExprData;
-	u.operand = processNode(u.operand, dctx, mode);
+	u.operand = processNode(u.operand, dctx, DrcMode.Normal);
 	return node;
 }
 
