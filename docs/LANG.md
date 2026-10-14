@@ -4039,6 +4039,23 @@ extern class console {
 }
 ```
 
+On C, `from` names the C symbol. On JS, a `from` string containing `#`, `@`, `(` or `$1` is a
+pattern emitted in place of the call: each `#` takes the next argument, `@` the remaining ones,
+`$1` the function's name. A pattern without a placeholder is emitted as written:
+
+```ms
+extern function answer(): int32 from "(40 + 2)";              // answer() → (40 + 2)
+extern function hashAt(s: string): int32 from "(#).indexOf('\\x23')";
+```
+
+Every `#` is a placeholder, a `#` inside a quoted JS string included, so a literal `#` is written
+`\\x23` in the pattern (JS reads `\x23` as `#`). The declaration is refused when the pattern's
+`#` count differs from the parameter count (with `@`, when it exceeds it), and the error names
+both counts. Measured 2026-10-14 on `wt/fix-extern-pattern`: corpus `externPatternArity` prints
+`42 hi 3 | 1 #x | 7 [1,2,3]` on JS, C drc and C orc (the C side defines plain functions under
+`when`); `src/test/js/externPattern.ms` pins the refusals. Not measured: extern class methods with
+a pattern, which the count check does not cover.
+
 ### Distinct Types
 ```typescript
 type UserId = distinct number;    // Nominal typing wrapper
