@@ -369,7 +369,7 @@ test "clone: exhaustive per-kind payload roundtrip" {
 	ct.kind = TypeKind.Boolean;
 	ct.typeName = "bool";
 	const samples = pkSamples(null as unknown as Symbol, nt, ct);
-	assert samples.length == 91;
+	assert samples.length == 92;
 	for (let i = 0; i < samples.length; i += 1) {
 		assert (samples[i].kind as int32) == i;
 	}

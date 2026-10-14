@@ -59,7 +59,7 @@ import {
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
 	// JSX (compile-time only — needs round-trip through macro VM)
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
@@ -1255,6 +1255,11 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as JSXSpreadAttributeData;
 			setNode(objHeap, arrHeap, handle, "jsxSpreadArg", d.jsxSpreadArg);
 		},
+		NodeKind.ComputedProperty => {
+			const d = node.data as ComputedPropertyData;
+			setNode(objHeap, arrHeap, handle, "computedKey", d.computedKey);
+			setNode(objHeap, arrHeap, handle, "computedValue", d.computedValue);
+		},
 
 		// Any unrecognized kind: kind/line/column only
 		_ => {},
@@ -2188,6 +2193,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.JSXSpreadAttribute => {
 			const jsxSpreadArg = readNode(objHeap, arrHeap, h, "jsxSpreadArg", loc);
 			return createNodeAt(NodeKind.JSXSpreadAttribute, { jsxSpreadArg }, loc);
+		},
+		NodeKind.ComputedProperty => {
+			const computedKey = readNode(objHeap, arrHeap, h, "computedKey", loc);
+			const computedValue = readNode(objHeap, arrHeap, h, "computedValue", loc);
+			return createNodeAt(NodeKind.ComputedProperty, { computedKey, computedValue }, loc);
 		},
 
 		// Unknown kind — return a NullLiteral as safe fallback

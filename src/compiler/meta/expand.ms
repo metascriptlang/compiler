@@ -42,7 +42,7 @@ import {
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
 	// JSX (compile-time only — addKindFields cases for quote {<...>})
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 	// Full addKindFields parity with bridge.ms nodeToValue (macros read fields of any NodeKind)
 	BigIntLiteralData, RegexLiteralData, UpdateExprData, TypeAssertionData, SpreadExprData,
 	NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
@@ -592,6 +592,12 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	if (k == NodeKind.JSXSpreadAttribute) {
 		const d = node.data as JSXSpreadAttributeData;
 		addNodeField(keys, values, "jsxSpreadArg", d.jsxSpreadArg, loc);
+		return;
+	}
+	if (k == NodeKind.ComputedProperty) {
+		const d = node.data as ComputedPropertyData;
+		addNodeField(keys, values, "computedKey", d.computedKey, loc);
+		addNodeField(keys, values, "computedValue", d.computedValue, loc);
 		return;
 	}
 
