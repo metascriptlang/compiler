@@ -272,7 +272,10 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (ext.sym == null) {
 		throw new Error(`internal: operator '${op}' resolved to an extension without a symbol`);
 	}
-	return makeCall(makeTypedIdentResolved(ext.sym, null, node.location), [d.operand], node.location);
+	const call = makeCall(makeTypedIdentResolved(ext.sym, null, node.location), [d.operand], node.location);
+	const fnType = getExtFnType(ext);
+	if (fnType != null && fnType.typeReturn != null) call.nodeType = fnType.typeReturn;
+	return call;
 }
 
 function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
