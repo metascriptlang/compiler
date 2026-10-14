@@ -9,7 +9,8 @@ import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag } from "../utils/string";
-import { normalize } from "std/fs/path";
+import { normalize, join } from "std/fs/path";
+import { resolveRuntimeDir } from "../utils/path";
 import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
 import { forEachChild } from "../ast/visitor";
@@ -496,10 +497,20 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 	fillClass(ctx, node);
 }
 
+let stdTreePrefix = "?";
+
+function inStdTree(modulePath: string): boolean {
+	if (stdTreePrefix == "?") {
+		const root = resolveRuntimeDir();
+		stdTreePrefix = root != "" ? normalize(join(root, "std")) + "/" : "";
+	}
+	return stdTreePrefix != "" && normalize(modulePath).startsWith(stdTreePrefix);
+}
+
 export function mintClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	// Callable-namespace statics attachment (Number.MAX_SAFE_INTEGER): a
-	// statics-only class sharing a prelude module (.cms/.jms/.rms) with a
+	// statics-only class in a std module beside a
 	// same-named Function symbol merges its constants onto that symbol —
 	// the name must stay callable AND carry statics. User modules keep the
 	// duplicate-symbol error so a JS name collision stays loud.
@@ -513,11 +524,10 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 	}
 	if (allStatic) {
 		const existing = lookupSymbol(ctx.table, d.className);
-		// The CLASS itself must live in a prelude module (.cms/.jms/.rms) — the
+		// The CLASS itself must live in std — the
 		// existing symbol's modulePath is always prelude, so checking it
 		// would let any user file silently extend a global name.
-		if (existing != null && existing.symbolKind == SymbolKind.Function
-				&& (ctx.modulePath.endsWith(".cms") || ctx.modulePath.endsWith(".jms") || ctx.modulePath.endsWith(".rms"))) {
+		if (existing != null && existing.symbolKind == SymbolKind.Function && inStdTree(ctx.modulePath)) {
 			for (const raw of d.classBody) {
 				const member = classMemberDecl(raw);
 				const pdm = member.data as PropertyDeclData;
@@ -1222,13 +1232,6 @@ function collectPreludeNames(ctx: CheckerContext, imp: ImportDeclData, node: Nod
 		const aliased = importAliasedPreludeSym(ctx, alias, name, sym, loc, node, reexport);
 		if (reexport) exportSymAs(ctx, aliased, alias);
 	}
-}
-
-function stripModuleExtension(path: string): string {
-	for (const suffix of ["/index.ms", "/index.cms", ".ms", ".cms"]) {
-		if (path.endsWith(suffix)) return path.slice(0, path.byteLength - suffix.byteLength);
-	}
-	return path;
 }
 
 function collectImport(ctx: CheckerContext, node: Node): void {
