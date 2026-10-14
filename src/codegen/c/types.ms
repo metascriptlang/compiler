@@ -602,8 +602,7 @@ export function typeKey(t: Type | null): string {
 	if (t == null) return "null";
 	return match (t.kind) {
 		TypeKind.Alias => typeKey(t.typeReturn),
-		TypeKind.Number => "number",
-		TypeKind.Float64 => "float64",
+		TypeKind.Number | TypeKind.Float64 => "float64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",

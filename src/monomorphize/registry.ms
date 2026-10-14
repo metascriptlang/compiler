@@ -113,7 +113,7 @@ export function monoInstanceNameOf(genericName: string, ownerPath: string, typeA
 export function monoTypeKey(t: Type | null): string {
 	if (t == null) return "null";
 	return match (t.kind) {
-		TypeKind.Number => "number",
+		TypeKind.Number => "float64",
 		TypeKind.String => "string",
 		TypeKind.Boolean => "boolean",
 		TypeKind.Void => "void",
