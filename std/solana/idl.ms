@@ -327,6 +327,8 @@ export macro anchorIdl(spec: Node): Node {
 				if (written == "int16") { idlType = "\"i16\""; }
 				if (written == "int32") { idlType = "\"i32\""; }
 				if (written == "int64") { idlType = "\"i64\""; }
+				if (written == "float32") { idlType = "\"f32\""; }
+				if (written == "float64") { idlType = "\"f64\""; }
 				if (written == "boolean") { idlType = "\"bool\""; }
 				if (sameType(scalarType, bindSym("Pubkey"))) { idlType = "\"pubkey\""; }
 				if (sameType(scalarType, bindSym("Bytes"))) { idlType = "\"bytes\""; }
@@ -464,6 +466,8 @@ export macro anchorIdl(spec: Node): Node {
 			if (element == "int16") { idlType = "\"i16\""; }
 			if (element == "int32") { idlType = "\"i32\""; }
 			if (element == "int64") { idlType = "\"i64\""; }
+			if (element == "float32") { idlType = "\"f32\""; }
+			if (element == "float64") { idlType = "\"f64\""; }
 			if (element == "boolean") { idlType = "\"bool\""; }
 			if (element == "Pubkey") { idlType = "\"pubkey\""; }
 			if (element.startsWith("BitSet<") && element.endsWith(">")) {
@@ -542,6 +546,8 @@ export macro anchorIdl(spec: Node): Node {
 				if (element == "uint16" || element == "int16") { size = 2; align = 2; }
 				if (element == "uint32" || element == "int32") { size = 4; align = 4; }
 				if (element == "uint64" || element == "int64") { size = 8; align = 8; }
+				if (element == "float32") { size = 4; align = 4; }
+				if (element == "float64") { size = 8; align = 8; }
 				if (element == "Pubkey") { size = 32; }
 				if (element.startsWith("BitSet<") && element.endsWith(">")) {
 					const members = getImpl(bindSym(element.slice(7, element.length - 1)))!;
