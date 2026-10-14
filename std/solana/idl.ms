@@ -255,8 +255,6 @@ export macro anchorIdl(spec: Node): Node {
 		if (member > 0) { json = json + ","; }
 		json = json + "{\"name\":\"" + snakeCase(op) + "\",\"discriminator\":" + tag +
 			",\"accounts\":[";
-		const accountsDecl = getImpl(bindSym(pair[0].name))!;
-		const accountsHeld = getTypeImpl(bindSym(pair[0].name))!;
 		let argsDecl: Node | null = null;
 		const argNames: string[] = [];
 		const argTypes: string[] = [];
@@ -276,7 +274,12 @@ export macro anchorIdl(spec: Node): Node {
 		const accountNames: string[] = [];
 		const accountWritten: string[] = [];
 		const accountDecorators: Node[][] = [];
-		inheritedFirst(accountsDecl, accountNames, accountWritten, accountDecorators);
+		let accountsHeld: Node | null = null;
+		if (pair.length > 0) {
+			const accountsDecl = getImpl(bindSym(pair[0].name))!;
+			inheritedFirst(accountsDecl, accountNames, accountWritten, accountDecorators);
+			accountsHeld = getTypeImpl(bindSym(pair[0].name))!;
+		}
 		let f = 0;
 		while (f < accountNames.length) {
 			const written = accountWritten[f];
@@ -294,7 +297,8 @@ export macro anchorIdl(spec: Node): Node {
 			let fixed = declaredAddress(decorators, spec);
 			if (fixed == "" && base == "Program") { fixed = knownProgram(inner); }
 			if (fixed != "") { account = account + ",\"address\":\"" + fixed + "\""; }
-			const pda = pdaJson(decorators, accountNames, accountWritten, accountsHeld, argNames, argTypes);
+			const pda = pdaJson(decorators, accountNames, accountWritten, accountsHeld!, argNames,
+				argTypes);
 			if (pda != "") { account = account + ",\"pda\":" + pda; }
 			json = json + (f > 0 ? "," : "") + account + "}";
 			f = f + 1;

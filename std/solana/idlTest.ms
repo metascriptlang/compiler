@@ -113,8 +113,28 @@ export function pdaSeedsIdl(): string {
 	});
 }
 
+enum PlainOp { Ping, Pay }
+
+function plainIdl(): string {
+	return anchorIdl<PlainOp>({
+		name: "plain",
+		Ping: [],
+		Pay: [PayerAccounts, MakeArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+}
+
 when (!testBuild) {
 	console.log(pdaSeedsIdl());
+}
+
+test "an instruction given no accounts struct has no accounts and no args" {
+	const idl = plainIdl();
+	assert idl.indexOf("{\"name\":\"ping\",\"discriminator\":[") >= 0;
+	assert idl.indexOf("],\"accounts\":[],\"args\":[]},{\"name\":\"pay\"") >= 0;
+	assert idl.indexOf("\"accounts\":[{\"name\":\"payer\",\"writable\":true,\"signer\":true}") >= 0;
 }
 
 test "a literal, an account and an argument seed give the account its PDA" {
