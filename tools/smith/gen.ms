@@ -30,6 +30,8 @@ enum EntKind {
 	MapVar,
 	SetVar,
 	StrVar,
+	OwnVar,
+	HeldVar,
 }
 
 struct Ent {
@@ -181,6 +183,9 @@ class Gen {
 	makerCount: int32 = 0;
 	nodesLeft: int32 = GEN_NODE_CAP;
 	w: int32[] = W_DEFAULTS;
+	bodyDepth: int32 = 0;
+	blockId: int32 = 0;
+	blockCount: int32 = 0;
 
 	wt(k: W): int32 { return this.w[k as int32]; }
 
@@ -513,7 +518,9 @@ class Gen {
 		this.cost = 0 as int64;
 		this.costCap = cap;
 		this.mult = 1 as int64;
+		this.bodyDepth++;
 		const text = this.expr(t, depth);
+		this.bodyDepth--;
 		const cost = this.cost;
 		this.cost = savedCost;
 		this.costCap = savedCap;
@@ -549,6 +556,7 @@ class Gen {
 		if (fam == Fam.Agg) { return this.aggExpr(t, depth); }
 		if (fam == Fam.Coll) { return this.collExpr(t, depth); }
 		if (fam == Fam.Str) { return this.strExpr(t, depth); }
+		if (fam == Fam.Own) { return this.ownExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1046,6 +1054,90 @@ class Gen {
 		return indent + "let " + name + ": string = " + value + ";\n";
 	}
 
+	ownHelpers(t: Ty): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const O = "Own" + X;
+		this.useHelper("ownHooks", "let ownHooks: int32 = 0;\n");
+		this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+		this.useHelper(O, "struct " + O + " { v: " + T + "; tag: string; }\n" +
+			"function onDestroy(this o: " + O + "): void { ownHooks = (ownHooks + 1) % 1000; }\n" +
+			"function onCopy(this ref d: " + O + ", s: " + O + "): void { ownHooks = (ownHooks + 1) % 1000; d.v = s.v; d.tag = s.tag; }\n" +
+			"function mkO" + X + "(v: " + T + ", t: string): " + O + " { return { v: v, tag: t }; }\n" +
+			"function takeO" + X + "(o: " + O + "): " + T + " { return o.v; }\n" +
+			"function bumpO" + X + "(ref o: " + O + ", x: " + T + "): void { o.v = x; o.tag = o.tag.slice(0, 4) + \"+\"; }\n" +
+			"function fillO" + X + "(out o: " + O + ", x: " + T + "): void { o = mkO" + X + "(x, \"o\"); }\n");
+		return X;
+	}
+
+	ownExpr(t: Ty, depth: int32): string {
+		if (this.bodyDepth > 0) { return ""; }
+		const owns = this.entsOf(EntKind.OwnVar, t);
+		const held = this.entsOf(EntKind.HeldVar, t);
+		const k = this.pickW(W.OwnField, W.OwnHeld);
+		if (k == 1 && held.length > 0) {
+			const h = this.pickEnt(held).name;
+			return "(" + h + ".length > 0 ? " + h + "[ixI(" + this.smallInt(depth) + ", " + h + ".length)].v : " + this.expr(t, depth + 1) + ")";
+		}
+		if (owns.length == 0) { return ""; }
+		const o = this.pickEnt(owns).name;
+		return t == Ty.Int32 && this.rng.chance(30) ? o + ".tag.length" : o + ".v";
+	}
+
+	dropEnt(name: string): void {
+		for (let i = 0; i < this.ents.length; i++) {
+			if (this.ents[i].name == name) {
+				this.ents.splice(i, 1);
+				return;
+			}
+		}
+	}
+
+	ownStatement(t: Ty, indent: string): string {
+		const X = this.ownHelpers(t);
+		const O = "Own" + X;
+		const owns = this.entsOf(EntKind.OwnVar, t);
+		const held = this.entsOf(EntKind.HeldVar, t);
+		const k = this.pickW(W.OwnDecl, W.OwnSink);
+		if (k >= 1 && owns.length > 0) {
+			const o = this.pickEnt(owns).name;
+			if (k == 1) {
+				const other = this.pickEnt(owns).name;
+				if (other != o && this.rng.chance(50)) { return indent + o + " = " + other + ";\n"; }
+				const name = this.entName("o");
+				this.ents.push({ kind: EntKind.OwnVar, name: name, ty: t, params: [], len: this.blockId, cost: 0 as int64 });
+				return indent + "let " + name + ": " + O + " = " + o + ";\n";
+			}
+			if (k == 2) {
+				const movable: Ent[] = [];
+				for (const e of owns) { if (e.len == this.blockId) { movable.push(e); } }
+				if (movable.length > 0) {
+					const m = this.pickEnt(movable).name;
+					this.dropEnt(m);
+					const form = this.rng.below(held.length > 0 ? 3 : 2);
+					if (form == 2) { return indent + this.pickEnt(held).name + ".push(move " + m + ");\n"; }
+					if (form == 1) { return indent + "let " + this.newLocal(t) + ": " + tyName(t) + " = takeO" + X + "(move " + m + ");\n"; }
+					const name = this.entName("o");
+					this.ents.push({ kind: EntKind.OwnVar, name: name, ty: t, params: [], len: this.blockId, cost: 0 as int64 });
+					return indent + "let " + name + ": " + O + " = move " + m + ";\n";
+				}
+			}
+			if (k == 3) { return indent + "bumpO" + X + "(" + o + ", " + this.expr(t, 0) + ");\n"; }
+			if (k == 4) { return indent + "fillO" + X + "(out " + o + ", " + this.expr(t, 0) + ");\n"; }
+			if (k == 5) {
+				if (held.length > 0 && this.rng.chance(50)) { return indent + this.pickEnt(held).name + ".push(" + o + ");\n"; }
+				const value = "[" + o + ", mkO" + X + "(" + this.expr(t, 0) + ", \"h\")]";
+				const name = this.entName("h");
+				this.ents.push({ kind: EntKind.HeldVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return indent + "let " + name + ": " + O + "[] = " + value + ";\n";
+			}
+		}
+		const value = "mkO" + X + "(" + this.expr(t, 0) + ", \"" + this.strLiteral(0) + "\")";
+		const name = this.entName("o");
+		this.ents.push({ kind: EntKind.OwnVar, name: name, ty: t, params: [], len: this.blockId, cost: 0 as int64 });
+		return indent + "let " + name + ": " + O + " = " + value + ";\n";
+	}
+
 	maker(t: Ty): Routine {
 		const name = "mk" + String(this.makerCount);
 		this.makerCount = this.makerCount + 1;
@@ -1123,6 +1215,7 @@ class Gen {
 		if (fam == Fam.Agg) { return this.aggStatement(t, indent); }
 		if (fam == Fam.Coll) { return this.collStatement(t, indent); }
 		if (fam == Fam.Str) { return this.strStatement(indent); }
+		if (fam == Fam.Own) { return this.ownStatement(t, indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -1263,6 +1356,9 @@ class Gen {
 		const saved = this.scope.length;
 		const savedEnts = this.ents.length;
 		const n = this.rng.between(1, this.stmtMax);
+		const savedBlock = this.blockId;
+		this.blockCount++;
+		this.blockId = this.blockCount;
 		let out = "";
 		for (let i = 0; i < n; i++) {
 			if (this.nodesLeft == 0 || this.cost + this.mult > this.costCap) { break; }
@@ -1270,6 +1366,7 @@ class Gen {
 		}
 		while (this.scope.length > saved) { this.scope.pop(); }
 		while (this.ents.length > savedEnts) { this.ents.pop(); }
+		this.blockId = savedBlock;
 		return out;
 	}
 
@@ -1589,6 +1686,7 @@ test "fams=none emits no closure, union or generic construct" {
 			assert !text.contains("PtS");
 			assert !text.contains("ixI");
 			assert !text.contains(": string = ");
+			assert !text.contains("ownHooks");
 		}
 	}
 }
@@ -1714,6 +1812,80 @@ test "a string variable grows only by a bounded slice" {
 		}
 	}
 	assert writes > 20;
+}
+
+test "the ownership family alone reaches each of its shapes" {
+	const f = withWeights("fams=own types=int32,uint8 stmts=8 w.stmt.fam=80");
+	const shapes = ["onDestroy(this o: OwnInt32)", "onCopy(this ref d: OwnUint8", ": OwnInt32 = mkO", ": OwnUint8 = o", " = move o", "= takeOInt32(move o",
+		".push(move o", "\tbumpO", "(out o", ": OwnInt32[] = [o", ".push(o", ".tag.length", "].v : ", ".v"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	let reassign = false;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+		for (const line of text.split("\n")) {
+			const t = line.trim();
+			if (t.startsWith("o") && t.contains(" = o") && t.length < 16) { reassign = true; }
+		}
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+	assert reassign;
+}
+
+function ownNameAt(text: string, at: int32): string {
+	let end = at + 1;
+	while (end < text.length && text.charCodeAt(end) >= 48 && text.charCodeAt(end) <= 57) { end++; }
+	return end > at + 1 ? text.slice(at, end) : "";
+}
+
+function indentOf(line: string): int32 { return line.length - line.trimStart().length; }
+
+test "a moved variable was declared in the moving block and is never named again" {
+	const f = withWeights("fams=own types=int32,uint8 stmts=8 w.stmt.fam=80 w.own.move=6");
+	let moves = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const lines = generate(seed as uint64, f).split("\n");
+		for (let i = 0; i < lines.length; i++) {
+			const at = lines[i].indexOf("move o");
+			if (at < 0) { continue; }
+			const name = ownNameAt(lines[i], at + 5);
+			moves++;
+			let declared = -1;
+			for (let j = i - 1; j >= 0 && declared < 0; j--) {
+				if (lines[j].trim().startsWith("let " + name + ":")) { declared = indentOf(lines[j]); }
+			}
+			assert declared == indentOf(lines[i]);
+			for (let j = i + 1; j < lines.length && !lines[j].startsWith("}"); j++) {
+				const k = lines[j].indexOf(name);
+				assert k < 0 || ownNameAt(lines[j], k) != name;
+			}
+		}
+	}
+	assert moves > 20;
+}
+
+test "no ownership construct reaches a closure body" {
+	const g = new Gen();
+	g.rng = Rng.seeded(7 as uint64);
+	g.tys = [Ty.Int32];
+	g.fams = [Fam.Own];
+	g.exprMax = 3;
+	g.w = withWeights("w.expr.fam=100").w;
+	g.ents = [
+		{ kind: EntKind.OwnVar, name: "o0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+		{ kind: EntKind.HeldVar, name: "h1", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+	];
+	let outside = 0;
+	for (let i = 0; i < 200; i++) {
+		g.costCap = TOP_COST_CAP;
+		g.cost = 0 as int64;
+		g.nodesLeft = GEN_NODE_CAP;
+		const body = g.lambda([Ty.Int32], Ty.Int32, 0, FN_COST_CAP).text;
+		assert !body.contains("o0") && !body.contains("h1");
+		const plain = g.expr(Ty.Int32, 0);
+		if (plain.contains("o0") || plain.contains("h1")) { outside++; }
+	}
+	assert outside > 100;
 }
 
 test "each family alone reaches the program" {

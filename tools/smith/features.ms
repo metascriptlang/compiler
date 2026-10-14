@@ -19,6 +19,7 @@ export enum Fam {
 	Agg,
 	Coll,
 	Str,
+	Own,
 }
 
 export enum W {
@@ -42,6 +43,7 @@ export enum W {
 	FamAgg,
 	FamColl,
 	FamStr,
+	FamOwn,
 	ClosureNamed,
 	ClosureArray,
 	ClosureIife,
@@ -91,6 +93,14 @@ export enum W {
 	StrCase,
 	StrGrow,
 	StrEdit,
+	OwnField,
+	OwnHeld,
+	OwnDecl,
+	OwnCopy,
+	OwnMove,
+	OwnRef,
+	OwnOut,
+	OwnSink,
 	ExprFam,
 	StmtFam,
 	StmtElse,
@@ -118,6 +128,7 @@ export const W_KEYS: string[] = [
 	"w.fam.agg",
 	"w.fam.coll",
 	"w.fam.str",
+	"w.fam.own",
 	"w.closure.named",
 	"w.closure.array",
 	"w.closure.iife",
@@ -167,6 +178,14 @@ export const W_KEYS: string[] = [
 	"w.str.case",
 	"w.str.grow",
 	"w.str.edit",
+	"w.own.field",
+	"w.own.held",
+	"w.own.decl",
+	"w.own.copy",
+	"w.own.move",
+	"w.own.ref",
+	"w.own.out",
+	"w.own.sink",
 	"w.expr.fam",
 	"w.stmt.fam",
 	"w.stmt.else",
@@ -176,7 +195,7 @@ export const W_KEYS: string[] = [
 export const W_DEFAULTS: int32[] = [
 	25, 30, 8, 10, 8, 19,
 	25, 25, 8, 12, 12, 6, 6, 6,
-	1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1,
 	1, 1, 1, 1, 2,
@@ -187,23 +206,27 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1, 1,
+	1, 1,
+	1, 1, 1, 1, 1, 1,
 	20, 20, 50, 30,
 ];
 
 const W_GROUPS: int32[][] = [
 	[0, 5],
 	[6, 13],
-	[14, 19],
-	[20, 22],
-	[23, 27],
-	[28, 32],
-	[33, 36],
-	[37, 43],
-	[44, 48],
-	[49, 56],
-	[57, 59],
-	[60, 62],
-	[63, 68],
+	[14, 20],
+	[21, 23],
+	[24, 28],
+	[29, 33],
+	[34, 37],
+	[38, 44],
+	[45, 49],
+	[50, 57],
+	[58, 60],
+	[61, 63],
+	[64, 69],
+	[70, 71],
+	[72, 77],
 ];
 
 export enum Plant {
@@ -238,7 +261,7 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
-export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str];
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own];
 
 export function famName(f: Fam): string {
 	return match (f) {
@@ -248,6 +271,7 @@ export function famName(f: Fam): string {
 		Fam.Agg => "agg",
 		Fam.Coll => "coll",
 		Fam.Str => "str",
+		Fam.Own => "own",
 	};
 }
 
@@ -255,7 +279,7 @@ function famFromName(name: string): Result<Fam, string> {
 	for (const f of ALL_FAMS) {
 		if (famName(f) == name) { return Result.ok(f); }
 	}
-	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, none)");
+	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, none)");
 }
 
 export function tyName(t: Ty): string {
@@ -518,7 +542,7 @@ test "an unknown weight, a bad value and an all-zero group are refused" {
 	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
-	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0").ok;
 }
 
 test "swarm keeps the weights of its base" {
@@ -571,8 +595,8 @@ test "swarm samples one density per vector, not a fixed coin per feature" {
 		if (f.fams == base.fams) { all++; }
 		if (f.fams.isEmpty()) { none++; }
 	}
-	assert all > 468 && all < 702;
-	assert none > 468 && none < 702;
+	assert all > 409 && all < 614;
+	assert none > 409 && none < 614;
 }
 
 test "swarm density also correlates a restricted two-family vector" {
