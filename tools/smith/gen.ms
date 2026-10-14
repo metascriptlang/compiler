@@ -29,6 +29,7 @@ enum EntKind {
 	FixedVar,
 	MapVar,
 	SetVar,
+	StrVar,
 }
 
 struct Ent {
@@ -153,6 +154,8 @@ const FLOAT_EDGES: string[] = [
 const INT_OPS: string[] = ["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"];
 const FLOAT_OPS: string[] = ["+", "-", "*", "/", "%"];
 const CMP_OPS: string[] = ["==", "!=", "<", "<=", ">", ">="];
+const STR_CHARS: string[] = ["a", "b", "Z", " ", "é", "ÿ", "中", "-", "0", "\\n", "\\t", "\\\"", "\\\\"];
+const STR_TESTS: string[] = [" == ", " != ", " < ", " > ", ".includes(", ".startsWith(", ".endsWith("];
 
 class Gen {
 	rng: Rng = new Rng();
@@ -545,6 +548,7 @@ class Gen {
 		if (fam == Fam.Union) { return this.unionExpr(t, depth); }
 		if (fam == Fam.Agg) { return this.aggExpr(t, depth); }
 		if (fam == Fam.Coll) { return this.collExpr(t, depth); }
+		if (fam == Fam.Str) { return this.strExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -958,6 +962,90 @@ class Gen {
 		return indent + "let " + name + ": " + T + "[] = " + value + ";\n";
 	}
 
+	strLiteral(min: int32): string {
+		let out = "";
+		const n = this.rng.between(min, 4);
+		for (let i = 0; i < n; i++) { out += STR_CHARS[this.rng.below(STR_CHARS.length)]; }
+		return out;
+	}
+
+	strLeaf(): string {
+		const vars = this.entsAny(EntKind.StrVar);
+		if (vars.length > 0 && this.rng.chance(60)) { return this.pickEnt(vars).name; }
+		return "\"" + this.strLiteral(0) + "\"";
+	}
+
+	strText(depth: int32): string {
+		if (this.nodesLeft == 0 || depth >= this.exprMax || !this.reserve(1 as int64)) { return this.strLeaf(); }
+		this.nodesLeft--;
+		const k = this.pickW(W.StrConcat, W.StrEdit);
+		if (k == 0) { return "(" + this.strText(depth + 1) + " + " + this.strText(depth + 1) + ")"; }
+		if (k == 1) {
+			const t = this.pickTy();
+			if (this.rng.chance(50)) { return "String(" + this.expr(t, depth + 1) + ")"; }
+			return "`" + this.strLiteral(0) + "${" + this.expr(t, depth + 1) + "}" + this.strLiteral(0) + "${" + this.strText(depth + 1) + "}`";
+		}
+		const s = "(" + this.strText(depth + 1) + ")";
+		if (k == 2) {
+			const form = this.rng.below(4);
+			const from = String(this.rng.below(5));
+			const to = String(this.rng.below(7));
+			if (form == 0) { return s + ".slice(" + from + (this.rng.chance(50) ? ", " + to : "") + ")"; }
+			if (form == 1) { return s + ".substring(" + from + ", " + to + ")"; }
+			if (form == 2) { return s + ".charAt(" + String(this.rng.below(6)) + ")"; }
+			this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+			const at = this.useHelper("atS", "function atS(s: string, i: int32): string { return s.length > 0 ? s[ixI(i, s.length)] : \"\"; }\n");
+			return at + "(" + s + ", " + this.smallInt(depth) + ")";
+		}
+		if (k == 3) { return s + [".toUpperCase()", ".toLowerCase()", ".trim()", ".trimStart()", ".trimEnd()"][this.rng.below(5)]; }
+		if (k == 4) {
+			const form = this.rng.below(3);
+			if (form == 0) { return s + ".repeat(" + String(this.rng.below(3)) + ")"; }
+			return s + (form == 1 ? ".padStart(" : ".padEnd(") + String(this.rng.below(9)) + ", \"" + this.strLiteral(1) + "\")";
+		}
+		const form = this.rng.below(3);
+		const search = "\"" + this.strLiteral(1) + "\"";
+		if (form == 0) { return s + ".replace(" + search + ", \"" + this.strLiteral(0) + "\")"; }
+		if (form == 1) { return s + ".replaceAll(" + search + ", \"" + this.strLiteral(0) + "\")"; }
+		return s + ".split(" + search + ").join(\"" + this.strLiteral(0) + "\")";
+	}
+
+	strExpr(t: Ty, depth: int32): string {
+		const k = this.pickW(W.StrSize, W.StrTest);
+		if (t == Ty.Int32 && k == 0) {
+			const s = "(" + this.strText(depth + 1) + ")";
+			const form = this.rng.below(4);
+			if (form == 0) { return s + ".length"; }
+			if (form == 3) { return s + ".split(\"" + this.strLiteral(1) + "\").length"; }
+			return "(" + s + (form == 1 ? ".indexOf(\"" : ".lastIndexOf(\"") + this.strLiteral(1) + "\") as int32)";
+		}
+		if (t == Ty.Int32 && k == 1) {
+			this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+			const code = this.useHelper("codeS", "function codeS(s: string, i: int32): int32 { return s.length > 0 ? (s.charCodeAt(ixI(i, s.length)) as int32) : -1; }\n");
+			return code + "(" + this.strText(depth + 1) + ", " + this.smallInt(depth) + ")";
+		}
+		const test = STR_TESTS[this.rng.below(STR_TESTS.length)];
+		const left = this.strText(depth + 1);
+		const a = left.startsWith("\"") ? "(" + left + " as string)" : left;
+		const b = this.strText(depth + 1);
+		const c = test.startsWith(".") ? "(" + a + ")" + test + b + ")" : "(" + a + test + b + ")";
+		return "(" + c + " ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+	}
+
+	strStatement(indent: string): string {
+		const vars = this.entsAny(EntKind.StrVar);
+		const k = this.pickW(W.StrDecl, W.StrAssign);
+		if (k > 0 && vars.length > 0) {
+			const v = this.pickEnt(vars).name;
+			if (k == 1) { return indent + v + " += (" + this.strText(0) + ").slice(0, 8);\n"; }
+			return indent + v + " = (" + this.strText(0) + ").slice(0, 32);\n";
+		}
+		const value = this.strText(0);
+		const name = this.entName("s");
+		this.ents.push({ kind: EntKind.StrVar, name: name, ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 });
+		return indent + "let " + name + ": string = " + value + ";\n";
+	}
+
 	maker(t: Ty): Routine {
 		const name = "mk" + String(this.makerCount);
 		this.makerCount = this.makerCount + 1;
@@ -1034,6 +1122,7 @@ class Gen {
 		}
 		if (fam == Fam.Agg) { return this.aggStatement(t, indent); }
 		if (fam == Fam.Coll) { return this.collStatement(t, indent); }
+		if (fam == Fam.Str) { return this.strStatement(indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -1499,6 +1588,7 @@ test "fams=none emits no closure, union or generic construct" {
 			assert !text.contains("BoxG");
 			assert !text.contains("PtS");
 			assert !text.contains("ixI");
+			assert !text.contains(": string = ");
 		}
 	}
 }
@@ -1591,6 +1681,39 @@ test "every for-of over a collection carries its trip bound" {
 		loops += forOf;
 	}
 	assert loops > 20;
+}
+
+test "the string family alone reaches each of its shapes" {
+	const f = withWeights("fams=str types=int32,uint8 stmts=8 w.stmt.fam=80");
+	const shapes = [".slice(", ".substring(", ".charAt(", "atS(", ".toUpperCase()", ".toLowerCase()", ".trim()", ".trimStart()",
+		".trimEnd()", ".repeat(", ".padStart(", ".padEnd(", ".replace(", ".replaceAll(", ".split(", "String(", "${", ").length",
+		".indexOf(\"", ".lastIndexOf(\"", "codeS(", " == ", " != ", " < ", " > ", ".includes(", ".startsWith(", ".endsWith(",
+		" += (", "let s", " as string)", "\\n", "\\\"", "中"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "a string variable grows only by a bounded slice" {
+	const f = withWeights("fams=str types=int32 stmts=8 w.stmt.fam=80 w.str.append=10 w.str.assign=10");
+	let writes = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			const t = line.trim();
+			if (!t.startsWith("s")) { continue; }
+			if (t.contains(" += (")) {
+				assert t.endsWith(").slice(0, 8);");
+				writes++;
+			} else if (t.contains(" = (") && t.indexOf(" = (") < 6) {
+				assert t.endsWith(").slice(0, 32);");
+				writes++;
+			}
+		}
+	}
+	assert writes > 20;
 }
 
 test "each family alone reaches the program" {
