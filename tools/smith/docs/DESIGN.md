@@ -61,8 +61,9 @@ and chooses where Smith strikes: a feature vector and construct weights per batc
    failure identity (lane pair + symptom + type/width axis). C-Reduce's README
    claims non-C support; that claim is unverified for `.ms` and verifying it
    is part of slice 4.
-5. **Graduation**: a reduced, confirmed regression becomes a corpus program
-   named by invariant; the bundle is then deleted.
+5. **Graduation**: a reduced, confirmed regression becomes a compiler inbox
+   card; the session that fixes it writes the corpus program, named by
+   invariant, into the card's `Pinned by:`. The bundle can then be deleted.
 
 ## Non-goals
 
@@ -107,7 +108,7 @@ picks the next vector; scouts where Smith cannot generate yet.
 |---|---|---|
 | G0 core | driver controls (lost lane, malformed metadata, rerun cannot overwrite evidence); 100-seed swarm and closure-only campaigns | measured programs per hour and finding rate |
 | G1 SAN | the driver stops forcing SAN off; leak / UAF become a bundle kind | a planted SAN divergence goes the full loop |
-| G2 reducer | `creduce --not-c` + identity predicate; the 2026-10-08 findings as real inputs | one planted and one real divergence graduated into the corpus |
+| G2 reducer | `creduce --not-c` + identity predicate; the 2026-10-08 findings as real inputs | one planted and one real divergence reduced; a real one pinned by its fixing session (`Pinned by:`) |
 | G3 handle | per-construct weights and shape knobs (nesting, capture in loop, aggregate into sink) in `Features`; heap/ownership families H6, H10, H2, H12 written with them | one vector concentrates ≥ 70% of a batch on the chosen construct |
 | G4 eyes | **NEW MECHANISM**: coverage-instrumented `msc`, a per-pass report per batch; findings still confirmed on a normal build | a per-pass report for `lambdaLifting`, `generatorLower`, DRC inject that reruns identically |
 | G5 manual strategist | an agent session aims one pass (first: `lambdaLifting`, two of three 2026-10-08 findings) against random swarm on the same CPU budget | per-pass branch coverage and distinct findings per CPU-hour for both arms |
@@ -299,5 +300,8 @@ family coverage.
 ## Done when (arc)
 
 - A bundle reruns byte-identically from its metadata alone.
-- At least one planted divergence AND one real divergence have gone the full
-  loop: detected → bundled → reduced → graduated into `src/test/corpus/`.
+- At least one planted divergence AND one real divergence have gone
+  detected → bundled → reduced, and a real one has graduated: the compiler
+  session that fixed it named its corpus program in the inbox card's
+  `Pinned by:` (decided 2026-10-15). Smith writes no corpus pin itself; the pin
+  belongs to the fixing session, and a second one would duplicate it.
