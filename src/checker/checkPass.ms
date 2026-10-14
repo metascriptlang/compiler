@@ -3381,8 +3381,10 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 // suffixes (`/index.ms`) must precede shorter ones (`.ms`) so the
 // `/index` form isn't misread as a bare `.ms`.
 function stripModuleExtension(path: string): string {
-	for (const suffix of ["/index.ms", "/index.cms", ".ms", ".cms"]) {
-		if (path.endsWith(suffix)) return path.slice(0, path.byteLength - suffix.byteLength);
+	for (const ext of [".ms", ".cms", ".jms", ".rms", ".wms", ".ems"]) {
+		for (const suffix of ["/index" + ext, ext]) {
+			if (path.endsWith(suffix)) return path.slice(0, path.byteLength - suffix.byteLength);
+		}
 	}
 	return path;
 }
