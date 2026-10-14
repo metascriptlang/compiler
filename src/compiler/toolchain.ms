@@ -107,7 +107,8 @@ function autoInstallAllowed(assumeYes: boolean): boolean {
 }
 
 function promptInstall(dir: string): boolean {
-	writeStderr(`No C compiler configured. Download Zig ${ZIG_VERSION} to ${dir}? [y/N] `);
+	writeStderr(`msc compiles C with Zig ${ZIG_VERSION} by default. Download it to ${dir}? ` +
+		`(--cc=clang uses your own) [y/N] `);
 	const ans = readLine();
 	return ans == "y" || ans == "Y" || ans == "yes";
 }
