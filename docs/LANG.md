@@ -1028,6 +1028,15 @@ export { Token } from "./lexer/token";
 export * from "./utils";
 ```
 
+**JS bundle exports.** `msc build --target=js entry.ms` gives the bundle the entry module's export
+list as its ES exports, under the source names: a function, a `const`/`let`, a non-generic class,
+`export default`, and a re-export (`export { x } from`, `export * from`) of one of those, bound to the
+same value. Each exported name is exactly one runtime value: exporting an overload set, a generic
+function or class, or an enum, directly or through a re-export, is a compile error at the `export`.
+Extension functions stay out of the bundle's exports because their export is module visibility.
+Exports of other modules stay internal, and `--split` output is unaffected. Measured 2026-10-14 with
+node 24.1 by `src/test/guard/jsBundleEntryExports.ms`.
+
 ### Converter Declarations
 
 Compile-time source since 2026-07-31 (main `9ce47eb`); runtime source since 2026-09-20 (`wt/inbox-directive`).
