@@ -24,6 +24,7 @@ export interface CliOptions {
 	command: string;
 	inputFile: string;
 	target: Target;
+	targetExplicit: boolean;   // --target= was passed, so build.ms `build.target` yields to it
 	outputPath: string;
 	showTime: boolean;
 	verbose: boolean;
@@ -123,6 +124,7 @@ export function newCliOptions(): CliOptions {
 		command: "",
 		inputFile: "",
 		target: Target.C,
+		targetExplicit: false,
 		outputPath: "",
 		showTime: false,
 		verbose: false,
@@ -196,16 +198,29 @@ export function parseArgs(): CliOptions {
 	// and the compiler is not known until resolveCC runs. resolveLto (cc.ms),
 	// called right after resolveCC, turns "" into thin/off per capability.
 
-	// Seeded last because backend/os/gc/mode are only final once every switch has
-	// been read; `seed` skips names the user already set, so -d: still wins
-	// (Nim reaches the same precedence by seeding first — condsyms.nim:34 before
-	// commands.nim:703).
-	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
-	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
-
 	opts.targetInfo = resolveTargetSizes(opts.targetOs, opts.cpuTarget);
 
 	return opts;
+}
+
+function targetNamed(name: string): Result<Target, string> {
+	return match (name) {
+		"c" => Result.ok(Target.C),
+		"js" | "javascript" => Result.ok(Target.JS),
+		"raiser" | "vm" => Result.ok(Target.Raiser),
+		_ => Result.err("unknown target '" + bold(name) + "'. Valid: " + cyan("c") + ", " + cyan("js") + ", " + cyan("raiser")),
+	};
+}
+
+export function applyBuildTarget(opts: CliOptions, name: string): Result<void, string> {
+	if (opts.targetExplicit) return Result.ok(null);
+	opts.target = try targetNamed(name);
+	return Result.ok(null);
+}
+
+export function seedOptionDefines(opts: CliOptions): void {
+	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
+	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
 }
 
 function isPackageCommand(command: string): boolean {
@@ -244,17 +259,13 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg == "--version" || arg == "-v") {
 			opts.command = "version";
 		} else if (arg.startsWith("--target=")) {
-			const targetStr = arg.slice(9, arg.length);
-			if (targetStr == "js" || targetStr == "javascript") {
-				opts.target = Target.JS;
-			} else if (targetStr == "c") {
-				opts.target = Target.C;
-			} else if (targetStr == "raiser" || targetStr == "vm") {
-				opts.target = Target.Raiser;
-			} else {
-				console.log(error("error") + ": unknown target '" + bold(targetStr) + "'. Valid: " + cyan("c") + ", " + cyan("js") + ", " + cyan("raiser"));
+			const named = targetNamed(arg.slice(9, arg.length));
+			if (!named.ok) {
+				console.log(error("error") + ": " + named.error);
 				exit(1);
 			}
+			opts.target = named.value;
+			opts.targetExplicit = true;
 		} else if (arg.startsWith("--output=")) {
 			opts.outputPath = arg.slice(9, arg.length);
 		} else if (arg.startsWith("-o=")) {
