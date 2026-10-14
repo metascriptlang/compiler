@@ -23,6 +23,7 @@ import {
 	givenBumpOwned,
 	holds,
 	conditionFailure,
+	errorCode,
 	keysFailure,
 	seedsCanonicalFailure,
 	seedsCanonicalProvenFailure,
@@ -1034,7 +1035,7 @@ export macro accounts(): Node {
 			line: at.line,
 			column: at.column,
 			boolValue: false,
-		}, member(rewrite(error), "code", at)], at), at);
+		}, call(bindSym("errorCode")!, [rewrite(error)], at)], at), at);
 		return {
 			kind: NodeKind.IfStmt,
 			line: at.line,

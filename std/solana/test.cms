@@ -4072,6 +4072,35 @@ test "a custom error is built when its check fails and not before, as Anchor bui
 	assert builtErrors == 3;
 }
 
+export struct EnumErrors {
+	owner: Signer;
+	@hasOne(owner, OffsetFailure.Start) @constraint(safe.limit > 5, SparseFailure.High)
+	safe: Owned<Safe>;
+	@address(Pubkey.zero(), OffsetFailure.Then) system: Account;
+}
+
+function enumErrorsStep(): Result<uint64, ProgramError> {
+	const x = try accounts<EnumErrors>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function enumErrorsEntry(): void { codeOf(enumErrorsStep()); }
+
+test "@hasOne, @constraint and @address take a member of an error enum and return the code its converter gives" {
+	const system = systemAccountKey();
+	const mine = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	assert run(programKey(), [ownerWallet(), mine, system], [], enumErrorsEntry).result == 0;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 50, 0));
+	assert run(programKey(), [ownerWallet(), strangers, system], [], enumErrorsEntry).result ==
+		ProgramError.userError(3).code;
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	assert run(programKey(), [ownerWallet(), low, system], [], enumErrorsEntry).result ==
+		ProgramError.userError(9).code;
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
+	assert run(programKey(), [ownerWallet(), mine, stranger], [], enumErrorsEntry).result ==
+		ProgramError.userError(4).code;
+}
+
 export struct Ordered {
 	owner: Signer;
 	@address(Pubkey.zero()) @constraint(safe.limit > 5) @hasOne(owner) @seeds("safe", owner) @bump(safe.bump)

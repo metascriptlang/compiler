@@ -1234,6 +1234,10 @@ export function keysMatch(actual: uint64, expected: uint64, failure: uint64): Re
 	return Result.ok(null);
 }
 
+@inline export function errorCode(error: ProgramError): uint64 {
+	return error.code;
+}
+
 @inline export function conditionFailure(condition: boolean, failure: uint64): uint64 {
 	return condition ? 0 : failure;
 }
