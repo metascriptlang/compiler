@@ -218,6 +218,47 @@ function runLinkCache(): void {
 	const secondFailure = build(archive, "link-failure-retry");
 	recordTrue("failed link rejects stale output", firstFailure != 0);
 	recordTrue("failed link remains invalidated", secondFailure != 0);
+
+	const cliArchive = fixture("cli-archive", "", "int probeValue(void) { return 17; }\n");
+	for (const label of ["initial", "changed"]) {
+		if (label == "changed") put(`${cliArchive}/native.c`, "int probeValue(void) { return 29; }\n");
+		need(command(cliArchive, `cc-${label}`, "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, `cc cli ${label}`);
+		need(command(cliArchive, `ar-${label}`, "ar", ["rcs", "libnative.a", "native.o"]).code == 0, `ar cli ${label}`);
+		need(build(cliArchive, label, "probe", ["--link=libnative.a"]) == 0, `cli archive ${label}`);
+		if (label == "initial") need(value(cliArchive) == "17", "cli archive initial value");
+	}
+	record("archive given by --link replaced", "29", value(cliArchive));
+
+	const cliObject = fixture("cli-object", "", "int probeValue(void) { return 5; }\n");
+	need(command(cliObject, "cc-object", "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, "cc cli object");
+	put(`${cliObject}/extra.c`, "int extraValue(void) { return 40; }\n");
+	need(command(cliObject, "cc-extra", "clang", ["-c", "extra.c", "-o", "extra.o"]).code == 0, "cc cli extra");
+	need(command(cliObject, "ar-extra", "ar", ["rcs", "libextra.a", "extra.o"]).code == 0, "ar cli extra");
+	put(`${cliObject}/build.ms`, "const config = { cc: { linkFlags: [\"libextra.a\"] }, globalImports: [\"./g\"] };\nexport default config;\n");
+	put(`${cliObject}/g.ms`, "export const offset = 100;\n");
+	put(`${cliObject}/api.h`, "int probeValue(void);\nint extraValue(void);\n");
+	put(`${cliObject}/main.ms`, "@include(\"./api.h\");\nextern function probeValue(): int32;\nextern function extraValue(): int32;\nconsole.log(probeValue() + extraValue() + offset);\n");
+	need(build(cliObject, "cli-object", "probe", ["--link=native.o"]) == 0, "cli object with build.ms");
+	record("object given by --link keeps build.ms linkFlags and globalImports", "145", value(cliObject));
+
+	if (windows) {
+		const resource = fixture("cli-resource", "@compile(\"./native.c\");", "int probeValue(void) { return 1; }\n");
+		for (const name of ["AlphaOne", "BravoTwo"]) {
+			put(`${resource}/version.rc`, `1 VERSIONINFO\nFILEVERSION 1,2,3,4\nBEGIN\n  BLOCK "StringFileInfo"\n  BEGIN\n    BLOCK "040904B0"\n    BEGIN\n      VALUE "ProductName", "${name}"\n    END\n  END\n  BLOCK "VarFileInfo"\n  BEGIN\n    VALUE "Translation", 0x409, 1200\n  END\nEND\n`);
+			need(command(resource, `rc-${name}`, "zig", ["rc", "/fo", "version.res", "version.rc"]).code == 0, `zig rc ${name}`);
+			need(build(resource, name, "probe", ["--link=version.res"]) == 0, `cli resource ${name}`);
+			if (name == "AlphaOne") need(holdsUtf16(`${resource}/probe`, "AlphaOne"), "cli resource initial product name");
+		}
+		recordTrue("resource given by --link replaced", holdsUtf16(`${resource}/probe`, "BravoTwo") && !holdsUtf16(`${resource}/probe`, "AlphaOne"));
+	}
+}
+
+function holdsUtf16(path: string, text: string): boolean {
+	const content = readFile(path);
+	if (!content.ok) return false;
+	let wide = "";
+	for (let i = 0; i < text.length; i++) wide = wide + text.charAt(i) + "\u0000";
+	return content.value.byteIndexOf(wide, 0) >= 0;
 }
 
 function makeArchive(dir: string, name: string, result: int32): string {
