@@ -36,9 +36,11 @@ A fresh worktree lacks files the build needs but git does not track. Recreate th
 ```bash
 ( cd vendor/mbedtls/tf-psa-crypto && python3 -m pip install --quiet jinja2 jsonschema && python3 scripts/generate_driver_wrappers.py core )
 cp -R "$MAIN_TREE/examples" .
+( cd tools/solana && npm ci --silent )
 ```
 
-miniz needs no step: its `miniz_export.h` is tracked as `runtime/compress/miniz_export.h`, and a
+Without `tools/solana/node_modules` the gate's solana lane fails with `replay-deps: node or
+tools/solana/node_modules/litesvm missing` (measured on release/0.3.3, 2026-10-15). miniz needs no step: its `miniz_export.h` is tracked as `runtime/compress/miniz_export.h`, and a
 copy inside `vendor/miniz` would shadow it.
 
 Check the version. If it does not read `$V`, the first commit on the branch sets it:
