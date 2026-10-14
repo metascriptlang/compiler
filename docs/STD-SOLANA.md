@@ -36,7 +36,7 @@ The worked example is Anchor's escrow: `examples/escrow/layout.ms` (shared by pr
 
 ## 2. A program
 
-A handler returns `Result<uint64, ProgramError>` and reads its instruction, arguments and accounts through the macros; `examples/escrow/program.ms` `make` is the full shape. The entry is `when (!testBuild) { entry(); }` so the same file carries its simulator tests.
+A handler returns `Result<uint64, ProgramError>` and reads its instruction, arguments and accounts through the macros; `examples/escrow/program.ms` `make` is the full shape. The entry is `when (!testBuild) { entry(); }` so the same file carries its simulator tests. A `--os=solana` build whose entry file calls nothing at its top level is refused, because the deployed program would answer success to every instruction without running one (measured 2026-10-15: the guard `solanaEmptyTopLevelRefused.ms` builds a `.so` on the previous compiler and is refused on this one; 79 Solana programs of `examples/`, `tools/solana/` and the guards build as before).
 
 ```ms
 function make(): Result<uint64, ProgramError> {
