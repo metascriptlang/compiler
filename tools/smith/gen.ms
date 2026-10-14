@@ -185,6 +185,8 @@ class Gen {
 	w: int32[] = W_DEFAULTS;
 	bodyDepth: int32 = 0;
 	famShape: Shape = Shape.Other;
+	elseArms: int32 = 0;
+	arithInElse: int32 = 0;
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
 
@@ -379,8 +381,11 @@ class Gen {
 	}
 
 	binary(t: Ty, depth: int32): string {
+		const inElse = this.elseArms > 0;
+		if (inElse) { this.arithInElse++; }
 		const a = this.expr(t, depth + 1);
 		const b = this.expr(t, depth + 1);
+		if (inElse) { this.arithInElse--; }
 		if (isFloat(t)) { return "(" + a + " " + this.pickOp(FLOAT_OPS) + " " + b + ")"; }
 		const op = this.pickOp(INT_OPS);
 		const guarded = op == "/" || op == "%" || (trapsOnOverflow(t) && (op == "+" || op == "-" || op == "*"));
@@ -452,7 +457,7 @@ class Gen {
 		if (this.fams.length > 0 && this.rng.chance(this.wt(W.ExprFam))) {
 			this.famShape = Shape.Other;
 			const fam = this.famExpr(t, depth);
-			if (fam != "") {
+			if (fam != "" && !(this.famShape == Shape.Ternary && this.arithInElse > 0)) {
 				this.shape = this.famShape;
 				return fam;
 			}
@@ -468,7 +473,8 @@ class Gen {
 		} else if (kind == 3) {
 			out = this.convert(t, depth);
 		} else if (kind == 4) {
-			out = "(" + this.cond(depth + 1) + " ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+			if (this.arithInElse > 0) { return this.leaf(t); }
+			out = "(" + this.cond(depth + 1) + " ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
 			shape = Shape.Ternary;
 		} else {
 			const c = this.call(t, depth);
@@ -497,6 +503,13 @@ class Gen {
 	}
 
 	pickEnt(ents: Ent[]): Ent { return ents[this.rng.below(ents.length)]; }
+
+	elseExpr(t: Ty, depth: int32): string {
+		this.elseArms++;
+		const e = this.expr(t, depth + 1);
+		this.elseArms--;
+		return e;
+	}
 
 	ternary(text: string): string {
 		this.famShape = Shape.Ternary;
@@ -803,7 +816,7 @@ class Gen {
 		if (owners.length == 0) { return ""; }
 		const o = this.pickEnt(owners);
 		const test = o.kind == EntKind.SetVar ? ".has(" : ".includes(";
-		const text = "(" + o.name + test + this.expr(t, depth + 1) + ") ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+		const text = "(" + o.name + test + this.expr(t, depth + 1) + ") ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
 		return this.ternary(text);
 	}
 
@@ -818,7 +831,7 @@ class Gen {
 		if (k == 2) {
 			const maps = this.entsOf(EntKind.MapVar, t);
 			if (maps.length > 0) {
-				const text = "(" + this.pickEnt(maps).name + ".get(" + this.smallInt(depth) + ") ?? " + this.expr(t, depth + 1) + ")";
+				const text = "(" + this.pickEnt(maps).name + ".get(" + this.smallInt(depth) + ") ?? " + this.elseExpr(t, depth) + ")";
 				return this.ternary(text);
 			}
 		}
@@ -837,7 +850,7 @@ class Gen {
 		}
 		if (arrays.length > 0 && this.rng.chance(70)) {
 			const a = this.pickEnt(arrays).name;
-			const text = "(" + a + ".length > 0 ? " + a + "[ixI(" + this.smallInt(depth) + ", " + a + ".length)] : " + this.expr(t, depth + 1) + ")";
+			const text = "(" + a + ".length > 0 ? " + a + "[ixI(" + this.smallInt(depth) + ", " + a + ".length)] : " + this.elseExpr(t, depth) + ")";
 			return this.ternary(text);
 		}
 		const n = this.rng.between(1, 3);
@@ -1048,7 +1061,7 @@ class Gen {
 		const a = left.startsWith("\"") ? "(" + left + " as string)" : left;
 		const b = this.strText(depth + 1);
 		const c = test.startsWith(".") ? "(" + a + ")" + test + b + ")" : "(" + a + test + b + ")";
-		const text = "(" + c + " ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+		const text = "(" + c + " ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
 		return this.ternary(text);
 	}
 
@@ -1089,7 +1102,7 @@ class Gen {
 		const k = this.pickW(W.OwnField, W.OwnHeld);
 		if (k == 1 && held.length > 0) {
 			const h = this.pickEnt(held).name;
-			const text = "(" + h + ".length > 0 ? " + h + "[ixI(" + this.smallInt(depth) + ", " + h + ".length)].v : " + this.expr(t, depth + 1) + ")";
+			const text = "(" + h + ".length > 0 ? " + h + "[ixI(" + this.smallInt(depth) + ", " + h + ".length)].v : " + this.elseExpr(t, depth) + ")";
 			return this.ternary(text);
 		}
 		if (owns.length == 0) { return ""; }
@@ -1566,8 +1579,8 @@ function countOver(needle: string, seeds: int32, f: Features): int32 {
 	return n;
 }
 
-test "default weights keep the pre-weight stream" {
-	const sizes = [21703, 13475, 26098, 17328];
+test "default weights keep the pinned stream" {
+	const sizes = [21703, 13475, 18941, 17328];
 	const closureSizes = [11356, 11418, 13350, 9328];
 	const closure = withWeights("fams=closure");
 	for (let i = 0; i < 4; i++) {
@@ -1775,6 +1788,30 @@ test "a family ternary is never narrowed by a raw cast" {
 		if (text.startsWith("wrapInt32ToUint8((a0.length > 0 ? ")) { wrapped++; }
 	}
 	assert wrapped > 10;
+}
+
+test "no ternary sits under arithmetic inside an else arm" {
+	const g = new Gen();
+	g.rng = Rng.seeded(5 as uint64);
+	g.tys = [Ty.Int32, Ty.Uint8];
+	g.fams = [Fam.Coll, Fam.Str, Fam.Own];
+	g.exprMax = 4;
+	g.w = withWeights("w.expr.ternary=60 w.expr.fam=60").w;
+	g.ents = [
+		{ kind: EntKind.ArrayVar, name: "a0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+		{ kind: EntKind.HeldVar, name: "h1", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+	];
+	let outside = 0;
+	for (let i = 0; i < 300; i++) {
+		g.costCap = TOP_COST_CAP;
+		g.cost = 0 as int64;
+		g.nodesLeft = GEN_NODE_CAP;
+		g.elseArms = 1;
+		assert !g.binary(Ty.Int32, 0).contains(" ? ");
+		g.elseArms = 0;
+		if (g.binary(Ty.Int32, 0).contains(" ? ")) { outside++; }
+	}
+	assert outside > 30;
 }
 
 test "a float element is never searched or kept in a Set" {
