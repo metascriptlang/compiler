@@ -1,11 +1,11 @@
 import { argv, cwd } from "std/process";
-import { Features, defaults, overlay, swarm } from "./features";
+import { Features, Plant, defaults, overlay, swarm } from "./features";
 import { generate } from "./gen";
 import { rerunBundle, runSeeds } from "./drive";
 import { interesting, reduceInput } from "./reduce";
 
 function usage(): int32 {
-	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt] [--swarm]");
+	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt|san] [--swarm]");
 	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...] [--swarm] [--san]");
 	console.log("       msc run tools/smith/main.ms rerun <bundleDir>");
 	console.log("       msc run tools/smith/main.ms reduce <bundleDir|program.ms> [--identity=<file>] [--jobs=4] [--cap=2700]");
@@ -90,6 +90,10 @@ function main(): int32 {
 		}
 		if (!n.ok || n.value < 1) {
 			console.log("smith: count must be at least 1");
+			return 2;
+		}
+		if (f.plant == Plant.San && !san) {
+			console.log("smith: plant=san writes freed memory, which only the SAN lane judges; add --san");
 			return 2;
 		}
 		return runSeeds(first.value, n.value, f, swarmed, san);

@@ -233,6 +233,7 @@ export enum Plant {
 	None,
 	Backend,
 	Opt,
+	San,
 }
 
 export struct Features {
@@ -308,6 +309,7 @@ function plantName(p: Plant): string {
 		Plant.None => "none",
 		Plant.Backend => "backend",
 		Plant.Opt => "opt",
+		Plant.San => "san",
 	};
 }
 
@@ -316,7 +318,8 @@ function plantFromName(name: string): Result<Plant, string> {
 		"none" => Result.ok(Plant.None),
 		"backend" => Result.ok(Plant.Backend),
 		"opt" => Result.ok(Plant.Opt),
-		_ => Result.err("unknown plant '" + name + "' (none, backend, opt)"),
+		"san" => Result.ok(Plant.San),
+		_ => Result.err("unknown plant '" + name + "' (none, backend, opt, san)"),
 	};
 }
 

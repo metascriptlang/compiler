@@ -1427,6 +1427,18 @@ class Gen {
 
 function plantDecls(plant: Plant): string {
 	if (plant == Plant.None) { return ""; }
+	if (plant == Plant.San) {
+		return "@include(\"stdlib.h\")\n" +
+			"extern function malloc(size: uint64): Ptr<void>;\n" +
+			"extern function free(p: Ptr<void>): void;\n" +
+			"function plantDelta(): int32 {\n" +
+			"\tconst raw = malloc(8 as uint64);\n" +
+			"\tfree(raw);\n" +
+			"\tconst p = raw as Ptr<uint8>;\n" +
+			"\tp[0] = 1 as uint8;\n" +
+			"\treturn 0;\n" +
+			"}\n";
+	}
 	const flag = plant == Plant.Backend ? "js" : "debug";
 	const inside = plant == Plant.Backend ? "1" : "0";
 	const outside = plant == Plant.Backend ? "0" : "1";
@@ -1691,6 +1703,17 @@ test "the program head names its seed and full feature vector" {
 	const f = Features.defaults();
 	const text = generate(5 as uint64, f);
 	assert text.startsWith("// smith seed=5 features=" + f.format() + "\n");
+}
+
+test "a san plant writes freed memory and leaves the printed result alone" {
+	const f: Features = { ...Features.defaults(), plant: Plant.San };
+	const text = generate(5 as uint64, f);
+	assert text.contains("\tfree(raw);\n\tconst p = raw as Ptr<uint8>;\n\tp[0] = 1 as uint8;\n\treturn 0;\n");
+	assert text.contains("plantDelta()");
+	assert !text.contains("when (");
+	const r = Features.defaults().overlay("plant=san");
+	assert r.ok;
+	if (r.ok) { assert r.value.plant == Plant.San && r.value.format().contains(" plant=san"); }
 }
 
 test "a planted program declares the plant on both sides of its flag" {
