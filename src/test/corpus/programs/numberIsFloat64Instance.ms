@@ -1,4 +1,4 @@
-// @stdout: 2.5|1.25|2|4.5|0.5|true
+// @stdout: 2.5|1.25|2|4.5|0.5|true|7.5|3|0.5
 // @exit: 0
 
 class E { code: int32 = 0 }
@@ -21,10 +21,17 @@ function elapsed(): Result<float64, E> {
 	return Result.ok(performance.now() - start);
 }
 
+function fromInt32(): Result<float64, E> { const n: int32 = 3; return Result.ok(n); }
+function fromFloat32(): Result<float64, E> { const f: float32 = 0.5; return Result.ok(f); }
+
+const x: number = 7.5;
+const declared: Result<float64, E> = Result.ok(x);
+const i = fromInt32();
+const g = fromFloat32();
 const a = intoFloat64();
 const b = intoNumber();
 const c = intoArray();
 const d = await intoPromise();
 const e = afterTry(0);
 const t = elapsed();
-console.log(`${a.ok ? a.value : -1}|${b.ok ? b.value : -1}|${c.ok ? c.value.length : -1}|${d.ok ? d.value : -1}|${e.ok ? e.value : -1}|${t.ok && t.value >= 0}`);
+console.log(`${a.ok ? a.value : -1}|${b.ok ? b.value : -1}|${c.ok ? c.value.length : -1}|${d.ok ? d.value : -1}|${e.ok ? e.value : -1}|${t.ok && t.value >= 0}|${declared.ok ? declared.value : -1}|${i.ok ? i.value : -1}|${g.ok ? g.value : -1}`);
