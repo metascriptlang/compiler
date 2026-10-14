@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, or all");
 	exit(2);
 }
 
@@ -586,6 +586,36 @@ function runObjectStore(): void {
 	record("a stored object after the C compiler changed", "59", builtValue(tool, build(tool, "second-toolchain", "probe", [], secondTool)));
 }
 
+function pinnedRun(dir: string, exe: string): string {
+	if (windows) {
+		const script = `$p = Start-Process '${dir}/${exe}' -PassThru -NoNewWindow -RedirectStandardOutput '${dir}/pinned.out'; $p.ProcessorAffinity = 1; $null = $p.Handle; if (-not $p.WaitForExit(30000)) { $p.Kill(); 'TIMEOUT' } else { 'exit=' + $p.ExitCode }`;
+		const r = execFileCapture("powershell", ["-NoProfile", "-Command", script]);
+		const out = readFile(`${dir}/pinned.out`);
+		return `${r.ok ? r.value.trim() : "powershell failed"} ${out.ok ? out.value.trim() : ""}`;
+	}
+	const r = execFileCapture("taskset", ["-c", "0", `${dir}/${exe}`]);
+	return r.ok ? `exit=0 ${r.value.trim()}` : `exit=${r.error.exitCode} ${r.error.output.trim()}`;
+}
+
+function runSpawnDrain(): void {
+	if (platform == "macos") {
+		console.log("skip spawn-drain: macOS has no CPU affinity to pin the run to one core");
+		return;
+	}
+	const dir = `${root}/spawn-drain`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, "class A { name() { return \"A\"; } }\nclass B extends A { name() { return \"B\"; } }\nasync function main() {\n\tconsole.log(\"pre\");\n\tconst f = spawn(() => { return true ? new B() : new A(); });\n\tconst g: A = await f;\n\tconst x = spawn(() => 1);\n\tconst y = spawn(() => 2);\n\tconst s = (await x) + (await y);\n\tconst k = spawn(() => new B());\n\tconst h: A = await k;\n\tconsole.log(`post ${g.name()} ${s} ${h.name()}`);\n}\nmain();\n");
+	need(build(dir, "spawn-drain", "probe.exe", ["--gc=drc"]) == 0, "spawn-drain build");
+	let complete = 0;
+	let last = "";
+	for (let i = 0; i < 10; i++) {
+		last = pinnedRun(dir, "probe.exe");
+		if (last.startsWith("exit=0") && last.contains("post B 3 B")) complete = complete + 1;
+	}
+	record(`pinned to one CPU, the exit drain waits for every spawned task (last: ${last})`, "10", `${complete}`);
+}
+
 function runDirectivePaths(): void {
 	const dup = `${root}/dedupe-directive`;
 	ensureDir(dup);
@@ -626,6 +656,7 @@ if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
 if (group == "project-cache" || group == "all") runProjectCache();
 if (group == "directive-paths" || group == "all") runDirectivePaths();
+if (group == "spawn-drain" || group == "all") runSpawnDrain();
 
 let failures = 0;
 console.log(`root ${root}`);
