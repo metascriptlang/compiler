@@ -230,6 +230,20 @@ function firstWarmBuild(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function timeReportsPhaseC(): void {
+	const tag = "hcrTimeReportsPhaseC";
+	const dir = freshDir(`${TMP}/timePhaseC`);
+	copy(`${FIXTURES}/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/logic.ms`, `${dir}/logic.ms`);
+	const hcr = ["build", "app.ms", "--hcr", "--time", "--output=module.hcr"];
+	const cold = mustBuild(tag, dir, hcr, "cold --hcr build failed");
+	copy(`${FIXTURES}/logicBodyEdit.ms`, `${dir}/logic.ms`);
+	const warm = mustBuild(tag, dir, hcr, "warm --hcr build failed");
+	need(tag, cold.contains("phase C (codegen+compile)") && cold.contains("codegen: "), "a cold --hcr build printed no phase C");
+	need(tag, warm.contains("phase C (codegen+compile)") && warm.contains("codegen: "), "a warm --hcr build printed no phase C");
+	console.log(`ok   ${tag}`);
+}
+
 function emittedModuleC(dir: string, stem: string): string {
 	const debug = `${dir}/out/debug`;
 	for (const e of readDir(debug)) {
@@ -1557,6 +1571,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
 	{ name: "hcrFirstWarmBuild", run: firstWarmBuild },
+	{ name: "hcrTimeReportsPhaseC", run: timeReportsPhaseC },
 	{ name: "hcrModuleLocalNames", run: localNames },
 	{ name: "hcrWatchWarm", run: watchWarm },
 	{ name: "hcrWatchGeneric", run: watchGeneric },
