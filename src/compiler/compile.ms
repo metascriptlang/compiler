@@ -1359,6 +1359,16 @@ function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: str
 	return ctxs;
 }
 
+function bundleExportList(names: string[], locals: string[]): string {
+	const specifiers: string[] = [];
+	for (let i = 0; i < names.length; i += 1) {
+		let declarations = 0;
+		for (const n of names) { if (n == names[i]) declarations += 1; }
+		if (declarations == 1) specifiers.push(locals[i] == names[i] ? names[i] : `${locals[i]} as ${names[i]}`);
+	}
+	return specifiers.length == 0 ? "" : `export { ${specifiers.join(", ")} };\n`;
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -1471,6 +1481,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
+	let entryExports = "";
 	const helpers = createJSHelpers();
 	setJsProgramScope(true);
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
@@ -1503,6 +1514,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const isPrelude = moduleId.startsWith("std/core/");
 		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers);
 		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
+		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals);
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + separator;
@@ -1531,7 +1543,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// Same reason as generateJSModule: node must meet module syntax before a top-level await.
 	if (extImportKeys.length == 0 && anyTopLevelAwait) output = output + "export {};\n";
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
-	output = output + bundle;
+	output = output + bundle + entryExports;
 
 	// `--output` wins here exactly as it does for the C binary. Deriving the
 	// name from the entry file alone collides for directory-style programs,

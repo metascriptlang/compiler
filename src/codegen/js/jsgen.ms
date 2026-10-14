@@ -252,10 +252,10 @@ function insertAfterHeader(gen: JSGenerator, headerChunks: int32, text: string):
 }
 
 // Bundle mode: generate JS for a single module without header/imports.
-// Returns the code body + list of exported names for the IIFE return statement.
 export interface BundleModuleResult {
 	code: string;
 	exportedNames: string[];
+	exportedLocals: string[];
 	smap: SourceInfo;
 }
 
@@ -270,7 +270,7 @@ export function generateJSBundleModule(program: Node, importSourceMap: string[],
 	gen.importSourceToModuleId = importSourceMap;
 	gen.importSourceToModuleIdKeys = importSourceMapKeys;
 	emitNodeDispatch(gen, program);
-	return { code: finalize(gen), exportedNames: gen.exportedNames, smap: gen.smapInfo };
+	return { code: finalize(gen), exportedNames: gen.exportedNames, exportedLocals: gen.bundleExportLocals, smap: gen.smapInfo };
 }
 
 // Generate JS without header (for internal/test use)
