@@ -16,6 +16,8 @@ import {
 } from "./testChainScope";
 import {
 	Account,
+	BorshReader,
+	BorshWriter,
 	DELEGATION_PROGRAM_ID,
 	Discriminator,
 	ProgramError,
@@ -5212,4 +5214,11 @@ test "scratch refuses a negative count and gives an empty span for zero" {
 
 test "the MagicBlock and Hydra modules are linked into this test run, so their host tests run with it" {
 	assert HYDRA_PROGRAM_ID != MAGIC_PROGRAM_ID && MAGIC_VAULT_ID != MAGIC_PROGRAM_ID;
+}
+
+test "std/solana gives a native program the Borsh writer and reader its clients use" {
+	let reader = BorshReader.of(BorshWriter.create().u64(7).bytes);
+	const back = reader.u64();
+	assert back.ok;
+	if (back.ok) { assert back.value == 7; }
 }

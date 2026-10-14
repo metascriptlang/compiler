@@ -3,6 +3,7 @@ export * from "./error";
 export * from "./discriminator";
 export * from "./pda";
 export * from "./littleEndian";
+export * from "./borsh";
 export {
 	Account,
 	AccountMeta,
