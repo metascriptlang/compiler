@@ -469,9 +469,15 @@ function refusePlaceholderMismatch(ctx: CheckerContext, d: FunctionDeclData, pat
 	for (let i = 0; i < pattern.length; i++) {
 		if (pattern.charAt(i) == "#") placeholders += 1;
 	}
+	const splatAt = findChar(pattern, "@");
+	if (splatAt >= 0 && findChar(pattern.slice(splatAt, pattern.length), "#") >= 0) {
+		addError(ctx,
+			`extern function '${d.fnName}': in the pattern "${pattern}" a '#' follows '@', which has already taken every remaining argument; move the '#' before the '@'`,
+			d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
 	const params = d.params.length;
-	const splat = findChar(pattern, "@") >= 0;
-	if (placeholders == params || (splat && placeholders < params)) return;
+	if (placeholders == params || (splatAt >= 0 && placeholders < params)) return;
 	const literalHint = placeholders > params ? "; write a literal '#' as '\\x1f', or as '\\\\x23' inside a JS string of the pattern" : "";
 	addError(ctx,
 		`extern function '${d.fnName}': the pattern "${pattern}" has ${placeholders} '#' placeholder(s) but the function takes ${params} parameter(s)${literalHint}`,
