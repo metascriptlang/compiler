@@ -2969,8 +2969,8 @@ test "Box<number> records instantiation" {
 	assert t.kind == TypeKind.GenericInstance;
 	assert getGenericTypeInstCount() == 1;
 	assert getGenericTypeInstBaseName(0) == "Box";
-	assert getGenericTypeInstTypeArgKey(0) == "number";
-	assert getGenericTypeInstMangledName(0) == "Box__number";
+	assert getGenericTypeInstTypeArgKey(0) == "float64";
+	assert getGenericTypeInstMangledName(0) == "Box__float64";
 	assert getGenericTypeInstFieldNames(0) == "value";
 	assert getGenericTypeInstFieldTypes(0) == "number";
 }
@@ -2981,7 +2981,7 @@ test "Pair<string, number> records instantiation" {
 	declareGeneric(ctx, NodeKind.InterfaceDecl, "Pair", "A,B", ["first", "second"], ["A", "B"]);
 	const t = resolveAnnotation("Pair<string, number>", ctx, 0, 0);
 	assert t.kind == TypeKind.GenericInstance;
-	const idx = findGenericTypeInstIdx("Pair", "string_number");
+	const idx = findGenericTypeInstIdx("Pair", "string_float64");
 	assert idx >= 0;
 	assert getGenericTypeInstFieldNames(idx) == "first|second";
 	assert getGenericTypeInstFieldTypes(idx) == "string|number";
