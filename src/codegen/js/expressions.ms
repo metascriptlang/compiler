@@ -365,6 +365,7 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 // Native-binding pattern substitution — reference parity: jsgen.nim importjs.
 // A symbol's `nativeName` is a JS template with placeholders:
 //   #   consume next arg          @   splat remaining args
+//   \x1f  literal '#'             \x1d  literal '@'
 // Used by extern functions in .jms preludes (e.g.
 // `extern function set<K,V>(this m, k, v) from "#.set(#, #)"`) to bind MS
 // extension calls to native JS dispatch without wrapper functions or mangling.
@@ -426,6 +427,12 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], form
 				argIdx = argIdx + 1;
 				first = false;
 			}
+			i = i + 1;
+		} else if (ch == "\x1f") {
+			emit(gen, "#");
+			i = i + 1;
+		} else if (ch == "\x1d") {
+			emit(gen, "@");
 			i = i + 1;
 		} else {
 			emit(gen, ch);
