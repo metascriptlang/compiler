@@ -17,7 +17,7 @@ import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverl
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isStaticExtensionSym } from "../../checker/context";
+import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
@@ -362,14 +362,6 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 // Used by extern functions in .jms preludes (e.g.
 // `extern function set<K,V>(this m, k, v) from "#.set(#, #)"`) to bind MS
 // extension calls to native JS dispatch without wrapper functions or mangling.
-function hasNativePattern(s: string): boolean {
-	for (let i = 0; i < s.length; i += 1) {
-		const c = s.charAt(i);
-		if (c == "#" || c == "@") return true;
-		if (c == "$" && i + 1 < s.length && s.charAt(i + 1) == "1") return true;
-	}
-	return false;
-}
 
 function emittedNode(node: Node): Node {
 	return match (node.kind) {
@@ -470,7 +462,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	// receiver is prepended to match the post-lower arg shape used by free
 	// extension functions.
 	const sym = d.callee.resolvedSym;
-	if (sym != null && sym.nativeName != "" && hasNativePattern(sym.nativeName)) {
+	if (sym != null && sym.nativeName != "" && isNativePattern(sym.nativeName)) {
 		let patternArgs = d.arguments;
 		if (d.callee.kind == NodeKind.MemberExpr) {
 			patternArgs = [(d.callee.data as MemberExprData).object];
@@ -508,7 +500,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			&& sym.overloads != null && sym.overloads.length > 0) {
 		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
 		const ws = w.winnerSym;
-		if (ws != null && ws.nativeName != "" && hasNativePattern(ws.nativeName)) {
+		if (ws != null && ws.nativeName != "" && isNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);
 			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name, nativeFormals(ws), node.nodeType);
 			return;

@@ -1037,6 +1037,11 @@ export function isStaticExtensionSym(sym: Symbol): boolean {
 	return decl != null && decl.kind == NodeKind.FunctionDecl && isStaticExtensionFlag((decl.data as FunctionDeclData).fnFlags);
 }
 
+export function isNativePattern(native: string): boolean {
+	return findChar(native, "#") >= 0 || findChar(native, "@") >= 0 || findChar(native, "(") >= 0
+		|| native.indexOf("$1") >= 0;
+}
+
 export function getExtReceiverName(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
 	if (seg == "") return "";
