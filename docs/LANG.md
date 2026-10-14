@@ -4048,11 +4048,15 @@ extern class console {
 }
 ```
 
-On C, `from` names the C symbol. On JS, a `from` string containing `#`, `@`, `(` or `$1` is a
-pattern emitted in place of the call: each `#` takes the next argument, `@` the remaining ones,
-`$1` the function's name. A C build refuses such a pattern at its `extern` declaration, called or
-not; a declaration meant for JS only sits inside `when (js) { … }` or in a `.jms` file. A pattern
-without a placeholder is emitted as written:
+The `from` string is formatted once, at the declaration, on every backend: `$1` becomes the
+declared name and `$$` a literal `$`; any other `$` sequence is refused there. So
+`extern function abs(x: int32): int32 from "$1"` names C's `abs` and `from "to$1"` on a function
+`upper` names `toupper`. A `from` name without `#`, `@` or `(` is the name called, on C and on JS
+alike: `from "Math.abs"` emits `Math.abs(x)` on JS. On JS, a `from` string containing `#`, `@` or
+`(` is a pattern emitted in place of the call: each `#` takes the next argument, `@` the remaining
+ones. A C build refuses such a pattern at its `extern` declaration, called or not; a declaration
+meant for JS only sits inside `when (js) { … }` or in a `.jms` file. A pattern without a
+placeholder is emitted as written:
 
 ```ms
 extern function answer(): int32 from "(40 + 2)";              // answer() → (40 + 2)
@@ -4060,13 +4064,21 @@ extern function hashAt(s: string): int32 from "(#).indexOf('\\x23')";
 ```
 
 Every `#` is a placeholder, a `#` inside a quoted JS string included, so a literal `#` is written
-`\\x23` in the pattern (JS reads `\x23` as `#`). The declaration is refused when the pattern's
-`#` count differs from the parameter count (with `@`, when it exceeds it), and the error names
-both counts. Measured 2026-10-14 on `wt/fix-extern-pattern`: corpus `externPatternArity` prints
+`\\x23` in the pattern (JS reads `\x23` as `#`). Anywhere in a pattern, inside a JS string or
+not (a private name `#.\x1fsize`), `"\x1f"` emits a literal `#` and `"\x1d"` a literal `@`. The
+declaration is refused when the pattern's `#` count differs from the parameter count (with `@`,
+when it exceeds it), and the error names both counts; a `#` after `@` is refused too, since `@`
+has taken every remaining argument. An extern class method whose `from` is a plain name is
+still called on JS by its declared member name (`Clock.stamp()` for `from "Date.now"`).
+
+Measured 2026-10-14 on `wt/fix-extern-pattern`: corpus `externPatternArity` prints
 `42 hi 3 | 1 #x | 7 [1,2,3]` on JS, C drc and C orc (the C side defines plain functions under
 `when`); `src/test/js/externPattern.ms` pins the count refusals and `src/test/c/externPattern.ms`
-the C refusal. Not measured: extern class methods with a pattern, which the count check does not
-cover (the C refusal does).
+the C refusal. Measured 2026-10-15 on `wt/fix-extern-name`: the same program, extended, prints
+`… | 3 65 4 #x@` on all three (`$1`, `to$1`, plain `Math.abs` / `fabs`, `\x1f`, `\x1d`); both
+test files pin `$1`, `$$`, the refused `$2`, the plain JS name, the literal characters and the
+`#`-after-`@` refusal. Not measured: extern class methods with a pattern, which the count check
+does not cover (the C refusal does).
 
 ### Distinct Types
 ```typescript
