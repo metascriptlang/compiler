@@ -4,11 +4,11 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
-import { getModuleDir, appendFlag } from "../utils/string";
+import { getModuleDir, appendFlag, findChar } from "../utils/string";
 import { normalize } from "std/fs/path";
 import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
@@ -428,6 +428,22 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 	}
 }
 
+function refusePlaceholderMismatch(ctx: CheckerContext, d: FunctionDeclData): void {
+	const pattern = d.nativeName;
+	if (!isNativePattern(pattern)) return;
+	let placeholders = 0;
+	for (let i = 0; i < pattern.length; i++) {
+		if (pattern.charAt(i) == "#") placeholders += 1;
+	}
+	const params = d.params.length;
+	const splat = findChar(pattern, "@") >= 0;
+	if (placeholders == params || (splat && placeholders < params)) return;
+	const literalHint = placeholders > params ? "; write a literal '#' inside a JS string of the pattern as '\\\\x23'" : "";
+	addError(ctx,
+		`extern function '${d.fnName}': the pattern "${pattern}" has ${placeholders} '#' placeholder(s) but the function takes ${params} parameter(s)${literalHint}`,
+		d.nameLocation.line, d.nameLocation.column);
+}
+
 // ===== Individual Collectors =====
 
 export function collectFunction(ctx: CheckerContext, node: Node): void {
@@ -468,6 +484,7 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 		// Wire nativeName from AST 'from "c_name"' clause
 		if (d.nativeName != null && d.nativeName != "") {
 			sym.nativeName = d.nativeName;
+			refusePlaceholderMismatch(ctx, d);
 		} else {
 			// extern without 'from' — function name IS the C name (no module mangling)
 			sym.nativeName = d.fnName;
