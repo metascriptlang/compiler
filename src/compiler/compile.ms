@@ -3181,6 +3181,10 @@ setGlobalHookOwners(sharedHookOwners);
 		cji = cji + 1;
 	}
 	if (moduleCompileFailed) throw new Error(BUILD_STOPPED);
+	if (opts.showTime) {
+		printTiming("phase C (codegen+compile)", tC);
+		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
+	}
 	if (hcrImages) {
 		const jobPaths: string[] = [];
 		for (const job of emissionJobs) jobPaths.push(job.modPath);
@@ -3222,10 +3226,6 @@ setGlobalHookOwners(sharedHookOwners);
 		return BuildStatus.Built;
 	}
 
-	if (opts.showTime) {
-		printTiming("phase C (codegen+compile)", tC);
-		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
-	}
 	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
