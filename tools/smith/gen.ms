@@ -184,6 +184,7 @@ class Gen {
 	nodesLeft: int32 = GEN_NODE_CAP;
 	w: int32[] = W_DEFAULTS;
 	bodyDepth: int32 = 0;
+	famShape: Shape = Shape.Other;
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
 
@@ -449,9 +450,10 @@ class Gen {
 		this.nodesLeft--;
 		if (depth >= this.exprMax || !this.reserve(1 as int64)) { return this.leaf(t); }
 		if (this.fams.length > 0 && this.rng.chance(this.wt(W.ExprFam))) {
+			this.famShape = Shape.Other;
 			const fam = this.famExpr(t, depth);
 			if (fam != "") {
-				this.shape = Shape.Other;
+				this.shape = this.famShape;
 				return fam;
 			}
 		}
@@ -495,6 +497,11 @@ class Gen {
 	}
 
 	pickEnt(ents: Ent[]): Ent { return ents[this.rng.below(ents.length)]; }
+
+	ternary(text: string): string {
+		this.famShape = Shape.Ternary;
+		return text;
+	}
 
 	entName(prefix: string): string {
 		const name = prefix + String(this.entCount);
@@ -783,8 +790,6 @@ class Gen {
 	collSize(t: Ty, depth: int32): string {
 		if (t == Ty.Int32) {
 			const arrays = this.entsAny(EntKind.ArrayVar);
-			const keyed = this.entsAny(EntKind.MapVar).concat(this.entsAny(EntKind.SetVar));
-			if (keyed.length > 0 && (arrays.length == 0 || this.rng.chance(30))) { return this.pickEnt(keyed).name + ".size"; }
 			if (arrays.length == 0) { return ""; }
 			const a = this.pickEnt(arrays);
 			const form = this.rng.below(4);
@@ -798,7 +803,8 @@ class Gen {
 		if (owners.length == 0) { return ""; }
 		const o = this.pickEnt(owners);
 		const test = o.kind == EntKind.SetVar ? ".has(" : ".includes(";
-		return "(" + o.name + test + this.expr(t, depth + 1) + ") ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+		const text = "(" + o.name + test + this.expr(t, depth + 1) + ") ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+		return this.ternary(text);
 	}
 
 	collExpr(t: Ty, depth: int32): string {
@@ -811,7 +817,10 @@ class Gen {
 		}
 		if (k == 2) {
 			const maps = this.entsOf(EntKind.MapVar, t);
-			if (maps.length > 0) { return "(" + this.pickEnt(maps).name + ".get(" + this.smallInt(depth) + ") ?? " + this.expr(t, depth + 1) + ")"; }
+			if (maps.length > 0) {
+				const text = "(" + this.pickEnt(maps).name + ".get(" + this.smallInt(depth) + ") ?? " + this.expr(t, depth + 1) + ")";
+				return this.ternary(text);
+			}
 		}
 		if (k == 3) {
 			const fixed = this.entsOf(EntKind.FixedVar, t);
@@ -828,7 +837,8 @@ class Gen {
 		}
 		if (arrays.length > 0 && this.rng.chance(70)) {
 			const a = this.pickEnt(arrays).name;
-			return "(" + a + ".length > 0 ? " + a + "[ixI(" + this.smallInt(depth) + ", " + a + ".length)] : " + this.expr(t, depth + 1) + ")";
+			const text = "(" + a + ".length > 0 ? " + a + "[ixI(" + this.smallInt(depth) + ", " + a + ".length)] : " + this.expr(t, depth + 1) + ")";
+			return this.ternary(text);
 		}
 		const n = this.rng.between(1, 3);
 		return "[" + this.items(t, depth, n) + "][" + String(this.rng.below(n)) + "]";
@@ -1009,7 +1019,8 @@ class Gen {
 		if (k == 4) {
 			const form = this.rng.below(3);
 			if (form == 0) { return s + ".repeat(" + String(this.rng.below(3)) + ")"; }
-			return s + (form == 1 ? ".padStart(" : ".padEnd(") + String(this.rng.below(9)) + ", \"" + this.strLiteral(1) + "\")";
+			const filled = "(" + s + " + \"" + this.strLiteral(1) + "\")";
+			return filled + (form == 1 ? ".padStart(" : ".padEnd(") + String(this.rng.below(9)) + ", \"" + this.strLiteral(1) + "\")";
 		}
 		const form = this.rng.below(3);
 		const search = "\"" + this.strLiteral(1) + "\"";
@@ -1037,7 +1048,8 @@ class Gen {
 		const a = left.startsWith("\"") ? "(" + left + " as string)" : left;
 		const b = this.strText(depth + 1);
 		const c = test.startsWith(".") ? "(" + a + ")" + test + b + ")" : "(" + a + test + b + ")";
-		return "(" + c + " ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+		const text = "(" + c + " ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+		return this.ternary(text);
 	}
 
 	strStatement(indent: string): string {
@@ -1077,7 +1089,8 @@ class Gen {
 		const k = this.pickW(W.OwnField, W.OwnHeld);
 		if (k == 1 && held.length > 0) {
 			const h = this.pickEnt(held).name;
-			return "(" + h + ".length > 0 ? " + h + "[ixI(" + this.smallInt(depth) + ", " + h + ".length)].v : " + this.expr(t, depth + 1) + ")";
+			const text = "(" + h + ".length > 0 ? " + h + "[ixI(" + this.smallInt(depth) + ", " + h + ".length)].v : " + this.expr(t, depth + 1) + ")";
+			return this.ternary(text);
 		}
 		if (owns.length == 0) { return ""; }
 		const o = this.pickEnt(owns).name;
@@ -1735,13 +1748,33 @@ test "the collection family alone reaches each of its shapes" {
 	const f = withWeights("fams=coll types=int32,uint8 stmts=8 w.stmt.fam=80");
 	const shapes = ["[ixI(", ".pop(); }", ".splice(ixI(", ".setLength(", ".fill(", ".reverse();", " = pushA", "[...a", ", ...a",
 		".concat(", ").map(", "for (const x", "for (let j", "for (const [x", "let [l", ", ...r", "new Map<int32, ", "new Set<",
-		" ?? ", ".delete(", ".add(", ".has(", ".includes(", ".indexOf(", ".join(\",\").length", ".size", "] = w"];
+		" ?? ", ".delete(", ".add(", ".has(", ".includes(", ".indexOf(", ".join(\",\").length", "] = w"];
 	const seen: boolean[] = shapes.map((x: string): boolean => false);
 	for (let seed = 1; seed < 41; seed++) {
 		const text = generate(seed as uint64, f);
 		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
 	}
 	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "a family ternary is never narrowed by a raw cast" {
+	const g = new Gen();
+	g.rng = Rng.seeded(3 as uint64);
+	g.tys = [Ty.Int32, Ty.Uint8];
+	g.fams = [Fam.Coll];
+	g.exprMax = 3;
+	g.w = withWeights("w.expr.fam=100 w.coll.index=100").w;
+	g.ents = [{ kind: EntKind.ArrayVar, name: "a0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 }];
+	let wrapped = 0;
+	for (let i = 0; i < 200; i++) {
+		g.costCap = TOP_COST_CAP;
+		g.cost = 0 as int64;
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.convert(Ty.Uint8, 0);
+		assert !text.startsWith("((a0.length > 0 ? ");
+		if (text.startsWith("wrapInt32ToUint8((a0.length > 0 ? ")) { wrapped++; }
+	}
+	assert wrapped > 10;
 }
 
 test "a float element is never searched or kept in a Set" {
