@@ -1032,6 +1032,10 @@ export function isStaticExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "sext:") != "";
 }
 
+export function isExtensionRoutine(flags: string): boolean {
+	return isExtensionFlag(flags) || isStaticExtensionFlag(flags);
+}
+
 export function isStaticExtensionSym(sym: Symbol): boolean {
 	const decl = sym.declNode;
 	return decl != null && decl.kind == NodeKind.FunctionDecl && isStaticExtensionFlag((decl.data as FunctionDeclData).fnFlags);

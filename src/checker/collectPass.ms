@@ -1050,7 +1050,7 @@ export function registerConverter(ctx: CheckerContext, sym: Symbol, tier: int32,
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
-function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string {
+export function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string {
 	if (ctx.currentModule != null) {
 		for (const imp of ctx.currentModule.imports) {
 			if (imp.sourceSpecifier == specifier) return imp.sourcePath;

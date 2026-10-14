@@ -30,6 +30,8 @@ import { inferRaises, resetRaises } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
+import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
+import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
@@ -1359,14 +1361,15 @@ function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: str
 	return ctxs;
 }
 
-function bundleExportList(names: string[], locals: string[]): string {
+function bundleExportList(names: string[], locals: string[], reexports: BundleReexport[]): string {
 	const specifiers: string[] = [];
-	for (let i = 0; i < names.length; i += 1) {
-		let declarations = 0;
-		for (const n of names) { if (n == names[i]) declarations += 1; }
-		if (declarations == 1) specifiers.push(locals[i] == names[i] ? names[i] : `${locals[i]} as ${names[i]}`);
-	}
+	for (let i = 0; i < names.length; i += 1) specifiers.push(exportSpecifier(locals[i], names[i]));
+	for (const r of reexports) specifiers.push(exportSpecifier(jsBundleReferenceName(r.sym, r.name), r.name));
 	return specifiers.length == 0 ? "" : `export { ${specifiers.join(", ")} };\n`;
+}
+
+function exportSpecifier(local: string, name: string): string {
+	return local == name ? name : `${local} as ${name}`;
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
@@ -1493,6 +1496,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 		}
 		refusePointerOpsOnJs(unitCtxs[ui], unitPrograms[ui]);
+		const reexports = modPath == entryPath ? checkJsBundleExports(unitCtxs[ui], unitPrograms[ui]) : [];
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
@@ -1514,7 +1518,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const isPrelude = moduleId.startsWith("std/core/");
 		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers);
 		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
-		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals);
+		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals, reexports);
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + separator;

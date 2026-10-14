@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
@@ -134,6 +134,12 @@ export function jsSymbolName(gen: JSGenerator, sym: Symbol | null, name: string)
 
 export function jsReferenceName(gen: JSGenerator, sym: Symbol | null, text: string): string {
 	return jsNameOf(gen, sym, text, referenceName(sym, text));
+}
+
+export function jsBundleReferenceName(sym: Symbol, text: string): string {
+	const gen = createJSGenerator();
+	gen.bundleMode = true;
+	return jsReferenceName(gen, sym, text);
 }
 
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {

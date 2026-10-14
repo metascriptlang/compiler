@@ -10,7 +10,7 @@ import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { isGenericFn, routineKindFlag } from "../../checker/context";
+import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
@@ -464,7 +464,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			return;
 		}
 		let declName = "";
-		if (inner.kind == NodeKind.FunctionDecl) { declName = (inner.data as FunctionDeclData).fnName; }
+		if (inner.kind == NodeKind.FunctionDecl && !isExtensionRoutine((inner.data as FunctionDeclData).fnFlags)) { declName = (inner.data as FunctionDeclData).fnName; }
 		else if (inner.kind == NodeKind.VariableDecl) { declName = (inner.data as VariableDeclData).declName; }
 		else if (inner.kind == NodeKind.ClassDecl) { declName = (inner.data as ClassDeclData).className; }
 		const before = gen.buf.length;
