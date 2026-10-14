@@ -1,6 +1,7 @@
 // MetaScript Compiler CLI — Argument parsing and option types
 
-import { argv, exit, platform, arch } from "std/process";
+import { argv, cwd, exit, platform, arch } from "std/process";
+import { isAbsolute, join, normalize } from "std/fs/path";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, defineSymbol } from "./defines";
@@ -43,6 +44,7 @@ export interface CliOptions {
 	sanitize: string;
 	passC: string;
 	passL: string;
+	link: string[];
 	emitC: boolean;
 	emitJobs: int32;
 	splitModules: boolean;     // --split: js target emits one ES module per source module instead of a bundle
@@ -141,6 +143,7 @@ export function newCliOptions(): CliOptions {
 		sanitize: "",
 		passC: "",
 		passL: "",
+		link: [],
 		emitC: false,
 		emitJobs: 0,
 		splitModules: false,
@@ -303,6 +306,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg.startsWith("--passL=")) {
 			if (opts.passL.length > 0) opts.passL = opts.passL + " ";
 			opts.passL = opts.passL + arg.slice(8, arg.length);
+		} else if (arg.startsWith("--link=")) {
+			const file = arg.slice(7, arg.length);
+			opts.link.push(isAbsolute(file) ? normalize(file) : normalize(join(cwd(), file)));
 		} else if (arg == "--check") {
 			opts.fmtCheck = true;
 		} else if (arg == "--hcr") {

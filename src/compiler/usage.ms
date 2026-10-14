@@ -56,6 +56,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));
 	console.log("  " + cyan("--passC") + "=<flags>      Extra C compiler flags");
 	console.log("  " + cyan("--passL") + "=<flags>      Extra linker flags");
+	console.log("  " + cyan("--link") + "=<file>        Link a file as @link does " + dim("(relative to the cwd)"));
 	console.log("  " + cyan("--emit") + "=c             Emit C source only " + dim("(no compile/link)"));
 	console.log("  " + cyan("--gendeps") + "             Write .deps file with module paths");
 	console.log("  " + cyan("--hcr") + "                 Build hot-reloadable module images " + dim("(docs/HCR.md)"));

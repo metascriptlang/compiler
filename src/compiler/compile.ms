@@ -1839,6 +1839,15 @@ function linkHcrImage(objects: string[], externalInputs: string[], image: string
 	writeLinkCache(objects, externalInputs, flags, image, image);
 }
 
+function linkInputs(opts: CliOptions): string[] {
+	const inputs: string[] = [];
+	for (const obj of globalLinkObjects()) inputs.push(obj);
+	for (const obj of opts.link) {
+		if (!inputs.includes(obj)) inputs.push(obj);
+	}
+	return inputs;
+}
+
 function linkHcrImages(
 	oSlots: string[][],
 	moduleSlots: int32[],
@@ -1854,8 +1863,7 @@ function linkHcrImages(
 ): void {
 	let linkFlags = cliLinkFlags(allFlags, opts);
 	for (const flag of globalLinkFlags()) linkFlags = appendFlag(linkFlags, flag);
-	const externalInputs: string[] = [];
-	for (const obj of globalLinkObjects()) externalInputs.push(obj);
+	const externalInputs = linkInputs(opts);
 
 	const core = hcrCoreImagePath(outBinary, opts.targetOs);
 	let coreFlags = linkFlags;
@@ -2531,7 +2539,7 @@ setGlobalHookOwners(sharedHookOwners);
 	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines) + modulePassIdentity();
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
-	for (const path of globalLinkObjects()) projectDeps.push(path);
+	for (const path of linkInputs(opts)) projectDeps.push(path);
 	let hcrBuildAbi: HcrBuildAbi = null as unknown as HcrBuildAbi;
 	if (opts.isHcr && !opts.emitC) {
 		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
@@ -3194,11 +3202,8 @@ setGlobalHookOwners(sharedHookOwners);
 	// Link all .o files into final binary (or shared library for HCR)
 	// Build link flags from global linkState (Set = deduplicated)
 	let allLink = cliLinkFlags(allFlags, opts);
-	const externalLinkInputs: string[] = [];
-	for (const obj of globalLinkObjects()) {
-		oFiles.push(obj);
-		externalLinkInputs.push(obj);
-	}
+	const externalLinkInputs = linkInputs(opts);
+	for (const obj of externalLinkInputs) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { allLink = appendFlag(allLink, flag); }
 	let linkFlags = allLink;
 
@@ -3549,7 +3554,7 @@ setGlobalHookOwners(sharedHookOwners);
 	// went unnoticed. forceExe keeps --app=lib / --hcr from turning the test
 	// binary into a shared library: execFile below has to run it.
 	let testLink = cliLinkFlags(allFlags, opts, true);
-	for (const obj of globalLinkObjects()) oFiles.push(obj);
+	for (const obj of linkInputs(opts)) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linkRes.ok) {
