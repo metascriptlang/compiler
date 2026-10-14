@@ -147,7 +147,9 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
 		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
 	}
-	if (sym.nativeName != null && sym.nativeName != "") return safeJsName(name);
+	if (sym.nativeName != null && sym.nativeName != "") {
+		return hasFlag(sym, SymbolFlag.ImportC) && !isNativePattern(sym.nativeName) ? sym.nativeName : safeJsName(name);
+	}
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name, declared);
 	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
