@@ -25,6 +25,10 @@ enum EntKind {
 	BoxVar,
 	StructVar,
 	ClassVar,
+	ArrayVar,
+	FixedVar,
+	MapVar,
+	SetVar,
 }
 
 struct Ent {
@@ -476,6 +480,14 @@ class Gen {
 		return out;
 	}
 
+	entsAny(kind: EntKind): Ent[] {
+		const out: Ent[] = [];
+		for (const e of this.ents) { if (e.kind == kind) { out.push(e); } }
+		return out;
+	}
+
+	pickEnt(ents: Ent[]): Ent { return ents[this.rng.below(ents.length)]; }
+
 	entName(prefix: string): string {
 		const name = prefix + String(this.entCount);
 		this.entCount = this.entCount + 1;
@@ -532,6 +544,7 @@ class Gen {
 		if (fam == Fam.Closure) { return this.closureExpr(t, depth); }
 		if (fam == Fam.Union) { return this.unionExpr(t, depth); }
 		if (fam == Fam.Agg) { return this.aggExpr(t, depth); }
+		if (fam == Fam.Coll) { return this.collExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -737,6 +750,214 @@ class Gen {
 		return text;
 	}
 
+	collHelpers(t: Ty): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+		this.useHelper("pushA" + X, "function pushA" + X + "(xs: " + T + "[], x: " + T + "): " + T + "[] { xs.push(x); return xs; }\n" +
+			"function restA" + X + "(d: " + T + ", ...xs: " + T + "[]): " + T + " { return xs.length > 0 ? xs[xs.length - 1] : d; }\n");
+		return X;
+	}
+
+	items(t: Ty, depth: int32, n: int32): string {
+		let out = "";
+		for (let i = 0; i < n; i++) {
+			const e = this.expr(t, depth + 1);
+			out = out == "" ? e : out + ", " + e;
+		}
+		return out;
+	}
+
+	collSize(t: Ty, depth: int32): string {
+		if (t == Ty.Int32) {
+			const arrays = this.entsAny(EntKind.ArrayVar);
+			const keyed = this.entsAny(EntKind.MapVar).concat(this.entsAny(EntKind.SetVar));
+			if (keyed.length > 0 && (arrays.length == 0 || this.rng.chance(30))) { return this.pickEnt(keyed).name + ".size"; }
+			if (arrays.length == 0) { return ""; }
+			const a = this.pickEnt(arrays);
+			const form = this.rng.below(4);
+			if (form == 1 && !isFloat(a.ty)) { return "(" + a.name + ".indexOf(" + this.expr(a.ty, depth + 1) + ") as int32)"; }
+			if (form == 2) { return a.name + ".join(\",\").length"; }
+			if (form == 3) { return a.name + ".concat(" + this.pickEnt(this.entsOf(EntKind.ArrayVar, a.ty)).name + ").length"; }
+			return a.name + ".length";
+		}
+		if (isFloat(t)) { return ""; }
+		const owners = this.entsOf(EntKind.ArrayVar, t).concat(this.entsOf(EntKind.SetVar, t));
+		if (owners.length == 0) { return ""; }
+		const o = this.pickEnt(owners);
+		const test = o.kind == EntKind.SetVar ? ".has(" : ".includes(";
+		return "(" + o.name + test + this.expr(t, depth + 1) + ") ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+	}
+
+	collExpr(t: Ty, depth: int32): string {
+		const X = this.collHelpers(t);
+		const arrays = this.entsOf(EntKind.ArrayVar, t);
+		const k = this.pickW(W.CollIndex, W.CollRest);
+		if (k == 1) {
+			const size = this.collSize(t, depth);
+			if (size != "") { return size; }
+		}
+		if (k == 2) {
+			const maps = this.entsOf(EntKind.MapVar, t);
+			if (maps.length > 0) { return "(" + this.pickEnt(maps).name + ".get(" + this.smallInt(depth) + ") ?? " + this.expr(t, depth + 1) + ")"; }
+		}
+		if (k == 3) {
+			const fixed = this.entsOf(EntKind.FixedVar, t);
+			if (fixed.length > 0) {
+				const f = this.pickEnt(fixed);
+				return f.name + "[" + String(this.rng.below(f.len)) + "]";
+			}
+		}
+		if (k == 4) {
+			const d = this.expr(t, depth + 1);
+			if (arrays.length > 0 && this.rng.chance(60)) { return "restA" + X + "(" + d + ", ..." + this.pickEnt(arrays).name + ")"; }
+			const rest = this.items(t, depth, this.rng.below(3));
+			return "restA" + X + "(" + d + (rest == "" ? "" : ", " + rest) + ")";
+		}
+		if (arrays.length > 0 && this.rng.chance(70)) {
+			const a = this.pickEnt(arrays).name;
+			return "(" + a + ".length > 0 ? " + a + "[ixI(" + this.smallInt(depth) + ", " + a + ".length)] : " + this.expr(t, depth + 1) + ")";
+		}
+		const n = this.rng.between(1, 3);
+		return "[" + this.items(t, depth, n) + "][" + String(this.rng.below(n)) + "]";
+	}
+
+	collLoop(t: Ty, a: string, indent: string): string {
+		const trips = this.rng.between(1, 4);
+		if (!this.reserve((2 * trips) as int64)) { return ""; }
+		const init = this.expr(t, 0);
+		const acc = this.newLocal(t);
+		const j = this.entName("j");
+		const maps = this.entsOf(EntKind.MapVar, t);
+		const form = this.rng.below(maps.length > 0 ? 3 : 2);
+		const saved = this.scope.length;
+		const savedMult = this.mult;
+		this.mult = this.mult * (trips as int64);
+		let head = "";
+		if (form == 1) {
+			this.scope.push({ name: j, ty: Ty.Int32, writable: false });
+			this.scope.push({ name: a + "[" + j + "]", ty: t, writable: false });
+			head = "for (let " + j + ": int32 = 0; " + j + " < " + a + ".length && " + j + " < " + String(trips) + "; " + j + "++) {\n";
+		} else if (form == 2) {
+			const key = this.entName("x");
+			const value = this.entName("x");
+			this.scope.push({ name: key, ty: Ty.Int32, writable: false });
+			this.scope.push({ name: value, ty: t, writable: false });
+			head = "for (const [" + key + ", " + value + "] of " + this.pickEnt(maps).name + ") {\n";
+		} else {
+			const x = this.entName("x");
+			this.scope.push({ name: x, ty: t, writable: false });
+			head = "for (const " + x + " of " + a + ") {\n";
+		}
+		const body = this.expr(t, 1);
+		this.mult = savedMult;
+		while (this.scope.length > saved) { this.scope.pop(); }
+		const tail = form == 1 ? "" : indent + "\t" + j + "++;\n" + indent + "\tif (" + j + " >= " + String(trips) + ") { break; }\n";
+		return indent + "let " + acc + ": " + tyName(t) + " = " + init + ";\n" +
+			(form == 1 ? "" : indent + "let " + j + ": int32 = 0;\n") +
+			indent + head +
+			indent + "\t" + acc + " = " + body + ";\n" +
+			tail + indent + "}\n";
+	}
+
+	collStatement(t: Ty, indent: string): string {
+		const X = this.collHelpers(t);
+		const T = tyName(t);
+		const arrays = this.entsOf(EntKind.ArrayVar, t);
+		const k = this.pickW(W.CollDecl, W.CollFixed);
+		if (k >= 1 && k <= 5 && arrays.length > 0) {
+			const a = this.pickEnt(arrays).name;
+			if (k == 1) {
+				const value = this.rng.chance(50) ? a : "pushA" + X + "(" + a + ", " + this.expr(t, 0) + ")";
+				const name = this.entName("a");
+				this.ents.push({ kind: EntKind.ArrayVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return indent + "const " + name + " = " + value + ";\n";
+			}
+			if (k == 2) { return indent + a + ".push(" + this.expr(t, 0) + ");\n"; }
+			if (k == 3) {
+				const form = this.rng.below(6);
+				const guard = indent + "if (" + a + ".length > 0) { ";
+				if (form == 0) { return guard + a + "[ixI(" + this.smallInt(0) + ", " + a + ".length)] = " + this.expr(t, 0) + "; }\n"; }
+				if (form == 1) { return guard + a + ".pop(); }\n"; }
+				if (form == 2) { return guard + a + ".splice(ixI(" + this.smallInt(0) + ", " + a + ".length), 1); }\n"; }
+				if (form == 3) {
+					const n = String(this.rng.below(4));
+					return indent + "if (" + a + ".length > " + n + ") { " + a + ".setLength(" + n + "); }\n";
+				}
+				if (form == 4) { return indent + a + ".fill(" + this.expr(t, 0) + ");\n"; }
+				return indent + a + ".reverse();\n";
+			}
+			if (k == 4) { return this.collLoop(t, a, indent); }
+			const n = this.rng.between(1, 3);
+			let pattern = "";
+			for (let i = 0; i < n; i++) {
+				const slot = "l" + String(this.localCount + i) + " = " + this.expr(t, 0);
+				pattern = pattern == "" ? slot : pattern + ", " + slot;
+			}
+			for (let i = 0; i < n; i++) { this.newLocal(t); }
+			if (this.rng.chance(50)) { pattern += ", ..." + this.entName("r"); }
+			return indent + "let [" + pattern + "] = " + a + ";\n";
+		}
+		if (k == 6) {
+			const keyed = this.entsOf(EntKind.MapVar, t).concat(this.entsOf(EntKind.SetVar, t));
+			if (keyed.length > 0 && this.rng.chance(60)) {
+				const o = this.pickEnt(keyed);
+				const drop = this.rng.chance(30);
+				if (o.kind == EntKind.SetVar) { return indent + o.name + (drop ? ".delete(" : ".add(") + this.expr(t, 0) + ");\n"; }
+				if (drop) { return indent + o.name + ".delete(" + this.smallInt(0) + ");\n"; }
+				return indent + o.name + ".set(" + this.smallInt(0) + ", " + this.expr(t, 0) + ");\n";
+			}
+			if (isFloat(t) || this.rng.chance(50)) {
+				const name = this.entName("m");
+				const text = indent + "const " + name + " = new Map<int32, " + T + ">();\n" +
+					indent + name + ".set(" + this.smallInt(0) + ", " + this.expr(t, 0) + ");\n";
+				this.ents.push({ kind: EntKind.MapVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return text;
+			}
+			const name = this.entName("m");
+			const text = indent + "const " + name + " = new Set<" + T + ">();\n" +
+				indent + name + ".add(" + this.expr(t, 0) + ");\n";
+			this.ents.push({ kind: EntKind.SetVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+			return text;
+		}
+		if (k == 7) {
+			const fixed = this.entsOf(EntKind.FixedVar, t);
+			if (fixed.length > 0 && this.rng.chance(60)) {
+				const f = this.pickEnt(fixed);
+				if (this.rng.chance(50)) { return indent + f.name + "[" + String(this.rng.below(f.len)) + "] = " + this.expr(t, 0) + ";\n"; }
+				const name = this.entName("w");
+				this.ents.push({ kind: EntKind.FixedVar, name: name, ty: t, params: [], len: f.len, cost: 0 as int64 });
+				return indent + "let " + name + ": " + T + "[" + String(f.len) + "] = " + f.name + ";\n";
+			}
+			const n = this.rng.between(1, 4);
+			const value = this.items(t, -1, n);
+			const name = this.entName("w");
+			this.ents.push({ kind: EntKind.FixedVar, name: name, ty: t, params: [], len: n, cost: 0 as int64 });
+			return indent + "let " + name + ": " + T + "[" + String(n) + "] = [" + value + "];\n";
+		}
+		let value = "";
+		const form = arrays.length > 0 ? this.rng.below(5) : 0;
+		if (form == 1) {
+			value = "[..." + this.pickEnt(arrays).name + ", " + this.expr(t, 0) + "]";
+		} else if (form == 2) {
+			value = this.pickEnt(arrays).name + ".concat(" + this.pickEnt(arrays).name + ")";
+		} else if (form == 3) {
+			const from = this.rng.below(3);
+			value = this.pickEnt(arrays).name + ".slice(" + String(from) + (this.rng.chance(50) ? ", " + String(from + this.rng.below(4)) : "") + ")";
+		} else if (form == 4) {
+			const a = this.pickEnt(arrays).name;
+			const trips = this.rng.between(1, 4);
+			const f = this.lambda([t], t, 0, this.spare(trips as int64));
+			if (!this.reserve((trips as int64) * f.cost)) { return ""; }
+			value = a + ".slice(0, " + String(trips) + ").map(" + f.text + ")";
+		} else {
+			value = "[" + this.items(t, -1, this.rng.below(4)) + "]";
+		}
+		const name = this.entName("a");
+		this.ents.push({ kind: EntKind.ArrayVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return indent + "let " + name + ": " + T + "[] = " + value + ";\n";
+	}
+
 	maker(t: Ty): Routine {
 		const name = "mk" + String(this.makerCount);
 		this.makerCount = this.makerCount + 1;
@@ -812,6 +1033,7 @@ class Gen {
 				indent + "for (let " + j + ": int32 = 0; " + j + " < " + String(n) + "; " + j + "++) { " + name + ".push(" + body.text + "); }\n";
 		}
 		if (fam == Fam.Agg) { return this.aggStatement(t, indent); }
+		if (fam == Fam.Coll) { return this.collStatement(t, indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -1276,6 +1498,7 @@ test "fams=none emits no closure, union or generic construct" {
 			assert !text.contains("| string | null");
 			assert !text.contains("BoxG");
 			assert !text.contains("PtS");
+			assert !text.contains("ixI");
 		}
 	}
 }
@@ -1318,6 +1541,56 @@ test "the aggregate weights choose between struct and class statements" {
 		k += countOf(b, "const k");
 	}
 	assert s > 20 && k > 20;
+}
+
+test "the collection family alone reaches each of its shapes" {
+	const f = withWeights("fams=coll types=int32,uint8 stmts=8 w.stmt.fam=80");
+	const shapes = ["[ixI(", ".pop(); }", ".splice(ixI(", ".setLength(", ".fill(", ".reverse();", " = pushA", "[...a", ", ...a",
+		".concat(", ").map(", "for (const x", "for (let j", "for (const [x", "let [l", ", ...r", "new Map<int32, ", "new Set<",
+		" ?? ", ".delete(", ".add(", ".has(", ".includes(", ".indexOf(", ".join(\",\").length", ".size", "] = w"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "a float element is never searched or kept in a Set" {
+	const f = withWeights("fams=coll types=int32,float64 stmts=8 w.stmt.fam=80 w.coll.keyed=20 w.coll.size=20");
+	let searched = 0;
+	let floatDecls = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("new Set<float64>");
+		const floats: string[] = [];
+		for (const line of text.split("\n")) {
+			if (line.startsWith("function ") || line.startsWith("}")) { floats.setLength(0); }
+			const t = line.trim();
+			const name = t.slice(t.indexOf(" ") + 1, t.indexOf(t.startsWith("let a") ? ":" : " ="));
+			const source = t.slice(t.indexOf("= ") + 2, t.length - 1);
+			if (t.startsWith("let a") && t.contains(": float64[] =")) {
+				floats.push(name);
+				floatDecls++;
+			}
+			if (t.startsWith("const a") && (t.contains("pushAFloat64(") || floats.includes(source))) { floats.push(name); }
+			for (const a of floats) { assert !t.contains(a + ".includes(") && !t.contains(a + ".indexOf("); }
+			if (t.contains(".includes(") || t.contains(".indexOf(")) { searched++; }
+		}
+	}
+	assert searched > 10 && floatDecls > 10;
+}
+
+test "every for-of over a collection carries its trip bound" {
+	const f = withWeights("fams=coll types=int32,uint8 stmts=8 w.stmt.fam=80 w.coll.loop=20");
+	let loops = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		const text = generate(seed as uint64, f);
+		const forOf = countOf(text, "for (const x") + countOf(text, "for (const [x");
+		assert forOf == countOf(text, "\tif (j");
+		loops += forOf;
+	}
+	assert loops > 20;
 }
 
 test "each family alone reaches the program" {
