@@ -364,7 +364,7 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 
 // Native-binding pattern substitution — reference parity: jsgen.nim importjs.
 // A symbol's `nativeName` is a JS template with placeholders:
-//   #   consume next arg          @   splat remaining args         $1  symbol name
+//   #   consume next arg          @   splat remaining args
 // Used by extern functions in .jms preludes (e.g.
 // `extern function set<K,V>(this m, k, v) from "#.set(#, #)"`) to bind MS
 // extension calls to native JS dispatch without wrapper functions or mangling.
@@ -400,7 +400,7 @@ function nativeFormal(formals: Type[] | null, idx: int32): Type | null {
 	return formals[idx];
 }
 
-function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symName: string, formals: Type[] | null = null, resultType: Type | null = null): void {
+function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], formals: Type[] | null = null, resultType: Type | null = null): void {
 	const outCopy = nativeResultCopy(gen, resultType);
 	if (outCopy != "") emit(gen, outCopy + "(");
 	let argIdx = 0;
@@ -427,9 +427,6 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 				first = false;
 			}
 			i = i + 1;
-		} else if (ch == "$" && i + 1 < pattern.length && pattern.charAt(i + 1) == "1") {
-			emit(gen, symName);
-			i = i + 2;
 		} else {
 			emit(gen, ch);
 			i = i + 1;
@@ -475,7 +472,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			for (const a of d.arguments) patternArgs.push(a);
 		}
 		markNamed(gen, calleeOriginNode(d.callee), sym.name);
-		emitNativePattern(gen, sym.nativeName, patternArgs, sym.name, nativeFormals(sym), node.nodeType);
+		emitNativePattern(gen, sym.nativeName, patternArgs, nativeFormals(sym), node.nodeType);
 		return;
 	}
 
@@ -508,7 +505,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		const ws = w.winnerSym;
 		if (ws != null && ws.nativeName != "" && isNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);
-			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name, nativeFormals(ws), node.nodeType);
+			emitNativePattern(gen, ws.nativeName, d.arguments, nativeFormals(ws), node.nodeType);
 			return;
 		}
 		markNamed(gen, d.callee, (d.callee.data as IdentifierData).name);
