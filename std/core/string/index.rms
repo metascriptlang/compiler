@@ -49,5 +49,11 @@ export extern function parseInt(this s: string): int64 from "msStringParseInt";
 // ===== Character Construction =====
 export extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
 
+const CHAR_UNIT_MASK: int32 = 0xFFFF;
+
+export function fromCharCode(this typeof String, code: int32): string {
+	return fromCodePoint((code & CHAR_UNIT_MASK) as number);
+}
+
 import { clampIndex } from "./shared";
 export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase, asciiLower, asciiUpper, isSpaceByte } from "./shared";
