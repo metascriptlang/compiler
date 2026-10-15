@@ -34,7 +34,7 @@ when (!bare && !solana) {
 		return msBigIntToString(b, radix);
 	}
 
-	export extern function BigInt(v: string): bigint from "msBigIntFromLit";
+	export extern function BigInt(v: string): bigint from "msBigIntParse";
 
 	export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
 	export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";

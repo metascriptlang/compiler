@@ -84,6 +84,43 @@ msBigInt* msBigIntFromLit(msString s) {
 	return msBigIntFromString(s.p != NULL ? s.p->data : "", (size_t)s.len);
 }
 
+static int digitIn(char c, int radix) {
+	int d = isdigit((unsigned char)c) ? c - '0' : isalpha((unsigned char)c) ? tolower((unsigned char)c) - 'a' + 10 : radix;
+	return d < radix;
+}
+
+msBigInt* msBigIntParse(msString str) {
+	const char* s = str.p != NULL ? str.p->data : "";
+	size_t len = (size_t)str.len;
+	while (len > 0 && isspace((unsigned char)s[0])) { s++; len--; }
+	while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
+	if (len == 0) return msBigIntFromInt64(0);
+	int neg = 0;
+	int radix = 10;
+	char c = len >= 2 && s[0] == '0' ? (char)tolower((unsigned char)s[1]) : 0;
+	if (c == 'x' || c == 'o' || c == 'b') {
+		radix = c == 'x' ? 16 : c == 'o' ? 8 : 2;
+		s += 2; len -= 2;
+	} else if (s[0] == '-' || s[0] == '+') {
+		neg = s[0] == '-';
+		s++; len--;
+	}
+	if (len == 0) bigFail("cannot convert string to a BigInt");
+	for (size_t i = 0; i < len; i++) {
+		if (!digitIn(s[i], radix)) bigFail("cannot convert string to a BigInt");
+	}
+	char* clean = (char*)malloc(len + 2);
+	if (clean == NULL) bigFail("out of memory");
+	size_t n = 0;
+	if (neg) clean[n++] = '-';
+	memcpy(clean + n, s, len);
+	clean[n + len] = '\0';
+	msBigInt* r = newBig();
+	if (mbedtls_mpi_read_string(&r->v, radix, clean) != 0) bigFail("cannot convert string to a BigInt");
+	free(clean);
+	return r;
+}
+
 msString msBigIntToString(const msBigInt* a, int32_t radix) {
 	char* raw = msBigIntToCString(a, radix);
 	msString out = msStringNew(raw, (int64_t)strlen(raw));
