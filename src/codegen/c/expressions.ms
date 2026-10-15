@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing } from "../../checker/types";
+import { isUnknownType, unionMemberDisplay, matchUnionBehindInstance, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing } from "../../checker/types";
 import { SymbolFlag, hasFlag, lookupCtorDefaults, CtorEntry } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -2271,7 +2271,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Variant struct → discriminated union: construct with tag + variant slot.
 		// C layouts differ (variant = small struct, union = tagged union with all
 		// variant slots) — a raw cast silently misaligns fields.
-		if (isTagCarriedUnion(d.convType)) {
+		const convUnion = matchUnionBehindInstance(d.convType);
+		if (isTagCarriedUnion(convUnion)) {
 			const srcType = d.convExpr.nodeType;
 			let vi = 0;
 			// Checker-stamped slot wins: union variants are frequently anonymous,
@@ -2281,13 +2282,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			if (stampedSlot > 0) {
 				vi = stampedSlot - 1;
 			} else {
-				for (const child of d.convType.typeChildren) {
+				for (const child of convUnion.typeChildren) {
 					if (srcType != null && srcType.kind == TypeKind.Struct && child.kind == TypeKind.Struct
 						&& child.typeName == srcType.typeName) break;
 					vi += 1;
 				}
 			}
-			if (vi < d.convType.typeChildren.length) {
+			if (vi < convUnion.typeChildren.length) {
 				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
 				return;
 			}
@@ -2331,7 +2332,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${payload}, .present=true} : (${targetC}){0})`);
 			return;
 		}
-		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && !isTagCarriedUnion(d.convType)) {
+		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && !isTagCarriedUnion(convUnion)) {
 			const pvi = projSlot - 1;
 			ctx.results.push(`(${inner}).v${pvi}`);
 			return;
