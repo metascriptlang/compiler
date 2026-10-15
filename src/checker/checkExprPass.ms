@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { integerLiteralText, adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, UnionRead, readUnionOperand, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
+import { integerLiteralText, adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, convertedTo, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, UnionRead, readUnionOperand, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -606,7 +606,7 @@ function checkNumberLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
 			const nd = node.data as NumberLiteralData;
 			const shown = nd.outOfRangeText != "" ? nd.outOfRangeText : integerLiteralText(nd);
-			addError(ctx, "cannot convert " + shown + " to " + typeDisplayName(expectedType), node.location.line, node.location.column);
+			addError(ctx, "cannot convert " + shown + " to " + typeDisplayName(convertedTo(ctx, node, expectedType)), node.location.line, node.location.column);
 			node.nodeType = expectedType; return;
 		} else {
 			node.nodeType = float64Type(); return;
@@ -1950,10 +1950,13 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : convTarget) : null;
 	const operandMark = ctx.errors.length;
 	const prevConversion = ctx.conversionOperand;
+	const prevConversionTarget = ctx.conversionTarget;
 	ctx.conversionOperand = isNumeric(convTarget) && convTarget.kind != TypeKind.Char ? d.asExpr : null as unknown as Node;
+	ctx.conversionTarget = targetType;
 	checkExpr(ctx, d.asExpr, innerExpected);
 	ctx.conversionOperand = prevConversion;
-	reportConstCast(ctx, d.asExpr, convTarget);
+	ctx.conversionTarget = prevConversionTarget;
+	reportConstCast(ctx, d.asExpr, convTarget, targetType);
 	let srcType = d.asExpr.nodeType;
 	const operandType = srcType;
 	const operandNode = d.asExpr;
@@ -2620,7 +2623,7 @@ function checkUnaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	const unaryExpected = (d.unaryOp == "-" || d.unaryOp == "+") ? expectedType : null;
 	if (d.unaryOp == "-" && isNodeIntLit(d.operand)
 		&& unaryExpected != null && isIntegerType(unaryExpected)) {
-		checkNegatedIntLiteral(ctx, d.operand, unaryExpected);
+		checkNegatedIntLiteral(ctx, d.operand, unaryExpected, convertedTo(ctx, node, unaryExpected));
 		node.nodeType = unaryExpected;
 		return;
 	}

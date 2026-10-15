@@ -1202,7 +1202,7 @@ export function fitIntegerConstant(ctx: CheckerContext, expr: Node, exprType: Ty
 	if (exact == null) return none;
 	const value = integerValueOf(exact);
 	if (integerValueFits(value, slot)) return typedIntegerLiteral(value, slot, expr.location);
-	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(slot), expr.location.line, expr.location.column);
+	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(convertedTo(ctx, expr, slot)), expr.location.line, expr.location.column);
 	return wrapInConv(expr, slot);
 }
 
@@ -1279,11 +1279,11 @@ export function reportLiteralRange(ctx: CheckerContext, node: Node): void {
 // rule — Nim folds it onto the token in the lexer (lexer.nim:333). Checked here
 // because the operand on its own is a magnitude and cannot tell the legal
 // -9223372036854775808 from an int64 overflow.
-export function checkNegatedIntLiteral(ctx: CheckerContext, lit: Node, target: Type): void {
+export function checkNegatedIntLiteral(ctx: CheckerContext, lit: Node, target: Type, shown: Type): void {
 	reportLiteralRange(ctx, lit);
 	if (!literalFitsInType(lit, target, true)) {
 		const mag = (lit.data as NumberLiteralData).value;
-		addError(ctx, "cannot convert -" + mag + " to " + typeDisplayName(target), lit.location.line, lit.location.column);
+		addError(ctx, "cannot convert -" + mag + " to " + typeDisplayName(shown), lit.location.line, lit.location.column);
 	}
 	lit.nodeType = target;
 }
@@ -1323,7 +1323,11 @@ export function tupleIndexType(ctx: CheckerContext, tupleType: Type, d: ArrayAcc
 	return tupleType.typeChildren[idx as int32];
 }
 
-export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): void {
+export function convertedTo(ctx: CheckerContext, operand: Node, slot: Type): Type {
+	return operand == ctx.conversionOperand && ctx.conversionTarget != null ? ctx.conversionTarget : slot;
+}
+
+export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type, shown: Type): void {
 	if (target.kind == TypeKind.Enum) {
 		reportConstEnumCast(ctx, expr, target);
 		return;
@@ -1334,17 +1338,17 @@ export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): 
 	if (folded == null || folded.kind != NodeKind.NumberLiteral) return;
 	if (constHoldsFloat(folded)) {
 		const v = constFloatValue(folded);
-		if (!floatTruncatesInto(v, target)) addError(ctx, "cannot convert " + floatValueText(v) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+		if (!floatTruncatesInto(v, target)) addError(ctx, "cannot convert " + floatValueText(v) + " to " + typeDisplayName(shown), expr.location.line, expr.location.column);
 		return;
 	}
 	if (isUnsignedIntegerType(target) || !isNodeIntLit(folded)) return;
 	const value = (folded.data as NumberLiteralData).intVal;
 	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) {
-		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to " + typeDisplayName(shown), expr.location.line, expr.location.column);
 		return;
 	}
 	if (foldedIntFits(value, target)) return;
-	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(shown), expr.location.line, expr.location.column);
 }
 
 function reportConstEnumCast(ctx: CheckerContext, expr: Node, target: Type): void {

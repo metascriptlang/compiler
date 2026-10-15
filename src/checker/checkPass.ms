@@ -1390,6 +1390,7 @@ interface DeclarationState {
 	typeExprSlot: Node;
 	calleeExpr: Node;
 	conversionOperand: Node;
+	conversionTarget: Type;
 	pendingTrailing: Node[];
 	instantiatingCtx: CheckerContext;
 }
@@ -1418,6 +1419,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 		typeExprSlot: ctx.typeExprSlot,
 		calleeExpr: ctx.calleeExpr,
 		conversionOperand: ctx.conversionOperand,
+		conversionTarget: ctx.conversionTarget,
 		pendingTrailing: ctx.pendingTrailing,
 		instantiatingCtx: ctx.instantiatingCtx,
 	};
@@ -1443,6 +1445,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	ctx.typeExprSlot = null as unknown as Node;
 	ctx.calleeExpr = null as unknown as Node;
 	ctx.conversionOperand = null as unknown as Node;
+	ctx.conversionTarget = null as unknown as Type;
 	ctx.pendingTrailing = [];
 	ctx.instantiatingCtx = null as unknown as CheckerContext;
 	return saved;
@@ -1471,6 +1474,7 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.typeExprSlot = saved.typeExprSlot;
 	ctx.calleeExpr = saved.calleeExpr;
 	ctx.conversionOperand = saved.conversionOperand;
+	ctx.conversionTarget = saved.conversionTarget;
 	ctx.pendingTrailing = saved.pendingTrailing;
 	ctx.instantiatingCtx = saved.instantiatingCtx;
 }
