@@ -114,16 +114,16 @@ function rewriteExternArrayReturn(node: Node): Node {
 			|| sym.symbolKind == SymbolKind.Parameter
 			|| sym.symbolKind == SymbolKind.Property) return node;
 	if (findChar(sym.nativeName, "(") >= 0) return node;
-	if (returnsTypeParam(sym)) return node;
+	if (!declaresArrayReturn(sym)) return node;
 	node.nodeType = refType.typeReturn;
 	const box = makeCall(runtimeRef("msBoxRefArray", node.location), [node], node.location);
 	box.nodeType = refType;
 	return box;
 }
 
-function returnsTypeParam(sym: Symbol): boolean {
-	const fn = sym.symbolType;
-	return fn != null && fn.typeReturn != null && fn.typeReturn.kind == TypeKind.GenericParam;
+function declaresArrayReturn(sym: Symbol): boolean {
+	const ret = sym.symbolType != null ? sym.symbolType.typeReturn : null;
+	return ret != null && ret.kind == TypeKind.Ref && ret.typeReturn != null && ret.typeReturn.kind == TypeKind.Array;
 }
 
 // new Array(N) / new Array<T>() typed as Ref<Array<T>>: the inner NewExpr builds a
