@@ -89,26 +89,46 @@ static int digitIn(char c, int radix) {
 	return d < radix;
 }
 
-msBigInt* msBigIntParse(msString str) {
+static int bigSyntax(msString str, const char** body, size_t* bodyLen, int* radix, int* neg) {
 	const char* s = str.p != NULL ? str.p->data : "";
 	size_t len = (size_t)str.len;
 	while (len > 0 && isspace((unsigned char)s[0])) { s++; len--; }
 	while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
-	if (len == 0) return msBigIntFromInt64(0);
-	int neg = 0;
-	int radix = 10;
+	*neg = 0;
+	*radix = 10;
+	*body = s;
+	*bodyLen = 0;
+	if (len == 0) return 1;
 	char c = len >= 2 && s[0] == '0' ? (char)tolower((unsigned char)s[1]) : 0;
 	if (c == 'x' || c == 'o' || c == 'b') {
-		radix = c == 'x' ? 16 : c == 'o' ? 8 : 2;
+		*radix = c == 'x' ? 16 : c == 'o' ? 8 : 2;
 		s += 2; len -= 2;
 	} else if (s[0] == '-' || s[0] == '+') {
-		neg = s[0] == '-';
+		*neg = s[0] == '-';
 		s++; len--;
 	}
-	if (len == 0) bigFail("cannot convert string to a BigInt");
+	if (len == 0) return 0;
 	for (size_t i = 0; i < len; i++) {
-		if (!digitIn(s[i], radix)) bigFail("cannot convert string to a BigInt");
+		if (!digitIn(s[i], *radix)) return 0;
 	}
+	*body = s;
+	*bodyLen = len;
+	return 1;
+}
+
+bool msBigIntParses(msString str) {
+	const char* body;
+	size_t len;
+	int radix, neg;
+	return bigSyntax(str, &body, &len, &radix, &neg);
+}
+
+msBigInt* msBigIntParse(msString str) {
+	const char* s;
+	size_t len;
+	int radix, neg;
+	if (!bigSyntax(str, &s, &len, &radix, &neg)) bigFail("cannot convert string to a BigInt");
+	if (len == 0) return msBigIntFromInt64(0);
 	char* clean = (char*)malloc(len + 2);
 	if (clean == NULL) bigFail("out of memory");
 	size_t n = 0;

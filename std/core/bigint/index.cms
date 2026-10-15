@@ -29,12 +29,17 @@ when (!bare && !solana) {
 	extern function msBigIntFromLit(s: string): bigint;
 	extern function msBigIntAsIntN(bits: int64, b: bigint): bigint;
 	extern function msBigIntAsUintN(bits: int64, b: bigint): bigint;
+	extern function msBigIntParses(s: string): boolean;
+	extern function msBigIntParse(s: string): bigint;
 
 	export function toString(this b: bigint, radix: int32 = 10): string {
 		return msBigIntToString(b, radix);
 	}
 
-	export extern function BigInt(v: string): bigint from "msBigIntParse";
+	export function BigInt(v: string): bigint {
+		if (!msBigIntParses(v)) throw new Error("Cannot convert " + v + " to a BigInt");
+		return msBigIntParse(v);
+	}
 
 	export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
 	export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";
