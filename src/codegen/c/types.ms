@@ -1771,7 +1771,8 @@ function genArrayType(g: CGen, t: Type): string {
 	const elemKey = (resolvedElem != null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey != "" && isBeingDefined(g, elemKey);
 
-	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : elementTypeDesc(g, t.typeReturn);
+	const byValue = !selfRef && resolvedElem != null && holdsStructByValue(resolvedElem);
+	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : (byValue ? "" : getTypeDesc(g, t.typeReturn));
 
 	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
@@ -1787,22 +1788,20 @@ function genArrayType(g: CGen, t: Type): string {
 		// Reference parity: two-struct split { len, p* } + __Content { cap, T data[] }.
 		// Forward decls in ForwardDecls, slim struct in Types, content in SeqTypes.
 		// SeqTypes is emitted after Types — element type is always complete by then.
+		// A by-value element is spelled by the name getTypeDesc gives it once defined
+		// (defineDeferredElements), never by a name derived beside it.
 		const contentName = arrTypeName + "__Content";
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${arrTypeName} ${arrTypeName};`);
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${contentName} ${contentName};`);
 		addLine(sec(g, CSection.Types), `struct ${arrTypeName} { int64_t len; ${contentName}* p; };`);
-		addLine(sec(g, CSection.SeqTypes), `struct ${contentName} { int64_t cap; ${elemType} data[]; };`);
+		if (byValue && resolvedElem != null) {
+			g.deferredElements.push({ elem: resolvedElem, contentName: contentName });
+		} else {
+			addLine(sec(g, CSection.SeqTypes), `struct ${contentName} { int64_t cap; ${elemType} data[]; };`);
+		}
 	}
 
 	return arrTypeName;
-}
-
-function elementTypeDesc(g: CGen, elem: Type | null): string {
-	if (elem == null || !holdsStructByValue(elem)) return getTypeDesc(g, elem);
-	const name = elemArrayCName(elem);
-	ensureForwardDecl(g, name);
-	g.deferredElements.push(elem);
-	return name;
 }
 
 function holdsStructByValue(t: Type): boolean {
@@ -1818,7 +1817,10 @@ export function defineDeferredElements(g: CGen): void {
 	while (g.deferredElements.length > 0) {
 		const pending = g.deferredElements;
 		g.deferredElements = [];
-		for (const t of pending) getTypeDesc(g, t);
+		for (const d of pending) {
+			const elemType = getTypeDesc(g, d.elem);
+			addLine(sec(g, CSection.SeqTypes), `struct ${d.contentName} { int64_t cap; ${elemType} data[]; };`);
+		}
 	}
 }
 
