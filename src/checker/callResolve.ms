@@ -79,14 +79,13 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	if (genericParams == "") return { type: calleeType, instance: null };
 	// Try explicit type args first (sources 1 + 2 in priority comment above).
 	const typeArgStr = astTypeArg;
-	let args: string[] = [];
 	const paramNames = splitTopLevel(genericParamNamesOf(genericParams), ",");
 	const trimmedParamNames: string[] = [];
 	const concreteTypes: Type[] = [];
 	let typeArgCol = ltCol + 1;
 	if (typeArgStr != "") {
 		// Source 1/2 — explicit type args spelled by user.
-		args = splitTopLevel(typeArgStr, ",");
+		const args = splitTopLevel(typeArgStr, ",");
 		for (let pi = 0; pi < paramNames.length; pi += 1) {
 			trimmedParamNames.push(paramNames[pi].trim());
 			const argName = pi < args.length ? args[pi].trim() : "";
@@ -104,9 +103,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 		// Source 3 — contextual inference. Peel `expectedType` (e.g.
 		// `Ref<GenericInstance Map(string, Handler)>` from a `const m:
 		// Map<string, Handler> = ...` annotation) and pull the concrete
-		// type args out of `typeChildren`. Round-trip the names through
-		// `monoConcreteTypeName` so the args carry the same string form
-		// they would have if the user had written `<...>` explicitly.
+		// type args out of `typeChildren`.
 		const giCtx = peelToGenericInstance(expectedType);
 		if (giCtx == null
 				|| giCtx.typeName != calleeName
@@ -117,7 +114,6 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 		for (let pi = 0; pi < paramNames.length; pi += 1) {
 			trimmedParamNames.push(paramNames[pi].trim());
 			concreteTypes.push(giCtx.typeChildren[pi]);
-			args.push(monoConcreteTypeName(giCtx.typeChildren[pi]));
 		}
 	}
 	for (let pi = 0; pi < trimmedParamNames.length && calleeSym != null; pi += 1) {
