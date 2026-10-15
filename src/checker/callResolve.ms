@@ -141,30 +141,12 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	return { type: isRefBase ? createRef(instType) : instType, instance };
 }
 
-// Resolve the defining module info for a type by name.
-// Tries scope lookup first, then searches the export registry.
-// Returns a symbol with modulePath + location, or null if not found.
-function resolveContainerModule(ctx: CheckerContext, typeName: string): Symbol | null {
-	const sym = lookupSymbol(ctx.table, typeName);
-	if (sym != null && sym.modulePath != "") return sym;
-	// Fallback: search export registry for types not directly in scope (e.g. nested struct fields)
-	for (const entry of ctx.exportRegistry.entries) {
-		for (const exp of entry.symbols) {
-			if (exp.name == typeName) return exp.sym;
-		}
-	}
-	return null;
-}
-
 // Inherit modulePath + location from a container type onto a synthetic field symbol.
 // Used for cross-file go-to-definition on object literal keys and member access properties.
-export function inheritContainerInfo(fieldSym: Symbol, ctx: CheckerContext, typeName: string): void {
-	if (typeName == "") return;
-	const cSym = resolveContainerModule(ctx, typeName);
-	if (cSym != null) {
-		fieldSym.modulePath = cSym.modulePath;
-		if (cSym.location != null) fieldSym.location = cSym.location;
-	}
+export function inheritContainerInfo(fieldSym: Symbol, container: Symbol | null): void {
+	if (container == null || container.modulePath == "") return;
+	fieldSym.modulePath = container.modulePath;
+	if (container.location != null) fieldSym.location = container.location;
 }
 
 // Public API: check expression, store type on node. Callers read node.nodeType.
@@ -4268,6 +4250,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	const fieldOwnerSym = declaringSymOf(resolvedObjType);
 	const peeledObjType = peelToStructOrUnion(resolvedObjType);
 	if (peeledObjType != null) { resolvedObjType = peeledObjType; }
+	const memberOwner = fieldOwnerSym != null ? fieldOwnerSym : resolvedObjType.sym;
 	// Static access detection: when the object is a type name (class, type alias, interface, struct),
 	// skip instance field resolution — go to static method lookup.
 	// Allows field/method name coexistence: result.ok (field) vs Result.ok() (static method).
@@ -4300,7 +4283,6 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 	if (!isStaticClassAccess && !isUnresolvedType(propType)) {
-		const memberOwner = fieldOwnerSym != null ? fieldOwnerSym : resolvedObjType.sym;
 		const receiver = isSuperReceiver(d.object) ? null : memberOwner;
 		refuseMemberAccess(ctx, memberOwner, d.property, receiver, node.location.line, node.location.column);
 	}
@@ -4339,7 +4321,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				if (!isUnresolvedType(propType)) {
 					const fieldSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 					fieldSym.state = SymbolState.Shaped;
-					inheritContainerInfo(fieldSym, ctx, resolvedObjType.typeName);
+					inheritContainerInfo(fieldSym, classSym);
 					node.resolvedSym = fieldSym;
 					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, fieldSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
 				}
@@ -4386,7 +4368,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// typeNames holds discriminant metadata, not field names — so they miss.
 				const narrowedSym = makeSymbol(d.property, SymbolKind.Property, fieldInVariant, false);
 				narrowedSym.state = SymbolState.Shaped;
-				inheritContainerInfo(narrowedSym, ctx, resolvedObjType.typeName);
+				inheritContainerInfo(narrowedSym, memberOwner);
 				narrowedSlot = duVariantIndexOfType(resolvedObjType, narrowedObjType) + 1;
 				narrowedSym.duVariantSlot = narrowedSlot;
 				node.resolvedSym = narrowedSym;
@@ -4403,7 +4385,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				if (fullIdx >= 0) {
 					const subSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 					subSym.state = SymbolState.Shaped;
-					inheritContainerInfo(subSym, ctx, resolvedObjType.typeName);
+					inheritContainerInfo(subSym, memberOwner);
 					narrowedSlot = fullIdx + 1;
 					subSym.duVariantSlot = narrowedSlot;
 					node.resolvedSym = subSym;
@@ -4449,7 +4431,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			if (peeledProp != null && peeledProp.kind == TypeKind.Union) {
 				const unionFieldSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 				unionFieldSym.state = SymbolState.Shaped;
-				inheritContainerInfo(unionFieldSym, ctx, resolvedObjType.typeName);
+				inheritContainerInfo(unionFieldSym, memberOwner);
 				node.resolvedSym = unionFieldSym;
 			}
 		}
@@ -4478,7 +4460,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 					if (resolvedObjType.typeChildren[mi].typeName != "") {
 						synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
 					}
-					inheritContainerInfo(synthSym, ctx, resolvedObjType.typeName);
+					inheritContainerInfo(synthSym, memberOwner);
 					node.resolvedSym = synthSym;
 					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + mName.length, synthSym, resolvedObjType.typeChildren[mi], SymbolKind.Property, mName, resolvedObjType.typeName, false);
 					break;

@@ -1699,7 +1699,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 				const keyLoc = d.keyLocations[fi];
 				if (keyName != "..." && keyName != "__computed__" && keyLoc.line > 0) {
 					const fieldSym = makeSymbolState(keyName, SymbolKind.Property, fieldExpected, false, SymbolState.Shaped);
-					inheritContainerInfo(fieldSym, ctx, containerName);
+					inheritContainerInfo(fieldSym, literalOwnerSym != null ? literalOwnerSym : objE.sym);
 					sgRecordSym(ctx, keyLoc.line, keyLoc.column, keyLoc.column + keyName.length, fieldSym, fieldExpected, SymbolKind.Property, keyName, containerName, false);
 				}
 			}
