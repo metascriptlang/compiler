@@ -12,6 +12,7 @@ import { containsExprKind, mapExprChildren } from "../walker";
 import { lowerForStmt } from "./forLoopLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { Spiller, lowerOperandList, lowerAssign, isAssignOp } from "./operandOrder";
+import { truthinessTest } from "../coercion/stringTruthiness";
 import { makeIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull, makeIf, makeAssign, makeBool, makeUnary, makeBreak, extractBodyStmts } from "../util";
 
 export type KindHoister = (node: Node, hoisted: Node[], ctx: TransformContext) => Node;
@@ -74,7 +75,7 @@ export function lowerGuardedShortCircuit(expr: Node, hoisted: Node[], ctx: Trans
 	const isAnd = bd.operator == "&&";
 	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
 	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
-	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
+	hoisted.push(makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), thenBlk, elseBlk, loc));
 	return makeIdentResolved(resSym, loc);
 }
 

@@ -17,6 +17,7 @@ import {
 import { cloneIfPure } from "../coercion/intArithJS";
 import { Spiller, bindTemp, tempRef, isVoidType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
 import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
+import { truthinessTest } from "../coercion/stringTruthiness";
 import { foldedNullOperand, isNullExpr } from "./operatorLower";
 import { walkExpandBlocks, isFuncBoundary } from "../walker";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
@@ -67,7 +68,8 @@ function lowerShortCircuit(e: Node, pre: Node[]): Node {
 	const inner: Node[] = [];
 	const right = lowerAwaitExpr(d.right, inner);
 	inner.push(makeExprStmt(makeAssign(tempRef(tmp, loc), right, loc), loc));
-	const test = d.operator == "&&" ? tempRef(tmp, loc) : makeUnary("!", tempRef(tmp, loc), loc);
+	const held = truthinessTest(tempRef(tmp, loc), _sp.ctx);
+	const test = d.operator == "&&" ? held : makeUnary("!", held, loc);
 	pre.push(makeIf(test, makeBlock(inner, loc), null, loc));
 	return tempRef(tmp, loc);
 }

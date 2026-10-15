@@ -49,6 +49,7 @@ import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } f
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs } from "./operandOrder";
+import { truthinessTest } from "../coercion/stringTruthiness";
 
 // ===== Hoist (top-down) =====
 
@@ -443,7 +444,7 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 	const isAnd = bd.operator == "&&";
 	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
 	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
-	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
+	hoisted.push(makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), thenBlk, elseBlk, loc));
 	return makeIdentResolved(resSym, loc);
 }
 

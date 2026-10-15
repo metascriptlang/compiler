@@ -59,6 +59,11 @@ export function isNaN(this typeof Number, x: float64): boolean {
 	return x != x;
 }
 
+@compilerFunc
+function msNumberIsTruthy(x: float64): boolean {
+	return x == x && x != 0.0;
+}
+
 // A finite double is the only kind for which x - x cancels: NaN stays NaN and
 // either infinity yields NaN too.
 export function isFinite(this typeof Number, x: float64): boolean {

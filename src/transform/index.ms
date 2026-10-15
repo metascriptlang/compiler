@@ -50,7 +50,7 @@ import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
-import { lowerStringTruthiness } from "./coercion/stringTruthiness";
+import { lowerStringTruthiness, instanceFieldInitializers, lowerMovedFieldInitTruthiness } from "./coercion/stringTruthiness";
 import { eraseBrandTypes } from "./coercion/brandErase";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
 import { lowerDestructuring } from "./desugar/destructuringLower";
@@ -108,11 +108,13 @@ import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
 import { lowerEnumToString } from "./native/enumToStringLower";
 
-// An instance field initializer is evaluated by the constructor, so its `?.` and `??`
-// bind their temps there, after lowerCtorInit has moved it; on C the moved expression
-// also spills what a folded null comparison would drop.
+// An instance field initializer is evaluated by the constructor, so its `?.`, `??` and
+// truthiness tests bind their temps there, after lowerCtorInit has moved it; on C the moved
+// expression also spills what a folded null comparison would drop.
 function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
-	const result = lowerNullishCoalesce(lowerOptionalChain(lowerCtorInit(program, ctx), ctx), ctx);
+	const inits: Node[] = ctx.jsBackend ? [] : instanceFieldInitializers(program);
+	const moved = lowerMovedFieldInitTruthiness(lowerCtorInit(program, ctx), ctx, inits);
+	const result = lowerNullishCoalesce(lowerOptionalChain(moved, ctx), ctx);
 	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
 }
 

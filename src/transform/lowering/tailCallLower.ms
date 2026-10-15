@@ -42,6 +42,7 @@ import {
 } from "../util";
 import { overloadWinner } from "../../checker/symbol";
 import { lowerTernaryInReturn } from "./conditionalExprLower";
+import { truthinessTest } from "../coercion/stringTruthiness";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
@@ -296,7 +297,7 @@ function statementizeTailPositions(stmt: Node, fnName: string, fnSym: Symbol | n
 				const keepBlk = makeBlock([makeReturn(makeIdentResolved(lhsSym, loc), loc)], loc);
 				const callBlk = makeBlock([tailArmStmt(bd.right, loc)], loc);
 				const isAnd = bd.operator == "&&";
-				const guard = makeIf(makeIdentResolved(lhsSym, loc), isAnd ? callBlk : keepBlk, isAnd ? keepBlk : callBlk, loc);
+				const guard = makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), isAnd ? callBlk : keepBlk, isAnd ? keepBlk : callBlk, loc);
 				return makeBlock([lhsDecl, statementizeTailPositions(guard, fnName, fnSym, ctx)], loc);
 			}
 			return stmt;
