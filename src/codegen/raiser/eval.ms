@@ -1069,13 +1069,14 @@ test "null === 0 is false (kind differs)" {
 
 // --- Closure with captures ---
 
-// Helper: parse → codegen → execute (no checker, no transforms)
+// Helper: parse → check → codegen → execute (no transforms)
 function evalRaiserDirect(code: string): RaiserContext {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) {
 		unreachable;
 		return createContext();
 	}
+	checkProgram(parseResult.value);
 	const mod = generateRaiser(parseResult.value);
 	const ctx = createContext();
 	load(ctx, mod);
@@ -1145,12 +1146,12 @@ test "class ctor returns object" {
 }
 
 test "class with method" {
-	const ctx = evalProject(["const b = Box_new(99); return b.getVal();", "class Box { val: number; constructor(v) { this.val = v; } getVal() { return this.val; } }"]);
+	const ctx = evalProject(["return readBox();", "class Box { val: int32; constructor(v: int32) { this.val = v; } getVal(): int32 { return this.val; } } function readBox(): int32 { return new Box(99).getVal(); }"]);
 	assert ctx.lastResult.intVal == 99;
 }
 
 test "class with multiple methods" {
-	const ctx = evalProject(["const m = Calc_new(3, 4); return m.sum() + m.product();", "class Calc { a: number; b: number; constructor(a, b) { this.a = a; this.b = b; } sum() { return this.a + this.b; } product() { return this.a * this.b; } }"]);
+	const ctx = evalProject(["return calc();", "class Calc { a: int32; b: int32; constructor(a: int32, b: int32) { this.a = a; this.b = b; } sum(): int32 { return this.a + this.b; } product(): int32 { return this.a * this.b; } } function calc(): int32 { const m = new Calc(3, 4); return m.sum() + m.product(); }"]);
 	assert ctx.lastResult.intVal == 19;
 }
 
@@ -1160,8 +1161,8 @@ test "class and function in same module" {
 }
 
 // --- Project test helper ---
-// Uses parse-only (no checker/transforms) because:
-// - Raiser VM is dynamically typed; checker/transforms aren't needed for correctness
+// Checks and lowers each module on its own; a name one module uses from
+// another stays unresolved and links by name.
 //
 // codes[0] = entry module, codes[1..n] = dependencies (deepest last).
 // Modules are pushed in reverse order so dependencies initialize before the entry.
@@ -1174,7 +1175,7 @@ function evalProject(codes: string[]): RaiserContext {
 		const pr = parseSource(codes[i]);
 		if (!pr.ok) { unreachable; return createContext(); }
 		const path = "/src/" + names[i] + ".ms";
-		const input: RaiserModuleInput = { modulePath: path, program: pr.value };
+		const input: RaiserModuleInput = { modulePath: path, program: transformForRaiser(pr.value, checkProgram(pr.value)) };
 		modules.push(input);
 		i = i - 1;
 	}
@@ -1202,33 +1203,33 @@ test "module with function no call" {
 }
 
 test "cross-module function call" {
-	const ctx = evalProject(["return add(3, 4);", "function add(a, b) { return a + b; }"]);
-	assert ctx.lastResult.intVal == 7;
+	const ctx = evalProject(["return sumPair(3, 4);", "function sumPair(a: number, b: number): number { return a + b; }"]);
+	assert unboxFloat(ctx.lastResult) == 7;
 }
 
 test "multiple functions from same module" {
-	const ctx = evalProject(["return add(3, 4) + mul(2, 5);", "function add(a, b) { return a + b; } function mul(a, b) { return a * b; }"]);
-	assert ctx.lastResult.intVal == 17;
+	const ctx = evalProject(["return (sumPair(3, 4) as number) + (product(2, 5) as number);", "function sumPair(a: number, b: number): number { return a + b; } function product(a: number, b: number): number { return a * b; }"]);
+	assert unboxFloat(ctx.lastResult) == 17;
 }
 
 test "sequential cross-module calls via variable" {
-	const ctx = evalProject(["const x = dbl(3); return dbl(x);", "function dbl(x) { return x * 2; }"]);
-	assert ctx.lastResult.intVal == 12;
+	const ctx = evalProject(["const x = dbl(3); return dbl(x);", "function dbl(x: number): number { return x * 2; }"]);
+	assert unboxFloat(ctx.lastResult) == 12;
 }
 
 test "nested cross-module call" {
-	const ctx = evalProject(["return dbl(dbl(3));", "function dbl(x) { return x * 2; }"]);
-	assert ctx.lastResult.intVal == 12;
+	const ctx = evalProject(["return dbl(dbl(3));", "function dbl(x: number): number { return x * 2; }"]);
+	assert unboxFloat(ctx.lastResult) == 12;
 }
 
 test "chain: A calls B calls C" {
-	const ctx = evalProject(["return quadruple(3);", "function quadruple(x) { return dbl(dbl(x)); }", "function dbl(x) { return x * 2; }"]);
-	assert ctx.lastResult.intVal == 12;
+	const ctx = evalProject(["return quadruple(3);", "function quadruple(x: number): number { return dbl(dbl(x)); }", "function dbl(x: number): number { return x * 2; }"]);
+	assert unboxFloat(ctx.lastResult) == 12;
 }
 
 test "diamond dependency" {
-	const ctx = evalProject(["return fromB(10) + fromC(10);", "function fromC(x) { return base(x) * 3; }", "function fromB(x) { return base(x) * 2; }", "function base(x) { return x + 1; }"]);
-	assert ctx.lastResult.intVal == 55;
+	const ctx = evalProject(["return (fromB(10) as number) + (fromC(10) as number);", "function fromC(x: number): number { return base(x) * 3; }", "function fromB(x: number): number { return base(x) * 2; }", "function base(x: number): number { return x + 1; }"]);
+	assert unboxFloat(ctx.lastResult) == 55;
 }
 
 test "module init order" {
@@ -1254,8 +1255,8 @@ test "entry module export default" {
 }
 
 test "recursive function cross-module" {
-	const ctx = evalProject(["return fact(5);", "function fact(n) { if (n <= 1) { return 1; } return n * fact(n - 1); }"]);
-	assert ctx.lastResult.intVal == 120;
+	const ctx = evalProject(["return fact(5);", "function fact(n: number): number { if (n <= 1) { return 1; } return n * fact(n - 1); }"]);
+	assert unboxFloat(ctx.lastResult) == 120;
 }
 
 // Regression: chained MemberExpr through nested ObjectLiteral.

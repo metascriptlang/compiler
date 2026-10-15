@@ -52,7 +52,7 @@ export function takeRaiserCompileErrors(): CheckerError[] {
 // --- Locals ---
 
 export interface RaiserLocal {
-	name: string;
+	sym: Symbol;
 	reg: int32;
 	isString: boolean;
 }
@@ -140,6 +140,7 @@ export interface RaiserCompState {
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;
 	scopedFunctions: boolean;
+	receiverReg: int32;
 }
 
 export function createCompState(): RaiserCompState {
@@ -156,7 +157,7 @@ export function createCompState(): RaiserCompState {
 	const builtinItems: RaiserBuiltinEntry[] = [];
 	const builtins: RaiserBuiltinMap = { items: builtinItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, scopedFunctions: false };
+		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, scopedFunctions: false, receiverReg: -1 };
 }
 
 // Overloads share module and name and differ by the declaration-time disamb,
@@ -251,28 +252,28 @@ export function emitHalt(s: RaiserCompState): void {
 
 // --- Locals helpers ---
 
-export function declareLocal(s: RaiserCompState, name: string, reg: int32): void {
-	const local: RaiserLocal = { name, reg, isString: false };
+export function declareLocal(s: RaiserCompState, sym: Symbol, reg: int32, isString: boolean = false): void {
+	const local: RaiserLocal = { sym, reg, isString };
 	s.locals.items.push(local);
 }
 
-export function declareLocalStr(s: RaiserCompState, name: string, reg: int32, isString: boolean): void {
-	const local: RaiserLocal = { name, reg, isString };
-	s.locals.items.push(local);
+export function declaredSymbol(node: Node, name: string): Symbol {
+	if (node.resolvedSym == null) throw new Error(`internal: the Raiser local '${name}' reached codegen without a symbol`);
+	return node.resolvedSym!;
 }
 
-export function isLocalString(s: RaiserCompState, name: string): boolean {
+export function isLocalString(s: RaiserCompState, sym: Symbol | null): boolean {
 	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
-		if (s.locals.items[i].name == name) {
+		if (s.locals.items[i].sym == sym) {
 			return s.locals.items[i].isString;
 		}
 	}
 	return false;
 }
 
-export function resolveLocal(s: RaiserCompState, name: string): int32 {
+export function resolveLocal(s: RaiserCompState, sym: Symbol | null): int32 {
 	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
-		if (s.locals.items[i].name == name) {
+		if (s.locals.items[i].sym == sym) {
 			return s.locals.items[i].reg;
 		}
 	}

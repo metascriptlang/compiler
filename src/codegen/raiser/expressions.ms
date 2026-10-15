@@ -367,7 +367,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 	if (k == NodeKind.StringLiteral) return true;
 	if (k == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		return isLocalString(s, d.name);
+		return isLocalString(s, node.resolvedSym);
 	}
 	if (k == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
@@ -424,7 +424,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, destination, global, 0));
 				return destination;
 			}
-			const reg = resolveLocal(s, d.name);
+			const reg = resolveLocal(s, node.resolvedSym);
 			if (reg >= 0) return reg;
 			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "NaN") {
 				const nanReg = allocReg(s);
@@ -608,7 +608,7 @@ function isRefParamTarget(left: Node): boolean {
 function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 {
 	if (isRefParamTarget(left)) {
 		const pointeeType = left.resolvedSym!.symbolType.typeReturn;
-		const paramReg = resolveLocal(s, (left.data as IdentifierData).name);
+		const paramReg = resolveLocal(s, left.resolvedSym);
 		if (paramReg < 0 || !needsValueAssign(s, pointeeType)) return -1;
 		const srcReg = compileExpr(s, right);
 		return emitValueAssign(s, paramReg, srcReg, pointeeType);
@@ -630,7 +630,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, result, global, 0));
 			return result;
 		}
-		const targetReg = resolveLocal(s, (left.data as IdentifierData).name);
+		const targetReg = resolveLocal(s, left.resolvedSym);
 		if (targetReg < 0) return -1;
 		const srcReg = compileExpr(s, right);
 		const result = emitValueAssign(s, targetReg, srcReg, left.nodeType);
@@ -707,7 +707,7 @@ function compileCellAddress(s: RaiserCompState, value: Node): int32 {
 
 function isPlace(s: RaiserCompState, node: Node): boolean {
 	if (node.kind == NodeKind.Identifier) {
-		return resolveGlobal(s, node.resolvedSym) >= 0 || resolveLocal(s, (node.data as IdentifierData).name) >= 0;
+		return resolveGlobal(s, node.resolvedSym) >= 0 || resolveLocal(s, node.resolvedSym) >= 0;
 	}
 	return node.kind == NodeKind.ArrayAccess || node.kind == NodeKind.MemberExpr || node.kind == NodeKind.HiddenDeref;
 }
@@ -720,7 +720,7 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 			emitInst(s, raiserABx(RaiserOpcode.AddrGlobal, dest, global));
 			return dest;
 		}
-		const local = resolveLocal(s, (place.data as IdentifierData).name);
+		const local = resolveLocal(s, place.resolvedSym);
 		if (local >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.AddrReg, dest, local, 0));
 			return dest;
@@ -833,13 +833,12 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		const srcReg = emitValueCopy(s, compileExpr(s, d.right), d.left.nodeType);
 		if (d.left.kind == NodeKind.Identifier) {
-			const id = d.left.data as IdentifierData;
 			const global = resolveGlobal(s, d.left.resolvedSym);
 			if (global >= 0) {
 				emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, srcReg, global, 0));
 				return srcReg;
 			}
-			const targetReg = resolveLocal(s, id.name);
+			const targetReg = resolveLocal(s, d.left.resolvedSym);
 			if (targetReg >= 0) {
 				emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, srcReg, 0));
 				return targetReg;
@@ -1163,9 +1162,8 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	}
 
 	if (d.left.kind == NodeKind.Identifier) {
-		const id = d.left.data as IdentifierData;
 		const global = resolveGlobal(s, d.left.resolvedSym);
-		const targetReg = global >= 0 ? compileExpr(s, d.left) : resolveLocal(s, id.name);
+		const targetReg = global >= 0 ? compileExpr(s, d.left) : resolveLocal(s, d.left.resolvedSym);
 		if (targetReg >= 0) {
 			const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
 			const rhsReg = strConcat ? compileStringPart(s, d.right) : compileCompoundOperand(s, op, d.right);
@@ -1504,7 +1502,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 				&& (d.callee.resolvedSym.symbolKind == SymbolKind.Class || d.callee.resolvedSym.symbolKind == SymbolKind.Function)) {
 			return compileSuperCall(s, node, d.callee.resolvedSym);
 		}
-		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, calleeId.name) >= 0) return compileClosureCall(s, node);
+		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, d.callee.resolvedSym) >= 0) return compileClosureCall(s, node);
 		let calleeSym = d.callee.resolvedSym;
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
 			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
@@ -1540,7 +1538,7 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 		funcIdx = s.scopedFunctions && parent.modulePath != "" ? resolveFunc(s, parent.modulePath + ":" + initName) : -1;
 		if (funcIdx < 0) funcIdx = resolveFunc(s, initName);
 	}
-	const thisReg = resolveLocal(s, "this");
+	const thisReg = s.receiverReg;
 	if (funcIdx < 0 || thisReg < 0) {
 		const msg = `cannot compile 'super(...)': no '${initName}' in the Raiser function table`;
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
@@ -1689,9 +1687,8 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 	}
 
 	if (d.updateArg.kind == NodeKind.Identifier) {
-		const id = d.updateArg.data as IdentifierData;
 		const global = resolveGlobal(s, d.updateArg.resolvedSym);
-		const varReg = global >= 0 ? compileExpr(s, d.updateArg) : resolveLocal(s, id.name);
+		const varReg = global >= 0 ? compileExpr(s, d.updateArg) : resolveLocal(s, d.updateArg.resolvedSym);
 		if (varReg >= 0) {
 			if (d.isPrefix) {
 				// ++i / --i: modify first, return modified
