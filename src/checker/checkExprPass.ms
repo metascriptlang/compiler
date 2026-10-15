@@ -3143,7 +3143,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		&& fnExpected.typeReturn != null
 		&& !isUnresolvedType(fnExpected.typeReturn)
 		&& !hasGenericParams(fnExpected.typeReturn)) {
-		explicitReturnType = fnExpected.typeReturn;
+		explicitReturnType = isAsync && fnFlags.indexOf("generator") < 0 && promisesContext(fnExpected.typeReturn)
+			? createPromise(fnExpected.typeReturn)
+			: fnExpected.typeReturn;
 	}
 
 	const savedFunction = ctx.currentFunction;
@@ -3282,6 +3284,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		return createClosureType(types, params, retT);
 	}
 	return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());
+}
+
+function promisesContext(contextReturn: Type): boolean {
+	return contextReturn.kind != TypeKind.Void && !isUnknownType(contextReturn) && !isAwaitable(contextReturn);
 }
 
 export function refuseReturnedPromise(ctx: CheckerContext, what: string, returned: Type, at: SourceLocation): void {
