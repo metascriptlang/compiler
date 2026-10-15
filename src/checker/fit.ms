@@ -1659,7 +1659,7 @@ export function readUnionOperand(ctx: CheckerContext, op: string, node: Node, op
 	let textReads = true;
 	for (const arm of arms) {
 		if (!sameType(arm.nodeType!, joined)) sameRead = false;
-		if (!isNumeric(arm.nodeType!)) numericReads = false;
+		if (!isNumeric(arm.nodeType!) && arm.nodeType!.kind != TypeKind.Enum) numericReads = false;
 		if (!isStringLike(arm.nodeType!)) textReads = false;
 	}
 	if (!sameRead) {
