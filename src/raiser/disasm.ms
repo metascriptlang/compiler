@@ -92,6 +92,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.SameLoc => "SameLoc",
 		RaiserOpcode.InstanceOf => "InstanceOf",
 		RaiserOpcode.ObjConv => "ObjConv",
+		RaiserOpcode.BTruthy => "BTruthy",
 		RaiserOpcode.CallHost => "CallHost",
 		RaiserOpcode.IsKind => "IsKind",
 		RaiserOpcode.Trap => "Trap",

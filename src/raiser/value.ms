@@ -109,10 +109,10 @@ export function raiserToBool(v: RaiserValue): boolean {
 	return match (v.kind) {
 		RaiserValueKind.Nil => false,
 		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal != 0,
-		RaiserValueKind.Float => v.floatVal != 0.0,
+		RaiserValueKind.Float => v.floatVal != 0.0 && v.floatVal == v.floatVal,
 		RaiserValueKind.String => v.strVal.length > 0,
-		RaiserValueKind.Array | RaiserValueKind.Object => true,
-		_ => false,
+		RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => true,
+		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => true,
 	};
 }
 
@@ -186,6 +186,14 @@ test "float" {
 	const v = raiserFloat(3.14);
 	assert v.kind == RaiserValueKind.Float;
 	assert v.floatVal == 3.14;
+}
+
+test "float NaN, 0 and -0 are falsy" {
+	const zero = 0.0;
+	assert !raiserToBool(raiserFloat(zero / zero));
+	assert !raiserToBool(raiserFloat(zero));
+	assert !raiserToBool(raiserFloat(-zero));
+	assert raiserToBool(raiserFloat(0.5));
 }
 
 test "int to float conversion" {

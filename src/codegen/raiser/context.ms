@@ -277,9 +277,7 @@ export function regIsFixedLocal(s: RaiserCompState, reg: int32): boolean {
 // --- Condition helpers ---
 
 export function emitBranchIfFalsy(s: RaiserCompState, condReg: int32): int32 {
-	const zeroReg = allocReg(s);
-	emitLoadConst(s, zeroReg, raiserInt(0));
-	emitInst(s, raiserABC(RaiserOpcode.BneI64, condReg, zeroReg, 1));
+	emitInst(s, raiserABC(RaiserOpcode.BTruthy, condReg, 0, 1));
 	return emitJumpPlaceholder(s);
 }
 

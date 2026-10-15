@@ -12,7 +12,7 @@ import {
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserRegAddr, raiserGlobalAddr, raiserElemAddr, raiserFieldAddr, heapObjectSetField,
-	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap,
+	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -1022,6 +1022,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
 			if (lhs.intVal != rhs.intVal) vm.ip = vm.ip + inst.c;
+		} else if (op == RaiserOpcode.BTruthy) {
+			if (raiserToBool(getReg(vm, base + inst.a))) vm.ip = vm.ip + inst.c;
 		} else if (op == RaiserOpcode.BltI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);

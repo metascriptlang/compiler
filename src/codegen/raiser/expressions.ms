@@ -1018,11 +1018,9 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 // --- Unary ---
 
 function emitLogicalNot(s: RaiserCompState, dest: int32, srcReg: int32): void {
-	const zeroReg = allocReg(s);
-	emitLoadConst(s, zeroReg, raiserInt(0));
-	emitLoadConst(s, dest, raiserBool(true));
-	emitInst(s, raiserABC(RaiserOpcode.BeqI64, srcReg, zeroReg, 1));
 	emitLoadConst(s, dest, raiserBool(false));
+	emitInst(s, raiserABC(RaiserOpcode.BTruthy, srcReg, 0, 1));
+	emitLoadConst(s, dest, raiserBool(true));
 }
 
 function typeofVariants(t: Type | null): Type[] {
