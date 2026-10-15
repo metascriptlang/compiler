@@ -113,7 +113,7 @@ export function monoInstanceNameOf(genericName: string, ownerPath: string, typeA
 export function monoTypeKey(t: Type | null): string {
 	if (t == null) return "null";
 	return match (t.kind) {
-		TypeKind.Number => "number",
+		TypeKind.Number => "float64",
 		TypeKind.String => "string",
 		TypeKind.Boolean => "boolean",
 		TypeKind.Void => "void",
@@ -275,7 +275,7 @@ export function monoRegister(
 // ===== Tests =====
 test "monoTypeKey primitives" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	assert monoTypeKey(num) == "number";
+	assert monoTypeKey(num) == "float64";
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	assert monoTypeKey(str) == "string";
 	const b: Type = { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
@@ -285,7 +285,7 @@ test "monoTypeKey primitives" {
 test "monoTypeKey array" {
 	const numT: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	const arrT: Type = { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: numT, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	assert monoTypeKey(arrT) == "arr_number";
+	assert monoTypeKey(arrT) == "arr_float64";
 }
 
 test "monoTypeKey object" {
@@ -296,14 +296,14 @@ test "monoTypeKey object" {
 test "mangleMonoName single param" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	const types: Type[] = [num];
-	assert mangleMonoName("identity", types) == "identity__number";
+	assert mangleMonoName("identity", types) == "identity__float64";
 }
 
 test "mangleMonoName two params" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	const types: Type[] = [num, str];
-	assert mangleMonoName("pair", types) == "pair__number_string";
+	assert mangleMonoName("pair", types) == "pair__float64_string";
 }
 
 test "registry dedup" {
@@ -312,14 +312,14 @@ test "registry dedup" {
 	const params: string[] = ["T"];
 	const types1: Type[] = [num];
 	const entry1 = monoRegister(reg, "identity", params, types1);
-	assert entry1.mangledName == "identity__number";
+	assert entry1.mangledName == "identity__float64";
 	assert reg.entries.length == 1;
 
 	// Same instantiation → dedup
 	const num2: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	const types2: Type[] = [num2];
 	const entry2 = monoRegister(reg, "identity", params, types2);
-	assert entry2.mangledName == "identity__number";
+	assert entry2.mangledName == "identity__float64";
 	assert reg.entries.length == 1;
 }
 

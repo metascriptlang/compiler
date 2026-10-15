@@ -1540,7 +1540,8 @@ function maybeCacheKey(inner: Type): string {
 	if (k == TypeKind.Union || k == TypeKind.Array || k == TypeKind.Tuple || k == TypeKind.Span || k == TypeKind.SizedArray) {
 		return "p" + (k as number) + "_" + identSafeKey(typeKey(inner));
 	}
-	return "p" + (inner.kind as number);
+	const scalar = k == TypeKind.Number ? TypeKind.Float64 : k;
+	return "p" + (scalar as number);
 }
 
 export function createMaybeType(inner: Type): Type {
@@ -2799,7 +2800,7 @@ function typeKey(t: Type): string {
 			}
 			return k + ">";
 		},
-		TypeKind.Number => "number",
+		TypeKind.Number | TypeKind.Float64 => "float64",
 		TypeKind.String => "string",
 		TypeKind.Boolean => "boolean",
 		TypeKind.Void => "void",
@@ -2807,7 +2808,6 @@ function typeKey(t: Type): string {
 		TypeKind.Int64 => "int64",
 		TypeKind.Uint32 => "uint32",
 		TypeKind.Float32 => "float32",
-		TypeKind.Float64 => "float64",
 		TypeKind.BigInt => "bigint",
 		TypeKind.Array => {
 			return "Array(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";

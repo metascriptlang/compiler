@@ -476,6 +476,12 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		const depMod = createModule(depPath);
 		depMod.imports = buildImportEntries(db, depPath, depProgram);
 		tmpCtx.currentModule = depMod;
+		const priorEntry = findModuleExports(db.exportRegistry, depPath);
+		if (priorEntry != null) {
+			for (const info of priorEntry.symbols) {
+				if (info.sym.declNode != null && info.sym.modulePath == depPath) tmpCtx.adoptedDecls.set(info.sym.declNode, info.sym);
+			}
+		}
 		collectTopLevel(tmpCtx, depProgram);
 		resolveDeclarations(tmpCtx, depProgram);
 

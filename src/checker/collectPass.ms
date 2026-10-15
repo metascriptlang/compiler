@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
-import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, int32Type, getSysType, stringType } from "./types";
+import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
@@ -399,6 +399,27 @@ function declSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolK
 	return adopted;
 }
 
+function retainedType(ctx: CheckerContext, node: Node, fresh: Type): Type {
+	const adopted = ctx.adoptedDecls.get(node);
+	if (adopted == null) return fresh;
+	const prior = adopted.symbolType;
+	if (fresh.kind != TypeKind.Inferred && prior.kind != fresh.kind) return fresh;
+	assignType(prior, fresh);
+	return prior;
+}
+
+function retainedRef(ctx: CheckerContext, node: Node, inner: Type, ref: Type): Type {
+	const adopted = ctx.adoptedDecls.get(node);
+	if (adopted == null) return ref;
+	const prior = adopted.symbolType;
+	const priorInner = prior.typeReturn;
+	if (prior.kind != TypeKind.Ref || priorInner == null || priorInner.kind != inner.kind) return ref;
+	assignType(priorInner, inner);
+	assignType(prior, ref);
+	prior.typeReturn = priorInner;
+	return prior;
+}
+
 export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	// Only set location if not already preserved from defining module (import parity)
 	if (sym.location == null || sym.location.line == 0) sym.location = node.location;
@@ -603,11 +624,12 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
-	const innerType = createStruct(d.className, memberNames, memberTypes, true);
+	const freshInner = createStruct(d.className, memberNames, memberTypes, true);
 	if (d.classExtends != "") {
-		innerType.typeExtra = createTypeRef(d.classExtends);
+		freshInner.typeExtra = createTypeRef(d.classExtends);
 	}
-	const classType = createRef(innerType);
+	const classType = retainedRef(ctx, node, freshInner, createRef(freshInner));
+	const innerType = classType.typeReturn!;
 	const sym = declSymbol(ctx, node, d.className, SymbolKind.Class, classType, false);
 	classType.sym = sym;
 	innerType.sym = sym;
@@ -680,8 +702,9 @@ export function mintActor(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
-	const innerType = createStruct(d.actorName, memberNames, memberTypes, true);
-	const actorType = createRef(innerType);
+	const freshInner = createStruct(d.actorName, memberNames, memberTypes, true);
+	const actorType = retainedRef(ctx, node, freshInner, createRef(freshInner));
+	const innerType = actorType.typeReturn!;
 	const sym = declSymbol(ctx, node, d.actorName, SymbolKind.Actor, actorType, false);
 	sym.nonisolatedFields = nonisolatedFields;
 	actorType.sym = sym;
@@ -891,9 +914,11 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, isRef: boolean): void {
 	const d = node.data as InterfaceDeclData;
 	const isExtern = node.flags.has(NodeFlag.ExternC);
-	const innerType = createStruct(d.interfaceName, [], [], true);
+	const freshInner = createStruct(d.interfaceName, [], [], true);
 	// Extern interfaces stay as value types (C header defines the struct layout)
-	const symType = (isRef && !isExtern) ? createRef(innerType) : innerType;
+	const wrapped = isRef && !isExtern;
+	const symType = wrapped ? retainedRef(ctx, node, freshInner, createRef(freshInner)) : retainedType(ctx, node, freshInner);
+	const innerType = wrapped ? symType.typeReturn! : symType;
 	const sym = declSymbol(ctx, node, d.interfaceName, kind, symType, false);
 	symType.sym = sym;
 	innerType.sym = sym;
@@ -915,7 +940,7 @@ export function collectStruct(ctx: CheckerContext, node: Node): void {
 export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as EnumDeclData;
 	const enumValues = foldEnumValues(ctx, node);
-	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
+	const enumType = retainedType(ctx, node, createEnum(d.enumName, d.enumMembers, enumValues));
 	const enumSym = declSymbol(ctx, node, d.enumName, SymbolKind.Enum, enumType, false);
 	enumType.sym = enumSym;
 	node.resolvedSym = enumSym;
@@ -1040,7 +1065,7 @@ function defineEnumMemberConst(ctx: CheckerContext, name: string, value: int64, 
 
 export function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TypeAliasDeclData;
-	const aliasType = inferredType();
+	const aliasType = retainedType(ctx, node, inferredType());
 	const sym = declSymbol(ctx, node, d.aliasName, SymbolKind.TypeAlias, aliasType, false);
 	aliasType.sym = sym;
 	defineOrError(ctx, sym, node);
@@ -1057,7 +1082,7 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		ExternKind.Type => SymbolKind.TypeAlias,
 		_ => SymbolKind.Variable,
 	};
-	const symType = d.externKind == ExternKind.Struct ? createStruct(d.externName, [], [], true) : inferredType();
+	const symType = d.externKind == ExternKind.Struct ? retainedType(ctx, node, createStruct(d.externName, [], [], true)) : inferredType();
 	const sym = declSymbol(ctx, node, d.externName, kind, symType, false);
 	sym.symbolType.sym = sym;
 	setFlag(sym, SymbolFlag.ImportC);

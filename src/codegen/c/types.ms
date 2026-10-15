@@ -602,8 +602,7 @@ export function typeKey(t: Type | null): string {
 	if (t == null) return "null";
 	return match (t.kind) {
 		TypeKind.Alias => typeKey(t.typeReturn),
-		TypeKind.Number => "number",
-		TypeKind.Float64 => "float64",
+		TypeKind.Number | TypeKind.Float64 => "float64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
@@ -2255,7 +2254,7 @@ test "the pointer threshold follows the target float width" {
 }
 
 test "primitive keys" {
-	assert typeKey(createPrimitive(TypeKind.Number)) == "number";
+	assert typeKey(createPrimitive(TypeKind.Number)) == "float64";
 	assert typeKey(createPrimitive(TypeKind.String)) == "string";
 	assert typeKey(createPrimitive(TypeKind.Boolean)) == "boolean";
 	assert typeKey(createPrimitive(TypeKind.Void)) == "void";
@@ -2444,7 +2443,7 @@ test "anonymous type cache key distinguishes" {
 
 test "tuple type key" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
-	assert typeKey(t) == "tuple:number,string";
+	assert typeKey(t) == "tuple:float64,string";
 }
 
 test "tuple type desc emits struct" {

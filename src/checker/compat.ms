@@ -1137,8 +1137,12 @@ function sameInnerType(a: Type, b: Type): boolean {
 	return sameType(a.typeReturn, b.typeReturn);
 }
 
+function isDoubleKind(t: Type): boolean {
+	return t.kind == TypeKind.Number || t.kind == TypeKind.Float64;
+}
+
 function sameTypeInner(a: Type, b: Type): boolean {
-	if (a.kind != b.kind) return false;
+	if (a.kind != b.kind) return isDoubleKind(a) && isDoubleKind(b);
 	return match (a.kind) {
 		TypeKind.Struct => sameStructType(a, b),
 		TypeKind.Enum => sameNominal(a, b),

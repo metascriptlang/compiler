@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, or all");
 	exit(2);
 }
 
@@ -219,7 +219,47 @@ function runLinkCache(): void {
 	recordTrue("failed link rejects stale output", firstFailure != 0);
 	recordTrue("failed link remains invalidated", secondFailure != 0);
 
+	const cliArchive = fixture("cli-archive", "", "int probeValue(void) { return 17; }\n");
+	for (const label of ["initial", "changed"]) {
+		if (label == "changed") put(`${cliArchive}/native.c`, "int probeValue(void) { return 29; }\n");
+		need(command(cliArchive, `cc-${label}`, "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, `cc cli ${label}`);
+		need(command(cliArchive, `ar-${label}`, "ar", ["rcs", "libnative.a", "native.o"]).code == 0, `ar cli ${label}`);
+		need(build(cliArchive, label, "probe", ["--link=libnative.a"]) == 0, `cli archive ${label}`);
+		if (label == "initial") need(value(cliArchive) == "17", "cli archive initial value");
+	}
+	record("archive given by --link replaced", "29", value(cliArchive));
+
+	const cliObject = fixture("cli-object", "", "int probeValue(void) { return 5; }\n");
+	need(command(cliObject, "cc-object", "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, "cc cli object");
+	put(`${cliObject}/extra.c`, "int extraValue(void) { return 40; }\n");
+	need(command(cliObject, "cc-extra", "clang", ["-c", "extra.c", "-o", "extra.o"]).code == 0, "cc cli extra");
+	need(command(cliObject, "ar-extra", "ar", ["rcs", "libextra.a", "extra.o"]).code == 0, "ar cli extra");
+	put(`${cliObject}/build.ms`, "const config = { cc: { linkFlags: [\"libextra.a\"] }, globalImports: [\"./g\"] };\nexport default config;\n");
+	put(`${cliObject}/g.ms`, "export const offset = 100;\n");
+	put(`${cliObject}/api.h`, "int probeValue(void);\nint extraValue(void);\n");
+	put(`${cliObject}/main.ms`, "@include(\"./api.h\");\nextern function probeValue(): int32;\nextern function extraValue(): int32;\nconsole.log(probeValue() + extraValue() + offset);\n");
+	need(build(cliObject, "cli-object", "probe", ["--link=native.o"]) == 0, "cli object with build.ms");
+	record("object given by --link keeps build.ms linkFlags and globalImports", "145", value(cliObject));
+
+	if (windows) {
+		const resource = fixture("cli-resource", "@compile(\"./native.c\");", "int probeValue(void) { return 1; }\n");
+		for (const name of ["AlphaOne", "BravoTwo"]) {
+			put(`${resource}/version.rc`, `1 VERSIONINFO\nFILEVERSION 1,2,3,4\nBEGIN\n  BLOCK "StringFileInfo"\n  BEGIN\n    BLOCK "040904B0"\n    BEGIN\n      VALUE "ProductName", "${name}"\n    END\n  END\n  BLOCK "VarFileInfo"\n  BEGIN\n    VALUE "Translation", 0x409, 1200\n  END\nEND\n`);
+			need(command(resource, `rc-${name}`, "zig", ["rc", "/fo", "version.res", "version.rc"]).code == 0, `zig rc ${name}`);
+			need(build(resource, name, "probe", ["--link=version.res"]) == 0, `cli resource ${name}`);
+			if (name == "AlphaOne") need(holdsUtf16(`${resource}/probe`, "AlphaOne"), "cli resource initial product name");
+		}
+		recordTrue("resource given by --link replaced", holdsUtf16(`${resource}/probe`, "BravoTwo") && !holdsUtf16(`${resource}/probe`, "AlphaOne"));
+	}
 	if (!windows) runLinkOrder();
+}
+
+function holdsUtf16(path: string, text: string): boolean {
+	const content = readFile(path);
+	if (!content.ok) return false;
+	let wide = "";
+	for (let i = 0; i < text.length; i++) wide = wide + text.charAt(i) + "\u0000";
+	return content.value.byteIndexOf(wide, 0) >= 0;
 }
 
 function firstLinkedWeakProbeWins(result: int32, edit: string): string {
@@ -607,6 +647,36 @@ function runObjectStore(): void {
 	record("a stored object after the C compiler changed", "59", builtValue(tool, build(tool, "second-toolchain", "probe", [], secondTool)));
 }
 
+function pinnedRun(dir: string, exe: string): string {
+	if (windows) {
+		const script = `$p = Start-Process '${dir}/${exe}' -PassThru -NoNewWindow -RedirectStandardOutput '${dir}/pinned.out'; $p.ProcessorAffinity = 1; $null = $p.Handle; if (-not $p.WaitForExit(30000)) { $p.Kill(); 'TIMEOUT' } else { 'exit=' + $p.ExitCode }`;
+		const r = execFileCapture("powershell", ["-NoProfile", "-Command", script]);
+		const out = readFile(`${dir}/pinned.out`);
+		return `${r.ok ? r.value.trim() : "powershell failed"} ${out.ok ? out.value.trim() : ""}`;
+	}
+	const r = execFileCapture("taskset", ["-c", "0", `${dir}/${exe}`]);
+	return r.ok ? `exit=0 ${r.value.trim()}` : `exit=${r.error.exitCode} ${r.error.output.trim()}`;
+}
+
+function runSpawnDrain(): void {
+	if (platform == "macos") {
+		console.log("skip spawn-drain: macOS has no CPU affinity to pin the run to one core");
+		return;
+	}
+	const dir = `${root}/spawn-drain`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, "class A { name() { return \"A\"; } }\nclass B extends A { name() { return \"B\"; } }\nasync function main() {\n\tconsole.log(\"pre\");\n\tconst f = spawn(() => { return true ? new B() : new A(); });\n\tconst g: A = await f;\n\tconst x = spawn(() => 1);\n\tconst y = spawn(() => 2);\n\tconst s = (await x) + (await y);\n\tconst k = spawn(() => new B());\n\tconst h: A = await k;\n\tconsole.log(`post ${g.name()} ${s} ${h.name()}`);\n}\nmain();\n");
+	need(build(dir, "spawn-drain", "probe.exe", ["--gc=drc"]) == 0, "spawn-drain build");
+	let complete = 0;
+	let last = "";
+	for (let i = 0; i < 10; i++) {
+		last = pinnedRun(dir, "probe.exe");
+		if (last.startsWith("exit=0") && last.contains("post B 3 B")) complete = complete + 1;
+	}
+	record(`pinned to one CPU, the exit drain waits for every spawned task (last: ${last})`, "10", `${complete}`);
+}
+
 function runDirectivePaths(): void {
 	const dup = `${root}/dedupe-directive`;
 	ensureDir(dup);
@@ -647,6 +717,7 @@ if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
 if (group == "project-cache" || group == "all") runProjectCache();
 if (group == "directive-paths" || group == "all") runDirectivePaths();
+if (group == "spawn-drain" || group == "all") runSpawnDrain();
 
 let failures = 0;
 console.log(`root ${root}`);

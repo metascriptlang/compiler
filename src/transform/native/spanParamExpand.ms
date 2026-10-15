@@ -92,6 +92,27 @@ function spanParamsOf(fnType: Type, names: string[]): ExpandedParam[] {
 	return spanParams;
 }
 
+function flattenSpanFormals(fnType: Type, spanParams: ExpandedParam[]): Type {
+	const children: Type[] = [];
+	let i = 0;
+	while (i < fnType.typeChildren.length) {
+		let elemType: Type | null = null;
+		for (const ep of spanParams) {
+			if (ep.originalIndex == i) elemType = ep.elemType;
+		}
+		if (elemType != null) {
+			children.push(createPtr(elemType));
+			children.push(getSysType(TypeKind.Int64));
+		} else {
+			children.push(fnType.typeChildren[i]);
+		}
+		i = i + 1;
+	}
+	const flat = copyTypeShallow(fnType);
+	flat.typeChildren = children;
+	return flat;
+}
+
 function expandFunctionDecl(node: Node): void {
 	const d = node.data as FunctionDeclData;
 	if (d.fnFlags.indexOf("extern", 0) < 0) return;
@@ -104,10 +125,8 @@ function expandFunctionDecl(node: Node): void {
 	if (spanParams.length == 0) return;
 	let i = 0;
 
-	// Build new param lists and type children
 	const newParams: string[] = [];
 	const newParamTypes: string[] = [];
-	const newTypeChildren: Type[] = [];
 
 	i = 0;
 	while (i < d.params.length) {
@@ -133,24 +152,18 @@ function expandFunctionDecl(node: Node): void {
 			}
 
 			const name = ep.paramName;
-			const elemType = ep.elemType;
 
 			// Replace with two params: name_data (Ptr<T>) and name_len (int64)
 			newParams.push(name + "_data");
 			newParams.push(name + "_len");
 			newParamTypes.push(""); // resolved via typeChildren
 			newParamTypes.push("int64");
-			newTypeChildren.push(createPtr(elemType));
-			newTypeChildren.push(getSysType(TypeKind.Int64));
 		} else {
 			newParams.push(d.params[i]);
 			if (i < d.fnParamTypes.length) {
 				newParamTypes.push(d.fnParamTypes[i]);
 			} else {
 				newParamTypes.push("");
-			}
-			if (i < fnType.typeChildren.length) {
-				newTypeChildren.push(fnType.typeChildren[i]);
 			}
 		}
 
@@ -160,8 +173,7 @@ function expandFunctionDecl(node: Node): void {
 	// Update params and type
 	d.params = newParams;
 	d.fnParamTypes = newParamTypes;
-	const flat = copyTypeShallow(fnType);
-	flat.typeChildren = newTypeChildren;
+	const flat = flattenSpanFormals(fnType, spanParams);
 	node.nodeType = flat;
 	if (node.resolvedSym != null && node.resolvedSym.symbolType == fnType) node.resolvedSym.symbolType = flat;
 
@@ -293,6 +305,7 @@ function expandCallSite(node: Node): void {
 	}
 
 	d.arguments = newArgs;
+	d.callee.nodeType = flattenSpanFormals(declared, spanParams);
 }
 
 // ===== V1 Diagnostic: Span in Closures =====

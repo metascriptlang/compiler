@@ -1073,6 +1073,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "fnFlags", d.fnFlags);
 			setStr(objHeap, handle, "fnReturnType", d.fnReturnType);
 			setDefaults(objHeap, arrHeap, handle, "fnDefaults", d.fnDefaults, includeTypeAst);
+			setStr(objHeap, handle, "nativeName", d.nativeName);
 		},
 		NodeKind.ImportDecl => {
 			const d = node.data as ImportDeclData;
@@ -1139,6 +1140,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "methodFlags", d.methodFlags);
 			setStr(objHeap, handle, "methodReturnType", d.methodReturnType);
 			setDefaults(objHeap, arrHeap, handle, "methodDefaults", d.methodDefaults, includeTypeAst);
+			setStr(objHeap, handle, "nativeName", d.nativeName);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -1972,7 +1974,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const fnDefaults = readDefaults(objHeap, arrHeap, h, "fnDefaults", loc);
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
-				fnDefaults, nativeName: "", nameLocation: loc,
+				fnDefaults, nativeName: readStr(objHeap, h, "nativeName"), nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ImportDecl => {
@@ -2073,7 +2075,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.MethodDecl, {
 				methodName, methodParams, methodParamTypes, methodBody,
 				methodIsStatic, methodFlags, methodVisibility, methodReturnType,
-				methodDefaults: readDefaults(objHeap, arrHeap, h, "methodDefaults", loc), nativeName: "", nameLocation: loc,
+				methodDefaults: readDefaults(objHeap, arrHeap, h, "methodDefaults", loc), nativeName: readStr(objHeap, h, "nativeName"), nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ConstructorDecl => {
@@ -2690,6 +2692,27 @@ test "round-trip FunctionDecl" {
 	assert d.params[0] == "a";
 	assert d.params[1] == "b";
 	assert d.fnReturnType == "number";
+}
+
+test "round-trip keeps the from template of an extern function and an extern method" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const body = createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc));
+	const fn = createNode(NodeKind.FunctionDecl, {
+		fnName: "bump", params: ["n"], fnParamTypes: ["number"],
+		fnBody: body, fnFlags: "", fnReturnType: "number",
+		fnDefaults: [], nativeName: "(n => n + 1)(#)", nameLocation: loc,
+	}, synthToken(loc));
+	const fnBack = valueToNode(nodeToValue(fn, objH, arrH), objH, arrH, loc).data as FunctionDeclData;
+	assert fnBack.nativeName == "(n => n + 1)(#)";
+	const method = createNode(NodeKind.MethodDecl, {
+		methodName: "size", methodParams: [], methodParamTypes: [], methodBody: body,
+		methodIsStatic: false, methodFlags: "", methodVisibility: "", methodReturnType: "number",
+		methodDefaults: [], nativeName: "#.length", nameLocation: loc,
+	}, synthToken(loc));
+	const methodBack = valueToNode(nodeToValue(method, objH, arrH), objH, arrH, loc).data as MethodDeclData;
+	assert methodBack.nativeName == "#.length";
 }
 
 test "round-trip ImportDecl" {
