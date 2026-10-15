@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'super' at comptime: symbol kind is Function
 // note: new, super, defaulted and rest parameters, generic instances and a class imported from another module each construct through their constructor's own routine
 import { Shape, Square, Crate, Marker } from "./shapes";
 
