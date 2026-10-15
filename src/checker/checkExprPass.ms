@@ -344,14 +344,19 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 // Record the JSX tag's base name as a symbol reference for LSP go-to-def / rename. An uppercase
 // tag is a component reference (binds to the function symbol); a lowercase tag is a platform
 // string (no binding). node.typeExpr is the positioned Identifier the parser stored for the tag.
-function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
-	if (node.typeExpr == null) return;
+export function jsxComponentSym(ctx: CheckerContext, node: Node): Symbol | null {
+	if (node.typeExpr == null) return null;
 	const base = (node.typeExpr.data as IdentifierData).name;
-	if (base.byteLength == 0 || base.byteAt(0) < "A".code || base.byteAt(0) > "Z".code) return;
-	const sym = lookupSymbol(ctx.table, base);
+	if (base.byteLength == 0 || base.byteAt(0) < "A".code || base.byteAt(0) > "Z".code) return null;
+	return lookupSymbol(ctx.table, base);
+}
+
+function recordJsxTagSym(ctx: CheckerContext, node: Node): void {
+	const sym = jsxComponentSym(ctx, node);
 	if (sym == null) return;
-	node.typeExpr.resolvedSym = sym;
-	const loc = node.typeExpr.location;
+	const base = (node.typeExpr!.data as IdentifierData).name;
+	node.typeExpr!.resolvedSym = sym;
+	const loc = node.typeExpr!.location;
 	sgRecordSym(ctx, loc.line, loc.column, loc.column + base.byteLength, sym, sym.symbolType, sym.symbolKind, base, "", false);
 }
 

@@ -37,7 +37,7 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, usedBeforeDeclaration } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, usedBeforeDeclaration, jsxComponentSym } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, refuseUnwrittenOut, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -912,6 +912,10 @@ function markBodyIdentifiersUsed(ctx: CheckerContext, body: Node): void {
 		const d = body.data as IdentifierData;
 		const sym = lookupSymbol(ctx.table, d.name);
 		if (sym != null) markUsedIn(ctx, sym);
+	}
+	if (body.kind == NodeKind.JSXElement) {
+		const tag = jsxComponentSym(ctx, body);
+		if (tag != null) markUsedIn(ctx, tag);
 	}
 	for (const text of writtenTypes(body)) markTypeNamesUsed(ctx, text);
 	forEachChild(body, (child: Node): void => { markBodyIdentifiersUsed(ctx, child); });
