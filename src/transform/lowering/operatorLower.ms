@@ -23,7 +23,13 @@ import { walkNode, hasEffect } from "../walker";
 import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
+import { resolveOperatorCall, ExtensionMethod } from "../../checker/context";
+
+// The checker binds every operator a routine in scope is declared for; an operator that reaches
+// lowering unbound calls a prelude or extension operator, the same one in every scope.
+function extensionOperator(ctx: TransformContext, op: string, types: Type[]): ExtensionMethod {
+	return resolveOperatorCall(null, ctx.checkerCtx.extensionRegistry, op, types);
+}
 
 // ===== Type Resolution =====
 
@@ -122,8 +128,8 @@ function declaresEquality(ctx: TransformContext, leftType: Type, right: Node): b
 	if (ctx.checkerCtx.extensionRegistry == null) return false;
 	const rt = resolveType(ctx, right);
 	const pair = [leftType, rt != null ? rt : leftType];
-	return resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, "==", pair) != null
-		|| resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, "!=", pair) != null;
+	return extensionOperator(ctx, "==", pair) != null
+		|| extensionOperator(ctx, "!=", pair) != null;
 }
 
 function comparedByValue(left: Type, right: Type | null): boolean {
@@ -177,15 +183,35 @@ function registerUnionEq(ctx: TransformContext, t: Type): void {
 	ctx.pendingUnionEqs.push(t);
 }
 
+// A checked operator the program declares a routine for is a call of the routine the checker bound
+// in the scope the operator is written in.
+function lowerBoundOperator(node: Node, routine: Symbol): Node {
+	const loc = node.location;
+	if (node.kind == NodeKind.UnaryExpr) return makeRoutineCall(routine, [(node.data as UnaryExprData).operand], loc);
+	const d = node.data as BinaryExprData;
+	if (!node.flags.has(NodeFlag.UserOpStores)) return makeRoutineCall(routine, [d.left, d.right], loc);
+	return makeBinary(d.left, "=", makeRoutineCall(routine, [cloneLvalue(d.left), d.right], loc), loc);
+}
+
+function boundOperator(node: Node): Symbol | null {
+	if (!node.flags.has(NodeFlag.UserOp)) return null;
+	if (node.resolvedSym == null) throw new Error("internal: a declared operator reached lowering without the routine the checker bound");
+	return node.resolvedSym;
+}
+
+function makeRoutineCall(routine: Symbol, args: Node[], loc: SourceLocation): Node {
+	const call = makeCall(makeTypedIdentResolved(routine, null, loc), args, loc);
+	const fnType = routine.symbolType;
+	if (fnType != null && fnType.kind == TypeKind.Function && fnType.typeReturn != null) call.nodeType = fnType.typeReturn;
+	return call;
+}
+
 // Build a call to an operator extension — resolves nativeName for extern operators.
 function makeExtOpCall(ext: ExtensionMethod, opName: string, left: Node, right: Node, loc: SourceLocation): Node {
 	if (ext.sym == null) {
 		throw new Error(`internal: operator '${opName}' resolved to an extension without a symbol`);
 	}
-	const call = makeCall(makeTypedIdentResolved(ext.sym, null, loc), [left, right], loc);
-	const fnType = getExtFnType(ext);
-	if (fnType != null && fnType.typeReturn != null) call.nodeType = fnType.typeReturn;
-	return call;
+	return makeRoutineCall(ext.sym, [left, right], loc);
 }
 
 // Resolve a base operator to a CallExpr.
@@ -195,7 +221,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 	// exactly as the direct form does, or `a == b` and `a != b` disagree.
 	{
 		const rt = resolveType(ctx, right);
-		const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, opName, [leftType, rt != null ? rt : leftType]);
+		const ext = extensionOperator(ctx, opName, [leftType, rt != null ? rt : leftType]);
 		if (ext != null) {
 			return makeExtOpCall(ext, opName, left, right, loc);
 		}
@@ -248,6 +274,8 @@ function lowerClosureEquality(node: Node, opName: string, left: Node, right: Nod
 }
 
 function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
+	const bound = boundOperator(node);
+	if (bound != null) return lowerBoundOperator(node, bound);
 	if (ctx.checkerCtx == null) return node;
 	if (ctx.checkerCtx.extensionRegistry == null) return node;
 	const d = node.data as UnaryExprData;
@@ -257,8 +285,8 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (t == null) return node;
 	if (isStringLike(t)) return node;
 	const typeName = typeNameOf(t);
-	if (typeName == "" || (isBuiltinOperand(t) && !node.flags.has(NodeFlag.UserOp))) return node;
-	const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, op, [t]);
+	if (typeName == "" || isBuiltinOperand(t)) return node;
+	const ext = extensionOperator(ctx, op, [t]);
 	if (ext == null) return node;
 	if (ext.sym == null) {
 		throw new Error(`internal: operator '${op}' resolved to an extension without a symbol`);
@@ -269,6 +297,8 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.UnaryExpr) return lowerUnaryNode(node, ctx);
 	if (node.kind != NodeKind.BinaryExpr) return node;
+	const bound = boundOperator(node);
+	if (bound != null) return lowerBoundOperator(node, bound);
 	if (ctx.checkerCtx == null) return node;
 
 	const d = node.data as BinaryExprData;
@@ -297,7 +327,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const ltName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
 		if (ltName != "" && !isBuiltinOperand(leftType)) {
 			const crt = resolveType(ctx, d.right);
-			const cext = crt != null ? resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, compoundBase, [leftType, crt]) : null as unknown as ExtensionMethod;
+			const cext = crt != null ? extensionOperator(ctx, compoundBase, [leftType, crt]) : null as unknown as ExtensionMethod;
 			if (cext != null) {
 				const rhsCall = makeExtOpCall(cext, compoundBase, cloneLvalue(d.left), d.right, loc);
 				return makeBinary(d.left, "=", rhsCall, loc);
@@ -362,7 +392,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
 	if (ctx.checkerCtx.extensionRegistry != null) {
 		const rt = resolveType(ctx, d.right);
-		const ext = rt != null ? resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, opName, [leftType, rt]) : null as unknown as ExtensionMethod;
+		const ext = rt != null ? extensionOperator(ctx, opName, [leftType, rt]) : null as unknown as ExtensionMethod;
 		if (ext != null) {
 			return makeExtOpCall(ext, opName, d.left, d.right, loc);
 		}
@@ -384,7 +414,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	};
 	if (baseOp != "") {
 		let hasBase = false;
-		if (resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, baseOp, [leftType, leftType]) != null) hasBase = true;
+		if (extensionOperator(ctx, baseOp, [leftType, leftType]) != null) hasBase = true;
 
 		if (hasBase) {
 			return resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);

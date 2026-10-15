@@ -989,7 +989,7 @@ export function isScalarPrimitive(t: Type | null): boolean {
 		|| k == TypeKind.CString;
 }
 
-function compoundBase(op: string): string {
+export function compoundBase(op: string): string {
 	if (op.length < 2 || !op.endsWith("=") || op == "==" || op == "!=" || op == "<=" || op == ">="
 		|| op == "===" || op == "!==") return op;
 	return op.slice(0, op.length - 1);

@@ -445,7 +445,7 @@ function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): 
 	return best;
 }
 
-export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
+export function resolveOperatorCall(table: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
 	const cands: ExtensionMethod[] = [];
 	if (registry != null) {
 		const exts = findAllExtensionsByName(registry, methodName);
