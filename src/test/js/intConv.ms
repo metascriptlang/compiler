@@ -77,9 +77,12 @@ function widen(v: int8): int32 { return v as int32; }
 function floatToByte(v: float64): uint8 { return v as uint8; }
 function floatToWord(v: float32): uint32 { return v as uint32; }
 function floatToU64(v: float64): uint64 { return v as uint64; }
+function toChar(v: int32): char { return v as char; }
+function floatToChar(v: float64): char { return v as char; }
 console.log(toInt8(1), toInt16(1), fromUnsigned(1), toInt32(1 as int64));
 console.log(fromFloat(1.5), toUnsigned(1), widen(1));
 console.log(floatToByte(1.5), floatToWord(1.5 as float32), floatToU64(1.5));
+console.log(toChar(65) as int32, floatToChar(65.5) as int32);
 `;
 
 test "a signed narrowing conversion and a float into an unsigned type are range checked on JS" {
@@ -95,6 +98,8 @@ test "a signed narrowing conversion and a float into an unsigned type are range 
 		{ name: "floatToByte", helper: "msCheckRangeU8" },
 		{ name: "floatToWord", helper: "msCheckRangeU32" },
 		{ name: "floatToU64", helper: "msCheckRangeU64" },
+		{ name: "toChar", helper: "msCheckRangeU8" },
+		{ name: "floatToChar", helper: "msCheckRangeU8" },
 	];
 	for (const row of checked) {
 		assert bodyOf(emitted, row.name).contains(row.helper), row.name + " lacks " + row.helper;

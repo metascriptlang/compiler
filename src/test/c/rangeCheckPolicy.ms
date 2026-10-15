@@ -69,6 +69,15 @@ test "an integer to an unsigned type wraps without a range check" {
 	assert !c.contains("msCheckRange");
 }
 
+test "an integer or a float to char keeps an unsigned byte range check" {
+	const ci = cFor("function f(): char { return opaqueI32(300) as char; }");
+	assert ci.contains("msCheckRangeU8") && ci.contains("255"), ci;
+	const cf = cFor("function f(): char { return opaqueF64(65.9) as char; }");
+	assert cf.contains("msCheckRangeU8"), cf;
+	const cu = cFor("function f(): char { return opaqueU8(65 as uint8) as char; }");
+	assert cu != "" && !cu.contains("msCheckRange"), cu;
+}
+
 test "int32 to an enum is checked against the enum's ordinals" {
 	const c = cFor("function f(): Grade { return opaqueI32(1) as Grade; }");
 	assert c != "";
