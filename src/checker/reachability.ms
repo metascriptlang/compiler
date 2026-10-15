@@ -6,9 +6,10 @@
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
+	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, ExprStmtData, MacroInvocationData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
+import { isBuiltinDirective } from "./decoratorHelpers";
 import {
 	AliveSet,
 	CTypeInfoDemand,
@@ -659,6 +660,20 @@ function markSideEffectImportsAlive(graph: ModuleGraph): void {
 	}
 }
 
+function markImportedInitModulesAlive(graph: ModuleGraph, entryPath: string, initModules: HashSet<string>): void {
+	const seen = new HashSet<string>();
+	const pending: string[] = [entryPath];
+	while (pending.length > 0) {
+		const path = pending.pop();
+		if (seen.has(path)) continue;
+		seen.add(path);
+		if (initModules.has(path)) aliveSetAddModule(_aliveSet, path);
+		const mod = findModule(graph, path);
+		if (mod == null) continue;
+		for (const imp of mod.imports) pending.push(imp.sourcePath);
+	}
+}
+
 function markImportedModulesAlive(graph: ModuleGraph): void {
 	let known: int32 = -1;
 	while (aliveSetModuleCount(_aliveSet) != known) {
@@ -695,6 +710,7 @@ export function computeAliveSet(
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
 	const globalDestroys: GlobalDestroysBlock[] = [];
+	const initModules = new HashSet<string>();
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {
@@ -763,6 +779,7 @@ export function computeAliveSet(
 			}
 			if (isTopLevelStatement(initStmt)) {
 				walkBody(bare, modulePath);
+				if (!isBuiltinDirectiveStmt(initStmt)) initModules.add(modulePath);
 				continue;
 			}
 
@@ -783,6 +800,7 @@ export function computeAliveSet(
 		}
 	}
 
+	markImportedInitModulesAlive(graph, entryPath, initModules);
 	markImportedModulesAlive(graph);
 	while (markAliveGlobalDestroys(globalDestroys)) markImportedModulesAlive(graph);
 	return takeReachability();
@@ -860,6 +878,12 @@ function isTopLevelStatement(node: Node): boolean {
 	if (k == NodeKind.AssertStmt) return true;
 	if (k == NodeKind.VariableDecl) return varDeclNeedsRuntimeInit(node);
 	return false;
+}
+
+function isBuiltinDirectiveStmt(node: Node): boolean {
+	if (node.kind != NodeKind.ExprStmt) return false;
+	const expr = (node.data as ExprStmtData).expr;
+	return expr.kind == NodeKind.MacroInvocation && isBuiltinDirective((expr.data as MacroInvocationData).macroName);
 }
 
 function varDeclNeedsRuntimeInit(node: Node): boolean {
@@ -998,7 +1022,6 @@ import "../parser/statements/core";
 import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
 import { aliveSetHas } from "../codegen/c/context";
 import { makeSymbol, setFlag } from "./symbol";
-import { ExprStmtData } from "../ast/node";
 
 test "nullable reference allocation keeps its concrete TypeInfo alive" {
 	const parsed = parseSource("const HolderTypeInfo = 0; let value = { label: \"held\" };");
