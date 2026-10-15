@@ -3297,7 +3297,9 @@ function fitsFormal(argType: Type, formal: Type): boolean {
 	const bindings = createUnifyBindings();
 	unifyType(formal, argType, bindings);
 	const bound = bindings.names.length > 0 ? instantiateGeneric(formal, bindings.names, bindings.types) : formal;
-	return hasGenericParams(bound) || isAssignable(argType, bound);
+	if (!hasGenericParams(bound)) return isAssignable(argType, bound);
+	return bound.kind == TypeKind.GenericParam || bound.kind == TypeKind.Union
+		|| (bound.kind == TypeKind.Function) == (argType.kind == TypeKind.Function);
 }
 
 function signatureReturn(sigType: Type, argTypes: Type[]): Type | null {
