@@ -3077,6 +3077,25 @@ function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node): S
 	return validateOverloadSigs(ctx, set, impl, callNode) ? impl : winner;
 }
 
+function fitCallToImplementation(callNode: Node, impl: Symbol, takesReceiver: boolean): void {
+	const implParams = impl.symbolType != null ? impl.symbolType.typeChildren : [];
+	const d = callNode.data as CallExprData;
+	const offset = takesReceiver ? 1 : 0;
+	if (takesReceiver && implParams.length > 0 && d.callee.kind == NodeKind.MemberExpr) {
+		const me = d.callee.data as MemberExprData;
+		if (me.object.nodeType != null) {
+			const fitted = widenVariantToUnion(me.object, implParams[0], me.object.nodeType);
+			if (fitted != null as unknown as Node) me.object = fitted;
+		}
+	}
+	for (let ai = 0; ai < d.arguments.length && ai + offset < implParams.length; ai += 1) {
+		const argType = d.arguments[ai].nodeType;
+		if (argType == null) continue;
+		const fitted = widenVariantToUnion(d.arguments[ai], implParams[ai + offset], argType);
+		if (fitted != null as unknown as Node) d.arguments[ai] = fitted;
+	}
+}
+
 function implementsSignatures(cand: Symbol, primary: Symbol): boolean {
 	if (hasFlag(cand, SymbolFlag.OverloadSig)) return false;
 	if (hasFlag(primary, SymbolFlag.OverloadSig)) return true;
@@ -3432,16 +3451,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// per-variant sigs (`data: TypeUnionData`) all redirect to one impl taking
 	// the union (`data: NodeData`), and handing it a bare variant struct
 	// corrupts memory — clang only warns on the pointer mismatch.
-	if (impl != null && impl.symbolType != null && impl.symbolType.typeChildren != null
-			&& d.arguments.length == impl.symbolType.typeChildren.length) {
-		const implParams = impl.symbolType.typeChildren;
-		for (let ri = 0; ri < d.arguments.length; ri += 1) {
-			const implArgType = d.arguments[ri].nodeType;
-			if (implArgType == null) continue;
-			const reconciled = widenVariantToUnion(d.arguments[ri], implParams[ri], implArgType);
-			if (reconciled != null as unknown as Node) d.arguments[ri] = reconciled;
-		}
-	}
+	if (impl != null) fitCallToImplementation(callNode, impl, false);
 	if (d.callee != null && d.callee.kind == NodeKind.Identifier) {
 		d.callee.resolvedSym = sym;
 		if (sym.symbolType != null) d.callee.nodeType = sym.symbolType;
@@ -3788,6 +3798,9 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
 	if (winnerType.kind == TypeKind.Function) relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
+	if (extWinnerSym != null && callNode.resolvedSym != extWinnerSym && hasFlag(extWinnerSym, SymbolFlag.OverloadSig)) {
+		fitCallToImplementation(callNode, callNode.resolvedSym!, !exts[idx].isStatic);
+	}
 	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
 			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
 			&& isGenericFn((extWinnerSym.declNode.data as FunctionDeclData).fnFlags)) {
