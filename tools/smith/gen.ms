@@ -2,6 +2,7 @@ import { Rng, seeded } from "./rng";
 import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, W, W_DEFAULTS, tyName, format } from "./features";
 
 const FN_COST_CAP: int64 = 20000 as int64;
+const ROUTINE_FRAMES: int32 = 4;
 const TOP_COST_CAP: int64 = 200000 as int64;
 const GEN_NODE_CAP: int32 = 4096;
 
@@ -1190,7 +1191,7 @@ class Gen {
 		const t = this.pickTy();
 		const T = tyName(t);
 		if (fam == Fam.Closure) {
-			const k = this.pickW(W.ClosureDecl, W.ClosureFill);
+			const k = this.pickW(W.ClosureDecl, W.ClosureRoutine);
 			if (k == 0) {
 				const params: Ty[] = [];
 				const n = this.rng.below(3);
@@ -1228,6 +1229,7 @@ class Gen {
 				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [t], len: 0, cost: mk.cost });
 				return text;
 			}
+			if (k == 5) { return this.routineDecl(t, indent); }
 			const name = this.entName("a");
 			const j = this.entName("j");
 			const n = this.rng.between(1, 4);
@@ -1264,6 +1266,26 @@ class Gen {
 		const name = this.entName("b");
 		const text = indent + "const " + name + " = new BoxG<" + T + ">(" + this.expr(t, 0) + ");\n";
 		this.ents.push({ kind: EntKind.BoxVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return text;
+	}
+
+	routineDecl(t: Ty, indent: string): string {
+		const name = this.entName("r");
+		const n = this.entName("q");
+		this.scope.push({ name: n, ty: Ty.Int32, writable: false });
+		const body = this.routine(t, 1, FN_COST_CAP);
+		this.scope.pop();
+		const cost = body.cost + (ROUTINE_FRAMES as int64);
+		this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [Ty.Int32], len: 0, cost: cost });
+		let text = indent + "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" +
+			indent + "\tif (" + n + " <= 0 || " + n + " >= " + String(ROUTINE_FRAMES) + ") { return " + body.text + "; }\n" +
+			indent + "\treturn " + name + "(" + n + " - 1);\n" +
+			indent + "}\n";
+		if (this.rng.chance(50)) {
+			const alias = this.entName("k");
+			this.ents.push({ kind: EntKind.Callable, name: alias, ty: t, params: [Ty.Int32], len: 0, cost: cost });
+			text += indent + "const " + alias + " = " + name + ";\n";
+		}
 		return text;
 	}
 
@@ -1591,13 +1613,30 @@ function countOver(needle: string, seeds: int32, f: Features): int32 {
 	return n;
 }
 
+test "a nested routine recurses at most its frame bound and may be named as a value" {
+	const f = withWeights("fams=closure w.closure.routine=40");
+	let routines = 0;
+	let aliases = 0;
+	for (let seed = 1; seed <= 20; seed++) {
+		const text = generate(seed as uint64, f);
+		for (const line of text.split("\n")) {
+			const t = line.trim();
+			if (t.startsWith("function r") && t.endsWith(" {") && line.startsWith("\t")) { routines++; }
+			if (t.startsWith("if (q") && t.contains(" <= 0 || q") && !t.contains(" >= " + String(ROUTINE_FRAMES) + ") { return ")) { assert false; }
+			if (t.startsWith("const k") && t.contains(" = r") && t.endsWith(";") && !t.contains("(")) { aliases++; }
+		}
+	}
+	assert routines > 10;
+	assert aliases > 3;
+}
+
 test "default weights keep the pinned stream" {
 	const sizes = [21703, 13475, 18941, 17328];
 	const closureSizes = [11356, 11418, 13350, 9328];
-	const closure = withWeights("fams=closure");
+	const closure = withWeights("fams=closure w.closure.routine=0");
 	for (let i = 0; i < 4; i++) {
-		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic")).byteLength == sizes[i];
-		assert generate((i + 1) as uint64, closure).byteLength == closureSizes[i];
+		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic w.closure.routine=0")).replace(" w.closure.routine=0", "").byteLength == sizes[i];
+		assert generate((i + 1) as uint64, closure).replace(" w.closure.routine=0", "").byteLength == closureSizes[i];
 	}
 }
 
