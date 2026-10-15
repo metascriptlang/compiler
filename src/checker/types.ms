@@ -3072,6 +3072,44 @@ export function classAncestorInstance(t: Type | null, target: Type): Type | null
 	return null;
 }
 
+function classOrigin(sym: Symbol | null): Symbol | null {
+	return sym != null && sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+}
+
+function classBodyOf(t: Type | null): Type | null {
+	const body = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
+	const cls = body != null && body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : body;
+	return cls != null && cls.kind == TypeKind.Struct && cls.sym != null && cls.sym.symbolKind == SymbolKind.Class ? cls : null;
+}
+
+// Whether a value of `t` is an instance of some instantiation of the class `cls`.
+export function derivesFromClass(t: Type | null, cls: Symbol): boolean {
+	if (isAwaitable(t)) return cls.name == "Promise";
+	let cur = classBodyOf(t);
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (classOrigin(cur.sym) == classOrigin(cls)) return true;
+		cur = classBodyOf(cur.typeExtra);
+	}
+	return false;
+}
+
+// The members of a union that `x instanceof cls` selects, for a generic `cls`;
+// null when the union holds no instance of `cls`, or holds an ancestor class an
+// instance of `cls` could hide behind.
+export function genericInstanceMembers(t: Type | null, cls: Symbol): Type[] | null {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return null;
+	const selected: Type[] = [];
+	for (const m of t.typeChildren) {
+		if (derivesFromClass(m, cls)) {
+			selected.push(m);
+			continue;
+		}
+		const ancestor = classBodyOf(m);
+		if (ancestor != null && ancestor.sym != null && derivesFromClass(cls.symbolType, ancestor.sym)) return null;
+	}
+	return selected.length > 0 ? selected : null;
+}
+
 function isClassOrSubclass(sub: Type, sup: Type): boolean {
 	const supBody = sup.typeReturn;
 	const supSym = runtimeClassSym(supBody);

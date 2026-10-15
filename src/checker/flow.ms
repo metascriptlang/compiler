@@ -22,7 +22,7 @@ import {
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
-	nullableUnionOf, hasGenericParams,
+	nullableUnionOf, hasGenericParams, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 	classAncestorInstance, isNullableShape,
 } from "./types";
@@ -1194,6 +1194,14 @@ function narrowTypeByInstanceof(t: Type | null, left: Node, right: Node, refNode
 	// a class — its resolvedSym.symbolType is the class/struct type.
 	if (right.resolvedSym == null || right.resolvedSym.symbolType == null) return t;
 	const target = right.resolvedSym.symbolType;
+	if (symGenericParams(right.resolvedSym) != "") {
+		const selected = genericInstanceMembers(t, right.resolvedSym);
+		if (selected == null) return t;
+		const kept: Type[] = [];
+		for (const v of t.typeChildren) if ((selected.indexOf(v) >= 0) == assumeTrue) kept.push(v);
+		if (kept.length == 0) return neverType();
+		return kept.length == 1 ? kept[0] : createUnion(kept);
+	}
 	const members = declaredMembers(t);
 	const kept: Type[] = [];
 	for (const m of members) {
