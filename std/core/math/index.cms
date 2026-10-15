@@ -15,7 +15,7 @@ export extern function floor(this typeof Math, x: float64): float64 from "floor"
 export extern function trunc(this typeof Math, x: float64): float64 from "trunc";
 export extern function sqrt(this typeof Math, x: float64): float64 from "sqrt";
 export extern function cbrt(this typeof Math, x: float64): float64 from "cbrt";
-export extern function pow(this typeof Math, x: float64, y: float64): float64 from "pow";
+export extern function pow(this typeof Math, x: float64, y: float64): float64 from "msPowF64";
 export extern function exp(this typeof Math, x: float64): float64 from "exp";
 export extern function expm1(this typeof Math, x: float64): float64 from "expm1";
 export extern function log(this typeof Math, x: float64): float64 from "log";

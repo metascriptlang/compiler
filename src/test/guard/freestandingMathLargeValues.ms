@@ -4,12 +4,14 @@
 // table for zeros, infinities, NaN and exponents past 2^63, is exact for integer results, and
 // stops the program on a positive base with a fractional exponent: exp and log are absent, and
 // a link refusal inside pow fails every -O0 build that calls pow, integer exponents included.
+// `**` and Math.pow reach it through msPowF64 (runtime/core/checkedArith.h), which gives
+// ECMAScript's NaN for a NaN exponent and for a +-1 base with an infinite exponent.
 //
 // WHY A SUBPROCESS: no host build reads this header (host and --os=bare use the system libm),
 // so the guard compiles a C probe against it with host clang under UBSan float-cast-overflow.
 //
 // RED PRE-FIX: UBSan stops floor(1e300) and pow(2, 1e300) at the int64 cast, isfinite is an
-// undefined symbol, and pow(2, 0.5) returns 1.
+// undefined symbol, pow(2, 0.5) returns 1, and the probe does not build without msPowF64.
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, ExecFileResult, cwd, exit, findOnPath } from "std/process";
@@ -20,6 +22,11 @@ const dir = `${root}/out/guardFreestandingMath`;
 
 const probe = [
 	"#include <math.h>",
+	"#include <stdint.h>",
+	"_Noreturn void msRaiseDivByZero(void);",
+	"_Noreturn void msRaiseOverflow(void);",
+	"_Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);",
+	"#include \"runtime/core/checkedArith.h\"",
 	"int printf(const char*, ...);",
 	"static int failures;",
 	"static void same(const char* what, double got, double want) {",
@@ -113,6 +120,15 @@ const probe = [
 	"\tsame(\"pow(2, -1074)\", pow(2.0 * one, -1074.0), 0x1p-1074);",
 	"\tsame(\"pow(-2, -1073)\", pow(-2.0 * one, -1073.0), -0x1p-1073);",
 	"\tsame(\"pow(2, -1075)\", pow(2.0 * one, -1075.0), 0.0);",
+	"\tsame(\"msPowF64(1, NaN)\", msPowF64(one, nan), nan);",
+	"\tsame(\"msPowF64(1, Infinity)\", msPowF64(one, inf), nan);",
+	"\tsame(\"msPowF64(1, -Infinity)\", msPowF64(one, -inf), nan);",
+	"\tsame(\"msPowF64(-1, Infinity)\", msPowF64(-one, inf), nan);",
+	"\tsame(\"msPowF64(-1, -Infinity)\", msPowF64(-one, -inf), nan);",
+	"\tsame(\"msPowF64(NaN, 0)\", msPowF64(nan, zero), 1.0);",
+	"\tsame(\"msPowF64(-1, 1e300)\", msPowF64(-one, huge), 1.0);",
+	"\tsame(\"msPowF64(-2, -1073)\", msPowF64(-2.0 * one, -1073.0), -0x1p-1073);",
+	"\tsame(\"msPowF64(0.5, Infinity)\", msPowF64(0.5 * one, inf), 0.0);",
 	"\tholds(\"isfinite(1e300)\", isfinite(huge));",
 	"\tholds(\"!isfinite(NaN)\", !isfinite(nan));",
 	"\tholds(\"isnan(NaN)\", isnan(nan));",
@@ -141,7 +157,7 @@ function firstLines(r: ExecFileResult): string {
 
 function buildAndRun(name: string, source: string): ExecFileResult {
 	writeFile(`${dir}/${name}.c`, source);
-	const flags = ["-std=c11", "-ffreestanding", "-fno-builtin", "-isystem", `${root}/runtime/freestanding`,
+	const flags = ["-std=c11", "-ffreestanding", "-fno-builtin", "-isystem", `${root}/runtime/freestanding`, "-I", root,
 		"-fsanitize=float-cast-overflow", "-fno-sanitize-recover=all", `${name}.c`, "-o", name];
 	const built = execFileResult("clang", flags, dir);
 	if (built.exitCode != 0) {

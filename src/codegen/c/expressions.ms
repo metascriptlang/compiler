@@ -1706,11 +1706,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			return;
 		}
 		if (d.operator == "**") {
-			const rt = node.nodeType;
-			if (rt != null && isIntegerType(rt)) {
-				addCGenError(g, `internal: integer '**' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
-			}
-			ctx.results.push(`pow(${left}, ${finalRight})`);
+			addCGenError(g, `internal: '**' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
+			ctx.results.push("0");
 			return;
 		}
 		if (d.operator == "instanceof") {

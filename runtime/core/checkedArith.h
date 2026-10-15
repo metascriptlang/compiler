@@ -1,6 +1,6 @@
 /*
- * Checked integer division, modulo and power, ToInt32, and the compound assignments
- * C has no operator for on a float target. The includer declares
+ * Checked integer division, modulo and power, ToInt32, the float power, and the compound
+ * assignments C has no operator for on a float target. The includer declares
  * msRaiseDivByZero, msRaiseOverflow and msRaiseRangeError first
  * (runtime/core/system.h, runtime/manual.h).
  */
@@ -148,6 +148,13 @@ static inline int32_t msNumberXor(double a, int32_t b) { return msToInt32(a) ^ b
 static inline int32_t msNumberShl(double a, int32_t b) { return (int32_t)((uint32_t)msToInt32(a) << ((uint32_t)b & 31)); }
 static inline int32_t msNumberShr(double a, int32_t b) { return msToInt32(a) >> ((uint32_t)b & 31); }
 static inline uint32_t msNumberShrU(double a, int32_t b) { return (uint32_t)msToInt32(a) >> ((uint32_t)b & 31); }
+
+/* ECMAScript Number::exponentiate (ES2024 6.1.6.1.3): a NaN exponent and a +-1 base with an
+ * infinite exponent give NaN, where C's pow answers 1; every other case is pow's. */
+static inline double msPowF64(double x, double y) {
+	if (y != y || (fabs(x) == 1.0 && fabs(y) == INFINITY)) return NAN;
+	return pow(x, y);
+}
 
 #define msModAssignF64(lv, b) msDivAssign_(lv, b, fmod)
 #define msAndAssignF64(lv, b) msDivAssign_(lv, b, msNumberAnd)

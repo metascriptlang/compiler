@@ -1032,6 +1032,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("sqrt",  _bridgeSqrt, HostCapability.Pure);
 	registerHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
 	registerHostFn("pow",   _bridgePow, HostCapability.Pure);
+	registerHostFn("msPowF64", _bridgePow, HostCapability.Pure);
 	registerHostFn("exp",   _bridgeExp, HostCapability.Pure);
 	registerHostFn("expm1", _bridgeExpm1, HostCapability.Pure);
 	registerHostFn("log",   _bridgeLog, HostCapability.Pure);
