@@ -6,7 +6,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
-import { hasGenericParams, declGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
+import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
@@ -145,7 +145,7 @@ function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
 // path writes `export ` before it dispatches, so it has to decide first or it
 // leaves a dangling keyword behind.
 export function classEmitsNoJs(node: Node): boolean {
-	if (node.flags.has(NodeFlag.ExternC) || declGenericParams(node) != "") return true;
+	if (node.flags.has(NodeFlag.ExternC)) return true;
 	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
 }
 
