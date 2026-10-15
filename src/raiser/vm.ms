@@ -290,6 +290,14 @@ function vmError(vm: RaiserVM, msg: string): void {
 }
 
 const MAX_CALL_DEPTH = 1024;
+const INT64_LOW: int64 = -9223372036854775807 - 1;
+
+function mulOverflowsI64(a: int64, b: int64): boolean {
+	if (a == 0 || b == 0) return false;
+	if (a == -1) return b == INT64_LOW;
+	if (b == -1) return a == INT64_LOW;
+	return int64Bits((a as uint64) * (b as uint64)) / a != b;
+}
 const MAX_ARRAY_COUNT = 4294967295;
 
 // --- Execute ---
@@ -932,19 +940,27 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.AddI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal + rhs.intVal));
+			const sum = int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64));
+			if ((sum ^ lhs.intVal) >= 0 || (sum ^ rhs.intVal) >= 0) { setReg(vm, base + inst.a, raiserInt(sum));
+			} else { vmError(vm, "over- or underflow"); }
 		} else if (op == RaiserOpcode.SubI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal - rhs.intVal));
+			const diff = int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64));
+			if ((diff ^ lhs.intVal) >= 0 || (diff ^ ~rhs.intVal) >= 0) { setReg(vm, base + inst.a, raiserInt(diff));
+			} else { vmError(vm, "over- or underflow"); }
 		} else if (op == RaiserOpcode.MulI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal * rhs.intVal));
+			if (mulOverflowsI64(lhs.intVal, rhs.intVal)) { vmError(vm, "over- or underflow");
+			} else { setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64)))); }
 		} else if (op == RaiserOpcode.DivI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
+			} else if (rhs.intVal == -1) {
+				if (lhs.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
+				} else { setReg(vm, base + inst.a, raiserInt(-lhs.intVal)); }
 			} else {
 				setReg(vm, base + inst.a, raiserInt(lhs.intVal / rhs.intVal));
 			}
@@ -953,7 +969,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			const rhs = getReg(vm, base + inst.c);
 			if (rhs.intVal == 0) { vmError(vm, "integer modulo by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(lhs.intVal % rhs.intVal));
+				setReg(vm, base + inst.a, raiserInt(rhs.intVal == -1 ? 0 : lhs.intVal % rhs.intVal));
 			}
 		} else if (op == RaiserOpcode.DivU64) {
 			const lhs = getReg(vm, base + inst.b);
@@ -1012,7 +1028,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			setReg(vm, base + inst.a, raiserBool(l.kind == r.kind && l.intVal == r.intVal && l.floatVal == r.floatVal && l.strVal == r.strVal));
 		} else if (op == RaiserOpcode.NegI64) {
 			const val = getReg(vm, base + inst.b);
-			setReg(vm, base + inst.a, raiserInt(-val.intVal));
+			if (val.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
+			} else { setReg(vm, base + inst.a, raiserInt(-val.intVal)); }
 		// --- i64 compare-branch ---
 		} else if (op == RaiserOpcode.BeqI64) {
 			const lhs = getReg(vm, base + inst.a);
@@ -1077,6 +1094,10 @@ function runStrandSlice(vm: RaiserVM): void {
 			const val = getReg(vm, base + inst.a);
 			const width = inst.b as int64;
 			setReg(vm, base + inst.a, raiserInt(val.intVal & (((1 as int64) << width) - 1)));
+		} else if (op == RaiserOpcode.NarrowS) {
+			const val = getReg(vm, base + inst.a);
+			const half = (1 as int64) << ((inst.b as int64) - 1);
+			if (val.intVal < -half || val.intVal >= half) vmError(vm, "over- or underflow");
 		} else if (op == RaiserOpcode.SignExtend) {
 			const val = getReg(vm, base + inst.a);
 			const imm = 64 - (inst.b as int64);
@@ -2219,6 +2240,58 @@ test "neg: -(7) = -7" {
 		[raiserInt(7)]
 	));
 	assert vm.exitValue.intVal == -7;
+}
+
+function execBinOpI64(op: RaiserOpcode, a: int64, b: int64): RaiserVM {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(op, 2, 0, 1),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(a), raiserInt(b)]
+	));
+}
+
+function execUnary(op: RaiserOpcode, a: int64, b: int32): RaiserVM {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(op, op == RaiserOpcode.NarrowS ? 0 : 1, op == RaiserOpcode.NarrowS ? b : 0, 0),
+			raiserABC(RaiserOpcode.Halt, op == RaiserOpcode.NarrowS ? 0 : 1, 0, 0),
+		],
+		[raiserInt(a)]
+	));
+}
+
+test "int64 + - * unary minus and MIN / -1 stop on overflow and keep the boundary values" {
+	const low: int64 = -9223372036854775807 - 1;
+	const high: int64 = 9223372036854775807;
+	assert execBinOpI64(RaiserOpcode.AddI64, high, 1).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.AddI64, low, -1).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.AddI64, high, low).exitValue.intVal == -1;
+	assert execBinOpI64(RaiserOpcode.SubI64, low, 1).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.SubI64, 0, low).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.SubI64, -1, low).exitValue.intVal == high;
+	assert execBinOpI64(RaiserOpcode.MulI64, 4294967296, 2147483648).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.MulI64, -1, low).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.MulI64, low, -1).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.MulI64, -4294967296, 2147483648).exitValue.intVal == low;
+	assert execBinOpI64(RaiserOpcode.DivI64, low, -1).error == "over- or underflow";
+	assert execBinOpI64(RaiserOpcode.DivI64, high, -1).exitValue.intVal == -high;
+	assert execBinOpI64(RaiserOpcode.ModI64, low, -1).exitValue.intVal == 0;
+	assert execUnary(RaiserOpcode.NegI64, low, 0).error == "over- or underflow";
+	assert execUnary(RaiserOpcode.NegI64, high, 0).exitValue.intVal == -high;
+}
+
+test "NarrowS stops on a value outside the signed width and keeps one inside" {
+	assert execUnary(RaiserOpcode.NarrowS, 128, 8).error == "over- or underflow";
+	assert execUnary(RaiserOpcode.NarrowS, -129, 8).error == "over- or underflow";
+	assert execUnary(RaiserOpcode.NarrowS, -128, 8).exitValue.intVal == -128;
+	assert execUnary(RaiserOpcode.NarrowS, 32767, 16).exitValue.intVal == 32767;
+	assert execUnary(RaiserOpcode.NarrowS, 2147483648, 32).error == "over- or underflow";
+	assert execUnary(RaiserOpcode.NarrowS, -2147483648, 32).exitValue.intVal == -2147483648;
 }
 
 function execIsKind(value: RaiserValue, kind: RaiserValueKind): RaiserValue {

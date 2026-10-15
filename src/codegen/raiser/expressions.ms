@@ -199,9 +199,7 @@ function convClassOf(t: Type | null): int32 {
 	};
 }
 
-// Signed int32 stays unwrapped: C-debug traps on its overflow and JS keeps the
-// double (docs/JS-NUMERIC.md §5), so there is no wrapped value to match.
-function emitWrapToWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
+function emitAtWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
 	if (t != null && peelDistinct(t).kind == TypeKind.Float32) {
 		emitInst(s, raiserABC(RaiserOpcode.Conv, reg, reg, RaiserConvClass.F32 as int32));
 		return;
@@ -210,8 +208,8 @@ function emitWrapToWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
 	if (bits == 0) return;
 	if (isUnsignedBand(t)) {
 		emitInst(s, raiserABC(RaiserOpcode.NarrowU, reg, bits, 0));
-	} else if (bits < 32) {
-		emitInst(s, raiserABC(RaiserOpcode.SignExtend, reg, bits, 0));
+	} else {
+		emitInst(s, raiserABC(RaiserOpcode.NarrowS, reg, bits, 0));
 	}
 }
 
@@ -328,16 +326,16 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 	}
 	if (!isFloatExpr(target)) {
 		emitInst(s, raiserABC(unsignedOpcode(compoundBaseOpcode(op), target.nodeType), dest, lhs, rhs));
-		emitWrapToWidth(s, dest, target.nodeType);
+		emitAtWidth(s, dest, target.nodeType);
 		return;
 	}
 	if (base != "%") {
 		emitInst(s, raiserABC(arithmeticOpcodeF64(base), dest, lhs, rhs));
-		emitWrapToWidth(s, dest, target.nodeType);
+		emitAtWidth(s, dest, target.nodeType);
 		return;
 	}
 	emitHostPair(s, "fmod", dest, lhs, rhs);
-	emitWrapToWidth(s, dest, target.nodeType);
+	emitAtWidth(s, dest, target.nodeType);
 }
 
 function emitHostPair(s: RaiserCompState, name: string, dest: int32, lhs: int32, rhs: int32): void {
@@ -1016,7 +1014,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		} else {
 			emitInst(s, raiserABC(unsignedOpcode(arithmeticOpcode(op), node.nodeType), dest, lReg, rReg));
 		}
-		emitWrapToWidth(s, dest, node.nodeType);
+		emitAtWidth(s, dest, node.nodeType);
 		return dest;
 	}
 
@@ -1108,7 +1106,7 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 			emitInst(s, raiserABC(RaiserOpcode.NegF64, dest, srcReg, 0));
 		} else {
 			emitInst(s, raiserABC(RaiserOpcode.NegI64, dest, srcReg, 0));
-			emitWrapToWidth(s, dest, node.nodeType);
+			emitAtWidth(s, dest, node.nodeType);
 		}
 	} else if (d.unaryOp == "~") {
 		emitInst(s, raiserABC(RaiserOpcode.BitNot, dest, srcReg, 0));
