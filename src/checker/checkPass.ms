@@ -37,7 +37,7 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
+import { checkExpr, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, usedBeforeDeclaration } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, refuseUnwrittenOut, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -45,7 +45,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./tem
 import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
+import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -2261,6 +2261,7 @@ function spliceStatementsAt(stmts: Node[], at: int32, picked: Node[]): void {
 interface BlockPosition {
 	stmts: Node[];
 	at: int32;
+	scope: Cursor<Scope>;
 }
 
 let _blocksInFlight: BlockPosition[] = [];
@@ -2296,20 +2297,24 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	_forwardLocals.add(sym);
 }
 
-function laterDeclarationNote(name: string): string {
+function undefinedVariableMessage(ctx: CheckerContext, name: string): string {
+	const undefinedName = "Undefined variable '" + name + "'";
 	for (let b = _blocksInFlight.length - 1; b >= 0; b -= 1) {
 		const pos = _blocksInFlight[b];
-		for (let i = pos.at + 1; i < pos.stmts.length; i += 1) {
+		for (let i = pos.at; i < pos.stmts.length; i += 1) {
 			const s = pos.stmts[i];
-			if (s.kind == NodeKind.FunctionDecl && (s.data as FunctionDeclData).fnName == name) {
-				return ": '" + name + "' is declared later in this block, after a statement that runs first; a local function declaration is visible only from the run of function declarations it belongs to, so move '" + name + "' up next to them";
+			if (i > pos.at && s.kind == NodeKind.FunctionDecl && (s.data as FunctionDeclData).fnName == name) {
+				return undefinedName + ": '" + name + "' is declared later in this block, after a statement that runs first; a local function declaration is visible only from the run of function declarations it belongs to, so move '" + name + "' up next to them";
 			}
-			if (s.kind == NodeKind.VariableDecl && (s.data as VariableDeclData).declName == name) {
-				return ": '" + name + "' is declared later in this block, and a const or let is not visible before its declaration; declare it first, or write the functions as adjacent function declarations";
-			}
+			if (s.kind != NodeKind.VariableDecl || (s.data as VariableDeclData).declName != name) continue;
+			const d = s.data as VariableDeclData;
+			const blockScoped = d.declKind != DeclKind.Var && (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr);
+			if (blockScoped && !readIsDeferred(ctx, pos.scope)) return usedBeforeDeclaration(name);
+			if (i == pos.at) return undefinedName;
+			return undefinedName + ": '" + name + "' is declared later in this block, and a const or let is not visible before its declaration; declare it first, or write the functions as adjacent function declarations";
 		}
 	}
-	return "";
+	return undefinedName;
 }
 
 function checkBlock(ctx: CheckerContext, node: Node): void {
@@ -2333,7 +2338,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 			continue;
 		}
 		if (ctx.currentFunction != null && isLocalFunctionStmt(d.statements[i])) forwardDeclareLocalRun(ctx, d.statements, i);
-		_blocksInFlight.push({ stmts: d.statements, at: i });
+		_blocksInFlight.push({ stmts: d.statements, at: i, scope: ctx.table.current });
 		const _cs0 = performance.now();
 		checkStmt(ctx, d.statements[i]);
 		const _cs1 = performance.now();
@@ -3960,7 +3965,7 @@ registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], b
 registerDemandReturn(demandReturnType);
 registerDemandBinding(demandBindingType);
 registerSelfReadType(selfReadType);
-registerLaterDeclarationNote(laterDeclarationNote);
+registerUndefinedVariableMessage(undefinedVariableMessage);
 
 // ===== Tests =====
 

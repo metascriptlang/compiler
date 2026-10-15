@@ -17,7 +17,7 @@ type DecoratorDefersFn = (ctx: CheckerContext, stmt: Node) => boolean;
 type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
 type DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
 type SelfReadTypeFn = (callee: Node) => Type | null;
-type LaterDeclarationNoteFn = (name: string) => string;
+type UndefinedVariableMessageFn = (ctx: CheckerContext, name: string) => string;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 };
@@ -57,8 +57,8 @@ let demandBindingFn: DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node): 
 let selfReadTypeFn: SelfReadTypeFn = (callee: Node): Type | null => {
 	return null;
 };
-let laterDeclarationNoteFn: LaterDeclarationNoteFn = (name: string): string => {
-	return "";
+let undefinedVariableMessageFn: UndefinedVariableMessageFn = (ctx: CheckerContext, name: string): string => {
+	return `Undefined variable '${name}'`;
 };
 
 
@@ -173,10 +173,10 @@ export function registerSelfReadType(fn: SelfReadTypeFn): void {
 	selfReadTypeFn = fn;
 }
 
-export function callLaterDeclarationNote(name: string): string {
-	return laterDeclarationNoteFn(name);
+export function callUndefinedVariableMessage(ctx: CheckerContext, name: string): string {
+	return undefinedVariableMessageFn(ctx, name);
 }
 
-export function registerLaterDeclarationNote(fn: LaterDeclarationNoteFn): void {
-	laterDeclarationNoteFn = fn;
+export function registerUndefinedVariableMessage(fn: UndefinedVariableMessageFn): void {
+	undefinedVariableMessageFn = fn;
 }
