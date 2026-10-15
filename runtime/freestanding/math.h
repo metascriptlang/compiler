@@ -5,9 +5,51 @@
 #define NAN       __builtin_nan("")
 #define INFINITY  __builtin_inf()
 static inline double fabs(double x) { return x < 0 ? -x : x; }
-static inline double floor(double x) { return (double)(int64_t)x - (x < (double)(int64_t)x ? 1.0 : 0.0); }
-static inline double ceil(double x)  { return (double)(int64_t)x + (x > (double)(int64_t)x ? 1.0 : 0.0); }
-static inline double fmod(double a, double b) { return a - (double)(int64_t)(a / b) * b; }
+#define MS_DOUBLES_ARE_INTEGERS_FROM 4503599627370496.0
+static inline double trunc(double x) {
+    if (!(fabs(x) < MS_DOUBLES_ARE_INTEGERS_FROM)) return x;
+    double whole = (double)(int64_t)x;
+    return whole == 0.0 ? x * 0.0 : whole;
+}
+static inline double floor(double x) { double t = trunc(x); return t > x ? t - 1.0 : t; }
+static inline double ceil(double x)  { double t = trunc(x); return t < x ? t + 1.0 : t; }
+static inline double fmod(double x, double y) {
+    union { double f; uint64_t i; } ux = { x }, uy = { y };
+    int ex = (int)(ux.i >> 52 & 0x7ff), ey = (int)(uy.i >> 52 & 0x7ff);
+    uint64_t sign = ux.i >> 63, xi = ux.i, yi = uy.i, i;
+    if (yi << 1 == 0 || y != y || ex == 0x7ff) return (x * y) / (x * y);
+    if (xi << 1 <= yi << 1) return xi << 1 == yi << 1 ? 0 * x : x;
+    if (ex == 0) {
+        for (i = xi << 12; i >> 63 == 0; ex--, i <<= 1) {}
+        xi <<= -ex + 1;
+    } else {
+        xi = (xi & (UINT64_MAX >> 12)) | (1ULL << 52);
+    }
+    if (ey == 0) {
+        for (i = yi << 12; i >> 63 == 0; ey--, i <<= 1) {}
+        yi <<= -ey + 1;
+    } else {
+        yi = (yi & (UINT64_MAX >> 12)) | (1ULL << 52);
+    }
+    for (; ex > ey; ex--) {
+        i = xi - yi;
+        if (i >> 63 == 0) {
+            if (i == 0) return 0 * x;
+            xi = i;
+        }
+        xi <<= 1;
+    }
+    i = xi - yi;
+    if (i >> 63 == 0) {
+        if (i == 0) return 0 * x;
+        xi = i;
+    }
+    for (; xi >> 52 == 0; xi <<= 1, ex--) {}
+    if (ex > 0) xi = (xi - (1ULL << 52)) | ((uint64_t)ex << 52);
+    else xi >>= -ex + 1;
+    ux.i = xi | sign << 63;
+    return ux.f;
+}
 static inline double pow(double base, double exp) {
     if (exp == 0.0) return 1.0;
     double result = 1.0;
@@ -15,7 +57,6 @@ static inline double pow(double base, double exp) {
     for (int64_t i = 0; i < (n < 0 ? -n : n); i++) result *= base;
     return n < 0 ? 1.0 / result : result;
 }
-double trunc(double x);
 double sqrt(double x);
 double cbrt(double x);
 double exp(double x);
@@ -38,7 +79,7 @@ double tanh(double x);
 double asinh(double x);
 double acosh(double x);
 double atanh(double x);
-int isinf(double x);
-int isnan(double x);
-int isfinite(double x);
+#define isnan(x) __builtin_isnan(x)
+#define isinf(x) __builtin_isinf(x)
+#define isfinite(x) __builtin_isfinite(x)
 #endif
