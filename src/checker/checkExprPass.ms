@@ -7,7 +7,7 @@ import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { isOutParam, distinctBody, peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, isStdCollection, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf, isNullableShape } from "./types";
 import { Scope, ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf, lookupCtorDefaults, isVisibleSymbol } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveOperatorCallAt, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -69,12 +69,19 @@ function isStructOperand(t: Type): boolean {
 	return isStructType(t) || (t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn));
 }
 
-function declaredOperatorResult(ctx: CheckerContext, op: string, left: Type | null, right: Type | null): Type | null {
+function resolveUserOperator(ctx: CheckerContext, op: string, argTypes: Type[]): ExtensionMethod {
+	const instantiation = ctx.instantiatingCtx != null ? ctx.instantiatingCtx.table : null;
+	return resolveOperatorCallAt(ctx.table, instantiation, ctx.extensionRegistry, op, argTypes);
+}
+
+function declaredOperatorResult(ctx: CheckerContext, node: Node, op: string, left: Type | null, right: Type | null): Type | null {
 	if (left == null || right == null || isStringLike(left) || isStringLike(right) || ctx.extensionRegistry == null) return null;
-	const ext = resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [left, right]);
+	const ext = resolveUserOperator(ctx, op, [left, right]);
 	if (ext == null) return null;
 	const fnType = getExtFnType(ext);
-	return fnType != null ? fnType.typeReturn : null;
+	if (fnType == null || fnType.typeReturn == null) return null;
+	node.resolvedSym = ext.sym;
+	return fnType.typeReturn;
 }
 
 function markAssignedTargets(ctx: CheckerContext, target: Node): void {
@@ -1353,7 +1360,7 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 		}
 	}
 	if (isBitwiseBinaryOp(d.operator)) {
-		const userBitwise = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
+		const userBitwise = declaredOperatorResult(ctx, node, d.operator, effLeft, effRight);
 		if (userBitwise != null) {
 			node.flags = node.flags.incl(NodeFlag.UserOp);
 			node.nodeType = userBitwise; return;
@@ -1404,7 +1411,7 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	const isArithmeticOp = d.operator == "+" || d.operator == "-" || d.operator == "*"
 		|| d.operator == "/" || d.operator == "%" || d.operator == "**";
 	if (isArithmeticOp || isComparisonOp(d.operator)) {
-		const userResult = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
+		const userResult = declaredOperatorResult(ctx, node, d.operator, effLeft, effRight);
 		if (userResult != null) {
 			node.flags = node.flags.incl(NodeFlag.UserOp);
 			node.nodeType = userResult; return;
@@ -2659,11 +2666,12 @@ function checkUnaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		&& operandType != null && !isStringLike(operandType)
 		&& !(d.unaryOp == "-" && d.operand.kind == NodeKind.NumberLiteral)
 		&& ctx.extensionRegistry != null) {
-		const unExt = resolveOperatorCall(ctx.table, ctx.extensionRegistry, d.unaryOp, [operandType]);
+		const unExt = resolveUserOperator(ctx, d.unaryOp, [operandType]);
 		if (unExt != null) {
 			const unFnType = getExtFnType(unExt);
 			if (unFnType != null && unFnType.typeReturn != null) {
 				node.flags = node.flags.incl(NodeFlag.UserOp);
+				node.resolvedSym = unExt.sym;
 				node.nodeType = unFnType.typeReturn; return;
 			}
 		}

@@ -475,8 +475,17 @@ function isSelectableAfterMonomorphization(sym: Symbol): boolean {
 	return !hasGenericParams(sym.symbolType);
 }
 
-function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol): void {
+function addPlainOperatorCandidates(cands: ExtensionMethod[], table: SymbolTable | null, methodName: string, exportedOnly: boolean): void {
+	if (table == null) return;
+	const sym = lookupSymbol(table, methodName);
+	if (sym == null) return;
+	addPlainOperatorCandidate(cands, sym, exportedOnly);
+	for (const ov of sym.overloads) addPlainOperatorCandidate(cands, ov, exportedOnly);
+}
+
+function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol, exportedOnly: boolean): void {
 	if (!isSelectableAfterMonomorphization(sym)) return;
+	if (exportedOnly && !hasFlag(sym, SymbolFlag.Exported)) return;
 	let i = 0;
 	while (i < cands.length) {
 		if (cands[i].sym == sym) return;
@@ -507,6 +516,10 @@ function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): 
 }
 
 export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
+	return resolveOperatorCallAt(table, null, registry, methodName, argTypes);
+}
+
+export function resolveOperatorCallAt(table: SymbolTable, instantiation: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
 	const cands: ExtensionMethod[] = [];
 	if (registry != null) {
 		const exts = findAllExtensionsByName(registry, methodName);
@@ -516,17 +529,8 @@ export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegis
 			i = i + 1;
 		}
 	}
-	if (table != null) {
-		const sym = lookupSymbol(table, methodName);
-		if (sym != null) {
-			addPlainOperatorCandidate(cands, sym);
-			let j = 0;
-			while (j < sym.overloads.length) {
-				addPlainOperatorCandidate(cands, sym.overloads[j]);
-				j = j + 1;
-			}
-		}
-	}
+	addPlainOperatorCandidates(cands, table, methodName, false);
+	if (instantiation != null && instantiation != table) addPlainOperatorCandidates(cands, instantiation, methodName, true);
 	const best = pickBestOperatorCandidate(cands, argTypes);
 	return best != null && builtinOperatorBeats(best, methodName, argTypes) ? null as unknown as ExtensionMethod : best;
 }

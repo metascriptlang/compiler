@@ -256,6 +256,15 @@ function cloneLvalue(node: Node): Node {
 	return node;
 }
 
+function checkedOperatorCall(node: Node, args: Node[]): Node | null {
+	if (!node.flags.has(NodeFlag.UserOp) || node.resolvedSym == null) return null;
+	const sym = node.resolvedSym;
+	const call = makeCall(makeTypedIdentResolved(sym, null, node.location), args, node.location);
+	const fnType = sym.symbolType;
+	if (fnType != null && fnType.kind == TypeKind.Function && fnType.typeReturn != null) call.nodeType = fnType.typeReturn;
+	return call;
+}
+
 function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (ctx.checkerCtx == null) return node;
 	if (ctx.checkerCtx.extensionRegistry == null) return node;
@@ -267,6 +276,8 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (isStringLike(t)) return node;
 	const typeName = typeNameOf(t);
 	if (typeName == "" || (isBuiltinOperand(t) && !node.flags.has(NodeFlag.UserOp))) return node;
+	const bound = checkedOperatorCall(node, [d.operand]);
+	if (bound != null) return bound;
 	const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, op, [t]);
 	if (ext == null) return node;
 	if (ext.sym == null) {
@@ -399,6 +410,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 1. Explicit user-defined operator overload takes priority (reference parity:
 	//    user overloads beat magic builtins). Checked BEFORE isBuiltinType
 	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
+	const bound = checkedOperatorCall(node, [d.left, d.right]);
+	if (bound != null) return bound;
 	if (ctx.checkerCtx.extensionRegistry != null) {
 		const rt = resolveType(ctx, d.right);
 		const ext = rt != null ? resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, opName, [leftType, rt]) : null as unknown as ExtensionMethod;
