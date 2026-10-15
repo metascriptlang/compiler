@@ -756,7 +756,10 @@ export function isPointerType(t: Type): boolean {
 	while (inner != null && distinctBody(inner) != null) inner = skipModifier(peelTransparentInstance(distinctBody(inner)!));
 	if (inner == null) return false;
 	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
-	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return true;
+	if (inner.kind == TypeKind.Union) {
+		const held = unwrapRefNullUnion(inner);
+		return held != null && isPointerType(held);
+	}
 	return match (inner.kind) {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
 		// user `unknown` is void*; a Pending type must stay non-pointer

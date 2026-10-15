@@ -2955,7 +2955,10 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 	if (t == null) return true;
 	const inner = skipModifier(t);
 	if (inner == null) return true;
-	if (inner.kind == TypeKind.Union) return unwrapRefNullUnion(inner) != null;
+	if (inner.kind == TypeKind.Union) {
+		const held = unwrapRefNullUnion(inner);
+		return held != null && isPointerShapedForUnknown(held);
+	}
 	return match (inner.kind) {
 		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
 			| TypeKind.CString | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => true,
@@ -3124,19 +3127,28 @@ export function unwrapRef(t: Type): Type {
 	return t;
 }
 
-// If t is Union(Ref<T>, Null), Union(Ptr<T>, Null) or Union(unknown, Null),
-// return the pointer-shaped member. Otherwise return null. Used by codegen to
-// collapse nullable-pointer unions to bare pointer types (the null pointer is
-// the natural sentinel — no Maybe wrapper needed).
+// If t is Union(Ref<T>, Null), Union(Ptr<T>, Null), Union(unknown, Null) or
+// Union(bigint, Null), return the pointer-shaped member. Otherwise return null.
+// Used by codegen to collapse nullable-pointer unions to bare pointer types (the
+// null pointer is the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
 	if (t == null || t.kind != TypeKind.Union) return null;
 	if (t.typeChildren == null || t.typeChildren.length != 2) return null;
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a == null || b == null) return null;
-	if ((a.kind == TypeKind.Ref || a.kind == TypeKind.Ptr || a.kind == TypeKind.Unknown) && b.kind == TypeKind.Null) return a;
-	if ((b.kind == TypeKind.Ref || b.kind == TypeKind.Ptr || b.kind == TypeKind.Unknown) && a.kind == TypeKind.Null) return b;
+	if (isNullablePointerKind(a.kind) && b.kind == TypeKind.Null) return a;
+	if (isNullablePointerKind(b.kind) && a.kind == TypeKind.Null) return b;
 	return null;
+}
+
+function isNullablePointerKind(k: TypeKind): boolean {
+	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
+}
+
+export function isNullableBigInt(t: Type | null): boolean {
+	const held = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
+	return held != null && held.kind == TypeKind.BigInt;
 }
 
 // ===== Needs RC =====
