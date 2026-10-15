@@ -8,6 +8,7 @@ import {
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { classDeclNodeOf, parentClassSymOf } from "../../checker/symbol";
+import { classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
@@ -30,7 +31,7 @@ import {
 	routineKey, resolveRoutine, RaiserCompState,
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr } from "./expressions";
+import { compileExpr, classTargetKey } from "./expressions";
 import { emitZeroValue } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 
@@ -201,11 +202,12 @@ function compileClassInit(
 
 function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
 	if (classSym == null) return 0;
-	const chain: string[] = [];
-	let cur: Symbol | null = classSym;
-	while (cur != null && chain.length < 64) {
-		chain.push(raiserClassKey(cur));
-		cur = parentClassSymOf(cur);
+	const chain: string[] = [raiserClassKey(classSym)];
+	let up = classParentOf(classSym.symbolType);
+	while (up != null && classTargetKey(up) != "") {
+		if (chain.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
+		chain.push(classTargetKey(up));
+		up = classParentOf(up);
 	}
 	s.classTypes.push({ name: className, chain });
 	return s.classTypes.length;

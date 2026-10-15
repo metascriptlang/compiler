@@ -779,7 +779,7 @@ function refusePointerOp(s: RaiserCompState, node: Node): int32 {
 	return emitTrapNil(s, msg);
 }
 
-function classTargetKey(t: Type | null): string {
+export function classTargetKey(t: Type | null): string {
 	let bare = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
 	if (bare != null && bare.kind == TypeKind.Ref && bare.typeReturn != null) bare = bare.typeReturn;
 	if (bare != null && bare.kind == TypeKind.GenericInstance) return monoInstanceName(bare);
