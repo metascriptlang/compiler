@@ -628,6 +628,7 @@ function relationalOrdered(t: Type): boolean {
 function relationalOperandsOk(a: Type, b: Type): boolean {
 	if (!relationalOrdered(a) || !relationalOrdered(b)) return false;
 	if (isStringLike(a) != isStringLike(b)) return false;
+	if ((a.kind == TypeKind.Ptr) != (b.kind == TypeKind.Ptr)) return false;
 	if (a.kind == TypeKind.Boolean || a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.Boolean || b.kind == TypeKind.BooleanLiteral) {
 		return (a.kind == TypeKind.Boolean || a.kind == TypeKind.BooleanLiteral) && (b.kind == TypeKind.Boolean || b.kind == TypeKind.BooleanLiteral);
 	}
