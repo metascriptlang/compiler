@@ -21,7 +21,7 @@ import { mangleModuleName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
-import { defineDeferredElements, emitOwnedTypeInfos, refArrayCellName } from "./types";
+import { defineDeferredElements, emitOwnedTypeInfos, refArrayCellName, isHcrImageModule } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
@@ -262,6 +262,7 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 		addLine(procs, "  BeforeRet_: ;");
 		g.initProc.beforeRetNeeded = false;
 	}
+	if (output.hasInit && !isHcrImageModule(g, g.modulePath)) addLine(procs, "  msTestErrorFlag();");
 	addLine(procs, "}");
 	addNewline(procs);
 
