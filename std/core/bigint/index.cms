@@ -73,6 +73,14 @@ when (!bare && !solana) {
 		return a == b;
 	}
 
+	extern function raiseNullRead(head: string, labels: string, tag: int64): never from "msRaiseFieldError";
+
+	@compilerFunc
+	function msBigIntNonNull(b: bigint | null, head: string, labels: string): bigint {
+		if (b == null) raiseNullRead(head, labels, 0);
+		return b;
+	}
+
 	@compilerFunc
 	function msBigIntIsTruthy(b: bigint | null): boolean {
 		if (b == null) return false;

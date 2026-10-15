@@ -23,6 +23,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLi
 import { addError } from "../../checker/context";
 import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
 import { isNullExpr } from "../lowering/operatorLower";
+import { nullAccessHead } from "./nullableLower";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeAssign, makeBinary, makeCall, makeNumber, makeString, makeUnary, runtimeRef } from "../util";
@@ -227,6 +228,11 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 		if (td.asExpr == null) return node;
 		const dstBig = node.nodeType != null && node.nodeType.kind == TypeKind.BigInt;
 		const srcBig = isBigNode(td.asExpr);
+		const carrier = td.asExpr.nodeType;
+		if (dstBig && carrier != null && isNullableBigInt(carrier)) {
+			const head = makeString(nullAccessHead(carrier), node.location);
+			return bigCall("msBigIntNonNull", [td.asExpr, head, makeString("null", node.location)], node.location, bigType());
+		}
 		if (dstBig && isFractionalSource(td.asExpr.nodeType)) return bigCall("msBigIntFromNumber", [td.asExpr], node.location, bigType());
 		if (dstBig && !srcBig) return toBig(td.asExpr, ctx);
 		if (srcBig && !dstBig) return fromBig(node, ctx);
