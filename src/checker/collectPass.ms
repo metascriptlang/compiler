@@ -1408,15 +1408,17 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 	if (modExports == null) return;
 	for (const expInfo of modExports.symbols) {
 		const ext = expInfo.ext;
-		if (ext == null) continue;
 		const methSym = expInfo.sym;
-		const methName = ext.sym != null && ext.sym.name == expInfo.name ? ext.methodName : expInfo.name;
-		noteImported(ctx, methSym);
-		if (markExported) exportSymAs(ctx, methSym, expInfo.name);
-		registerExtension(ctx.extensionRegistry, reexportExt(ext, methName, sourcePath, methSym, 0));
+		const methName = ext != null && ext.sym != null && ext.sym.name == expInfo.name ? ext.methodName : expInfo.name;
+		if (ext != null) {
+			noteImported(ctx, methSym);
+			if (markExported) exportSymAs(ctx, methSym, expInfo.name);
+			registerExtension(ctx.extensionRegistry, reexportExt(ext, methName, sourcePath, methSym, 0));
+		}
 		for (let ovi = 0; ovi < expInfo.overloadExts.length && ovi < methSym.overloads.length; ovi += 1) {
 			const ovExt = expInfo.overloadExts[ovi];
 			if (ovExt == null) continue;
+			noteImported(ctx, methSym);
 			const ovSym = methSym.overloads[ovi];
 			if (markExported) exportSymAs(ctx, ovSym, expInfo.name);
 			registerExtension(ctx.extensionRegistry, reexportExt(ovExt, methName, sourcePath, ovSym, 0));

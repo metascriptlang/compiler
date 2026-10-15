@@ -81,27 +81,12 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 // ===== Export Info Builder (shared by orchestrator + loadPreludeSubModules) =====
 
 export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistry, modulePath: string, ctx: CheckerContext, exportedName: string = ""): ExportedSymInfo {
-	// Extension receiver metadata for primary symbol
 	let primaryExt: ExtensionMethod | null = null;
-	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) {
-		const ext = findExtensionByType(extensionRegistry, sym.name, sym.symbolType);
-		if (ext != null) {
-			primaryExt = ext;
-		} else {
-			// Class methods: mangled name (GPUInstance_release) doesn't match
-			// extension entry (release). Fall back to symbol identity match.
-			primaryExt = findExtensionBySym(extensionRegistry, sym);
-		}
-	}
+	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) primaryExt = findExtensionBySym(extensionRegistry, sym);
 
 	const ovExts: (ExtensionMethod | null)[] = [];
 	for (const ov of sym.overloads) {
-		let ovExt: ExtensionMethod | null = null;
-		if (extensionRegistry != null) {
-			ovExt = findExtensionByType(extensionRegistry, sym.name, ov.symbolType);
-			if (ovExt == null && primaryExt != null) ovExt = findExtensionBySym(extensionRegistry, ov);
-		}
-		ovExts.push(ovExt);
+		ovExts.push(extensionRegistry != null ? findExtensionBySym(extensionRegistry, ov) : null);
 	}
 
 	let mConverterTargetType: Type = null as unknown as Type;
@@ -326,17 +311,6 @@ export function truncateExtensions(registry: ExtensionRegistry, count: int32): v
 // hasExtensionByName — check if ANY extension has this method name (any receiver)
 export function hasExtensionByName(registry: ExtensionRegistry, methodName: string): boolean {
 	return registry.byNameHead.has(methodName);
-}
-
-// findExtensionByType — find extension matching method name + fnType identity (for overload export)
-export function findExtensionByType(registry: ExtensionRegistry, methodName: string, fnType: Type): ExtensionMethod {
-	let i = registry.byNameHead.get(methodName) ?? -1;
-	while (i >= 0) {
-		const m = registry.methods[i];
-		if (m.fnType == fnType) return m;
-		i = registry.byNameNext[i];
-	}
-	return null as unknown as ExtensionMethod;
 }
 
 // findExtensionBySym — match by symbol identity (not name).
