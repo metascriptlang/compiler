@@ -240,6 +240,7 @@ function compoundBaseOf(op: string): string {
 		"+=" => "+",
 		"-=" => "-",
 		"*=" => "*",
+		"**=" => "**",
 		"&=" => "&",
 		"|=" => "|",
 		"^=" => "^",
@@ -257,7 +258,7 @@ export function needsIntegerCompoundRewrite(d: BinaryExprData): boolean {
 	if (t == null || !isIntConvKind(t.kind)) return false;
 	if (isShiftOp(base)) return is64(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32);
 	if (base == "&" || base == "|" || base == "^") return t.kind == TypeKind.Uint32;
-	if ((base == "/" || base == "%") && !cannotRaise(d.right, t)) return true;
+	if (base == "**" || ((base == "/" || base == "%") && !cannotRaise(d.right, t))) return true;
 	if (base == "%" || is64(t.kind)) return false;
 	return base == "/" || t.kind == TypeKind.Uint32 || subIntKind(t) != TypeKind.Unknown;
 }
@@ -270,7 +271,7 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		return node;
 	}
 	if (!needsIntegerCompoundRewrite(d) || (is64(t.kind) && isShiftOp(base))) return node;
-	const checked = (base == "/" || base == "%") && !cannotRaise(d.right, t);
+	const checked = base == "**" || ((base == "/" || base == "%") && !cannotRaise(d.right, t));
 	const unsigned = t.kind == TypeKind.Uint32;
 	const narrow = subIntKind(t);
 	const readBack = cloneIfPure(d.left);

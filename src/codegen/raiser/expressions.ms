@@ -255,7 +255,7 @@ function bitwiseOpcode(op: string): RaiserOpcode {
 
 function isCompoundAssignOp(op: string): boolean {
 	return match (op) {
-		"+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
 		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
@@ -320,6 +320,12 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 		emitBitwise(s, base, dest, lhs, rhs, target.nodeType);
 		return;
 	}
+	if (base == "**") {
+		emitHostPair(s, "pow", dest, lhs, rhs);
+		const cls = convClassOf(target.nodeType);
+		if (cls >= 0 && cls != (RaiserConvClass.F64 as int32)) emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, cls, RaiserConvClass.F64 as int32), 0));
+		return;
+	}
 	if (!isFloatExpr(target)) {
 		emitInst(s, raiserABC(unsignedOpcode(compoundBaseOpcode(op), target.nodeType), dest, lhs, rhs));
 		emitWrapToWidth(s, dest, target.nodeType);
@@ -330,14 +336,18 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 		emitWrapToWidth(s, dest, target.nodeType);
 		return;
 	}
+	emitHostPair(s, "fmod", dest, lhs, rhs);
+	emitWrapToWidth(s, dest, target.nodeType);
+}
+
+function emitHostPair(s: RaiserCompState, name: string, dest: int32, lhs: int32, rhs: int32): void {
 	const out = allocReg(s);
 	const a1 = allocReg(s);
 	const a2 = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.Move, a1, lhs, 0));
 	emitInst(s, raiserABC(RaiserOpcode.Move, a2, rhs, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserString("fmod")), 2));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserString(name)), 2));
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest, out, 0));
-	emitWrapToWidth(s, dest, target.nodeType);
 }
 
 function unsignedOpcode(opc: RaiserOpcode, t: Type | null): RaiserOpcode {

@@ -149,7 +149,7 @@ function arithFn(op: string): string {
 		"*" | "*=" => "msBigIntMul",
 		"/" | "/=" => "msBigIntDiv",
 		"%" | "%=" => "msBigIntMod",
-		"**" => "msBigIntPow",
+		"**" | "**=" => "msBigIntPow",
 		"&" | "&=" => "msBigIntAnd",
 		"|" | "|=" => "msBigIntOr",
 		"^" | "^=" => "msBigIntXor",

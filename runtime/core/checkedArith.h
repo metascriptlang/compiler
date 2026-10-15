@@ -134,6 +134,15 @@ static inline uint32_t msPowWrapU32(uint32_t a, uint32_t b) {
 	return (uint32_t)msPowWrapU64(a, b);
 }
 
+#define msPowAssignI32(lv, b) msDivAssign_(lv, b, msPowI32)
+#define msPowAssignI64(lv, b) msDivAssign_(lv, b, msPowI64)
+#define msPowAssignU32(lv, b) msDivAssign_(lv, b, msPowU32)
+#define msPowAssignU64(lv, b) msDivAssign_(lv, b, msPowU64)
+#define msPowWrapAssignI32(lv, b) msDivAssign_(lv, b, msPowWrapI32)
+#define msPowWrapAssignI64(lv, b) msDivAssign_(lv, b, msPowWrapI64)
+#define msPowWrapAssignU32(lv, b) msDivAssign_(lv, b, msPowWrapU32)
+#define msPowWrapAssignU64(lv, b) msDivAssign_(lv, b, msPowWrapU64)
+
 static inline int32_t msToInt32(double x) {
 	if (x > -2147483649.0 && x < 2147483648.0) return (int32_t)x;
 	if (!isfinite(x)) return 0;
@@ -161,6 +170,7 @@ static inline double msPowF64(double x, double y) {
 	return pow(x, y);
 }
 
+#define msPowAssignF64(lv, b) msDivAssign_(lv, b, msPowF64)
 #define msModAssignF64(lv, b) msDivAssign_(lv, b, fmod)
 #define msAndAssignF64(lv, b) msDivAssign_(lv, b, msNumberAnd)
 #define msOrAssignF64(lv, b) msDivAssign_(lv, b, msNumberOr)

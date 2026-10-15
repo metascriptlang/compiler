@@ -5,6 +5,7 @@
 //   a /= b   → msDivAssignI32(a, b)   (the left side is evaluated once)
 //   a ** b   → msPowI64(a, b)         (msPowWrapI64 under --danger)
 //   x ** y   → msPowF64(x, y)         (a float power, ECMAScript's NaN cases)
+//   a **= b  → msPowAssignI64(a, b)   (msPowAssignF64 on a float target, msPowWrapAssign under --danger)
 //   f %= b   → msModAssignF64(f, b)   (a float target; fmod, the left side evaluated once)
 //   n |= b   → msOrAssignF64(n, b)    (a number target of & | ^ << >> >>>, as n = n | b)
 //
@@ -62,6 +63,7 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator == "**") return lowerPow(node, d, ctx);
+	if (d.operator == "**=") return lowerPowAssign(node, d, ctx);
 	const floatAssign = floatAssignHelper(d);
 	if (floatAssign != "") {
 		const call = makeCall(runtimeRef(floatAssign, node.location), [d.left, d.right], node.location);
@@ -110,6 +112,16 @@ function lowerPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 	if (!isFloatRepr(node.nodeType)) return node;
 	const call = makeCall(runtimeRef("msPowF64", node.location), [d.left, d.right], node.location);
 	call.nodeType = node.nodeType;
+	return call;
+}
+
+function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
+	const t = integerRepr(d.left.nodeType);
+	let helper = "msPowAssignF64";
+	if (t != null) helper = helperName(ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign", t);
+	else if (!isFloatRepr(d.left.nodeType)) return node;
+	const call = makeCall(runtimeRef(helper, node.location), [d.left, d.right], node.location);
+	call.nodeType = d.left.nodeType;
 	return call;
 }
 

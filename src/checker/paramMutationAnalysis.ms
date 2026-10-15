@@ -140,7 +140,7 @@ function findMutationLocation(node: Node | null, paramName: string): SourceLocat
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
-			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
+			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=" || d.operator == "**="
 			|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
 			|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
 			if (getRootName(d.left) == paramName) return node.location;
@@ -255,7 +255,7 @@ function scanForMutation(node: Node | null, paramName: string): boolean {
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
-				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
+				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=" || d.operator == "**="
 				|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
 				|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
 				if (getRootName(d.left) == paramName) return true;

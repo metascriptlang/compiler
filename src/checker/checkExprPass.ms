@@ -981,7 +981,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	const d = node.data as BinaryExprData;
 	// Ref parity: leftPartOfAsgn
 	const isAsgn = d.operator == "=" || d.operator == "+=" || d.operator == "-=" ||
-		d.operator == "*=" || d.operator == "/=" || d.operator == "%=" ||
+		d.operator == "*=" || d.operator == "/=" || d.operator == "%=" || d.operator == "**=" ||
 		d.operator == "&&=" || d.operator == "||=" || d.operator == "??=" ||
 		isBitwiseCompoundOp(d.operator);
 	if (isAsgn && node != ctx.stmtPosExpr) {

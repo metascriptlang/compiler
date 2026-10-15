@@ -1705,8 +1705,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(genShiftAssign(d.operator, d.left.nodeType, left, finalRight));
 			return;
 		}
-		if (d.operator == "**") {
-			addCGenError(g, `internal: '**' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
+		if (d.operator == "**" || d.operator == "**=") {
+			addCGenError(g, `internal: '${d.operator}' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
 			ctx.results.push("0");
 			return;
 		}

@@ -886,6 +886,8 @@ test "parens" { assert parseOk("(a + b) * c"); }
 // Right-associative
 test "** right assoc" { assert parseOk("a ** b ** c"); }
 
+test "**= binds loosest" { assert exprOp("a **= b ** 2") == "**="; }
+
 test "assign right assoc" { assert parseOk("a = b = c"); }
 
 test "bitwise compound assignments bind loosest" {

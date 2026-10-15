@@ -301,6 +301,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		"*=" => "*",
 		"/=" => "/",
 		"%=" => "%",
+		"**=" => "**",
 		_ => "",
 	};
 	if (compoundBase != "" && leftType != null

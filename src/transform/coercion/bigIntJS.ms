@@ -402,7 +402,7 @@ function narrowBits(kind: TypeKind): int32 {
 
 function isAssignOp(op: string): boolean {
 	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
 		"<<=" | ">>=" | ">>>=" | "&=" | "|=" | "^=" => true,
 		_ => false,
 	};

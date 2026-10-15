@@ -338,7 +338,7 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			const bitwise = inferBitwiseOp(leftType, rightType);
 			return op == ">>>" ? unsignedOfWidth(bitwise) : bitwise;
 		},
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||=" | "??="
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&&=" | "||=" | "??="
 			| "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => voidType(),
 		"??" => {
 			if (isMaybeType(leftType) && leftType.typeReturn != null) {
@@ -554,7 +554,7 @@ export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type 
 	}
 	if (leftBig == rightBig) return false;
 	const isArith = op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**"
-		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
+		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=" || op == "**=";
 	if (!isArith && !isBitwiseBinaryOp(op) && !isBitwiseCompoundOp(op)) return false;
 	const other = leftBig ? rightType : leftType;
 	if ((op == "+" || op == "+=") && other != null && isStringLike(other)) return false;
@@ -565,7 +565,7 @@ export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type 
 
 function mixesNumericOperands(op: string): boolean {
 	return op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**"
-		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%="
+		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=" || op == "**="
 		|| op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "!=" || op == "===" || op == "!==";
 }
 
