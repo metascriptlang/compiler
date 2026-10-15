@@ -5,7 +5,7 @@
 
 import { Obj, ObjKind } from "../cparse/obj";
 import { CType, CTypeKind } from "../cparse/type";
-import { TargetInfo, hostTarget } from "../cparse/target";
+import { TargetInfo, hostTarget, targetFor } from "../cparse/target";
 import { Diagnostic } from "../cparse/error";
 import { parseHeader } from "./index";
 
@@ -67,7 +67,7 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			if (t.base.kind == CTypeKind.Void) return "Ptr<void>";
 			// char* and const char* → cstring; unsigned char and the fixed-width
 			// byte typedefs (uint8_t, int8_t) point at bytes, not text.
-			if (t.base.kind == CTypeKind.Char && t.base.isSigned && mapRuntimeType(t.base.typedefName) == "") return "cstring";
+			if (t.base.kind == CTypeKind.Char && t.base.isPlainChar && mapRuntimeType(t.base.typedefName) == "") return "cstring";
 			// Function pointer → closure type
 			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
 			if (isOpaqueTag(t.base)) return `Ptr<${t.base.tagName}>`;
@@ -455,6 +455,56 @@ test "struct pointer param is a nullable Ptr, const or not" {
 	assert ms.indexOf("m: Ptr<A> | null") >= 0;
 	assert ms.indexOf("b: Ptr<B> | null") >= 0;
 	assert ms.indexOf("v: Borrow<float32>") >= 0;
+}
+
+function emitFor(os: string, cpu: string, source: string): string {
+	return translateCHeader(source, [], false, "target.h", [], null, null, null, targetFor(os, cpu));
+}
+
+function plainCharPointersAreCString(os: string, cpu: string): boolean {
+	const src = "const char *a(void);\nchar *b(void);\nint c(char **v);\n"
+		+ "typedef char ch;\nconst ch *d(void);";
+	const ms = emitFor(os, cpu, src);
+	return ms.indexOf("function a(): cstring") >= 0
+		&& ms.indexOf("function b(): cstring") >= 0
+		&& ms.indexOf("v: Ptr<cstring> | null") >= 0
+		&& ms.indexOf("function d(): cstring") >= 0;
+}
+
+function explicitCharPointersAreBytes(os: string, cpu: string): boolean {
+	const src = "signed char *s(void);\nconst signed char *cs(void);\n"
+		+ "unsigned char *u(void);\nconst unsigned char *cu(void);";
+	const ms = emitFor(os, cpu, src);
+	return ms.indexOf("function s(): Ptr<int8>") >= 0
+		&& ms.indexOf("function cs(): Borrow<int8>") >= 0
+		&& ms.indexOf("function u(): Ptr<uint8>") >= 0
+		&& ms.indexOf("function cu(): Borrow<uint8>") >= 0;
+}
+
+test "plain char pointers are cstring whether the target's char is signed or unsigned" {
+	assert plainCharPointersAreCString("android", "arm64");
+	assert plainCharPointersAreCString("linux", "riscv64");
+	assert plainCharPointersAreCString("macos", "arm64");
+	assert plainCharPointersAreCString("linux", "x86_64");
+}
+
+test "signed char and unsigned char pointers are byte pointers on every target" {
+	assert explicitCharPointersAreBytes("android", "arm64");
+	assert explicitCharPointersAreBytes("linux", "riscv64");
+	assert explicitCharPointersAreBytes("macos", "arm64");
+	assert explicitCharPointersAreBytes("linux", "x86_64");
+}
+
+test "only plain char takes the target's signedness" {
+	const src = "char pc(void);\nsigned char sc(void);\nunsigned char uc(void);";
+	const unsignedChar = emitFor("android", "arm64", src);
+	assert unsignedChar.indexOf("function pc(): uint8") >= 0;
+	assert unsignedChar.indexOf("function sc(): int8") >= 0;
+	assert unsignedChar.indexOf("function uc(): uint8") >= 0;
+	const signedChar = emitFor("macos", "arm64", src);
+	assert signedChar.indexOf("function pc(): int8") >= 0;
+	assert signedChar.indexOf("function sc(): int8") >= 0;
+	assert signedChar.indexOf("function uc(): uint8") >= 0;
 }
 
 test "emit with name filter" {
