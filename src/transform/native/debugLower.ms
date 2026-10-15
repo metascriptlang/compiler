@@ -112,15 +112,35 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		call.nodeType = stringType();
 		return call;
 	}
-	// Fallback: emit type name as placeholder string (safe — no C compile error)
-	// Use explicit local to avoid DRC ternary+member-access issue
-	let fallbackName = "object";
-	if (t.typeName != null && t.typeName != "") {
-		fallbackName = t.typeName;
+	return evaluatedPlaceholder(arg, t, "<" + (t.typeName != "" ? t.typeName : "object") + ">", loc, ctx);
+}
+
+export function evaluatedPlaceholder(arg: Node, t: Type, text: string, loc: SourceLocation, ctx: TransformContext): Node {
+	if (t.kind == TypeKind.Void || t.kind == TypeKind.Never) {
+		const unevaluated = makeString(text, loc);
+		unevaluated.nodeType = stringType();
+		return unevaluated;
 	}
-	const placeholder = makeString("<" + fallbackName + ">", loc);
-	placeholder.nodeType = stringType();
-	return placeholder;
+	const name = "msPlaceholder_" + hashToBase36(typeKey(t) + "|" + text);
+	let sym = existingDumpFn(name);
+	if (sym == null) {
+		sym = mintSym(ctx, SymbolKind.Function, name, null);
+		_dumpFnNames.push(name);
+		_dumpFnSyms.push(sym);
+		const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", t);
+		const placeholder = makeString(text, loc);
+		placeholder.nodeType = stringType();
+		const fnNode = makeFnDecl(name, [valueSym], ["unknown"], makeBlock([makeReturn(placeholder, loc)], loc), "", "string", loc);
+		if (fnNode.nodeType != null && fnNode.nodeType.typeChildren != null && fnNode.nodeType.typeChildren.length > 0) {
+			fnNode.nodeType.typeChildren[0] = t;
+		}
+		if (fnNode.nodeType != null) sym.symbolType = fnNode.nodeType;
+		fnNode.resolvedSym = sym;
+		_dumpFnDecls.push(fnNode);
+	}
+	const call = makeCall(makeTypedIdentResolved(sym, null, loc), [arg], loc);
+	call.nodeType = stringType();
+	return call;
 }
 
 function hasToStringExtension(t: Type, ctx: TransformContext): boolean {

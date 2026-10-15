@@ -22,7 +22,7 @@ import {
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef, takeValueShareFns,
 } from "../util";
-import { rewriteEcho, buildStructToString, buildUnionText, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
+import { rewriteEcho, buildStructToString, buildUnionText, evaluatedPlaceholder, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
 import { isSlotUnion } from "../../checker/fit";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
@@ -226,23 +226,9 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		call.nodeType = stringType();
 		return call;
 	}
-	// Null → "null"
-	if (tk == TypeKind.Null) {
-		const s = makeString("null", loc);
-		s.nodeType = stringType();
-		return s;
-	}
-	// Function/Closure → "<function>"
-	if (tk == TypeKind.Function) {
-		const s = makeString("<function>", loc);
-		s.nodeType = stringType();
-		return s;
-	}
-	// Fallback: "<TypeName>" or "<object>"
-	const fallbackName = objType.typeName != "" ? objType.typeName : "object";
-	const s = makeString("<" + fallbackName + ">", loc);
-	s.nodeType = stringType();
-	return s;
+	if (tk == TypeKind.Null) return evaluatedPlaceholder(obj, objType, "null", loc, ctx);
+	if (tk == TypeKind.Function) return evaluatedPlaceholder(obj, objType, "<function>", loc, ctx);
+	return evaluatedPlaceholder(obj, objType, "<" + (objType.typeName != "" ? objType.typeName : "object") + ">", loc, ctx);
 }
 
 
