@@ -2526,18 +2526,16 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 
 	// Detect discriminated union narrowing: match (base.discriminantField)
 	// Handles both enum-based DUs (isDiscriminatedUnion) and string-literal DUs (Tier 2).
-	let narrowBase: Symbol | null = null;
 	let narrowUnion: Type | null = null;
 	let narrowIsStringDU = false;
 	let narrowDiscField = "";
 	if (d.matchStmtDisc.kind == NodeKind.MemberExpr) {
 		const discMd = d.matchStmtDisc.data as MemberExprData;
 		if (discMd.object != null && discMd.object.kind == NodeKind.Identifier) {
-			const baseSym = lookupSymbol(ctx.table, (discMd.object.data as IdentifierData).name);
+			const baseSym = discMd.object.resolvedSym;
 			if (baseSym != null && baseSym.symbolType != null) {
 				const di = detectUnionDiscriminant(baseSym.symbolType, discMd.property);
 				if (di.discField != "") {
-					narrowBase = baseSym;
 					narrowUnion = baseSym.symbolType;
 					narrowIsStringDU = di.isStringDU;
 					narrowDiscField = di.discField;
