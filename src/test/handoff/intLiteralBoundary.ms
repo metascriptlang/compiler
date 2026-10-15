@@ -65,6 +65,11 @@ test "integer literal boundary: a too-wide literal in a narrow type is a type er
 	assert strictErrorCount("function f(): int32 { const v: int32 = 9223372036854775808; return v; }") > 0;
 }
 
+test "integer literal boundary: a literal past 2^63 that does not fit is named by its value" {
+	assert hasError("const a: int64 = 9223372036854775808;", "cannot convert 9223372036854775808 to int64");
+	assert hasError("const a: int32 = 18446744073709551615;", "cannot convert 18446744073709551615 to int32");
+}
+
 // The minus sign sits in a UnaryExpr, not in the token, so before the fix the
 // range rule only ever saw a magnitude — which made every signed MIN illegal
 // and let every positive overflow through. Both directions are pinned here.

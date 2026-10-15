@@ -1005,6 +1005,11 @@ function isInt64Min(v: int64): boolean {
 	return v < 0 && int64Bits(0 - (v as uint64)) == v;
 }
 
+export function integerLiteralText(d: NumberLiteralData): string {
+	const magnitudePast2p63 = d.intVal < 0 && d.value > 0;
+	return magnitudePast2p63 ? uint64ToDecimal(d.intVal as uint64) : int64ToDecimal(d.intVal);
+}
+
 // Nim splits this in two. A BIT-PATTERN literal may fill the whole UNSIGNED
 // width of its target and still be legal — `0x80` as int8 is -128, deliberately
 // (lexer.nim:494-509). A DECIMAL literal is held to the target's SIGNED range
