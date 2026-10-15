@@ -2,7 +2,7 @@
 // nullable carrier passes it unchanged; a bare value is wrapped once. Struct, tuple and
 // primitive payloads, explicit and inferred `T`.
 //
-// @stdout: s:1|s:1|s:0|t:7|t:7|t:0|i:5|i:5|i:0|s:1
+// @stdout: s:1|s:1|s:0|t:7|t:7|t:0|i:5|i:5|i:0|s:1|s:2
 // @exit: 0
 
 struct Cell { a: int32; s: string; }
@@ -27,6 +27,8 @@ function main(): void {
 	const i2 = sFirst<int32>(5, mkInt());
 	const i3 = sFirst<int32>(null, 5);
 	const r4 = sFirst<Cell>({ a: 1, s: "z" }, c);
+	const bare: Cell = { a: 2, s: "b" };
+	const r5 = sFirst<Cell>(bare, c);
 	const out: string[] = [];
 	out.push("s:" + (r1 != null ? String(r1.a) : "0"));
 	out.push("s:" + (r2 != null ? String(r2.a) : "0"));
@@ -38,6 +40,7 @@ function main(): void {
 	out.push("i:" + (i2 != null ? String(i2) : "0"));
 	out.push("i:" + (i3 != null ? String(i3) : "0"));
 	out.push("s:" + (r4 != null ? String(r4.a) : "0"));
+	out.push("s:" + (r5 != null ? String(r5.a) : "0"));
 	console.log(out.join("|"));
 }
 main();
