@@ -2156,7 +2156,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 			// `{ kind: K.A, ... } | { kind: K.B, ... }` declares the same enum
 			// discriminator the match-type form declares, so it gets the same
 			// contract: typeExtra = enum type, typeNames = [disc, key0, key1...]
-			// in typeChildren order (findVariantByDiscriminant reads keys there).
+			// in typeChildren order (variantKeyMember reads keys there).
 			const enumDisc = findSharedEnumDiscriminant(resolved);
 			const enumType = enumDisc != "" ? enumDiscriminantTypeOf(resolved, enumDisc) : null;
 			if (enumType != null) {

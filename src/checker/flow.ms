@@ -19,13 +19,13 @@ import {
 } from "../ast/node";
 import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
-	detectUnionDiscriminant, findVariantByDiscriminant,
+	detectUnionDiscriminant, enumMemberLiteralOf,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
 	nullableUnionOf, hasGenericParams, isNullableShape,
 	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 } from "./types";
-import { typeRelation, TypeRelation, sameType } from "./compat";
+import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 // ===== FlowType =====
@@ -205,33 +205,14 @@ function isMatchingIndex(a: Node | null, b: Node | null): boolean {
 
 // ===== Literal value extraction =====
 //
-// To compare `x.kind === "circle"` against union variants, we pull the
-// literal value out of the AST. Supports string literals, enum-member
-// references (both the original `K.Member` form and the post-checker
-// mangled `K_Member` identifier form), and null.
+// To compare `x.kind === "circle"` against union variants, read the literal
+// value the compared expression denotes: a string literal, or a string-literal
+// type the checker gave it.
 
-function extractLiteralString(node: Node): string {
-	if (node == null) return "";
-	match (node.kind) {
-		NodeKind.StringLiteral => {
-			const d = node.data as StringLiteralData;
-			return d.value;
-		},
-		NodeKind.Identifier => {
-			// Enum member after checker rewrite: MemberExpr `K.A` becomes
-			// Identifier `K_A`. We return the raw name; findVariantByDiscriminant
-			// uses bareAfterDelim("_") to strip the enum prefix.
-			const d = node.data as IdentifierData;
-			return d.name;
-		},
-		NodeKind.MemberExpr => {
-			// Enum member before checker rewrite: `K.A`
-			const d = node.data as MemberExprData;
-			return d.property;
-		},
-		_ => { return ""; },
-	};
-	return "";
+function stringLiteralValueOf(node: Node): string | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.StringLiteral) return (node.data as StringLiteralData).value;
+	return node.nodeType != null && node.nodeType.kind == TypeKind.StringLiteral ? node.nodeType.typeName : null;
 }
 
 function isNullLiteral(node: Node): boolean {
@@ -1603,13 +1584,15 @@ export function narrowTypeByDiscriminantProperty(
 	}
 	const info = detectUnionDiscriminant(t, propName);
 	if (info.discField == "") return t;
-	const litValue = extractLiteralString(valueExpr);
-	if (litValue == "") return t;
 	let variantIdx = -1;
 	if (info.isStringDU) {
+		const litValue = stringLiteralValueOf(valueExpr);
+		if (litValue == null) return t;
 		variantIdx = findVariantByStringDiscriminant(t, info.discField, litValue);
 	} else {
-		variantIdx = findVariantByDiscriminant(t, litValue);
+		const lit = enumMemberLiteralOf(valueExpr);
+		if (lit == null) return t;
+		variantIdx = findVariantByEnumMember(t, lit);
 	}
 	if (variantIdx < 0) return t;
 	if (t.typeChildren == null || variantIdx >= t.typeChildren.length) return t;

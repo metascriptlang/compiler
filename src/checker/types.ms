@@ -898,7 +898,7 @@ export function getDiscriminantName(t: Type | null): string {
 
 // Tier 2: detect if a Union type has a discriminant field matching `fieldName`.
 // Returns { isStringDU, discField } — the caller can use these to pick the right
-// variant-finding function (findVariantByDiscriminant vs findVariantByStringDiscriminant).
+// variant-finding function (findVariantByEnumMember vs findVariantByStringDiscriminant).
 // Checks enum-based DUs first, then string-literal DUs.
 export interface DiscriminantInfo {
 	isStringDU: boolean;
@@ -1132,24 +1132,19 @@ export function duSharedFieldSlotDiffers(unionType: Type | null, fieldName: stri
 	return false;
 }
 
-// Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
-// typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
-// Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.
-export function findVariantByDiscriminant(unionType: Type | null, enumValue: string): int32 {
-	if (unionType == null || unionType.typeNames == null || unionType.typeNames.length < 2) return -1;
-	const queryBare = bareAfterDelim(enumValue, ".");
-	// Also handle underscore-mangled form: checkMemberExpr rewrites EnumType.Member to EnumType_Member
-	const queryBareUnderscore = bareAfterDelim(enumValue, "_");
-	let i = 1;
-	while (i < unionType.typeNames.length) {
-		const stored = unionType.typeNames[i];
-		if (stored == enumValue) return i - 1;
-		const storedBare = bareAfterDelim(stored, ".");
-		if (storedBare == queryBare) return i - 1;
-		if (storedBare == queryBareUnderscore) return i - 1;
-		i = i + 1;
-	}
-	return -1;
+// The member of `enumT` a discriminated union's variant key names; the key is
+// the member as the declaration spelled it, bare or qualified by its enum.
+export function variantKeyMember(enumT: Type, key: string): int32 {
+	return enumT.typeNames.indexOf(bareAfterDelim(key, ".")) as int32;
+}
+
+// The enum literal an expression denotes: the checked member reference carries it
+// on its Symbol, or as its own type where the context asked for the literal.
+export function enumMemberLiteralOf(node: Node | null): Type | null {
+	if (node == null) return null;
+	const sym = node.resolvedSym;
+	if (sym != null && sym.symbolKind == SymbolKind.EnumMember && isEnumLiteral(sym.symbolType)) return sym.symbolType;
+	return isEnumLiteral(node.nodeType) ? node.nodeType : null;
 }
 
 // Tier 2: detect a string-literal discriminant field shared by every variant of the union.
@@ -1389,7 +1384,7 @@ export function collectStringDiscriminantValues(unionType: Type | null, discFiel
 }
 
 // Variant keys in `typeChildren` order — the shape typeNames[1..] must carry for
-// `findVariantByDiscriminant` (dotted `Enum.Member`, same form the match-type DU
+// `variantKeyMember` (dotted `Enum.Member`, same form the match-type DU
 // declaration stores).
 export function collectEnumDiscriminantValues(unionType: Type | null, discFieldName: string): string[] {
 	return collectLiteralDiscriminantValues(unionType, discFieldName, TypeKind.EnumLiteral);

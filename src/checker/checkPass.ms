@@ -5386,7 +5386,7 @@ test "flow: enum DU narrowing via match-syntax discriminated union" {
 	// Uses the checker-recognized discriminated-union syntax:
 	//   type V = match (kind: K) { K.A => { x }, K.B => { y } }
 	// This is the pattern the existing ctx.narrowedDiscriminants path supports
-	// and is the shape findVariantByDiscriminant was designed for.
+	// and is the shape findVariantByEnumMember reads.
 	const src = "enum K { A, B }\n"
 		+ "type V = match (kind: K) { K.A => { x: number }, K.B => { y: string } };\n"
 		+ "function f(v: V): number {\n"

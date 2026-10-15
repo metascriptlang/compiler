@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType } from "../../checker/types";
+import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -115,7 +115,7 @@ function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, d
 	const lits: string[] = [];
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
 		const lt = findFieldInVariant(u.typeChildren[vi], disc);
-		const enumMember = lt != null && lt.kind == TypeKind.EnumLiteral && lt.typeReturn != null && lt.typeNames.length > 0 ? enumMemberOfKey(lt.typeReturn, lt.typeNames[0]) : -1;
+		const enumMember = lt != null && lt.kind == TypeKind.EnumLiteral && lt.typeReturn != null && lt.typeNames.length > 0 ? variantKeyMember(lt.typeReturn, lt.typeNames[0]) : -1;
 		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral && enumMember < 0)) {
 			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayName(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return tagRead;
@@ -129,13 +129,6 @@ function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, d
 	return tagToLiteral(p, lits, tagRead);
 }
 
-function enumMemberOfKey(enumT: Type, key: string): int32 {
-	for (let mi = 0; mi < enumT.typeNames.length; mi += 1) {
-		const m = enumT.typeNames[mi];
-		if (key == m || key.endsWith("." + m) || key == enumT.typeName + "_" + m) return mi as int32;
-	}
-	return -1;
-}
 
 function enumTagMembers(g: CGen, node: Readonly<Node>, u: Type): string[] {
 	const enumT = u.typeExtra;
@@ -144,7 +137,7 @@ function enumTagMembers(g: CGen, node: Readonly<Node>, u: Type): string[] {
 	let identity = true;
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
 		const key = vi + 1 < u.typeNames.length ? u.typeNames[vi + 1] : "";
-		const mi = enumMemberOfKey(enumT, key);
+		const mi = variantKeyMember(enumT, key);
 		if (mi < 0) {
 			addCGenError(g, `internal: variant ${vi} of '${typeDisplayName(u)}' has no member of enum '${enumT.typeName}' (key '${key}') at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return [];
@@ -737,25 +730,9 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 					const sd = discValNode.data as StringLiteralData;
 					varIdx = findVariantByStringDiscriminant(litType, discName, sd.value);
 				}
-				if (varIdx < 0) {
-					let discValStr = "";
-					if (discValNode != null && discValNode.kind == NodeKind.MemberExpr) {
-						const md = discValNode.data as MemberExprData;
-						if (md.object != null && md.object.kind == NodeKind.Identifier) {
-							discValStr = (md.object.data as IdentifierData).name + "." + md.property;
-						}
-					} else if (discValNode != null && discValNode.kind == NodeKind.Identifier) {
-						// Checker rewrites Enum.Member → Enum_Member identifier
-						const idName = (discValNode.data as IdentifierData).name;
-						// Convert Enum_Member back to Enum.Member for variant lookup
-						const usIdx = idName.indexOf("_");
-						if (usIdx > 0) {
-							discValStr = idName.slice(0, usIdx) + "." + idName.slice(usIdx + 1, idName.length);
-						} else {
-							discValStr = idName;
-						}
-					}
-					varIdx = findVariantByDiscriminant(litType, discValStr);
+				if (varIdx < 0 && node.variantSlot > 0) varIdx = node.variantSlot - 1;
+				if (varIdx < 0 && report) {
+					addCGenError(g, "internal: object literal for discriminated union " + unionName + " reached codegen without its checked variant in " + g.modulePath, node.location.line, node.location.column);
 				}
 				if (varIdx >= 0) {
 					cType = variantStructCName(g, litType, varIdx, unionName);

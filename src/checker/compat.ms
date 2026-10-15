@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -1100,6 +1100,20 @@ export function sameNominal(a: Type, b: Type): boolean {
 	return a.sym == null && b.sym == null && a.kind == b.kind
 		&& a.typeName != "" && a.typeName == b.typeName
 		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren);
+}
+
+// The variant of an enum-discriminated union whose key names the member `lit`
+// denotes; -1 when `lit` is a member of another enum.
+export function findVariantByEnumMember(unionType: Type, lit: Type): int32 {
+	const enumT = unionType.typeExtra;
+	if (enumT == null || enumT.kind != TypeKind.Enum || lit.kind != TypeKind.EnumLiteral
+			|| lit.typeReturn == null || !sameNominal(lit.typeReturn, enumT)) return -1;
+	const member = enumT.typeNames.indexOf(lit.typeNames[0]);
+	if (member < 0) return -1;
+	for (let vi = 0; vi + 1 < unionType.typeNames.length && vi < unionType.typeChildren.length; vi += 1) {
+		if (variantKeyMember(enumT, unionType.typeNames[vi + 1]) == member) return vi;
+	}
+	return -1;
 }
 
 function isOwnGenericBase(base: Type, inst: Type): boolean {
