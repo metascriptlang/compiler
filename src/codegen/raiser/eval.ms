@@ -414,7 +414,7 @@ test "engine: conditional return retains a fallthrough terminator" {
 }
 
 test "engine: explicit exit coerces its number and aborts module initialization" {
-	const ctx = evalOrcVM("console.log('before'); exit(7); console.log('after');");
+	const ctx = evalOrcVM("console.log('before'); process.exit(7); console.log('after');");
 	assert ctx.error == "";
 	assert ctx.output == "before\n";
 	assert ctx.exitValue.kind == RaiserValueKind.Int;
@@ -422,7 +422,7 @@ test "engine: explicit exit coerces its number and aborts module initialization"
 }
 
 test "engine: exit inside a spawned strand ends the program with its code" {
-	const ctx = evalOrcVM("function quit(): int32 { exit(3); return 0; }"
+	const ctx = evalOrcVM("function quit(): int32 { process.exit(3); return 0; }"
 		+ " console.log('armed'); const f = spawn(() => quit());"
 		+ " let n: int32 = 0; while (n < 1000) { n += 1; }"
 		+ " console.log(`after ${await f}`);");
