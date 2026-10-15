@@ -1,6 +1,6 @@
 // E2E: WebSocket server upgrade (std/http/server + std/core/websocket) → C output
 //
-// Companion to `src/test/std/http/websocket.ms` (client-side). This file pins
+// Companion to `src/test/c/websocket.ms` (client-side). This file pins
 // the SERVER-side upgrade surface introduced for Photon:
 //   - `parseUpgradeRequest` / `buildUpgradeResponse` (server-direction handshake helpers)
 //   - `processFrame(fs, frame, isServerSide=true)` (server-direction mask check)
@@ -17,7 +17,7 @@
 //   3. The Photon-style upgrade flow compiles unchanged (parse headers, derive
 //      accept-key, build 101, send via std/net, detach fd, walk away).
 
-import { compileToC } from "../../helpers";
+import { compileToC, compileToCWithStd } from "../helpers";
 
 // ===== 1. Server-side handshake helpers compile =====
 
@@ -31,7 +31,7 @@ function handshake(raw: string): string {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: parseUpgradeRequest surfaces subprotocols list" {
@@ -44,7 +44,7 @@ function pickSubprotocol(raw: string): string {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: buildUpgradeResponse with negotiated subprotocol + extras" {
@@ -55,7 +55,7 @@ function build(accept: string, sub: string): string {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 2. processFrame server-direction compiles =====
@@ -70,7 +70,7 @@ function recvOne(fs: FragState, f: ParsedFrame): string {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 3. Photon-style upgrade flow compiles =====
@@ -87,7 +87,7 @@ test "E2E C: detach() can be called without subsequent res.end()" {
 	// matching res.end() — the event loops respect _upgraded regardless of
 	// whether a response is queued through std/http's pipeline.
 	const src = `
-import { HttpRequest, ServerResponse } from "std/http/types";
+import { HttpRequest, ServerResponse } from "std/http";
 
 function bareDetachHandler(req: HttpRequest, res: ServerResponse): int32 {
 	const fd = res.detach();
@@ -95,13 +95,13 @@ function bareDetachHandler(req: HttpRequest, res: ServerResponse): int32 {
 	return fd;
 }
 `;
-	const c = compileToC(src);
-	assert c.ok;
+	const c = compileToCWithStd(src);
+	assert c.ok, c.error;
 }
 
 test "E2E C: full WebSocket upgrade handler compiles" {
 	const src = `
-import { HttpRequest, ServerResponse } from "std/http/types";
+import { HttpRequest, ServerResponse } from "std/http";
 import { getHeader } from "std/http/headers";
 
 function wsUpgradeHandler(req: HttpRequest, res: ServerResponse): void {
@@ -140,8 +140,8 @@ function wsUpgradeHandler(req: HttpRequest, res: ServerResponse): void {
 	// Caller would spawn a ConnectionActor on \`fd\` here.
 }
 `;
-	const c = compileToC(src);
-	assert c.ok;
+	const c = compileToCWithStd(src);
+	assert c.ok, c.error;
 }
 
 // ===== 4. Server recv loop pattern compiles =====
@@ -167,7 +167,7 @@ function recvLoop(fs: FragState, buf: uint8[]): int32 {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 5. Roundtrip: client request bytes → server parse → server build → client parse =====
@@ -188,5 +188,5 @@ function roundtrip(clientReq: string): boolean {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }

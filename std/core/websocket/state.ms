@@ -516,7 +516,7 @@ test "processFrame: Ping during fragmentation does NOT clear fragment state" {
 // Real overflow tests would allocate 16 MB+ which is heavy for a unit test.
 // The cap predicate is a single `>` comparison and is visually reviewable.
 // We exercise the BELOW-cap acceptance path here; an integration test that
-// actually drives the cap from a server would belong in src/test/std/http/
+// actually drives the cap from a server would belong in src/test/c/
 // against a fixture server.
 
 test "processFrame: fragment START below cap → accepted" {

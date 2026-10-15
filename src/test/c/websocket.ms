@@ -20,7 +20,7 @@
 //   5. Sync + async paths are independently reachable (separate function
 //      tables in the C output).
 
-import { compileToC } from "../../helpers";
+import { compileToC, compileToCWithStd } from "../helpers";
 
 // ===== 1. Public API compiles (async-first) =====
 
@@ -38,7 +38,7 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: sendBinary + recv binary roundtrip compiles" {
@@ -58,7 +58,7 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: connect with subprotocols compiles" {
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: connect with extra headers compiles" {
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: connect with timeout compiles" {
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 2. Sync variants =====
@@ -120,7 +120,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: sendBinarySync compiles" {
@@ -133,7 +133,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 3. Re-exports from std/http (explicit-import path) =====
@@ -149,8 +149,8 @@ async function main(): Promise<void> {
 	await c.close(WsCloseCode.GoingAway, "shutdown");
 }
 `;
-	const c = compileToC(src);
-	assert c.ok;
+	const c = compileToCWithStd(src);
+	assert c.ok, c.error;
 }
 
 test "E2E C: import WsMessage + WsMessageKind from std/http compiles" {
@@ -179,8 +179,8 @@ async function main(): Promise<void> {
 	}
 }
 `;
-	const c = compileToC(src);
-	assert c.ok;
+	const c = compileToCWithStd(src);
+	assert c.ok, c.error;
 }
 
 // ===== 4. Pure-MS layer accessibility from user code =====
@@ -199,7 +199,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: encodeClosePayload + decodeClosePayload accessible" {
@@ -212,7 +212,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: handshake helpers accessible (deriveAcceptKey, parseWsUrl)" {
@@ -225,7 +225,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 5. Codegen pin checks — user-module call sites are emitted =====
@@ -293,7 +293,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: WsErrorKind classification helpers reachable" {
@@ -315,7 +315,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 7. Bytes ↔ string boundary helpers =====
@@ -330,7 +330,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 8. Realistic patterns =====
@@ -361,7 +361,7 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: chat-style text echo loop with state-machine close" {
@@ -389,7 +389,7 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 9. Frame-layer protocol-violation paths reachable =====
@@ -406,7 +406,7 @@ function main(): void {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E C: parseFrame reserved-opcode rejection reachable" {
@@ -418,7 +418,7 @@ function main(): boolean {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 // ===== 10. Optional runtime smokes (skip by default) =====
@@ -426,9 +426,9 @@ function main(): boolean {
 // These need a live ws:// endpoint. To enable, run with the proper env set
 // and a local server up:
 //
-//   WS_ECHO_TEST=1 msc test src/test/std/http/websocket.ms
+//   WS_ECHO_TEST=1 msc test src/test/c/websocket.ms
 //   WS_SURREAL_TEST=1 surreal start --user root --pass root memory &  \
-//     msc test src/test/std/http/websocket.ms
+//     msc test src/test/c/websocket.ms
 //
 // Until the harness can run compiled-C E2E tests inline (no helper exists
 // yet), these are placeholders that just verify the patterns *compile* —
@@ -442,7 +442,7 @@ async function main(): Promise<void> {
 	const c = r.value;
 	const send: uint8[] = [];
 	let i = 0;
-	while (i < 1024) { send.push(i & 0xff); i = i + 1; }
+	while (i < 1024) { send.push((i & 0xff) as uint8); i = i + 1; }
 	const sr = await c.sendBinary(send);
 	if (!sr.ok) return;
 	const mr = await c.recv();
@@ -453,5 +453,5 @@ async function main(): Promise<void> {
 }
 `;
 	const c = compileToC(src);
-	assert c.ok;
+	assert c.ok, c.error;
 }
