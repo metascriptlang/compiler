@@ -1124,7 +1124,30 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		if (parentBody.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, baseName, parentBody);
 		else ensureTypeInfo(g, baseName);
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.base = &${baseName}TypeInfo;`);
+		emitInstanceDisplay(g, className, parentBody);
 	}
+}
+
+function emitInstanceDisplay(g: CGen, className: string, parentBody: Type): void {
+	const ancestors: string[] = [];
+	let up: Type | null = parentBody;
+	while (up != null && (up.kind == TypeKind.GenericInstance || up.kind == TypeKind.Struct)) {
+		if (ancestors.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
+		const name = getTypeDesc(g, up);
+		if (up.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, name, up);
+		else ensureTypeInfo(g, name);
+		ancestors.push(name);
+		const next = classParentOf(up);
+		up = next != null && next.kind == TypeKind.Ref ? next.typeReturn : next;
+	}
+	const display = className + "TypeInfoDisplay";
+	addLine(sec(g, CSection.GlobalVars), `static const msTypeInfo* ${display}[${ancestors.length + 1}];`);
+	for (let slot = 0; slot < ancestors.length; slot += 1) {
+		addLine(sec(g, CSection.DatInit), `  ${display}[${slot}] = &${ancestors[ancestors.length - 1 - slot]}TypeInfo;`);
+	}
+	addLine(sec(g, CSection.DatInit), `  ${display}[${ancestors.length}] = &${className}TypeInfo;`);
+	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.depth = ${ancestors.length};`);
+	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.display = ${display};`);
 }
 
 // TypeInfo for an Arc<T> heap cell; destroyFn runs the pointee's destructor on the
