@@ -40,6 +40,13 @@ test "relationalOperands: ordered pairs and a declared overload are accepted" {
 	assert pair("V", "V", "<") == 0;
 }
 
+test "relationalOperands: a union of ordered primitives is accepted on either side" {
+	for (const op of ["<", "<=", ">", ">="]) {
+		assert pair("int32 | float64", "int32", op) == 0;
+		assert pair("uint64", "int32 | float64", op) == 0;
+	}
+}
+
 test "relationalOperands: a generic instantiated with a Result is refused" {
 	assert refused("function lt<T>(a: T, b: T): boolean { return a < b; }\nfunction f(): boolean { return lt(mk(), mk()); }") >= 1;
 	assert refused("function lt<T>(a: T, b: T): boolean { return a < b; }\nfunction f(): boolean { return lt(1, 2); }") == 0;
