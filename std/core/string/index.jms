@@ -203,11 +203,12 @@ export function msBoolToString(b: boolean): string {
 // String hash — DJB2 over WTF-8 bytes (matches C runtime msStringHash)
 export function msStringHash(s: string): int32 {
 	const sb = wtf8Cached(s);
-	let h: int32 = 5381;
+	let h: float64 = 5381;
 	for (let i = 0; i < sb.length; i += 1) {
-		h = (h * 33 + sb[i]) as int32;
+		h = (h * 33 + sb[i]) % 4294967296.0;
 	}
-	return h;
+	if (h > 2147483647) h = h - 4294967296.0;
+	return h as int32;
 }
 
 // .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
