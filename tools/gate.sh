@@ -4,7 +4,7 @@ export LC_ALL=C
 
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 FLOOR_EXEMPT='^tools/'
-SOLANA_SDK='^(std/(solana|crypto|meta|serialize/json)|runtime/solana|tools/solana|examples/(escrow|anchorBench))/|^runtime/manual\.h$|^src/test/c/solana'
+SOLANA_SDK='^(std/(solana|crypto|meta|serialize/json)|runtime/(solana|freestanding)|tools/solana|examples/(escrow|anchorBench))/|^runtime/manual\.h$|^src/test/c/solana'
 SOLANA_COMPILER='^src/(checker|codegen/c|monomorphize)/|^src/module/cparse/target\.ms$|^src/compiler/(meta/|(buildConfig|cc|compile|defines|options|toolchain)\.ms$)'
 EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomorphize|parser|raiser|transform|utils)/|^src/compiler/(meta/|[^/]+\.ms$)|^src/index\.ms$|^(std|runtime|vendor)/'
 RULES=(
@@ -1372,6 +1372,7 @@ runtime/solana/host.c|boundary build corpus guard solana suite tests
 std/solana/core.cms|build corpus guard solana suite tests
 std/solana/test.cms|build corpus guard solana suite tests
 runtime/solana/solana.h|boundary build corpus guard solana suite tests
+runtime/freestanding/musl/pow.c|boundary build corpus solana suite tests
 docs/TESTING.md|
 src/test/known-red.json|
 CASES
@@ -1774,7 +1775,7 @@ solana_replays() {
   solana_check token-build "$CAND" build tools/solana/tokenOpsProbe.ms --os=solana --release --output="$dir/tokenOpsProbe.so" \
     && { solana_check token-replay node tools/solana/tokenOps.mjs "$dir/tokenOpsProbe.so" || rc=1; } || rc=1
   local pin
-  for pin in logText:logTextProbe createAccountPrefund:createAccountPrefundProbe failFirst:failFirstProbe arrayCount:arrayCountProbe tokenInterface:tokenInterfaceProbe; do
+  for pin in logText:logTextProbe createAccountPrefund:createAccountPrefundProbe failFirst:failFirstProbe arrayCount:arrayCountProbe tokenInterface:tokenInterfaceProbe pow:powProbe; do
     solana_check "${pin%%:*}-build" "$CAND" build "tools/solana/${pin#*:}.ms" --os=solana --release --output="$dir/${pin#*:}.so" \
       && { solana_check "${pin%%:*}-replay" node "tools/solana/${pin%%:*}.mjs" "$dir/${pin#*:}.so" || rc=1; } || rc=1
   done
@@ -1790,7 +1791,7 @@ run_solana_lane() {
     solana_host_test "$entry" || rc=1
   done
   solana_host_test std/solana/accountCodecTest.ms --target=js || rc=1
-  if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^tools\/solana\//{f=1} END{exit !f}' "$OUT/why"; then
+  if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"; then
     solana_replays "$dir" || rc=1
   fi
   return $rc
