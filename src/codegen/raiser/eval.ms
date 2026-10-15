@@ -405,6 +405,37 @@ function evalOrcVM(code: string): RaiserVM {
 	return execModule(compileForOrc(code), "orc");
 }
 
+test "engine: an enum converts to an integer type as its ordinal does, as on C and JS" {
+	const decl = "enum E { Neg = -5, Big = 1000000000 } let e: E[] = [E.Neg, E.Big];";
+	const ok = evalOrcVM(decl + " console.log(`${e[0] as uint8} ${e[0] as uint16} ${e[1] as uint8} ${e[0] as int64} ${e[1] as float64}`);");
+	assert ok.error == "", ok.error;
+	assert ok.output == "251 65531 0 -5 1000000000\n", ok.output;
+	const narrow = evalOrcVM(decl + " console.log(`${e[1] as int16}`);");
+	assert narrow.error.indexOf("value 1000000000 not in range -32768 .. 32767") >= 0, narrow.error;
+}
+
+test "engine: a value outside an enum's members stops the conversion into it" {
+	const decl = "enum D { A, B, C } let i: int32[] = [3]; let z: float64[] = [0.0, 1.5];";
+	const fromInt = evalOrcVM(decl + " console.log(`${i[0] as D}`);");
+	assert fromInt.error.indexOf("value 3 not in range 0 .. 2") >= 0, fromInt.error;
+	const fromNaN = evalOrcVM(decl + " console.log(`${(z[0] / z[0]) as D}`);");
+	assert fromNaN.error.indexOf("value NaN not in range 0 .. 2") >= 0, fromNaN.error;
+	const fromFloat = evalOrcVM(decl + " console.log(`${(z[1] as D) as int32}`);");
+	assert fromFloat.error == "", fromFloat.error;
+	assert fromFloat.output == "1\n", fromFloat.output;
+}
+
+test "engine: a conversion into char stops outside 0 .. 255 and truncates a float, as on C and JS" {
+	const decl = "let a: int32[] = [-1, 300, 200]; let f: float64[] = [300.7, 65.9];";
+	assert evalOrcVM(decl + " console.log(`${(a[0] as char) as int32}`);").error.indexOf("value -1 not in range 0 .. 255") >= 0;
+	assert evalOrcVM(decl + " console.log(`${(a[1] as char) as int32}`);").error.indexOf("value 300 not in range 0 .. 255") >= 0;
+	assert evalOrcVM(decl + " console.log(`${(f[0] as char) as int32}`);").error.indexOf("value 300.7 not in range 0 .. 255") >= 0;
+	assert evalOrcVM(decl + " const c = a[2] as char; console.log(`${c as int8}`);").error.indexOf("value 200 not in range -128 .. 127") >= 0;
+	const ok = evalOrcVM(decl + " const c = a[2] as char; console.log(`${(f[1] as char) as int32} ${c as int16} ${c as uint8}`);");
+	assert ok.error == "", ok.error;
+	assert ok.output == "65 200 200\n", ok.output;
+}
+
 test "engine: an engine check leaves no C generic type rows to the module being checked" {
 	raiserPreludeCtx();
 	const pr = parseSource("const m = new Map<int16, uint8>(); m.set(1 as int16, 2 as uint8); const s = new HashSet<int16>();");
@@ -974,12 +1005,12 @@ test "number toString through full pipeline" {
 // mangled identifier the VM yields nil / 0 and match-on-enum collapses to arm 0.
 test "enum member through full pipeline" {
 	const ctx = evalFull("enum Color { Red, Green, Blue } return Color.Green as number;");
-	assert ctx.lastResult.intVal == 1;
+	assert ctx.lastResult.kind == RaiserValueKind.Float && ctx.lastResult.floatVal == 1.0;
 }
 
 test "enum explicit values through full pipeline" {
 	const ctx = evalFull("enum Status { Active = 5, Inactive = 2, Pending = 9 } return Status.Pending as number;");
-	assert ctx.lastResult.intVal == 9;
+	assert ctx.lastResult.kind == RaiserValueKind.Float && ctx.lastResult.floatVal == 9.0;
 }
 
 test "match on enum through full pipeline" {
