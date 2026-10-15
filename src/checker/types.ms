@@ -3723,6 +3723,10 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 			if (ca.kind == TypeKind.Null) { unifyType(formal.typeReturn, cb, bindings); return; }
 		}
 	}
+	if (formal.kind == TypeKind.Union && concrete.kind != TypeKind.Union && !isMaybeType(concrete)) {
+		unifyIntoUnionFormal(formal, concrete, bindings);
+		return;
+	}
 	// Structural match — same kind, recurse into children
 	if (formal.kind != concrete.kind) return;
 	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span || formal.kind == TypeKind.Set) {
@@ -3767,6 +3771,36 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		}
 		return;
 	}
+}
+
+// One value into a union formal: a member it already is binds nothing, a generic member
+// that infers from it takes it, and otherwise the union's one bare type parameter does.
+function unifyIntoUnionFormal(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+	const base = literalBase(concrete);
+	let naked: Type | null = null;
+	let nakedCount = 0;
+	for (const m of formal.typeChildren) {
+		if (m == null) continue;
+		if (m.kind == TypeKind.GenericParam) {
+			naked = m;
+			nakedCount += 1;
+		} else if (!hasGenericParams(m) && isMemberItself(m, base)) {
+			return;
+		}
+	}
+	for (const m of formal.typeChildren) {
+		if (m == null || m.kind == TypeKind.GenericParam || !hasGenericParams(m)) continue;
+		const before = bindings.names.length;
+		unifyType(m, concrete, bindings);
+		if (bindings.names.length > before) return;
+	}
+	if (nakedCount == 1 && naked != null) unifyType(naked, concrete, bindings);
+}
+
+function isMemberItself(member: Type, value: Type): boolean {
+	if (member == value) return true;
+	if (isPrimitiveKind(member.kind)) return member.kind == value.kind;
+	return member.sym != null && member.sym == value.sym;
 }
 
 export function hasGenericParams(t: Type | null): boolean {
@@ -4845,6 +4879,21 @@ test "unify mismatched kinds" {
 	const b = createUnifyBindings();
 	unifyType(createArray(createGenericParam("T")), numberType(), b);
 	assert b.names.length == 0;
+}
+
+test "a value into a union formal binds its bare type parameter unless it is a member already" {
+	const nullable = createUnion([createGenericParam("T"), nullType()]);
+	const bare = createUnifyBindings();
+	unifyType(nullable, int32Type(), bare);
+	assert bare.names.length == 1;
+	assert bare.types[0].kind == TypeKind.Int32;
+	const member = createUnifyBindings();
+	unifyType(nullable, nullType(), member);
+	assert member.names.length == 0;
+	const elements = createUnifyBindings();
+	unifyType(createUnion([createGenericParam("T"), createArray(createGenericParam("T"))]), createArray(int32Type()), elements);
+	assert elements.names.length == 1;
+	assert elements.types[0].kind == TypeKind.Int32;
 }
 
 test "unify concrete no bindings" {
