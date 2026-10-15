@@ -31,7 +31,7 @@
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, NodeFlag, DeclKind, Type, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, Type, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData, ExportDeclData, MoveExprData } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -93,6 +93,11 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		return makeIdentResolved(t, loc);
 	}
 	if (expr.kind == NodeKind.UpdateExpr) return hoistUpdate(expr, hoisted, ctx);
+	if (expr.kind == NodeKind.MoveExpr) {
+		const md = expr.data as MoveExprData;
+		md.moveArg = hoistTernaries(md.moveArg, hoisted, ctx);
+		return expr;
+	}
 	if ((argDepth > 0 || callsToStatements > 0) && expr.kind == NodeKind.BinaryExpr && (expr.data as BinaryExprData).operator == "=") return hoistArgAssign(expr, hoisted, ctx);
 	if (!ctx.jsBackend) {
 		if (expr.kind == NodeKind.ArrayLiteral || expr.kind == NodeKind.ObjectLiteral) return hoistLiteral(expr, hoisted, ctx);
@@ -548,6 +553,16 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 				ud.updateArg = hoistTargetCalls(ud.updateArg, pre, ctx);
 				if (ctx.jsBackend && needsIntegerUpdateRewrite(ud)) { ud.updateArg = hoistAssignTargetEffects(ud.updateArg, pre, ctx, []); }
 				if (pre.length == 0) return [stmt];
+				pre.push(stmt);
+				return pre;
+			}
+		},
+		NodeKind.ExportDecl => {
+			const decl = (stmt.data as ExportDeclData).exportedDecl;
+			if (!ctx.jsBackend && decl != null && decl.kind == NodeKind.VariableDecl && !decl.flags.has(NodeFlag.StaticStorage)) {
+				const d = decl.data as VariableDeclData;
+				const pre: Node[] = [];
+				d.initializer = hoistNestedRaisingCalls(d.initializer, pre, ctx);
 				pre.push(stmt);
 				return pre;
 			}

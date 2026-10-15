@@ -26,6 +26,7 @@ function side(tag: string, v: int32): int32 { log.push(tag); return v; }
 function sideS(tag: string, s: string): string { log.push(tag); return s; }
 function sideP(tag: string, p: Pt): int32 { log.push(tag); return p.x + p.y; }
 function two(a: int32, b: int32): int32 { log.push("two"); return a + b; }
+function takeK(k: K): int32 { log.push("take"); return k.v; }
 class Acc {
 	total: int32 = 0;
 	add(v: int32): int32 { log.push("acc"); this.total += v; return this.total; }
@@ -80,6 +81,8 @@ expect("assigned", `${assigned}`, "1");
 run("index target", () => { cells[thrower(1)] = 7; });
 run("index update", () => { cells[thrower(1)]++; });
 expect("cells", cells.join(","), "0,0,0");
+const ks: K[] = [new K(), new K()];
+run("move element", () => { side("outer", takeK(move ks[thrower(1)])); });
 function throwArg(): void { throw new Error(sideS("msg", strThrower(1))); }
 log = [];
 try { throwArg(); } catch (e) { expect("throw arg", `${log.join(",")}:${(e as Error).message}`, ":bad"); }
