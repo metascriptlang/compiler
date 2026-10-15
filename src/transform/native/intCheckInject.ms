@@ -90,7 +90,7 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 	const arith = overflowPrefix(d.operator);
 	if (arith != "") {
 		const t = signedRepr(node.nodeType);
-		if (t == null || (isLiteral(d.left) && isLiteral(d.right))) return node;
+		if (t == null) return node;
 		return typedCall(ownWidthName(arith, t), [d.left, d.right], node);
 	}
 	const assign = overflowAssign(d.operator);

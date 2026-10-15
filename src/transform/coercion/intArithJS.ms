@@ -48,7 +48,7 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	if (d.operator == "/" || d.operator == "%" || d.operator == "**") return divideAsInteger(node, d);
 	if (isShiftOp(d.operator) && subIntKind(d.left.nodeType) != TypeKind.Unknown) return shiftAtLeftWidth(node, d);
 	const signed = signedType(node.nodeType);
-	if (signed != null && wrapsAtWidth(d.operator)) return isLiteral(d.left) && isLiteral(d.right) ? node : overflowChecked(node, signed, node.location);
+	if (signed != null && wrapsAtWidth(d.operator)) return overflowChecked(node, signed, node.location);
 	const narrow = subIntKind(node.nodeType);
 	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);
