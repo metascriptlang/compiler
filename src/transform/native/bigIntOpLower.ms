@@ -16,7 +16,7 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { addError } from "../../checker/context";
-import { booleanType, createPrimitive, int32Type, isNumeric, typeDisplayName } from "../../checker/types";
+import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeAssign, makeBinary, makeCall, makeNumber, makeString, runtimeRef } from "../util";
@@ -37,6 +37,11 @@ function isBigType(t: Type | null): boolean {
 
 function isBigNode(n: Node | null): boolean {
 	return n != null && isBigType(n.nodeType);
+}
+
+function isFractionalSource(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	return r != null && (r.kind == TypeKind.Float32 || r.kind == TypeKind.Float64 || r.kind == TypeKind.Number);
 }
 
 function bigType(): Type {
@@ -169,6 +174,7 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 		if (td.asExpr == null) return node;
 		const dstBig = node.nodeType != null && node.nodeType.kind == TypeKind.BigInt;
 		const srcBig = isBigNode(td.asExpr);
+		if (dstBig && isFractionalSource(td.asExpr.nodeType)) return bigCall("msBigIntFromNumber", [td.asExpr], node.location, bigType());
 		if (dstBig && !srcBig) return toBig(td.asExpr, ctx);
 		if (srcBig && !dstBig) return fromBig(node, ctx);
 		return node;

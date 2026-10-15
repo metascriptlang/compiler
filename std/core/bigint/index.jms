@@ -15,10 +15,7 @@ export function BigInt(v: string): bigint {
 	}
 }
 
-export function BigInt(v: float64): bigint {
-	if (v % 1.0 != 0.0) throw new RangeError(notIntegerMessage(v));
-	return v as bigint;
-}
+export function BigInt(v: float64): bigint { return v as bigint; }
 
 export function BigInt(v: boolean): bigint { return v ? 1n : 0n; }
 export function BigInt(v: int8): bigint { return v as bigint; }
@@ -37,6 +34,13 @@ function notIntegerMessage(v: float64): string {
 }
 
 function parseBigInt(v: string): bigint {
+	@emit(`return globalThis.BigInt(${v});`);
+	unreachable;
+}
+
+@compilerFunc
+function msBigIntFromNumber(v: float64): bigint {
+	if (v % 1.0 != 0.0) throw new RangeError(notIntegerMessage(v));
 	@emit(`return globalThis.BigInt(${v});`);
 	unreachable;
 }

@@ -35,6 +35,10 @@ function is64Kind(kind: TypeKind): boolean {
 	return kind == TypeKind.Int64 || kind == TypeKind.Uint64;
 }
 
+function isFractionalKind(kind: TypeKind): boolean {
+	return kind == TypeKind.Float32 || kind == TypeKind.Float64 || kind == TypeKind.Number;
+}
+
 function reprKind(t: Type | null): TypeKind {
 	const r = peelToRepr(t);
 	if (r == null) return TypeKind.Unknown;
@@ -129,6 +133,7 @@ function bigintCast(node: Node, d: TypeAssertionData, rangeChecks: boolean): Nod
 	if (dstBig) {
 		if (srcBig || srcT == null) return d.asExpr;
 		if (is64Kind(srcT.kind)) return d.asExpr;
+		if (isFractionalKind(reprKind(srcT))) return typedCall("msBigIntFromNumber", [d.asExpr], TypeKind.Int64, loc);
 		return bigIntOf(d.asExpr, loc);
 	}
 	const dstK = reprKind(node.nodeType);
