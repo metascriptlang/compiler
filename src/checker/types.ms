@@ -3445,6 +3445,37 @@ function copyTypeForSubst(t: Type): Type {
 	return result;
 }
 
+function distributedMembers(t: Type, paramName: string, concrete: Type): Type[] {
+	if (t.typeChildren.length != 4) return [];
+	const check = t.typeChildren[0];
+	if (check == null || check.kind != TypeKind.GenericParam || check.typeName != paramName) return [];
+	if (concrete.kind == TypeKind.Union) return concrete.typeChildren;
+	if (isMaybeType(concrete) && concrete.typeReturn != null) {
+		const payload = concrete.typeReturn!;
+		const members: Type[] = payload.kind == TypeKind.Union ? [...payload.typeChildren] : [payload];
+		members.push(nullType());
+		return members;
+	}
+	return [];
+}
+
+function substitutedConditional(t: Type, paramName: string, concrete: Type, active: Cursor<Type>[]): Type {
+	const cond = copyTypeForSubst(t);
+	substituteChildrenInPlace(cond, paramName, concrete, active);
+	return evaluateConditionalType(cond);
+}
+
+function substitutedConditionalAll(t: Type, names: string[], concretes: Type[], active: Cursor<Type>[]): Type {
+	const cond = copyTypeForSubst(t);
+	substituteChildrenInPlaceAll(cond, names, concretes, active);
+	return evaluateConditionalType(cond);
+}
+
+function unionOfParts(parts: Type[]): Type {
+	if (parts.length == 1) return parts[0];
+	return isNullableShape(parts) ? nullableUnionOf(parts) : createUnion(parts);
+}
+
 // In-place substitute all children of a copied type.
 function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type, seen: Cursor<Type>[]): void {
 	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
@@ -3527,10 +3558,11 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				return gi;
 			},
 			TypeKind.Conditional => {
-				// Substitute in all 4 children, then try to evaluate
-				const cond = copyTypeForSubst(t);
-				substituteChildrenInPlace(cond, paramName, concrete, active);
-				return evaluateConditionalType(cond);
+				const members = distributedMembers(t, paramName, concrete);
+				if (members.length == 0) return substitutedConditional(t, paramName, concrete, active);
+				const parts: Type[] = [];
+				for (const m of members) parts.push(substitutedConditional(t, paramName, m, active));
+				return unionOfParts(parts);
 			},
 			_ => t,
 		};
@@ -3611,9 +3643,17 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				return gi;
 			},
 			TypeKind.Conditional => {
-				const cond = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(cond, names, concretes, active);
-				return evaluateConditionalType(cond);
+				const checkIndex = t.typeChildren.length == 4 ? names.indexOf(t.typeChildren[0].typeName) : -1;
+				const members = checkIndex >= 0 ? distributedMembers(t, names[checkIndex], concretes[checkIndex]) : [];
+				if (members.length == 0) return substitutedConditionalAll(t, names, concretes, active);
+				const parts: Type[] = [];
+				for (const m of members) {
+					const each: Type[] = [];
+					for (const c of concretes) each.push(c);
+					each[checkIndex] = m;
+					parts.push(substitutedConditionalAll(t, names, each, active));
+				}
+				return unionOfParts(parts);
 			},
 			_ => t,
 		};
