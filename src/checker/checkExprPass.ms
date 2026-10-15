@@ -1438,6 +1438,20 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	}
 }
 
+// The type an object literal is stamped with: the expected type without ownership modifiers,
+// Maybe<T> reduced to T so fitNode sees the T -> Maybe<T> gap and inserts the wrap (otherwise
+// codegen writes the literal's fields into the Maybe slot), Ref|null reduced to Ref so a class
+// literal still heap-allocates.
+function literalStampType(expectedType: Type | null, fallback: Type): Type {
+	let stampType = skipModifier(expectedType);
+	if (stampType != null && isMaybeType(stampType)) {
+		stampType = stampType.typeReturn != null ? stampType.typeReturn : fallback;
+	}
+	const stampRef = stampType != null ? unwrapRefNullUnion(stampType) : null;
+	if (stampRef != null) stampType = stampRef;
+	return stampType != null ? stampType : fallback;
+}
+
 function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as ObjectLiteralData;
 	// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
@@ -1562,19 +1576,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Reference parity: stamp literal with expected type, propagate field types
 		// For class types, keep Ref wrapper so codegen knows to heap-allocate.
 		// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
-		let stampType = skipModifier(expectedType);
-		// Maybe<T> override: when expected is Maybe<T>, the literal's natural
-		// shape is the inner T (matched against T's fields above via the peel).
-		// Stamp the inner T so fitNode at the call site detects the T → Maybe<T>
-		// gap and inserts the wrap. Without this, node.nodeType = Maybe<T>
-		// short-circuits fitNode's same-kind check and no wrap is emitted —
-		// codegen then writes the literal's T-shape fields into Maybe<T>'s slot.
-		if (stampType != null && isMaybeType(stampType)) {
-			stampType = stampType.typeReturn != null ? stampType.typeReturn : objExpected;
-		}
-		const stampRef = stampType != null ? unwrapRefNullUnion(stampType) : null;
-		if (stampRef != null) stampType = stampRef;
-		node.nodeType = (stampType != null) ? stampType : objExpected;
+		const stampType = literalStampType(expectedType, objExpected);
+		node.nodeType = stampType;
 		// Pin to consts so the inner while-loop body sees non-null typeNames/
 		// typeChildren — flow narrowing on `let objExpected` doesn't reach
 		// inside nested loops via the binder's current narrowing rules.
@@ -1720,8 +1723,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	} else if (objExpected != null && objExpected.kind == TypeKind.Union
 		&& isDiscriminatedUnion(objExpected)) {
 		// Discriminated union construction validation
-		// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
-		const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
+		const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, literalStampType(expectedType, objExpected));
 		node.nodeType = constructed; return;
 	} else if (objExpected != null && objExpected.kind == TypeKind.Union) {
 		// Non-discriminated union: resolve variant, propagate field types.
