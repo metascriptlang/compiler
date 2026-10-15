@@ -2,7 +2,7 @@
 // If/else dispatch loop. C backend has optional computed-goto fast path (vmDispatch.c).
 
 import {
-	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource,
+	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx,
 	getBx, getSignedAx
 } from "./bytecode";
@@ -1802,6 +1802,10 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		vmError(vm, `value ${src.floatVal} not in range ${lo} .. ${hi}`);
 		return;
 	}
+	if (src.kind == RaiserValueKind.Int && signed && fromUnsigned && src.intVal < 0) {
+		vmError(vm, `value ${src.intVal as uint64} not in range ${lo} .. ${hi}`);
+		return;
+	}
 	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
 	if (bits == 64) {
 		setReg(vm, vm.baseReg + inst.a, raiserInt(whole));
@@ -2033,11 +2037,11 @@ test "halt returns constant" {
 	assert vm.exitValue.intVal == 42;
 }
 
-function execConv(value: RaiserValue, cls: RaiserConvClass): RaiserVM {
+function execConv(value: RaiserValue, cls: RaiserConvClass, from: int32 = -1): RaiserVM {
 	return execModule(makeTestModule(
 		[
 			raiserABx(RaiserOpcode.LoadConst, 0, 0),
-			raiserABC(RaiserOpcode.Conv, 1, 0, cls as int32),
+			raiserABC(RaiserOpcode.Conv, 1, 0, convOperand(cls, from)),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
 		[value]
@@ -2049,6 +2053,14 @@ test "a float converted to a signed integer out of its range stops, as on C" {
 	const i8 = execConv(raiserFloat(128.0), RaiserConvClass.I8);
 	assert i8.error.indexOf("value 128 not in range -128 .. 127") >= 0;
 	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
+}
+
+test "a uint64 past int64 converted to a signed integer stops, as on C" {
+	const u64 = RaiserConvClass.U64 as int32;
+	assert execConv(raiserInt(int64Bits(9223372036854775808)), RaiserConvClass.I64, u64).error == "value 9223372036854775808 not in range -9223372036854775808 .. 9223372036854775807";
+	assert execConv(raiserInt(int64Bits(9223372036854775813)), RaiserConvClass.I32, u64).error == "value 9223372036854775813 not in range -2147483648 .. 2147483647";
+	assert execConv(raiserInt(9223372036854775807), RaiserConvClass.I64, u64).exitValue.intVal == 9223372036854775807;
+	assert execConv(raiserInt(int64Bits(9223372036854775813)), RaiserConvClass.U32, u64).exitValue.intVal == 5;
 }
 
 test "a float wrapped to int32 takes the bitwise operand conversion of C and JS" {
