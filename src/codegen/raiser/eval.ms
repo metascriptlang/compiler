@@ -815,12 +815,32 @@ test "engine: shift right on uint32 is logical" {
 	assert r.lastResult.intVal == 1;
 }
 
-test "engine: signed sub-int arithmetic wraps at the type width" {
+test "engine: signed arithmetic in range reaches the type's bounds" {
 	const ctx = evalOrcVM("function multiply(left: int16, right: int16): int16 { return left * right; }"
-		+ " function negate(x: int8): int8 { return -x; } let a: int16 = 32767; a += 1; let b: int8 = 127; b++;"
-		+ " console.log(`${multiply(300, 300)} ${multiply(-300, 300)} ${negate(-128)} ${a} ${b}`);");
+		+ " function negate(x: int8): int8 { return -x; } let a: int16 = 32766; a += 1; let b: int8 = -127; b--;"
+		+ " let c: int32 = 2147483646; c++; let d: int64 = -9223372036854775807; d -= 1;"
+		+ " console.log(`${multiply(181, 181)} ${multiply(-128, 256)} ${negate(-127)} ${a} ${b} ${c} ${d}`);");
 	assert ctx.error == "";
-	assert ctx.output == "24464 -24464 -128 -32768 -128\n";
+	assert ctx.output == "32761 -32768 127 32767 -128 2147483647 -9223372036854775808\n";
+}
+
+test "engine: signed overflow stops at every width" {
+	const programs = [
+		"function multiply(left: int16, right: int16): int16 { return left * right; } console.log(`${multiply(300, 300)}`);",
+		"function negate(x: int8): int8 { return -x; } console.log(`${negate(-128)}`);",
+		"let a: int16 = 32767; a += 1; console.log(`${a}`);",
+		"let b: int8 = 127; b++; console.log(`${b}`);",
+		"function add(x: int32, y: int32): int32 { return x + y; } console.log(`${add(2147483647, 1)}`);",
+		"function sub(x: int64, y: int64): int64 { return x - y; } console.log(`${sub(-9223372036854775807, 2)}`);",
+		"function mul(x: int64, y: int64): int64 { return x * y; } console.log(`${mul(4294967296, 2147483648)}`);",
+		"function neg(x: int64): int64 { return -x; } console.log(`${neg(-9223372036854775807 - 1)}`);",
+		"function div(x: int8, y: int8): int8 { return x / y; } console.log(`${div(-128, -1)}`);",
+	];
+	for (const program of programs) {
+		const ctx = evalOrcVM(program);
+		assert ctx.error.indexOf("over- or underflow") >= 0, program;
+		assert ctx.output == "", program;
+	}
 }
 
 test "engine: unsigned arithmetic wraps at the type width" {
@@ -831,11 +851,15 @@ test "engine: unsigned arithmetic wraps at the type width" {
 	assert ctx.output == "24464 0 255\n";
 }
 
-test "engine: a field or element update wraps at its type width" {
-	const ctx = evalOrcVM("struct Counter { n: int8; } const c: Counter = { n: 127 }; c.n++; const xs: uint8[] = [255]; xs[0] += 2;"
+test "engine: an unsigned field or element update wraps at its type width; a signed one stops" {
+	const ctx = evalOrcVM("struct Counter { n: uint8; } const c: Counter = { n: 255 }; c.n++; const xs: uint8[] = [255]; xs[0] += 2;"
 		+ " console.log(`${c.n} ${xs[0]}`);");
 	assert ctx.error == "";
-	assert ctx.output == "-128 1\n";
+	assert ctx.output == "0 1\n";
+	const field = evalOrcVM("struct Counter { n: int8; } const c: Counter = { n: 127 }; c.n++; console.log(`${c.n}`);");
+	assert field.error.indexOf("over- or underflow") >= 0;
+	const element = evalOrcVM("const xs: int32[] = [2147483647]; xs[0] *= 2; console.log(`${xs[0]}`);");
+	assert element.error.indexOf("over- or underflow") >= 0;
 }
 
 test "engine: compound assignment on a float local uses float arithmetic" {
