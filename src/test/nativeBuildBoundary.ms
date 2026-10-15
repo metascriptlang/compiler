@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, or all");
 	exit(2);
 }
 
@@ -709,6 +709,34 @@ function runDirectivePaths(): void {
 	record("@link with absolute archive path", "61", value(abs));
 }
 
+function runUpcastCast(): void {
+	const dir = `${root}/upcast-cast`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"interface A { a: int32; }",
+		"interface B extends A { b: int32; }",
+		"interface C extends B { c: int32; }",
+		"interface P { a: int32; }",
+		"interface Q { a: int32; q: int32; }",
+		"class Animal { legs: int32 = 4; legCount(): int32 { return this.legs; } }",
+		"class Dog extends Animal { name: string = \"d\"; }",
+		"function readA(x: A): int32 { return x.a; }",
+		"function readMaybe(x: A | null): int32 { return x === null ? 0 : x.a; }",
+		"function readP(p: P): int32 { return p.a; }",
+		"function countLegs(x: Animal): int32 { return x.legs; }",
+		"function deep(x: C): int32 { return readA(x); }",
+		"function maybe(x: B): int32 { return readMaybe(x); }",
+		"const c: C = { a: 1, b: 2, c: 3 };",
+		"const q: Q = { a: 5, q: 6 };",
+		"const dog = new Dog();",
+		"console.log(`${deep(c)} ${maybe(c)} ${readP(q)} ${countLegs(dog)} ${dog.legCount()}`);",
+		"",
+	].join("\n"));
+	need(build(dir, "upcast-cast", "probe", ["--passC=-Werror=incompatible-pointer-types"]) == 0, "upcast-cast build under -Werror=incompatible-pointer-types");
+	record("a derived interface, a structural match and a class reach their base as a cast pointer", "1 1 5 4 4", value(dir));
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -718,6 +746,7 @@ if (group == "object-store" || group == "all") runObjectStore();
 if (group == "project-cache" || group == "all") runProjectCache();
 if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
+if (group == "upcast-cast" || group == "all") runUpcastCast();
 
 let failures = 0;
 console.log(`root ${root}`);
