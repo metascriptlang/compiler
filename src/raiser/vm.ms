@@ -1872,12 +1872,7 @@ function vmHandleDivF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const dst = getReg(vm, vm.baseReg + inst.a);
 	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
-	const rv = asNum(rhs);
-	if (rv != 0.0) {
-		dst.floatVal = asNum(lhs) / rv;
-	} else {
-		dst.floatVal = 0.0;
-	}
+	dst.floatVal = asNum(lhs) / asNum(rhs);
 	dst.intVal = 0;
 	dst.strVal = "";
 }
@@ -2130,6 +2125,27 @@ test "unsigned add, sub and mul wrap past 64 bits" {
 	assert execBinOp(RaiserOpcode.MulU64, -1, 3).exitValue.intVal == -3;
 	assert execBinOp(RaiserOpcode.AddU64, 4611686018427387904, 4611686018427387904).exitValue.intVal == -9223372036854775807 - 1;
 	assert execBinOp(RaiserOpcode.SubU64, 0, 1).exitValue.intVal == -1;
+}
+
+function execFloatDiv(a: float64, b: float64): float64 {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.DivF64, 2, 0, 1),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserFloat(a), raiserFloat(b)]
+	)).exitValue.floatVal;
+}
+
+test "a float divided by zero is an infinity or NaN, as on C and JS" {
+	assert execFloatDiv(1.0, 0.0) == 1.0 / 0.0;
+	assert execFloatDiv(-1.0, 0.0) == -1.0 / 0.0;
+	assert execFloatDiv(1.0, -0.0) == -1.0 / 0.0;
+	const nan = execFloatDiv(0.0, 0.0);
+	assert nan != nan;
+	assert execFloatDiv(1.0, 4.0) == 0.25;
 }
 
 test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal == 42; }
