@@ -3990,6 +3990,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		txCtx.rangeChecks = opts.mode != MODE_DANGER;
 		const refined = refineTypes(comptimeResolved, txCtx, graphRegistry);
 		const transformed = transformForRaiser(refined, modCtx);
+		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 
 		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };
 		modules.push(input);
