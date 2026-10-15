@@ -86,3 +86,34 @@ export class Keeper<T> {
 	assert occurrences(messages, "'Slot' is imported but never used") == 0, messages.join("\n");
 	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
 }
+
+test "compileTimeNameUse: a component tag written only as JSX inside a generic body counts as a use; an intrinsic tag does not" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/ui.ms", entrySource: `export function View(): int32 { return 1; }
+export function Frame(): int32 { return 2; }
+export function Panel(): int32 { return 3; }
+export function div(): int32 { return 4; }
+export function Spare(): int32 { return 5; }
+` },
+		{ entryPath: "src/screen.ms", entrySource: `import { View, Frame, Panel, div, Spare } from "./ui";
+export function screen<T>(value: T): int32 {
+	const tree = <Frame><View /></Frame>;
+	return 0;
+}
+export class Host<T> {
+	held: int32 = 0;
+	draw<U>(value: U): int32 {
+		const leaf = <Panel />;
+		const raw = <div />;
+		return 0;
+	}
+}
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/screen.ms");
+	assert occurrences(messages, "'View' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Frame' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Panel' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'div' is imported but never used") == 1, messages.join("\n");
+	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
+}
