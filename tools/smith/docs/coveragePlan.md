@@ -412,6 +412,11 @@ Batches (`run <first> <count> --features=…`), counted by the symptom in each b
 | all seven families, `stmts=6` | `daabe58b9` | 40 | 26 | 12 ternary hoist; 1 double negation; 1 both |
 | `--swarm`, `MSCORPUS_JOBS=4` | `daabe58b9` | 100 | 91 | 5 ternary hoist; 2 double negation; 1 `_envP`; 1 hoisted argument |
 | `--swarm --features="w.expr.unary=0"`, `MSCORPUS_JOBS=4` | `daabe58b9` | 100 | 91 | 7 ternary hoist; 1 compound assignment; 1 hoisted argument |
+| `fams=coll`, aimed | `bf9abc145` | 40 | 40 | — |
+| `fams=str`, aimed | `bf9abc145` | 40 | 38 | 2 ternary hoist |
+| all seven families, `stmts=6` | `c7c28bb56` | 40 | 30 | 7 ternary hoist (one with a second C error); 3 double negation |
+| `--swarm`, `MSCORPUS_JOBS=4` | `c7c28bb56` | 100 | 94 | 3 ternary hoist; 2 double negation; 1 `_envP` |
+| `--swarm --features="w.expr.unary=0"`, `MSCORPUS_JOBS=4` | `c7c28bb56` | 100 | 93 | 5 ternary hoist; 1 compound assignment; 1 hoisted argument |
 
 The Smith bug: a family result that is a ternary with literal arms was cast to a narrower
 type with a raw `as`, and the checker folds that cast and refuses the literal. `convert`
@@ -437,12 +442,25 @@ callee on the right side of `g4 +=` writes `g4`. At 100 programs neither arm sho
 hiding a bug. The ternary-hoist bug is now the larger mask: it fails the C build of 5–7 %
 of swarm programs and of 13 of 40 programs that draw all seven families, so those programs
 judge nothing on C.
+`bf9abc145` parks the shape the card records: inside the else arm of any ternary, an
+arithmetic operand never holds a ternary (`Gen.elseExpr`, `arithInElse`). It changed 83 of
+the 600 programs of the identity vectors, and exactly those 83 are the ones where the park
+fired (a probe build that logs each firing). Hoist failures fell from 12 to 7 in the
+seven-family batch, from 5 to 3 in swarm and from 7 to 5 in the mask arm (`bf9abc145` and
+`c7c28bb56` generate the same programs; the later commits touch only the plant, the driver
+and the reducer), so the bug has a second shape the park does not cover. Smith's reducer found one
+(mask seed 12, recorded on the card): a `new` temporary inside a call argument of the
+then-branch and a nested ternary inside a call of the else-branch, with no arithmetic. A
+wider park, no ternary anywhere below an else arm, changed 137 of the 600 identity programs
+and left 2, 6, 3 and 4 hoist failures in the same four batches, so it was reverted: it cost
+far more coverage than it removed, and the remaining failures stay findings for the card.
 Smith's reducer cut one string-family hoist bundle 6,144 → 152 bytes to the shape the card
 already records: string temporaries in the condition, arithmetic on a nested ternary in the
 else-branch.
 
-Not measured: SAN with a planted failure (the SAN lane has none, `DESIGN.md` §Debt), so
-`own`'s 12 clean SAN programs do not show the lane would catch a lifecycle bug; the Raiser
+The SAN lane caught its plant after these batches (`DESIGN.md`, planted SAN loop), so the
+lane and the driver work; `own`'s 12 clean SAN programs still say nothing about how often
+a lifecycle bug would trip it. Not measured: the Raiser
 lane; CPU time of these batches; batches larger than 100; `Vec` / `Span` / `Record`,
 nested destructuring, astral text, `onMove` / `onMoved` hooks, `move` into a constructor.
 
