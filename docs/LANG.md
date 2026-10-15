@@ -3605,6 +3605,16 @@ One step only: the result of a `valueOf` is not read again. The receiver matches
 distinct of the same shape does not borrow it, and the extension must be visible like any other (imported
 from its module, or re-exported through a hub).
 
+**Ordering**: `<` `<=` `>` `>=` order numbers, enums, strings, booleans against booleans, bigints, and
+pointers against pointers. A class, interface, struct or array has no order of its own: two of them
+are read through `valueOf` or refused, never compared by address. A union operand reads each member,
+an ordered one as itself and any other through its `valueOf`, joins the reads (numbers and enums to
+the wider number, text to `string`), and picks the member held with `typeof`/`instanceof`, a subclass
+before its base. It is refused, naming the member, when a member neither orders nor has `valueOf`,
+cannot compare with the other side, or cannot be told apart at run time from another member (two
+plain objects, two enums); when the union holds `null`; and when the operand is not a name or a field
+path (store it in a local first). Corpus `orderingThroughValueOf` runs every accepted shape on C and JS.
+
 Consequences: `const c2 = count`, `id(count)`, `[count]`, `nn ?? count` and `() => count` in a
 `() => Accessor<T>` slot keep the accessor; `console.log(count)` and `String(count)` print the handle
 (write `${count}` or `count.toString()`); `typeof count` inspects the handle.
