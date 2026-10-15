@@ -855,6 +855,7 @@ test "as binds at relational precedence, left to right" {
 		assert (n.data as BinaryExprData).right.kind == NodeKind.TypeAssertion, src;
 	}
 	assert binLeftKind("a as T * b") == NodeKind.TypeAssertion;
+	assert binLeftKind("a as Box<int32> < b") == NodeKind.TypeAssertion;
 }
 
 test "after a + b as T, an operator that would have taken b ends the expression" {

@@ -226,7 +226,7 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 export function raiserErrors(source: string): string {
 	resetBuildState();
 	const pr = parseSource(source);
-	if (!pr.ok) return "parse failed";
+	if (!pr.ok) return "parse failed: " + pr.error;
 	const ctx: CheckerContext = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, preludeContextFor("", ".rms"));
 	let text = "";
 	for (const e of ctx.errors) {

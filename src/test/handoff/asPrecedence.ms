@@ -43,3 +43,10 @@ test "asPrecedence: an operator after a + b as T that would have taken b is a sy
 	const r = compileToC("const a: int32 = 1;\nconst b: int32 = 2;\nconst c: int32 = 3;\nconst d = a + b as int64 * c;\nconsole.log(`${d}`);");
 	assert !r.ok && r.error.includes("Unexpected token: *"), r.ok ? "accepted" : r.error;
 }
+
+test "asPrecedence: a < after an as type that never closes is a syntax error, not a swallowed statement" {
+	const keyword = refusedOnEveryBackend("const a: int32 = 1;\nconst b: int32 = 2;\nconst r = a as int32 < b;\nconsole.log(`${r}`);", "Expected '>' to close the type arguments");
+	assert keyword == "", keyword;
+	const reference = refusedOnEveryBackend("type T = int32;\nconst a: int32 = 1;\nconst b: int32 = 2;\nif (a as T < b) { console.log(\"lt\"); }", "Expected '>' to close the type arguments");
+	assert reference == "", reference;
+}

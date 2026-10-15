@@ -610,6 +610,22 @@ test "a closer joined to = leaves the =" {
 	assert skipsTo("A<B<Array<number>>>= x", TokenKind.Assign);
 }
 
+function unclosedTypeArgsStopAt(input: string, stopKind: TokenKind): boolean {
+	const lr = lex(input);
+	if (!lr.ok) return false;
+	const state = createState(lr.value);
+	skipTypeAnnotation(state);
+	return current(state).kind == stopKind && state.errors.length == 1 && state.errors[0].includes("Expected '>' to close the type arguments");
+}
+
+test "unclosed type arguments end at the statement or the enclosing bracket with an error" {
+	assert unclosedTypeArgsStopAt("int32 < b; console.log(r);", TokenKind.Semicolon);
+	assert unclosedTypeArgsStopAt("T < b) { f(); }", TokenKind.RParen);
+	assert unclosedTypeArgsStopAt("Box<Box<int32> < b];", TokenKind.RBracket);
+	assert unclosedTypeArgsStopAt("Map<string, (x: int32) => void", TokenKind.Eof);
+	assert skipsType("Map<string, { a: int32; b: (x: int32) => void }>");
+}
+
 test "array in generic arg" { assert skipsType("Result<Node[], string>"); }
 
 test "array in both generic args" { assert skipsType("HashMap<string[], number[]>"); }
