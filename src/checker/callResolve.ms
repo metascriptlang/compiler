@@ -1261,17 +1261,21 @@ function foldAtCompileTime(ctx: CheckerContext, node: Node, expected: Type | nul
 	node.resolvedSym = null;
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
-	keepComptimeOrdinalType(node, value.nodeType);
+	keepComptimeNominalType(node, value.nodeType);
 	callCheckExpr(ctx, node, expected);
 	node.flags = node.flags.incl(NodeFlag.Folded);
 	return true;
 }
 
-export function keepComptimeOrdinalType(node: Node, staticType: Type | null): void {
-	if (node.kind != NodeKind.NumberLiteral || staticType == null) return;
-	if (staticType.kind != TypeKind.Char && staticType.kind != TypeKind.Enum) return;
+export function isNominalLiteralType(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.Char || t.kind == TypeKind.Enum || t.kind == TypeKind.Distinct);
+}
+
+export function keepComptimeNominalType(node: Node, staticType: Type | null): void {
+	const literal = node.kind == NodeKind.NumberLiteral || node.kind == NodeKind.StringLiteral || node.kind == NodeKind.BooleanLiteral;
+	if (!literal || !isNominalLiteralType(staticType)) return;
 	node.flags = node.flags.incl(NodeFlag.Folded);
-	node.nodeType = staticType;
+	node.nodeType = staticType!;
 }
 
 export function keepFoldedType(node: Node, expanded: Node): void {

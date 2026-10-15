@@ -589,11 +589,15 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	node.nodeType = result;
 }
 
+function keepsFoldedNominalType(node: Node, slot: Type | null): boolean {
+	if (!node.flags.has(NodeFlag.Folded) || !isNominalLiteralType(slot)) return false;
+	node.nodeType = slot!;
+	return true;
+}
+
 function checkNumberLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
-	if (node.flags.has(NodeFlag.Folded) && expectedType != null && (expectedType.kind == TypeKind.Char || expectedType.kind == TypeKind.Enum)) {
-		node.nodeType = expectedType; return;
-	}
+	if (keepsFoldedNominalType(node, expectedType)) return;
 	reportLiteralRange(ctx, node);
 	if (expectedType != null && isIntegerType(expectedType)) {
 		if (literalFitsInType(node, expectedType, false)) {
@@ -648,6 +652,7 @@ function checkNumberLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 
 function checkStringLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
+	if (keepsFoldedNominalType(node, expectedType)) return;
 	// TypeScript parity: string literals get StringLiteral type when expectedType demands it
 	if (expectedType != null) {
 		const sd = node.data as StringLiteralData;
@@ -676,6 +681,7 @@ function checkStringLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 
 function checkBooleanLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
+	if (keepsFoldedNominalType(node, expectedType)) return;
 	// TypeScript parity: boolean literals get BooleanLiteral type when expectedType demands it.
 	// Required for discriminated union narrowing on `ok: true | false` discriminants.
 	if (expectedType != null) {
@@ -740,7 +746,7 @@ function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type 
 	node.resolvedSym = null;
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
-	if (!hoists) keepComptimeOrdinalType(node, staticType);
+	if (!hoists) keepComptimeNominalType(node, staticType);
 	const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
 		|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
 		? expectedType : staticType;
@@ -3468,7 +3474,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer } from "./instantiate";
-import { anyArgIsParametric, keepFoldedType, keepComptimeOrdinalType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
+import { anyArgIsParametric, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);
