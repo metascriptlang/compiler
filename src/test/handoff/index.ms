@@ -44,6 +44,7 @@ import "./anonStructResolve";
 import "./tryResultArray";
 import "./classMemberElseIf";
 import "./crossModuleGlobal";
+import "./importCycleInference";
 import "./closureCall";
 import "./nrvoReassign";
 import "./closureEnvArrayType";
