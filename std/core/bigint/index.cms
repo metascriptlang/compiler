@@ -37,8 +37,29 @@ when (!bare && !solana) {
 	}
 
 	export function BigInt(v: string): bigint {
-		if (!msBigIntParses(v)) throw new Error("Cannot convert " + v + " to a BigInt");
+		if (!msBigIntParses(v)) throw new SyntaxError("Cannot convert " + v + " to a BigInt");
 		return msBigIntParse(v);
+	}
+
+	export function BigInt(v: float64): bigint {
+		if (v % 1.0 != 0.0) throw new RangeError(notIntegerMessage(v));
+		return msBigIntFromFloat64(v);
+	}
+
+	export function BigInt(v: boolean): bigint { return v ? 1n : 0n; }
+	export function BigInt(v: int8): bigint { return v as bigint; }
+	export function BigInt(v: int16): bigint { return v as bigint; }
+	export function BigInt(v: int32): bigint { return v as bigint; }
+	export function BigInt(v: int64): bigint { return v as bigint; }
+	export function BigInt(v: uint8): bigint { return v as bigint; }
+	export function BigInt(v: uint16): bigint { return v as bigint; }
+	export function BigInt(v: uint32): bigint { return v as bigint; }
+	export function BigInt(v: uint64): bigint { return v as bigint; }
+	export function BigInt(v: char): bigint { return v as bigint; }
+	export function BigInt(v: bigint): bigint { return v; }
+
+	function notIntegerMessage(v: float64): string {
+		return `The number ${v} cannot be converted to a BigInt because it is not an integer`;
 	}
 
 	export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
