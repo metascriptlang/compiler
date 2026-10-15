@@ -1,11 +1,15 @@
 // The --os=solana libm (runtime/freestanding/math.h) gives floor, ceil, trunc and fmod the
 // results node gives for 1e300, -1e300, 2^53 + 1, NaN and the infinities, with no int64 cast
-// past 2^63, and isnan/isinf/isfinite link without a libm behind them.
+// past 2^63, and isnan/isinf/isfinite link without a libm behind them. pow follows C's pow
+// table for zeros, infinities, NaN and exponents past 2^63, is exact for integer results, and
+// stops the program on a positive base with a fractional exponent: exp and log are absent, and
+// a link refusal inside pow fails every -O0 build that calls pow, integer exponents included.
 //
 // WHY A SUBPROCESS: no host build reads this header (host and --os=bare use the system libm),
 // so the guard compiles a C probe against it with host clang under UBSan float-cast-overflow.
 //
-// RED PRE-FIX: UBSan stops floor(1e300) at the int64 cast, and isfinite is an undefined symbol.
+// RED PRE-FIX: UBSan stops floor(1e300) and pow(2, 1e300) at the int64 cast, isfinite is an
+// undefined symbol, and pow(2, 0.5) returns 1.
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, ExecFileResult, cwd, exit, findOnPath } from "std/process";
@@ -65,6 +69,50 @@ const probe = [
 	"\tsame(\"fmod(3, 0)\", fmod(3.0 * one, zero), nan);",
 	"\tsame(\"fmod(3, Infinity)\", fmod(3.0 * one, inf), 3.0);",
 	"\tsame(\"fmod(-0, 3)\", fmod(-zero, 3.0), -0.0);",
+	"\tsame(\"pow(2, 1e300)\", pow(2.0 * one, huge), inf);",
+	"\tsame(\"pow(2, -1e300)\", pow(2.0 * one, -huge), 0.0);",
+	"\tsame(\"pow(0.5, 1e300)\", pow(0.5 * one, huge), 0.0);",
+	"\tsame(\"pow(-2, 1e300)\", pow(-2.0 * one, huge), inf);",
+	"\tsame(\"pow(-1, 1e300)\", pow(-one, huge), 1.0);",
+	"\tsame(\"pow(1+2^-52, 2^63)\", pow(0x1.0000000000001p0 * one, 0x1p63), inf);",
+	"\tsame(\"pow(1-2^-53, 2^63)\", pow(0x1.fffffffffffffp-1 * one, 0x1p63), 0.0);",
+	"\tsame(\"pow(2, NaN)\", pow(2.0 * one, nan), nan);",
+	"\tsame(\"pow(NaN, 1)\", pow(nan, one), nan);",
+	"\tsame(\"pow(NaN, 0)\", pow(nan, zero), 1.0);",
+	"\tsame(\"pow(NaN, -0)\", pow(nan, -zero), 1.0);",
+	"\tsame(\"pow(1, NaN)\", pow(one, nan), 1.0);",
+	"\tsame(\"pow(1, Infinity)\", pow(one, inf), 1.0);",
+	"\tsame(\"pow(-1, Infinity)\", pow(-one, inf), 1.0);",
+	"\tsame(\"pow(-1, -Infinity)\", pow(-one, -inf), 1.0);",
+	"\tsame(\"pow(0.5, Infinity)\", pow(0.5 * one, inf), 0.0);",
+	"\tsame(\"pow(0.5, -Infinity)\", pow(0.5 * one, -inf), inf);",
+	"\tsame(\"pow(-2, Infinity)\", pow(-2.0 * one, inf), inf);",
+	"\tsame(\"pow(2, -Infinity)\", pow(2.0 * one, -inf), 0.0);",
+	"\tsame(\"pow(-0, 3)\", pow(-zero, 3.0), -0.0);",
+	"\tsame(\"pow(-0, 2)\", pow(-zero, 2.0), 0.0);",
+	"\tsame(\"pow(-0, -3)\", pow(-zero, -3.0), -inf);",
+	"\tsame(\"pow(-0, -2)\", pow(-zero, -2.0), inf);",
+	"\tsame(\"pow(-0, 0.5)\", pow(-zero, 0.5), 0.0);",
+	"\tsame(\"pow(-0, -0.5)\", pow(-zero, -0.5), inf);",
+	"\tsame(\"pow(-0, -Infinity)\", pow(-zero, -inf), inf);",
+	"\tsame(\"pow(-Infinity, 3)\", pow(-inf, 3.0), -inf);",
+	"\tsame(\"pow(-Infinity, -3)\", pow(-inf, -3.0), -0.0);",
+	"\tsame(\"pow(-Infinity, 2)\", pow(-inf, 2.0), inf);",
+	"\tsame(\"pow(-Infinity, 0.5)\", pow(-inf, 0.5), inf);",
+	"\tsame(\"pow(-Infinity, -0.5)\", pow(-inf, -0.5), 0.0);",
+	"\tsame(\"pow(Infinity, -2)\", pow(inf, -2.0), 0.0);",
+	"\tsame(\"pow(-8, 1/3)\", pow(-8.0 * one, 1.0 / 3.0), nan);",
+	"\tsame(\"pow(-1, 2^53-1)\", pow(-one, 0x1.fffffffffffffp52), -1.0);",
+	"\tsame(\"pow(-1, 1-2^53)\", pow(-one, -0x1.fffffffffffffp52), -1.0);",
+	"\tsame(\"pow(3, 33)\", pow(3.0 * one, 33.0), 5559060566555523.0);",
+	"\tsame(\"pow(10, 22)\", pow(10.0 * one, 22.0), 1e22);",
+	"\tsame(\"pow(-2, 3)\", pow(-2.0 * one, 3.0), -8.0);",
+	"\tsame(\"pow(-2, -3)\", pow(-2.0 * one, -3.0), -0.125);",
+	"\tsame(\"pow(2, 1023)\", pow(2.0 * one, 1023.0), 0x1p1023);",
+	"\tsame(\"pow(2, 1024)\", pow(2.0 * one, 1024.0), inf);",
+	"\tsame(\"pow(2, -1074)\", pow(2.0 * one, -1074.0), 0x1p-1074);",
+	"\tsame(\"pow(-2, -1073)\", pow(-2.0 * one, -1073.0), -0x1p-1073);",
+	"\tsame(\"pow(2, -1075)\", pow(2.0 * one, -1075.0), 0.0);",
 	"\tholds(\"isfinite(1e300)\", isfinite(huge));",
 	"\tholds(\"!isfinite(NaN)\", !isfinite(nan));",
 	"\tholds(\"isnan(NaN)\", isnan(nan));",
@@ -75,9 +123,32 @@ const probe = [
 	"",
 ].join("\n");
 
+const fractionalPow = [
+	"#include <math.h>",
+	"int printf(const char*, ...);",
+	"int main(void) {",
+	"\tvolatile double half = 0.5;",
+	"\tprintf(\"pow(2, 0.5) returned %.17g\\n\", pow(2.0, half));",
+	"\treturn 0;",
+	"}",
+	"",
+].join("\n");
+
 function firstLines(r: ExecFileResult): string {
 	const lines = `${r.errorOutput}${r.output}`.split("\n");
 	return lines.slice(0, 8).join("\n");
+}
+
+function buildAndRun(name: string, source: string): ExecFileResult {
+	writeFile(`${dir}/${name}.c`, source);
+	const flags = ["-std=c11", "-ffreestanding", "-fno-builtin", "-isystem", `${root}/runtime/freestanding`,
+		"-fsanitize=float-cast-overflow", "-fno-sanitize-recover=all", `${name}.c`, "-o", name];
+	const built = execFileResult("clang", flags, dir);
+	if (built.exitCode != 0) {
+		console.log(`GUARD-FAIL the ${name} probe against runtime/freestanding/math.h did not build:\n${firstLines(built)}`);
+		exit(1);
+	}
+	return execFileResult(`${dir}/${name}`, [], dir);
 }
 
 if (findOnPath("clang") == "") {
@@ -85,17 +156,14 @@ if (findOnPath("clang") == "") {
 	exit(1);
 }
 ensureDir(dir);
-writeFile(`${dir}/probe.c`, probe);
-const flags = ["-std=c11", "-ffreestanding", "-fno-builtin", "-isystem", `${root}/runtime/freestanding`,
-	"-fsanitize=float-cast-overflow", "-fno-sanitize-recover=all", "probe.c", "-o", "probe"];
-const built = execFileResult("clang", flags, dir);
-if (built.exitCode != 0) {
-	console.log(`GUARD-FAIL the probe against runtime/freestanding/math.h did not build:\n${firstLines(built)}`);
-	exit(1);
-}
-const ran = execFileResult(`${dir}/probe`, [], dir);
+const ran = buildAndRun("probe", probe);
 console.log(ran.output.trim());
 if (ran.exitCode != 0 || !ran.output.contains("GUARD-OK")) {
 	console.log(`GUARD-FAIL the probe exited ${ran.exitCode}:\n${firstLines(ran)}`);
+	exit(1);
+}
+const refused = buildAndRun("fractionalPow", fractionalPow);
+if (refused.exitCode == 0 && refused.signal == 0) {
+	console.log(`GUARD-FAIL a fractional exponent did not stop the program:\n${firstLines(refused)}`);
 	exit(1);
 }

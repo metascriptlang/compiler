@@ -50,12 +50,34 @@ static inline double fmod(double x, double y) {
     ux.i = xi | sign << 63;
     return ux.f;
 }
-static inline double pow(double base, double exp) {
-    if (exp == 0.0) return 1.0;
-    double result = 1.0;
-    int64_t n = (int64_t)exp;
-    for (int64_t i = 0; i < (n < 0 ? -n : n); i++) result *= base;
-    return n < 0 ? 1.0 / result : result;
+#define MS_POW_SATURATES_FROM 9223372036854775808.0
+static inline double ms_pow_by_squaring(double x, int64_t n) {
+    double r = 1.0;
+    for (;;) {
+        if (n & 1) r *= x;
+        n >>= 1;
+        if (n == 0) return r;
+        x *= x;
+    }
+}
+static inline double pow(double x, double y) {
+    if (y == 0.0 || x == 1.0) return 1.0;
+    if (x != x || y != y) return x + y;
+    double ax = fabs(x);
+    if (!(fabs(y) < MS_POW_SATURATES_FROM)) {
+        if (ax == 1.0) return 1.0;
+        return (ax > 1.0) == (y > 0.0) ? INFINITY : 0.0;
+    }
+    if (trunc(y) != y) {
+        if (ax == 0.0 || ax == INFINITY) return (ax == 0.0) == (y > 0.0) ? 0.0 : INFINITY;
+        if (x < 0.0) return NAN;
+        __builtin_trap();
+    }
+    int64_t n = (int64_t)fabs(y);
+    double r = ms_pow_by_squaring(x, n);
+    if (y > 0.0) return r;
+    if (fabs(r) == INFINITY) return ms_pow_by_squaring(1.0 / x, n);
+    return 1.0 / r;
 }
 double sqrt(double x);
 double cbrt(double x);
