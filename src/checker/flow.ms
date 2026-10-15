@@ -23,7 +23,7 @@ import {
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
 	nullableUnionOf, hasGenericParams,
-	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
+	isAtomicRef, peelToStructOrUnion, matchUnionBehindInstance, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
@@ -161,6 +161,14 @@ function appendIfUnique(types: Type[], t: Type | null): void {
 // `s` to the outer `s`). When getFlowTypeOfReference is called by the
 // checker, both sides always have resolvedSym populated.
 
+function skipReferenceHidden(n: Node): Node {
+	let walk: Node = n;
+	while (walk.kind == NodeKind.HiddenDeref || walk.kind == NodeKind.HiddenAddr || walk.kind == NodeKind.HiddenSubConv) {
+		walk = walk.kind == NodeKind.HiddenSubConv ? (walk.data as HiddenStdConvData).convExpr : (walk.data as { expr: Node }).expr;
+	}
+	return walk;
+}
+
 function isMatchingReference(source: Node, target: Node): boolean {
 	if (source == null || target == null) return false;
 	// Unwrap checker-inserted hidden conversions. The condition expression is
@@ -168,14 +176,8 @@ function isMatchingReference(source: Node, target: Node): boolean {
 	// rewritten by the checker to wrap reference-typed reads in HiddenDeref
 	// so codegen knows to deref the pointer. Without unwrapping, the structural
 	// comparison fails between the bind-time condition and check-time access.
-	while (source.kind == NodeKind.HiddenDeref || source.kind == NodeKind.HiddenAddr) {
-		const hd = source.data as { expr: Node };
-		source = hd.expr;
-	}
-	while (target.kind == NodeKind.HiddenDeref || target.kind == NodeKind.HiddenAddr) {
-		const hd = target.data as { expr: Node };
-		target = hd.expr;
-	}
+	source = skipReferenceHidden(source);
+	target = skipReferenceHidden(target);
 	if (source == target) return true;
 	if (source.kind != target.kind) return false;
 	match (source.kind) {
@@ -280,12 +282,21 @@ export function getFlowTypeOfReference(refNode: Node, declaredType: Type): Type 
 	if (declaredType == null) return declaredType;
 	const flow = refNode.flowNode;
 	if (flow == null) return declaredType;
-	const state = createFlowState(refNode, declaredType);
+	const base = matchUnionBehindInstance(declaredType);
+	const state = createFlowState(refNode, base);
 	if (endsInNeverCall(flow)) return declaredType;
 	const ft = getTypeAtFlowNode(state, flow);
 	const t = ft.t;
-	if (t == null) return declaredType;
+	if (t == null || t == base || (base != declaredType && holdsEveryMember(t, base))) return declaredType;
 	return t;
+}
+
+function holdsEveryMember(t: Type, whole: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren == null || t.typeChildren.length != whole.typeChildren.length) return false;
+	for (const member of whole.typeChildren) {
+		if (!t.typeChildren.includes(member)) return false;
+	}
+	return true;
 }
 
 function endsInNeverCall(flow: FlowNode | null): boolean {

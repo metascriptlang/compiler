@@ -8,8 +8,9 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay } from "./types";
+import { peelTransparentInstance, matchUnionBehindInstance, assignType, emptyType, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
+import { monoInstanceName } from "../monomorphize/registry";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue, floatTruncatesInto } from "./constFold";
@@ -1811,8 +1812,16 @@ function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }
 
-export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
-	if (unwrapRefNullUnion(formal) != null) return null as unknown as Node;
+function instanceNamedUnion(instance: Type, body: Type): Type {
+	const named = emptyType();
+	assignType(named, body);
+	named.typeName = monoInstanceName(instance);
+	return named;
+}
+
+export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type): Node {
+	const formal = matchUnionBehindInstance(formalSlot);
+	if (exprType.kind == TypeKind.GenericInstance || unwrapRefNullUnion(formal) != null) return null as unknown as Node;
 	// A flow-narrowed reference types as the variant, but its storage is the
 	// declared union struct — wrapping it would deref that struct as a variant
 	// pointer. Into the declared union itself the fit is an identity pass;
@@ -1823,34 +1832,35 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	const declared = declaredTagUnionOf(expr);
 	if (declared != null) {
 		if (formal.kind != TypeKind.Union) return null as unknown as Node;
-		if (sameType(declared, formal)) {
-			expr.nodeType = formal;
+		if (sameType(declared, formal) || sameType(declaredInstanceOf(expr), formalSlot)) {
+			expr.nodeType = formalSlot;
 			return expr;
 		}
 		const projected = projectTagUnionMember(expr, declared, exprType);
 		if (projected == null as unknown as Node) return null as unknown as Node;
-		return widenVariantToUnion(projected, formal, exprType);
+		return widenVariantToUnion(projected, formalSlot, exprType);
 	}
+	const target = formal == formalSlot ? formal : instanceNamedUnion(formalSlot, formal);
 	const valueType = unwrapRef(exprType);
-	const exactSlot = unionSlotOf(formal, exprType);
-	const vi = exactSlot >= 0 || formal.kind != TypeKind.Union || !isClassRef(exprType) ? exactSlot : exactMemberSlot(formal, exprType);
+	const exactSlot = unionSlotOf(target, exprType);
+	const vi = exactSlot >= 0 || target.kind != TypeKind.Union || !isClassRef(exprType) ? exactSlot : exactMemberSlot(target, exprType);
 	if (vi < 0) return null as unknown as Node;
-	if (vi != exactSlot) expr = classUpcast(expr, formal.typeChildren[vi]);
-	if (valueType == exprType && formal.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
+	if (vi != exactSlot) expr = classUpcast(expr, target.typeChildren[vi]);
+	if (valueType == exprType && target.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	// A by-value slot READS a ref operand and copies it, never consumes it:
 	// handing the pointer to the conversion makes the analyzer sink it
 	// (wasMoved) and the heap cell is then destroyed by nobody.
 	let operand = expr;
-	const thunk = synthClosureThunk(expr, formal.typeChildren[vi], exprType);
+	const thunk = synthClosureThunk(expr, target.typeChildren[vi], exprType);
 	if (thunk != null as unknown as Node) operand = thunk;
-	if (valueType != exprType && slotHoldsStructByValue(formal.typeChildren[vi])) {
+	if (valueType != exprType && slotHoldsStructByValue(target.typeChildren[vi])) {
 		const drefNode = createNode(NodeKind.HiddenDeref, { expr: expr }, convTok);
 		drefNode.nodeType = valueType;
 		operand = drefNode;
 	}
-	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: operand, convType: formal }, convTok);
-	convNode.nodeType = formal;
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: operand, convType: target }, convTok);
+	convNode.nodeType = formalSlot;
 	// Same stamp convention as the object-literal path: codegen reads the slot,
 	// it never re-derives one (+1 so 0 keeps meaning "not set").
 	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
@@ -1890,14 +1900,19 @@ function declaredTypeOfLocation(loc: Node): Type | null {
 	return null;
 }
 
-export function declaredTagUnionOf(expr: Node): Type | null {
+function declaredInstanceOf(expr: Node): Type | null {
 	let walk: Node = expr;
 	while (walk != null && walk.kind == NodeKind.TypeAssertion) {
 		walk = (walk.data as TypeAssertionData).asExpr;
 	}
-	if (walk == null) return null;
-	const t = declaredTypeOfLocation(walk);
-	return t != null && isSlotUnion(t) ? t : null;
+	return walk == null ? null : declaredTypeOfLocation(walk);
+}
+
+export function declaredTagUnionOf(expr: Node): Type | null {
+	const t = declaredInstanceOf(expr);
+	if (t == null) return null;
+	const body = matchUnionBehindInstance(t);
+	return isSlotUnion(body) ? body : null;
 }
 
 export function isSlotUnion(t: Type): boolean {
@@ -2111,7 +2126,7 @@ function flatUnionTakesNull(t: Type): boolean {
 // Same stamp convention (+1 so 0 means "not set"); the emitter tells the two
 // directions apart by convType: union = inject, member = project.
 export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
-	const exprType = peelTransparentInstance(exprTypeRaw);
+	const exprType = matchUnionBehindInstance(peelTransparentInstance(exprTypeRaw));
 	if (exprType.kind == TypeKind.Union && !isStrLitSet(exprType)) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
@@ -2439,6 +2454,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (exprType.kind == TypeKind.Null && formal.kind == TypeKind.Union && flatUnionTakesNull(formal)) {
 		expr.nodeType = formal;
 		return expr;
+	}
+	if (exprType.kind != TypeKind.GenericInstance && exprType.kind != TypeKind.Union && matchUnionBehindInstance(formal) != formal) {
+		const widened = widenVariantToUnion(expr, formal, exprType);
+		if (widened != null as unknown as Node) return widened;
 	}
 	// A variant value meeting a union formal converts HERE so every fit
 	// position (var init, assign, return, ternary, call arg) shares the one

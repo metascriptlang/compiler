@@ -1320,6 +1320,18 @@ export function peelToStructOrUnion(t: Type | null): Type | null {
 	return cur;
 }
 
+export function matchUnionBehindInstance(t: Type): Type {
+	if (t.kind != TypeKind.GenericInstance) return t;
+	instantiateGenericBody(t, genericParamsOf(t));
+	if (t.typeReturn == null) return t;
+	const u = peelToStructOrUnion(t);
+	if (!isDiscriminatedUnion(u)) return t;
+	for (const member of u!.typeChildren) {
+		if (member.kind == TypeKind.Ref) return t;
+	}
+	return u!;
+}
+
 // A generic instantiation whose body has no nominal Struct/Union carries no
 // identity of its own: `type Brand<T> = T` means `Brand<number>` IS number.
 // Reference parity: ccgtypes.nim `irrelevantForBackend` + getSimpleTypeDesc

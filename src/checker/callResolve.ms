@@ -24,7 +24,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
+import { matchUnionBehindInstance, isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
@@ -2239,12 +2239,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				args[pi] = convNode;
 			}
 			const paramValue = skipModifier(paramType);
-			if (paramValue != null && paramValue.kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+			if (paramValue != null && matchUnionBehindInstance(paramValue).kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
 				const uw = widenVariantToUnion(args[pi], paramValue, argNow);
 				if (uw != null as unknown as Node) args[pi] = uw;
 			}
-			if (paramValue != null && paramValue.kind != TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+			if (paramValue != null && matchUnionBehindInstance(paramValue).kind != TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const pj = narrowUnionToVariant(args[pi], argTypes[pi]);
 				if (pj != null as unknown as Node) args[pi] = pj;
 			}
@@ -2523,7 +2523,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			if (arg == null || arg.nodeType == null) continue;
 			const formal = applySubstitutions(fnType.typeChildren[ai], argBindings);
 			const formalValue = skipModifier(formal);
-			if (formalValue != null && formalValue.kind == TypeKind.Union) {
+			if (formalValue != null && matchUnionBehindInstance(formalValue).kind == TypeKind.Union) {
 				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType);
 				if (uw != null as unknown as Node) cd.arguments[ai] = uw;
 			}
@@ -2954,7 +2954,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 		}
 		const substitutedValue = skipModifier(substituted);
-		if (substitutedValue != null && substitutedValue.kind == TypeKind.Union && arg.nodeType != null) {
+		if (substitutedValue != null && matchUnionBehindInstance(substitutedValue).kind == TypeKind.Union && arg.nodeType != null) {
 			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType);
 			if (uw != null as unknown as Node) {
 				cd.arguments[pi] = uw;

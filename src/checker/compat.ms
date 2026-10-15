@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, matchUnionBehindInstance } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -451,6 +451,15 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			|| (target.kind == TypeKind.Struct && source.kind == TypeKind.GenericInstance)) {
 		const ancestor = classAncestorInstance(source, target);
 		if (ancestor != null) return isAssignable(ancestor, target);
+	}
+
+	if (target.kind == TypeKind.GenericInstance && source.kind != TypeKind.GenericInstance && source.kind != TypeKind.Union) {
+		const body = matchUnionBehindInstance(target);
+		if (body != target) {
+			for (const member of body.typeChildren) {
+				if (sameType(member, source)) return true;
+			}
+		}
 	}
 
 	// Generic-alias instance carries its resolved body in typeReturn
