@@ -773,7 +773,7 @@ if (h.cb !== null) { h.cb(7); }           // narrow, then call
 
 **Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
 
-**Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread or a computed key takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
+**Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
 
 **Locals read before they are assigned** (measured 2026-10-12 on C, JS and the Raiser with a candidate built from tree `d98cdaec6f8d03752dd344dda894df6e3d05a478`; handoff `useBeforeAssign`, corpus `outArgumentUnassigned`): a function-local variable declared without a value must be assigned on every path before it is read, for every type, the TypeScript rule (TS2454). `let n: int32; return n;` and `let n: int32; if (c) { n = 1; } return n;` are `'n' may be read before it is assigned` on all three backends; an assignment in a loop body does not count for a read after the loop. Writing a field or an element is a read of the variable: `let p: P; p.x = 1;` is the same error, so a struct is built with a literal and a sized array is declared `let buf: uint8[4] = [];` (zero filled). An `out` argument is the assignment: `let a: int32; let s: string; fill(out a, out s);` then reading both prints `5 five` on all three. A variable whose type admits `null` (`T | null`) reads as `null` without an assignment. Module-level variables are not checked. `--strict-defs`, which used to turn this into a warning, is gone (`unknown option '--strict-defs'`). Whether the callee writes its `out` parameter is checked where the callee is declared (see Parameter Modifiers); `out a` passed to a `ref` or plain parameter is an error.
 
@@ -798,6 +798,12 @@ const p: Vec2 = { x: 1.0, y: 2.0 };  // stack-allocated
 interface IUser { name: string; age: number; }
 struct SuperUser = IUser & { role: string; };
 ```
+
+#### Computed keys
+
+An object literal's fields are fixed at compile time, so a computed key must be a string literal: `{ ["lit"]: 3 }` is the field `lit`, as in TypeScript. Any other key expression is the error `a computed key must be a string literal` at its `[`, including `[k]` for `const k = "kv"`, because MetaScript types `k` as `string` where TypeScript types it `"kv"`; keys known only at run time belong in a `Map<string, T>`. TypeScript gives such a literal an index signature, which a struct cannot carry. Inside a macro argument the key is kept for the macro (`docs/LANG-METAPROGRAMMING.md`, Macro Invocation Forms).
+
+Measured 2026-10-15 on a candidate built from `wt/fix-computed-key`: `{ ["lit"]: 3, plain: 4 }` prints `{"lit":3,"plain":4}` on C, JS and the Raiser (corpus `computedKeyStringLiteral`); `[screen.wide]` and `[k]` are refused on C and JS, and two computed keys give two errors (`src/test/handoff/computedObjectKey.ms`). Before, every computed key was stored as the field `__computed__`: one printed `{"__computed__":1}`, two collapsed into one field on JS and failed in clang on C. A numeric literal key `[1]` is refused the same way, while TypeScript names the field `1`. Not measured: a computed key in a literal whose expected type is a class or an interface.
 
 #### Field Decorators
 
@@ -4073,11 +4079,15 @@ extern class console {
 }
 ```
 
-On C, `from` names the C symbol. On JS, a `from` string containing `#`, `@`, `(` or `$1` is a
-pattern emitted in place of the call: each `#` takes the next argument, `@` the remaining ones,
-`$1` the function's name. A C build refuses such a pattern at its `extern` declaration, called or
-not; a declaration meant for JS only sits inside `when (js) { … }` or in a `.jms` file. A pattern
-without a placeholder is emitted as written:
+The `from` string is formatted once, at the declaration, on every backend: `$1` becomes the
+declared name and `$$` a literal `$`; any other `$` sequence is refused there. So
+`extern function abs(x: int32): int32 from "$1"` names C's `abs` and `from "to$1"` on a function
+`upper` names `toupper`. A `from` name without `#`, `@` or `(` is the name called, on C and on JS
+alike: `from "Math.abs"` emits `Math.abs(x)` on JS. On JS, a `from` string containing `#`, `@` or
+`(` is a pattern emitted in place of the call: each `#` takes the next argument, `@` the remaining
+ones. A C build refuses such a pattern at its `extern` declaration, called or not; a declaration
+meant for JS only sits inside `when (js) { … }` or in a `.jms` file. A pattern without a
+placeholder is emitted as written:
 
 ```ms
 extern function answer(): int32 from "(40 + 2)";              // answer() → (40 + 2)
@@ -4085,13 +4095,21 @@ extern function hashAt(s: string): int32 from "(#).indexOf('\\x23')";
 ```
 
 Every `#` is a placeholder, a `#` inside a quoted JS string included, so a literal `#` is written
-`\\x23` in the pattern (JS reads `\x23` as `#`). The declaration is refused when the pattern's
-`#` count differs from the parameter count (with `@`, when it exceeds it), and the error names
-both counts. Measured 2026-10-14 on `wt/fix-extern-pattern`: corpus `externPatternArity` prints
+`\\x23` in the pattern (JS reads `\x23` as `#`). Anywhere in a pattern, inside a JS string or
+not (a private name `#.\x1fsize`), `"\x1f"` emits a literal `#` and `"\x1d"` a literal `@`. The
+declaration is refused when the pattern's `#` count differs from the parameter count (with `@`,
+when it exceeds it), and the error names both counts; a `#` after `@` is refused too, since `@`
+has taken every remaining argument. An extern class method whose `from` is a plain name is
+still called on JS by its declared member name (`Clock.stamp()` for `from "Date.now"`).
+
+Measured 2026-10-14 on `wt/fix-extern-pattern`: corpus `externPatternArity` prints
 `42 hi 3 | 1 #x | 7 [1,2,3]` on JS, C drc and C orc (the C side defines plain functions under
 `when`); `src/test/js/externPattern.ms` pins the count refusals and `src/test/c/externPattern.ms`
-the C refusal. Not measured: extern class methods with a pattern, which the count check does not
-cover (the C refusal does).
+the C refusal. Measured 2026-10-15 on `wt/fix-extern-name`: the same program, extended, prints
+`… | 3 65 4 #x@` on all three (`$1`, `to$1`, plain `Math.abs` / `fabs`, `\x1f`, `\x1d`); both
+test files pin `$1`, `$$`, the refused `$2`, the plain JS name, the literal characters and the
+`#`-after-`@` refusal. Not measured: extern class methods with a pattern, which the count check
+does not cover (the C refusal does).
 
 ### Distinct Types
 ```typescript

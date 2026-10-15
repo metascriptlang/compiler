@@ -356,6 +356,8 @@ export enum NodeKind {
 	// See docs/LANG-JSX.md for spec, docs/JSX-ROADMAP.md for phased plan.
 	JSXElement, JSXFragment, JSXText,
 	JSXExpressionContainer, JSXAttribute, JSXSpreadAttribute,
+	// `{ [key]: value }` whose key is not a string literal: compile-time only, like JSX.
+	ComputedProperty,
 }
 
 // ===== Declaration Kind Enum =====
@@ -512,6 +514,7 @@ export type NodeData =
 	| { jsxExpr: Node }                                            // JSXExpressionContainer
 	| { jsxAttrName: string, jsxAttrValue: Node }                  // JSXAttribute
 	| { jsxSpreadArg: Node }                                       // JSXSpreadAttribute
+	| { computedKey: Node, computedValue: Node }                  // ComputedProperty
 
 // ===== Flow Graph =====
 //
@@ -741,6 +744,7 @@ export type JSXTextData = { jsxText: string };
 export type JSXExpressionContainerData = { jsxExpr: Node };
 export type JSXAttributeData = { jsxAttrName: string, jsxAttrValue: Node };
 export type JSXSpreadAttributeData = { jsxSpreadArg: Node };
+export type ComputedPropertyData = { computedKey: Node, computedValue: Node };
 
 // ===== Constructors =====
 
@@ -877,6 +881,7 @@ export function createNodeAt(kind: NodeKind.JSXText, data: JSXTextData, loc: Sou
 export function createNodeAt(kind: NodeKind.JSXExpressionContainer, data: JSXExpressionContainerData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.JSXAttribute, data: JSXAttributeData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.JSXSpreadAttribute, data: JSXSpreadAttributeData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ComputedProperty, data: ComputedPropertyData, loc: SourceLocation): Node;
 
 // Implementation — widest signature, accepts any NodeKind and the NodeData union.
 // This is the body; all overload signatures above delegate here via the checker's

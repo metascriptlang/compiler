@@ -164,6 +164,44 @@ export function collectWritableModuleBindings(program: Node): Node[] {
 	return out;
 }
 
+export function emptyTopLevelMessage(fileName: string): string {
+	return `'${fileName}' calls nothing at its top level, so this Solana program would do nothing and report success for every instruction. Solana runs the top-level code of this file once per instruction: call the function that handles instructions there, for example 'when (!testBuild) { entry(); }' at the end of the file`;
+}
+
+function declaredNode(node: Node): Node {
+	if (node.kind == NodeKind.ExportDecl) return declaredNode((node.data as ExportDeclData).exportedDecl);
+	if (node.kind == NodeKind.DecoratedDecl) return declaredNode((node.data as DecoratedDeclData).decoratedNode);
+	return node;
+}
+
+function runsOnlyAtCompileTime(node: Node): boolean {
+	return match (node.kind) {
+		NodeKind.FunctionDecl | NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+		| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl | NodeKind.ActorDecl
+		| NodeKind.TestDecl | NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.MacroInvocation
+		| NodeKind.ComptimeBlock => true,
+		_ => false,
+	};
+}
+
+function callsOutsideRoutines(node: Node): boolean {
+	if (node.kind == NodeKind.CallExpr || node.kind == NodeKind.NewExpr) return true;
+	if (isFunctionLike(node) || node.kind == NodeKind.ClassDecl) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && callsOutsideRoutines(child)) found = true;
+	});
+	return found;
+}
+
+export function topLevelCallsAnything(program: Node): boolean {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const declared = declaredNode(stmt);
+		if (!runsOnlyAtCompileTime(declared) && callsOutsideRoutines(declared)) return true;
+	}
+	return false;
+}
+
 // ===== Tests =====
 // Hand-built AST: this module must not import the parser (it is consumed by
 // both the checker-side gate and the LSP handler).
@@ -297,4 +335,19 @@ test "freestanding: report position is the declaration name" {
 	const loc = freestandingAsyncLoc(fn);
 	assert loc.line == 1;
 	assert loc.column == 1;
+}
+
+test "freestanding: a top level of declarations calls nothing" {
+	const entry = fsFn("entry", "", fsBlock([fsExprStmt(fsCall())]));
+	const exported = createNodeAt(NodeKind.ExportDecl, { exportedDecl: fsFn("dispatch", "", fsBlock([fsExprStmt(fsCall())])) }, fsLoc());
+	assert !topLevelCallsAnything(fsProgram([entry, exported]));
+	assert !topLevelCallsAnything(fsProgram([]));
+	const routine = createNodeAt(NodeKind.ArrowFunction, { arrowParams: [], arrowParamTypes: [], arrowBody: fsBlock([fsExprStmt(fsCall())]), arrowFlags: "", arrowReturnType: "", arrowDefaults: [] }, fsLoc());
+	assert !topLevelCallsAnything(fsProgram([fsVariable("handler", DeclKind.Const, routine)]));
+}
+
+test "freestanding: a top-level call, nested or in an initializer, counts" {
+	assert topLevelCallsAnything(fsProgram([fsFn("entry", "", fsBlock([])), fsExprStmt(fsCall())]));
+	assert topLevelCallsAnything(fsProgram([fsBlock([fsExprStmt(fsCall())])]));
+	assert topLevelCallsAnything(fsProgram([fsVariable("result", DeclKind.Const, fsCall())]));
 }

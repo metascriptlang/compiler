@@ -113,8 +113,61 @@ export function pdaSeedsIdl(): string {
 	});
 }
 
+enum PlainOp { Ping, Pay }
+
+function plainIdl(): string {
+	return anchorIdl<PlainOp>({
+		name: "plain",
+		Ping: [],
+		Pay: [PayerAccounts, MakeArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+}
+
+enum GaugeOp { Measure }
+
+struct Gauge {
+	reading: float64;
+	scale: float32;
+	count: uint32;
+}
+
+struct MeasureArgs {
+	ratio: float32;
+	limit: float64;
+}
+
+function gaugeIdl(): string {
+	return anchorIdl<GaugeOp>({
+		name: "gauge",
+		Measure: [PayerAccounts, MeasureArgs],
+		accounts: [Gauge],
+		events: [],
+		errors: "",
+	});
+}
+
 when (!testBuild) {
 	console.log(pdaSeedsIdl());
+}
+
+test "an instruction given no accounts struct has no accounts and no args" {
+	const idl = plainIdl();
+	assert idl.indexOf("{\"name\":\"ping\",\"discriminator\":[") >= 0;
+	assert idl.indexOf("],\"accounts\":[],\"args\":[]},{\"name\":\"pay\"") >= 0;
+	assert idl.indexOf("\"accounts\":[{\"name\":\"payer\",\"writable\":true,\"signer\":true}") >= 0;
+}
+
+test "a float32 and a float64 field are the IDL's f32 and f64" {
+	assert gaugeIdl().indexOf("\"fields\":[{\"name\":\"reading\",\"type\":\"f64\"}," +
+		"{\"name\":\"scale\",\"type\":\"f32\"},{\"name\":\"count\",\"type\":\"u32\"}]") >= 0;
+}
+
+test "a float32 and a float64 argument are the IDL's f32 and f64" {
+	assert gaugeIdl().indexOf("\"args\":[{\"name\":\"ratio\",\"type\":\"f32\"}," +
+		"{\"name\":\"limit\",\"type\":\"f64\"}]") >= 0;
 }
 
 test "a literal, an account and an argument seed give the account its PDA" {

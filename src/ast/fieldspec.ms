@@ -32,7 +32,7 @@ import { Node, NodeKind, NodeFlag, NodeData, SourceLocation, Type, Symbol, DeclK
 	TestDeclData, AssertStmtData,
 	HiddenStdConvData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 	BreakStmtData, ContinueStmtData, UnreachableStmtData,
 } from "./node";
 
@@ -198,6 +198,7 @@ export function rebuildNodeData(n: Node, X: FieldXform): NodeData {
 	if (kind == NodeKind.JSXExpressionContainer) { const d = n.data as JSXExpressionContainerData; return { jsxExpr: X.node(d.jsxExpr) as Node } as NodeData; }
 	if (kind == NodeKind.JSXAttribute) { const d = n.data as JSXAttributeData; return { jsxAttrName: X.str(d.jsxAttrName), jsxAttrValue: X.node(d.jsxAttrValue) as Node } as NodeData; }
 	if (kind == NodeKind.JSXSpreadAttribute) { const d = n.data as JSXSpreadAttributeData; return { jsxSpreadArg: X.node(d.jsxSpreadArg) as Node } as NodeData; }
+	if (kind == NodeKind.ComputedProperty) { const d = n.data as ComputedPropertyData; return { computedKey: X.node(d.computedKey) as Node, computedValue: X.node(d.computedValue) as Node } as NodeData; }
 	// Unknown kind: share the original payload (the pre-unification clone's
 	// fallback semantics for not-yet-handled kinds).
 	return n.data;
@@ -293,6 +294,7 @@ export function nodeFields(n: Node, V: FieldSink): void {
 	if (kind == NodeKind.JSXExpressionContainer) { const d = n.data as JSXExpressionContainerData; V.node("jsxExpr", d.jsxExpr); return; }
 	if (kind == NodeKind.JSXAttribute) { const d = n.data as JSXAttributeData; V.str("jsxAttrName", d.jsxAttrName); V.node("jsxAttrValue", d.jsxAttrValue); return; }
 	if (kind == NodeKind.JSXSpreadAttribute) { const d = n.data as JSXSpreadAttributeData; V.node("jsxSpreadArg", d.jsxSpreadArg); return; }
+	if (kind == NodeKind.ComputedProperty) { const d = n.data as ComputedPropertyData; V.node("computedKey", d.computedKey); V.node("computedValue", d.computedValue); return; }
 }
 
 // ===== Exhaustive per-kind test helpers =====
@@ -439,6 +441,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.JSXExpressionContainer, { jsxExpr: a } as NodeData, makeLoc(17, 89)));
 	out.push(jsxAttr);
 	out.push(createNodeAt(NodeKind.JSXSpreadAttribute, { jsxSpreadArg: a } as NodeData, makeLoc(17, 91)));
+	out.push(createNodeAt(NodeKind.ComputedProperty, { computedKey: a, computedValue: a } as NodeData, makeLoc(17, 93)));
 	// resolvedSym coverage: slot 6 (Identifier) carries the cross-table link.
 	out[6] = linked;
 	return out;
@@ -564,6 +567,7 @@ export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 	if (kind == NodeKind.JSXExpressionContainer) { const d = n.data as JSXExpressionContainerData; return s + `jxc=${pkDumpNode(d.jsxExpr, withMeta)}`; }
 	if (kind == NodeKind.JSXAttribute) { const d = n.data as JSXAttributeData; return s + `jxa=${d.jsxAttrName}:${pkDumpNode(d.jsxAttrValue, withMeta)}`; }
 	if (kind == NodeKind.JSXSpreadAttribute) { const d = n.data as JSXSpreadAttributeData; return s + `jxs=${pkDumpNode(d.jsxSpreadArg, withMeta)}`; }
+	if (kind == NodeKind.ComputedProperty) { const d = n.data as ComputedPropertyData; return s + `cpk=${pkDumpNode(d.computedKey, withMeta)}:${pkDumpNode(d.computedValue, withMeta)}`; }
 	return s + "unknown";
 }
 
@@ -664,6 +668,7 @@ export function nodeKindName(kind: NodeKind): string {
 		NodeKind.JSXExpressionContainer => "JSXExpressionContainer",
 		NodeKind.JSXAttribute => "JSXAttribute",
 		NodeKind.JSXSpreadAttribute => "JSXSpreadAttribute",
+		NodeKind.ComputedProperty => "ComputedProperty",
 		_ => `Kind${kind as int32}`,
 	};
 }

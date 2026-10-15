@@ -36,3 +36,22 @@ test "C: a C symbol name in from stays a name" {
 	assert c.ok;
 	assert c.value.contains("abs(");
 }
+
+test "C: '$1' in from names the C function by the declared name" {
+	const c = compileAsCBuild("extern function abs(n: int32): int32 from \"$1\";\nconst v = abs(-1);");
+	assert c.ok;
+	assert c.value.contains("abs(");
+	assert !c.value.contains("$1");
+}
+
+test "C: 'prefix$1' in from names the prefixed C function" {
+	const c = compileAsCBuild("extern function upper(c: int32): int32 from \"to$1\";\nconst v = upper(97);");
+	assert c.ok;
+	assert c.value.contains("toupper(");
+}
+
+test "C: an unknown '$' sequence in a from name is refused at the declaration" {
+	const c = compileAsCBuild("extern function abs(n: int32): int32 from \"$12\";\nconst v = abs(-1);");
+	assert !c.ok;
+	assert c.error.contains("extern function 'abs': invalid from name \"$12\"");
+}

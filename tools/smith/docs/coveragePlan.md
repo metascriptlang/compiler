@@ -105,7 +105,7 @@ state. A single syntax hit does not verify a row.
 | id | surface / safety axis to vary | proposed oracle / reference | present Smith state |
 |---|---|---|---|
 | H1 | sized integers, float64; add float32, char, bigint, boolean/null/void; spelling and width edges | P; R1/R2 + DESIGN numeric guards | Arithmetic types source-present; additional types not implemented. |
-| H2 | string/character/UTF-8 operations, templates and escaping, regex literals | P on specified byte/index space, S for owned values; R1/R8 | Strings only incidental to union helpers/prints; standalone family absent. Surface measured (§Surfaces measured). |
+| H2 | string/character/UTF-8 operations, templates and escaping, regex literals | P on specified byte/index space, S for owned values; R1/R8 | `str` family (§Collection, string and ownership families); never astral text. Surface measured (§Surfaces measured). |
 | H3 | arithmetic/comparison/bitwise/logical/ternary; all compound/update forms; nullish/optional access and operator overloads | P, explicit legal effect order; R4/R6/R7 | Scalar subset source-present, many operators absent. |
 | H4 | blocks, if/match, bounded for/while/do, for-of/in, break/continue, early return, unreachable and switch spelling | P/S, explicit fuel; R4/R5 | if, for, scalar match, loop exits and return subset source-present. |
 | H5 | routines and function values: inference/annotations, arrows/nested declarations, defaults/rest/overloads, finite recursion | P/S, depth/work fuel and exact captures; R4/R6 | Acyclic numeric functions and closure subset source-present. |
@@ -113,9 +113,9 @@ state. A single syntax hit does not verify a row.
 | H7 | enums/BitSet, aliases/distinct/delegation, literal and discriminated types, intersections/conditional/mapped/utility types, unknown/never | P for observable meaning, D for refusal; R1/R4 | None as independent families. |
 | H8 | nullable/union narrowing and reassignment, Result/try and typed errors | P/S; R4/R5 | Scalar-or-string-or-null union subset source-present; Result absent. |
 | H9 | generics: inference/explicit args, constraints, nested/recursive instances, generic structs/interfaces/classes/methods | P/S, finite instantiation fuel; R1/R4/R6 | id/twice/pick/Box subset source-present. |
-| H10 | dynamic/fixed arrays, Vec/Span, tuples, Map/Set/Record; iteration/destructuring/default/rest/spread/index bounds | P/S, ownership and backing lifetimes; R5/R7 | Small generic arrays/closure arrays incidental; independent collections absent. Surface measured (§Surfaces measured). |
+| H10 | dynamic/fixed arrays, Vec/Span, tuples, Map/Set/Record; iteration/destructuring/default/rest/spread/index bounds | P/S, ownership and backing lifetimes; R5/R7 | `coll` family (§Collection, string and ownership families): arrays, `Map`, `Set`, fixed arrays, one-level destructuring. `Vec` / `Span` / `Record`, tuples and nested destructuring absent. Surface measured (§Surfaces measured). |
 | H11 | conversions/coercions, extension/static/ref receivers, convention protocols, user operators | P/S or D, explicit width/type axis; R1/R7 | Numeric conversion helpers only. |
-| H12 | move/ref/out/readonly/borrow/cursor, custom lifecycle hooks; field/element sinks, cleanup after branch/loop/escape | P/S, lifetime/provenance facts; R5/R6/R7 | Scalar capture/maker/loop-closure shapes source-present; owning aggregate lifecycle absent. Surface measured: hooks are not a parity oracle (§Surfaces measured). |
+| H12 | move/ref/out/readonly/borrow/cursor, custom lifecycle hooks; field/element sinks, cleanup after branch/loop/escape | P/S, lifetime/provenance facts; R5/R6/R7 | `own` family (§Collection, string and ownership families): hooked struct, copy, `move`, `ref` / `out`, array sinks; judged on parity and SAN, the SAN lane with no planted failure. Surface measured: hooks are not a parity oracle (§Surfaces measured). |
 | H13 | throw/catch/finally/defer, typed throw vs Result, unwinding of partially built values | P/S and D where required; R4/R5 | Not implemented. |
 | H14 | generators/yield/delegation, iterators, nested routines across resume | P/S on supporting lanes; bounded resumes; R4/R5/R6 | Not implemented; Raiser capability must be probed, not presumed. |
 | H15 | modules/import/export/re-export/alias/cycle and backend-specific module selection | P/S with complete project bundle; R1/R6 | Single-file source only. |
@@ -354,6 +354,115 @@ copy; the aimed vector above holds 29, 83 and 23. Aim with `types`, `stmts` and
 Not covered by the family: inheritance, statics, getters and setters, interfaces, structs
 in arrays or closures as a drawn shape, `float64` struct equality. Not measured: SAN,
 Raiser, any batch larger than 40.
+
+### Collection, string and ownership families (G3) — measured 2026-10-15
+
+Three families follow the `agg` idiom (an `EntKind` per value they track, a `Gen.<fam>Expr`
+/ `Gen.<fam>Statement` pair, helpers emitted only when the family is drawn, a weight group
+of their own): `fams=coll` (H10), `fams=str` (H2) and `fams=own` (H12). All three are in the
+default family set and in the swarm draw; with them the weight table holds 82 keys. Each
+emits only the shapes §Surfaces measured found raw, or guarded so that every lane computes
+the same value:
+
+- `coll`: `T[]` indexed through `ixI` (index kept in `0..length-1`) behind a non-empty
+  test, `Map.get` only through `??`, `push`, `pop`, `splice`, shrinking `setLength`,
+  `fill`, `reverse`, `slice`, `concat`, `indexOf` (never on `float64` elements),
+  `join`, `includes`, aliasing, three loop forms with a trip bound, one-level destructuring
+  with defaults and a rest, `Map` / `Set` with no write inside their own `for…of` and no
+  `float64` Set, fixed `T[N]` copy and write, spread into a rest parameter.
+- `str`: concatenation, `+=` and `=` with the result cut to a bounded length, templates,
+  `String(x)`, `slice` / `substring` / `charAt`, case and trim, `repeat`, `padStart` /
+  `padEnd`, `replace` / `replaceAll` / `split(sep).join`, `length` / `indexOf` /
+  `lastIndexOf` / `charCodeAt`, `==` `!=` `<` `>` `includes` `startsWith` `endsWith`, over an
+  alphabet of ASCII, BMP non-ASCII and every escape form, never astral.
+- `own`: a hooked `struct Own<T>` whose `onDestroy` / `onCopy` count into a global that is
+  never printed, copies, `move` only of a variable declared in the same block and never
+  named again, `ref` and `out` parameters, sinks into an array, element reads; nothing of it
+  inside a closure body.
+
+Generator tree of the second batch `daabe58b9` (first batch `8a118417d`); subject and harness
+the installed `msc` v0.3.3, BUILD `f82403c8e`; lanes c / orc / danger / js / esm; macOS
+arm64, no gate in `~/.metascript/gates` for the second batch (the first batch overlapped a
+release gate for its last run).
+
+| check | result |
+|---|---|
+| `gen <seed>` with the CLI before `coll` and with `daabe58b9`, seeds 1..100: `fams=closure,union,generic,agg` / `fams=none` / `fams=closure` / `fams=union types=int32,uint8` / `fams=agg types=int32,uint8 stmts=8 w.stmt.fam=80` / `plant=backend` | **600/600** identical |
+| `msc test tools/smith/gen.ms`, C / `--target=js` | **353/353**, **116/116** |
+| `drive.ms` C; `identity.ms` C / JS | **438/438**; **308/308**, **71/71** |
+| family statement lines, 40 programs, aimed `types=int32,uint8 stmts=8 w.stmt.fam=80` | coll 76 %, str 82 %, own 80 % |
+| the same, default vector `fams=<fam>` | coll 50 %, str 49 %, own 58 % |
+| `msc check`, aimed vector, seeds 1..40 per family (coll, str) | **80/80** clean |
+
+The concentration count is a line heuristic: a statement line in a function body that is
+not one of the scalar statement forms counts as a family line.
+
+Batches (`run <first> <count> --features=…`), counted by the symptom in each bundle:
+
+| batch | gen | programs | clean | findings, by cause |
+|---|---|---:|---:|---|
+| `fams=coll`, aimed | `8a118417d` | 40 | 30 | 8 `Map`/`Set` `.size` refused on JS; 2 a Smith bug (below) |
+| `fams=coll`, default | `8a118417d` | 12 | 11 | 1 double negation |
+| `fams=str`, aimed | `8a118417d` | 40 | 14 | 18 `padStart`/`padEnd` panic on C debug; 8 ternary hoist |
+| `fams=str`, default | `8a118417d` | 12 | 3 | 7 ternary hoist; 2 pad |
+| `fams=own`, aimed | `8a118417d` | 40 | 40 | — |
+| `fams=own`, aimed, `--san` | `daabe58b9` | 12 | 12 | — |
+| `fams=coll`, aimed | `daabe58b9` | 40 | 39 | 1 ternary hoist |
+| `fams=str`, aimed | `daabe58b9` | 40 | 35 | 5 ternary hoist |
+| all seven families, `stmts=6` | `daabe58b9` | 40 | 26 | 12 ternary hoist; 1 double negation; 1 both |
+| `--swarm`, `MSCORPUS_JOBS=4` | `daabe58b9` | 100 | 91 | 5 ternary hoist; 2 double negation; 1 `_envP`; 1 hoisted argument |
+| `--swarm --features="w.expr.unary=0"`, `MSCORPUS_JOBS=4` | `daabe58b9` | 100 | 91 | 7 ternary hoist; 1 compound assignment; 1 hoisted argument |
+| `fams=coll`, aimed | `bf9abc145` | 40 | 40 | — |
+| `fams=str`, aimed | `bf9abc145` | 40 | 38 | 2 ternary hoist |
+| all seven families, `stmts=6` | `c7c28bb56` | 40 | 30 | 7 ternary hoist (one with a second C error); 3 double negation |
+| `--swarm`, `MSCORPUS_JOBS=4` | `c7c28bb56` | 100 | 94 | 3 ternary hoist; 2 double negation; 1 `_envP` |
+| `--swarm --features="w.expr.unary=0"`, `MSCORPUS_JOBS=4` | `c7c28bb56` | 100 | 93 | 5 ternary hoist; 1 compound assignment; 1 hoisted argument |
+
+The Smith bug: a family result that is a ternary with literal arms was cast to a narrower
+type with a raw `as`, and the checker folds that cast and refuses the literal. `convert`
+now treats a family ternary as checked at compile time (`Gen.ternary`); the guard test
+"a family ternary is never narrowed by a raw cast" fails on the generator without it.
+
+Two compiler bugs found by these families are parked in the generator, because each
+buried every other finding of the program it hit: `.size` is not drawn (inbox
+`2026-10-15-map-and-set-size-is-int32-on-c-and-number-on-js`), and `pad` pads only a
+receiver with a non-empty literal appended (inbox
+`2026-10-15-c-padstart-padend-panic-on-an-empty-string-with-no-payload`). A destructured
+rest is bound and never used (inbox
+`2026-10-15-array-destructuring-rest-is-typed-vec-not-the-source-array-type`).
+
+Masking. The swarm pair runs the same generator with and without `w.expr.unary`, over
+different programs per seed, so it compares rates, not pairs. Switching the double
+negation off removed its 2 findings and found 1 compound-assignment and 1 hoisted-argument
+program. Both are known cards; the hoisted-argument programs of the two arms are new
+triggers of that card, a rest-parameter call (mask seed 34) and a ternary argument
+(control seed 28, reduced 17,133 → 340 bytes in the 1,200 s cap), each cut by hand and
+recorded there. Mask seed 14 was matched to the compound-assignment card by reading: the
+callee on the right side of `g4 +=` writes `g4`. At 100 programs neither arm shows the double negation
+hiding a bug. The ternary-hoist bug is now the larger mask: it fails the C build of 5–7 %
+of swarm programs and of 13 of 40 programs that draw all seven families, so those programs
+judge nothing on C.
+`bf9abc145` parks the shape the card records: inside the else arm of any ternary, an
+arithmetic operand never holds a ternary (`Gen.elseExpr`, `arithInElse`). It changed 83 of
+the 600 programs of the identity vectors, and exactly those 83 are the ones where the park
+fired (a probe build that logs each firing). Hoist failures fell from 12 to 7 in the
+seven-family batch, from 5 to 3 in swarm and from 7 to 5 in the mask arm (`bf9abc145` and
+`c7c28bb56` generate the same programs; the later commits touch only the plant, the driver
+and the reducer), so the bug has a second shape the park does not cover. Smith's reducer found one
+(mask seed 12, recorded on the card): a `new` temporary inside a call argument of the
+then-branch and a nested ternary inside a call of the else-branch, with no arithmetic. A
+wider park, no ternary anywhere below an else arm, changed 137 of the 600 identity programs
+and left 2, 6, 3 and 4 hoist failures in the same four batches, so it was reverted: it cost
+far more coverage than it removed, and the remaining failures stay findings for the card.
+Smith's reducer cut one string-family hoist bundle 6,144 → 152 bytes to the shape the card
+already records: string temporaries in the condition, arithmetic on a nested ternary in the
+else-branch.
+
+The SAN lane caught its plant after these batches (`DESIGN.md`, planted SAN loop), so the
+lane and the driver work; `own`'s 12 clean SAN programs still say nothing about how often
+a lifecycle bug would trip it. Not measured: the Raiser
+lane; CPU time of these batches; batches larger than 100; `Vec` / `Span` / `Record`,
+nested destructuring, astral text, `onMove` / `onMoved` hooks, `move` into a constructor.
 
 ### Surfaces measured for the next families — 2026-10-12
 

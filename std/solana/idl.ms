@@ -255,8 +255,6 @@ export macro anchorIdl(spec: Node): Node {
 		if (member > 0) { json = json + ","; }
 		json = json + "{\"name\":\"" + snakeCase(op) + "\",\"discriminator\":" + tag +
 			",\"accounts\":[";
-		const accountsDecl = getImpl(bindSym(pair[0].name))!;
-		const accountsHeld = getTypeImpl(bindSym(pair[0].name))!;
 		let argsDecl: Node | null = null;
 		const argNames: string[] = [];
 		const argTypes: string[] = [];
@@ -276,7 +274,12 @@ export macro anchorIdl(spec: Node): Node {
 		const accountNames: string[] = [];
 		const accountWritten: string[] = [];
 		const accountDecorators: Node[][] = [];
-		inheritedFirst(accountsDecl, accountNames, accountWritten, accountDecorators);
+		let accountsHeld: Node | null = null;
+		if (pair.length > 0) {
+			const accountsDecl = getImpl(bindSym(pair[0].name))!;
+			inheritedFirst(accountsDecl, accountNames, accountWritten, accountDecorators);
+			accountsHeld = getTypeImpl(bindSym(pair[0].name))!;
+		}
 		let f = 0;
 		while (f < accountNames.length) {
 			const written = accountWritten[f];
@@ -294,7 +297,8 @@ export macro anchorIdl(spec: Node): Node {
 			let fixed = declaredAddress(decorators, spec);
 			if (fixed == "" && base == "Program") { fixed = knownProgram(inner); }
 			if (fixed != "") { account = account + ",\"address\":\"" + fixed + "\""; }
-			const pda = pdaJson(decorators, accountNames, accountWritten, accountsHeld, argNames, argTypes);
+			const pda = pdaJson(decorators, accountNames, accountWritten, accountsHeld!, argNames,
+				argTypes);
 			if (pda != "") { account = account + ",\"pda\":" + pda; }
 			json = json + (f > 0 ? "," : "") + account + "}";
 			f = f + 1;
@@ -323,6 +327,8 @@ export macro anchorIdl(spec: Node): Node {
 				if (written == "int16") { idlType = "\"i16\""; }
 				if (written == "int32") { idlType = "\"i32\""; }
 				if (written == "int64") { idlType = "\"i64\""; }
+				if (written == "float32") { idlType = "\"f32\""; }
+				if (written == "float64") { idlType = "\"f64\""; }
 				if (written == "boolean") { idlType = "\"bool\""; }
 				if (sameType(scalarType, bindSym("Pubkey"))) { idlType = "\"pubkey\""; }
 				if (sameType(scalarType, bindSym("Bytes"))) { idlType = "\"bytes\""; }
@@ -460,6 +466,8 @@ export macro anchorIdl(spec: Node): Node {
 			if (element == "int16") { idlType = "\"i16\""; }
 			if (element == "int32") { idlType = "\"i32\""; }
 			if (element == "int64") { idlType = "\"i64\""; }
+			if (element == "float32") { idlType = "\"f32\""; }
+			if (element == "float64") { idlType = "\"f64\""; }
 			if (element == "boolean") { idlType = "\"bool\""; }
 			if (element == "Pubkey") { idlType = "\"pubkey\""; }
 			if (element.startsWith("BitSet<") && element.endsWith(">")) {
@@ -538,6 +546,8 @@ export macro anchorIdl(spec: Node): Node {
 				if (element == "uint16" || element == "int16") { size = 2; align = 2; }
 				if (element == "uint32" || element == "int32") { size = 4; align = 4; }
 				if (element == "uint64" || element == "int64") { size = 8; align = 8; }
+				if (element == "float32") { size = 4; align = 4; }
+				if (element == "float64") { size = 8; align = 8; }
 				if (element == "Pubkey") { size = 32; }
 				if (element.startsWith("BitSet<") && element.endsWith(">")) {
 					const members = getImpl(bindSym(element.slice(7, element.length - 1)))!;

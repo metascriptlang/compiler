@@ -1029,8 +1029,7 @@ export function isStaticExtensionSym(sym: Symbol): boolean {
 }
 
 export function isNativePattern(native: string): boolean {
-	return findChar(native, "#") >= 0 || findChar(native, "@") >= 0 || findChar(native, "(") >= 0
-		|| native.indexOf("$1") >= 0;
+	return findChar(native, "#") >= 0 || findChar(native, "@") >= 0 || findChar(native, "(") >= 0;
 }
 
 export function getExtReceiverName(flags: string): string {

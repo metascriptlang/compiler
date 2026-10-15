@@ -3,7 +3,7 @@
 import {
 	Node, NodeKind, NodeFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
-	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
+	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ComputedPropertyData, ArrayLiteralData, ArrowFunctionData,
 	ConditionalExprData, SpreadExprData, NewExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
@@ -279,7 +279,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		}
 		let entryDoc: Doc;
 		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column) : "";
-		if (d.keys[i] == "...") {
+		if (d.keys[i] == "..." || (prop != null && prop.kind == NodeKind.ComputedProperty)) {
 			entryDoc = callPrintNode(prop, options);
 		} else if (writtenKey != "") {
 			entryDoc = docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
@@ -414,6 +414,11 @@ export function printConditionalExpr(node: Node, options: FormatOptions): Doc {
 export function printSpreadExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as SpreadExprData;
 	return docGroup([docText("..."), callPrintNode(d.spreadArg, options)]);
+}
+
+export function printComputedProperty(node: Node, options: FormatOptions): Doc {
+	const d = node.data as ComputedPropertyData;
+	return docGroup([docText("["), callPrintNode(d.computedKey, options), docText("]: "), callPrintNode(d.computedValue, options)]);
 }
 
 export function printNewExpr(node: Node, options: FormatOptions): Doc {

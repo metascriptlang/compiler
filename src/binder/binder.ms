@@ -31,7 +31,7 @@ import {
 	MacroInvocationData, SpliceManyData,
 	HiddenDerefData, HiddenStdConvData,
 	IdentifierData, BooleanLiteralData,
-	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../ast/node";
 
 // ===== FlowNode Constructors =====
@@ -781,6 +781,11 @@ function bindExpression(state: BinderState, node: Node): void {
 		NodeKind.JSXSpreadAttribute => {
 			const d = node.data as JSXSpreadAttributeData;
 			if (d.jsxSpreadArg != null) bindExpression(state, d.jsxSpreadArg);
+		},
+		NodeKind.ComputedProperty => {
+			const d = node.data as ComputedPropertyData;
+			bindExpression(state, d.computedKey);
+			bindExpression(state, d.computedValue);
 		},
 		NodeKind.QuoteExpr => {
 			node.flowNode = state.currentFlow;

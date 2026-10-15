@@ -11,6 +11,7 @@ import { definedValue } from "../compiler/defines";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag, findChar } from "../utils/string";
+import { isDigit } from "../lexer/chars";
 import { normalize } from "std/fs/path";
 import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
@@ -123,7 +124,7 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			const sym = declOfStatement(dd.decoratedNode).resolvedSym;
 			if (sym != null) {
 				const info = extractDecoratorInfo(node);
-				if (info.nativeName != "") sym.nativeName = info.nativeName;
+				if (info.nativeName != "" && sym.nativeName == "") sym.nativeName = formatExternName(ctx, "declaration", sym.name, info.nativeName, node.location);
 				if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
 			}
 		},
@@ -433,6 +434,31 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 	}
 }
 
+function formatExternName(ctx: CheckerContext, kind: string, name: string, raw: string, at: SourceLocation): string {
+	if (findChar(raw, "$") < 0) return raw;
+	let out = "";
+	let i = 0;
+	while (i < raw.length) {
+		const ch = raw.charAt(i);
+		const next = i + 1 < raw.length ? raw.charAt(i + 1) : "";
+		const digitAfter = i + 2 < raw.length && isDigit(raw.charCodeAt(i + 2) as int32);
+		if (ch != "$") {
+			out += ch;
+			i += 1;
+		} else if (next == "$") {
+			out += "$";
+			i += 2;
+		} else if (next == "1" && !digitAfter) {
+			out += name;
+			i += 2;
+		} else {
+			addError(ctx, `extern ${kind} '${name}': invalid from name "${raw}"; '$1' stands for the declared name and '$$' for a literal '$'`, at.line, at.column);
+			return raw;
+		}
+	}
+	return out;
+}
+
 function refuseJsPatternOffJs(ctx: CheckerContext, kind: string, name: string, native: string, at: SourceLocation): void {
 	if (!isNativePattern(native) || definedValue(getParserDefines(), "backend") != "c") return;
 	addError(ctx,
@@ -440,17 +466,22 @@ function refuseJsPatternOffJs(ctx: CheckerContext, kind: string, name: string, n
 		at.line, at.column);
 }
 
-function refusePlaceholderMismatch(ctx: CheckerContext, d: FunctionDeclData): void {
-	const pattern = d.nativeName;
+function refusePlaceholderMismatch(ctx: CheckerContext, d: FunctionDeclData, pattern: string): void {
 	if (!isNativePattern(pattern)) return;
 	let placeholders = 0;
 	for (let i = 0; i < pattern.length; i++) {
 		if (pattern.charAt(i) == "#") placeholders += 1;
 	}
+	const splatAt = findChar(pattern, "@");
+	if (splatAt >= 0 && findChar(pattern.slice(splatAt, pattern.length), "#") >= 0) {
+		addError(ctx,
+			`extern function '${d.fnName}': in the pattern "${pattern}" a '#' follows '@', which has already taken every remaining argument; move the '#' before the '@'`,
+			d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
 	const params = d.params.length;
-	const splat = findChar(pattern, "@") >= 0;
-	if (placeholders == params || (splat && placeholders < params)) return;
-	const literalHint = placeholders > params ? "; write a literal '#' inside a JS string of the pattern as '\\\\x23'" : "";
+	if (placeholders == params || (splatAt >= 0 && placeholders < params)) return;
+	const literalHint = placeholders > params ? "; write a literal '#' as '\\x1f', or as '\\\\x23' inside a JS string of the pattern" : "";
 	addError(ctx,
 		`extern function '${d.fnName}': the pattern "${pattern}" has ${placeholders} '#' placeholder(s) but the function takes ${params} parameter(s)${literalHint}`,
 		d.nameLocation.line, d.nameLocation.column);
@@ -495,9 +526,9 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 		setFlag(sym, SymbolFlag.ImportC);
 		// Wire nativeName from AST 'from "c_name"' clause
 		if (d.nativeName != null && d.nativeName != "") {
-			sym.nativeName = d.nativeName;
-			refuseJsPatternOffJs(ctx, "function", d.fnName, d.nativeName, d.nameLocation);
-			refusePlaceholderMismatch(ctx, d);
+			sym.nativeName = formatExternName(ctx, "function", d.fnName, d.nativeName, d.nameLocation);
+			refuseJsPatternOffJs(ctx, "function", d.fnName, sym.nativeName, d.nameLocation);
+			refusePlaceholderMismatch(ctx, d, sym.nativeName);
 		} else {
 			// extern without 'from' — function name IS the C name (no module mangling)
 			sym.nativeName = d.fnName;
@@ -812,8 +843,9 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		md.methodFlags = md.methodFlags == "" ? `gen:${classGenerics}` : `${md.methodFlags}|gen:${classGenerics}`;
 	}
 	const fnType = createFunction([], [], inferredType());
-	if (md.nativeName != null && md.nativeName != "") {
-		fnType.typeName = md.nativeName;
+	const methodNative = md.nativeName != null && md.nativeName != "" ? formatExternName(ctx, "method", md.methodName, md.nativeName, md.nameLocation) : "";
+	if (methodNative != "") {
+		fnType.typeName = methodNative;
 	}
 	if (builtinKind != "") {
 		fnType.typeName = builtinKind;
@@ -821,9 +853,9 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	const mangledName = className + "_" + md.methodName;
 	const methodSym = makeSymbol(mangledName, SymbolKind.Function, fnType, false);
 	fnType.sym = methodSym;
-	if (md.nativeName != null && md.nativeName != "") {
-		methodSym.nativeName = md.nativeName;
-		refuseJsPatternOffJs(ctx, "method", md.methodName, md.nativeName, md.nameLocation);
+	if (methodNative != "") {
+		methodSym.nativeName = methodNative;
+		refuseJsPatternOffJs(ctx, "method", md.methodName, methodNative, md.nameLocation);
 	}
 	if (builtinKind != "") {
 		methodSym.builtinKind = builtinKind;
@@ -1038,8 +1070,8 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 	setFlag(sym, SymbolFlag.ImportC);
 	// Wire nativeName from AST 'from "c_name"' clause
 	if (d.nativeName != null && d.nativeName != "") {
-		sym.nativeName = d.nativeName;
-		refuseJsPatternOffJs(ctx, "declaration", d.externName, d.nativeName, node.location);
+		sym.nativeName = formatExternName(ctx, "declaration", d.externName, d.nativeName, node.location);
+		refuseJsPatternOffJs(ctx, "declaration", d.externName, sym.nativeName, node.location);
 	} else {
 		sym.nativeName = d.externName;
 	}
