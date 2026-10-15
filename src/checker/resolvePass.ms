@@ -2313,8 +2313,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	//   back to synthetic `<Union>_v<N>` which matches the typedef emitted
 	//   by `genUnionType`).
 	// - Boolean disc: variants stay anonymous. Inject the disc field as
-	//   `BooleanLiteral` so `r.ok` member access reads through overlapping
-	//   variant memory (`v<N>.<disc>`).
+	//   `BooleanLiteral` for narrowing; C stores no field of one value (`storesNothing`).
 	const variantTypes: Type[] = [];
 	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
 		let resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);

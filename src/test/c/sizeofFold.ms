@@ -35,3 +35,54 @@ test "sizeof refuses void rather than folding it to zero" {
 	assert !result.ok;
 	assert result.error.contains("'sizeof' needs a type with a known layout");
 }
+
+test "a Result stores its discriminant once, in its tag, and sizeof counts it once" {
+	const result = compileToC("struct Key { bytes: uint8[32] }\nstruct Failure { code: uint64 }\nconst w: int32 = sizeof(Result<Key, Failure>);\nconsole.log(w);");
+	assert result.ok;
+	assert result.value.contains("= (int32_t)40;");
+	assert !result.value.contains("MS_BOOL ok;");
+}
+
+test "a union of named structs keeps their discriminator field, which each struct owns" {
+	const result = compileToC("struct Hit { ok: true; at: uint8 }\nstruct Miss { ok: false; why: string }\ntype Probe = Hit | Miss;\nconst w: int32 = sizeof(Probe);\nconsole.log(w);");
+	assert result.ok;
+	assert result.value.contains("= (int32_t)32;");
+	assert result.value.contains("MS_BOOL ok;");
+}
+
+test "an anonymous struct stores a field of one boolean value nowhere and reads it as that value" {
+	const result = compileToC("type Lone = { ok: true; n: int32 };\nconst a: Lone = { ok: true, n: 3 };\nconsole.log(a.ok, a.n);");
+	assert result.ok;
+	assert !result.value.contains("MS_BOOL ok;");
+	assert result.value.contains("{\n  int32_t n;\n};");
+	assert result.value.contains(", MS_TRUE)");
+}
+
+test "a field of one boolean value and a boolean field of the same name give two C structs" {
+	const result = compileToC("type Lone = { ok: true; n: int32 };\ntype Both = { ok: boolean; n: int32 };\nconst a: Lone = { ok: true, n: 3 };\nconst b: Both = { ok: false, n: 4 };\nconsole.log(a.n, b.ok);");
+	assert result.ok;
+	assert result.value.contains("{\n  int32_t n;\n};");
+	assert result.value.contains("{\n  MS_BOOL ok;\n  int32_t n;\n};");
+}
+
+test "a union asserts its checker size to C on 64-bit and 32-bit targets" {
+	const source = "type Word = match (ok: boolean) { true => { text: string }, false => { code: int32 } };\nconst w: int32 = sizeof(Word);\nconsole.log(w);";
+	const host = compileToC(source);
+	assert host.ok;
+	assert host.value.contains("== 24, \"struct Word");
+	const arm: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "arm", os: "linux" };
+	const onArm = compileToC(source, arm);
+	assert onArm.ok;
+	assert onArm.value.contains("== 24, \"struct Word");
+	const i386: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "linux" };
+	const onI386 = compileToC(source, i386);
+	assert onI386.ok;
+	assert onI386.value.contains("== 16, \"struct Word");
+}
+
+test "a union of string literals folds sizeof to the string that holds it" {
+	const result = compileToC("type Align = \"auto\" | \"center\";\nstruct Holder { a: Align | null }\nconst w: int32 = sizeof(Align);\nconst h: int32 = sizeof(Holder);\nconsole.log(w, h);");
+	assert result.ok;
+	assert result.value.contains("= (int32_t)16;");
+	assert result.value.contains("= (int32_t)24;");
+}
