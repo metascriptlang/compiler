@@ -2266,8 +2266,9 @@ export function tryAdoptAnonStruct(ctx: CheckerContext, expr: Node, formalIn: Ty
 	if (formal == null || exprType == null) return null as unknown as Node;
 	if (expr.kind != NodeKind.Identifier) return null as unknown as Node;
 	if (!isAnonStructAdoption(exprType, formal)) return null as unknown as Node;
+	const shape = formal.kind == TypeKind.Ref ? formal.typeReturn! : formal;
 	const owner = declaringSymOf(formalIn);
-	const hidden = hiddenPrivateField(ctx, owner, formal.typeNames);
+	const hidden = hiddenPrivateField(ctx, owner, shape.typeNames);
 	if (hidden != "") {
 		refusePrivateField(ctx, owner, hidden, expr.location.line, expr.location.column);
 		return null as unknown as Node;
@@ -2277,18 +2278,18 @@ export function tryAdoptAnonStruct(ctx: CheckerContext, expr: Node, formalIn: Ty
 	const keys: string[] = [];
 	const keyLocs: SourceLocation[] = [];
 	const identD = expr.data as IdentifierData;
-	for (let i = 0; i < formal.typeNames.length; i += 1) {
+	for (let i = 0; i < shape.typeNames.length; i += 1) {
 		const objNode = createNode(NodeKind.Identifier, { name: identD.name } as NodeData, tok);
 		objNode.resolvedSym = expr.resolvedSym;
 		objNode.nodeType = exprType;
 		objNode.flags = objNode.flags.incl(NodeFlag.Sem);
 		objNode.location = expr.location;
-		const mem = createNode(NodeKind.MemberExpr, { object: objNode, property: formal.typeNames[i], isOptional: false } as NodeData, tok);
-		mem.nodeType = formal.typeChildren[i];
+		const mem = createNode(NodeKind.MemberExpr, { object: objNode, property: shape.typeNames[i], isOptional: false } as NodeData, tok);
+		mem.nodeType = shape.typeChildren[i];
 		mem.flags = mem.flags.incl(NodeFlag.Sem);
 		mem.location = expr.location;
 		props.push(mem);
-		keys.push(formal.typeNames[i]);
+		keys.push(shape.typeNames[i]);
 		keyLocs.push(expr.location);
 	}
 	const lit = createNode(NodeKind.ObjectLiteral, { properties: props, keys: keys, keyLocations: keyLocs } as NodeData, tok);
