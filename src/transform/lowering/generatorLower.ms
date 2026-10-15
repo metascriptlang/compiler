@@ -40,6 +40,7 @@ import {
 } from "../util";
 import { numberType, createPtr, createPrimitive, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -1141,6 +1142,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
+			if (isGenericFn(d.fnFlags)) return;
 			walkGenerators(d.fnBody, ctx);
 			if (isGeneratorFlag(d.fnFlags)) {
 				// Skip generic templates — only monomorphized instances should be lowered.
@@ -1168,6 +1170,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
+			if (isGenericFn(d.methodFlags)) return;
 			walkGenerators(d.methodBody, ctx);
 			const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
 			if (d.methodBody != null && isGeneratorFlag(d.methodFlags) && (fnType == null || !hasGenericParams(fnType))) {
