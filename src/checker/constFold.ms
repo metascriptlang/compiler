@@ -464,7 +464,7 @@ function constantTreeOf(expr: Node, depth: int32): Node {
 			if (array == null || array.kind != NodeKind.ArrayLiteral || index == null || index.kind != NodeKind.NumberLiteral) return none;
 			const nd = index.data as NumberLiteralData;
 			const elements = (array.data as ArrayLiteralData).elements;
-			if (nd.isFloat || nd.intVal < 0 || nd.intVal >= elements.length as int64) return none;
+			if (nd.isFloat || nd.intVal < 0 || nd.intVal >= (elements.length as int64)) return none;
 			return elements[nd.intVal as int32];
 		},
 		NodeKind.MemberExpr => {

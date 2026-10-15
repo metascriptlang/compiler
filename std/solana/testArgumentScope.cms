@@ -11,5 +11,5 @@ export function scopedKeysResult(): Result<uint64, ProgramError> {
 	for (const key of decoded.two) {
 		for (const byte of key.bytes) { checksum = checksum + (byte as uint64); }
 	}
-	return Result.ok(checksum + decoded.empty.length as uint64);
+	return Result.ok(checksum + (decoded.empty.length as uint64));
 }

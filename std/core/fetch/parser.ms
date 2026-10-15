@@ -849,7 +849,7 @@ test "parseRequest finds first CRLFCRLF, not last (chunked terminator regression
 	assert r.ok;
 	// bodyStart must be inside the buffer, not at end.
 	assert r.value.bodyStart > 0;
-	assert r.value.bodyStart < data.length as int32;
+	assert r.value.bodyStart < (data.length as int32);
 	// Everything after bodyStart is the chunked body, intact.
 	const bodyPart = data.slice(r.value.bodyStart, data.length);
 	assert bodyPart == "5\r\nhello\r\n0\r\n\r\n";
