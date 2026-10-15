@@ -264,10 +264,35 @@ test "comptime macro values: floatValue and stringValue refuse a node of another
 	assert readLiteral("floatValue", "\"7\"").includes("floatValue needs a float literal, got StringLiteral"), readLiteral("floatValue", "\"7\"");
 	assert readLiteral("floatValue", "41").includes("floatValue needs a float literal, got an integer literal"), readLiteral("floatValue", "41");
 	assert readLiteral("floatValue", "8.5") == "ok", readLiteral("floatValue", "8.5");
-	assert readLiteral("stringValue", "x").includes("stringValue needs a string literal, got Identifier"), readLiteral("stringValue", "x");
-	assert readLiteral("stringValue", "f()").includes("stringValue needs a string literal, got CallExpr"), readLiteral("stringValue", "f()");
-	assert readLiteral("stringValue", "41").includes("stringValue needs a string literal, got NumberLiteral"), readLiteral("stringValue", "41");
+	assert readLiteral("stringValue", "f()").includes("stringValue needs a string literal or an identifier, got CallExpr"), readLiteral("stringValue", "f()");
+	assert readLiteral("stringValue", "41").includes("stringValue needs a string literal or an identifier, got NumberLiteral"), readLiteral("stringValue", "41");
 	assert readLiteral("stringValue", "\"7\"") == "ok", readLiteral("stringValue", "\"7\"");
+}
+
+test "comptime macro values: stringValue of an identifier is its name" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind, stringValue } from "std/meta";
+const bound = 5;
+macro named(n: Node, want: Node): Node {
+	if (stringValue(n) != stringValue(want)) { error("stringValue read " + stringValue(n) + ", want " + stringValue(want), n); }
+	return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: "ok" };
+}
+function main(): void {
+	const a = named(bound, "bound");
+	const b = named(main, "main");
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+}
+
+test "comptime macro values: stringValue refuses an enum member and names what the macro got" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind, stringValue } from "std/meta";
+enum Color { Red, Green }
+macro named(n: Node): Node { return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: stringValue(n) }; }
+console.log(named(Color.Green));
+`);
+	assert !result.ok && result.error.includes("stringValue does not read an enum member, got Color_Green"), result.ok ? "accepted" : result.error;
 }
 
 test "comptime macro values: floatValue reads an integer literal the checker typed as a float" {
