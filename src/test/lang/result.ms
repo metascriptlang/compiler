@@ -437,3 +437,72 @@ test "a nested discriminant test narrows through the narrowed union" {
 	}
 	assert seen;
 }
+
+// --- a narrowed variant meets a parameter written as the same object type ---
+import { okText, okCount } from "./fixtures/objectParameters";
+
+type VariantPair = match (ok: boolean) {
+	true => { value: string },
+	false => { error: string },
+};
+
+function variantPair(good: boolean): VariantPair {
+	if (good) return { ok: true, value: "lib" };
+	return { ok: false, error: "nope" };
+}
+
+function variantCount(good: boolean): Result<int32, string> {
+	if (good) return Result.ok(7);
+	return Result.err("no");
+}
+
+function variantWide(x: { ok: boolean; value: string }): string {
+	return `${x.ok}:${x.value}`;
+}
+
+function variantTaker(x: VariantPair): boolean {
+	return x.ok;
+}
+
+test "a narrowed match variant passes to a parameter of the same object type" {
+	const p = variantPair(true);
+	let seen = "";
+	if (p.ok) seen = okText(p);
+	assert seen == "true:lib";
+}
+
+test "a narrowed Result passes to a parameter of the same object type" {
+	const r = variantCount(true);
+	let seen = 0;
+	if (r.ok) seen = okCount(r);
+	assert seen == 7;
+}
+
+test "a narrowed variant passes where the discriminant is written boolean" {
+	const p = variantPair(true);
+	let seen = "";
+	if (p.ok) seen = variantWide(p);
+	assert seen == "true:lib";
+}
+
+test "a narrowed variant is stored in a typed local and pushed into an array declared before the guard" {
+	const p = variantPair(true);
+	const r = variantCount(true);
+	const texts: { ok: true; value: string }[] = [];
+	const counts: { ok: true; value: int32 }[] = [];
+	let seen = "";
+	if (p.ok) {
+		const q: { ok: true; value: string } = p;
+		seen = q.value;
+		texts.push(p);
+	}
+	if (r.ok) counts.push(r);
+	assert seen == "lib";
+	assert texts.length == 1 && texts[0].value == "lib";
+	assert counts.length == 1 && counts[0].value == 7;
+}
+
+test "a value written as the variant's object type passes where the match type is expected" {
+	const v: { ok: true; value: string } = { ok: true, value: "w" };
+	assert variantTaker(v);
+}
