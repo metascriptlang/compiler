@@ -29,6 +29,29 @@ import { nodeToValue, valueToExpansion, takeWireRefusals } from "./bridge";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { forEachChild } from "../../ast/visitor";
 
+// The names the wrapper binds; a decorator body placed inside it must not see them.
+const wrapperBindings = ["value", "kind", "name", "isStatic", "isPrivate", "metaKeys", "metaValues", "inheritedKeys", "inheritedValues", "init", "sink", "get", "set", "has", "__dec", "r0", "r"];
+const decoratorBodyName = "$dec:__dec";
+
+function wrapperName(name: string): string {
+	return wrapperBindings.includes(name) ? "$dec:" + name : name;
+}
+
+function gensymWrapper(node: Node): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
+		const id = node.data as IdentifierData;
+		id.name = wrapperName(id.name);
+	} else if (node.kind == NodeKind.VariableDecl) {
+		const vd = node.data as VariableDeclData;
+		vd.declName = wrapperName(vd.declName);
+	} else if (node.kind == NodeKind.FunctionDecl) {
+		const fd = node.data as FunctionDeclData;
+		fd.params = fd.params.map((p: string): string => wrapperName(p));
+	}
+	forEachChild(node, gensymWrapper);
+}
+
 function rebaseLocations(node: Node, loc: SourceLocation): void {
 	if (node == null) return;
 	node.location = loc;
@@ -536,7 +559,7 @@ function calleeName(call: Node): string {
 }
 
 function buildCallee(sym: Symbol, md: MacroInvocationData, isMacro: boolean, isFactory: boolean, loc: SourceLocation): Node {
-	let callee: Node = createNodeAt(NodeKind.Identifier, { name: isMacro ? "__dec" : sym.name }, loc);
+	let callee: Node = createNodeAt(NodeKind.Identifier, { name: isMacro ? decoratorBodyName : sym.name }, loc);
 	if (isFactory) {
 		const factoryArgs: Node[] = [];
 		for (const a of md.macroArgs) factoryArgs.push(cloneNodeForCheck(a));
@@ -574,12 +597,13 @@ function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInv
 	}
 	const program = pr.value;
 	rebaseLocations(program, loc);
+	gensymWrapper(program);
 	const fn = (program.data as ProgramData).programStmts[0];
 	const stmts = ((fn.data as FunctionDeclData).fnBody.data as BlockStmtData).statements;
 	for (const st of stmts) {
 		if (st.kind != NodeKind.VariableDecl) continue;
 		const vd = st.data as VariableDeclData;
-		if (vd.declName == "__dec" && macroBody != null && vd.initializer != null && vd.initializer.kind == NodeKind.ArrowFunction) {
+		if (vd.declName == decoratorBodyName && macroBody != null && vd.initializer != null && vd.initializer.kind == NodeKind.ArrowFunction) {
 			(vd.initializer.data as ArrowFunctionData).arrowBody = macroBody;
 		} else if (vd.initializer != null && vd.initializer.kind == NodeKind.CallExpr && calleeName(vd.initializer) == "__callee__") {
 			(vd.initializer.data as CallExprData).callee = buildCallee(sym, md, isMacro, isFactory, loc);
