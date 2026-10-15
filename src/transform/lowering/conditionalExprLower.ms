@@ -24,9 +24,9 @@
 //     (per-iteration re-eval like while; a `continue` of B leaves a labelled
 //     block around B, so it still reaches the test)
 //
-// Codegen checks msErr only after a statement's top-level call, so a call that
-// can raise in a condition, a literal element or a return value inside a try
-// becomes its own statement here.
+// Codegen checks msErr only after a statement, so on C every call that can raise
+// nested in a statement's value, target or condition becomes its own statement
+// here, in order; the value's top-level call stays (bound too in a return in a try).
 //
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
@@ -111,6 +111,19 @@ function hoistRaisingCalls(expr: Node, hoisted: Node[], ctx: TransformContext): 
 	return lowered;
 }
 
+function hoistNestedRaisingCalls(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	if (ctx.jsBackend) return hoistTernaries(expr, hoisted, ctx);
+	if (expr == null || (expr.kind != NodeKind.CallExpr && expr.kind != NodeKind.NewExpr)) return hoistRaisingCalls(expr, hoisted, ctx);
+	callsToStatements += 1;
+	hoistChildrenInOrder(expr, hoisted, ctx);
+	callsToStatements -= 1;
+	return expr;
+}
+
+function hoistTargetCalls(target: Node, hoisted: Node[], ctx: TransformContext): Node {
+	return ctx.jsBackend ? hoistTernaries(target, hoisted, ctx) : hoistRaisingCalls(target, hoisted, ctx);
+}
+
 function callCanRaise(n: Node): boolean {
 	if (n.nodeType != null && (n.nodeType.kind == TypeKind.Void || n.nodeType.kind == TypeKind.Never)) return false;
 	if (n.kind == NodeKind.NewExpr) return true;
@@ -177,7 +190,7 @@ function initializeAggregate(target: Node, literal: Node, initialized: Node[], c
 	const t = aggregateInitType(literal);
 	const loc = literal.location;
 	if (t == null) {
-		const value = hoistTernaries(literal, initialized, ctx);
+		const value = hoistNestedRaisingCalls(literal, initialized, ctx);
 		const assignment = makeAssign(target, value, loc);
 		assignment.flags = assignment.flags.incl(NodeFlag.FirstWrite);
 		initialized.push(makeExprStmt(assignment, loc));
@@ -507,7 +520,7 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.expr.kind == NodeKind.UpdateExpr) {
 				const ud = d.expr.data as UpdateExprData;
 				const pre: Node[] = [];
-				ud.updateArg = hoistTernaries(ud.updateArg, pre, ctx);
+				ud.updateArg = hoistTargetCalls(ud.updateArg, pre, ctx);
 				if (ctx.jsBackend && needsIntegerUpdateRewrite(ud)) { ud.updateArg = hoistAssignTargetEffects(ud.updateArg, pre, ctx, []); }
 				if (pre.length == 0) return [stmt];
 				pre.push(stmt);
@@ -521,7 +534,9 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 		_ => {},
 	};
 	const hoisted: Node[] = [];
-	mapChildren(stmt, (child: Node): Node => hoistTernaries(child, hoisted, ctx));
+	const value = stmt.kind == NodeKind.ExprStmt || stmt.kind == NodeKind.ReturnStmt || stmt.kind == NodeKind.ThrowStmt
+		|| (stmt.kind == NodeKind.VariableDecl && !stmt.flags.has(NodeFlag.StaticStorage));
+	mapChildren(stmt, (child: Node): Node => value ? hoistNestedRaisingCalls(child, hoisted, ctx) : hoistTernaries(child, hoisted, ctx));
 	if (hoisted.length > 0) {
 		hoisted.push(stmt);
 		return hoisted;
@@ -609,9 +624,9 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as ExprStmtData;
 	const bd = d.expr.data as BinaryExprData;
 	const pre: Node[] = [];
-	bd.left = hoistTernaries(bd.left, pre, ctx);
+	bd.left = hoistTargetCalls(bd.left, pre, ctx);
 	const rhsPre: Node[] = [];
-	bd.right = hoistTernaries(bd.right, rhsPre, ctx);
+	bd.right = hoistNestedRaisingCalls(bd.right, rhsPre, ctx);
 	if (rhsPre.length > 0) {
 		const writes: Symbol[] = [];
 		for (const s of rhsPre) { collectWrites(s, writes); }
