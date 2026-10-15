@@ -139,6 +139,23 @@ test "an enum member of a union must still compare with the other operand" {
 	assert hasError(ENUM_HEAD + "function f(a: E | boolean, b: int32): boolean { return a < b; }", "cannot compare the member 'boolean' of 'E | boolean' with 'int32'");
 }
 
+test "a pointer orders only against a pointer" {
+	for (const fn of [
+		"function f(p: Ptr<uint64>, n: int64): boolean { return p < n; }",
+		"function f(n: uint64, p: Ptr<uint64>): boolean { return n >= p; }",
+		"function f(p: Ptr<uint64>, e: E): boolean { return p <= e; }",
+		"function f(p: Ptr<uint64>): boolean { return p > 0; }",
+	]) {
+		assert hasError(ENUM_HEAD + fn, "cannot be applied to types"), fn;
+	}
+	for (const fn of [
+		"function f(p: Ptr<uint64>, q: Ptr<uint64>): boolean { return p < q; }",
+		"function f(p: Ptr<uint64>, q: Ptr<uint8>): boolean { return p >= q; }",
+	]) {
+		assert strictErrorCount(ENUM_HEAD + fn) == 0, fn;
+	}
+}
+
 test "a Result member of a union operand is named" {
 	assert hasError(UNION_HEAD + "function f(a: Result<int32, string> | int32, b: int32): boolean { return a < b; }", "cannot order the member 'Result<int32, string>'");
 }
