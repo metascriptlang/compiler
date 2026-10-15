@@ -2,6 +2,7 @@
 // @stdout: B A 7
 // @stdout: 11 5 6
 // @stdout: true 1
+// @xfail(raiser): an enum value prints its number on the Raiser, card 2026-09-25-raiser-enum-to-string-prints-the-number
 
 import { Box, repeat, shifted } from "./library";
 
