@@ -697,14 +697,6 @@ function isTypedAsFloat(objHeap: RaiserObjectHeap, h: int64): boolean {
 	return repr != null && (repr.kind == TypeKind.Float32 || repr.kind == TypeKind.Float64 || repr.kind == TypeKind.Number);
 }
 
-// Literal value accessors. Each one FIXES the representation of its result the
-// way Nim's opcNIntVal/opcNFloatVal do (vm.nim:1867-1881, decodeB(rkInt/rkFloat)):
-// the VM's arithmetic and compare opcodes are typed (AddI64 vs AddF64, BltI64 vs
-// BltF64) and the Raiser picks them from the STATIC type of the expression, so a
-// single accessor declared `: number` that returned Int for one literal and Float
-// for another would have its operands read through the wrong opcode — measured as
-// a value that prints "8" and then compares as 0. One static type, one register
-// kind; ask isFloatLiteral first, exactly as Nim asks the node kind.
 function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxBool(false);
 	const objHeapOrNull = activeHostObjectHeap();
