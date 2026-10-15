@@ -1655,6 +1655,10 @@ export function wireLiteralIntegerRefusal(objHeap: RaiserObjectHeap, h: int64): 
 	return contradictoryNumber(wireLiteralIsFloat(objHeap, h), heapObjectGetField(objHeap, h, "value"), heapObjectGetField(objHeap, h, "intVal"), readFloat(objHeap, h, "value"));
 }
 
+export function wireLiteralFloat(objHeap: RaiserObjectHeap, h: int64): number {
+	return readFloat(objHeap, h, "value");
+}
+
 export function wireLiteralInteger(objHeap: RaiserObjectHeap, h: int64): int64 {
 	return wireInteger(heapObjectGetField(objHeap, h, "value"), heapObjectGetField(objHeap, h, "intVal"), readFloat(objHeap, h, "value"));
 }

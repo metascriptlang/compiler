@@ -212,15 +212,19 @@ function main(): void {
 	}
 }
 
-function intValueOf(arg: string): string {
+function readLiteral(accessor: string, arg: string): string {
 	const result = compileToCWithStd(`
-import { Node, NodeKind, intValue } from "std/meta";
+import { Node, NodeKind, intValue, floatValue, stringValue } from "std/meta";
 function f(): int32 { return 1; }
 const x = 5;
-macro iv(n: Node): Node { return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: \`\${intValue(n)}\` }; }
-console.log(iv(${arg}));
+macro read(n: Node): Node { return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: \`\${${accessor}(n)}\` }; }
+console.log(read(${arg}));
 `);
 	return result.ok ? "ok" : result.error;
+}
+
+function intValueOf(arg: string): string {
+	return readLiteral("intValue", arg);
 }
 
 test "comptime macro values: intValue refuses a node that is not an integer literal and names its kind" {
@@ -249,6 +253,49 @@ export macro bits(node: Node): Node {
 
 function main(): void {
 	const x = bits({ a: 9007199254740993, b: 9223372036854775808 as uint64, c: 18446744073709551615 as uint64 });
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+}
+
+test "comptime macro values: floatValue and stringValue refuse a node of another kind and name it" {
+	assert readLiteral("floatValue", "x").includes("floatValue needs a float literal, got Identifier"), readLiteral("floatValue", "x");
+	assert readLiteral("floatValue", "f()").includes("floatValue needs a float literal, got CallExpr"), readLiteral("floatValue", "f()");
+	assert readLiteral("floatValue", "\"7\"").includes("floatValue needs a float literal, got StringLiteral"), readLiteral("floatValue", "\"7\"");
+	assert readLiteral("floatValue", "41").includes("floatValue needs a float literal, got an integer literal"), readLiteral("floatValue", "41");
+	assert readLiteral("floatValue", "8.5") == "ok", readLiteral("floatValue", "8.5");
+	assert readLiteral("stringValue", "x").includes("stringValue needs a string literal, got Identifier"), readLiteral("stringValue", "x");
+	assert readLiteral("stringValue", "f()").includes("stringValue needs a string literal, got CallExpr"), readLiteral("stringValue", "f()");
+	assert readLiteral("stringValue", "41").includes("stringValue needs a string literal, got NumberLiteral"), readLiteral("stringValue", "41");
+	assert readLiteral("stringValue", "\"7\"") == "ok", readLiteral("stringValue", "\"7\"");
+}
+
+test "comptime macro values: floatValue reads an integer literal the checker typed as a float" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind, getImpl, childCount, childAt, floatValue } from "std/meta";
+
+function firstNumber(n: Node): float64 {
+	if (n.kind == NodeKind.NumberLiteral) return floatValue(n);
+	for (let i = 0; i < childCount(n); i++) {
+		const found = firstNumber(childAt(n, i));
+		if (found >= 0.0) return found;
+	}
+	return -1.0;
+}
+
+export macro factor(fn: Node): Node {
+	const impl = getImpl(fn);
+	const v = impl == null ? -1.0 : firstNumber(impl);
+	if (v != 2.0) { error("floatValue of a float-typed 2 read " + v.toString(), fn); }
+	return { kind: NodeKind.StringLiteral, line: fn.line, column: fn.column, value: "ok" };
+}
+
+function twice(x: float32): float32 { return x * 2; }
+function twiceWide(x: float64): float64 { const two: float64 = 2; return x * two; }
+
+function main(): void {
+	const a = factor(twice);
+	const b = factor(twiceWide);
 }
 `);
 	assert result.ok, result.ok ? "" : result.error;
