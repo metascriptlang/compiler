@@ -1698,15 +1698,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			if (fi < d.keys.length && d.keyLocations != null && fi < d.keyLocations.length && fieldExpected != null) {
 				const keyLoc = d.keyLocations[fi];
 				if (keyName != "..." && keyName != "__computed__" && keyLoc.line > 0) {
-					let fieldSym: Symbol | null = null;
-					if (containerName != "") {
-						fieldSym = lookupSymbol(ctx.table, containerName + "_" + keyName);
-						if (fieldSym != null) ensureShaped(fieldSym, ctx);
-					}
-					if (fieldSym == null) {
-						fieldSym = makeSymbolState(keyName, SymbolKind.Property, fieldExpected, false, SymbolState.Shaped);
-						inheritContainerInfo(fieldSym, ctx, containerName);
-					}
+					const fieldSym = makeSymbolState(keyName, SymbolKind.Property, fieldExpected, false, SymbolState.Shaped);
+					inheritContainerInfo(fieldSym, ctx, containerName);
 					sgRecordSym(ctx, keyLoc.line, keyLoc.column, keyLoc.column + keyName.length, fieldSym, fieldExpected, SymbolKind.Property, keyName, containerName, false);
 				}
 			}

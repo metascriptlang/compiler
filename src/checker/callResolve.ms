@@ -4467,22 +4467,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 			d.object = derefNode;
 		}
-		// Resolve property symbol: search symbol table for TypeName_propName (named types).
-		// Keep a duVariantSlot-stamped sym — the table sym is SHARED across sites and
-		// must never carry (or replace) a per-site variant slot.
-		const hasVariantStamp = node.resolvedSym != null && node.resolvedSym.duVariantSlot > 0;
-		if (resolvedObjType.typeName != "" && !hasVariantStamp) {
-			const propSymName = resolvedObjType.typeName + "_" + d.property;
-			const propSym = lookupSymbol(ctx.table, propSymName);
-			if (propSym != null) {
-				ensureShaped(propSym, ctx);
-				node.resolvedSym = propSym;
-				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, propSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
-			}
-		}
-		// Standard reference parity: fallback — search the type's field list directly
-		// (lookupInRecordAndBuildCheck pattern). Works for anonymous structs,
-		// type alias targets, and named types whose fields aren't in the symbol table.
+		// Standard reference parity: search the type's field list
+		// (lookupInRecordAndBuildCheck pattern).
 		if (node.resolvedSym == null && resolvedObjType.typeNames != null) {
 			let mi = 0;
 			for (const mName of resolvedObjType.typeNames) {
@@ -4557,13 +4543,12 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// No hardcoded dispatch: Map and Set classes declare @builtin methods in std/core/structure.
 
 	if (isUnresolvedType(propType) && ctx.inGenericContext > 0 && resolvedObjType.kind == TypeKind.GenericParam) return propType;
-	// Class method lookup: ClassName_methodName in symbol table (methods are standalone procs).
+	// Class method lookup: the method the class Symbol declares under this name.
 	// Filters by static/instance: static access (SymbolKind.Class) only matches static methods,
 	// instance access only matches instance methods. Checks overloads if primary doesn't match.
 	if (resolvedObjType.typeName != "") {
-		const classMethName = resolvedObjType.typeName + "_" + d.property;
 		const declaredMethod = resolvedObjType.sym != null ? dispatchDeclaredEntry(resolvedObjType.sym, d.property) : null;
-		let classMethSym = declaredMethod != null ? declaredMethod.sym : lookupSymbol(ctx.table, classMethName);
+		let classMethSym: Symbol | null = declaredMethod != null ? declaredMethod.sym : null;
 		// Filter: instance methods have "this" as first param, static methods don't.
 		// If the found symbol doesn't match the access type, check overloads for one that does.
 		if (classMethSym != null && classMethSym.symbolKind == SymbolKind.Function) {
