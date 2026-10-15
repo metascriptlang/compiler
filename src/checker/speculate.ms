@@ -14,7 +14,7 @@
 // approach was tried in the reference and abandoned. Known leakage edge
 // cases are accepted as part of the design.
 
-import { ArrayLiteralData, Node, NodeKind, UnaryExprData } from "../ast/node";
+import { ArrayLiteralData, ArrowFunctionData, Node, NodeKind, UnaryExprData } from "../ast/node";
 
 // "Context-sensitive" arguments: their inferred type depends on the parameter
 // type they're being checked against. Pass 1
@@ -26,7 +26,15 @@ import { ArrayLiteralData, Node, NodeKind, UnaryExprData } from "../ast/node";
 export function isContextSensitive(arg: Node): boolean {
 	if (arg == null) return false;
 	return arg.kind == NodeKind.ObjectLiteral
-		|| arg.kind == NodeKind.ArrowFunction;
+		|| (arg.kind == NodeKind.ArrowFunction && !isFullyAnnotated(arg.data as ArrowFunctionData));
+}
+
+function isFullyAnnotated(arrow: ArrowFunctionData): boolean {
+	if (arrow.arrowReturnType == "" || arrow.arrowParamTypes.length < arrow.arrowParams.length) return false;
+	for (const t of arrow.arrowParamTypes) {
+		if (t == "") return false;
+	}
+	return true;
 }
 
 export function isLiteralTree(arg: Node): boolean {
