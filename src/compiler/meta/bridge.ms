@@ -161,6 +161,20 @@ function isVisiting(visited: Type[], t: Type): boolean {
 	return false;
 }
 
+function cyclePlaceholderName(t: Type, impl: boolean): string {
+	if (isMaybeType(t) || (impl && t.kind == TypeKind.Alias)) return "";
+	return t.typeName;
+}
+
+function cycleBrokenByNamedType(visited: Type[], t: Type, impl: boolean): boolean {
+	let inside = false;
+	for (const v of visited) {
+		if (v == t) inside = true;
+		else if (inside && cyclePlaceholderName(v, impl) != "") return true;
+	}
+	return false;
+}
+
 function collectFieldDecorators(t: Type): Node[][] {
 	const out: Node[][] = [];
 	for (let i = 0; i < t.typeNames.length; i = i + 1) out.push([]);
@@ -387,12 +401,13 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 	// Cycle break — emit name placeholder and stop descending.
 	// Pre-push check so Alias peel below also benefits (e.g., `type X = X`).
 	if (isVisiting(visited, t)) {
-		if (impl && (t.kind == TypeKind.Alias || t.typeName == "")) {
-			throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
+		const placeholder = cyclePlaceholderName(t, impl);
+		if (placeholder != "" || !cycleBrokenByNamedType(visited, t, impl)) {
+			if (placeholder == "" && impl) throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
+			const result = atomicTypeNode(placeholder != "" ? placeholder : "<cycle>", loc);
+			result.nodeType = t;
+			return result;
 		}
-		const result = atomicTypeNode(nameOrDefault(t, "<cycle>"), loc);
-		result.nodeType = t;
-		return result;
 	}
 
 	visited.push(t);
@@ -3328,6 +3343,32 @@ test "mapTypeToAst — self-referential Struct (Tree<children: Tree[]>) terminat
 	const arrData = d.typExprFieldTypes[0].data as TypeArrayData;
 	assert arrData.typExprElement.kind == NodeKind.Identifier;
 	assert (arrData.typExprElement.data as IdentifierData).name == "Tree";
+}
+
+test "mapTypeToAst — a cycle re-entered at an unnamed Ref names the recursion at the struct inside it" {
+	const loc = makeLoc(1, 0);
+	const rule = makeStructType("Rule", ["blocks"], []);
+	const ruleRef = makeModifierType(TypeKind.Ref, rule);
+	rule.typeChildren = [makeArrayType(TypeKind.Array, ruleRef, 0)];
+	const box = makeStructType("Box", ["rule"], [ruleRef]);
+	for (const impl of [true, false]) {
+		const out = mapTypeToAst(box, loc, impl);
+		const ruleShape = ((out.data as TypeObjectData).typExprFieldTypes[0].data as TypeGenericData).typExprArgs[0];
+		assert ruleShape.kind == NodeKind.TypeObject;
+		const blocks = (ruleShape.data as TypeObjectData).typExprFieldTypes[0].data as TypeArrayData;
+		const inner = (blocks.typExprElement.data as TypeGenericData).typExprArgs[0];
+		assert inner.kind == NodeKind.Identifier && (inner.data as IdentifierData).name == "Rule" && inner.nodeType == rule;
+	}
+}
+
+test "mapTypeToAst — an unnamed struct cycle with no named type in it stops getTypeImpl with an internal error" {
+	const loc = makeLoc(1, 0);
+	const anon = makeStructType("", ["next"], []);
+	const anonRef = makeModifierType(TypeKind.Ref, anon);
+	anon.typeChildren = [anonRef];
+	let threw = false;
+	try { mapTypeToAst(anonRef, loc, true); } catch (e) { threw = true; }
+	assert threw;
 }
 
 test "mapTypeToAst — mutually-recursive Structs (A.b: B, B.a: A) terminate" {
