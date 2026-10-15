@@ -77,6 +77,18 @@ test "a lambda passes into a void-returning parameter, expression-bodied or not"
 	assert strictErrorCount("function eff(f: () => void): void { f(); }\nlet n = 0;\neff(() => 1);\neff(() => { n = n + 1; });") == 0;
 }
 
+test "an async lambda does not pass into a parameter returning a plain value" {
+	const TAKER = "function takeR(f: (x: number) => number): number { return f(1); }\n";
+	assert hasError(TAKER + "takeR(async (x) => 1);", "Argument type mismatch in 'takeR' arg 0");
+	assert hasError(TAKER + "takeR(async (x) => { return x; });", "Argument type mismatch in 'takeR' arg 0");
+	assert hasError("const f: (x: number) => string = async (x) => \"s\";", "not assignable");
+}
+
+test "an async lambda passes into a promise-returning or void-returning parameter" {
+	assert strictErrorCount("function takeP(f: (x: number) => Promise<number>): void {}\ntakeP(async (x) => 1);\ntakeP(async (x) => { return x; });") == 0;
+	assert strictErrorCount("function eff(f: () => void): void { f(); }\neff(async () => {});") == 0;
+}
+
 test "a named function keeps its return type invariant against the parameter" {
 	assert hasError("function eff(f: () => void): void { f(); }\nfunction one(): number { return 1; }\neff(one);", "Argument type mismatch in 'eff' arg 0");
 }
