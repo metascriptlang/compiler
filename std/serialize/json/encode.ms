@@ -10,15 +10,20 @@
 //
 // Walks t.nodeType (synthesized type-AST per SERIALIZE Phase A1). Refs/Ptrs
 // unwrap via TypeGeneric (modifierToAst maps to TypeGeneric with base name).
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, TypeGenericData, TypeKind, getTypeImpl, typeKind } from "std/meta";
 import { detectUnionDisc, parseDiscKey } from "../discDetect";
 
+function unwrapType(n: Node): Node {
+	if (n.kind != NodeKind.TypeGeneric) return n;
+	if (typeKind(n) != TypeKind.GenericInstance) return (n as TypeGenericData).typExprArgs[0];
+	const impl = getTypeImpl(n);
+	if (impl == null) throw new Error("internal: jsonValueOf: a generic instance has no implementation");
+	return impl;
+}
+
 export macro jsonValueOf(t: Node): Node {
-	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
-	let tt = t.nodeType;
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	let tt = unwrapType(t.nodeType);
+	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
@@ -61,7 +66,8 @@ export macro jsonValueOf(t: Node): Node {
 			}
 		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element
-			const peeled: Node = elemType.typExprArgs[0];
+			let peeled: Node = unwrapType(elemType);
+			if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
 			if (peeled.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = peeled.typExprTypeName;
