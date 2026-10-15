@@ -2400,7 +2400,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ReturnStmtData;
 	if (ctx.ctorExits != null) ctx.ctorExits.push(collectNewInits(ctx.initTracker, 0));
-	if (ctx.currentFunction == null) {
+	if (ctx.currentFunction == null && !isEngineCheckMode()) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
 	if (refuseGeneratorReturnValue(ctx, node)) return;

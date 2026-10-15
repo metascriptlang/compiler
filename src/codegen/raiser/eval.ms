@@ -116,9 +116,14 @@ export function evalASTCompile(program: Node): RaiserModule {
 }
 
 export function evalASTFull(program: Node): RaiserContext {
-	const raiserMod = evalASTCompile(program);
+	const transformed = transformForEngine(program);
 	const ctx = createContext();
-	load(ctx, raiserMod);
+	for (const e of _lastEngineCheckErrors) {
+		if (e.severity != Severity.Error) continue;
+		ctx.lastError = e.message;
+		return ctx;
+	}
+	load(ctx, generateRaiser(transformed));
 	execute(ctx);
 	return ctx;
 }
@@ -577,9 +582,9 @@ test "engine: nested value copy retains reference identity under ORC" {
 }
 
 test "engine: value copy preserves Span fields and Span bindings" {
-	const r = evalFull("struct S { view: Span<int32>; } let a: Vec<int32> = [1];"
+	const r = evalFull("struct S { view: Span<int32>; } function run(): int32 { let a: Vec<int32> = [1];"
 		+ " let view: Span<int32> = a; let box: S = { view: a }; let copy = box;"
-		+ " view[0] = 4; copy.view[0] = 7; return a[0];");
+		+ " view[0] = 4; copy.view[0] = 7; return a[0]; } return run();");
 	assert r.lastError == "";
 	assert r.lastResult.intVal == 7;
 }
@@ -1065,7 +1070,7 @@ test "objects through transform" {
 }
 
 test "build.ms pattern through transform" {
-	const ctx = evalFull("import { defineConfig } from \"std/build\"; export default defineConfig({ root: \"src/main.ms\" });");
+	const ctx = evalFull("interface Config { root: string; } function defineConfig(config: Config): Config { return config; } export default defineConfig({ root: \"src/main.ms\" });");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
@@ -1190,7 +1195,7 @@ test "a closure made in a for-of reads the binding of its own iteration" {
 }
 
 test "a closure made in a for loop that continues reads the counter of its own iteration" {
-	const ctx = evalFull("function make(): number { const fs: (() => number)[] = []; for (let i = 0; i < 6; i++) { if (i % 2 == 0) continue; fs.push((): number => i); } let acc = 0; for (const f of fs) { acc = acc * 10 + f(); } return acc; } return make();");
+	const ctx = evalFull("function make(): number { const fs: (() => number)[] = []; for (let i = 0; i < 6; i++) { if (i % 2 == 0) continue; fs.push((): number => i); } let acc: number = 0; for (const f of fs) { acc = acc * 10 + f(); } return acc; } return make();");
 	assert ctx.lastError == "", ctx.lastError;
 	assert unboxFloat(ctx.lastResult) == 135;
 }
