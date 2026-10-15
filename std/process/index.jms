@@ -8,6 +8,7 @@
 @import("node:process", { exit, cwd });
 @import("node:child_process", { execSync, spawnSync });
 @import("node:fs", { existsSync, readdirSync });
+@import("node:os", { constants });
 
 export extern function exit(code: number): void;
 export extern function cwd(): string;
@@ -23,6 +24,11 @@ extern function readdirSync(path: string): string[];
 
 interface SpawnOpts { stdio: string; }
 interface SpawnResult { status: number; }
+
+import { ProcessError, startFailed, nonZeroExit, signalTerminated } from "./errors";
+
+export { ProcessError, ProcessErrorKind } from "./errors";
+export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
 
 // Re-export from fs (Result-returning)
 export { readFile, writeFile } from "../fs/index";
@@ -56,6 +62,34 @@ export function exec(command: string): number {
 export function execFile(path: string, args: string[] = []): number {
 	const result = spawnSync(path, args, { stdio: "inherit" });
 	return result.status;
+}
+
+interface Captured {
+	startError: string;
+	exitCode: int32;
+	signal: int32;
+	output: string;
+	errorOutput: string;
+}
+
+function spawnCapture(path: string, args: string[], cwd: string): Captured {
+	@emit(`const r = spawnSync(${path}, ${args}, { cwd: ${cwd} === "" ? undefined : ${cwd}, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+return {
+	startError: r.error ? (typeof r.error.code === "string" ? r.error.code : "UNKNOWN") : "",
+	exitCode: r.status ?? 0,
+	signal: r.signal ? (constants.signals[r.signal] ?? 0) : 0,
+	output: r.stdout ?? "",
+	errorOutput: r.stderr ?? "",
+};`);
+	unreachable;
+}
+
+export function execFileCapture(path: string, args: string[] = [], cwd: string = ""): Result<string, ProcessError> {
+	const r = spawnCapture(path, args, cwd);
+	if (r.startError != "") return Result.err(startFailed(path, r.startError));
+	if (r.signal != 0) return Result.err(signalTerminated(path, r.signal, r.output, r.errorOutput));
+	if (r.exitCode != 0) return Result.err(nonZeroExit(path, r.exitCode, r.output, r.errorOutput));
+	return Result.ok(r.output);
 }
 
 // env — Deno-style namespaced env API.

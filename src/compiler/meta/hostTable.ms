@@ -233,6 +233,7 @@ let _spawnExitCode: number = 0;
 let _spawnSignal: number = 0;
 let _spawnOk: number = 0;
 let _spawnPipeOk: number = 1;
+let _spawnErrno: number = 0;
 
 // ProcessErrorKind: SpawnFailed=0, NotFound=1, NonZeroExit=2,
 // SignalTerminated=3, PipeError=4, Unknown=5
@@ -274,6 +275,10 @@ function _bridgeMsProcSpawnGetOk(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsProcSpawnGetPipeOk(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnPipeOk);
+}
+
+function _bridgeMsProcSpawnGetErrno(args: RaiserValue[]): RaiserValue {
+	return boxInt(_spawnErrno);
 }
 
 function _bridgeMsProcSpawnGetExitCode(args: RaiserValue[]): RaiserValue {
@@ -347,6 +352,7 @@ function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
 	_spawnSignal = r.signal;
 	_spawnOk = r.started ? 1 : 0;
 	_spawnPipeOk = r.pipeOk ? 1 : 0;
+	_spawnErrno = r.startErrno;
 	return boxString(_spawnStdout);
 }
 
@@ -955,6 +961,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessSpawnSync",    _bridgeMsProcessSpawnSync);
 	registerHostFn("msProcSpawnGetOk",      _bridgeMsProcSpawnGetOk);
 	registerHostFn("msProcSpawnGetPipeOk",  _bridgeMsProcSpawnGetPipeOk);
+	registerHostFn("msProcSpawnGetErrno",   _bridgeMsProcSpawnGetErrno);
 	registerHostFn("msProcSpawnGetExitCode", _bridgeMsProcSpawnGetExitCode);
 	registerHostFn("msProcSpawnGetSignal",  _bridgeMsProcSpawnGetSignal);
 	registerHostFn("msProcSpawnGetStderr",  _bridgeMsProcSpawnGetStderr);

@@ -14,6 +14,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <errno.h>
 #include <direct.h>
 #include <shellapi.h>
 #else
@@ -498,12 +499,14 @@ static _Thread_local int32_t _msProcSpawnSignal = 0;
 static _Thread_local msString _msProcSpawnStderr = MS_EMPTY_STRING;
 static _Thread_local int32_t _msProcSpawnOk = 0;  /* 1 if spawn succeeded, 0 otherwise */
 static _Thread_local int32_t _msProcSpawnPipeOk = 1;  /* 0 if a pipe read/setup failed mid-flight */
+static _Thread_local int32_t _msProcSpawnErrno = 0;
 
 static inline int32_t msProcSpawnGetExitCode(void) { return _msProcSpawnExitCode; }
 static inline int32_t msProcSpawnGetSignal(void) { return _msProcSpawnSignal; }
 static inline msString msProcSpawnGetStderr(void) { return _msProcSpawnStderr; }
 static inline int32_t msProcSpawnGetOk(void) { return _msProcSpawnOk; }
 static inline int32_t msProcSpawnGetPipeOk(void) { return _msProcSpawnPipeOk; }
+static inline int32_t msProcSpawnGetErrno(void) { return _msProcSpawnErrno; }
 
 #define MS_SPAWN_MAX_OUTPUT (16 * 1024 * 1024)
 
@@ -864,6 +867,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	_msProcSpawnStderr = MS_EMPTY_STRING;
 	_msProcSpawnOk = 0;
 	_msProcSpawnPipeOk = 1;
+	_msProcSpawnErrno = 0;
 
 #ifdef _WIN32
 	AcquireSRWLockExclusive(&_msSpawnCreateLock);
@@ -969,6 +973,11 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	 * section (see _msSpawnCreateLock). The drain runs unlocked. */
 	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 	if (!ok) {
+		DWORD lastError = GetLastError();
+		_msProcSpawnErrno = lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND ? ENOENT
+			: lastError == ERROR_ACCESS_DENIED ? EACCES
+			: lastError == ERROR_BAD_EXE_FORMAT ? ENOEXEC
+			: 0;
 		CloseHandle(outRd); CloseHandle(errRd);
 		return MS_EMPTY_STRING;
 	}
@@ -1032,6 +1041,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
 	free(argv);
 	if (spawnErr != 0) {
+		_msProcSpawnErrno = spawnErr;
 		close(outPipe[0]); close(outPipe[1]);
 		close(errPipe[0]); close(errPipe[1]);
 		return MS_EMPTY_STRING;
