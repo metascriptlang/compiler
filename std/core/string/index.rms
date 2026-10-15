@@ -53,6 +53,12 @@ export function parseInt(this s: string): int64 {
 // ===== Character Construction =====
 export extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
 
+export function fromCharCode(this typeof String, ...codes: int32[]): string {
+	let text = "";
+	for (const code of codes) text += fromCodePoint((code & 0xFFFF) as number);
+	return text;
+}
+
 import { clampIndex } from "./shared";
 import { parseFloatPrefix, parseIntPrefix } from "../number/parse";
 export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase, asciiLower, asciiUpper, isSpaceByte } from "./shared";

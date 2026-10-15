@@ -119,8 +119,10 @@ export extern function fromCodePoint(cp: number): string from "msStringFromCodeP
 
 const CHAR_UNIT_MASK: int32 = 0xFFFF;
 
-export function fromCharCode(this typeof String, code: int32): string {
-	return fromCodePoint((code & CHAR_UNIT_MASK) as number);
+export function fromCharCode(this typeof String, ...codes: int32[]): string {
+	let text = "";
+	for (const code of codes) text += fromCodePoint((code & CHAR_UNIT_MASK) as number);
+	return text;
 }
 
 // ===== Type Coercion =====
