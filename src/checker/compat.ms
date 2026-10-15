@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -787,6 +787,7 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;
+	if (heldAsUnknown(a, b) || heldAsUnknown(b, a)) return true;
 	if (b.kind == TypeKind.Union && a.kind != TypeKind.Union && a.kind != TypeKind.Null) {
 		const bn = nonNullMemberOfNullable(b);
 		if (bn != null) return fnSlotReprMismatch(a, bn);
@@ -798,6 +799,18 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	if ((a.kind == TypeKind.Union) != (b.kind == TypeKind.Union)) return true;
 	if (fieldReprMismatch(a, b)) return true;
 	return isReinterpretUnsafe(a, b);
+}
+
+function heldAsUnknown(held: Type, slot: Type): boolean {
+	return isUnknownType(slot) && !isUnknownType(held) && unknownRefusal(held) != UnknownRefusal.None;
+}
+
+export function unknownReturnRefusal(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	const held = skipModifier(source.typeReturn);
+	const slot = skipModifier(target.typeReturn);
+	if (held == null || slot == null || !heldAsUnknown(held, slot)) return "";
+	return " — a function returning " + typeDisplayName(held) + " cannot stand in for one returning unknown, which holds only class or interface instances";
 }
 
 function leavesInlineConv(source: Type, target: Type): boolean {

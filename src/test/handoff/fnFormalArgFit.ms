@@ -89,6 +89,18 @@ test "an async lambda passes into a promise-returning or void-returning paramete
 	assert strictErrorCount("function eff(f: () => void): void { f(); }\neff(async () => {});") == 0;
 }
 
+test "a function returning a value type does not stand in for one returning unknown" {
+	const CALL = "function callIt(read: () => unknown): void { read(); }\n";
+	assert hasError(CALL + "function seven(): int32 { return 7; }\ncallIt(seven);", "a function returning int32 cannot stand in for one returning unknown");
+	assert hasError(CALL + "function word(): string { return \"w\"; }\ncallIt(word);", "a function returning string cannot stand in for one returning unknown");
+	assert hasError(CALL + "function yes(): boolean { return true; }\ncallIt(yes);", "Argument type mismatch in 'callIt' arg 0");
+	assert strictErrorCount("function seven(): int32 { return 7; }\nconst f: () => unknown = seven;") >= 1;
+}
+
+test "a function returning a class instance stands in for one returning unknown" {
+	assert strictErrorCount("class Cell { n: number = 3; }\nfunction make(): Cell { return new Cell(); }\nfunction callIt(read: () => unknown): void { read(); }\ncallIt(make);\nconst f: () => unknown = make;") == 0;
+}
+
 test "a named function keeps its return type invariant against the parameter" {
 	assert hasError("function eff(f: () => void): void { f(); }\nfunction one(): number { return 1; }\neff(one);", "Argument type mismatch in 'eff' arg 0");
 }
