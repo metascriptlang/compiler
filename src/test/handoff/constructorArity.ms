@@ -1,6 +1,4 @@
 // Checker -> codegen: a `new` whose arguments the class cannot take stops in the checker.
-// Before, the count reached codegen: "new with N argument(s) ... reached codegen unlowered"
-// for a class that takes none, and a C compiler error for a constructor of another arity.
 
 import { hasError, strictErrorCount } from "./helpers";
 
