@@ -7,6 +7,8 @@
 //   a + b    →  msBigIntAdd(a, b)           (- * / % ** & | ^ << >> alike)
 //   -a / ~a  →  msBigIntNeg(a) / msBigIntNot(a)
 //   a < b    →  msBigIntCmp(a, b) < 0       (=== and !== compare against 0 too)
+//   a == b   →  msBigIntEqualsNullable(a, b) (a side is bigint | null, a pointer
+//               that is NULL for null; `== null` stays a pointer test)
 //   a < x    →  msBigIntCompareFloat64(a, x, u) < 0   (x fractional; u is the
 //               result when x is NaN, chosen so every comparison is false)
 //   a += b   →  a = msBigIntAdd(a, b)
@@ -18,10 +20,11 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { addError } from "../../checker/context";
-import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName } from "../../checker/types";
+import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
+import { isNullExpr } from "../lowering/operatorLower";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeAssign, makeBinary, makeCall, makeNumber, makeString, runtimeRef } from "../util";
+import { makeAssign, makeBinary, makeCall, makeNumber, makeString, makeUnary, runtimeRef } from "../util";
 import { parseInput } from "../testUtil";
 import { CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
 import { createTransformContextWithChecker } from "../context";
@@ -39,6 +42,29 @@ function isBigType(t: Type | null): boolean {
 
 function isBigNode(n: Node | null): boolean {
 	return n != null && isBigType(n.nodeType);
+}
+
+function isNullableBigNode(n: Node): boolean {
+	return isNullableBigInt(n.nodeType);
+}
+
+function isNullOperand(n: Node): boolean {
+	return isNullExpr(n) || (n.nodeType != null && n.nodeType.kind == TypeKind.Null);
+}
+
+function nullableBigOperator(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
+	const loc = node.location;
+	const cmp = comparisonOp(d.operator);
+	if (cmp != "===" && cmp != "!==") {
+		addError(ctx.checkerCtx, "'" + d.operator + "' needs a bigint, not a value that may be null; compare it with null first", loc.line, loc.column);
+		return node;
+	}
+	if (isNullOperand(d.left) || isNullOperand(d.right)) return node;
+	const eq = bigCall("msBigIntEqualsNullable", [d.left, d.right], loc, booleanType());
+	if (cmp == "===") return eq;
+	const ne = makeUnary("!", eq, loc);
+	ne.nodeType = booleanType();
+	return ne;
 }
 
 function isFractionalSource(t: Type | null): boolean {
@@ -222,6 +248,8 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
+	const nullableOperand = isNullableBigNode(d.left) || isNullableBigNode(d.right);
+	if (nullableOperand && (comparisonOp(d.operator) != "" || arithFn(d.operator) != "")) return nullableBigOperator(node, d, ctx);
 	if (!isBigNode(d.left) && !isBigNode(d.right)) return node;
 
 	const loc = node.location;

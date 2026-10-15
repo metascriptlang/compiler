@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, createNodeAt, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, storesNothing } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
 import { genericParamsOf, classParentOf, createUnionInOrder } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -1821,6 +1821,9 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	if (fieldType.kind == TypeKind.BigInt) {
 		return makeBinary(makeCall(runtimeRef("msBigIntCmp", loc), [aField, bField], loc), "===", makeNumber(0, loc), loc);
 	}
+	if (isNullableBigInt(fieldType)) {
+		return makeCall(runtimeRef("msBigIntEqualsNullable", loc), [aField, bField], loc);
+	}
 	if (isPayloadUnion(fieldType)) {
 		return payloadUnionEqExpr(aField, bField, fieldType, lctx, loc);
 	}
@@ -2216,6 +2219,7 @@ function generateTupleOrder(tupleName: string, suffix: string, op: AttachedOp, w
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const fieldType = t.typeChildren[i];
+		if (isNullableBigInt(fieldType)) addError(lctx.checkerCtx, "a tuple element of type 'bigint | null' has no order: compare it with null first", loc.line, loc.column);
 		const less = fieldOrderExpr(tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc), tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc), fieldType, "<", lctx, loc);
 		buf.push(makeIf(less, makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
 		const greater = fieldOrderExpr(tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc), tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc), fieldType, ">", lctx, loc);

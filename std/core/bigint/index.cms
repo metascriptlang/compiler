@@ -66,6 +66,13 @@ when (!bare && !solana) {
 		return msBigIntFromFloat64(v);
 	}
 
+	@compilerFunc
+	function msBigIntEqualsNullable(a: bigint | null, b: bigint | null): boolean {
+		if (a == null) return b == null;
+		if (b == null) return false;
+		return a == b;
+	}
+
 	export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
 	export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";
 }
