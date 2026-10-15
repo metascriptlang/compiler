@@ -2986,7 +2986,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const ptrTmp = getTemp(p, "void*");
 		const valTmp = getTemp(p, unboxType);
 		emitStmtsLine(p, `${ptrTmp.snippet} = ${argsStr};`);
-		emitStmtsLine(p, `${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
+		emitStmtsLine(p, `if (${ptrTmp.snippet} != NULL) ${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
 		emitStmtsLine(p, `free(${ptrTmp.snippet});`);
 		ctx.results.push(valTmp.snippet);
 		return;
