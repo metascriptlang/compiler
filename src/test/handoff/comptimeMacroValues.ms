@@ -301,6 +301,47 @@ function main(): void {
 	assert result.ok, result.ok ? "" : result.error;
 }
 
+test "comptime macro values: isFloatLiteral answers by the type the checker gave the literal" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind, getImpl, childCount, childAt, isFloatLiteral } from "std/meta";
+
+function firstNumber(n: Node): Node | null {
+	if (n.kind == NodeKind.NumberLiteral) return n;
+	for (let i = 0; i < childCount(n); i++) {
+		const found = firstNumber(childAt(n, i));
+		if (found != null) return found;
+	}
+	return null;
+}
+
+function bodyLiteral(fn: Node): Node | null {
+	const impl = getImpl(fn);
+	return impl == null ? null : firstNumber(impl);
+}
+
+export macro floaty(fn: Node): Node {
+	const lit = bodyLiteral(fn);
+	if (lit == null || !isFloatLiteral(lit)) { error("isFloatLiteral of a float-typed 2 is false", fn); }
+	return { kind: NodeKind.StringLiteral, line: fn.line, column: fn.column, value: "ok" };
+}
+
+export macro integral(fn: Node): Node {
+	const lit = bodyLiteral(fn);
+	if (lit == null || isFloatLiteral(lit)) { error("isFloatLiteral of an int32-typed 2 is true", fn); }
+	return { kind: NodeKind.StringLiteral, line: fn.line, column: fn.column, value: "ok" };
+}
+
+function twice(x: float32): float32 { return x * 2; }
+function twiceInt(x: int32): int32 { return x * 2; }
+
+function main(): void {
+	const a = floaty(twice);
+	const b = integral(twiceInt);
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+}
+
 test "comptime macro values: intValue of an enum member is the member's value" {
 	const result = compileToCWithStd(`
 import { Node, NodeKind, childAt, intValue } from "std/meta";

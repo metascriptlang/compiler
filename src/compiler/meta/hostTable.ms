@@ -702,7 +702,7 @@ function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull == null) return boxBool(false);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	return boxBool(isWireNode(objHeap, args[0], NodeKind.NumberLiteral) && wireLiteralIsFloat(objHeap, args[0].intVal));
+	return boxBool(isWireNode(objHeap, args[0], NodeKind.NumberLiteral) && (wireLiteralIsFloat(objHeap, args[0].intVal) || isTypedAsFloat(objHeap, args[0].intVal)));
 }
 
 function wireNodeKindText(objHeap: RaiserObjectHeap, n: RaiserValue): string {
