@@ -1,5 +1,4 @@
 // @stdout: 2 3 3 3 1,2 true | 2 3 3 3 1,2 true | 2 3 3 3 1,2 true # abc a-b-c | ac a-c # 2 6 t hi 5 | -1 -1 f d 0 | 2 -1 t ok 0 # y n # s2 n4 3 # 2s 6q
-// @xfail(raiser): the Raiser VM has no Array.join (inbox 2026-09-24-int-array-literal-has-no-sort-or-join) and reads an absent-vs-present nullable string as falsy when present; the alias-free twin fails the same
 type Brand<T> = T;
 function mk<T>(o: T): Brand<T> { return o; }
 
