@@ -956,6 +956,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		ai = ai + 1;
 	}
 	const declaringClass = hasCtor ? constructorDeclaringClass(d.newCallee.resolvedSym!) : null;
+	if (d.newCallee.resolvedSym != null) checkNewArity(ctx, node, d.newCallee.resolvedSym, innerType, declaringClass);
 	if (declaringClass != null) {
 		const defaults = declaringClass.defaultParams;
 		if (defaults != null && defaults.length > 0) {
@@ -999,6 +1000,39 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		return resolvedType;
 	}
 	return inferredType();
+}
+
+function requiredCtorArgs(formals: Type[], defaults: Node[] | null): int32 {
+	let required: int32 = 0;
+	for (let i = 0; i < formals.length; i += 1) {
+		const hasDefault = defaults != null && i < defaults.length && defaults[i] != null;
+		if (!hasDefault && formals[i].kind != TypeKind.Varargs) required = i + 1;
+	}
+	return required;
+}
+
+function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerType: Type | null, declaringClass: Symbol | null): void {
+	const args = (node.data as NewExprData).newArguments;
+	if (hasFlag(classSym, SymbolFlag.ImportC)) return;
+	for (const a of args) { if (a.kind == NodeKind.SpreadExpr) return; }
+	let required: int32 = 0;
+	let allowed: int32 = args.length;
+	if (hasFlag(classSym, SymbolFlag.HasConstructor)) {
+		const ctor = ctorFnTypeOf(classSym);
+		if (ctor == null) return;
+		const formals = ctor.typeChildren;
+		required = requiredCtorArgs(formals, (declaringClass != null ? declaringClass : classSym).defaultParams);
+		if (formals.length == 0 || formals[formals.length - 1].kind != TypeKind.Varargs) allowed = formals.length;
+	} else {
+		if (classSym.symbolKind != SymbolKind.Class && classSym.symbolKind != SymbolKind.Struct) return;
+		if (innerType == null || innerType.kind != TypeKind.Struct) return;
+		allowed = innerType.typeNames.length;
+	}
+	if (args.length < required) {
+		addError(ctx, `Too few arguments to 'new ${classSym.name}': expected at least ${required}, got ${args.length}`, node.location.line, node.location.column);
+	} else if (args.length > allowed) {
+		addError(ctx, `Too many arguments to 'new ${classSym.name}': expected at most ${allowed}, got ${args.length}`, node.location.line, node.location.column);
+	}
 }
 
 function fieldsWithoutDefault(ctx: CheckerContext, classSym: Symbol, depth: int32): string[] {
