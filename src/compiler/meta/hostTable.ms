@@ -828,7 +828,10 @@ function _bridgeMsCheckRangeI32(args: RaiserValue[]): RaiserValue {
 	const lo = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int64 : args[1].intVal;
 	const hi = args[2].kind == RaiserValueKind.Float ? args[2].floatVal as int64 : args[2].intVal;
 	const inRange = v.kind == RaiserValueKind.Float ? v.floatVal > (lo as float64) - 1.0 && v.floatVal < (hi as float64) + 1.0 : v.intVal >= lo && v.intVal <= hi;
-	if (!inRange) raiseFromHost(`value ${v.kind == RaiserValueKind.Float ? `${v.floatVal}` : `${v.intVal}`} not in range ${lo} .. ${hi}`, true);
+	if (!inRange) {
+		raiseFromHost(`value ${v.kind == RaiserValueKind.Float ? `${v.floatVal}` : `${v.intVal}`} not in range ${lo} .. ${hi}`, true);
+		return v;
+	}
 	return v.kind == RaiserValueKind.Float ? raiserInt(v.floatVal as int64) : v;
 }
 
@@ -986,8 +989,8 @@ export function ensureHostTableLoaded(): void {
 
 // --- Tests ---
 
-import { raiserInt, raiserString, RaiserValueKind } from "../../raiser/value";
-import { lookupHostFn, _resetHostRegistryForTests } from "../../raiser/hostRegistry";
+import { raiserInt, raiserFloat, raiserString, RaiserValueKind } from "../../raiser/value";
+import { lookupHostFn, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
 
 test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();
@@ -1015,6 +1018,17 @@ test "string padding bridges preserve native semantics" {
 	assert _bridgeMsStringPadEnd([boxString("42"), boxInt(5), boxString("ab")]).strVal == "42aba";
 	assert _bridgeMsStringPadStart([boxString("é"), boxInt(3), boxString("x")]).strVal == "xxé";
 	assert _bridgeMsStringPadEnd([boxString("same"), boxInt(7), boxString("")]).strVal == "same";
+}
+
+test "the enum range bridge raises for a float outside the range without converting it" {
+	takeHostRaise();
+	const nan = _bridgeMsCheckRangeI32([raiserFloat(0.0 / 0.0), raiserInt(0), raiserInt(2)]);
+	assert takeHostRaise() == "value NaN not in range 0 .. 2";
+	assert nan.kind == RaiserValueKind.Float;
+	_bridgeMsCheckRangeI32([raiserFloat(1e300), raiserInt(0), raiserInt(2)]);
+	assert (takeHostRaise() ?? "").endsWith(" not in range 0 .. 2");
+	assert _bridgeMsCheckRangeI32([raiserFloat(2.5), raiserInt(0), raiserInt(2)]).intVal == 2;
+	assert takeHostRaise() == null;
 }
 
 test "ensureHostTableLoaded is idempotent" {
