@@ -184,7 +184,7 @@ export function cmdInit(name: string): void {
 	ensureDir(name == "." ? "src" : name + "/src");
 	const buildPath = name + "/build.ms";
 	const srcPath = name + "/src/index.ms";
-	const buildContent = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\troot: \"src/index.ms\",\n\tfmt: {\n\t\tuseTabs: true,\n\t},\n};\n\nexport default config;\n";
+	const buildContent = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\tentry: \"src/index.ms\",\n\tfmt: {\n\t\tuseTabs: true,\n\t},\n};\n\nexport default config;\n";
 	const srcContent = "function main(): int32 {\n\tconsole.log(\"hello, metascript!\");\n\treturn 0;\n}\n\nprocess.exit(main());\n";
 	writeOutput(buildPath, buildContent);
 	writeOutput(srcPath, srcContent);
