@@ -12,7 +12,7 @@ import { peelTransparentInstance, literalBase, classAncestorInstance, errorType,
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue, floatTruncatesInto } from "./constFold";
+import { constantLiteralOf, enumMemberLiteral, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue, floatTruncatesInto } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
@@ -1329,7 +1329,8 @@ export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): 
 		return;
 	}
 	if (!isIntegerType(target) && target.kind != TypeKind.Char) return;
-	const folded = constantLiteralOf(expr, 0);
+	const literal = constantLiteralOf(expr, 0);
+	const folded = literal != null ? literal : enumMemberLiteral(expr);
 	if (folded == null || folded.kind != NodeKind.NumberLiteral) return;
 	if (constHoldsFloat(folded)) {
 		const v = constFloatValue(folded);
