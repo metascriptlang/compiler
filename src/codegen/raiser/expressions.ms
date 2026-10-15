@@ -1541,6 +1541,7 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 	const initName = parent.name + "_init";
 	let funcIdx = s.scopedFunctions && parent.modulePath != "" ? resolveFunc(s, parent.modulePath + ":" + initName) : -1;
 	if (funcIdx < 0) funcIdx = resolveFunc(s, initName);
+	if (funcIdx < 0 && callRaiserOnDemand(parent) >= 0) funcIdx = resolveFunc(s, initName);
 	const thisReg = resolveLocal(s, "this");
 	if (funcIdx < 0 || thisReg < 0) {
 		const msg = `cannot compile 'super(...)': no '${initName}' in the Raiser function table`;
