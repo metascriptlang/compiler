@@ -21,11 +21,11 @@ when (!bare && !solana) {
 			this.ms = msTimeClip(ms);
 		}
 
-		// Wall-clock time in milliseconds since Unix epoch (fractional).
-		// Mirrors JS/Node `Date.now()`. Use when comparing to external
-		// timestamps — not for elapsed-time measurement (use `performance.now()`).
+		// Wall-clock time in whole milliseconds since Unix epoch, as JS/Node
+		// `Date.now()`. Use when comparing to external timestamps — not for
+		// elapsed-time measurement (use `performance.now()`).
 		static now(): number {
-			return msTimeNow();
+			return msTimeClip(msTimeNow());
 		}
 
 		getTime(): number {
