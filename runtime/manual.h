@@ -623,6 +623,7 @@ static inline int64_t  msCheckRangeI64FromU64(uint64_t v) { if(v>(uint64_t)INT64
 
 _Noreturn static inline void msRaiseDivByZero(void) { __builtin_trap(); }
 _Noreturn static inline void msRaiseOverflow(void) { __builtin_trap(); }
+_Noreturn static inline void msRaiseRadixError(void) { __builtin_trap(); }
 _Noreturn static inline void msMapFatal(msString msg) { (void)msg; __builtin_trap(); }
 #include "runtime/core/checkedArith.h"
 

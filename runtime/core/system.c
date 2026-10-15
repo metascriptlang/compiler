@@ -179,6 +179,12 @@ _Noreturn void msRaiseOverflow(void) {
 	exit(1);
 }
 
+_Noreturn void msRaiseRadixError(void) {
+	fprintf(stderr, "Error: toString() radix argument must be between 2 and 36\n");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 /* Parity: standard reference range error handling */
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	fprintf(stderr, "Error: value %lld not in range %lld .. %lld\n",

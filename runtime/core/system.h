@@ -678,6 +678,7 @@ static inline int64_t msCheckRangeI64FromU64(uint64_t v) {
 
 _Noreturn void msRaiseDivByZero(void);
 _Noreturn void msRaiseOverflow(void);
+_Noreturn void msRaiseRadixError(void);
 #include "runtime/core/checkedArith.h"
 
 #endif /* SYSTEM_H */

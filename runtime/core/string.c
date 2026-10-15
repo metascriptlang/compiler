@@ -1193,16 +1193,9 @@ msString msUint64ToString(uint64_t value) {
 	return msStringNew(buf, len);
 }
 
-static _Noreturn void msRaiseRadixError(void) {
-	fprintf(stderr, "Error: toString() radix argument must be between 2 and 36\n");
-	if (msFatalTrap != NULL) msFatalTrap();
-	exit(1);
-}
-
 static int msCheckedRadix(double radix) {
-	double r = trunc(radix);
-	if (!(r >= 2.0 && r <= 36.0)) msRaiseRadixError();
-	return (int)r;
+	if (!(radix >= 2.0 && radix < 37.0)) msRaiseRadixError();
+	return (int)radix;
 }
 
 msString msIntToStringRadix(int64_t iv, double radix) {
