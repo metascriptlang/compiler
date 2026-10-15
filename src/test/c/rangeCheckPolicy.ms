@@ -54,6 +54,12 @@ test "uint32 to int32 keeps the range check" {
 	assert c.contains("msCheckRangeI32");
 }
 
+test "uint64 to int64 keeps the range check" {
+	const c = cFor("function opaqueU64(x: uint64): uint64 { return x; }\nfunction f(): int64 { return opaqueU64(3 as uint64) as int64; }");
+	assert c != "";
+	assert c.contains("msCheckRangeI64FromU64(");
+}
+
 test "float64 to uint32 has no range check" {
 	const c = cFor("function f(): uint32 { return opaqueF64(3.9) as uint32; }");
 	assert c != "";
