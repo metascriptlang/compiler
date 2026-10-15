@@ -122,6 +122,8 @@ export function coverSeeds(first: uint64, count: int32, base: Features, swarmed:
 	const dir = root + "/out/smith/cov/seeds" + String(first) + "-" + String(count) + "-" + hashToHex(djb2(vector)).slice(0, 8);
 	removeAll(dir);
 	ensureDir(dir + "/programs");
+	env.set("LLVM_PROFILE_FILE", dir + "/identify.prof");
+	const id = identify(root, instrumented);
 	env.set("LLVM_PROFILE_FILE", dir + "/batch-%m.profraw");
 	env.set("MSC_NO_GLOBAL_CACHE", "1");
 	let emitted = 0;
@@ -144,7 +146,6 @@ export function coverSeeds(first: uint64, count: int32, base: Features, swarmed:
 	if (!merged.ok) { return fail(merged.error); }
 	const report = run([...llvmTool("llvm-cov"), "report", instrumented, "-instr-profile=" + dir + "/batch.profdata"], dir);
 	if (!report.ok) { return fail(report.error); }
-	const id = identify(root, instrumented);
 	const text = "smith cov — seeds " + String(first) + ".." + String(first + ((count - 1) as uint64)) + ", " + vector + "\n" +
 		"  instrumented " + instrumented + " (" + id.mscHash + "; source " + source.value.trim() + ")\n" +
 		"  generator " + id.generator + "\n" +
