@@ -1,5 +1,6 @@
 import { NodeKind, IdentifierData, createNodeAt, makeLoc, Node, bindSym, childCount, getImpl, SourceLocation, getType } from "std/meta";
 import { declareWireShape } from "./macroWireFixture";
+import { twice, outer, outer2 } from "./macroBindingFixture";
 
 test "macro node variant fit: variant cast widens at a call argument" {
 	const loc = makeLoc(1, 1);
@@ -63,8 +64,12 @@ function dbl(value: string): string { return "caller " + value; }
 function inner(value: string): string { return "caller macro " + value; }
 
 test "macro expansion identity: declaration-module symbols resist caller shadowing" {
+	assert twice(21) == 42;
+	assert outer(7) == 14;
+	assert outer2(0) == 42;
 	assert dbl("x") == "caller x";
 	assert inner("y") == "caller macro y";
+	{ const dbl: int32 = 9; assert twice(8) + dbl == 25; }
 }
 
 function triple(value: int32): int32 { return value * 3; }
