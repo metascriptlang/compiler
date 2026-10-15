@@ -11,7 +11,7 @@
 //   f("hello", ["a", "b", "c"]);
 
 import {
-	Node, NodeKind, NodeData, Type, TypeKind, SymbolKind,
+	Node, NodeKind, NodeData, Type, TypeKind,
 	CallExprData, IdentifierData, NewExprData,
 	createNode,
 } from "../../ast/node";
@@ -19,7 +19,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
 import { hasFlag, SymbolFlag, overloadWinner } from "../../checker/symbol";
-import { ctorFormalTypes, ctorRoutineOf } from "../../checker/ctorRoutine";
+import { ctorFormalTypes } from "../../checker/ctorRoutine";
 
 export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 	walkNode(program, lowerRest);
@@ -86,9 +86,8 @@ function lowerRest(node: Node): Node {
 	// console.log is a flat-varargs intrinsic — every backend prints its args
 	// individually (C debugLower, JS native, Raiser loop); packing breaks all three.
 	if (isConsoleLogCallee(callee)) return node;
-	if (callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super"
-		&& callee.resolvedSym != null && callee.resolvedSym.symbolKind == SymbolKind.Class) {
-		d.arguments = packCtorRest(d.arguments, ctorFormalTypes(ctorRoutineOf(callee.resolvedSym)), node.location.line);
+	if (callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super" && callee.resolvedSym != null) {
+		d.arguments = packCtorRest(d.arguments, ctorFormalTypes(callee.resolvedSym), node.location.line);
 		return node;
 	}
 	let sym = callee.resolvedSym;
