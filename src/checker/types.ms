@@ -3822,6 +3822,10 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 			if (ca.kind == TypeKind.Null) { unifyType(formal.typeReturn, cb, bindings); return; }
 		}
 	}
+	if (formal.kind == TypeKind.Union && concrete.kind != TypeKind.Union) {
+		unifyIntoUnion(formal, concrete, bindings);
+		return;
+	}
 	// Structural match — same kind, recurse into children
 	if (formal.kind != concrete.kind) return;
 	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span || formal.kind == TypeKind.Set) {
@@ -3866,6 +3870,29 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		}
 		return;
 	}
+}
+
+function unifyIntoUnion(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+	let naked: Type | null = null;
+	let nakedCount = 0;
+	const before = bindings.names.length;
+	for (const member of formal.typeChildren) {
+		if (member == null) continue;
+		if (member.kind == TypeKind.GenericParam) {
+			naked = member;
+			nakedCount += 1;
+		} else if (isLeafNamed(member, concrete)) {
+			return;
+		} else {
+			unifyType(member, concrete, bindings);
+		}
+	}
+	if (nakedCount == 1 && bindings.names.length == before) unifyType(naked, concrete, bindings);
+}
+
+function isLeafNamed(member: Type, concrete: Type): boolean {
+	return member.kind == concrete.kind && member.typeName == concrete.typeName
+		&& member.typeChildren.length == 0 && member.typeReturn == null;
 }
 
 export function hasGenericParams(t: Type | null): boolean {

@@ -3300,6 +3300,26 @@ function fitsFormal(argType: Type, formal: Type): boolean {
 	return hasGenericParams(bound) || isAssignable(argType, bound);
 }
 
+function signatureReturn(sigType: Type, argTypes: Type[]): Type | null {
+	const ret = sigType.typeReturn;
+	if (ret == null || !hasGenericParams(ret)) return ret;
+	const bindings = createUnifyBindings();
+	for (let ai = 0; ai < argTypes.length && ai < sigType.typeChildren.length; ai += 1) {
+		if (argTypes[ai] != null) unifyType(sigType.typeChildren[ai], argTypes[ai], bindings);
+	}
+	const bound = bindings.names.length > 0 ? instantiateGeneric(ret, bindings.names, bindings.types) : ret;
+	return hasGenericParams(bound) ? null : bound;
+}
+
+function isHiddenImplementation(cand: Symbol, set: Symbol): boolean {
+	if (hasFlag(cand, SymbolFlag.OverloadSig)) return false;
+	if (hasFlag(set, SymbolFlag.OverloadSig)) return true;
+	for (const o of set.overloads) {
+		if (hasFlag(o, SymbolFlag.OverloadSig)) return true;
+	}
+	return false;
+}
+
 function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
 	let sym = primary;
 	let impl = findOverloadImpl(sym);
@@ -3352,30 +3372,29 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	let bestIdx: int32 = -1;
 	let bestScore: CandidateScore = null as unknown as CandidateScore;
 	let ambiguous = false;
-	const scores: CandidateScore[] = [];
+	let scores: CandidateScore[] = [];
+	let implAsFallback = false;
 	let ci: int32 = 0;
 	while (ci < candidates.length) {
 		const candType = candidates[ci];
-		const score = candType == null || candType.kind != TypeKind.Function
+		const score = candType == null || candType.kind != TypeKind.Function || (!implAsFallback && isHiddenImplementation(candSyms[ci], ci < ownCount ? sym : gathered!))
 			? noMatchScore()
 			: scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
 		scores.push(score);
-		if (score.exactMatches < 0) { ci = ci + 1; continue; }
-		if (bestIdx < 0) {
+		const cmp = score.exactMatches < 0 ? -1 : bestIdx < 0 ? 1 : cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
+		if (cmp > 0) {
 			bestIdx = ci;
 			bestScore = score;
 			ambiguous = false;
-		} else {
-			const cmp = cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
-			if (cmp > 0) {
-				bestIdx = ci;
-				bestScore = score;
-				ambiguous = false;
-			} else if (cmp == 0) {
-				ambiguous = true;
-			}
+		} else if (cmp == 0) {
+			ambiguous = true;
 		}
 		ci = ci + 1;
+		if (ci == candidates.length && bestIdx < 0 && !implAsFallback) {
+			implAsFallback = true;
+			scores = [];
+			ci = 0;
+		}
 	}
 
 	if (ambiguous) {
@@ -3510,7 +3529,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		const implParams = impl.symbolType.typeChildren;
 		for (let ri = 0; ri < d.arguments.length; ri += 1) {
 			const implArgType = d.arguments[ri].nodeType;
-			if (implArgType == null) continue;
+			if (implArgType == null || hasGenericParams(implParams[ri])) continue;
 			const reconciled = widenVariantToUnion(d.arguments[ri], implParams[ri], implArgType);
 			if (reconciled != null as unknown as Node) d.arguments[ri] = reconciled;
 		}
@@ -3532,12 +3551,15 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// un-substituted generic body. The instSym has zero overloads, so after
 	// redirect the codegen naturally falls into direct-call path and emits the
 	// mangled mono name (e.g. `g__ref_Post`).
-	const winnerSym: Symbol = bestIdx == 0
+	const pickedSym: Symbol = bestIdx == 0
 		? sym
 		: (bestIdx - 1 < sym.overloads.length ? sym.overloads[bestIdx - 1] : (null as unknown as Symbol));
+	const runsImpl = pickedSym != null && hasFlag(pickedSym, SymbolFlag.OverloadSig) && impl != null;
+	const winnerSym: Symbol = runsImpl ? impl : pickedSym;
 	if (winnerSym != null && winnerSym.declNode != null) {
 		const winnerFlags = getGenericDeclFlags(winnerSym.declNode);
 		if (isGenericFn(winnerFlags)) {
+			const callReturn = runsImpl ? signatureReturn(winnerType, argTypes) : null;
 			// Swap callNode.resolvedSym to winner so the helper instantiates
 			// the picked overload, not the primary. Helper writes instSym
 			// back into resolvedSym on success.
@@ -3547,7 +3569,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 				d.callee.resolvedSym = winnerSym;
 				d.callee.nodeType = winnerSym.symbolType;
 			}
-			const newCalleeType = tryInstantiateGenericCallee(ctx, callNode, explicitWinner, argTypes, winnerFlags, expectedType);
+			const newCalleeType = tryInstantiateGenericCallee(ctx, callNode, runsImpl ? impl.symbolType : explicitWinner, argTypes, winnerFlags, expectedType);
 			if (newCalleeType != null) {
 				// Mono fired. callNode.resolvedSym now points to instSym (no
 				// overloads → codegen takes direct path). Keep d.resolvedOverloadIdx
@@ -3556,6 +3578,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 				if (newCalleeType.kind == TypeKind.Function && argTypes.length < newCalleeType.typeChildren.length) {
 					fillDefaultArgsForNode(ctx, callNode, sym.name, newCalleeType.typeChildren.length, 0);
 				}
+				if (callReturn != null) return callReturn;
 				return newCalleeType.typeReturn != null ? newCalleeType.typeReturn : inferredType();
 			}
 			// Mono didn't fire — restore primary sym for normal fall-through.
