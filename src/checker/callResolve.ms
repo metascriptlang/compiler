@@ -3077,6 +3077,15 @@ function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node): S
 	return validateOverloadSigs(ctx, set, impl, callNode) ? impl : winner;
 }
 
+function implementsSignatures(cand: Symbol, primary: Symbol): boolean {
+	if (hasFlag(cand, SymbolFlag.OverloadSig)) return false;
+	if (hasFlag(primary, SymbolFlag.OverloadSig)) return true;
+	for (const o of primary.overloads) {
+		if (hasFlag(o, SymbolFlag.OverloadSig)) return true;
+	}
+	return false;
+}
+
 function findOverloadImpl(sym: Symbol): Symbol {
 	if (!hasFlag(sym, SymbolFlag.OverloadSig)) return sym;
 	for (const o of sym.overloads) {
@@ -3266,26 +3275,30 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	let bestScore: CandidateScore = null as unknown as CandidateScore;
 	let ambiguous = false;
 	let ci: int32 = 0;
-	while (ci < candidates.length) {
-		const candType = candidates[ci];
-		if (candType == null || candType.kind != TypeKind.Function) { ci = ci + 1; continue; }
-		const score = scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
-		if (score.exactMatches < 0) { ci = ci + 1; continue; }
-		if (bestIdx < 0) {
-			bestIdx = ci;
-			bestScore = score;
-			ambiguous = false;
-		} else {
-			const cmp = cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
-			if (cmp > 0) {
+	for (let pass = 0; pass < 2 && bestIdx < 0; pass += 1) {
+		ci = 0;
+		while (ci < candidates.length) {
+			const candType = candidates[ci];
+			if (candType == null || candType.kind != TypeKind.Function
+					|| (pass == 0 && implementsSignatures(candSyms[ci], ci < ownCount ? sym : gathered!))) { ci = ci + 1; continue; }
+			const score = scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
+			if (score.exactMatches < 0) { ci = ci + 1; continue; }
+			if (bestIdx < 0) {
 				bestIdx = ci;
 				bestScore = score;
 				ambiguous = false;
-			} else if (cmp == 0) {
-				ambiguous = true;
+			} else {
+				const cmp = cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
+				if (cmp > 0) {
+					bestIdx = ci;
+					bestScore = score;
+					ambiguous = false;
+				} else if (cmp == 0) {
+					ambiguous = true;
+				}
 			}
+			ci = ci + 1;
 		}
-		ci = ci + 1;
 	}
 
 	if (ambiguous) {
