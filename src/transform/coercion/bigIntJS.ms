@@ -131,6 +131,7 @@ function bigintCast(node: Node, d: TypeAssertionData): Node | null {
 	if (dstK == TypeKind.Uint64) return asN(true, 64, d.asExpr, loc);
 	const bits = narrowBits(dstK);
 	if (bits > 0) return numberOf(asN(!isSignedNarrowKind(dstK), bits, d.asExpr, loc), loc);
+	if (dstK == TypeKind.Float32) return typedCall("msBigIntToFloat32", [d.asExpr], dstK, loc);
 	return numberOf(d.asExpr, loc);
 }
 

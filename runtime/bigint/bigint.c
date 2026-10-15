@@ -207,6 +207,20 @@ int64_t msBigIntToSigned(const msBigInt* a, int32_t bits) {
 	return msBigIntToInt64(a);
 }
 
+float msBigIntToFloat32(const msBigInt* a) {
+	size_t n = mbedtls_mpi_bitlen(&a->v);
+	if (n <= 24) return (float)msBigIntToInt64(a);
+	int neg = mbedtls_mpi_cmp_int(&a->v, 0) < 0;
+	size_t shift = n - 24;
+	uint32_t m = 0;
+	for (size_t i = n; i-- > shift;) m = (m << 1) | (uint32_t)mbedtls_mpi_get_bit(&a->v, i);
+	int half = mbedtls_mpi_get_bit(&a->v, shift - 1);
+	int sticky = mbedtls_mpi_lsb(&a->v) < shift - 1;
+	if (half && (sticky || (m & 1u) != 0)) m++;
+	float r = shift > 128 ? INFINITY : ldexpf((float)m, (int)shift);
+	return neg ? -r : r;
+}
+
 #define BIN_OP(name, call) \
 	msBigInt* name(const msBigInt* a, const msBigInt* b) { \
 		msBigInt* r = newBig(); \

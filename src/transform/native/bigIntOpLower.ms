@@ -75,7 +75,11 @@ function fromBig(node: Node, ctx: TransformContext): Node {
 	const d = node.data as TypeAssertionData;
 	const dst = node.nodeType;
 	const loc = node.location;
-	if (dst != null && (dst.kind == TypeKind.Float64 || dst.kind == TypeKind.Float32 || dst.kind == TypeKind.Number)) {
+	if (dst != null && dst.kind == TypeKind.Float32) {
+		d.asExpr = bigCall("msBigIntToFloat32", [d.asExpr], loc, dst);
+		return node;
+	}
+	if (dst != null && (dst.kind == TypeKind.Float64 || dst.kind == TypeKind.Number)) {
 		d.asExpr = bigCall("msBigIntToFloat64", [d.asExpr], loc, dst);
 		return node;
 	}
@@ -255,4 +259,9 @@ test "bigint to a signed integer checks the true value" {
 test "bigint to an unsigned integer wraps" {
 	assert extractionOf("uint8") == "msBigIntToInt64";
 	assert extractionOf("uint64") == "msBigIntToInt64";
+}
+
+test "bigint to float32 rounds once" {
+	assert extractionOf("float32") == "msBigIntToFloat32";
+	assert extractionOf("float64") == "msBigIntToFloat64";
 }
