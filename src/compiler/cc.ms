@@ -12,6 +12,7 @@ import {
 	execFileCapture,
 	execFileResult,
 	nonZeroExit,
+	notFound,
 	pipeError,
 	processError,
 	signalTerminated,
@@ -23,7 +24,7 @@ import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
-import { renameReplace, atomicWriteFile, stopBuild } from "./io";
+import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -1411,6 +1412,28 @@ test "an SBF build asks the code generator to keep a failing branch's constant o
 	assert applyArgs(host, ["--release"], 0).ok;
 	assert cliCompileFlags(host).indexOf("machine-sink", 0) < 0;
 	assert cliCompileFlags(host).indexOf("csuses", 0) < 0;
+}
+
+test "an MSC_SBF_CLANG that cannot run stops the build instead of falling through to another clang" {
+	const saved = env.get("MSC_SBF_CLANG");
+	env.set("MSC_SBF_CLANG", "/nonexistent/clang");
+	_sbfClangChecked = false;
+	setRecoverableBuild(true);
+	let stopped = false;
+	try {
+		resolveBpfClang();
+	} catch (e) {
+		stopped = e.message == BUILD_STOPPED;
+	}
+	setRecoverableBuild(false);
+	env.set("MSC_SBF_CLANG", saved);
+	assert stopped;
+}
+
+test "a clang is refused for SBF, with the reason, unless its target list names sbf" {
+	assert printedTargetsRefusal(Result.err(notFound("\"/nonexistent/clang\" --print-targets"))) == "was not found";
+	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    bpf        - BPF (host endian)\n    bpfel      - BPF (little endian)\n")) == "has no sbf target";
+	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    sbf        - SBF new (little endian)\n")) == "";
 }
 
 test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {
