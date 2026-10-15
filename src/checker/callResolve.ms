@@ -1573,6 +1573,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				}
 			}
 		}
+		const qualifier = (d.callee.data as MemberExprData).object.resolvedSym;
+		if (qualifier != null && qualifier.symbolKind == SymbolKind.Module && methodSym != null && hasOverloads(methodSym)) {
+			needsOverloadScoring = true;
+			overloadSym = methodSym;
+		}
 	}
 	// Pre-arg binding derivation. Three sources accumulate into _argBindings,
 	// in priority order (explicit beats inferred):
