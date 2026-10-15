@@ -116,6 +116,29 @@ test "members that no tag or class test can tell apart are refused naming both, 
 	assert strictErrorCount(UNION_HEAD + reads + "function f(a: S | int32, b: S | int32): boolean { return a >= b; }") == 0;
 }
 
+const ENUM_HEAD = "enum E { A, B, C }\nenum F { X, Y }\n";
+
+test "a union holding an enum and a number orders as the enum does on its own" {
+	for (const fn of [
+		"function f(a: E | int32, b: int32): boolean { return a < b; }",
+		"function f(a: int32, b: E | int32): boolean { return a >= b; }",
+		"function f(a: E | float64, b: E): boolean { return a <= b; }",
+		"function f(a: E | uint8, b: F): boolean { return a > b; }",
+		"function f(a: E | int32, b: E | int32): boolean { return a < b; }",
+	]) {
+		assert strictErrorCount(ENUM_HEAD + fn) == 0, fn;
+	}
+}
+
+test "a union of two enums is refused because no run-time test tells them apart" {
+	assert hasError(ENUM_HEAD + "function f(a: E | F, b: int32): boolean { return a < b; }", "cannot tell the members 'E' and 'F' of 'E | F' apart at run time");
+}
+
+test "an enum member of a union must still compare with the other operand" {
+	assert hasError(ENUM_HEAD + "function f(a: E | int32, b: string): boolean { return a < b; }", "of 'E | int32' with 'string'");
+	assert hasError(ENUM_HEAD + "function f(a: E | boolean, b: int32): boolean { return a < b; }", "cannot compare the member 'boolean' of 'E | boolean' with 'int32'");
+}
+
 test "a Result member of a union operand is named" {
 	assert hasError(UNION_HEAD + "function f(a: Result<int32, string> | int32, b: int32): boolean { return a < b; }", "cannot order the member 'Result<int32, string>'");
 }

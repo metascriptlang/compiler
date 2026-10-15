@@ -5,7 +5,7 @@
 // class. Allocation order is the reverse of value order, so an address
 // comparison prints the opposite.
 //
-// @stdout: method false true false|classExt false true|iface false true true|struct false true|text false true|mixed false true true|generic false true|left true false true|right true false false|both true false true false|classes false false true|ext true true false|utext true false true|kinds true false|field false true|usub true false true true|ustruct true false false true false
+// @stdout: method false true false|classExt false true|iface false true true|struct false true|text false true|mixed false true true|generic false true|left true false true|right true false false|both true false true false|classes false false true|ext true true false|utext true false true|kinds true false|field false true|usub true false true true|ustruct true false false true false|uenum false true false true true false true false
 // @exit: 0
 
 class M { c: int32; constructor(c: int32) { this.c = c; } valueOf(): int32 { return this.c; } }
@@ -19,6 +19,7 @@ class N { s: string; constructor(s: string) { this.s = s; } valueOf(): string { 
 class D extends M { constructor(c: int32) { super(c); } valueOf(): int32 { return this.c * 10; } }
 class P { c: int32; constructor(c: int32) { this.c = c; } valueOf(): int32 { return this.c; } }
 class H { u: M | int32; constructor(u: M | int32) { this.u = u; } }
+enum E { A, B, C }
 
 function lt<T>(a: T, b: T): boolean { return a < b; }
 function left(a: M | int32, b: M): boolean { return a < b; }
@@ -36,6 +37,10 @@ function field(h: H, b: int32): boolean { return h.u < b; }
 function usub(a: M | D | int32, b: int32): boolean { return a < b; }
 function ustruct(a: S | int32, b: int32): boolean { return a < b; }
 function ustructBoth(a: S | int32, b: S | int32): boolean { return a >= b; }
+function enumLt(a: E | int32, b: int32): boolean { return a < b; }
+function enumGe(a: int32, b: E | int32): boolean { return a >= b; }
+function enumFloat(a: E | float64, b: E): boolean { return a <= b; }
+function enumBoth(a: E | int32, b: E | int32): boolean { return a < b; }
 
 const m1 = new M(5);
 const m2 = new M(1);
@@ -67,5 +72,6 @@ const rows: string[] = [
 	`field ${field(new H(m1), 3)} ${field(new H(2), 3)}`,
 	`usub ${usub(m2, 5)} ${usub(new D(1), 5)} ${usub(new D(1), 15)} ${usub(2, 5)}`,
 	`ustruct ${ustruct(s1, 5)} ${ustruct(s1, 3)} ${ustruct(7, 5)} ${ustructBoth(s1, 3)} ${ustructBoth(2, s1)}`,
+	`uenum ${enumLt(E.C, 1)} ${enumLt(0, 1)} ${enumGe(1, E.C)} ${enumGe(5, E.C)} ${enumFloat(1.5, E.C)} ${enumFloat(E.C, E.B)} ${enumBoth(E.A, 1)} ${enumBoth(2, E.A)}`,
 ];
 console.log(rows.join("|"));
