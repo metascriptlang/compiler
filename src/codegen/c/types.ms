@@ -753,6 +753,7 @@ export function isPointerType(t: Type): boolean {
 	if (t == null) return false;
 	let inner = skipModifier(t);
 	if (inner != null) inner = skipModifier(peelTransparentInstance(inner));
+	while (inner != null && distinctBody(inner) != null) inner = skipModifier(peelTransparentInstance(distinctBody(inner)!));
 	if (inner == null) return false;
 	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return true;
