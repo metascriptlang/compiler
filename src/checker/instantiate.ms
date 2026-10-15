@@ -12,7 +12,6 @@ import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } fro
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { splitTopLevel } from "../utils/string";
-import { isFrameValue } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -706,13 +705,13 @@ export function clearCheckerState(node: Node): void {
 	if (node == null) return;
 	const redeclared: Symbol[] = [];
 	collectDeclaredSyms(node, redeclared);
-	const names: string[] = [];
-	collectDeclaredNames(node, names);
-	clearStateKeepingOuterBindings(node, redeclared, names);
+	clearStateKeepingOuterBindings(node, redeclared);
 }
 
 function collectDeclaredSyms(node: Node, into: Symbol[]): void {
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) into.push(node.resolvedSym);
+	const binds = node.kind == NodeKind.VariableDecl || node.kind == NodeKind.ForOfStmt || node.kind == NodeKind.TryCatchStmt;
+	if (binds && node.resolvedSym != null) into.push(node.resolvedSym);
+	if (node.paramSyms != null) for (const p of node.paramSyms) into.push(p);
 	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredSyms(child, into); });
 }
 
@@ -734,7 +733,7 @@ function bindsInto(node: Node, redeclared: Symbol[]): boolean {
 	return false;
 }
 
-function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[], names: string[]): void {
+function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
 	if (node == null) return;
 	while (isCheckerWrapper(node)) {
 		const inner = node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv
@@ -751,15 +750,14 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[], names:
 	// clone.ms preserves it). The enum member type is concrete, never generic, so
 	// it needs no regeneration against the instance's concrete types. Keep it.
 	// See NIM-REF CK-22 "Enum member repr & generic-instantiation survival".
-	const rebinds = node.kind == NodeKind.Identifier && node.flags.has(NodeFlag.BoundSym)
-		&& (bindsInto(node, redeclared) || (node.resolvedSym != null && isFrameValue(node.resolvedSym) && names.includes((node.data as IdentifierData).name)));
+	const rebinds = node.kind == NodeKind.Identifier && node.flags.has(NodeFlag.BoundSym) && bindsInto(node, redeclared);
 	if (rebinds) node.flags = node.flags.excl(NodeFlag.BoundSym);
 	const keepBound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
 	if (!keepBound && (node.resolvedSym == null || node.resolvedSym.symbolKind != SymbolKind.EnumMember)) {
 		node.resolvedSym = null;
 	}
 	node.flags = node.flags.intersection(SYNTAX_NODE_FLAGS);
-	forEachChild(node, (child: Node): void => { clearStateKeepingOuterBindings(child, redeclared, names); });
+	forEachChild(node, (child: Node): void => { clearStateKeepingOuterBindings(child, redeclared); });
 }
 
 // ===== replaceTypeVars =====
