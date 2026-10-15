@@ -134,6 +134,7 @@ import "./macroNamedLikeDirective";
 import "./compileTimeNameUse";
 import "./extensionImportUse";
 import "./memberBinding";
+import "./memberContainer";
 import "./genericInstanceCast";
 import "./comptimeCallFold";
 import "./readonlyViewRefArgument";
