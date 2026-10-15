@@ -48,6 +48,7 @@ import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower
 import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } from "../coercion/intArithJS";
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
+import { readsBeforeHoist, snapshotsLikeJs } from "./operandOrder";
 
 // ===== Hoist (top-down) =====
 
@@ -288,10 +289,15 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 	while (i >= 0) {
 		if (ends[i] < hoisted.length && kids[i] != null) {
 			const writes: Symbol[] = [];
+			let calls = false;
 			let w = ends[i];
-			while (w < hoisted.length) { collectWrites(hoisted[w], writes); w += 1; }
+			while (w < hoisted.length) {
+				collectWrites(hoisted[w], writes);
+				calls = calls || holdsCall(hoisted[w]);
+				w += 1;
+			}
 			const pre: Node[] = [];
-			kids[i] = captureSibling(expr, i, kids[i], pre, writes, ctx);
+			kids[i] = captureSibling(expr, i, kids[i], pre, writes, calls, ctx);
 			let p = 0;
 			while (p < pre.length) { hoisted.splice(ends[i] + p, 0, pre[p]); p += 1; }
 		}
@@ -305,7 +311,7 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 	});
 }
 
-function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], ctx: TransformContext): Node {
+function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], calls: boolean, ctx: TransformContext): Node {
 	const isCallee = index == 0 && (parent.kind == NodeKind.CallExpr || parent.kind == NodeKind.NewExpr);
 	if (isCallee) return child;
 	const isLocation = index == 0 && (parent.kind == NodeKind.MemberExpr || parent.kind == NodeKind.ArrayAccess
@@ -313,7 +319,10 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		|| (parent.kind == NodeKind.BinaryExpr && isAssignOperator((parent.data as BinaryExprData).operator)));
 	if (isLocation) return hoistAssignTargetEffects(child, pre, ctx, writes);
 	if (isLiteral(child)) return child;
-	if (!hasEffect(child) && !readsAnyOf(child, writes)) return child;
+	const isReceiver = index == 1 && parent.kind == NodeKind.CallExpr
+		&& parent.flags.has(NodeFlag.ExtCall) && !parent.flags.has(NodeFlag.ExtStatic);
+	const readsBeforeCall = calls && !isReceiver && snapshotsLikeJs(child.nodeType) && holdsStorageRead(child);
+	if (!hasEffect(child) && !readsAnyOf(child, writes) && !readsBeforeCall) return child;
 	const loc = child.location;
 	const sym = freshOwnedSym(ctx, "ord", child.nodeType);
 	const decl = makeVarDecl(sym.name, child, DeclKind.Const, loc);
@@ -321,6 +330,22 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 	if (child.nodeType != null) { decl.nodeType = child.nodeType; }
 	pre.push(decl);
 	return makeIdentResolved(sym, loc);
+}
+
+function holdsCall(n: Node): boolean {
+	if (n == null || isFunctionNode(n)) return false;
+	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && holdsCall(c)) found = true; });
+	return found;
+}
+
+function holdsStorageRead(n: Node): boolean {
+	if (n == null || isFunctionNode(n) || n.kind == NodeKind.HiddenAddr || n.kind == NodeKind.MoveExpr) return false;
+	if (readsBeforeHoist(n)) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && holdsStorageRead(c)) found = true; });
+	return found;
 }
 
 function isLiteral(n: Node): boolean {
