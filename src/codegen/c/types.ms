@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, isStringLiteralUnion, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, storesNothing } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, isStringLiteralUnion, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, storesNothing, createGenericInstance } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -407,6 +407,7 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 			return t.typeName;
 		},
 		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
 			let k = "fn(";
@@ -2429,6 +2430,21 @@ test "same anonymous type gets same name (deterministic)" {
 	const anon2 = createStruct("", names2, types2, true);
 
 	assert anonTypeName(anon1) == anonTypeName(anon2);
+}
+
+test "anonymous type name ignores a generic field's lazily instantiated body" {
+	const gi = createGenericInstance(createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true), [createPrimitive(TypeKind.Int32)]);
+	const anon = createStruct("", ["v", "t"], [gi, createPrimitive(TypeKind.Uint8)], true);
+	const before = anonTypeName(anon);
+	gi.typeReturn = createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true);
+	assert anonTypeName(anon) == before;
+}
+
+test "anonymous type name tells generic arguments apart" {
+	const base = createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true);
+	const ofInt = createStruct("", ["v"], [createGenericInstance(base, [createPrimitive(TypeKind.Int32)])], true);
+	const ofString = createStruct("", ["v"], [createGenericInstance(base, [createPrimitive(TypeKind.String)])], true);
+	assert anonTypeName(ofInt) != anonTypeName(ofString);
 }
 
 test "anonymous type cache key distinguishes" {
