@@ -1,12 +1,14 @@
 // bigint Operation Lowering (C backend) — msBigInt is an opaque heap value, so
 // every operator becomes a runtime call. The checker has already rejected mixed
-// operands, so any bigint-typed operand means both sides are bigint.
+// arithmetic, so only a comparison meets a non-bigint operand.
 //
 // Rewrites:
 //   123n     →  msBigIntFromLit("123n")     (the runtime parser owns 0x/0b/0o/_)
 //   a + b    →  msBigIntAdd(a, b)           (- * / % ** & | ^ << >> alike)
 //   -a / ~a  →  msBigIntNeg(a) / msBigIntNot(a)
 //   a < b    →  msBigIntCmp(a, b) < 0       (=== and !== compare against 0 too)
+//   a < x    →  msBigIntCompareFloat64(a, x, u) < 0   (x fractional; u is the
+//               result when x is NaN, chosen so every comparison is false)
 //   a += b   →  a = msBigIntAdd(a, b)
 //   a++      →  a = msBigIntAdd(a, msBigIntFromLit("1n"))
 //
@@ -141,6 +143,24 @@ function comparisonOp(op: string): string {
 	};
 }
 
+function resultWhenUnordered(cmp: string): int32 {
+	return cmp == ">" || cmp == ">=" ? -1 : 1;
+}
+
+function compareWithFraction(d: BinaryExprData, cmp: string, loc: SourceLocation): Node | null {
+	const unordered = makeNumber(resultWhenUnordered(cmp), loc);
+	let call: Node | null = null;
+	if (isBigNode(d.left) && isFractionalSource(d.right.nodeType)) {
+		call = bigCall("msBigIntCompareFloat64", [d.left, d.right, unordered], loc, int32Type());
+	} else if (isFractionalSource(d.left.nodeType) && isBigNode(d.right)) {
+		call = bigCall("msFloat64CompareBigInt", [d.left, d.right, unordered], loc, int32Type());
+	}
+	if (call == null) return null;
+	const result = makeBinary(call, cmp, makeNumber(0, loc), loc);
+	result.nodeType = booleanType();
+	return result;
+}
+
 // A target read twice by `a += b` / `a++` must be free of side effects.
 function isRereadableTarget(n: Node): boolean {
 	if (n.kind == NodeKind.Identifier) return true;
@@ -207,6 +227,8 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 	const cmp = comparisonOp(d.operator);
 	if (cmp != "") {
+		const withFraction = compareWithFraction(d, cmp, loc);
+		if (withFraction != null) return withFraction;
 		const cmpCall = bigCall("msBigIntCmp", [toBig(d.left, ctx), toBig(d.right, ctx)], loc, int32Type());
 		const result = makeBinary(cmpCall, cmp, makeNumber(0, loc), loc);
 		result.nodeType = booleanType();
