@@ -228,10 +228,10 @@ function intValueOf(arg: string): string {
 }
 
 test "comptime macro values: intValue refuses a node that is not an integer literal and names its kind" {
-	assert intValueOf("x").includes("intValue needs an integer literal, got Identifier"), intValueOf("x");
-	assert intValueOf("f()").includes("intValue needs an integer literal, got CallExpr"), intValueOf("f()");
-	assert intValueOf("-5").includes("intValue needs an integer literal, got UnaryExpr"), intValueOf("-5");
-	assert intValueOf("\"7\"").includes("intValue needs an integer literal, got StringLiteral"), intValueOf("\"7\"");
+	assert intValueOf("x").includes("intValue needs an integer literal or an enum member, got Identifier"), intValueOf("x");
+	assert intValueOf("f()").includes("intValue needs an integer literal or an enum member, got CallExpr"), intValueOf("f()");
+	assert intValueOf("-5").includes("intValue needs an integer literal or an enum member, got UnaryExpr"), intValueOf("-5");
+	assert intValueOf("\"7\"").includes("intValue needs an integer literal or an enum member, got StringLiteral"), intValueOf("\"7\"");
 	assert intValueOf("8.5").includes("intValue needs an integer literal, got a float literal"), intValueOf("8.5");
 	assert intValueOf("41") == "ok", intValueOf("41");
 }
@@ -296,6 +296,27 @@ function twiceWide(x: float64): float64 { const two: float64 = 2; return x * two
 function main(): void {
 	const a = factor(twice);
 	const b = factor(twiceWide);
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+}
+
+test "comptime macro values: intValue of an enum member is the member's value" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind, childAt, intValue } from "std/meta";
+
+enum Color { Red, Green = 5, Blue }
+enum Signed { Below = -1, Zero }
+
+export macro members(node: Node): Node {
+	let text = "";
+	for (let i = 0; i < 5; i += 1) text = text + (i > 0 ? "," : "") + intValue(childAt(node, i)).toString();
+	if (text != "0,5,6,-1,0") { error("enum member values read " + text, node); }
+	return { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: text };
+}
+
+function main(): void {
+	const x = members({ a: Color.Red, b: Color.Green, c: Color.Blue, d: Signed.Below, e: Signed.Zero });
 }
 `);
 	assert result.ok, result.ok ? "" : result.error;

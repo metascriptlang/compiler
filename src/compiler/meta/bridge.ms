@@ -691,6 +691,13 @@ export function boundTypeAt(index: int32): Type | null {
 	return _boundTypes[index];
 }
 
+export function boundSymOfObject(objHeap: RaiserObjectHeap, handle: int64): Symbol | null {
+	const sh = heapObjectGetField(objHeap, handle, "symHandle");
+	if (sh.kind == RaiserValueKind.Int) return boundSymAt(sh.intVal as int32);
+	if (sh.kind == RaiserValueKind.Float) return boundSymAt(sh.floatVal as int32);
+	return null;
+}
+
 export function boundTypeOfObject(objHeap: RaiserObjectHeap, handle: int64): Type | null {
 	const th = heapObjectGetField(objHeap, handle, "typeHandle");
 	if (th.kind == RaiserValueKind.Int) return boundTypeAt(th.intVal as int32);

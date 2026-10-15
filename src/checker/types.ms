@@ -2457,12 +2457,16 @@ export function booleanLiteralValue(t: Type | null): boolean {
 // typeName = enum type name (e.g. "NodeKind").
 // typeNames[0] = specific member (e.g. "BinaryExpr").
 // typeReturn = back-reference to the underlying Enum Type for fast subtype checks.
+export function enumMemberValue(t: Type, index: int32): int32 {
+	return t.typeChildren != null && index < t.typeChildren.length && t.typeChildren[index] != null ? t.typeChildren[index].typeValue : index;
+}
+
 export function enumOrdinalBounds(t: Type): int32[] {
 	const count = t.typeNames.length;
 	let low: int32 = 0;
 	let high: int32 = 0;
 	for (let i = 0; i < count; i += 1) {
-		const v: int32 = t.typeChildren != null && i < t.typeChildren.length && t.typeChildren[i] != null ? t.typeChildren[i].typeValue : i;
+		const v = enumMemberValue(t, i);
 		if (i == 0 || v < low) low = v;
 		if (i == 0 || v > high) high = v;
 	}

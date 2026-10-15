@@ -51,10 +51,10 @@ import {
 	boxString, boxInt, boxFloat, boxBool,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
-import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject } from "./bridge";
+import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
 import { nodeKindName } from "../../ast/fieldspec";
-import { NodeKind, TypeKind } from "../../ast/node";
-import { distinctNumericBase } from "../../checker/types";
+import { NodeKind, TypeKind, SymbolKind } from "../../ast/node";
+import { distinctNumericBase, enumMemberValue } from "../../checker/types";
 
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
@@ -719,6 +719,14 @@ function wireNodeKindText(objHeap: RaiserObjectHeap, n: RaiserValue): string {
 	return kind.kind == RaiserValueKind.Int ? nodeKindName(kind.intVal as NodeKind) : "a node without a kind";
 }
 
+function enumMemberOrdinal(objHeap: RaiserObjectHeap, n: RaiserValue): RaiserValue {
+	const sym = n.kind == RaiserValueKind.Object ? boundSymOfObject(objHeap, n.intVal) : null;
+	if (sym == null || sym.symbolKind != SymbolKind.EnumMember || sym.symbolType == null) return raiserNil();
+	const enumType = sym.symbolType.kind == TypeKind.EnumLiteral && sym.symbolType.typeReturn != null ? sym.symbolType.typeReturn : sym.symbolType;
+	const index: int32 = enumType.kind == TypeKind.Enum ? enumType.typeNames.indexOf(sym.name) as int32 : -1;
+	return index < 0 ? raiserNil() : raiserInt(enumMemberValue(enumType, index) as int64);
+}
+
 function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	if (objHeap == null || args.length < 1) {
@@ -726,8 +734,10 @@ function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
 		return raiserInt(0);
 	}
 	const n = args[0];
+	const ordinal = enumMemberOrdinal(objHeap, n);
+	if (ordinal.kind == RaiserValueKind.Int) return ordinal;
 	if (!isWireNode(objHeap, n, NodeKind.NumberLiteral)) {
-		raiseFromHost("intValue needs an integer literal, got " + wireNodeKindText(objHeap, n), true);
+		raiseFromHost("intValue needs an integer literal or an enum member, got " + wireNodeKindText(objHeap, n), true);
 		return raiserInt(0);
 	}
 	if (wireLiteralIsFloat(objHeap, n.intVal)) {
