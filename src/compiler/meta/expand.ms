@@ -1752,7 +1752,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	const emptyDefaults: Node[] = [];
 	const nodeInScope = isMetaNodeSym(lookupSymbol(regCtx.table, "Node"));
 	const macroFn = createNode(NodeKind.FunctionDecl, {
-		fnName: "__macroBody",
+		fnName: "$macro:body",
 		params: params,
 		fnParamTypes: paramTypes,
 		fnBody: fnBody,
@@ -1765,7 +1765,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	const result = callMacroEngineCompiler(program, ctx, "__macroBody", regCtx);
+	const result = callMacroEngineCompiler(program, ctx, "$macro:body", regCtx);
 	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {
