@@ -84,3 +84,9 @@ test "a spread argument has no count the checker can compare" {
 test "an extern class keeps the arguments of its native constructor" {
 	assert strictErrorCount("extern class Native {}\nconst n = new Native(1, 2);") == 0;
 }
+
+test "the prelude Date takes no argument or one millisecond count" {
+	assert strictErrorCount("const a = new Date();\nconst b = new Date(5);\nconst c = a < b;\nconst t: number = b.getTime() + a.valueOf();") == 0;
+	assert hasError("const d = new Date(1, 2, 3);", TOO_MANY + "Date': expected at most 1, got 3");
+	assert hasError("const d = new Date(\"2020-01-01\");", "'string' is not assignable to type 'number'");
+}
