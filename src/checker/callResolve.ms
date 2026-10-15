@@ -1906,7 +1906,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		return nullableRet;
 	}
 	if (calleeType != null && isValueCallee(d.callee) && !isCallableValueType(calleeType)) {
-		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures" + dynamicFieldCalleeHint(d.callee),
+		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures" + unionCalleeHint(calleeType) + dynamicFieldCalleeHint(d.callee),
 			node.location.line, node.location.column);
 		node.nodeType = inferredType();
 		return node.nodeType;
@@ -3716,11 +3716,12 @@ function matchArmValue(cd: MatchCaseData, asStatement: boolean): Node {
 	return last.kind == NodeKind.ReturnStmt ? (last.data as ReturnStmtData).argument ?? none : none;
 }
 
-function unionHasFunction(t: Type): boolean {
+function unionCalleeHint(t: Type): string {
+	if (t.kind != TypeKind.Union) return "";
 	for (const m of t.typeChildren) {
-		if (m.kind == TypeKind.Function) return true;
+		if (m.kind == TypeKind.Function) return " — a union is called only after narrowing it to a single function type";
 	}
-	return false;
+	return "";
 }
 
 function isCallableValueType(t: Type): boolean {
@@ -3730,7 +3731,6 @@ function isCallableValueType(t: Type): boolean {
 			| TypeKind.GenericParam | TypeKind.GenericInstance | TypeKind.TypeReference | TypeKind.Conditional => true,
 		TypeKind.Ref | TypeKind.Var | TypeKind.Lent | TypeKind.Sink | TypeKind.Borrow | TypeKind.Alias | TypeKind.Distinct =>
 			t.typeReturn == null || isCallableValueType(t.typeReturn),
-		TypeKind.Union => unionHasFunction(t),
 		_ => false,
 	};
 }
