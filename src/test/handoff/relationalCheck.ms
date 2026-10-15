@@ -29,8 +29,8 @@ test "ordering a value array is rejected" {
 	assert hasError(src, "operator '<' cannot be applied to types");
 }
 
-test "reference array ordering compares references" {
-	assert strictErrorCount("const a: int32[] = [1];\nconst b: int32[] = [2];\nconst c = a < b;") == 0;
+test "ordering a reference array is rejected, because backends would order it by address or by text" {
+	assert hasError("const a: int32[] = [1];\nconst b: int32[] = [2];\nconst c = a < b;", "operator '<' cannot be applied to types");
 }
 
 // ===== Accepted: a candidate exists =====
@@ -66,9 +66,18 @@ test "enum ordering is unaffected" {
 	assert strictErrorCount("enum E { A, B }\nconst a = E.A;\nconst b = E.B;\nconst c = a < b;") == 0;
 }
 
-test "reference ordering is unaffected" {
-	const src = "interface R { m: int32; }\nconst a: R = { m: 1 };\nconst b: R = { m: 2 };\nconst c = a < b;";
-	assert strictErrorCount(src) == 0;
+test "ordering two references without valueOf is rejected" {
+	const iface = "interface R { m: int32; }\nconst a: R = { m: 1 };\nconst b: R = { m: 2 };\nconst c = a < b;";
+	assert hasError(iface, "operator '<' cannot be applied to types 'R' and 'R'");
+	const cls = "class K { m: int32 = 0; }\nconst a = new K();\nconst b = new K();\nconst c = a <= b;";
+	assert hasError(cls, "operator '<=' cannot be applied to types");
+}
+
+test "ordering two references reads them through valueOf" {
+	const method = "class K { m: int32 = 0; valueOf(): int32 { return this.m; } }\nconst a = new K();\nconst b = new K();\nconst c = a < b;";
+	assert strictErrorCount(method) == 0;
+	const ext = "interface R { m: int32; }\nfunction valueOf(this r: R): int32 { return r.m; }\nconst a: R = { m: 1 };\nconst b: R = { m: 2 };\nconst c = a >= b;";
+	assert strictErrorCount(ext) == 0;
 }
 
 // ===== Arithmetic and equality operands =====

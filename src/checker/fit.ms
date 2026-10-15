@@ -633,16 +633,6 @@ function relationalOperandsOk(a: Type, b: Type): boolean {
 	return true;
 }
 
-function relationalNeedsOperator(s: Type): boolean {
-	if (s.kind == TypeKind.Struct) return !isMaybeType(s);
-	return s.kind == TypeKind.Array || s.kind == TypeKind.SizedArray
-		|| s.kind == TypeKind.Span || s.kind == TypeKind.Function || s.kind == TypeKind.Set;
-}
-
-function relationalBothReferences(a: Type, b: Type): boolean {
-	return !relationalOrdered(a) && !relationalOrdered(b) && !relationalNeedsOperator(a) && !relationalNeedsOperator(b);
-}
-
 export function relationalOperandsFail(ctx: CheckerContext, op: string, leftType: Type, rightType: Type): boolean {
 	if (op != "<" && op != ">" && op != "<=" && op != ">=") return false;
 	if (leftType == null || rightType == null) return false;
@@ -651,7 +641,7 @@ export function relationalOperandsFail(ctx: CheckerContext, op: string, leftType
 	if (a == null || b == null) return false;
 	const holdsResult = isResult(leftType) || isResult(rightType);
 	if (!holdsResult && (relationalSkip(a) || relationalSkip(b))) return false;
-	if (!holdsResult && (relationalOperandsOk(a, b) || relationalBothReferences(a, b))) return false;
+	if (!holdsResult && relationalOperandsOk(a, b)) return false;
 	return ctx.extensionRegistry == null
 		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) == null;
 }
