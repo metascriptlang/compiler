@@ -192,6 +192,8 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	return false;
 }
 
+export { lastIndexOf, findIndex, findLastIndex } from "./shared";
+
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	const n = view.length;
 	let i = 0;
