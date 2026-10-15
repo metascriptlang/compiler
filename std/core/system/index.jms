@@ -181,6 +181,13 @@ function msCheckRangeI64(v: float64): float64 {
 }
 
 @compilerFunc
+function msCheckRangeI64FromU64(v: uint64): uint64 {
+	@emit(`if (!(${v} < 9223372036854775808)) ${msDefect}("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
 function msDivI32(a: int32, b: int32): int32 {
 	@emit(`if (${b} === 0) ${msDefect}("division by zero");
 	if (${b} === -1 && ${a} === -2147483648) ${msDefect}("over- or underflow");
