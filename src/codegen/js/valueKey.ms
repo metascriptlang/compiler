@@ -9,7 +9,7 @@
 // goes through a native Map/Set subclass that never finds NaN.
 
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
-import { NewExprData, CallExprData, Node } from "../../ast/node";
+import { NewExprData, CallExprData, Node, NodeFlag } from "../../ast/node";
 import { distinctBody, setRepr, isStdCollectionKind } from "../../checker/types";
 import { emit, emitNode, emitJoinedNodes, JSGenerator } from "./emit";
 import { valueCopyFnName } from "./valueCopy";
@@ -134,27 +134,31 @@ const RUNTIME = "function msValueKeys() {\n"
 	+ "        default: return \"x\" + String(v);\n"
 	+ "      }\n"
 	+ "    }\n"
-	+ "    class ValueMap {\n"
-	+ "      constructor(key, copy, init) { this.k = key; this.c = copy; this.m = new Map(); if (init) for (const [a, b] of init) this.set(a, b); }\n"
+	+ "    class KeyedStore {\n"
+	+ "      constructor(key, copy, hash, eq) { this.c = copy; this.h = hash || key; this.q = eq || (hash ? (x, y) => key(x) === key(y) : null); this.m = new Map(); this.b = new Map(); this.n = 0; }\n"
 	+ "      get size() { return this.m.size; }\n"
-	+ "      set(a, b) { const c = this.k(a); const e = this.m.get(c); if (e !== undefined) e[1] = b; else this.m.set(c, [this.c ? this.c(a) : a, b]); return this; }\n"
-	+ "      get(a) { const e = this.m.get(this.k(a)); return e === undefined ? undefined : e[1]; }\n"
-	+ "      has(a) { return this.m.has(this.k(a)); }\n"
-	+ "      delete(a) { return this.m.delete(this.k(a)); }\n"
-	+ "      clear() { this.m.clear(); }\n"
+	+ "      keyOf(id) { return this.m.get(id); }\n"
+	+ "      find(a) { const ids = this.b.get(this.h(a)); if (ids !== undefined) for (const id of ids) if (this.q === null || this.q(this.keyOf(id), a)) return id; return undefined; }\n"
+	+ "      insert(a, entry) { const id = ++this.n; this.m.set(id, entry); const h = this.h(a); const ids = this.b.get(h); if (ids === undefined) this.b.set(h, [id]); else ids.push(id); }\n"
+	+ "      delete(a) { const h = this.h(a); const ids = this.b.get(h); const id = this.find(a); if (id === undefined) return false; this.m.delete(id); ids.splice(ids.indexOf(id), 1); if (ids.length === 0) this.b.delete(h); return true; }\n"
+	+ "      clear() { this.m.clear(); this.b.clear(); }\n"
+	+ "    }\n"
+	+ "    class ValueMap extends KeyedStore {\n"
+	+ "      constructor(key, copy, hash, eq, init) { super(key, copy, hash, eq); if (init) for (const [a, b] of init) this.set(a, b); }\n"
+	+ "      keyOf(id) { return this.m.get(id)[0]; }\n"
+	+ "      set(a, b) { const id = this.find(a); if (id !== undefined) this.m.get(id)[1] = b; else this.insert(a, [this.c ? this.c(a) : a, b]); return this; }\n"
+	+ "      get(a) { const id = this.find(a); return id === undefined ? undefined : this.m.get(id)[1]; }\n"
+	+ "      has(a) { return this.find(a) !== undefined; }\n"
 	+ "      *keys() { for (const e of this.m.values()) yield e[0]; }\n"
 	+ "      *values() { for (const e of this.m.values()) yield e[1]; }\n"
 	+ "      *entries() { for (const e of this.m.values()) yield [e[0], e[1]]; }\n"
 	+ "      [Symbol.iterator]() { return this.entries(); }\n"
 	+ "      forEach(f, self) { for (const e of this.m.values()) f.call(self, e[1], e[0], this); }\n"
 	+ "    }\n"
-	+ "    class ValueSet {\n"
-	+ "      constructor(key, copy, init) { this.k = key; this.c = copy; this.m = new Map(); if (init) for (const a of init) this.add(a); }\n"
-	+ "      get size() { return this.m.size; }\n"
-	+ "      add(a) { const c = this.k(a); if (!this.m.has(c)) this.m.set(c, this.c ? this.c(a) : a); return this; }\n"
-	+ "      has(a) { return this.m.has(this.k(a)); }\n"
-	+ "      delete(a) { return this.m.delete(this.k(a)); }\n"
-	+ "      clear() { this.m.clear(); }\n"
+	+ "    class ValueSet extends KeyedStore {\n"
+	+ "      constructor(key, copy, hash, eq, init) { super(key, copy, hash, eq); if (init) for (const a of init) this.add(a); }\n"
+	+ "      add(a) { if (this.find(a) === undefined) this.insert(a, this.c ? this.c(a) : a); return this; }\n"
+	+ "      has(a) { return this.find(a) !== undefined; }\n"
 	+ "      *values() { yield* this.m.values(); }\n"
 	+ "      keys() { return this.values(); }\n"
 	+ "      *entries() { for (const a of this.m.values()) yield [a, a]; }\n"
@@ -213,19 +217,26 @@ export function emitCollectionNew(gen: JSGenerator, node: Node): boolean {
 	const isMap = sym.builtinKind == "IndexableMap";
 	const keyType = keyTypeOfCollection(node.nodeType);
 	const shape = valueKeyShape(keyType);
+	const keyOps = node.flags.has(NodeFlag.KeyOps);
+	const init = keyOps || d.newArguments.length > 0 ? d.newArguments[0] : null;
 	if (shape == null) {
 		const native = isMap ? "Map" : "Set";
 		emit(gen, "new " + (admitsNaN(keyType) ? floatCollection(gen, native) : native) + "(");
-		emitJoinedNodes(gen, d.newArguments, ", ");
+		if (init != null) emitNode(gen, init);
 		emit(gen, ")");
 		return true;
 	}
 	useRuntime(gen);
 	const copy = valueCopyFnName(gen, shape);
-	emit(gen, "new (msValueKeys()." + (isMap ? "ValueMap" : "ValueSet") + ")(" + keyFnName(gen, shape) + ", " + (copy != "" ? copy : "null"));
-	if (d.newArguments.length > 0) {
+	emit(gen, "new (msValueKeys()." + (isMap ? "ValueMap" : "ValueSet") + ")(" + keyFnName(gen, shape) + ", " + (copy != "" ? copy : "null") + ", ");
+	if (keyOps) {
+		emitJoinedNodes(gen, [d.newArguments[1], d.newArguments[2]], ", ");
+	} else {
+		emit(gen, "null, null");
+	}
+	if (init != null) {
 		emit(gen, ", ");
-		emitJoinedNodes(gen, d.newArguments, ", ");
+		emitNode(gen, init);
 	}
 	emit(gen, ")");
 	return true;
@@ -247,7 +258,7 @@ export function emitCollectionFromPairs(gen: JSGenerator, node: Node): boolean {
 	if (shape != null) {
 		useRuntime(gen);
 		const copy = valueCopyFnName(gen, shape);
-		emit(gen, "new (msValueKeys().ValueMap)(" + keyFnName(gen, shape) + ", " + (copy != "" ? copy : "null") + ", ");
+		emit(gen, "new (msValueKeys().ValueMap)(" + keyFnName(gen, shape) + ", " + (copy != "" ? copy : "null") + ", null, null, ");
 	} else if (admitsNaN(keyType)) {
 		emit(gen, "new " + floatCollection(gen, "Map") + "(");
 	} else {

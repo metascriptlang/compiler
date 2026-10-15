@@ -296,6 +296,7 @@ export enum NodeFlag {
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
 	OptionalChainEnd, // parser: last link of a run that starts at `?.` — the null test covers every link from the `?.` to here
 	AutoAccessor,  // parser: this class field was written `accessor x` — a hidden storage field plus a getter and a setter replace it before the class is filled
+	KeyOps,        // JS transform: a std collection construction carries [initializer, key hash, key ==] as its arguments
 }
 
 // ===== Node Kind Enum =====

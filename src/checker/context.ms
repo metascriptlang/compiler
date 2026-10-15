@@ -747,7 +747,7 @@ export function findAccessor(ctx: CheckerContext, objType: Type, routineName: st
 	return findFirstMatchingExt(exts, objType);
 }
 
-function hasConcreteReceiver(ext: ExtensionMethod): boolean {
+export function hasConcreteReceiver(ext: ExtensionMethod): boolean {
 	if (ext.isStatic) return true;
 	const fnType = getExtFnType(ext);
 	if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) return false;
