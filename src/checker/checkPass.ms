@@ -37,7 +37,7 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, usedBeforeDeclaration } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, usedBeforeDeclaration } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, refuseUnwrittenOut, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -638,6 +638,7 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 			else checkExpr(ctx, d.deferExpr, null);
 		},
 		NodeKind.DecoratedDecl => checkDecoratedStmt(ctx, node),
+		NodeKind.ComptimeBlock => checkComptimeStmt(ctx, node),
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;

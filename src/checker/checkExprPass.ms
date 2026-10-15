@@ -721,6 +721,14 @@ function checkSpliceMany(ctx: CheckerContext, node: Node, expectedType: Type | n
 	node.nodeType = node.nodeType; return;
 }
 
+export function checkComptimeStmt(ctx: CheckerContext, node: Node): void {
+	markNamesUsed(ctx, node);
+	if (insideGenericTemplate(ctx)) return;
+	callEvalComptimeBlock(node, ctx);
+	node.kind = NodeKind.BlockStmt;
+	node.data = { statements: [] } as BlockStmtData;
+}
+
 function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	// Eagerly fold @comptime block — mirrors Phase B+ macro eager
 	// expansion below. Without this, `const X = @comptime { ... }`

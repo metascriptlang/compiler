@@ -381,13 +381,15 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
 	const result = compileIntoEngineSeeded(program, token, fnName, token, enclosingTypeAliases(token.table));
 	if (result == null as unknown as EngineMacroResult) return createContext();
+	let refused = false;
 	if (result.errors != null) {
 		for (const e of result.errors) {
 			if (e.severity != Severity.Error) continue;
 			addError(token, `@comptime block: ${e.message}`, e.line, e.column);
+			refused = true;
 		}
 	}
-	if (result.funcIdx < 0) return createContext();
+	if (refused || result.funcIdx < 0) return createContext();
 	const noArgs: RaiserValue[] = [];
 	const resultVal = callWithComptimeHostPolicy(result.vm, result.funcIdx, noArgs, token.modulePath);
 	if (result.vm.diagMessage != "") {

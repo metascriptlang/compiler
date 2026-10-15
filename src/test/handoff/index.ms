@@ -86,6 +86,7 @@ import "./callableRepresentation";
 import "./checkedReadErrors";
 import "./comptimeHostEffects";
 import "./comptimeMacroValues";
+import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";
 import "./declaredSubscript";
