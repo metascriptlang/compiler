@@ -66,6 +66,18 @@ test "enum ordering is unaffected" {
 	assert strictErrorCount("enum E { A, B }\nconst a = E.A;\nconst b = E.B;\nconst c = a < b;") == 0;
 }
 
+test "tuples order field by field when every field orders against its counterpart" {
+	assert strictErrorCount("const a: [int32, string] = [1, \"a\"];\nconst b: [int32, string] = [1, \"b\"];\nconst c = a < b;") == 0;
+	assert strictErrorCount("const a: [[int32, string], bigint] = [[1, \"a\"], 2n];\nconst b: [[int32, string], bigint] = [[1, \"a\"], 3n];\nconst c = a >= b;") == 0;
+}
+
+test "a tuple with a field that has no order is rejected" {
+	const cls = "class K { m: int32 = 0; }\nconst a: [int32, K] = [1, new K()];\nconst b: [int32, K] = [1, new K()];\nconst c = a < b;";
+	assert hasError(cls, "operator '<' cannot be applied to types");
+	const nested = "struct S { m: int32; }\nconst a: [int32, [S, int32]] = [1, [{ m: 1 }, 2]];\nconst b: [int32, [S, int32]] = [1, [{ m: 1 }, 2]];\nconst c = a <= b;";
+	assert hasError(nested, "operator '<=' cannot be applied to types");
+}
+
 test "ordering two references without valueOf is rejected" {
 	const iface = "interface R { m: int32; }\nconst a: R = { m: 1 };\nconst b: R = { m: 2 };\nconst c = a < b;";
 	assert hasError(iface, "operator '<' cannot be applied to types 'R' and 'R'");
