@@ -101,7 +101,10 @@ extern function msPtrBits(p: Ptr<void>): uint64;
 @builtin("Float64Bits")
 extern function msFloat64Bits(d: number): uint64;
 
-export function hashNumber(n: number): int64 { return hashWangYi1(msFloat64Bits(n + 0.0)); }
+export function hashNumber(n: number): int64 {
+	if (n != n) return hashWangYi1(0x7FF8000000000000 as uint64);
+	return hashWangYi1(msFloat64Bits(n + 0.0));
+}
 
 export function hashCombine(h: int64, v: int64): int64 {
 	let r = (h as uint64) + (v as uint64);
@@ -167,6 +170,25 @@ export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
 export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u as Ptr<void>)); }
 
+function sameKey<T>(this a: T, b: T): boolean { return a == b; }
+function sameKey(this a: number, b: number): boolean { return a == b || (a != a && b != b); }
+function sameKey(this a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
+function sameKey(this a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
+function sameKey(this a: unknown, b: unknown): boolean { return a == b; }
+
+test "a NaN key is found and stored once, like a TypeScript Map" {
+	const zero: number = 0.0;
+	const nan = zero / zero;
+	const m = new Map<number, int32>();
+	m.set(nan, 1);
+	m.set(nan, 2);
+	assert m.has(nan) && m.size == 1 && (m.get(nan) ?? 0) == 2;
+	const s = new HashSet<float64>();
+	s.add(nan as float64);
+	s.add(nan as float64);
+	assert s.size == 1 && s.has(nan as float64);
+}
+
 test "scalar keys hash by ordinal value and float bits" {
 	const low = 7 as uint64;
 	assert low.hash() != (low | ((1 as uint64) << (32 as uint64))).hash();
@@ -221,7 +243,7 @@ function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (m.data[h].hcode != 0) {
-		if (m.data[h].hcode == hc && m.data[h].key == key) {
+		if (m.data[h].hcode == hc && m.data[h].key.sameKey(key)) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -423,7 +445,7 @@ function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode != 0) {
-		if (s.data[h].hcode == hc && s.data[h].key == key) {
+		if (s.data[h].hcode == hc && s.data[h].key.sameKey(key)) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -574,7 +596,7 @@ function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = m.entries[slot];
-			if (e.hcode == hc && e.key == key) return h;
+			if (e.hcode == hc && e.key.sameKey(key)) return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -819,7 +841,7 @@ function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = s.entries[slot];
-			if (e.hcode == hc && e.key == key) return h;
+			if (e.hcode == hc && e.key.sameKey(key)) return h;
 		}
 		h = (h + 1) & mask;
 	}
