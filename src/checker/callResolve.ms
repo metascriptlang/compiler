@@ -24,7 +24,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
+import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, callMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
@@ -1722,7 +1722,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const extLastCT = calleeType.typeChildren.length > 0
 			? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
 		const extHasRest = extLastCT != null && extLastCT.kind == TypeKind.Varargs;
-		const extMinArDeclared = getMinArity(calleeType);
+		const extMinArDeclared = callMinArity(calleeType);
 		const extMinAr = extHasRest && extMinArDeclared >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : extMinArDeclared;
 		if (d.arguments.length < extMinAr) {
@@ -1873,7 +1873,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
 		const hasRest = lastCT != null && lastCT.kind == TypeKind.Varargs;
 		// Fill default arguments if too few args provided
-		const minAr = getMinArity(calleeType);
+		const minAr = callMinArity(calleeType);
 		// Rest param is optional (accepts 0+ args), so effective min excludes it
 		const effectiveMin = hasRest && minAr >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : minAr;

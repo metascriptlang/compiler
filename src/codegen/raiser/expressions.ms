@@ -1577,7 +1577,6 @@ function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: strin
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const argCount = d.arguments.length;
 
 	// Compile callee expression → register holding the closure pair object
 	const closureReg = compileExpr(s, d.callee);
@@ -1593,9 +1592,14 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 
 	// Precompile all args into temp registers
 	const argRegs: number[] = [];
-	for (let i = 0; i < argCount; i = i + 1) {
+	for (let i = 0; i < d.arguments.length; i = i + 1) {
+		if (d.arguments[i].nodeType != null && d.arguments[i].nodeType!.kind == TypeKind.Void) {
+			if (d.arguments[i].kind != NodeKind.Identifier) compileExpr(s, d.arguments[i]);
+			continue;
+		}
 		argRegs.push(compileExpr(s, d.arguments[i]));
 	}
+	const argCount = argRegs.length;
 
 	// Allocate dest + (argCount+1) slots (worst case: env + args)
 	const totalArgs = argCount + 1;
