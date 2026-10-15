@@ -940,6 +940,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as ArrayPatternData;
 			setNodes(objHeap, arrHeap, handle, "patternElements", d.patternElements);
 			setBool(objHeap, handle, "hasRestElement", d.hasRestElement);
+			setDefaults(objHeap, arrHeap, handle, "patternDefaults", d.patternDefaults, includeTypeAst);
 		},
 		NodeKind.ObjectPattern => {
 			const d = node.data as ObjectPatternData;
@@ -1018,6 +1019,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setBool(objHeap, handle, "forOfIsConst", d.forOfIsConst);
 			setNode(objHeap, arrHeap, handle, "forOfIterable", d.forOfIterable);
 			setNode(objHeap, arrHeap, handle, "forOfBody", d.forOfBody);
+			setNode(objHeap, arrHeap, handle, "forOfPattern", d.forOfPattern);
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
@@ -1835,7 +1837,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.ArrayPattern => {
 			const patternElements = readNodes(objHeap, arrHeap, h, "patternElements", loc);
 			const hasRestElement = readBool(objHeap, h, "hasRestElement");
-			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement, patternDefaults: [] }, loc);
+			const patternDefaults = readDefaults(objHeap, arrHeap, h, "patternDefaults", loc);
+			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement, patternDefaults }, loc);
 		},
 		NodeKind.ObjectPattern => {
 			const patternProps = readNodes(objHeap, arrHeap, h, "patternProps", loc);
@@ -1916,9 +1919,10 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const forOfIsConst = readBool(objHeap, h, "forOfIsConst");
 			const forOfIterable = readNode(objHeap, arrHeap, h, "forOfIterable", loc);
 			const forOfBody = readNode(objHeap, arrHeap, h, "forOfBody", loc);
+			const forOfPattern = readNode(objHeap, arrHeap, h, "forOfPattern", loc);
 			return createNodeAt(NodeKind.ForOfStmt, {
 				forOfBinding, forOfIsConst, forOfIterable, forOfBody,
-				forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
+				forOfPattern, bindingLocation: loc, forOfLabel: "",
 			}, loc);
 		},
 		NodeKind.ForInStmt => {
@@ -2850,6 +2854,53 @@ test "round-trip MatchCase without guard (null)" {
 	assert back.kind == NodeKind.MatchCase;
 	const d = back.data as MatchCaseData;
 	assert d.caseGuard == null;
+}
+
+test "round-trip ForOfStmt keeps a nested pattern and its defaults" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const ident = (name: string): Node => createNode(NodeKind.Identifier, { name }, synthToken(loc));
+	const inner = createNode(NodeKind.ObjectPattern, {
+		patternProps: [createNode(NodeKind.ObjectPatternProp, { propKey: "a", propAlias: ident("a"), propDefault: mkNumber(4, loc) }, synthToken(loc))],
+		hasRestProp: false,
+	}, synthToken(loc));
+	const pattern = createNode(NodeKind.ArrayPattern, {
+		patternElements: [ident("k"), inner, ident("v")],
+		hasRestElement: false,
+		patternDefaults: [null as unknown as Node, null as unknown as Node, mkNumber(9, loc)],
+	}, synthToken(loc));
+	const orig = createNode(NodeKind.ForOfStmt, {
+		forOfBinding: "_destructure", forOfIsConst: true, forOfIterable: ident("rows"),
+		forOfBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+		forOfPattern: pattern, bindingLocation: loc, forOfLabel: "",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const p = (back.data as ForOfStmtData).forOfPattern;
+	assert p != null && p.kind == NodeKind.ArrayPattern;
+	const pd = p.data as ArrayPatternData;
+	assert pd.patternElements.length == 3;
+	assert pd.patternElements[1].kind == NodeKind.ObjectPattern;
+	assert ((pd.patternElements[1].data as ObjectPatternData).patternProps[0].data as ObjectPatternPropData).propDefault != null;
+	assert pd.patternDefaults.length == 3;
+	assert pd.patternDefaults[0] == null && pd.patternDefaults[1] == null;
+	assert pd.patternDefaults[2].kind == NodeKind.NumberLiteral;
+}
+
+test "round-trip ForOfStmt over a single name keeps no pattern" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.ForOfStmt, {
+		forOfBinding: "x", forOfIsConst: true,
+		forOfIterable: createNode(NodeKind.Identifier, { name: "rows" }, synthToken(loc)),
+		forOfBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+		forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as ForOfStmtData;
+	assert d.forOfBinding == "x";
+	assert d.forOfPattern == null;
 }
 
 // ===== mapTypeToAst tests — Day 1 (atomic types) =====
