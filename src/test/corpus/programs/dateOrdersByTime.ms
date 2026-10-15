@@ -6,6 +6,7 @@
 //
 // @stdout: time 1000 2000|order true false true false|equal true true false|valueOf 1000 1005|truncates 1000 -1000 0|range 8640000000000000 true|now true true true true
 // @exit: 0
+// @xfail(raiser): the Raiser has no Date (inbox 2026-10-16-raiser-has-no-date)
 
 function earlier(a: Date, b: Date): Date { return a < b ? a : b; }
 function whole(ms: number): boolean { return ms == Math.trunc(ms); }
