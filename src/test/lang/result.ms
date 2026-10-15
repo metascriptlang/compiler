@@ -320,3 +320,120 @@ test "Result.err for Result<void, E>" {
 	assert !r.ok;
 	if (!r.ok) assert r.error == "boom";
 }
+
+// --- a binding copied from a narrowed Result keeps the narrowed variant ---
+struct CopyKey {
+	b: uint8;
+}
+
+function copyPick(flag: boolean): Result<CopyKey, string> {
+	if (!flag) return Result.err("bad");
+	return Result.ok({ b: 9 });
+}
+
+function copyViaParam(r: Result<CopyKey, string>): int32 {
+	if (r.ok) {
+		const h = r;
+		return h.value.b as int32;
+	}
+	return -1;
+}
+
+function copyWidth(r: Result<CopyKey, string>): int32 {
+	if (r.ok) return r.value.b as int32;
+	return 0;
+}
+
+function copyForward(r: Result<string, int32>): Result<string, int32> {
+	if (r.ok) {
+		const h = r;
+		const q: Result<string, int32> = h;
+		return q;
+	}
+	const e = r;
+	return e;
+}
+
+function copyText(r: Result<string, int32>): string {
+	if (r.ok) {
+		let h = r;
+		return h.value;
+	}
+	return "none";
+}
+
+test "const copy of a narrowed Result reads the variant field" {
+	const got = copyPick(true);
+	let seen = 0;
+	if (got.ok) {
+		const h = got;
+		seen = h.value.b as int32;
+	}
+	assert seen == 9;
+}
+
+test "let copy of a narrowed Result reads the variant field" {
+	const got = copyPick(true);
+	let seen = 0;
+	if (got.ok) {
+		let h = got;
+		seen = h.value.b as int32;
+	}
+	assert seen == 9;
+}
+
+test "copy of a narrowed Result parameter reads the variant field" {
+	assert copyViaParam(copyPick(true)) == 9;
+	assert copyViaParam(copyPick(false)) == -1;
+}
+
+test "copy of the error arm reads error" {
+	const bad = copyPick(false);
+	let seen = "";
+	if (!bad.ok) {
+		const h = bad;
+		seen = h.error;
+	}
+	assert seen == "bad";
+}
+
+test "copy of a narrowed Result passes where a Result is expected" {
+	const got = copyPick(true);
+	let seen = 0;
+	if (got.ok) {
+		const h = got;
+		seen = copyWidth(h);
+	}
+	assert seen == 9;
+}
+
+test "copy of a narrowed Result returns as the Result, other payload types" {
+	assert copyForward(Result.ok("hi")).ok;
+	assert !copyForward(Result.err(7)).ok;
+	assert copyText(Result.ok("hi")) == "hi";
+	assert copyText(Result.err(7)) == "none";
+}
+
+enum CopyKind { A, B }
+
+type CopyVariantData = match (kind: CopyKind) {
+	CopyKind.A => {},
+	CopyKind.B => { flag: boolean },
+};
+
+type CopyVariant = Ref<CopyVariantData>;
+type CopyPlain = { ok: true; value: CopyVariant } | { ok: false; error: string };
+
+function copyMake(): CopyPlain {
+	const v: CopyVariant = { kind: CopyKind.B, flag: true };
+	return { ok: true, value: v };
+}
+
+test "a nested discriminant test narrows through the narrowed union" {
+	const r = copyMake();
+	let seen = false;
+	if (r.ok) {
+		if (r.value.kind == CopyKind.B) seen = r.value.flag;
+	}
+	assert seen;
+}
