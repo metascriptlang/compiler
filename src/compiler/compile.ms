@@ -1583,7 +1583,14 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
 		);
 	}
-	if (opts.targetOs == "bare" || opts.targetOs == "solana") return [];
+	if (opts.targetOs == "solana") {
+		return processCompileDirectives(
+			"runtime/freestanding/musl/pow.c\nruntime/freestanding/musl/pow_data.c\nruntime/freestanding/musl/exp_data.c", ".", includePaths, allFlags,
+			opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose,
+			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
+		);
+	}
+	if (opts.targetOs == "bare") return [];
 
 	let rtFiles = "";
 	if (opts.targetOs == "emcc") {

@@ -1,20 +1,21 @@
 // The --os=solana libm (runtime/freestanding/math.h) gives floor, ceil, trunc and fmod the
 // results node gives for 1e300, -1e300, 2^53 + 1, NaN and the infinities, with no int64 cast
-// past 2^63, and isnan/isinf/isfinite link without a libm behind them. pow follows C's pow
-// table for zeros, infinities, NaN and exponents past 2^63, is exact for integer results, and
-// stops the program on a positive base with a fractional exponent: exp and log are absent, and
-// a link refusal inside pow fails every -O0 build that calls pow, integer exponents included.
-// `**` and Math.pow reach it through msPowF64 (runtime/core/checkedArith.h), which gives
-// ECMAScript's NaN for a NaN exponent and for a +-1 base with an infinite exponent, squares
-// for an exponent of 2, and under MSOS_SOLANA leaves an exponent of 0.5 to this pow, since
-// the header declares sqrt without a body.
+// past 2^63, and isnan/isinf/isfinite link without a libm behind them. pow is musl's
+// (runtime/freestanding/musl, compiled into every --os=solana build): C's pow table for zeros,
+// infinities, NaN and exponents past 2^63, and node's bits for fractional, negative and large
+// integer exponents. `**` and Math.pow reach it through msPowF64 (runtime/core/checkedArith.h),
+// which gives ECMAScript's NaN for a NaN exponent and for a +-1 base with an infinite exponent,
+// squares for an exponent of 2, and under MSOS_SOLANA leaves an exponent of 0.5 to this pow,
+// since the header declares sqrt without a body.
 //
 // WHY A SUBPROCESS: no host build reads this header (host and --os=bare use the system libm),
-// so the guard compiles a C probe against it with host clang under UBSan float-cast-overflow.
+// so the guard compiles a C probe against it with host clang under UBSan float-cast-overflow,
+// without FMA contraction, as SBF computes.
 //
 // RED PRE-FIX: UBSan stops floor(1e300) and pow(2, 1e300) at the int64 cast, isfinite is an
-// undefined symbol, pow(2, 0.5) returns 1, the probe does not build without msPowF64, and
-// msPowF64(2, 0.5) returns sqrt(2) from the host libm when its square root ignores MSOS_SOLANA.
+// undefined symbol, pow(2, 0.5) stops the program, the probe does not build without msPowF64,
+// and msPowF64(2, 0.5) returns sqrt(2) from the host libm when its square root ignores
+// MSOS_SOLANA.
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, ExecFileResult, cwd, exit, findOnPath } from "std/process";
@@ -22,6 +23,7 @@ import { writeFile, ensureDir } from "std/fs";
 
 const root = cwd();
 const dir = `${root}/out/guardFreestandingMath`;
+const muslPow = ["pow.c", "pow_data.c", "exp_data.c"].map((f: string): string => `${root}/runtime/freestanding/musl/${f}`);
 
 const preamble = [
 	"#include <math.h>",
@@ -127,6 +129,16 @@ const probe = [
 	"\tsame(\"pow(2, -1074)\", pow(2.0 * one, -1074.0), 0x1p-1074);",
 	"\tsame(\"pow(-2, -1073)\", pow(-2.0 * one, -1073.0), -0x1p-1073);",
 	"\tsame(\"pow(2, -1075)\", pow(2.0 * one, -1075.0), 0.0);",
+	"\tsame(\"pow(2, 0.5)\", pow(2.0 * one, 0.5), 1.4142135623730951);",
+	"\tsame(\"pow(2, 1.5)\", pow(2.0 * one, 1.5), 2.8284271247461903);",
+	"\tsame(\"pow(1.1, 37)\", pow(1.1 * one, 37.0), 34.00394858615784);",
+	"\tsame(\"pow(7, -0.5)\", pow(7.0 * one, -0.5), 0.37796447300922725);",
+	"\tsame(\"pow(0.3, 37)\", pow(0.3 * one, 37.0), 4.5028390589099675e-20);",
+	"\tsame(\"pow(10, -0.5)\", pow(10.0 * one, -0.5), 0.31622776601683794);",
+	"\tsame(\"pow(pi, e)\", pow(3.141592653589793 * one, 2.718281828459045), 22.45915771836104);",
+	"\tsame(\"pow(49.283038373705544, 1.5)\", pow(49.283038373705544 * one, 1.5), 345.9761904469652);",
+	"\tsame(\"pow(1.0000001, 1e9)\", pow(1.0000001 * one, 1e9), 2.6881038582144647e+43);",
+	"\tsame(\"pow(0.5, 1074.5)\", pow(0.5 * one, 1074.5), 5e-324);",
 	"\tsame(\"msPowF64(1, NaN)\", msPowF64(one, nan), nan);",
 	"\tsame(\"msPowF64(1, Infinity)\", msPowF64(one, inf), nan);",
 	"\tsame(\"msPowF64(1, -Infinity)\", msPowF64(one, -inf), nan);",
@@ -142,22 +154,13 @@ const probe = [
 	"\tsame(\"msPowF64(-0, 0.5)\", msPowF64(-zero, 0.5), 0.0);",
 	"\tsame(\"msPowF64(-Infinity, 0.5)\", msPowF64(-inf, 0.5), inf);",
 	"\tsame(\"msPowF64(-4, 0.5)\", msPowF64(-4.0 * one, 0.5), nan);",
+	"\tsame(\"msPowF64(2, 0.5)\", msPowF64(2.0 * one, 0.5), 1.4142135623730951);",
 	"\tholds(\"isfinite(1e300)\", isfinite(huge));",
 	"\tholds(\"!isfinite(NaN)\", !isfinite(nan));",
 	"\tholds(\"isnan(NaN)\", isnan(nan));",
 	"\tholds(\"isinf(-Infinity)\", isinf(-inf));",
 	"\tif (failures == 0) printf(\"GUARD-OK\\n\");",
 	"\treturn failures != 0;",
-	"}",
-	"",
-].join("\n");
-
-const fractionalPow = [
-	...preamble,
-	"int main(void) {",
-	"\tvolatile double half = 0.5;",
-	"\tprintf(\"msPowF64(2, 0.5) returned %.17g\\n\", msPowF64(2.0, half));",
-	"\treturn 0;",
 	"}",
 	"",
 ].join("\n");
@@ -170,7 +173,7 @@ function firstLines(r: ExecFileResult): string {
 function buildAndRun(name: string, source: string): ExecFileResult {
 	writeFile(`${dir}/${name}.c`, source);
 	const flags = ["-std=c11", "-ffreestanding", "-fno-builtin", "-isystem", `${root}/runtime/freestanding`, "-I", root, "-DMSOS_SOLANA",
-		"-fsanitize=float-cast-overflow", "-fno-sanitize-recover=all", `${name}.c`, "-o", name];
+		"-ffp-contract=off", "-U__FP_FAST_FMA", "-fsanitize=float-cast-overflow", "-fno-sanitize-recover=all", `${name}.c`, ...muslPow, "-o", name];
 	const built = execFileResult("clang", flags, dir);
 	if (built.exitCode != 0) {
 		console.log(`GUARD-FAIL the ${name} probe against runtime/freestanding/math.h did not build:\n${firstLines(built)}`);
@@ -188,10 +191,5 @@ const ran = buildAndRun("probe", probe);
 console.log(ran.output.trim());
 if (ran.exitCode != 0 || !ran.output.contains("GUARD-OK")) {
 	console.log(`GUARD-FAIL the probe exited ${ran.exitCode}:\n${firstLines(ran)}`);
-	exit(1);
-}
-const refused = buildAndRun("fractionalPow", fractionalPow);
-if (refused.exitCode == 0 && refused.signal == 0) {
-	console.log(`GUARD-FAIL a fractional exponent did not stop the program:\n${firstLines(refused)}`);
 	exit(1);
 }
