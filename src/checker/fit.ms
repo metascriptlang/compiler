@@ -13,6 +13,7 @@ import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
+import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
 
 // ===== Operator Inference =====
@@ -984,7 +985,7 @@ export function isNodeIntLit(node: Node): boolean {
 
 // INT64_MIN is the one int64 that is its own negation.
 function isInt64Min(v: int64): boolean {
-	return v < 0 && ((0 - (v as uint64)) as int64) == v;
+	return v < 0 && int64Bits(0 - (v as uint64)) == v;
 }
 
 // Nim splits this in two. A BIT-PATTERN literal may fill the whole UNSIGNED

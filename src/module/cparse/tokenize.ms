@@ -6,6 +6,7 @@
 import { CToken, CTokenKind, LitKind, makeEofToken } from "./token";
 import { Diagnostic, DiagSeverity, makeDiag } from "./error";
 import { decodeUtf8, isIdent1, isIdent2, fromHex, stripBom, canonicalizeNewline, removeBackslashNewline, convertUniversalChars } from "./unicode";
+import { int64Bits } from "../../utils/stdBackport";
 
 export interface TokenizeResult {
 	head: CToken;
@@ -440,7 +441,7 @@ export function convertPPInt(tok: CToken): boolean {
 	else tok.litKind = LitKind.Int;
 
 	tok.kind = CTokenKind.Num;
-	tok.intVal = val as int64;
+	tok.intVal = int64Bits(val);
 	return true;
 }
 

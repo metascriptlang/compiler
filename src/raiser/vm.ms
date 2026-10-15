@@ -23,6 +23,7 @@ import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
 import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
+import { int64Bits } from "../utils/stdBackport";
 
 @include("runtime/promise/dispatch.h");
 extern function msMonoTimeMs(): int64;
@@ -959,27 +960,27 @@ function runStrandSlice(vm: RaiserVM): void {
 			const rhs = getReg(vm, base + inst.c);
 			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) / (rhs.intVal as uint64)) as int64));
+				setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) / (rhs.intVal as uint64))));
 			}
 		} else if (op == RaiserOpcode.ModU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			if (rhs.intVal == 0) { vmError(vm, "integer modulo by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) % (rhs.intVal as uint64)) as int64));
+				setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) % (rhs.intVal as uint64))));
 			}
 		} else if (op == RaiserOpcode.AddU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) + (rhs.intVal as uint64)) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64))));
 		} else if (op == RaiserOpcode.SubU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) - (rhs.intVal as uint64)) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64))));
 		} else if (op == RaiserOpcode.MulU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) * (rhs.intVal as uint64)) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64))));
 		} else if (op == RaiserOpcode.AddrReg) {
 			setReg(vm, base + inst.a, raiserRegAddr((base + inst.b) as int64));
 		} else if (op == RaiserOpcode.AddrGlobal) {
@@ -1065,7 +1066,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const count = (rhs.intVal & 63) as uint64;
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) << count) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) << count)));
 		} else if (op == RaiserOpcode.ShiftRight) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
@@ -1077,13 +1078,13 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.SignExtend) {
 			const val = getReg(vm, base + inst.a);
 			const imm = 64 - (inst.b as int64);
-			const raised = ((val.intVal as uint64) << (imm as uint64)) as int64;
+			const raised = int64Bits((val.intVal as uint64) << (imm as uint64));
 			setReg(vm, base + inst.a, raiserInt(raised >> imm));
 		} else if (op == RaiserOpcode.ShiftRightU) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const count = (rhs.intVal & 63) as uint64;
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) >> count) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) >> count)));
 		} else if (op == RaiserOpcode.Conv) {
 			vmHandleConv(vm, inst);
 		// --- Complex ops (previously handled in MetaScript fallback) ---
@@ -1758,7 +1759,7 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const cls = convTarget(inst.c);
 	const fromUnsigned = convSource(inst.c) == (RaiserConvClass.U64 as int32);
 	if (cls == RaiserConvClass.F64Bits) {
-		setReg(vm, vm.baseReg + inst.a, raiserInt(msFloat64Bits(asNum(src)) as int64));
+		setReg(vm, vm.baseReg + inst.a, raiserInt(int64Bits(msFloat64Bits(asNum(src)))));
 		return;
 	}
 	if (cls == RaiserConvClass.I32Wrap) {
@@ -1788,16 +1789,17 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		return;
 	}
 	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0 && src.floatVal < 18446744073709551616.0) {
-		setReg(vm, vm.baseReg + inst.a, raiserInt((src.floatVal as uint64) as int64));
+		setReg(vm, vm.baseReg + inst.a, raiserInt(int64Bits(src.floatVal as uint64)));
 		return;
 	}
 	const bits = convClassBits(cls);
 	const signed = convClassSigned(cls);
+	const hi: int64 = bits == 64
+		? 9223372036854775807
+		: ((1 as int64) << ((bits - 1) as int64)) - 1;
+	const lo: int64 = -hi - 1;
 	if (src.kind == RaiserValueKind.Float && signed && !floatFitsSigned(src.floatVal, bits)) {
-		const hi: int64 = bits == 64
-			? 9223372036854775807
-			: ((1 as int64) << ((bits - 1) as int64)) - 1;
-		vmError(vm, `value ${src.floatVal} not in range ${-hi - 1} .. ${hi}`);
+		vmError(vm, `value ${src.floatVal} not in range ${lo} .. ${hi}`);
 		return;
 	}
 	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
@@ -1805,9 +1807,7 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, vm.baseReg + inst.a, raiserInt(whole));
 		return;
 	}
-	if (convClassSigned(cls)) {
-		const hi: int64 = ((1 as int64) << ((bits - 1) as int64)) - 1;
-		const lo: int64 = -hi - 1;
+	if (signed) {
 		if (whole < lo || whole > hi) {
 			vmError(vm, `value ${whole} not in range ${lo} .. ${hi}`);
 			return;

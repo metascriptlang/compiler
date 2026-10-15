@@ -886,7 +886,7 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 				column: seeds.column,
 				value: word as number,
 				isFloat: false,
-				intVal: word as int64,
+				intVal: int64Bits(word),
 				outOfRangeText: "",
 				isBitPattern: true,
 			});

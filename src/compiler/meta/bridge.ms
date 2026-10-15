@@ -66,6 +66,7 @@ import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidTyp
 import { hasFlag, isFrameValue, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { collectDeclaredNames } from "../../checker/instantiate";
+import { int64Bits } from "../../utils/stdBackport";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -1586,7 +1587,7 @@ function contradictoryNumber(isFloat: boolean, raw: RaiserValue, exact: RaiserVa
 function wireInteger(raw: RaiserValue, exact: RaiserValue, value: number): int64 {
 	if (exact.kind == RaiserValueKind.Int) return exact.intVal;
 	if (raw.kind == RaiserValueKind.Int) return raw.intVal;
-	return value >= WIRE_INT_CEILING ? (value as uint64) as int64 : value as int64;
+	return value >= WIRE_INT_CEILING ? int64Bits(value as uint64) : value as int64;
 }
 
 function literalBits(d: NumberLiteralData): int64 {

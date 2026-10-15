@@ -1367,7 +1367,7 @@ export macro accounts(): Node {
 					column: seeded.column,
 					value: value as number,
 					isFloat: false,
-					intVal: value as int64,
+					intVal: int64Bits(value),
 					outOfRangeText: "",
 					isBitPattern: isBitPattern,
 				};

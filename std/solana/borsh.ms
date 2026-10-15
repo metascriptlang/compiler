@@ -104,7 +104,7 @@ export function u64(this ref reader: BorshReader): Result<uint64, BorshError> {
 export function i64(this ref reader: BorshReader): Result<int64, BorshError> {
 	const value = try reader.read(8);
 	reader.offset += 8;
-	return Result.ok(value as int64);
+	return Result.ok(int64Bits(value));
 }
 
 export function bool(this ref reader: BorshReader): Result<boolean, BorshError> {
