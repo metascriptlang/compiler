@@ -138,6 +138,7 @@ import "./compileTimeNameUse";
 import "./extensionImportUse";
 import "./memberBinding";
 import "./memberContainer";
+import "./actorFieldIsolation";
 import "./genericInstanceCast";
 import "./comptimeCallFold";
 import "./comptimeConversionRange";

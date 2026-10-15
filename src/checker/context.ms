@@ -1226,7 +1226,7 @@ export class CheckerContext {
 	targetInfo: TargetInfo;
 	appMode: string;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
-	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
+	currentActor: Symbol | null;
 	staticBlockClass: Symbol | null;
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
@@ -1316,7 +1316,7 @@ export function createContext(): CheckerContext {
 		targetInfo: hostTargetInfo(),
 		appMode: "console",
 		currentFunction: null,
-		currentActorName: "",
+		currentActor: null,
 		staticBlockClass: null,
 		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,

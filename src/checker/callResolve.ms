@@ -4717,12 +4717,11 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		propType = objType;
 	}
 	// Actor isolation: block external field access (only message-passing allowed).
-	// Allow access from inside the actor's own methods (ctx.currentActorName matches).
+	// Allow access from inside the actor's own methods (ctx.currentActor is its symbol).
 	// Allow @nonisolated fields for read access (Swift parity).
-	if (!isStaticClassAccess && !isUnresolvedType(propType) && resolvedObjType.typeName != "") {
-		const fieldOwnerSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
+	if (!isStaticClassAccess && !isUnresolvedType(propType)) {
 		if (fieldOwnerSym != null && fieldOwnerSym.symbolKind == SymbolKind.Actor
-			&& ctx.currentActorName != resolvedObjType.typeName
+			&& ctx.currentActor != fieldOwnerSym
 			&& d.property != "pid"
 			&& !hasNonisolatedField(fieldOwnerSym, d.property)) {
 			addError(ctx, `cannot access actor field '${d.property}' directly — use actor methods`,

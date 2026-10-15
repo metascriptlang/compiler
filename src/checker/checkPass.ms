@@ -1367,7 +1367,7 @@ function moduleScopeOf(ctx: CheckerContext): Cursor<Scope> {
 interface DeclarationState {
 	scope: Cursor<Scope>;
 	currentFunction: Symbol | null;
-	currentActorName: string;
+	currentActor: Symbol | null;
 	staticBlockClass: Symbol | null;
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
@@ -1396,7 +1396,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	const saved: DeclarationState = {
 		scope: ctx.table.current,
 		currentFunction: ctx.currentFunction,
-		currentActorName: ctx.currentActorName,
+		currentActor: ctx.currentActor,
 		staticBlockClass: ctx.staticBlockClass,
 		staticBlockPending: ctx.staticBlockPending,
 		readonlyBoundary: ctx.readonlyBoundary,
@@ -1422,7 +1422,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	};
 	ctx.table.current = top;
 	ctx.currentFunction = null;
-	ctx.currentActorName = "";
+	ctx.currentActor = null;
 	ctx.staticBlockClass = null;
 	ctx.staticBlockPending = [];
 	ctx.readonlyBoundary = null as unknown as Cursor<Scope>;
@@ -1451,7 +1451,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): void {
 	ctx.table.current = saved.scope;
 	ctx.currentFunction = saved.currentFunction;
-	ctx.currentActorName = saved.currentActorName;
+	ctx.currentActor = saved.currentActor;
 	ctx.staticBlockClass = saved.staticBlockClass;
 	ctx.staticBlockPending = saved.staticBlockPending;
 	ctx.readonlyBoundary = saved.readonlyBoundary;
@@ -1633,13 +1633,13 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 
 	openScope(ctx.table, ScopeKind.Class);
 	ctx.table.current.privateAccess = sym;
-	const prevActorName = ctx.currentActorName;
-	ctx.currentActorName = d.actorName;
+	const prevActor = ctx.currentActor;
+	ctx.currentActor = sym;
 	for (const member of d.actorBody) {
 		checkClassMember(ctx, member, d.actorName, sym.symbolType);
 		checkActorStaticField(ctx, member);
 	}
-	ctx.currentActorName = prevActorName;
+	ctx.currentActor = prevActor;
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
