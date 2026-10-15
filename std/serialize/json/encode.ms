@@ -10,16 +10,8 @@
 //
 // Walks t.nodeType (synthesized type-AST per SERIALIZE Phase A1). Refs/Ptrs
 // unwrap via TypeGeneric (modifierToAst maps to TypeGeneric with base name).
-import { Node, NodeKind, TypeGenericData, TypeKind, getTypeImpl, typeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey } from "../discDetect";
-
-function unwrapType(n: Node): Node {
-	if (n.kind != NodeKind.TypeGeneric) return n;
-	if (typeKind(n) != TypeKind.GenericInstance) return (n as TypeGenericData).typExprArgs[0];
-	const impl = getTypeImpl(n);
-	if (impl == null) throw new Error("internal: jsonValueOf: a generic instance has no implementation");
-	return impl;
-}
+import { Node, NodeKind } from "std/meta";
+import { detectUnionDisc, parseDiscKey, unwrapType } from "../discDetect";
 
 export macro jsonValueOf(t: Node): Node {
 	let tt = unwrapType(t.nodeType);

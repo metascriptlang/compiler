@@ -21,8 +21,17 @@
 import { Node, NodeKind, TypeUnionData, TypeGenericData, TypeObjectData, IdentifierData,
 	StringLiteralData, BooleanLiteralData,
 	CallExprData, MemberExprData, TypeAssertionData,
+	TypeKind, getTypeImpl, typeKind,
 	createNodeAt, makeLoc,
 	SourceLocation } from "std/meta";
+
+export function unwrapType(n: Node): Node {
+	if (n.kind != NodeKind.TypeGeneric) return n;
+	if (typeKind(n) != TypeKind.GenericInstance) return (n as TypeGenericData).typExprArgs[0];
+	const impl = getTypeImpl(n);
+	if (impl == null) throw new Error("internal: unwrapType: a generic instance has no implementation");
+	return impl;
+}
 
 export interface DiscVariant {
 	key: string;     // disc value: "circle" | "true" | "Click" etc.
@@ -162,11 +171,7 @@ export function pickAtomicAccessor(tn: string): AtomicAccessor {
 // Peel Ref<Struct> → Struct for variant inspection. Variants come from
 // tt.typExprMembers; generic-instance variants land as TypeGeneric wrappers.
 function peelVariant(vRaw: Node): Node {
-	if (vRaw.kind == NodeKind.TypeGeneric) {
-		const gd: TypeGenericData = vRaw as TypeGenericData;
-		return gd.typExprArgs[0];
-	}
-	return vRaw;
+	return unwrapType(vRaw);
 }
 
 // Find disc-field literal value for a peeled variant. Returns "" if the
