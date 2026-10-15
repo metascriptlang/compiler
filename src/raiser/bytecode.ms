@@ -41,7 +41,7 @@ export enum RaiserOpcode {
 	StoreIndex,       // ABC: R[A][R[B]] = R[C]
 	ArrayLen,         // ABC: R[A] = len(R[B])
 	ArrayPush,        // ABC: R[A].push(R[B])
-	ArraySetLen,      // ABC: R[A].setLength(R[B]) — truncate or nil-extend
+	ArraySetLen,      // ABC: R[A].setLength(R[B]) — truncate or nil-extend; C = 1 only checks R[B] is a valid array count (0..2^32-1)
 
 	// Object operations (3)
 	NewObject,        // ABC: R[A] = new empty object; B > 0 gives it class type B - 1 of the function

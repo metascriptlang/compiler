@@ -75,7 +75,7 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 		const assign: Node[] = [staticFieldAssignment(declNode, ownerName, member)];
 		out.push(staticRunBlock(declNode, assign));
 	}
-	body.length = write;
+	body.shrink(write);
 }
 
 function expandClassStmt(stmt: Node, ctx: TransformContext): Node[] {

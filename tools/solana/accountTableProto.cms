@@ -226,8 +226,8 @@ export function verifiedConstraints(
 			const key = msSolLoadU64(accounts + ((head >> 8) & 0xff) * 8) + 8;
 			const count = (head >> 16) & 0xff;
 			const stored = ((head >> 24) & 0xff) != 0;
-			let slices: SeedSlice[17];
-			let scratch: uint64[16];
+			let slices: SeedSlice[17] = [];
+			let scratch: uint64[16] = [];
 			const slicesAt = msSolSlicesAddress(slices);
 			const scratchAt = msSolScratchAddress(scratch);
 			for (let seed: uint64 = 0; seed < count; seed++) {
@@ -249,7 +249,7 @@ export function verifiedConstraints(
 				}
 			}
 			if (stored) {
-				let bump: uint8[1];
+				let bump: uint8[1] = [];
 				bump[0] = msSolLoadU64(given + ((head >> 32) & 0xff) * 8) as uint8;
 				msSolStoreU64(slicesAt + count * 16, msSolBytesAddress(bump));
 				msSolStoreU64(slicesAt + count * 16 + 8, 1);

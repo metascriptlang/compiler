@@ -148,6 +148,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerTypeof(result, ctx);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
+	// A `try` in a match expression arm became a statement only now.
+	result = lowerTryExpr(result, ctx);
 	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); }

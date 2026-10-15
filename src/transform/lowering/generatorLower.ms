@@ -197,28 +197,28 @@ function extendStateLifetimes(node: Node | null, locals: SymSet, live: Symbol[],
 		extendStateLifetimes(d.condition, locals, live, lifted, ctx);
 		const depth = live.length;
 		extendStateLifetimes(d.consequent, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		extendStateLifetimes(d.alternate, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		return;
 	} else if (node.kind == NodeKind.WhileStmt) {
 		const d = node.data as WhileStmtData;
 		extendStateLifetimes(d.whileCondition, locals, live, lifted, ctx);
 		const depth = live.length;
 		extendStateLifetimes(d.whileBody, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		return;
 	} else if (node.kind == NodeKind.DoWhileStmt) {
 		const d = node.data as DoWhileStmtData;
 		const depth = live.length;
 		extendStateLifetimes(d.doBody, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		extendStateLifetimes(d.doCondition, locals, live, lifted, ctx);
 		return;
 	}
 	const depth = live.length;
 	forEachChild(node, (child: Node): void => { extendStateLifetimes(child, locals, live, lifted, ctx); });
-	if (node.kind == NodeKind.BlockStmt || node.kind == NodeKind.SwitchCase) live.length = depth;
+	if (node.kind == NodeKind.BlockStmt || node.kind == NodeKind.SwitchCase) live.shrink(depth);
 }
 
 export function localsOutlivingSuspension(body: Node, locals: SymSet, ctx: TransformContext): SymSet {

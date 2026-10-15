@@ -4,7 +4,7 @@
 // @stdout: true,true,true,false|true,true,false,true|true,false
 // @exit: 0
 
-export enum E { A, B, C, D }
+enum E { A, B, C, D }
 
 const s: BitSet<E> = E.A | E.C;
 const left = E.B | s;

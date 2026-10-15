@@ -1,4 +1,4 @@
-import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, CallExprData, SourceLocation, Type, TypeKind, DeclKind } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, NewExprData, CallExprData, SourceLocation, Type, TypeKind, DeclKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { TransformContext, freshTempSym } from "../context";
 import { addError } from "../../checker/context";
@@ -18,6 +18,17 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind == NodeKind.ArrayAccess) return checkedAccess(node);
 	if (node.kind == NodeKind.MemberExpr) return spanLength(node);
 	if (node.kind == NodeKind.SpreadExpr) return spreadSpanValues(node);
+	if (node.kind == NodeKind.NewExpr) return checkedCount(node);
+	return node;
+}
+
+function checkedCount(node: Node): Node {
+	const d = node.data as NewExprData;
+	if (d.newArguments.length != 1 || node.nodeType == null) return node;
+	let t = peelTransparentInstance(node.nodeType);
+	if (t.kind == TypeKind.Ref && t.typeReturn != null) t = peelTransparentInstance(t.typeReturn);
+	if (t.kind != TypeKind.Array) return node;
+	d.newArguments[0] = makeCall(runtimeRef("msChkCount", node.location), [d.newArguments[0]], node.location);
 	return node;
 }
 

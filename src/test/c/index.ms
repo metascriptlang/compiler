@@ -62,3 +62,4 @@ import "./pointerAddress";
 import "./noinlinePragma";
 import "./copiedBodyHeader";
 import "./solanaVaultHost";
+import "./externPattern";

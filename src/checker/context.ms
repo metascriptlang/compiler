@@ -352,7 +352,7 @@ export function truncateExtensions(registry: ExtensionRegistry, count: int32): v
 		}
 		i -= 1;
 	}
-	registry.methods.length = count;
+	registry.methods.shrink(count);
 	registry.byNameNext.length = count;
 	registry.byNamePrev.length = count;
 }
@@ -1019,9 +1019,18 @@ export function isStaticExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "sext:") != "";
 }
 
+export function isExtensionRoutine(flags: string): boolean {
+	return isExtensionFlag(flags) || isStaticExtensionFlag(flags);
+}
+
 export function isStaticExtensionSym(sym: Symbol): boolean {
 	const decl = sym.declNode;
 	return decl != null && decl.kind == NodeKind.FunctionDecl && isStaticExtensionFlag((decl.data as FunctionDeclData).fnFlags);
+}
+
+export function isNativePattern(native: string): boolean {
+	return findChar(native, "#") >= 0 || findChar(native, "@") >= 0 || findChar(native, "(") >= 0
+		|| native.indexOf("$1") >= 0;
 }
 
 export function getExtReceiverName(flags: string): string {
@@ -1302,7 +1311,6 @@ export class CheckerContext {
 	ctorExits: string[][] | null; // the `this.<field>` names assigned on each exit of the constructor body being checked
 	ctorExitsNext: string[][] | null;
 	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
-	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
@@ -1389,7 +1397,6 @@ export function createContext(): CheckerContext {
 		ctorExits: null,
 		ctorExitsNext: null,
 		affineTracker: createAffineTracker(),
-		strictDefs: false,
 		strictNullChecks: false,
 		inTryExpr: false,
 		genericInstDepth: 0,

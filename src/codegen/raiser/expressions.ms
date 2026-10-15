@@ -1769,6 +1769,7 @@ function compileNewArray(s: RaiserCompState, node: Node, arrayType: Type): int32
 	if (d.newArguments.length == 1) {
 		const count = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.newArguments[0]), RaiserConvClass.I64));
+		emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, array, count, 1));
 		emitZeroFill(s, array, count, arrayType.typeReturn);
 	}
 	return array;

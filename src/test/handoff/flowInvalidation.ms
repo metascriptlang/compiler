@@ -49,7 +49,7 @@ test "flowInvalidation: nondefaultable locals require assignment on every incomi
 		{ name: "a function local, an array local and a struct holding a function are refused", source: "function f(flag: boolean): int32 {\n\tlet cb: () => int32;\n\tif (flag) { cb = (): int32 => 42; }\n\treturn cb();\n}\n", expected: -1 },
 		{ name: "a function local, an array local and a struct holding a function are refused", source: "function f(n: int32): int32 {\n\tlet xs: int32[];\n\tfor (let i = 0; i < n; i++) { xs = [i]; }\n\treturn xs.length;\n}\n", expected: -1 },
 		{ name: "a function local, an array local and a struct holding a function are refused", source: "struct S { cb: () => int32; }\nfunction f(flag: boolean): int32 {\n\tlet s: S;\n\tif (flag) { s = { cb: (): int32 => 1 }; }\n\treturn s.cb();\n}\n", expected: -1 },
-		{ name: "every branch assigning, a later closure read and a number stay accepted", source: "class Foo { x: int32 = 7; }\nenum E { A, B }\nfunction f(flag: boolean, e: E): int32 {\n\tlet o: Foo;\n\tif (flag) { o = new Foo(); } else { o = new Foo(); }\n\tlet p: Foo;\n\tmatch (e) { E.A => { p = new Foo(); }, E.B => { p = new Foo(); } };\n\tlet cb: () => int32;\n\tcb = (): int32 => 3;\n\tconst g = (): int32 => cb();\n\tlet n: int32;\n\tif (flag) { n = 1; }\n\treturn o.x + p.x + g() + n;\n}\n", expected: 0 },
+		{ name: "every branch assigning, a later closure read and a number stay accepted", source: "class Foo { x: int32 = 7; }\nenum E { A, B }\nfunction f(flag: boolean, e: E): int32 {\n\tlet o: Foo;\n\tif (flag) { o = new Foo(); } else { o = new Foo(); }\n\tlet p: Foo;\n\tmatch (e) { E.A => { p = new Foo(); }, E.B => { p = new Foo(); } };\n\tlet cb: () => int32;\n\tcb = (): int32 => 3;\n\tconst g = (): int32 => cb();\n\tlet n: int32 = 0;\n\tif (flag) { n = 1; }\n\treturn o.x + p.x + g() + n;\n}\n", expected: 0 },
 	];
 	for (const item of cases) {
 		const errors = strictErrorCount(item.source);
@@ -87,14 +87,14 @@ test "flowInvalidation: mixed representation unions expose only a stable discrim
 	}
 }
 
-function strictWarnings(source: string, strictDefs: boolean, strictNil: boolean): int32 {
+function strictWarnings(source: string, strictNil: boolean): int32 {
 	resetBuildState();
 	const entries: MapEntry[] = [
 		{ entryPath: "/src/strictPolicy.ms", entrySource: source },
 		{ entryPath: "/src/strictEntry.ms", entrySource: "import \"./strictPolicy\";" },
 	];
 	const graph = loadModuleGraph("/src/strictEntry.ms", createMapProvider(entries));
-	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Orc, null, null, strictDefs, strictNil);
+	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Orc, null, null, strictNil);
 	const mod = findModule(graph, "/src/strictPolicy.ms");
 	if (mod == null) return -1;
 	let warnings: int32 = 0;
@@ -103,18 +103,13 @@ function strictWarnings(source: string, strictDefs: boolean, strictNil: boolean)
 }
 
 test "flow invalidation: strict policies reach dependencies and do not leak into later checks" {
-	const unassigned = "function f(flag: boolean): int32 { let n: int32; if (flag) { n = 5; } return n; }";
 	const nullable = "class Box { x: int32 = 7; } function f(): int32 { let box: Box | null = new Box(); const read = (): int32 => box.x; return read(); }";
 	const nonnull = "class Box { x: int32 = 7; } function f(box: Box): int32 { return box.x; }";
-	const relaxedDefs = strictWarnings(unassigned, false, false);
-	assert relaxedDefs >= 0;
-	assert strictWarnings(unassigned, true, false) > relaxedDefs;
-	const relaxedNil = strictWarnings(nullable, false, false);
+	const relaxedNil = strictWarnings(nullable, false);
 	assert relaxedNil >= 0;
-	assert strictWarnings(nullable, false, true) > relaxedNil;
-	assert strictWarnings(nonnull, false, true) == strictWarnings(nonnull, false, false);
-	strictWarnings(unassigned, true, true);
-	assert strictWarnings(unassigned, false, false) == relaxedDefs;
+	assert strictWarnings(nullable, true) > relaxedNil;
+	assert strictWarnings(nonnull, true) == strictWarnings(nonnull, false);
+	assert strictWarnings(nullable, false) == relaxedNil;
 	const prelude = getPreludeContext();
-	assert prelude != null && !prelude.strictDefs && !prelude.strictNullChecks;
+	assert prelude != null && !prelude.strictNullChecks;
 }

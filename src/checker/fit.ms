@@ -104,7 +104,7 @@ function dropSubclassMembers(members: Type[]): void {
 			kept += 1;
 		}
 	}
-	members.length = kept;
+	members.shrink(kept);
 }
 
 function derivesFrom(sub: Type, sup: Type): boolean {
@@ -777,19 +777,40 @@ function operandShape(t: Type | null): Type | null {
 	return s;
 }
 
-function relationalNeedsOperator(t: Type): boolean {
-	const s = operandShape(t);
-	if (s == null) return false;
+function relationalOrdered(t: Type): boolean {
+	return isNumeric(t) || isStringLike(t) || t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral
+		|| t.kind == TypeKind.Boolean || t.kind == TypeKind.BooleanLiteral || t.kind == TypeKind.BigInt
+		|| t.kind == TypeKind.Ptr;
+}
+
+function relationalOperandsOk(a: Type, b: Type): boolean {
+	if (!relationalOrdered(a) || !relationalOrdered(b)) return false;
+	if (isStringLike(a) != isStringLike(b)) return false;
+	if (a.kind == TypeKind.Boolean || a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.Boolean || b.kind == TypeKind.BooleanLiteral) {
+		return (a.kind == TypeKind.Boolean || a.kind == TypeKind.BooleanLiteral) && (b.kind == TypeKind.Boolean || b.kind == TypeKind.BooleanLiteral);
+	}
+	return true;
+}
+
+function relationalNeedsOperator(s: Type): boolean {
 	if (s.kind == TypeKind.Struct) return !isMaybeType(s);
 	return s.kind == TypeKind.Array || s.kind == TypeKind.SizedArray
 		|| s.kind == TypeKind.Span || s.kind == TypeKind.Function || s.kind == TypeKind.Set;
 }
 
+function relationalBothReferences(a: Type, b: Type): boolean {
+	return !relationalOrdered(a) && !relationalOrdered(b) && !relationalNeedsOperator(a) && !relationalNeedsOperator(b);
+}
+
 export function relationalOperandsFail(ctx: CheckerContext, op: string, leftType: Type, rightType: Type): boolean {
 	if (op != "<" && op != ">" && op != "<=" && op != ">=") return false;
 	if (leftType == null || rightType == null) return false;
-	if (hasGenericParams(leftType) || hasGenericParams(rightType)) return false;
-	if (!relationalNeedsOperator(leftType) && !relationalNeedsOperator(rightType)) return false;
+	const a = operandShape(leftType);
+	const b = operandShape(rightType);
+	if (a == null || b == null) return false;
+	const holdsResult = isResult(leftType) || isResult(rightType);
+	if (!holdsResult && (relationalSkip(a) || relationalSkip(b))) return false;
+	if (!holdsResult && (relationalOperandsOk(a, b) || relationalBothReferences(a, b))) return false;
 	return ctx.extensionRegistry == null
 		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [leftType, rightType]) == null;
 }
@@ -827,6 +848,10 @@ function binaryOperandSkip(t: Type): boolean {
 		|| k == TypeKind.TypeReference || k == TypeKind.Inferred || k == TypeKind.None
 		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional
 		|| k == TypeKind.Result || k == TypeKind.BigInt;
+}
+
+function relationalSkip(t: Type): boolean {
+	return t.kind != TypeKind.Result && t.kind != TypeKind.BigInt && binaryOperandSkip(t);
 }
 
 function eqComparableOperand(orig: Type, shaped: Type): Type | null {

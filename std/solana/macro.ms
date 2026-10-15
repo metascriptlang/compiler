@@ -1,5 +1,5 @@
-import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, stringValue } from "std/meta";
-import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, sameType, stringValue } from "std/meta";
+import { eventDiscriminator, instructionDiscriminator, snakeCase } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
@@ -118,10 +118,36 @@ export macro instruction(): Node {
 	}
 	checkDeployKeypair(decl);
 	declaredProgramKey(decl);
+	const tags = decl.enumMembers.map((name: string) => instructionDiscriminator(name));
+	for (let later = 1; later < tags.length; later++) {
+		for (let earlier = 0; earlier < later; earlier++) {
+			const first = decl.enumMembers[earlier];
+			const second = decl.enumMembers[later];
+			if (tags[earlier] == tags[later]) {
+				error("instruction<" + decl.enumName + ">(): members '" + first + "' and '" + second +
+					"' have the same discriminator, of the instruction names '" + snakeCase(first) + "' and '" +
+					snakeCase(second) + "': no instruction data selects '" + second + "'", decl);
+			}
+		}
+	}
+	for (let later = 0; later < decl.enumValues.length; later++) {
+		const value = decl.enumValues[later] as int32;
+		if (value < 0) {
+			error("instruction<" + decl.enumName + ">(): member '" + decl.enumMembers[later] + "' has the value " +
+				String(value) + ", and the values of an instruction enum are zero or more", decl);
+		}
+		for (let earlier = 0; earlier < later; earlier++) {
+			if ((decl.enumValues[earlier] as int32) == value) {
+				error("instruction<" + decl.enumName + ">(): members '" + decl.enumMembers[earlier] + "' and '" +
+					decl.enumMembers[later] + "' have the same value " + String(value) +
+					", so a match on the instruction cannot tell them apart", decl);
+			}
+		}
+	}
 	let selected = ordinal(-(ProgramError.instructionFallbackNotFound().code as int32));
 	for (let member = decl.enumMembers.length - 1; member >= 0; member--) {
-		const tag = instructionDiscriminator(decl.enumMembers[member]);
-		selected = choose(call(bindSym("instructionHasWord"), [word(tag.bytes, 0)]), ordinal(member), selected);
+		selected = choose(call(bindSym("instructionHasWord"), [word(tags[member].bytes, 0)]),
+			ordinal(decl.enumValues[member] as int32), selected);
 	}
 	selected = choose(call(bindSym("instructionHasDiscriminator"), []), selected, ordinal(-(ProgramError.instructionMissing().code as int32)));
 	return {
@@ -415,6 +441,18 @@ export macro emit(value: Node): Node {
 	}
 	if (value.kind !== NodeKind.Identifier) {
 		error("emit<E>(value): pass the event as a local variable", value);
+	}
+	let given = getType(value);
+	if (given != null && given.kind === NodeKind.TypeGeneric && given.typExprArgs.length == 1 &&
+		given.typExprBase.kind === NodeKind.Identifier && given.typExprBase.name == "Ptr") {
+		given = given.typExprArgs[0];
+	}
+	if (!sameType(given, shape)) {
+		let givenName = "value of another type";
+		if (given != null && given.kind === NodeKind.Identifier) { givenName = given.name; }
+		if (given != null && given.kind === NodeKind.TypeObject) { givenName = given.typExprTypeName; }
+		error("emit<" + shape.typExprTypeName + ">(value): '" + value.name + "' is a " + givenName +
+			", not a " + shape.typExprTypeName, value);
 	}
 	const line = value.line;
 	const column = value.column;

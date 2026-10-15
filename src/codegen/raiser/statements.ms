@@ -115,7 +115,7 @@ function compileBlock(s: RaiserCompState, node: Node): void {
 		compileStmt(s, stmt);
 	}
 	// Restore locals scope — drop block-scoped vars
-	s.locals.items.length = savedLocals;
+	s.locals.items.shrink(savedLocals);
 }
 
 // --- Variable Declaration ---
@@ -407,7 +407,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 		const savedLocals = s.locals.items.length;
 		if (d.catchName != "") declareLocal(s, d.catchName, catchReg);
 		if (d.catchBody != null) compileStmt(s, d.catchBody);
-		s.locals.items.length = savedLocals;
+		s.locals.items.shrink(savedLocals);
 		catchEnd = emitJumpPlaceholder(s);
 	}
 

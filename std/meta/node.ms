@@ -79,6 +79,7 @@ export enum TypeFlag {
 	HasGenericParam,
 	BorrowDot,
 	Spelled,              // the compiler spelled this name from an owner and arguments: it is the identity and no declaring symbol exists
+	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
 }
 
 // ===== Attached Lifecycle Ops =====

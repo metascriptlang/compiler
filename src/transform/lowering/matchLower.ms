@@ -13,15 +13,14 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, SwitchStmtData, AssertStmtData, IdentifierData, NumberLiteralData, StringLiteralData, BinaryExprData, ConditionalExprData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
-import { walkExpandBlocks, containsExprKind, mapExprChildren } from "../walker";
-import { lowerForStmt } from "./forLoopLower";
-import { moveDoWhileTestIntoBody } from "./jumpRetarget";
+import { walkExpandBlocks, containsExprKind } from "../walker";
+import { hoistGuarded, expandConditionStmt } from "./guardedLower";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase, makeBreak, extractBodyStmts, isCSwitchableType, runtimeRef,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
 } from "../util";
 import { booleanType, int32Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -29,41 +28,14 @@ import { hashStringSigned } from "std/hash";
 import { endsInNoReturn } from "../analysis/dce";
 
 // ===== Nested MatchExpr Hoisting =====
-// Position-aware walk: a hoist out of a conditionally-evaluated position
-// (`&&`/`||` RHS, ternary arm) would run the match unconditionally, so those
-// positions rewrite their OWNER to statement form instead; the block re-walk
-// then lowers the match inside its guard.
 
 function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	if (expr.kind == NodeKind.BinaryExpr) {
-		const bd = expr.data as BinaryExprData;
-		if (bd.operator == "&&" || bd.operator == "||") {
-			bd.left = hoistNestedMatch(bd.left, hoisted, ctx);
-			if (containsExprKind(bd.right, NodeKind.MatchExpr)) {
-				return lowerGuardedShortCircuit(expr, hoisted, ctx);
-			}
-			return expr;
-		}
-	}
-	if (expr.kind == NodeKind.ConditionalExpr) {
-		const cd = expr.data as ConditionalExprData;
-		cd.ternaryCondition = hoistNestedMatch(cd.ternaryCondition, hoisted, ctx);
-		if (containsExprKind(cd.ternaryConsequent, NodeKind.MatchExpr)
-			|| containsExprKind(cd.ternaryAlternate, NodeKind.MatchExpr)) {
-			return lowerGuardedTernary(expr, hoisted, ctx);
-		}
-		return expr;
-	}
-	if (expr.kind == NodeKind.MatchExpr) {
-		const matchData = expr.data as MatchExprData;
-		matchData.matchDisc = hoistNestedMatch(matchData.matchDisc, hoisted, ctx);
-		return hoistMatchExpr(expr, hoisted, ctx);
-	}
-	mapExprChildren(expr, (child: Node): Node => hoistNestedMatch(child, hoisted, ctx));
-	return expr;
+	return hoistGuarded(expr, NodeKind.MatchExpr, hoistMatchExpr, hoisted, ctx);
 }
 
 function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Node {
+	const matchData = node.data as MatchExprData;
+	matchData.matchDisc = hoistNestedMatch(matchData.matchDisc, hoisted, ctx);
 	const loc = node.location;
 	const resultSym = freshTempSym(ctx, "matchres", node.nodeType);
 
@@ -80,50 +52,6 @@ function hoistMatchExpr(node: Node, hoisted: Node[], ctx: TransformContext): Nod
 
 	// Replace MatchExpr with $matchres_N
 	return makeIdentResolved(resultSym, loc);
-}
-
-// a && rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = rhs; } else { $scres = $sclhs; }
-// a || rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = $sclhs; } else { $scres = rhs; }
-function lowerGuardedShortCircuit(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	const bd = expr.data as BinaryExprData;
-	const loc = expr.location;
-	const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
-	const lhsDecl = makeVarDecl(lhsSym.name, bd.left, DeclKind.Const, loc);
-	lhsDecl.resolvedSym = lhsSym;
-	hoisted.push(lhsDecl);
-
-	const resSym = freshTempSym(ctx, "scres", expr.nodeType);
-	const resDecl = makeVarDecl(resSym.name, makeNull(loc), DeclKind.Let, loc);
-	resDecl.resolvedSym = resSym;
-	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
-	hoisted.push(resDecl);
-
-	const rhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), bd.right, loc), loc);
-	const lhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), makeIdentResolved(lhsSym, loc), loc), loc);
-	const isAnd = bd.operator == "&&";
-	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
-	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
-	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
-	return makeIdentResolved(resSym, loc);
-}
-
-// c ? a : b (match in an arm) → let $gtern; if (c) { $gtern = a; } else { $gtern = b; }
-function lowerGuardedTernary(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	const cd = expr.data as ConditionalExprData;
-	const loc = expr.location;
-	const t = freshTempSym(ctx, "gtern", expr.nodeType);
-	const letDecl = makeVarDecl(t.name, makeNull(loc), DeclKind.Let, loc);
-	letDecl.resolvedSym = t;
-	if (expr.nodeType != null) { letDecl.nodeType = expr.nodeType; }
-	hoisted.push(letDecl);
-	const thenStmt = (cd.ternaryConsequent.nodeType != null && cd.ternaryConsequent.nodeType.kind == TypeKind.Never)
-		? makeExprStmt(cd.ternaryConsequent, loc)
-		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryConsequent, loc), loc);
-	const elseStmt = (cd.ternaryAlternate.nodeType != null && cd.ternaryAlternate.nodeType.kind == TypeKind.Never)
-		? makeExprStmt(cd.ternaryAlternate, loc)
-		: makeExprStmt(makeAssign(makeIdentResolved(t, loc), cd.ternaryAlternate, loc), loc);
-	hoisted.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
-	return makeIdentResolved(t, loc);
 }
 
 // ===== Main Entry Point =====
@@ -178,62 +106,8 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 				return hoisted;
 			}
 		},
-		NodeKind.IfStmt => {
-			const d = stmt.data as IfStmtData;
-			if (!containsExprKind(d.condition, NodeKind.MatchExpr)) return [stmt];
-			const pre: Node[] = [];
-			d.condition = hoistNestedMatch(d.condition, pre, ctx);
-			if (pre.length > 0) { pre.push(stmt); return pre; }
-		},
-		NodeKind.WhileStmt => {
-			const d = stmt.data as WhileStmtData;
-			if (!containsExprKind(d.whileCondition, NodeKind.MatchExpr)) return [stmt];
-			const pre: Node[] = [];
-			const cond = hoistNestedMatch(d.whileCondition, pre, ctx);
-			if (pre.length > 0) {
-				const loc = stmt.location;
-				pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
-				for (const s of extractBodyStmts(d.whileBody)) { pre.push(s); }
-				d.whileCondition = makeBool(true, loc);
-				d.whileBody = makeBlock(pre, loc);
-			}
-		},
-		NodeKind.DoWhileStmt => {
-			const d = stmt.data as DoWhileStmtData;
-			if (!containsExprKind(d.doCondition, NodeKind.MatchExpr)) return [stmt];
-			const pre: Node[] = [];
-			const cond = hoistNestedMatch(d.doCondition, pre, ctx);
-			if (pre.length > 0) { moveDoWhileTestIntoBody(stmt, pre, cond, ctx); }
-		},
-		NodeKind.ForStmt => {
-			// Native for headers are already normalized; JS keeps them until a
-			// header needs statements. Reuse the same continue-safe loop tail.
-			const d = stmt.data as ForStmtData;
-			let init: Node | null = d.forInit;
-			if (init != null && init.kind == NodeKind.VariableDecl) {
-				init = (init.data as VariableDeclData).initializer;
-			} else if (init != null && init.kind == NodeKind.ExprStmt) {
-				init = (init.data as ExprStmtData).expr;
-			}
-			if (containsExprKind(init, NodeKind.MatchExpr)
-				|| containsExprKind(d.forCondition, NodeKind.MatchExpr)
-				|| containsExprKind(d.forUpdate, NodeKind.MatchExpr)) {
-				return [lowerForStmt(stmt, ctx)];
-			}
-		},
-		NodeKind.SwitchStmt => {
-			const d = stmt.data as SwitchStmtData;
-			if (!containsExprKind(d.switchDisc, NodeKind.MatchExpr)) return [stmt];
-			const pre: Node[] = [];
-			d.switchDisc = hoistNestedMatch(d.switchDisc, pre, ctx);
-			if (pre.length > 0) { pre.push(stmt); return pre; }
-		},
-		NodeKind.AssertStmt => {
-			const d = stmt.data as AssertStmtData;
-			if (!containsExprKind(d.assertExpr, NodeKind.MatchExpr)) return [stmt];
-			const pre: Node[] = [];
-			d.assertExpr = hoistNestedMatch(d.assertExpr, pre, ctx);
-			if (pre.length > 0) { pre.push(stmt); return pre; }
+		NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt | NodeKind.SwitchStmt | NodeKind.AssertStmt => {
+			return expandConditionStmt(stmt, NodeKind.MatchExpr, hoistMatchExpr, ctx);
 		},
 		_ => {},
 	};

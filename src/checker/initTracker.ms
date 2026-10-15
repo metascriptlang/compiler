@@ -10,8 +10,7 @@
 // Set + branch-merge primitives live in branchSet.ms and are shared with
 // spawnAffinity.ms so both trackers stay in lockstep.
 
-import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, BooleanLiteralData, TypeKind, Type } from "../ast/node";
-import { skipModifier, isStructType, isMaybeType } from "./types";
+import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, BooleanLiteralData, TypeKind } from "../ast/node";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { BreakState, addName, hasName, collectSince, mergeBranches } from "./branchSet";
 
@@ -23,8 +22,12 @@ export interface InitTracker {
 	initialized: string[];     // append-only list of initialized var names
 	currentBlock: number;      // scope depth counter
 	leftPartOfAsgn: number;    // >0 when processing LHS of assignment
+	assignTarget: Node | null; // the identifier an `=` or `out` writes; its own check is not a read
+	argIdents: Node[];         // bare identifiers passed as call arguments: whether the callee takes them `out` is known only after resolution
+	pendingReads: Node[];      // those of argIdents read while unassigned, settled when the call resolves
 	declScopes: string[];      // parallel with declBlocks: var name at declaration
 	declBlocks: number[];      // block depth where each variable was declared
+	outParams: string[];       // out parameters of the routine being checked: each must be written before every exit
 }
 
 // ===== Constructors =====
@@ -34,8 +37,12 @@ export function createInitTracker(): InitTracker {
 		initialized: [],
 		currentBlock: 0,
 		leftPartOfAsgn: 0,
+		assignTarget: null,
+		argIdents: [],
+		pendingReads: [],
 		declScopes: [],
 		declBlocks: [],
+		outParams: [],
 	};
 }
 
@@ -59,6 +66,18 @@ export function saveInitState(t: InitTracker): int32 {
 // Reference parity: restore init state
 export function restoreInitState(t: InitTracker, state: int32): void {
 	t.initialized.length = state;
+}
+
+// First out parameter of the current routine that is not written on the path being checked, or "".
+export function unwrittenOutParam(t: InitTracker): string {
+	for (const name of t.outParams) {
+		if (!hasName(t.initialized, name)) return name;
+	}
+	return "";
+}
+
+export function isOutParamName(t: InitTracker, name: string): boolean {
+	return hasName(t.outParams, name);
 }
 
 // ===== Scope Tracking (for nfFirstWrite) =====
@@ -136,21 +155,6 @@ export function collectNewInits(t: InitTracker, oldState: int32): string[] {
 }
 
 // ===== Helpers =====
-
-export function requiresInit(t: Type | null): boolean {
-	return requiresInitAt(t, 0);
-}
-
-function requiresInitAt(t: Type | null, depth: int32): boolean {
-	const inner = skipModifier(t);
-	if (inner == null || depth > 16 || isMaybeType(inner)) return false;
-	if (inner.kind == TypeKind.Function || inner.kind == TypeKind.Ref) return true;
-	if (!isStructType(inner) || inner.typeChildren == null) return false;
-	for (const field of inner.typeChildren) {
-		if (requiresInitAt(field, depth + 1)) return true;
-	}
-	return false;
-}
 
 // Reference parity: check for `while (true)` literal
 export function isAlwaysTrue(node: Node): boolean {

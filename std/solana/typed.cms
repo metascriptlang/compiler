@@ -1,7 +1,7 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
-import { DeclKind, Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
+import { DeclKind, Node, NodeKind, bindSym, define, expansionFile, getImpl, sameType, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
 import { accountAddressOf, keyAddressOf, slottedTable } from "./accountSeeds";
 import { namedWord } from "./discriminator";
@@ -16,12 +16,14 @@ import {
 	createdPdaAccount,
 	createdPdaAccountAt,
 	delegatedFailure,
+	delegatedAtFailure,
 	duplicateFailure,
 	exclusiveWritable,
 	givenBump,
 	givenBumpOwned,
 	holds,
 	conditionFailure,
+	errorCode,
 	keysFailure,
 	seedsCanonicalFailure,
 	seedsCanonicalProvenFailure,
@@ -33,13 +35,18 @@ import {
 	keysEqual,
 	unchecked,
 	keyIsZero,
-	mutableEnvelopeAtFailure,
 	mutableEnvelopeFailure,
+	mutableEnvelopeAtFailure,
 	programWordsAtFailure,
-	ownedAtFailure,
 	ownedFailure,
+	ownedAtFailure,
+	accountAt,
+	accountIn,
+	heldUpTo,
+	heldNow,
+	Held,
+	recordAddress,
 	resizedProgramAccount,
-	selectedInstruction,
 	transfer,
 } from "./core";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
@@ -75,13 +82,6 @@ export struct Mutable<T> { private account: Account; }
 export struct External<T> { private account: Account; }
 export struct ExternalMutable<T> { private account: Account; }
 export struct Delegated<T> { private account: Account; }
-
-@inline function uncheckedProofFailure(index: int32, out found: Account): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	found = { address: address };
-	return 0;
-}
 
 export function key(this proof: Signer): Pubkey { return proof.account.key(); }
 export function key(this proof: WritableSigner): Pubkey { return proof.account.key(); }
@@ -139,82 +139,69 @@ export function asAccount<T>(this proof: External<T>): Account { return proof.ac
 export function asAccount<T>(this proof: ExternalMutable<T>): Account { return proof.account; }
 export function asAccount<T>(this proof: Delegated<T>): Account { return proof.account; }
 
-@inline function signerProofAt(address: uint64, out proof: Signer): uint64 {
-	if (msSolLoadU8(address + 1) == 0) { return ProgramError.accountNotSigner().code; }
-	proof = { account: { address: address } };
-	return 0;
-}
-
-@inline function signerProofFailure(index: int32, out proof: Signer): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	return signerProofAt(address, proof);
+@inline function signerProof(index: int32, held: Held, out failure: uint64): Signer {
+	const found = accountIn(index, held, failure);
+	if (failure == 0 && msSolLoadU8(found.recordAddress() + 1) == 0) { failure = ProgramError.accountNotSigner().code; }
+	return { account: found };
 }
 
 export function signer(index: int32): Result<Signer, ProgramError> {
-	let proof: Signer;
-	const failure = signerProofFailure(index, proof);
+	let failure: uint64 = 0;
+	const proof = signerProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
 
-@inline function writableSignerProofAt(address: uint64, out proof: WritableSigner): uint64 {
-	if (msSolLoadU32(address + 1) == 0x0101) {
-		proof = { account: { address: address } };
-		return 0;
-	}
+@inline function writableSignerFailure(address: uint64): uint64 {
+	if (msSolLoadU32(address + 1) == 0x0101) { return 0; }
 	if (msSolLoadU8(address + 1) == 0) { return ProgramError.accountNotSigner().code; }
 	const duplicated = duplicateFailure(address);
 	if (duplicated != 0) { return duplicated; }
 	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
-	proof = { account: { address: address } };
 	return 0;
 }
 
-@inline function writableSignerProofFailure(index: int32, out proof: WritableSigner): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	return writableSignerProofAt(address, proof);
+@inline function writableSignerProof(index: int32, held: Held, out failure: uint64): WritableSigner {
+	const found = accountIn(index, held, failure);
+	if (failure == 0) { failure = writableSignerFailure(found.recordAddress()); }
+	return { account: found };
 }
 
 export function writableSigner(index: int32): Result<WritableSigner, ProgramError> {
-	let proof: WritableSigner;
-	const failure = writableSignerProofFailure(index, proof);
+	let failure: uint64 = 0;
+	const proof = writableSignerProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
 
-@inline function writableProofAt(address: uint64, out proof: Writable): uint64 {
-	if (msSolLoadU32(address + 2) == 1) {
-		proof = { account: { address: address } };
-		return 0;
+@inline function writableFailure(address: uint64): uint64 {
+	if (msSolLoadU32(address + 2) == 1) { return 0; }
+	const duplicated = duplicateFailure(address);
+	if (duplicated != 0) { return duplicated; }
+	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
+	return 0;
+}
+
+@inline function writableProof(index: int32, held: Held, out failure: uint64): Writable {
+	const found = accountIn(index, held, failure);
+	if (failure == 0) { failure = writableFailure(found.recordAddress()); }
+	return { account: found };
+}
+
+@inline function writablePdaProof(index: int32, held: Held, out failure: uint64): WritablePda {
+	const found = accountIn(index, held, failure);
+	if (failure == 0) {
+		const address = found.recordAddress();
+		const duplicated = duplicateFailure(address);
+		if (duplicated != 0) { failure = duplicated; }
+		else if (msSolLoadU8(address + 2) == 0) { failure = ProgramError.constraintMut().code; }
 	}
-	const duplicated = duplicateFailure(address);
-	if (duplicated != 0) { return duplicated; }
-	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
-	proof = { account: { address: address } };
-	return 0;
+	return { account: found, bump: 0 };
 }
 
-@inline function writableProofFailure(index: int32, out proof: Writable): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	return writableProofAt(address, proof);
-}
-
-@inline function writablePdaProofFailure(index: int32, out proof: WritablePda): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	const duplicated = duplicateFailure(address);
-	if (duplicated != 0) { return duplicated; }
-	if (msSolLoadU8(address + 2) == 0) { return ProgramError.constraintMut().code; }
-	proof = { account: { address: address }, bump: 0 };
-	return 0;
-}
-
-export function writablePda(index: int32): Result<WritablePda, ProgramError> {
-	let proof: WritablePda;
-	const failure = writablePdaProofFailure(index, proof);
+function writablePda(index: int32): Result<WritablePda, ProgramError> {
+	let failure: uint64 = 0;
+	const proof = writablePdaProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
@@ -236,37 +223,35 @@ export function seedsFoldedPdaFailure(
 }
 
 export function writable(index: int32): Result<Writable, ProgramError> {
-	let proof: Writable;
-	const failure = writableProofFailure(index, proof);
+	let failure: uint64 = 0;
+	const proof = writableProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
 
-@inline function systemProofFailure(index: int32, out proof: SystemAccount): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	if (!keyIsZero(address + 40)) { return ProgramError.accountNotSystemOwned().code; }
-	proof = { account: { address: address } };
-	return 0;
+@inline function systemProof(index: int32, held: Held, out failure: uint64): SystemAccount {
+	const found = accountIn(index, held, failure);
+	if (failure == 0 && !keyIsZero(found.recordAddress() + 40)) { failure = ProgramError.accountNotSystemOwned().code; }
+	return { account: found };
 }
 
 export function systemAccount(index: int32): Result<SystemAccount, ProgramError> {
-	let proof: SystemAccount;
-	const failure = systemProofFailure(index, proof);
+	let failure: uint64 = 0;
+	const proof = systemProof(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
 
 export function data<T>(this proof: Mutable<T>): Ptr<T> {
-	return msSolPointer(proof.account.address + 96) as Ptr<T>;
+	return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
 }
 
 export function data<T>(this proof: Owned<T>): Readonly<Ptr<T>> {
-	return msSolPointer(proof.account.address + 96) as Ptr<T>;
+	return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
 }
 
 export function data<T>(this proof: Delegated<T>): Readonly<Ptr<T>> {
-	return msSolPointer(proof.account.address + 96) as Ptr<T>;
+	return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
 }
 
 export function read<T>(this proof: External<T>): Result<T, ProgramError> {
@@ -298,137 +283,154 @@ export function asWritable<T>(this proof: Mutable<T>): Writable {
 }
 
 export struct Pda<T> {
-	account: Mutable<T>;
-	bump: uint8;
+	private account: Mutable<T>;
+	private bump: uint8;
 }
 
-@inline function programProofAt<P>(address: uint64, out proof: Program<P>): uint64 {
-	const failure = programWordsAtFailure(
-		address,
-		@comptime { return P.id().word(0); },
-		@comptime { return P.id().word(1); },
-		@comptime { return P.id().word(2); },
-		@comptime { return P.id().word(3); },
-	);
-	if (failure != 0) { return failure; }
-	proof = { account: { address: address } };
-	return 0;
-}
+@inline export function asMutable<T>(this found: Pda<T>): Mutable<T> { return found.account; }
+@inline export function foundBump<T>(this found: Pda<T>): uint8 { return found.bump; }
 
-@inline function programProofFailure<P>(index: int32, out proof: Program<P>): uint64 {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return ProgramError.accountNotEnoughKeys().code; }
-	return programProofAt<P>(address, proof);
+@inline function programProof<P>(index: int32, held: Held, out failure: uint64): Program<P> {
+	const found = accountIn(index, held, failure);
+	if (failure == 0) {
+		failure = programWordsAtFailure(
+			found.recordAddress(),
+			@comptime { return P.id().word(0); },
+			@comptime { return P.id().word(1); },
+			@comptime { return P.id().word(2); },
+			@comptime { return P.id().word(3); },
+		);
+	}
+	return { account: found };
 }
 
 @inline export function program<P>(index: int32): Result<Program<P>, ProgramError> {
-	let proof: Program<P>;
-	const failure = programProofFailure<P>(index, proof);
+	let failure: uint64 = 0;
+	const proof = programProof<P>(index, heldNow(), failure);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(proof);
 }
 
-@inline function ownedProofAt<T>(address: uint64, out proof: Owned<T>): uint64 {
-	const failure = ownedAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
-	if (failure != 0) { return failure; }
-	if (!accountFieldsValid<T>(address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
-	proof = { account: { address: address } };
-	return 0;
-}
-
-@inline function ownedProofFailure<T>(index: int32, out proof: Owned<T>): uint64 {
-	let found: Account = { address: 0 };
-	const failure = ownedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, found);
-	if (failure != 0) { return failure; }
-	if (!accountFieldsValid<T>(found.address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
-	proof = { account: found };
-	return 0;
+@inline function ownedProof<T>(index: int32, held: Held, out failure: uint64): Owned<T> {
+	const found = accountIn(index, held, failure);
+	if (failure == 0) {
+		failure = ownedAtFailure(found.recordAddress(), provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+	}
+	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
+		failure = ProgramError.accountDidNotDeserialize().code;
+	}
+	return { account: found };
 }
 
 @inline export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
-	let proof: Owned<T>;
-	const failure = ownedProofFailure<T>(index, proof);
+	let failure: uint64 = 0;
+	const found = ownedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
+		failure = ProgramError.accountDidNotDeserialize().code;
+	}
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	return Result.ok({ account: found });
 }
 
-@inline function mutableProofAt<T>(address: uint64, out proof: Mutable<T>): uint64 {
-	const failure = mutableEnvelopeAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
-	if (failure != 0) { return failure; }
-	if (!accountFieldsValid<T>(address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
-	msSolClaimRecord(address);
-	proof = { account: { address: address } };
-	return 0;
-}
-
-@inline function mutableProofFailure<T>(index: int32, out proof: Mutable<T>): uint64 {
-	let found: Account = { address: 0 };
-	const failure = mutableEnvelopeFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, found);
-	if (failure != 0) { return failure; }
-	if (!accountFieldsValid<T>(found.address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
-	const claimed = exclusiveWritable(found);
-	if (!claimed.ok) { return claimed.error.code; }
-	proof = { account: claimed.value };
-	return 0;
+@inline function mutableProof<T>(index: int32, held: Held, out failure: uint64): Mutable<T> {
+	const found = accountIn(index, held, failure);
+	if (failure == 0) {
+		const address = found.recordAddress();
+		failure = mutableEnvelopeAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+		if (failure == 0 && !accountFieldsValid<T>(address + 96)) {
+			failure = ProgramError.accountDidNotDeserialize().code;
+		}
+		if (failure == 0) { msSolClaimRecord(address); }
+	}
+	return { account: found };
 }
 
 @inline export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
-	let proof: Mutable<T>;
-	const failure = mutableProofFailure<T>(index, proof);
+	let failure: uint64 = 0;
+	const found = mutableEnvelopeFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
+		failure = ProgramError.accountDidNotDeserialize().code;
+	}
+	if (failure == 0) { msSolClaimRecord(found.recordAddress()); }
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	return Result.ok({ account: found });
 }
 
-@inline function delegatedProofFailure<T>(index: int32, out proof: Delegated<T>): uint64 {
-	let found: Account = { address: 0 };
-	const failure = delegatedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, found);
-	if (failure != 0) { return failure; }
-	if (!accountFieldsValid<T>(found.address + 96)) { return ProgramError.accountDidNotDeserialize().code; }
-	proof = { account: found };
-	return 0;
+@inline function delegatedProof<T>(index: int32, held: Held, out failure: uint64): Delegated<T> {
+	const found = accountIn(index, held, failure);
+	if (failure == 0) {
+		const address = found.recordAddress();
+		failure = delegatedAtFailure(address, provenDiscriminatorWord<T>(), sizeof(T) as uint64);
+		if (failure == 0 && !accountFieldsValid<T>(address + 96)) {
+			failure = ProgramError.accountDidNotDeserialize().code;
+		}
+	}
+	return { account: found };
 }
 
 @inline export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
-	let proof: Delegated<T>;
-	const failure = delegatedProofFailure<T>(index, proof);
+	let failure: uint64 = 0;
+	const found = delegatedFailure(index, provenDiscriminatorWord<T>(), sizeof(T) as uint64, failure);
+	if (failure == 0 && !accountFieldsValid<T>(found.recordAddress() + 96)) {
+		failure = ProgramError.accountDidNotDeserialize().code;
+	}
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	return Result.ok({ account: found });
 }
 
-@inline function externalProofFailure<T>(index: int32, out proof: External<T>, out rejected: boolean): uint64 {
+// Only the failure paths hold this: the account is built for a proof that is refused.
+@noinline function refusedSlot(index: int32): Account {
+	let lookup: uint64 = 0;
+	return accountAt(index, lookup);
+}
+
+@inline function externalProof<T>(index: int32, held: Held, out failure: uint64, out rejected: boolean): External<T> {
 	rejected = false;
-	const found = T.verify(index);
-	if (!found.ok) { rejected = true; return found.error.code; }
-	if (!T.acceptsOwner(found.value.owner())) { rejected = true; return ProgramError.accountOwnedByWrongProgram().code; }
-	proof = { account: found.value };
-	return 0;
+	failure = 0;
+	const verified = T.verify(index);
+	if (!verified.ok) {
+		rejected = true;
+		failure = verified.error.code;
+		return { account: refusedSlot(index) };
+	}
+	if (!T.acceptsOwner(verified.value.owner())) {
+		rejected = true;
+		failure = ProgramError.accountOwnedByWrongProgram().code;
+		return { account: refusedSlot(index) };
+	}
+	return { account: verified.value };
 }
 
 @inline export function external<T>(index: int32): Result<External<T>, ProgramError> {
-	let proof: External<T>;
-	let rejected = false;
-	const failure = externalProofFailure<T>(index, proof, rejected);
-	if (failure != 0 || rejected) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	const verified = try T.verify(index);
+	if (!T.acceptsOwner(verified.owner())) { return Result.err(ProgramError.accountOwnedByWrongProgram()); }
+	return Result.ok({ account: verified });
 }
 
-@inline function externalMutableProofFailure<T>(index: int32, out proof: ExternalMutable<T>, out rejected: boolean): uint64 {
+@inline function externalMutableProof<T>(index: int32, held: Held, out failure: uint64, out rejected: boolean): ExternalMutable<T> {
 	rejected = false;
-	const found = T.verify(index);
-	if (!found.ok) { rejected = true; return found.error.code; }
-	if (!T.acceptsOwner(found.value.owner())) { rejected = true; return ProgramError.accountOwnedByWrongProgram().code; }
-	const claimed = exclusiveWritable(found.value);
-	if (!claimed.ok) { return claimed.error.code; }
-	proof = { account: claimed.value };
-	return 0;
+	failure = 0;
+	const verified = T.verify(index);
+	if (!verified.ok) {
+		rejected = true;
+		failure = verified.error.code;
+		return { account: refusedSlot(index) };
+	}
+	if (!T.acceptsOwner(verified.value.owner())) {
+		rejected = true;
+		failure = ProgramError.accountOwnedByWrongProgram().code;
+		return { account: refusedSlot(index) };
+	}
+	const claimed = exclusiveWritable(verified.value);
+	if (!claimed.ok) { failure = claimed.error.code; }
+	return { account: verified.value };
 }
 
 @inline export function externalMutable<T>(index: int32): Result<ExternalMutable<T>, ProgramError> {
-	let proof: ExternalMutable<T>;
-	let rejected = false;
-	const failure = externalMutableProofFailure<T>(index, proof, rejected);
-	if (failure != 0 || rejected) { return Result.err({ code: failure }); }
-	return Result.ok(proof);
+	const verified = try T.verify(index);
+	if (!T.acceptsOwner(verified.owner())) { return Result.err(ProgramError.accountOwnedByWrongProgram()); }
+	const claimed = try exclusiveWritable(verified);
+	return Result.ok({ account: claimed });
 }
 
 export function selectLiteralInstruction<E>(member: int32): Result<E, ProgramError> {
@@ -456,9 +458,8 @@ test "literal selection widens the minimum int32 before negation" {
 	assert found.error.code == 2147483648;
 }
 
-export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
-	const member = try selectedInstruction(table);
-	return Result.ok(member as E);
+@inline function uncheckedProof(index: int32, held: Held, out failure: uint64): Account {
+	return accountIn(index, held, failure);
 }
 
 macro provenDiscriminatorWord(): Node {
@@ -490,47 +491,109 @@ macro provenDiscriminatorWord(): Node {
 	};
 }
 
-macro singleAccountFailure(index: Node, value: Node, rejected: Node): Node {
+function failedAccount<T>(code: uint64): Result<T, ProgramError> {
+	return Result.err({ code: code });
+}
+
+macro singleAccountBody(index: Node): Node {
 	const shape = getTypeArg();
 	const field = shape.typExprFieldTypes[0];
 	const base = field.kind === NodeKind.TypeGeneric ? field.typExprBase.name : field.typExprTypeName;
 	let kernel: Node | null = null;
-	if (base == "Signer") { kernel = bindSym("signerProofFailure"); }
-	if (base == "WritableSigner") { kernel = bindSym("writableSignerProofFailure"); }
-	if (base == "Writable") { kernel = bindSym("writableProofFailure"); }
-	if (base == "WritablePda") { kernel = bindSym("writablePdaProofFailure"); }
-	if (base == "SystemAccount") { kernel = bindSym("systemProofFailure"); }
-	if (base == "Account") { kernel = bindSym("uncheckedProofFailure"); }
-	if (base == "Program") { kernel = bindSym("programProofFailure"); }
-	if (base == "Owned") { kernel = bindSym("ownedProofFailure"); }
-	if (base == "Mutable") { kernel = bindSym("mutableProofFailure"); }
-	if (base == "Delegated") { kernel = bindSym("delegatedProofFailure"); }
-	if (base == "External") { kernel = bindSym("externalProofFailure"); }
-	if (base == "ExternalMutable") { kernel = bindSym("externalMutableProofFailure"); }
+	if (base == "Signer") { kernel = bindSym("signerProof"); }
+	if (base == "WritableSigner") { kernel = bindSym("writableSignerProof"); }
+	if (base == "Writable") { kernel = bindSym("writableProof"); }
+	if (base == "WritablePda") { kernel = bindSym("writablePdaProof"); }
+	if (base == "SystemAccount") { kernel = bindSym("systemProof"); }
+	if (base == "Account") { kernel = bindSym("uncheckedProof"); }
+	if (base == "Program") { kernel = bindSym("programProof"); }
+	if (base == "Owned") { kernel = bindSym("ownedProof"); }
+	if (base == "Mutable") { kernel = bindSym("mutableProof"); }
+	if (base == "Delegated") { kernel = bindSym("delegatedProof"); }
+	if (base == "External") { kernel = bindSym("externalProof"); }
+	if (base == "ExternalMutable") { kernel = bindSym("externalMutableProof"); }
 	if (kernel == null) { error("single account has no proof kernel", field); }
-	const proof: Node = {
-		kind: NodeKind.MemberExpr, line: shape.line, column: shape.column,
-		object: value, property: shape.typExprFieldNames[0], isOptional: false,
+	function typeText(written: Node): string {
+		if (written.kind === NodeKind.TypeObject) { return written.typExprTypeName; }
+		if (written.kind !== NodeKind.TypeGeneric) { error("single account: the type argument is not a named type", written); }
+		const inner: string[] = [];
+		for (const arg of written.typExprArgs) { inner.push(typeText(arg)); }
+		return written.typExprBase.name + "<" + inner.join(", ") + ">";
+	}
+	let inner = "";
+	if (field.kind === NodeKind.TypeGeneric) {
+		inner = typeText(field.typExprArgs[0]);
+		const meant = bindSym(inner);
+		if (meant != null && !sameType(meant, field.typExprArgs[0])) {
+			error("single account: where accounts<T>() is called '" + inner + "' means another type than the one the field " +
+				"was declared with; import the '" + inner + "' the field was declared with under that name, or call " +
+				"accounts<T>() in the module that declares the field", field);
+		}
+	}
+	const line = shape.line;
+	const column = shape.column;
+	const proof = "$soleProof";
+	const failure = "$soleFailure";
+	const rejected = "$soleRejected";
+	function ident(name: string): Node {
+		return { kind: NodeKind.Identifier, line: line, column: column, name: name };
+	}
+	function declare(name: string, type: string, value: Node): Node {
+		return {
+			kind: NodeKind.VariableDecl, line: line, column: column,
+			declName: name, declType: type, declKind: DeclKind.Let,
+			initializer: value, nameLocation: { line: line, column: column },
+		};
+	}
+	function literal(value: number): Node {
+		return {
+			kind: NodeKind.NumberLiteral, line: line, column: column,
+			value: value, isFloat: false, intVal: value as int64, outOfRangeText: "", isBitPattern: false,
+		};
+	}
+	function call(callee: Node, args: Node[], typeArg: string): Node {
+		const made: Node = {
+			kind: NodeKind.CallExpr, line: line, column: column,
+			callee: callee, arguments: args, isDirectCall: false, resolvedOverloadIdx: -1,
+		};
+		if (typeArg != "") { made.typeArg = typeArg; }
+		return made;
+	}
+	const args: Node[] = [index, call(bindSym("heldNow")!, [], ""), ident(failure)];
+	if (base == "External" || base == "ExternalMutable") { args.push(ident(rejected)); }
+	const refused: Node = {
+		kind: NodeKind.BinaryExpr, line: line, column: column, operator: "||",
+		left: { kind: NodeKind.BinaryExpr, line: line, column: column, operator: "!=", left: ident(failure), right: literal(0) },
+		right: ident(rejected),
 	};
-	const args: Node[] = [index, proof];
-	if (base == "External" || base == "ExternalMutable") { args.push(rejected); }
-	return {
-		kind: NodeKind.CallExpr, line: shape.line, column: shape.column,
-		callee: kernel!, arguments: args, isDirectCall: false, resolvedOverloadIdx: -1,
+	const built: Node = {
+		kind: NodeKind.ObjectLiteral, line: line, column: column,
+		properties: [ident(proof)], keys: [shape.typExprFieldNames[0]], keyLocations: [],
 	};
+	const statements: Node[] = [
+		declare(rejected, "boolean", { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: false }),
+		declare(failure, "uint64", literal(0)),
+		declare(proof, "", call(kernel!, args, inner)),
+		{
+			kind: NodeKind.IfStmt, line: line, column: column, condition: refused,
+			consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
+				{ kind: NodeKind.ReturnStmt, line: line, column: column, argument: call(bindSym("failedAccount")!, [ident(failure)], "T") }] },
+		},
+		{
+			kind: NodeKind.ReturnStmt, line: line, column: column,
+			argument: call(bindSym("readArgs")!, [{ kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: true }, built], "T"),
+		},
+	];
+	return call({
+		kind: NodeKind.FunctionExpr, line: line, column: column,
+		funcExprParams: [], funcExprParamTypes: [], funcExprFlags: "",
+		funcExprReturnType: "",
+		funcExprBody: { kind: NodeKind.BlockStmt, line: line, column: column, statements: statements },
+	}, [], "");
 }
 
 function singleAccountResult<T>(index: int32): Result<T, ProgramError> {
-	let value: T;
-	let rejected = false;
-	const failure = singleAccountFailure<T>(index, value, rejected);
-	if (failure != 0 || rejected) { return Result.err({ code: failure }); }
-	return Result.ok(value);
-}
-
-function checkedAccountResult<T>(accepted: boolean, value: T, code: uint64): Result<T, ProgramError> {
-	if (!accepted) { return Result.err({ code: code }); }
-	return Result.ok(value);
+	return singleAccountBody<T>(index);
 }
 
 @inline export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
@@ -684,11 +747,70 @@ export macro accounts(): Node {
 	if (shape.kind !== NodeKind.TypeObject) {
 		error("accounts<T>(): T must be a struct of the instruction's accounts", shape);
 	}
-	const decl = getImpl(bindSym(shape.typExprTypeName))!;
+	const given = shape.typExprTypeName;
+	const named = bindSym(given);
+	const found = getImpl(named);
+	let unreadable = "";
+	if (named == null) {
+		unreadable = "no struct has that name";
+	} else if (found == null || (found!.kind !== NodeKind.StructDecl && found!.kind !== NodeKind.InterfaceDecl)) {
+		unreadable = "that name is not a struct";
+	} else if (!sameType(named, shape)) {
+		unreadable = "that name means another struct, '" + found!.interfaceName + "' of '" + found!.resolvedSym!.modulePath + "'";
+	}
+	if (unreadable != "") {
+		error("accounts<" + given + ">(): accounts<T>() reads the declaration of '" + given + "' by its name, and where it " +
+			"is called " + unreadable + "; import the struct under its own name, or call accounts<T>() in the module " +
+			"that declares it", shape);
+	}
+	const decl = found!;
 	const line = shape.line;
 	const column = shape.column;
-	const holder = "$accounts";
-	const names = decl.interfaceFields;
+	function slotOf(field: string): string { return "$account_" + field; }
+	const names: string[] = [];
+	const writtenTypes: string[] = [];
+	const fieldDecorators: Node[][] = [];
+	const proofKinds: string[] = [];
+	function unreadableBase(from: Node, base: string, found: Node | null): string {
+		if (base.indexOf("<") >= 0) { return "a base with type arguments is not supported; extend a struct that has none"; }
+		if (found == null) {
+			return "no struct named '" + base + "' is imported where accounts<T>() is called; import it there under that name";
+		}
+		const parent = found!;
+		if (parent.kind !== NodeKind.StructDecl && parent.kind !== NodeKind.InterfaceDecl) {
+			return "'" + base + "' is not a struct where accounts<T>() is called";
+		}
+		const home = from.resolvedSym!.modulePath;
+		const origin = parent.resolvedSym!.modulePath;
+		const calledWhereDeclared = home == expansionFile();
+		const declaredBesideUnderThatName = origin == home && parent.interfaceName == base;
+		if (calledWhereDeclared || declaredBesideUnderThatName) { return ""; }
+		return "'" + base + "' names the struct '" + parent.interfaceName + "' of '" + origin +
+			"' where accounts<T>() is called, which may not be the base '" + from.interfaceName +
+			"' was declared with in '" + home + "'; import the '" + base + "' that module declares under that name or, " +
+			"when it imports '" + base + "' itself, call accounts<T>() there";
+	}
+	function inheritedFirst(from: Node): void {
+		for (const base of from.interfaceExtends) {
+			const parent = getImpl(bindSym(base));
+			const unreadable = unreadableBase(from, base, parent);
+			if (unreadable != "") {
+				error("accounts<" + decl.interfaceName + ">(): '" + from.interfaceName + "' extends '" + base +
+					"', whose fields accounts<T>() cannot read: " + unreadable, shape);
+			}
+			inheritedFirst(parent!);
+		}
+		for (let own = 0; own < from.interfaceFields.length; own++) {
+			names.push(from.interfaceFields[own]);
+			writtenTypes.push(from.interfaceFieldTypes[own]);
+			fieldDecorators.push(from.interfaceFieldDecorators[own]);
+		}
+	}
+	inheritedFirst(decl);
+	if (names.join(",") != shape.typExprFieldNames.join(",")) {
+		error("accounts<" + decl.interfaceName + ">(): the struct and the structs it extends declare the fields '" +
+			names.join(", ") + "', and its type holds '" + shape.typExprFieldNames.join(", ") + "'", shape);
+	}
 
 	function ident(name: string, at: Node): Node {
 		return { kind: NodeKind.Identifier, line: at.line, column: at.column, name: name };
@@ -756,7 +878,7 @@ export macro accounts(): Node {
 	}
 
 	function dataFieldOf(owner: number, property: string, at: Node): boolean {
-		const written = decl.interfaceFieldTypes[owner];
+		const written = writtenTypes[owner];
 		const open = written.indexOf("<");
 		if (open < 0) { return false; }
 		const outer = written.slice(0, open);
@@ -767,25 +889,36 @@ export macro accounts(): Node {
 				"' holds '" + written + "', whose fields are not visible where accounts<T>() is " +
 				"called: import the struct", at);
 		}
-		let member = 0;
-		while (member < target!.interfaceFields.length) {
-			if (target!.interfaceFields[member] == property) { return true; }
-			member = member + 1;
+		function declares(from: Node): boolean {
+			for (const own of from.interfaceFields) {
+				if (own == property) { return true; }
+			}
+			for (const base of from.interfaceExtends) {
+				const parent = getImpl(bindSym(base));
+				const unreadable = unreadableBase(from, base, parent);
+				if (unreadable != "") {
+					error("accounts<" + decl.interfaceName + ">(): field '" + names[owner] + "' holds '" + written +
+						"', and '" + from.interfaceName + "' extends '" + base + "', whose fields accounts<T>() " +
+						"cannot read: " + unreadable, at);
+				}
+				if (declares(parent!)) { return true; }
+			}
+			return false;
 		}
-		return false;
+		return declares(target!);
 	}
 
 	function rewrite(n: Node): Node {
 		if (n.kind === NodeKind.Identifier) {
 			const owner = fieldIndex(n.name);
 			if (owner < 0) { return n; }
-			return member(ident(holder, n), n.name, n);
+			return ident(slotOf(n.name), n);
 		}
 		if (n.kind === NodeKind.MemberExpr) {
 			if (n.object.kind === NodeKind.Identifier) {
 				const owner = fieldIndex(n.object.name);
 				if (owner >= 0 && dataFieldOf(owner, n.property, n)) {
-					const proof = member(ident(holder, n), n.object.name, n);
+					const proof = ident(slotOf(n.object.name), n);
 					return member(call(member(proof, "data", n), [], n), n.property, n);
 				}
 			}
@@ -902,7 +1035,7 @@ export macro accounts(): Node {
 			line: at.line,
 			column: at.column,
 			boolValue: false,
-		}, member(rewrite(error), "code", at)], at), at);
+		}, call(bindSym("errorCode")!, [rewrite(error)], at)], at), at);
 		return {
 			kind: NodeKind.IfStmt,
 			line: at.line,
@@ -949,6 +1082,15 @@ export macro accounts(): Node {
 			initializer: value, nameLocation: { line: line, column: column },
 		};
 	}
+	function refuseFailed(): Node {
+		const no: Node = { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: false };
+		return {
+			kind: NodeKind.IfStmt, line: line, column: column,
+			condition: { kind: NodeKind.UnaryExpr, line: line, column: column, unaryOp: "!", operand: unfailed(shape) },
+			consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
+				attempt(call(bindSym("holds")!, [no, ident(failure, shape)], shape), shape)] },
+		};
+	}
 	function guard(statement: Node): Node {
 		return {
 			kind: NodeKind.IfStmt, line: line, column: column,
@@ -969,20 +1111,20 @@ export macro accounts(): Node {
 		kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: false,
 	}));
 	chain.push(declare(failure, "uint64", whole(0, shape)));
-	chain.push(declare(holder, decl.interfaceName, null as unknown as Node));
-	chain.push(declare("$table", "uint64", call(bindSym("msSolAccountTable")!, [], shape)));
 	chain.push({
 		kind: NodeKind.IfStmt, line: line, column: column,
 		condition: {
 			kind: NodeKind.BinaryExpr, line: line, column: column, operator: "<",
-			left: call(bindSym("msSolAccountCount")!, [], shape), right: whole(decl.interfaceFields.length, shape),
+			left: call(bindSym("msSolAccountCount")!, [], shape), right: whole(names.length, shape),
 		},
 		consequent: { kind: NodeKind.BlockStmt, line: line, column: column, statements: [
 			assignFailure(whole(ProgramError.accountNotEnoughKeys().code as number, shape), shape)] },
 	});
+	chain.push(refuseFailed());
+	chain.push(declare("$held", "", call(bindSym("heldUpTo")!, [whole(names.length, shape)], shape)));
 	let field = 0;
-	while (field < decl.interfaceFields.length) {
-		const written = decl.interfaceFieldTypes[field];
+	while (field < names.length) {
+		const written = writtenTypes[field];
 		let canonical = written;
 		const reflected = shape.typExprFieldTypes[field];
 		if (written.indexOf("<") < 0 && reflected.kind === NodeKind.TypeObject && reflected.typExprTypeName != "") {
@@ -991,6 +1133,14 @@ export macro accounts(): Node {
 		const open = canonical.indexOf("<");
 		const base = open < 0 ? canonical : canonical.slice(0, open);
 		const inner = open < 0 ? "" : canonical.slice(open + 1, canonical.length - 1);
+		const meant = inner == "" ? null : bindSym(inner);
+		if (meant != null && reflected.kind === NodeKind.TypeGeneric && !sameType(meant, reflected.typExprArgs[0])) {
+			error("accounts<" + decl.interfaceName + ">(): field '" + names[field] + "' holds '" + written +
+				"', and where accounts<T>() is called '" + inner + "' means another type, '" + meant!.resolvedSym!.name +
+				"' of '" + meant!.resolvedSym!.modulePath + "'; import the '" + inner + "' the field was declared with " +
+				"under that name, or call accounts<T>() in the module that declares the field", shape);
+		}
+		proofKinds.push(base);
 		const index: Node = {
 			kind: NodeKind.NumberLiteral,
 			line: line,
@@ -1028,7 +1178,7 @@ export macro accounts(): Node {
 			check!.typeArg = inner;
 		}
 		if (check == null) {
-			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
+			error("accounts<T>(): field '" + names[field] + "' has type '" +
 				written + "'; use Signer, WritableSigner, Writable, WritablePda, SystemAccount, Account, " +
 				"Program<P>, " +
 				"Owned<T>, Mutable<T>, Delegated<T>, External<T> or ExternalMutable<T>", shape);
@@ -1037,35 +1187,25 @@ export macro accounts(): Node {
 			kind: NodeKind.TryExpr, line: line, column: column,
 			tryArg: check!, hasCatch: false, catchVal: check!,
 		});
-		const proof = member(ident(holder, shape), names[field], shape);
+		const proof = ident(slotOf(names[field]), shape);
 		let direct: Node | null = null;
-		if (base == "Signer") { direct = bindSym("signerProofFailure"); }
-		if (base == "WritableSigner") { direct = bindSym("writableSignerProofFailure"); }
-		if (base == "Writable") { direct = bindSym("writableProofFailure"); }
-		if (base == "WritablePda") { direct = bindSym("writablePdaProofFailure"); }
-		if (base == "Account") { direct = bindSym("uncheckedProofFailure"); }
-		if (base == "SystemAccount") { direct = bindSym("systemProofFailure"); }
-		if (base == "Owned") { direct = bindSym("ownedProofFailure"); }
-		if (base == "Mutable") { direct = bindSym("mutableProofFailure"); }
-		if (base == "Delegated") { direct = bindSym("delegatedProofFailure"); }
-		if (base == "Program") { direct = bindSym("programProofFailure"); }
-		if (base == "External") { direct = bindSym("externalProofFailure"); }
-		if (base == "ExternalMutable") { direct = bindSym("externalMutableProofFailure"); }
-		let atKernel: Node | null = null;
-		if (base == "Signer") { atKernel = bindSym("signerProofAt"); }
-		if (base == "Mutable") { atKernel = bindSym("mutableProofAt"); }
-		if (base == "WritableSigner") { atKernel = bindSym("writableSignerProofAt"); }
-		if (base == "Writable") { atKernel = bindSym("writableProofAt"); }
-		if (base == "Program") { atKernel = bindSym("programProofAt"); }
-		if (base == "Owned") { atKernel = bindSym("ownedProofAt"); }
-		const slot = call(bindSym("msSolLoadU64")!, [{
-			kind: NodeKind.BinaryExpr, line: line, column: column, operator: "+",
-			left: ident("$table", shape), right: whole(field * 8, shape),
-		}], shape);
-		const verdict = atKernel == null ? call(direct!, [index, proof], shape) : call(atKernel!, [slot, proof], shape);
+		if (base == "Signer") { direct = bindSym("signerProof"); }
+		if (base == "WritableSigner") { direct = bindSym("writableSignerProof"); }
+		if (base == "Writable") { direct = bindSym("writableProof"); }
+		if (base == "WritablePda") { direct = bindSym("writablePdaProof"); }
+		if (base == "Account") { direct = bindSym("uncheckedProof"); }
+		if (base == "SystemAccount") { direct = bindSym("systemProof"); }
+		if (base == "Owned") { direct = bindSym("ownedProof"); }
+		if (base == "Mutable") { direct = bindSym("mutableProof"); }
+		if (base == "Delegated") { direct = bindSym("delegatedProof"); }
+		if (base == "Program") { direct = bindSym("programProof"); }
+		if (base == "External") { direct = bindSym("externalProof"); }
+		if (base == "ExternalMutable") { direct = bindSym("externalMutableProof"); }
+		const verdict = call(direct!, [index, ident("$held", shape), ident(failure, shape)], shape);
 		if (base == "External" || base == "ExternalMutable") { verdict.arguments.push(ident(rejected, shape)); }
 		verdict.typeArg = inner;
-		chain.push(guard(assignFailure(verdict, shape)));
+		chain.push(declare(slotOf(names[field]), "", verdict));
+		chain.push(refuseFailed());
 		values.push(proof);
 		field = field + 1;
 	}
@@ -1073,9 +1213,10 @@ export macro accounts(): Node {
 	let owner = 0;
 	while (owner < names.length) {
 		const self = names[owner];
-		const selfType = decl.interfaceFieldTypes[owner];
-		const isToken = selfType == "External<TokenAccount>" || selfType == "ExternalMutable<TokenAccount>";
-		const decorators = decl.interfaceFieldDecorators[owner];
+		const selfType = writtenTypes[owner];
+		const isToken = selfType == "External<TokenAccount>" || selfType == "ExternalMutable<TokenAccount>" ||
+			selfType == "External<InterfaceTokenAccount>" || selfType == "ExternalMutable<InterfaceTokenAccount>";
+		const decorators = fieldDecorators[owner];
 		let seeded: Node | null = null;
 		let bumped: Node | null = null;
 		const associated: Node[] = [];
@@ -1116,7 +1257,7 @@ export macro accounts(): Node {
 						"of a struct with a field '" + target + "'", d);
 				}
 				const stored = call(bindSym("keyAddressOf")!, [
-					member(call(member(member(ident(holder, d), self, d), "data", d), [], d), target, d),
+					member(call(member(ident(slotOf(self), d), "data", d), [], d), target, d),
 				], d);
 				if (args.length == 2) {
 					related.push(lazily(call(bindSym("keysEqual")!, [stored, keyOf(args[0])], d), args[1], d));
@@ -1152,7 +1293,7 @@ export macro accounts(): Node {
 			}
 			if (name == "associated" || name == "tokenMint" || name == "tokenAuthority") {
 				if (!isToken) {
-					error(where + ": the field must be External<TokenAccount> or ExternalMutable<TokenAccount>", d);
+					error(where + ": the field must be External or ExternalMutable of TokenAccount or InterfaceTokenAccount", d);
 				}
 				if (name == "associated") {
 					if (args.length == 3) {
@@ -1186,6 +1327,12 @@ export macro accounts(): Node {
 			error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a Delegated<T> with no " +
 				"@seeds/@bump or @address: any account the delegation program owns with T's layout would pass", shape);
 		}
+		const keepsBump = proofKinds[owner] == "WritablePda";
+		if (keepsBump && seeded == null) {
+			error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a WritablePda with no @seeds: " +
+				"any writable account would pass, and createPda<T>() would sign for it with bump 0 instead of " +
+				"the canonical bump; write @seeds(...) @bump, or Writable when no derivation is meant", shape);
+		}
 		if (seeded != null) {
 			if (bumped == null) {
 				error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
@@ -1205,7 +1352,6 @@ export macro accounts(): Node {
 				elements: list,
 			}], seeded);
 			const key = keyOf(ident(self, seeded));
-			const keepsBump = selfType == "WritablePda";
 			if (keepsBump && bumped.macroArgs.length == 1) {
 				error("accounts<" + decl.interfaceName + ">(): field '" + self + "' is a WritablePda, which keeps " +
 					"the canonical bump the bare @bump finds; a given @bump needs a Writable", bumped);
@@ -1263,14 +1409,14 @@ export macro accounts(): Node {
 			} else {
 				if (literal.length > 0) {
 					if (keepsBump) {
-						words[0] = member(ident(holder, seeded), self, seeded);
+						words[0] = ident(slotOf(self), seeded);
 						words.push(constant(foldedBump as uint64, false));
 						checks.push(attempt(call(bindSym("seedsFoldedPdaFailure")!, words, seeded), seeded));
 					} else {
 						checks.push(attempt(call(bindSym("seedsFoldedFailure")!, words, seeded), seeded));
 					}
 				} else if (keepsBump) {
-					checks.push(attempt(call(bindSym("seedsFoundFailure")!, [member(ident(holder, seeded), self, seeded), table], seeded), seeded));
+					checks.push(attempt(call(bindSym("seedsFoundFailure")!, [ident(slotOf(self), seeded), table], seeded), seeded));
 				} else {
 					checks.push(attempt(call(
 						programOwned ? bindSym("seedsCanonicalProvenFailure")! : bindSym("seedsCanonicalFailure")!,
@@ -1297,7 +1443,7 @@ export macro accounts(): Node {
 		line: line,
 		column: column,
 		properties: values,
-		keys: decl.interfaceFields,
+		keys: names,
 		keyLocations: [],
 	};
 	const yes: Node = { kind: NodeKind.BooleanLiteral, line: line, column: column, boolValue: true };
@@ -1311,6 +1457,12 @@ export macro accounts(): Node {
 		return direct;
 	}
 	const statements: Node[] = chain;
+	if (checks.length > 0) { statements.pop(); }
+	function readBuilt(): Node {
+		const read = call(bindSym("readArgs")!, [yes, built], shape);
+		read.typeArg = decl.interfaceName;
+		return read;
+	}
 	function constraintCode(statement: Node): Node {
 		if (statement.kind === NodeKind.ExprStmt && statement.expr.kind === NodeKind.TryExpr) {
 			return assignFailure(statement.expr.tryArg, statement);
@@ -1329,7 +1481,7 @@ export macro accounts(): Node {
 	if (checks.length == 0) {
 		statements.push({
 			kind: NodeKind.ReturnStmt, line: line, column: column,
-			argument: call(bindSym("checkedAccountResult")!, [unfailed(shape), ident(holder, shape), ident(failure, shape)], shape),
+			argument: readBuilt(),
 		});
 		return call({
 			kind: NodeKind.FunctionExpr, line: line, column: column,
@@ -1338,7 +1490,7 @@ export macro accounts(): Node {
 			funcExprBody: { kind: NodeKind.BlockStmt, line: line, column: column, statements: statements },
 		}, [], shape);
 	}
-	statements.push(attempt(call(bindSym("holds")!, [unfailed(shape), ident(failure, shape)], shape), shape));
-	statements.push(call(bindSym("readArgs")!, [yes, ident(holder, shape)], shape));
+	statements.push(refuseFailed());
+	statements.push(readBuilt());
 	return { kind: NodeKind.SpliceMany, line: line, column: column, spliceNodes: statements };
 }

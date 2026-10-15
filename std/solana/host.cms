@@ -11,12 +11,14 @@ import {
 	logU64,
 	transfer,
 	writableAccount,
+	recordAddress,
 } from "./core";
 import { ProgramError } from "./error";
 import { Pubkey } from "./pubkey";
 
 extern function msSolHostInput(size: uint64): uint64;
 extern function msSolHostEnter(input: uint64): void;
+extern function msSolHostLeave(): void;
 extern function msSolHostResult(): uint64;
 extern function msSolHostFaultCodeOf(): uint64;
 extern function msSolHostFaultMessage(): string;
@@ -32,6 +34,7 @@ extern function msSolHostSetClock(
 	leaderEpoch: uint64,
 	unixTime: uint64,
 ): void;
+extern function msSolHostSetSysvarStatus(status: uint64): void;
 extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
 extern function msSolLoadU64(address: uint64): uint64;
@@ -54,6 +57,7 @@ export struct HostRun {
 }
 
 export const REFUSED: uint64 = 0xffffffffffffffff;
+export const NOT_SIMULATED: uint64 = 0xfffffffffffffffe;
 
 const MAX_INSTRUCTION_ACCOUNTS: int32 = 255;
 
@@ -186,9 +190,12 @@ export function run(
 	const input = serialized(program, accounts, data);
 	msSolHostEnter(input);
 	entry();
-	readBack(accounts, input, lengths);
-	const fault = msSolHostFaultCodeOf() != 0 ? msSolHostFaultMessage() : "";
-	return { result: msSolHostResult(), fault: fault };
+	msSolHostLeave();
+	const faulted = msSolHostFaultCodeOf();
+	if (faulted != 0) { return { result: faulted, fault: msSolHostFaultMessage() }; }
+	const result = msSolHostResult();
+	if (result == 0) { readBack(accounts, input, lengths); }
+	return { result: result, fault: "" };
 }
 
 export function logs(): string[] {
@@ -283,6 +290,8 @@ export function setClock(clock: Clock): void {
 	);
 }
 
+export function setSysvarStatus(status: uint64): void { msSolHostSetSysvarStatus(status); }
+
 function keyOf(word: uint64): Pubkey {
 	let key = Pubkey.zero();
 	for (let index = 0; index < 8; index++) {
@@ -294,7 +303,7 @@ function keyOf(word: uint64): Pubkey {
 function holderOf(word: uint64, data: uint8[], signer: boolean, writable: boolean): HostAccount {
 	return {
 		key: keyOf(word),
-		owner: keyOf(7),
+		owner: keyOf(9),
 		lamports: 1000,
 		data: data,
 		signer: signer,
@@ -321,7 +330,7 @@ function addToCounter(): void {
 function secondStep(): Result<uint64, ProgramError> {
 	const first = try account(0);
 	const second = try writableAccount(1);
-	if (first.address != second.address) { return Result.err(ProgramError.invalidArgument()); }
+	if (first.recordAddress() != second.recordAddress()) { return Result.err(ProgramError.invalidArgument()); }
 	return second.data().writeU64(0, 42);
 }
 
@@ -331,7 +340,9 @@ function writeThroughSecond(): void {
 }
 
 function logSlot(): void {
-	logU64(clock().slot);
+	const now = clock();
+	if (!now.ok) { failWith(now.error); return; }
+	logU64(now.value.slot);
 }
 
 function payStep(): Result<uint64, ProgramError> {
@@ -376,7 +387,8 @@ test "a repeated account is serialized once and both indexes reach it" {
 }
 
 test "a CPI is recorded with its program, accounts and data" {
-	const accounts: HostAccount[] = [holderOf(1, [], true, true), holderOf(2, [], false, true)];
+	const payer = { ...holderOf(1, [], true, true), owner: Pubkey.zero() };
+	const accounts: HostAccount[] = [payer, { ...holderOf(2, [], false, true), lamports: 1000000000 }];
 	const empty: uint8[] = [];
 	const outcome = run(keyOf(9), accounts, empty, payTen);
 	assert outcome.result == 0;

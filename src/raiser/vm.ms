@@ -289,6 +289,7 @@ function vmError(vm: RaiserVM, msg: string): void {
 }
 
 const MAX_CALL_DEPTH = 1024;
+const MAX_ARRAY_COUNT = 4294967295;
 
 // --- Execute ---
 
@@ -399,7 +400,7 @@ function vmFireDueTimer(vm: RaiserVM): void {
 	if (items.length == 0 || items[0].dueMs > msMonoTimeMs()) return;
 	const timer = items[0];
 	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
-	items.length = items.length - 1;
+	items.shrink(items.length - 1);
 	futureComplete(vm, timer.future, raiserNil());
 }
 
@@ -448,10 +449,7 @@ export function vmOrphanFailures(vm: RaiserVM): string[] {
 
 // --- Exceptions ---
 // A per-frame stack of safepoints, each holding the ip of the handler metadata
-// its `Try` registered, plus one in-flight exception. A `finally` can be
-// entered from an unwind or from a return; `savedIp` is the instruction it
-// hands control back to when it ends, so FinallyEnd re-executes the Throw that
-// is still searching or the Ret that is still returning.
+// its `Try` registered, plus one in-flight exception.
 
 function popSafePoint(vm: RaiserVM): number {
 	const n = vm.safePoints.length;
@@ -466,7 +464,7 @@ function popSafePoint(vm: RaiserVM): number {
 function unwindFrame(vm: RaiserVM): void {
 	const len = vm.callStack.items.length;
 	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.length = len - 1;
+	vm.callStack.items.shrink(len - 1);
 	vm.funcIdx = frame.funcIdx;
 	vm.ip = frame.returnIp;
 	vm.baseReg = frame.baseReg;
@@ -1184,7 +1182,10 @@ function runStrandSlice(vm: RaiserVM): void {
 			// Only reached when the guarded region completed without raising.
 			popSafePoint(vm);
 		} else if (op == RaiserOpcode.FinallyEnd) {
-			if (vm.savedIp >= 0) {
+			if (vm.unwinding) {
+				vm.savedIp = -1;
+				unwindStep(vm);
+			} else if (vm.savedIp >= 0) {
 				vm.ip = vm.savedIp;
 				vm.savedIp = -1;
 			}
@@ -1267,7 +1268,7 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	// Pop frame
 	const len = vm.callStack.items.length;
 	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.length = len - 1;
+	vm.callStack.items.shrink(len - 1);
 
 	// Copy return value to caller's dest register (fresh object avoids aliasing)
 	const retCopy = raiserNil();
@@ -1501,6 +1502,11 @@ function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	if (lenVal.kind != RaiserValueKind.Int) {
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
+	}
+	if (inst.c == 1) {
+		if (lenVal.intVal < 0) vmError(vm, `value ${lenVal.intVal} not in range 0 .. 9223372036854775807`);
+		else if (lenVal.intVal > MAX_ARRAY_COUNT) vmError(vm, "over- or underflow");
+		return;
 	}
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot set the length of a slice"); return;
@@ -2321,6 +2327,48 @@ test "ArraySetLen truncates" {
 		[raiserInt(7), raiserInt(1)]
 	));
 	assert vm.exitValue.intVal == 1;
+}
+
+test "ArraySetLen with C = 1 refuses a negative count" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(-1)]
+	));
+	assert vm.halted;
+	assert vm.error == "value -1 not in range 0 .. 9223372036854775807";
+}
+
+test "ArraySetLen with C = 1 refuses a count past 2^32 - 1" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(4294967296)]
+	));
+	assert vm.error == "over- or underflow";
+}
+
+test "ArraySetLen with C = 1 accepts a valid count without growing" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.ArrayLen, 2, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(3)]
+	));
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 0;
 }
 
 test "ArraySetLen nil-extends" {

@@ -775,6 +775,10 @@ if (h.cb !== null) { h.cb(7); }           // narrow, then call
 
 **Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread or a computed key takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
 
+**Locals read before they are assigned** (measured 2026-10-12 on C, JS and the Raiser with a candidate built from tree `d98cdaec6f8d03752dd344dda894df6e3d05a478`; handoff `useBeforeAssign`, corpus `outArgumentUnassigned`): a function-local variable declared without a value must be assigned on every path before it is read, for every type, the TypeScript rule (TS2454). `let n: int32; return n;` and `let n: int32; if (c) { n = 1; } return n;` are `'n' may be read before it is assigned` on all three backends; an assignment in a loop body does not count for a read after the loop. Writing a field or an element is a read of the variable: `let p: P; p.x = 1;` is the same error, so a struct is built with a literal and a sized array is declared `let buf: uint8[4] = [];` (zero filled). An `out` argument is the assignment: `let a: int32; let s: string; fill(out a, out s);` then reading both prints `5 five` on all three. A variable whose type admits `null` (`T | null`) reads as `null` without an assignment. Module-level variables are not checked. `--strict-defs`, which used to turn this into a warning, is gone (`unknown option '--strict-defs'`). Whether the callee writes its `out` parameter is checked where the callee is declared (see Parameter Modifiers); `out a` passed to a `ref` or plain parameter is an error.
+
+**A struct with a private field has no default value outside its module** (measured 2026-10-12, same candidate, same three backends; guard `solanaPdaForgeRefused`, handoff `fieldVisibility`): for `export struct Proof { private n: int32; }`, another module cannot bring a `Proof` into being except through a function of the declaring module. `const a: Proof = {}` and `{} as Proof` are `type 'Proof' has a private field and can only be built by the module that declares it — obtain one from that module`; `const c: Proof[2] = []` is `2 of 2 slots are left without a value`; `new Array<Proof>(2)` is `would fill the array with default values`; a struct that holds a `Proof` cannot omit that field; and an `out` argument assigns such a variable only because the callee must write its `out` parameter on every path (`function leave(out p: Proof): void {}` is `'p' is not assigned on every path` where it is declared, so `let p: Proof; leave(out p); needs(p)` cannot forge one). A module-level `let g: Proof;` is `'g' is declared without a value`. Inside the declaring module nothing changes. `as` to a struct takes only a struct it is related to (itself, a distinct of it, a struct it extends or that extends it), a union holding one, or an object literal: `(0 as uint64) as Proof` is `cannot convert uint64 to Proof: only a struct, a distinct of it, or a struct it extends converts to a struct`, and so are a string, an enum, an array, a function, a `Map`, a `Promise` and `T[] | null` as the source (measured 2026-10-12 on the three backends, candidate of tree `1af2a5e74d0bcf99ee42267467cdc99e4127a310`; handoff `fieldVisibility`). Growing an array by assignment is the same hole: `d.length = n` (and `+=`, `-=`, and `d.setLength(n)`) on an array whose element has no default value (a class, a `Map`, a function, an array, or a struct holding a `Proof`) is `'length' cannot be assigned on an array whose elements have no default value, because it could grow`, also through a generic `function g<T>(a: T[], n: int32) { a.length = n; }` instantiated with such a `T`; only the literal `d.length = 0` is accepted, because zero cannot grow. `d.shrink(n)` cuts to `n` elements and destroys each dropped one; `n` outside `0 .. d.length` is `value 5 not in range 0 .. 2` and exit 1 on C and JS (the Raiser VM reports its own `raiser runtime error`). Arrays of `int32`, `string`, a scalar struct or `T | null` keep `length = n` (measured 2026-10-14 with the candidate of this arc; handoff `arrayLengthGrowth`, corpus `arrayShrinkValid`, `arrayShrinkOver`, `arrayShrinkNegative`). Not measured: `d.setLength(n)` on the Raiser for such an element, which is not refused there.
+
 `?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
 
 **C backend**: Interfaces emit as C structs, passed by pointer (`T*`), heap-allocated with DRC refcounting.
@@ -860,6 +864,8 @@ Developer writes normal code — the compiler picks the fastest path automatical
 | `readonly` | `f(readonly v: Struct)` | Explicit copy — caller's value unaffected |
 | `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
+
+An `out` parameter must be written on every path before the routine returns (measured 2026-10-14 on a candidate of this tree, handoff `outParameterWrites`): the end of the body, every `return`, and a `try` that returns its error each give `'x' is not assigned on every path: it is an out parameter and must be written before …`, so `function f(out x: int32, c: boolean): void { if (c) { x = 1; } }` and an early `return` before the write are errors. A branch that leaves, a `throw` and a call `g(out x)` to another out parameter count as writes or exits; writing `x[i]` or `x.f` does not count. A `throw` leaves the parameter unwritten, and the caller's variable is not assigned across a `catch`. A local that reuses an out parameter's name in the same function is an error, because the check goes by name. An `out` argument assigns the caller's variable and is written only for an out parameter (`out a` to a plain or `ref` parameter is an error); passing the variable without `out` to an out parameter assigns it too. A body-less `extern` declaration is the trust boundary and is not checked. A class method takes `out` and `ref` parameters the same way (measured on C and JS, corpus `methodOutParameter`, a generic class instance included); a constructor parameter cannot be `out` or `ref` and says so. Not covered: an out parameter on an actor method or a function expression (the parameter name keeps its `out:` prefix and the body reads `Undefined variable 'x'`), and a read of an out parameter before its first write, which the checker's identifier read path does not yet treat as a read of an unassigned local.
 
 A closure cannot capture a `ref` or `out` parameter (`'n' is a ref/out parameter and cannot be
 captured by a closure`), as the reference refuses capturing a `var` parameter (lambdalifting.nim:208
@@ -1021,6 +1027,15 @@ export default class App { }
 export { Token } from "./lexer/token";
 export * from "./utils";
 ```
+
+**JS bundle exports.** `msc build --target=js entry.ms` gives the bundle the entry module's export
+list as its ES exports, under the source names: a function, a `const`/`let`, a non-generic class,
+`export default`, and a re-export (`export { x } from`, `export * from`) of one of those, bound to the
+same value. Each exported name is exactly one runtime value: exporting an overload set, a generic
+function or class, or an enum, directly or through a re-export, is a compile error at the `export`.
+Extension functions stay out of the bundle's exports because their export is module visibility.
+Exports of other modules stay internal, and `--split` output is unaffected. Measured 2026-10-14 with
+node 24.1 by `src/test/guard/jsBundleEntryExports.ms`.
 
 ### Converter Declarations
 
@@ -4057,6 +4072,26 @@ extern class console {
     extern log(value: string): void from "msPrintln";
 }
 ```
+
+On C, `from` names the C symbol. On JS, a `from` string containing `#`, `@`, `(` or `$1` is a
+pattern emitted in place of the call: each `#` takes the next argument, `@` the remaining ones,
+`$1` the function's name. A C build refuses such a pattern at its `extern` declaration, called or
+not; a declaration meant for JS only sits inside `when (js) { … }` or in a `.jms` file. A pattern
+without a placeholder is emitted as written:
+
+```ms
+extern function answer(): int32 from "(40 + 2)";              // answer() → (40 + 2)
+extern function hashAt(s: string): int32 from "(#).indexOf('\\x23')";
+```
+
+Every `#` is a placeholder, a `#` inside a quoted JS string included, so a literal `#` is written
+`\\x23` in the pattern (JS reads `\x23` as `#`). The declaration is refused when the pattern's
+`#` count differs from the parameter count (with `@`, when it exceeds it), and the error names
+both counts. Measured 2026-10-14 on `wt/fix-extern-pattern`: corpus `externPatternArity` prints
+`42 hi 3 | 1 #x | 7 [1,2,3]` on JS, C drc and C orc (the C side defines plain functions under
+`when`); `src/test/js/externPattern.ms` pins the count refusals and `src/test/c/externPattern.ms`
+the C refusal. Not measured: extern class methods with a pattern, which the count check does not
+cover (the C refusal does).
 
 ### Distinct Types
 ```typescript

@@ -94,10 +94,10 @@ function createMultisig(): Result<uint64, ProgramError> {
 		if (!remaining.isSigner()) { return Result.err(ProgramError.userError(2)); }
 		signers[i] = remaining.key();
 	}
-	const config = made.account.data();
+	const config = made.asMutable().data();
 	config.creator = x.creator.key();
 	config.threshold = input.threshold;
-	config.bump = made.bump;
+	config.bump = made.foundBump();
 	config.labelLength = 0;
 	config.signersLength = count as uint16;
 	config.signers = signers;

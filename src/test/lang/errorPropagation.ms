@@ -22,6 +22,39 @@ function statementTryGuarded(ok: boolean): Result<string, string> {
 	return Result.ok("after");
 }
 
+let lazyTryCalls: int32 = 0;
+
+function lazyTryStep(ok: boolean): Result<int32, string> {
+	lazyTryCalls += 1;
+	return ok ? Result.ok(3) : Result.err("step failed");
+}
+
+function lazyTryArm(skip: boolean, ok: boolean): Result<int32, string> {
+	const p = skip ? 7 : try lazyTryStep(ok);
+	return Result.ok(p);
+}
+
+function lazyTryAnd(skip: boolean, ok: boolean): Result<boolean, string> {
+	const p = !skip && (try lazyTryStep(ok)) == 3;
+	return Result.ok(p);
+}
+
+function lazyTryCatchValue(ok: boolean): Result<int32, string> {
+	const p = try lazyTryStep(ok) catch (try lazyTryStep(false));
+	return Result.ok(p);
+}
+
+function lazyTryWhile(rounds: int32, ok: boolean): Result<int32, string> {
+	let i = 0;
+	while (i < rounds && (try lazyTryStep(ok)) == 3) { i += 1; }
+	return Result.ok(i);
+}
+
+function lazyTryMatchArm(skip: boolean): Result<int32, string> {
+	const p = match (skip) { true => 7, _ => try lazyTryStep(false) };
+	return Result.ok(p);
+}
+
 enum ErrorConversionAccountError { MissingSigner, WrongOwner }
 
 enum ErrorConversionPetError { Account, Dead }
@@ -220,4 +253,95 @@ test "errorPropagation: a try in a generic function converts per instance" {
 	assert !err.ok && err.error == ErrorConversionPetError.Account;
 	const same = errorConversionFeedGeneric<ErrorConversionAccountError>(true, ErrorConversionAccountError.MissingSigner);
 	assert !same.ok && same.error == ErrorConversionAccountError.WrongOwner;
+}
+
+test "errorPropagation: a try in a ternary arm that is not taken does not run" {
+	lazyTryCalls = 0;
+	const r = lazyTryArm(true, false);
+	assert r.ok;
+	assert lazyTryCalls == 0;
+}
+
+test "errorPropagation: a try in the taken ternary arm returns its error" {
+	lazyTryCalls = 0;
+	const r = lazyTryArm(false, false);
+	assert !r.ok;
+	assert lazyTryCalls == 1;
+}
+
+test "errorPropagation: a try after a short circuit does not run" {
+	lazyTryCalls = 0;
+	const r = lazyTryAnd(true, false);
+	assert r.ok;
+	assert lazyTryCalls == 0;
+}
+
+test "errorPropagation: a try in a catch value runs only when the first fails" {
+	lazyTryCalls = 0;
+	const r = lazyTryCatchValue(true);
+	assert r.ok;
+	assert lazyTryCalls == 1;
+	lazyTryCalls = 0;
+	const bad = lazyTryCatchValue(false);
+	assert !bad.ok;
+	assert lazyTryCalls == 2;
+}
+
+test "errorPropagation: a try in a while condition runs once per iteration" {
+	lazyTryCalls = 0;
+	const r = lazyTryWhile(3, true);
+	assert r.ok;
+	if (r.ok) assert r.value == 3;
+	assert lazyTryCalls == 3;
+	const bad = lazyTryWhile(3, false);
+	assert !bad.ok;
+}
+
+test "errorPropagation: a try in a match expression arm lowers and returns its error" {
+	lazyTryCalls = 0;
+	assert lazyTryMatchArm(true).ok;
+	assert lazyTryCalls == 0;
+	assert !lazyTryMatchArm(false).ok;
+	assert lazyTryCalls == 1;
+}
+
+let orderTrace = "";
+function orderLeft(): int32 { orderTrace = orderTrace + "L"; return 1; }
+function orderRight(): int32 { orderTrace = orderTrace + "R"; return 3; }
+function orderTry(ok: boolean): Result<int32, string> { orderTrace = orderTrace + "T"; return ok ? Result.ok(2) : Result.err("no"); }
+function orderAdd3(a: int32, b: int32, c: int32): int32 { return a + b + c; }
+function orderMiddle(ok: boolean): Result<int32, string> { return Result.ok(orderAdd3(orderLeft(), try orderTry(ok), orderRight())); }
+function orderOperator(): Result<int32, string> { return Result.ok(orderLeft() + (try orderTry(true))); }
+function orderArray(): Result<int32, string> { const x = [orderLeft(), try orderTry(true)]; return Result.ok(x[0] + x[1]); }
+function orderRead(): Result<int32, string> { orderStored = 5; return Result.ok(orderStored + (try orderMutates())); }
+let orderStored: int32 = 0;
+function orderMutates(): Result<int32, string> { orderStored = 100; return Result.ok(1); }
+
+test "errorPropagation: operands left of a try run before it and operands right of it after it" {
+	orderTrace = "";
+	const r = orderMiddle(true);
+	assert r.ok;
+	if (r.ok) assert r.value == 6;
+	assert orderTrace == "LTR";
+}
+
+test "errorPropagation: a failing try returns after the operands on its left and before those on its right" {
+	orderTrace = "";
+	assert !orderMiddle(false).ok;
+	assert orderTrace == "LT";
+}
+
+test "errorPropagation: a try right of a binary operator or in an array literal runs after the left operand" {
+	orderTrace = "";
+	assert orderOperator().ok;
+	assert orderTrace == "LT";
+	orderTrace = "";
+	assert orderArray().ok;
+	assert orderTrace == "LT";
+}
+
+test "errorPropagation: a variable on the left of a try is read before the try runs" {
+	const r = orderRead();
+	assert r.ok;
+	if (r.ok) assert r.value == 6;
 }

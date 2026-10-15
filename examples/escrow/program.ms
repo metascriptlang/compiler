@@ -81,14 +81,14 @@ function make(): Result<uint64, ProgramError> {
 	}
 	const x = try accounts<MakeAccounts>();
 	const made = try createPda<Escrow>(x.maker, x.escrow, ["escrow", x.maker, leBytes(a.seed)]);
-	const escrow = made.account.data();
+	const escrow = made.asMutable().data();
 	escrow.seed = a.seed;
 	escrow.maker = x.maker.key();
 	escrow.mintA = x.mintA.key();
 	escrow.mintB = x.mintB.key();
 	escrow.receive = a.receive;
-	escrow.bump = made.bump;
-	const escrowAccount = made.account.asAccount();
+	escrow.bump = made.foundBump();
+	const escrowAccount = made.asMutable().asAccount();
 	const _vaultMade = try createAssociatedFor(
 		x.maker,
 		x.vault,

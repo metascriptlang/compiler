@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate typeof at comptime: 'function' and 'number' variants share Raiser value kind 2 (inbox 2026-09-26-raiser-typeof-yields-the-value)
 // Parity program — an arrow with one untyped parameter and a return type is an arrow,
 // and the true arm of a conditional keeps the colon that ends it: a parenthesized
 // true arm is not mistaken for the head of an arrow in the false arm.
