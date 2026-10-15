@@ -38,7 +38,9 @@ export extern function acosh(this typeof Math, x: float64): float64 from "acosh"
 export extern function atanh(this typeof Math, x: float64): float64 from "atanh";
 
 export function round(this typeof Math, x: float64): float64 {
-	return Math.floor(x + 0.5);
+	const down = Math.floor(x);
+	const r = x - down >= 0.5 ? down + 1.0 : down;
+	return r == 0.0 && x < 0.0 ? -0.0 : r;
 }
 
 export function sign(this typeof Math, x: float64): float64 {
