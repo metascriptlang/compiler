@@ -57,6 +57,18 @@ export class Error {
 	}
 }
 
+export class RangeError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
+export class SyntaxError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
