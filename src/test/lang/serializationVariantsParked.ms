@@ -1,4 +1,4 @@
-// Parked at inbox card 2026-09-27-result-value-union-projection.md
+// Parked at inbox card 2026-10-15-narrowed-union-payload-read-through-result-value-fails-clang.md
 
 interface WireCircle { kind: "circle"; r: float64; }
 

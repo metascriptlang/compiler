@@ -1,4 +1,4 @@
-// Parked at inbox card 2026-09-27-branded-string-inequality.md
+// Parked at inbox card 2026-10-15-branded-string-inequality-fails-clang.md
 
 type EntityId = string & { __brand: "EntityId" };
 
