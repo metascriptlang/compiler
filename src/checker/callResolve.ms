@@ -2578,7 +2578,8 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			const fSub = applySubstitutions(fFormal, argBindings);
 			if (hasGenericParams(fSub)) {
 				if (callNode != null && callNode.kind == NodeKind.CallExpr && argTypes[fi] != null
-						&& !isAssignable(argTypes[fi], fFormal)) {
+						&& !isAssignable(argTypes[fi], fFormal)
+						&& !(fi < (callNode.data as CallExprData).arguments.length && literalShortOfSlot((callNode.data as CallExprData).arguments[fi], fFormal))) {
 					const mcd = callNode.data as CallExprData;
 					const argLoc = fi < mcd.arguments.length && mcd.arguments[fi] != null ? mcd.arguments[fi].location : callNode.location;
 					const hint = fi < mcd.arguments.length && mcd.arguments[fi] != null ? refDerefHint(mcd.arguments[fi], argTypes[fi], fFormal) : "";
