@@ -1536,7 +1536,12 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					}
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
-					const rawFlags = (readInt(objHeap, handle, "flags") as uint32) as BitSet<NodeFlag>;
+					const flagsValue = readInt(objHeap, handle, "flags");
+					const flagsFit = flagsValue >= 0 && flagsValue <= 4294967295 && Math.floor(flagsValue) == flagsValue;
+					if (!flagsFit) {
+						_wireRefusals.push({ message: `flags must be a NodeFlag set, an integer in 0 .. 4294967295, not ${flagsValue}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
+					}
+					const rawFlags = ((flagsFit ? flagsValue : 0) as uint32) as BitSet<NodeFlag>;
 					const pipeline = rawFlags.difference(PARSER_NODE_FLAGS);
 					if (!pipeline.isEmpty()) {
 						_wireRefusals.push({ message: `flags may hold only what the parser writes (${PARSER_NODE_FLAGS.toString()}), not ${pipeline.toString()}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
@@ -2659,6 +2664,22 @@ test "an enum ordinal written as flags is refused, not read as a set" {
 	const back = valueToNode(val, objH, arrH, loc);
 	assert !back.flags.has(NodeFlag.StaticStorage);
 	assert takeWireRefusals().length == 1;
+}
+
+test "flags that are no 32-bit set are refused, not converted" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const forged: RaiserValue[] = [raiserInt(4294967296), raiserInt(-1), raiserFloat(1.5), raiserFloat(0.0 / 0.0), raiserFloat(1.0 / 0.0)];
+	for (const flags of forged) {
+		const val = nodeToValue(mkNumber(1, loc), objH, arrH);
+		heapObjectSetField(objH, val.intVal, "flags", flags);
+		const back = valueToNode(val, objH, arrH, loc);
+		assert back.flags == (0 as BitSet<NodeFlag>);
+		const refused = takeWireRefusals();
+		assert refused.length == 1, `${refused.length}`;
+		assert refused[0].message.contains("an integer in 0 .. 4294967295"), refused[0].message;
+	}
 }
 
 test "a node that crossed the wire with only parser flags is not refused" {
