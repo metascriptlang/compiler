@@ -26,6 +26,8 @@ export interface DecoratorContext {
 export type ClassDecoratorContext = DecoratorContext;
 export type ClassMethodDecoratorContext = DecoratorContext;
 export type ClassFieldDecoratorContext = DecoratorContext;
+export type ClassGetterDecoratorContext = DecoratorContext;
+export type ClassSetterDecoratorContext = DecoratorContext;
 
 export function metadataSet(m: DecoratorMetadata, key: string, value: Node): void {
 	for (let i = 0; i < m.keys.length; i += 1) {

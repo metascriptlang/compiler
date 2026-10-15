@@ -359,12 +359,6 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 			addError(ctx, "Decorators are not valid here", dec.location.line, dec.location.column);
 			continue;
 		}
-		if (current.flags.has(NodeFlag.Accessor)) {
-			const name = (current.data as MethodDeclData).methodName;
-			addError(ctx, `decorator '${md.macroName}' cannot apply to accessor '${name.slice(0, 3)} ${name.slice(4, name.length)}': decorated getters and setters are not supported`,
-				dec.location.line, dec.location.column);
-			continue;
-		}
 		current = runDecorator(ctx, dec, md, current, plan);
 	}
 	return current;
@@ -373,6 +367,9 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 function targetInfo(target: Node): TargetInfo {
 	if (target.kind == NodeKind.MethodDecl) {
 		const md = target.data as MethodDeclData;
+		if (target.flags.has(NodeFlag.Accessor)) {
+			return { kind: md.methodName.startsWith("get_") ? "getter" : "setter", name: md.methodName.slice(4, md.methodName.length), isStatic: md.methodIsStatic };
+		}
 		return { kind: "method", name: md.methodName, isStatic: md.methodIsStatic };
 	}
 	if (target.kind == NodeKind.PropertyDecl) {
@@ -383,6 +380,12 @@ function targetInfo(target: Node): TargetInfo {
 		return { kind: "class", name: (target.data as ActorDeclData).actorName, isStatic: false };
 	}
 	return { kind: "class", name: (target.data as ClassDeclData).className, isStatic: false };
+}
+
+function accessorLabel(methodName: string): string {
+	if (methodName.startsWith("get_")) return `getter '${methodName.slice(4, methodName.length)}'`;
+	if (methodName.startsWith("set_")) return `setter '${methodName.slice(4, methodName.length)}'`;
+	return `method '${methodName}'`;
 }
 
 function kindLabel(kind: NodeKind): string {
@@ -732,12 +735,16 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		markExpansion(ctx, target, friends);
 	} else if (shape == shapeNode && rv.kind != RaiserValueKind.Nil) {
 		const replacement = valueToExpansion(rv, objHeap, arrHeap, loc, gensym);
-		if (replacement == null || replacement.kind != target.kind) {
-			const got = replacement == null ? "nothing" : kindLabel(replacement.kind);
-			const want = kindLabel(target.kind);
+		const accessor = target.flags.has(NodeFlag.Accessor);
+		const renamed = accessor && replacement != null && replacement.kind == target.kind
+			&& (replacement.data as MethodDeclData).methodName != (target.data as MethodDeclData).methodName;
+		if (replacement == null || replacement.kind != target.kind || renamed) {
+			const got = replacement == null ? "nothing" : renamed ? accessorLabel((replacement.data as MethodDeclData).methodName) : kindLabel(replacement.kind);
+			const want = accessor ? `${info.kind} '${info.name}'` : kindLabel(target.kind);
 			const article = want == "actor" ? "an" : "a";
 			addError(ctx, `decorator '${name}' on ${article} ${want} must return ${article} ${want} or nothing, got ${got}`, loc.line, loc.column);
 		} else {
+			if (accessor) replacement.flags = replacement.flags.incl(NodeFlag.Accessor);
 			adoptReplacement(target, replacement);
 			markExpansion(ctx, replacement, friends);
 			outNode = replacement;

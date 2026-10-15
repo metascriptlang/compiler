@@ -1,7 +1,7 @@
 // E2E: Classes and Interfaces → C output
 // Classes are instantiated so DCE keeps them.
 
-import { compileToC } from "../helpers";
+import { compileToC, compileToCWithStd } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { resetAllSideChannels } from "../../parser/context";
@@ -101,10 +101,14 @@ p.v = 3;
 console.log(p.v);") == "compiled";
 }
 
-test "E2E C: a decorated accessor is refused, not dropped" {
+test "E2E C: a decorated accessor stays an accessor and keeps its name" {
 	const deco = "import { Node, ClassMethodDecoratorContext } from \"std/meta\";\nmacro logged(value: Node, context: ClassMethodDecoratorContext): Node { return value; }\n";
-	assert accessorError(deco + "class C { @logged get n(): int32 { return 1; } }\nconsole.log(new C().n);").contains("decorator 'logged' cannot apply to accessor 'get n'");
-	assert accessorError(deco + "class C { private _n: int32 = 0; get n(): int32 { return this._n; } @logged set n(v: int32) { this._n = v; } }").contains("cannot apply to accessor 'set n'");
+	const renamer = "import { Node, ClassMethodDecoratorContext } from \"std/meta\";\nmacro rename(value: Node, context: ClassMethodDecoratorContext): Node { value.methodName = \"get_m\"; return value; }\n";
+	assert compileToCWithStd(deco + "class C { @logged get n(): int32 { return 1; } }\nconsole.log(new C().n);").ok;
+	assert compileToCWithStd(deco + "class C { private _n: int32 = 0; get n(): int32 { return this._n; } @logged set n(v: int32) { this._n = v; } }\nconst c = new C();\nc.n = 2;").ok;
+	const renamed = compileToCWithStd(renamer + "class C { @rename get n(): int32 { return 1; } }");
+	assert !renamed.ok;
+	if (!renamed.ok) assert renamed.error.contains("decorator 'rename' on a getter 'n' must return a getter 'n' or nothing, got getter 'm'");
 	assert accessorError(deco + "struct V2 { x: float32; @logged get sum(): float32 { return this.x; } }").contains("Decorated getter 'sum' at line 3 is not supported");
 }
 
