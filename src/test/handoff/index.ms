@@ -71,6 +71,7 @@ import "./maybeGenericPayload";
 import "./genericReturnIntoMaybe";
 import "./extGenericFromArg";
 import "./arrowInGenericLiteral";
+import "./literalAwaitsBinding";
 import "./functionValueMisuse";
 import "./fnFormalArgFit";
 import "./maybeRefPayloadKey";

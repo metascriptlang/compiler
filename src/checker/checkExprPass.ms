@@ -5,7 +5,7 @@ import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refu
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { isOutParam, distinctBody, peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, isStdCollection, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf, isNullableShape, genericInstanceMembers } from "./types";
+import { isOutParam, distinctBody, peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, isStdCollection, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf, isNullableShape, genericInstanceMembers, functionSlotOf, holdsInferred } from "./types";
 import { Scope, ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf, lookupCtorDefaults, isVisibleSymbol } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
 import {
@@ -3098,18 +3098,8 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// from body, because contextual return types may be generic (`() => T`) and would shadow
 	// the concrete inference from the body that downstream passes (lambda lifting) rely on.
 	let ctxParamTypes: Type[] = [];
-	// A `fn | null` formal is a Maybe struct — peel it so the arrow is typed from the inner fn.
-	let fnExpected = expectedType != null ? peelTransparentInstance(expectedType) : null;
-	if (fnExpected != null && isMaybeType(fnExpected) && fnExpected.typeReturn != null) {
-		fnExpected = peelTransparentInstance(fnExpected.typeReturn);
-	}
-	if (fnExpected != null && fnExpected.kind == TypeKind.Union) {
-		const soleFn = soleUnionMember(fnExpected, isFunctionKind);
-		if (soleFn != null) fnExpected = soleFn;
-	}
-	if (fnExpected != null && fnExpected.kind == TypeKind.Function && fnExpected.typeChildren != null) {
-		ctxParamTypes = fnExpected.typeChildren;
-	}
+	const fnExpected = functionSlotOf(expectedType);
+	if (fnExpected != null) ctxParamTypes = fnExpected.typeChildren;
 
 	// Body's expected return type. Sources, in priority order:
 	//   1. Explicit annotation on the arrow (`(): T => ...`)
@@ -3318,21 +3308,12 @@ export function refuseReturnedPromise(ctx: CheckerContext, what: string, returne
 // Only concrete tails pad: a generic/unresolved extra formal leaves the
 // literal untouched (ec38c20 family — never bake half-resolved types).
 function padLiteralParams(params: string[], paramTypes: string[], node: Node, expectedType: Type | null): void {
-	if (expectedType == null) return;
-	let fnExpected = peelTransparentInstance(expectedType);
-	if (isMaybeType(fnExpected) && fnExpected.typeReturn != null) {
-		fnExpected = peelTransparentInstance(fnExpected.typeReturn);
-	}
-	if (fnExpected.kind == TypeKind.Union) {
-		const soleFn = soleUnionMember(fnExpected, isFunctionKind);
-		if (soleFn != null) fnExpected = soleFn;
-	}
-	if (fnExpected.kind != TypeKind.Function || fnExpected.typeChildren == null) return;
-	if (params.length >= fnExpected.typeChildren.length) return;
+	const fnExpected = functionSlotOf(expectedType);
+	if (fnExpected == null || params.length >= fnExpected.typeChildren.length) return;
 	let i = params.length;
 	while (i < fnExpected.typeChildren.length) {
 		const pt = fnExpected.typeChildren[i];
-		if (pt == null || isUnresolvedType(pt) || pt.kind == TypeKind.GenericParam || hasGenericParams(pt)) return;
+		if (pt == null || hasGenericParams(pt) || holdsInferred(pt)) return;
 		i += 1;
 	}
 	while (paramTypes.length < params.length) {

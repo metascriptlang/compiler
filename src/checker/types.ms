@@ -2673,6 +2673,17 @@ export function isFunctionKind(t: Type): boolean {
 	return t.kind == TypeKind.Function;
 }
 
+export function functionSlotOf(slot: Type | null): Type | null {
+	if (slot == null) return null;
+	let fn = peelTransparentInstance(slot);
+	if (isMaybeType(fn) && fn.typeReturn != null) fn = peelTransparentInstance(fn.typeReturn);
+	if (fn.kind == TypeKind.Union) {
+		const soleFn = soleUnionMember(fn, isFunctionKind);
+		if (soleFn != null) fn = soleFn;
+	}
+	return fn.kind == TypeKind.Function && fn.typeChildren != null ? fn : null;
+}
+
 export function isArrayShaped(t: Type): boolean {
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray) return true;
 	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
@@ -3345,6 +3356,21 @@ function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
 function anyChildHoldsView(t: Type, seen: TypeVisitSet): boolean {
 	for (const child of t.typeChildren) {
 		if (holdsView(child, seen)) return true;
+	}
+	return false;
+}
+
+export function holdsInferred(t: Type | null): boolean {
+	return inferredScan(t, new TypeVisitSet());
+}
+
+function inferredScan(t: Type | null, seen: TypeVisitSet): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Inferred) return true;
+	if (isDeclaredStruct(t) || !typeVisitAdd(seen, t)) return false;
+	if (inferredScan(t.typeReturn, seen) || inferredScan(t.typeExtra, seen)) return true;
+	for (const child of t.typeChildren) {
+		if (inferredScan(child, seen)) return true;
 	}
 	return false;
 }
