@@ -2,7 +2,7 @@ import { execFileResult } from "std/process";
 import { ensureDir, exists, isDir, readFile, remove, removeAll, writeFile } from "std/fs";
 import { subjectMsc } from "./drive";
 import {
-	Identity, firstDiff, firstCompilerError, forbidOf, formatIdentity, hasLine, missingKeep, onlyCompilerError, parseIdentity, presentForbidden, throwLine,
+	Identity, firstDiff, firstCompilerError, forbidOf, formatIdentity, hasLine, missingKeep, onlyCompilerError, parseIdentity, presentForbidden, sanLine, throwLine,
 } from "./identity";
 
 const WATCHDOG: string = "my $t = shift; my $pid = fork; if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127; } $SIG{ALRM} = sub { kill 'TERM', -$pid; }; alarm $t; waitpid($pid, 0); exit($? >> 8);";
@@ -36,9 +36,9 @@ function parentOf(file: string): string { return file.slice(0, file.lastIndexOf(
 
 function lane(msc: string, file: string, target: string): Lane {
 	const dir = parentOf(file);
-	const bin = dir + (target == "js" ? "/cand.js" : "/cand.bin");
+	const bin = dir + (target == "js" ? "/cand.js" : target == "asan" ? "/cand.asan" : "/cand.bin");
 	if (exists(bin)) { remove(bin); }
-	const flags = target == "js" ? ["--target=js"] : [];
+	const flags = target == "js" ? ["--target=js"] : target == "asan" ? ["--sanitize=address", "--cc=clang"] : [];
 	const b = ran(msc, ["build", file, ...flags, "--no-color", "--output=" + bin], dir, 180);
 	const log = b.out + b.err;
 	if (b.exit != 0 || !exists(bin)) { return { built: false, buildLog: log, exit: -1, out: "", err: "", again: "" }; }
@@ -61,6 +61,13 @@ function judge(id: Identity, msc: string, file: string): string {
 	const introduced = presentForbidden(id.forbid, text.value);
 	if (introduced != "") { return "the candidate introduced '" + introduced + "', which the input never had"; }
 	if (ran(msc, ["check", file, "--no-color"], dir, 60).exit != 0) { return "msc check rejects the candidate"; }
+	if (id.mode == "san") {
+		const s = lane(msc, file, "asan");
+		if (!s.built) { return "ASan " + describe(s); }
+		const got = sanLine(s.err);
+		if (got == "") { return "the ASan build reports nothing"; }
+		return got == id.symptom ? "" : "ASan reports " + got + ", not " + id.symptom;
+	}
 	const js = lane(msc, file, "js");
 	if (id.mode == "js-throws") {
 		if (!js.built) { return "JS " + describe(js); }
@@ -84,9 +91,14 @@ function judge(id: Identity, msc: string, file: string): string {
 	return d.shape == id.shape ? "" : "outputs differ in a " + d.shape + " value (" + d.left + " vs " + d.right + "), not " + id.shape;
 }
 
-function infer(msc: string, file: string): Result<Identity, string> {
+function infer(msc: string, file: string, san: boolean): Result<Identity, string> {
 	const dir = parentOf(file);
 	if (ran(msc, ["check", file, "--no-color"], dir, 60).exit != 0) { return Result.err("msc check rejects the input"); }
+	if (san) {
+		const s = lane(msc, file, "asan");
+		const got = s.built ? sanLine(s.err) : "";
+		return got != "" ? Result.ok({ mode: "san", symptom: got, label: "", shape: "", keep: "", forbid: "" }) : Result.err("a SAN bundle whose ASan build " + (s.built ? "reports nothing" : "fails: " + firstCompilerError(s.buildLog)));
+	}
 	const js = lane(msc, file, "js");
 	const c = lane(msc, file, "c");
 	const jsOk = js.built && js.exit == 0;
@@ -121,6 +133,11 @@ function stemOf(path: string): string {
 	return base.endsWith(".ms") ? base.slice(0, base.length - 3) : base;
 }
 
+function sanBundle(bundle: string): boolean {
+	const meta = readFile(bundle + "/meta.txt");
+	return meta.ok && meta.value.split("\n").includes("mode: san");
+}
+
 function plantKeep(bundle: string): string {
 	const meta = readFile(bundle + "/meta.txt");
 	if (!meta.ok) { return ""; }
@@ -151,7 +168,7 @@ export function reduceInput(root: string, input: string, identityPath: string, j
 		if (!parsed.ok) { return fail(identityPath + ": " + parsed.error); }
 		id = parsed.value;
 	} else {
-		const inferred = infer(msc, out + "/input.ms");
+		const inferred = infer(msc, out + "/input.ms", isDir(input) && sanBundle(input));
 		if (!inferred.ok) { return fail(inferred.error); }
 		id = { ...inferred.value, keep: isDir(input) ? plantKeep(input) : "" };
 	}
