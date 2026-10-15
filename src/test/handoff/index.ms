@@ -132,6 +132,7 @@ import "./delegateBase";
 import "./bindSymGeneric";
 import "./macroNamedLikeDirective";
 import "./compileTimeNameUse";
+import "./extensionImportUse";
 import "./genericInstanceCast";
 import "./comptimeCallFold";
 import "./readonlyViewRefArgument";
