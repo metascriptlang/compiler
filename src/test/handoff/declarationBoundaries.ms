@@ -6,6 +6,10 @@ import { getPreludeContext } from "../../checker/orchestrator";
 import { ExportRegistry, Severity } from "../../checker/context";
 import { Module, ModuleGraph } from "../../module/graph";
 import { NodeKind, ProgramData, FunctionDeclData, BlockStmtData, ExprStmtData, MatchExprData, createNodeAt } from "../../ast/node";
+import { resetBuildState } from "../../compiler/buildSession";
+import { MapEntry, createMapProvider, loadModuleGraph, canonicalModulePath } from "../../module/loader";
+import { checkModuleGraph } from "../../checker/orchestrator";
+import { lookupModuleCtx } from "../../checker/instantiate";
 
 test "declarationBoundaries: inheritance follows acyclic paths, not a depth limit" {
 	const cases0 = [
@@ -240,4 +244,29 @@ test "declarationBoundaries: a generic type is written with its type arguments w
 		assert result.ok == (item.message == ""), item.name + ": " + error;
 		assert item.message == "" || error.indexOf(item.message, 0) >= 0, item.name + ": " + error;
 	}
+}
+
+// b.ms declares its own `Base` under the exported `Mid`; a.ms names a class `Base` too.
+function inheritanceErrors(entrySource: string): string[] {
+	resetBuildState();
+	const entries: MapEntry[] = [
+		{ entryPath: canonicalModulePath("/declarationBoundaries/a.ms"), entrySource },
+		{ entryPath: canonicalModulePath("/declarationBoundaries/b.ms"), entrySource: "class Base { tag(): string { return \"b\"; } }\nexport class Mid extends Base { }\n" },
+	];
+	checkModuleGraph(loadModuleGraph(entries[0].entryPath, createMapProvider(entries)), "");
+	const ctx = lookupModuleCtx(entries[0].entryPath);
+	const messages: string[] = [];
+	if (ctx == null) { messages.push("no module context"); return messages; }
+	for (const e of ctx.errors) messages.push(e.message);
+	return messages;
+}
+
+test "declarationBoundaries: an imported parent's own base is no cycle through a local class spelled the same" {
+	const messages = inheritanceErrors("import { Mid } from \"./b\";\nclass Base extends Mid { }\nconst s = new Base().tag();\n");
+	assert messages.length == 0, messages.join("\n");
+}
+
+test "declarationBoundaries: a local chain onto an imported parent is no cycle one level deeper" {
+	const messages = inheritanceErrors("import { Mid } from \"./b\";\nclass Top extends Mid { }\nclass Base extends Top { }\nconst s = new Base().tag();\n");
+	assert messages.length == 0, messages.join("\n");
 }
