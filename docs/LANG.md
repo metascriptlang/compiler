@@ -194,6 +194,8 @@ error: implicit int64 → int32 conversion in '+=' narrows — write an explicit
 
 Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`, `anonymousLiteralFieldWidths`.
 
+**`as` from one integer type to another** (measured 2026-10-15 on C, JS and the Raiser): into a signed type, a value in the target's range is kept and a value past it stops the program, a `uint64` past 2^63 into `int64` included (`value 9223372036854775808 not in range -9223372036854775808 .. 9223372036854775807`, exit 1). A constant outside is a compile error: `(9223372036854775808 as uint64) as int64` is `cannot convert 9223372036854775808 to int64`. Into an unsigned type the value wraps (`uint64` 2^63+5 `as uint32` is 5). `int64Bits(u)` reads a `uint64`'s bits as an `int64` (`int64Bits(18446744073709551615)` is -1). `--danger` drops the run-time check on C; JS keeps it. For a `uint64` past 2^63 into `int32`, C prints the value as a float (`value 9.2233720368547758e+18 not in range …`); JS and the Raiser print the integer. Pins: corpus `669`, `uint64ToInt64Checked`, `1033`; handoff `intLiteralBoundary`; the Raiser conversion tests in `src/raiser/vm.ms`.
+
 ### Float Types
 
 | Type | Size | C Mapping |
