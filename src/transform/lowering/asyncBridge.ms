@@ -34,6 +34,7 @@ import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
 import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { routineSyms } from "./lambdaLiftingDetect";
+import { statementCanRaise } from "../../checker/raises";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -163,14 +164,30 @@ function zeroValueForType(t: Type, loc: SourceLocation): Node {
 // Returns an array of statements (usually 1, but 2 for arrays due to msSinkBoxStruct expansion).
 let asyncNameCounter = 0;
 
-function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutSym: Symbol, ctx: TransformContext): Node[] {
+function makeFutureCompleteStmts(valueExprIn: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutSym: Symbol, ctx: TransformContext): Node[] {
+	const settledAfter: Node[] = [];
+	let valueExpr = valueExprIn;
 	if (isVoid || valueExpr == null) {
-		return [makeExprStmt(makeCall(
+		if (valueExpr != null) settledAfter.push(makeExprStmt(valueExpr, loc));
+		settledAfter.push(makeExprStmt(makeCall(
 			runtimeRef("msFutureCompleteVoid", loc),
 			[makeTypedIdentResolved(retFutSym, promiseType, loc)],
 			loc,
-		), loc)];
+		), loc));
+		return settledAfter;
 	}
+	if (statementCanRaise(valueExpr)) {
+		const valueSym = mintSym(ctx, SymbolKind.Variable, retFutSym.name + "_v", fnReturnInner!);
+		const valueDecl = makeVarDecl(valueSym.name, valueExpr, DeclKind.Const, loc);
+		valueDecl.nodeType = fnReturnInner;
+		valueDecl.resolvedSym = valueSym;
+		settledAfter.push(valueDecl);
+		valueExpr = makeTypedIdentResolved(valueSym, fnReturnInner, loc);
+	}
+	return [...settledAfter, ...completeWithValue(valueExpr, promiseType, fnReturnInner, loc, retFutSym, ctx)];
+}
+
+function completeWithValue(valueExpr: Node, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutSym: Symbol, ctx: TransformContext): Node[] {
 	// Boxed types: msSinkBoxStruct is a multi-statement codegen expansion (can't
 	// nest in another call), so box via a separate VarDecl then complete with the
 	// void* pointer. Codegen reads sizeof(T) from the box arg's nodeType.
@@ -737,30 +754,9 @@ function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Typ
 function completeAndReturn(stmt: Node, promiseType: Type | null, fnReturnInner: Type | null, retFutSym: Symbol, ctx: TransformContext): Node[] {
 	const rd = stmt.data as ReturnStmtData;
 	const loc = stmt.location;
-	const out: Node[] = [];
 	const isVoid = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
-	let completeCall: Node | null = null;
-	if (isVoid || rd.argument == null) {
-		completeCall = makeCall(runtimeRef("msFutureCompleteVoid", loc),
-			[makeTypedIdentResolved(retFutSym, promiseType, loc)], loc);
-	} else if (boxedInFuture(fnReturnInner)) {
-		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
-		const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [rd.argument], loc);
-		boxCall.nodeType = voidPtrType;
-		const boxSym = mintSym(ctx, SymbolKind.Variable, retFutSym.name + "_b", voidPtrType);
-		const boxDecl = makeVarDecl(boxSym.name, boxCall, DeclKind.Const, loc);
-		boxDecl.nodeType = voidPtrType;
-		boxDecl.resolvedSym = boxSym;
-		out.push(boxDecl);
-		completeCall = makeCall(runtimeRef("msFutureComplete", loc),
-			[makeTypedIdentResolved(retFutSym, promiseType, loc), makeTypedIdentResolved(boxSym, voidPtrType, loc)], loc);
-	} else {
-		completeCall = makeCall(runtimeRef("msFutureCompleteT", loc),
-			[makeTypedIdentResolved(retFutSym, promiseType, loc), rd.argument], loc);
-	}
-	out.push(makeExprStmt(completeCall, loc));
-	out.push(makeReturn(makeTypedIdentResolved(retFutSym, promiseType, loc), loc));
-	return out;
+	const futType = promiseType != null ? promiseType : promiseTypeFor(fnReturnInner);
+	return [...makeFutureCompleteStmts(rd.argument, isVoid, futType, fnReturnInner, loc, retFutSym, ctx), makeReturn(makeTypedIdentResolved(retFutSym, promiseType, loc), loc)];
 }
 
 // Simple wrapper: async function with no await → wrap return value in msFutureComplete
