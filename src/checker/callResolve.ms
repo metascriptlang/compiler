@@ -1510,7 +1510,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					const winner = filtered[0];
 					if (winner.sym != null) {
 						ensureShaped(winner.sym, ctx);
-						if (node.resolvedSym == null || node.resolvedSym.name.indexOf("__", 0) < 0) {
+						if (node.resolvedSym == null || node.resolvedSym.instantiatedFrom != winner.sym) {
 							const target = signatureTarget(ctx, winner.sym, node);
 							node.resolvedSym = target;
 							d.callee.resolvedSym = target;
@@ -3759,7 +3759,8 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	const extWinnerSym = idx >= 0 && idx < exts.length ? exts[idx].sym : null;
 	if (extWinnerSym != null) {
-		callNode.resolvedSym = signatureTarget(ctx, extWinnerSym, callNode);
+		const looked = callNode.resolvedSym;
+		callNode.resolvedSym = looked != null && looked.instantiatedFrom == extWinnerSym ? looked : signatureTarget(ctx, extWinnerSym, callNode);
 		// Mark for transform: skip registry re-lookup (reference resolves UFCS in sem)
 		if (!hasFlag(extWinnerSym, SymbolFlag.NativeMethod)) {
 			callNode.flags = callNode.flags.incl(NodeFlag.ExtCall);
