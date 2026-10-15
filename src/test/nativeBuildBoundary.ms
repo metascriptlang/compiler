@@ -659,7 +659,7 @@ function pinnedRun(dir: string, exe: string): string {
 }
 
 function runSpawnDrain(): void {
-	if (platform == "macos") {
+	if (platform == "darwin") {
 		console.log("skip spawn-drain: macOS has no CPU affinity to pin the run to one core");
 		return;
 	}
