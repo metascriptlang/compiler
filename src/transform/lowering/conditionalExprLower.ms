@@ -36,7 +36,7 @@ import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
+import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType } from "../../checker/types";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { walkExpandBlocksHooked, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, extractBodyStmts, syntheticToken } from "../util";
@@ -49,6 +49,7 @@ import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } f
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs } from "./operandOrder";
+import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
 
 // ===== Hoist (top-down) =====
@@ -423,7 +424,7 @@ function readsAnyOf(n: Node, writes: Symbol[]): boolean {
 
 // a && rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = rhs; } else { $scres = $sclhs; }
 // a || rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = $sclhs; } else { $scres = rhs; }
-function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+export function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	const bd = expr.data as BinaryExprData;
 	const loc = expr.location;
 	const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
@@ -439,13 +440,33 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
 	hoisted.push(resDecl);
 
-	const rhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), bd.right, loc), loc);
-	const lhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), makeIdentResolved(lhsSym, loc), loc), loc);
+	const lhsType = bd.left.nodeType;
+	const rhsAssign: Node[] = lhsType == null || shortCircuitRightRuns(bd.operator, lhsType)
+		? [branchValueStmt(makeIdentResolved(resSym, loc), fitShortCircuitArm(bd.right, expr.nodeType, ctx), loc)] : [];
+	const share = lhsType != null ? shortCircuitLeftShare(bd.operator, lhsType) : null;
+	const lhsAssign: Node[] = lhsType == null || share != null
+		? [makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), shortCircuitShareArm(makeIdentResolved(lhsSym, loc), share, expr.nodeType, ctx), loc), loc)] : [];
 	const isAnd = bd.operator == "&&";
-	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
-	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
+	const thenBlk = makeBlock(isAnd ? rhsAssign : lhsAssign, loc);
+	const elseBlk = makeBlock(isAnd ? lhsAssign : rhsAssign, loc);
 	hoisted.push(makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), thenBlk, elseBlk, loc));
 	return makeIdentResolved(resSym, loc);
+}
+
+export function shortCircuitShareArm(lhsRead: Node, share: Type | null, resultType: Type | null, ctx: TransformContext): Node {
+	const held = lhsRead.nodeType;
+	let read = lhsRead;
+	if (share != null && share.kind == TypeKind.Null) read = makeNull(lhsRead.location);
+	else if (share != null && held != null && isMaybeType(held) && !isMaybeType(share)) read = makeMember(lhsRead, "value", lhsRead.location);
+	if (share != null) read.nodeType = share;
+	return fitShortCircuitArm(read, resultType, ctx);
+}
+
+export function fitShortCircuitArm(arm: Node, resultType: Type | null, ctx: TransformContext): Node {
+	const t = arm.nodeType;
+	if (t == null || resultType == null || ctx.checkerCtx == null || isBoolType(resultType)) return arm;
+	const slot = isMaybeType(resultType) && !isMaybeType(t) && t.kind != TypeKind.Null ? unwrapMaybeType(resultType) : resultType;
+	return fitJoinedBranch(ctx.checkerCtx, arm, slot);
 }
 
 // JS evaluates in place and skips the hoist, except where a width step must

@@ -41,7 +41,8 @@ import {
 	extractBodyStmts,
 } from "../util";
 import { overloadWinner } from "../../checker/symbol";
-import { lowerTernaryInReturn } from "./conditionalExprLower";
+import { lowerTernaryInReturn, shortCircuitShareArm } from "./conditionalExprLower";
+import { shortCircuitLeftShare } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -294,8 +295,12 @@ function statementizeTailPositions(stmt: Node, fnName: string, fnSym: Symbol | n
 				const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
 				const lhsDecl = makeVarDecl(lhsSym.name, bd.left, DeclKind.Const, loc);
 				lhsDecl.resolvedSym = lhsSym;
-				const keepBlk = makeBlock([makeReturn(makeIdentResolved(lhsSym, loc), loc)], loc);
 				const callBlk = makeBlock([tailArmStmt(bd.right, loc)], loc);
+				const share = bd.left.nodeType != null ? shortCircuitLeftShare(bd.operator, bd.left.nodeType) : null;
+				if (bd.left.nodeType != null && share == null) {
+					return makeBlock([lhsDecl, statementizeTailPositions(callBlk, fnName, fnSym, ctx)], loc);
+				}
+				const keepBlk = makeBlock([makeReturn(shortCircuitShareArm(makeIdentResolved(lhsSym, loc), share, rd.argument.nodeType, ctx), loc)], loc);
 				const isAnd = bd.operator == "&&";
 				const guard = makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), isAnd ? callBlk : keepBlk, isAnd ? keepBlk : callBlk, loc);
 				return makeBlock([lhsDecl, statementizeTailPositions(guard, fnName, fnSym, ctx)], loc);

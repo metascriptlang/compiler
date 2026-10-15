@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay } from "./types";
+import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, holdsFalsyValue, unwrapMaybeType } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -88,7 +88,44 @@ export function joinBranchTypes(types: Type[]): Type {
 		}
 		return acc;
 	}
+	const numericJoined = joinNumericMembers(prepared);
+	if (numericJoined != null) return numericJoined;
 	return canonicalizeBranchJoin(unionOfTypes(prepared, null));
+}
+
+function joinArmMembers(arm: Type, out: Type[]): void {
+	if (isMaybeType(arm)) {
+		joinArmMembers(unwrapMaybeType(arm), out);
+		out.push(nullType());
+		return;
+	}
+	if (arm.kind == TypeKind.Union) {
+		for (const m of arm.typeChildren) { if (m != null) out.push(m); }
+		return;
+	}
+	out.push(arm);
+}
+
+function joinNumericMembers(prepared: Type[]): Type | null {
+	const numerics: Type[] = [];
+	const others: Type[] = [];
+	let nullable = false;
+	for (const p of prepared) {
+		const members: Type[] = [];
+		joinArmMembers(p, members);
+		let armNumerics = 0;
+		for (const m of members) {
+			if (m.kind == TypeKind.Null) { nullable = true; continue; }
+			if (isNumeric(m) || m.kind == TypeKind.Enum) { armNumerics++; numerics.push(m); continue; }
+			others.push(m);
+		}
+		if (armNumerics > 1) return null;
+	}
+	if (numerics.length < 2) return null;
+	const parts: Type[] = [joinBranchTypes(numerics)];
+	for (const o of others) parts.push(o);
+	if (nullable) parts.push(nullType());
+	return canonicalizeBranchJoin(unionOfTypes(parts, null));
 }
 
 function dropSubclassMembers(members: Type[]): void {
@@ -300,6 +337,67 @@ function inferBitSetOp(op: string, leftType: Type, rightType: Type): Type | null
 		return createBitSet(leftType);
 	}
 	return null;
+}
+
+function truthMembers(t: Type, out: Type[]): void {
+	const held = peelTransparentInstance(t);
+	if (held.kind == TypeKind.Alias && held.typeReturn != null) { truthMembers(held.typeReturn, out); return; }
+	if (isMaybeType(held)) {
+		truthMembers(unwrapMaybeType(held), out);
+		out.push(nullType());
+		return;
+	}
+	if (held.kind == TypeKind.Union) {
+		for (const m of held.typeChildren) { if (m != null) truthMembers(m, out); }
+		return;
+	}
+	out.push(held);
+}
+
+function memberCanBeFalsy(m: Type): boolean {
+	if (m.kind == TypeKind.Null || m.kind == TypeKind.Void) return true;
+	if (m.kind == TypeKind.Never) return false;
+	if (m.kind == TypeKind.BooleanLiteral) return m.typeName == "false";
+	if (m.kind == TypeKind.StringLiteral) return m.typeName == "";
+	return holdsFalsyValue(m);
+}
+
+function memberCanBeTruthy(m: Type): boolean {
+	if (m.kind == TypeKind.Null || m.kind == TypeKind.Void || m.kind == TypeKind.Never) return false;
+	if (m.kind == TypeKind.BooleanLiteral) return m.typeName == "true";
+	if (m.kind == TypeKind.StringLiteral) return m.typeName != "";
+	return true;
+}
+
+export function shortCircuitRightRuns(op: string, left: Type): boolean {
+	const members: Type[] = [];
+	truthMembers(left, members);
+	for (const m of members) {
+		if (op == "&&" ? memberCanBeTruthy(m) : memberCanBeFalsy(m)) return true;
+	}
+	return false;
+}
+
+export function shortCircuitLeftShare(op: string, left: Type): Type | null {
+	const members: Type[] = [];
+	truthMembers(left, members);
+	const kept: Type[] = [];
+	let nonNull = 0;
+	for (const m of members) {
+		if (m.kind != TypeKind.Null) nonNull++;
+		if (op == "&&" ? memberCanBeFalsy(m) : memberCanBeTruthy(m)) kept.push(m);
+	}
+	if (kept.length == 0) return null;
+	if (kept.length == members.length) return left;
+	if (op == "||" && kept.length == nonNull) {
+		const held = peelTransparentInstance(left);
+		if (isMaybeType(held)) return unwrapMaybeType(held);
+		const pointer = unwrapRefNullUnion(held);
+		if (pointer != null) return pointer;
+		const payload = nonNullMemberOfNullable(held);
+		if (payload != null) return payload;
+	}
+	return kept.length == 1 ? kept[0] : unionOfTypes(kept, null);
 }
 
 export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {

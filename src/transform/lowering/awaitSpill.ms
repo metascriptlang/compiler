@@ -18,6 +18,8 @@ import { cloneIfPure } from "../coercion/intArithJS";
 import { Spiller, bindTemp, tempRef, isVoidType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
 import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
 import { truthinessTest } from "../coercion/stringTruthiness";
+import { shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
+import { shortCircuitShareArm, fitShortCircuitArm } from "./conditionalExprLower";
 import { foldedNullOperand, isNullExpr } from "./operatorLower";
 import { walkExpandBlocks, isFuncBoundary } from "../walker";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
@@ -64,14 +66,20 @@ function lowerShortCircuit(e: Node, pre: Node[]): Node {
 	const d = e.data as BinaryExprData;
 	const loc = e.location;
 	const t = e.nodeType != null ? e.nodeType : booleanType();
-	const tmp = bindTemp(_sp, lowerAwaitExpr(d.left, pre), DeclKind.Let, t, pre, loc);
-	const inner: Node[] = [];
-	const right = lowerAwaitExpr(d.right, inner);
-	inner.push(makeExprStmt(makeAssign(tempRef(tmp, loc), right, loc), loc));
-	const held = truthinessTest(tempRef(tmp, loc), _sp.ctx);
-	const test = d.operator == "&&" ? held : makeUnary("!", held, loc);
-	pre.push(makeIf(test, makeBlock(inner, loc), null, loc));
-	return tempRef(tmp, loc);
+	const lhsType = d.left.nodeType != null ? d.left.nodeType : t;
+	const lhs = bindTemp(_sp, lowerAwaitExpr(d.left, pre), DeclKind.Const, lhsType, pre, loc);
+	const res = bindTemp(_sp, makeDefaultValue(t, loc), DeclKind.Let, t, pre, loc);
+	const rightStmts: Node[] = [];
+	if (shortCircuitRightRuns(d.operator, lhsType)) {
+		const right = lowerAwaitExpr(d.right, rightStmts);
+		rightStmts.push(makeExprStmt(makeAssign(tempRef(res, loc), fitShortCircuitArm(right, t, _sp.ctx), loc), loc));
+	}
+	const share = shortCircuitLeftShare(d.operator, lhsType);
+	const leftStmts: Node[] = share == null ? []
+		: [makeExprStmt(makeAssign(tempRef(res, loc), shortCircuitShareArm(tempRef(lhs, loc), share, t, _sp.ctx), loc), loc)];
+	const isAnd = d.operator == "&&";
+	pre.push(makeIf(truthinessTest(tempRef(lhs, loc), _sp.ctx), makeBlock(isAnd ? rightStmts : leftStmts, loc), makeBlock(isAnd ? leftStmts : rightStmts, loc), loc));
+	return tempRef(res, loc);
 }
 
 function lowerConditional(e: Node, pre: Node[]): Node {
