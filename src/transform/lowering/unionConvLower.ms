@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, TypeKind, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, ProgramData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData } from "../../ast/node";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv } from "../../checker/fit";
 import { peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
@@ -49,6 +49,7 @@ function targetMembers(target: Type): Type[] {
 }
 
 function lowerConversion(node: Node, ctx: TransformContext): Node {
+	if (node.kind == NodeKind.BinaryExpr) return lowerComparison(node, ctx);
 	const pair = unionPair(node);
 	if (pair == null) return node;
 	const source = pair[0];
@@ -73,6 +74,53 @@ function lowerConversion(node: Node, ctx: TransformContext): Node {
 	return call;
 }
 
+function comparesByKind(kind: string): boolean {
+	return kind == "number" || kind == "string" || kind == "boolean" || kind == "bigint";
+}
+
+// `u === v` with a union on one side and a value of a primitive kind on the other
+// is true when the union holds a member of that kind and the member equals the value.
+function lowerComparison(node: Node, ctx: TransformContext): Node {
+	if (ctx.jsBackend || ctx.raiserBackend) return node;
+	const d = node.data as BinaryExprData;
+	const negated = d.operator == "!=" || d.operator == "!==";
+	if (!negated && d.operator != "==" && d.operator != "===") return node;
+	if (d.left.nodeType == null || d.right.nodeType == null) return node;
+	const left = peelTransparentInstance(d.left.nodeType);
+	const right = peelTransparentInstance(d.right.nodeType);
+	if (isSlotUnion(left) == isSlotUnion(right)) return node;
+	const unionOnLeft = isSlotUnion(left);
+	if (!comparesByKind(jsMemberKind(unionOnLeft ? right : left))) return node;
+	const call = makeCall(makeTypedIdentResolved(comparisonRoutine(left, right, unionOnLeft, ctx, node.location), null, node.location), [d.left, d.right], node.location);
+	call.nodeType = booleanType();
+	return negated ? makeUnary("!", call, node.location) : call;
+}
+
+function comparisonRoutine(left: Type, right: Type, unionOnLeft: boolean, ctx: TransformContext, loc: SourceLocation): Symbol {
+	const name = "msUnionEq_" + hashToBase36(typeKey(left) + "=" + typeKey(right));
+	const at = _convNames.indexOf(name);
+	if (at >= 0) return _convSyms[at];
+	const sym = mintSym(ctx, SymbolKind.Function, name, null);
+	_convNames.push(name);
+	_convSyms.push(sym);
+	const x = mintSym(ctx, SymbolKind.Parameter, "x", left);
+	const y = mintSym(ctx, SymbolKind.Parameter, "y", right);
+	const union = unionOnLeft ? left : right;
+	const unionSym = unionOnLeft ? x : y;
+	const kind = jsMemberKind(unionOnLeft ? right : left);
+	const body: Node[] = [];
+	for (const vi of armOrder(union, ctx, loc)) {
+		const member = union.typeChildren[vi];
+		if (jsMemberKind(member) != kind) continue;
+		const held = slotConv(read(unionSym, union, loc), member, vi);
+		const same = unionOnLeft ? makeBinary(held, "==", read(y, right, loc), loc) : makeBinary(read(x, left, loc), "==", held, loc);
+		same.nodeType = booleanType();
+		body.push(makeIf(holdsMember(union, unionSym, vi, ctx, loc), makeBlock([makeReturn(same, loc)], loc), null, loc));
+	}
+	body.push(makeReturn(makeBool(false, loc), loc));
+	return declareRoutine(sym, name, [x, y], [left, right], booleanType(), body, loc);
+}
+
 function passesUnchanged(source: Type, target: Type, ctx: TransformContext): boolean {
 	if (!ctx.jsBackend && !ctx.raiserBackend) return false;
 	if (target.kind != TypeKind.Union || storesUnionTag(source) || storesUnionTag(target)) return false;
@@ -93,7 +141,7 @@ function conversionRoutine(source: Type, target: Type, ctx: TransformContext, lo
 	_convNames.push(name);
 	_convSyms.push(sym);
 	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", source);
-	return declareRoutine(sym, name, valueSym, source, target, conversionArms(source, target, valueSym, ctx, loc), loc);
+	return declareRoutine(sym, name, [valueSym], [source], target, conversionArms(source, target, valueSym, ctx, loc), loc);
 }
 
 function nullableConversionRoutine(source: Type, target: Type, from: Type, to: Type, ctx: TransformContext, loc: SourceLocation): Symbol {
@@ -114,17 +162,18 @@ function nullableConversionRoutine(source: Type, target: Type, from: Type, to: T
 	const absent = makeNull(loc);
 	absent.nodeType = target;
 	const body = [makeIf(present, makeBlock([makeReturn(held, loc)], loc), null, loc), makeReturn(absent, loc)];
-	return declareRoutine(sym, name, valueSym, source, target, body, loc);
+	return declareRoutine(sym, name, [valueSym], [source], target, body, loc);
 }
 
-function declareRoutine(sym: Symbol, name: string, valueSym: Symbol, source: Type, target: Type, body: Node[], loc: SourceLocation): Symbol {
-	const fnNode = makeFnDecl(name, [valueSym], ["unknown"], makeBlock(body, loc), "", "unknown", loc);
-	if (fnNode.nodeType == null || fnNode.nodeType.typeChildren == null || fnNode.nodeType.typeChildren.length != 1) {
-		throw new Error(`internal: the conversion routine from '${typeDisplayName(source)}' to '${typeDisplayName(target)}' has no parameter type`);
+function declareRoutine(sym: Symbol, name: string, params: Symbol[], paramTypes: Type[], target: Type, body: Node[], loc: SourceLocation): Symbol {
+	const fnNode = makeFnDecl(name, params, params.map((p: Symbol): string => "unknown"), makeBlock(body, loc), "", "unknown", loc);
+	const fnType = fnNode.nodeType;
+	if (fnType == null || fnType.typeChildren == null || fnType.typeChildren.length != params.length) {
+		throw new Error(`internal: the routine '${name}' has no parameter types`);
 	}
-	fnNode.nodeType.typeChildren[0] = source;
-	fnNode.nodeType.typeReturn = target;
-	sym.symbolType = fnNode.nodeType;
+	for (let i = 0; i < params.length; i += 1) fnType.typeChildren[i] = paramTypes[i];
+	fnType.typeReturn = target;
+	sym.symbolType = fnType;
 	fnNode.resolvedSym = sym;
 	_convDecls.push(fnNode);
 	return sym;
