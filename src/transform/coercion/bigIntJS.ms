@@ -24,6 +24,7 @@ import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../uti
 import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 import { cloneIfPure } from "./intArithJS";
+import { makeRangeCheckFor } from "../native/rangeCheckInject";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => materializeBigInt(node, ctx));
@@ -74,7 +75,7 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 	}
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		const bigCast = bigintCast(node, d);
+		const bigCast = bigintCast(node, d, ctx.rangeChecks);
 		if (bigCast != null) return bigCast;
 		const dstK = reprKind(node.nodeType);
 		if (dstK == TypeKind.Unknown || d.asExpr == null) return node;
@@ -118,7 +119,7 @@ export function readsUnionMember(d: TypeAssertionData): boolean {
 	return d.asExpr.nodeType != null && d.asExpr.nodeType.kind == TypeKind.Union;
 }
 
-function bigintCast(node: Node, d: TypeAssertionData): Node | null {
+function bigintCast(node: Node, d: TypeAssertionData, rangeChecks: boolean): Node | null {
 	if (d.asExpr == null) return null;
 	const srcT = d.asExpr.nodeType;
 	const dstBig = reprKind(node.nodeType) == TypeKind.BigInt;
@@ -133,6 +134,10 @@ function bigintCast(node: Node, d: TypeAssertionData): Node | null {
 	const dstK = reprKind(node.nodeType);
 	if (dstK == TypeKind.Int64) return typedCall("msBigIntToSigned", [d.asExpr, makeNumber(64, loc)], dstK, loc);
 	if (dstK == TypeKind.Uint64) return asN(true, 64, d.asExpr, loc);
+	const dstRepr = peelToRepr(node.nodeType);
+	if (rangeChecks && dstRepr != null && dstRepr.kind == TypeKind.Char) {
+		return numberOf(makeRangeCheckFor("msCheckRangeU8", d.asExpr, dstRepr, loc), loc);
+	}
 	const bits = narrowBits(dstK);
 	if (bits > 0) return numberOf(asN(!isSignedNarrowKind(dstK), bits, d.asExpr, loc), loc);
 	if (dstK == TypeKind.Float32) return typedCall("msBigIntToFloat32", [d.asExpr], dstK, loc);
