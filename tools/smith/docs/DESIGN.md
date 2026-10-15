@@ -131,7 +131,7 @@ deferred; nothing else is ported. Evidence for each sits with its section or com
 | 7 | voting across compilers / levels | lanes c / orc / danger / js / esm | done |
 | 8 | observe every global | every global and entry result printed, no CRC | done (person's call: no extra observation) |
 | 9 | driver classification and controls | `drive.ms`: VOID causes, write-once bundles, stale-run checks | done |
-| 10 | sanitizer runs | `run --san`, bundle kind `san`, mode kept on rerun | done, with no planted `san` bundle (see Debt) |
+| 10 | sanitizer runs | `run --san`, bundle kind `san`, mode kept on rerun, `plant=san`, identity mode `san` | done; the plant goes the full loop (below) |
 | 11 | creduce | `reduce.ms`, `creduce --not-c` | done |
 | 12 | identity predicate | `identity.ms`: mode, symptom, split, shape, keep, forbid, determinism, `msc check` | done |
 | 13 | per-construct probabilities | `w.*` keys in `Features`, defaults byte-identical | done (`coveragePlan.md` weight table) |
@@ -151,6 +151,17 @@ Reductions: planted `smith1` 21,853 → 139 bytes; the real JS double-negation f
 `2026-10-08-ternary-hoist-lost-when-else-holds-a-nested-ternary.md`). For both C cases creduce
 stopped above 800 bytes. The last step to a clean repro was manual, guided by the emitted C.
 
+Planted SAN loop, 2026-10-15 (installed msc BUILD `682b18673`). `plant=san` declares `malloc`
+and `free` as externs and writes one byte through a freed pointer inside `plantDelta()`,
+which returns 0, so stdout is unchanged and only ASan sees it; `run` refuses it without
+`--san`. `run 1 3 --plant=san --san`: 3/3 bundles of kind `san`. `rerun` of two of them was
+NOT REPRODUCED before the fix (the recorded line holds the ASan pid and addresses) and
+REPRODUCED after it (`stableDetail` in `drive.ms` blanks `==<pid>==` and `0x…` on both
+sides). `reduce` inferred identity `mode: san`, `symptom: heap-use-after-free`, `keep:
+plantDelta`, and cut 9,832 → 176 bytes in the 600 s cap; before the `san` mode it refused
+the bundle with "no single-lane finding to pin". Leaks are not covered: ASan's leak check
+does not run on macOS.
+
 ### Debt — workarounds to repay
 
 | blocker | workaround | remove when |
@@ -158,7 +169,6 @@ stopped above 800 bytes. The last step to a clean repro was manual, guided by th
 | `std/process` has no `findOnPath` on JS | `drive.ms` is tested on C only | JS `std/process` gains it, or `drive.ms` stops importing it |
 | no content manifest for the support tree | support identity = git tree hashes of `src`, `std`, `runtime`, or the `BUILD` text | a support-tree manifest hash exists |
 | bundle directory names carry an 8-hex content hash | a collision would read "already recorded" | a collision is seen; then use the full hash |
-| safe MetaScript cannot express a leak or double destroy, and `Plant` only makes a C↔JS split | the `san` kind is covered by inline tests on captured runner lines only | a SAN plant becomes expressible (a test-only runtime hook, or a fixture) |
 | creduce has no total time limit | a `perl` fork-and-alarm watchdog (`--cap`) | creduce gains a cap |
 | `execFileResult` has no timeout | each predicate lane runs under a `perl` alarm | `std/process` gains a timeout |
 | printed lines do not carry the declared type | wrong-code splits are pinned by label, value shape and `keep:`; a plain `.ms` input needs `--identity` | prints carry the type, so the width can be pinned |
