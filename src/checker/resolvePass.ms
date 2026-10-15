@@ -9,7 +9,7 @@
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
 import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType } from "./types";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag } from "./symbol";
+import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
@@ -2402,6 +2402,17 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, paramTypes, params, ctorNode, []);
 }
 
+// A resolved class names its parent by Symbol; one not resolved yet is declared in
+// this module, so its `extends` name binds in this scope.
+function declaredParentClass(ctx: CheckerContext, classSym: Symbol): Symbol | null {
+	if (classSym.declNode == null || classSym.declNode.kind != NodeKind.ClassDecl) return null;
+	const resolved = parentClassSymOf(classSym);
+	if (resolved != null) return resolved;
+	const ext = (classSym.declNode.data as ClassDeclData).classExtends;
+	if (ext == "") return null;
+	return lookupSymbol(ctx.table, ext.indexOf("<") >= 0 ? ext.slice(0, ext.indexOf("<")).trim() : ext.trim());
+}
+
 export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = lookupSymbol(ctx.table, d.className);
@@ -2566,10 +2577,10 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		// the self-cycle branch above does. Without this the partial-resolve
 		// races produce a misleading "field 'x' redefines inherited field"
 		// downstream instead of a clean "cyclic inheritance" diagnostic.
-		let cycleProbe = bareParentName.trim();
+		let cycleProbe: Symbol | null = lookupSymbol(ctx.table, bareParentName.trim());
 		let cycleSteps: int32 = 0;
-		while (cycleProbe != "" && cycleSteps < 64) {
-			if (cycleProbe == d.className) {
+		while (cycleProbe != null && cycleSteps < 64) {
+			if (cycleProbe == sym) {
 				addError(ctx, "'" + d.className + "' cyclic inheritance — '" + d.className + "' indirectly extends itself via '" + bareParentName + "'", node.location.line, node.location.column);
 				inner.typeNames = memberNames;
 				inner.typeChildren = memberTypes;
@@ -2578,12 +2589,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				if (hasGenerics) closeScope(ctx.table);
 				return;
 			}
-			const probeSym = lookupSymbol(ctx.table, cycleProbe);
-			if (probeSym == null || probeSym.declNode == null || probeSym.declNode.kind != NodeKind.ClassDecl) break;
-			const probeData = probeSym.declNode.data as ClassDeclData;
-			const nextParent = probeData.classExtends;
-			if (nextParent == "") break;
-			cycleProbe = nextParent.indexOf("<") >= 0 ? nextParent.slice(0, nextParent.indexOf("<")).trim() : nextParent.trim();
+			cycleProbe = declaredParentClass(ctx, cycleProbe);
 			cycleSteps = (cycleSteps + 1) as int32;
 		}
 		const parentSym = lookupSymbol(ctx.table, bareParentName);
