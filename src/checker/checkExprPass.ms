@@ -15,7 +15,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
-import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
+import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { checkArcPointeeSendable } from "./sendable";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
@@ -3124,6 +3124,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	}
 	const suspends = isAsync || fnFlags.indexOf("generator") >= 0;
 	const paramSyms: Symbol[] = [];
+	const paramValueTypes: Type[] = [];
 	let pi = 0;
 	for (const p of params) {
 		let pType = inferredType();
@@ -3133,10 +3134,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 			// Contextual fallback: untyped param inherits expected param type
 			pType = ctxParamTypes[pi];
 		}
-		if (suspends && bodyMentionsName(body, p)) {
-			const at = paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null ? paramLocs[pi] : fnNode.location;
-			refuseSuspendingViewParam(ctx, p, pType, at.line, at.column);
-		}
+		paramValueTypes.push(pType);
 		const paramSym = paramSymbol(ctx, body, pi, p, SymbolKind.Parameter, pType);
 		if (paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null) {
 			paramSym.location = paramLocs[pi];
@@ -3171,6 +3169,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		const temps = takeDefaultArgTemps(ctx, hoistMark);
 		if (temps.length > 0) bodyIntoBlock(body, temps);
 	}
+	if (suspends) refuseUsedSuspendingViewParams(ctx, paramSyms, paramValueTypes, paramLocs, fnNode.location);
 	closeScope(ctx.table);
 	releaseNames(ctx, boundNames);
 	ctx.readonlyBoundary = savedBoundary;

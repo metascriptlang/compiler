@@ -14,7 +14,6 @@ import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, createOutVar } from "./types";
-import { forEachChild } from "../ast/visitor";
 import { getIdentId } from "./idents";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, addError, addWarning, sgRecordSym, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
@@ -359,7 +358,7 @@ export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | nu
 	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + typeDisplayName(view)
 		+ " inside it: a view borrows memory its source can free while the container still holds it — use " + ownedAlternativeOf(view), line, col);
 }
-export function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
+function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
 	const view = findViewType(t);
 	if (view == null) return;
 	const what = view.kind == TypeKind.Var ? "a ref/out parameter" : "a " + typeDisplayName(view) + " view";
@@ -367,12 +366,12 @@ export function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: 
 		+ ": its parameters are captured into the frame the function suspends in, and the memory they point at can change or die across an await or yield — take the view again after each await, or pass a copy with [...x]", line, col);
 }
 
-export function bodyMentionsName(body: Node | null, name: string): boolean {
-	if (body == null) return false;
-	if (body.kind == NodeKind.Identifier && (body.data as IdentifierData).name == name) return true;
-	let hit = false;
-	forEachChild(body, (c: Node): void => { if (!hit && bodyMentionsName(c, name)) hit = true; });
-	return hit;
+export function refuseUsedSuspendingViewParams(ctx: CheckerContext, paramSyms: Symbol[], paramTypes: Type[], paramLocs: SourceLocation[] | null, fallback: SourceLocation): void {
+	for (let i = 0; i < paramSyms.length && i < paramTypes.length; i += 1) {
+		if (!hasFlag(paramSyms[i], SymbolFlag.Used)) continue;
+		const at = paramLocs != null && i < paramLocs.length && paramLocs[i] != null ? paramLocs[i] : fallback;
+		refuseSuspendingViewParam(ctx, paramSyms[i].name, paramTypes[i], at.line, at.column);
+	}
 }
 
 export function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
