@@ -1281,9 +1281,13 @@ export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): 
 		return;
 	}
 	if (!isIntegerType(target) || isUnsignedIntegerType(target)) return;
-	const folded = constIntegerOf(expr);
-	if (folded == null) return;
+	const folded = constantLiteralOf(expr, 0);
+	if (folded == null || !isNodeIntLit(folded)) return;
 	const value = (folded.data as NumberLiteralData).intVal;
+	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) {
+		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+		return;
+	}
 	if (foldedIntFits(value, target)) return;
 	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
 }
