@@ -2229,9 +2229,9 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					}
 				}
 			}
-			const carrierMeetsOpenNullable = isMaybeType(peelTransparentInstance(argTypes[pi]))
-				&& paramType.kind == TypeKind.Union && hasGenericParams(paramType);
-			if ((needsStdConv(argTypes[pi], paramType) && !carrierMeetsOpenNullable) || addressAtC) {
+			const paramValue = skipModifier(paramType);
+			const opensUnion = paramValue != null && paramValue.kind == TypeKind.Union && hasGenericParams(paramValue);
+			if ((needsStdConv(argTypes[pi], paramType) && !opensUnion) || addressAtC) {
 				// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
 				const convType = paramType.kind == TypeKind.Sink && paramType.typeReturn != null ? paramType.typeReturn : paramType;
 				const convTok = createToken(TokenKind.Ident, "", args[pi].location.line);
@@ -2240,8 +2240,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 				args[pi] = convNode;
 			}
-			const paramValue = skipModifier(paramType);
-			if (paramValue != null && paramValue.kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+			if (paramValue != null && paramValue.kind == TypeKind.Union && !opensUnion && pi < args.length && argTypes[pi] != null) {
 				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
 				const uw = widenVariantToUnion(args[pi], paramValue, argNow);
 				if (uw != null as unknown as Node) args[pi] = uw;
@@ -2943,7 +2942,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		// (checkExpr ObjectLiteral: a generic-containing formal is never stamped)
 		// now gets the instantiated formal: codegen must emit the same struct
 		// identity the instance's parameter uses, not the literal's own anon name.
-		const substitutedObject = substituted.kind == TypeKind.Ref && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+		const carried = isMaybeType(substituted) && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+		const substitutedObject = carried.kind == TypeKind.Ref && carried.typeReturn != null ? carried.typeReturn : carried;
 		if (arg.kind == NodeKind.ObjectLiteral && substitutedObject.kind == TypeKind.Struct
 				&& !hasGenericParams(substituted)) {
 			let skipConstruct = false;
@@ -2951,9 +2951,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			if (!skipConstruct) {
 				rearmUnfitProperties(ctx, arg, substitutedObject);
 				rearmLiteralForRecheck(arg, calleeType.typeChildren[pi]);
-				callCheckExpr(ctx, arg, substituted);
+				callCheckExpr(ctx, arg, carried);
 			}
-			if (arg.nodeType == null) arg.nodeType = substituted;
+			if (arg.nodeType == null) arg.nodeType = carried;
+			if (carried != substituted && !isMaybeType(arg.nodeType)) {
+				cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+				if (pi < argTypes.length) argTypes[pi] = substituted;
+				continue;
+			}
 			if (pi < argTypes.length) argTypes[pi] = arg.nodeType;
 			continue;
 		}
