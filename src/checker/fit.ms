@@ -12,7 +12,7 @@ import { peelTransparentInstance, literalBase, classAncestorInstance, errorType,
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
+import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
@@ -2578,12 +2578,6 @@ function doubleFitsInt(v: number, target: Type): boolean {
 	return back == v;
 }
 
-function roundedToFloat32(v: number): number {
-	const narrowed = v as float32;
-	const widened = narrowed as float64;
-	return widened;
-}
-
 function float32Overflows(v: number): boolean {
 	return (v >= FLOAT32_ROUNDS_TO_INFINITY || v <= -FLOAT32_ROUNDS_TO_INFINITY) && v != Infinity && v != -Infinity;
 }
@@ -2600,18 +2594,6 @@ function intExactInMantissa(magnitude: uint64, mantissaBits: int32): boolean {
 	if (rest == 0) return true;
 	while ((rest & 1) == 0) rest = rest >> 1;
 	return (rest >> (mantissaBits as uint64)) == 0;
-}
-
-function constHoldsFloat(folded: Node): boolean {
-	const t = folded.nodeType;
-	if (t != null && isIntegerType(t)) return false;
-	if (t != null && isFloatSlot(t)) return true;
-	return (folded.data as NumberLiteralData).isFloat;
-}
-
-function constFloatValue(folded: Node): number {
-	const v = (folded.data as NumberLiteralData).value;
-	return folded.nodeType != null && folded.nodeType.kind == TypeKind.Float32 ? roundedToFloat32(v) : v;
 }
 
 function constIsUnsignedHigh(folded: Node): boolean {

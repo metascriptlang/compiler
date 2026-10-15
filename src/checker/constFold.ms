@@ -81,9 +81,32 @@ function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Nod
 	if (literal.kind == NodeKind.BooleanLiteral) return makeBool((literal.data as BooleanLiteralData).boolValue, loc);
 	const nd = literal.data as NumberLiteralData;
 	if (t != null && isIntegerType(t)) return makeTypedInteger(wrapToWidth(nd.intVal as uint64, t), t, loc);
-	const copy = createNode(NodeKind.NumberLiteral, { value: nd.value, isFloat: nd.isFloat, intVal: nd.intVal, outOfRangeText: nd.outOfRangeText, isBitPattern: nd.isBitPattern }, syntheticToken(loc));
+	const value = constHoldsFloat(literal) ? constFloatValue(literal) : isFloat32Type(t) ? integerAsFloat32(nd) : nd.value;
+	const copy = createNode(NodeKind.NumberLiteral, { value: value, isFloat: nd.isFloat, intVal: nd.intVal, outOfRangeText: nd.outOfRangeText, isBitPattern: nd.isBitPattern }, syntheticToken(loc));
 	copy.nodeType = t != null ? t : literal.nodeType;
 	return copy;
+}
+
+function integerAsFloat32(d: NumberLiteralData): number {
+	const narrowed: float32 = d.intVal < 0 && d.value > 0 ? (d.intVal as uint64) as float32 : d.intVal as float32;
+	return narrowed as float64;
+}
+
+export function constHoldsFloat(folded: Node): boolean {
+	const t = folded.nodeType;
+	if (t != null && isIntegerType(t)) return false;
+	if (t != null && (isFloatType(t) || t.kind == TypeKind.Number)) return true;
+	return (folded.data as NumberLiteralData).isFloat;
+}
+
+export function constFloatValue(folded: Node): number {
+	const v = (folded.data as NumberLiteralData).value;
+	return isFloat32Type(folded.nodeType) ? roundedToFloat32(v) : v;
+}
+
+function roundedToFloat32(v: number): number {
+	const narrowed = v as float32;
+	return narrowed as float64;
 }
 
 export function isUntypedIntegerConstant(expr: Node, depth: int32): boolean {

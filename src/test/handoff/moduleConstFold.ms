@@ -83,3 +83,18 @@ test "module const handoff: a readonly bool static a static block assigns is not
 	const value = foldedReturn(source, "read");
 	assert value == null || value.kind != NodeKind.BooleanLiteral;
 }
+
+function foldedValue(source: string): number {
+	const value = foldedReturn(source, "read");
+	if (value == null || value.kind != NodeKind.NumberLiteral) return -1.5;
+	return (value.data as NumberLiteralData).value;
+}
+
+test "module const handoff: a 64-bit integer constant converted to float32 rounds once" {
+	assert foldedValue("const I: int64 = 1152921573326323713; const F = I as float32; function read(): float32 { return F; }") == 1152921642045800448.0;
+	assert foldedValue("const I: int64 = -1152921573326323713; const F = I as float32; function read(): float32 { return F; }") == -1152921642045800448.0;
+	assert foldedValue("const U: uint64 = 1152921573326323713; const F = U as float32; function read(): float32 { return F; }") == 1152921642045800448.0;
+	assert foldedValue("const U: uint64 = 9223372586610589697; const F = U as float32; function read(): float32 { return F; }") == 9223373136366403584.0;
+	assert foldedValue("const F = 1152921573326323713 as float32; function read(): float32 { return F; }") == 1152921642045800448.0;
+	assert foldedValue("const I: int64 = 1152921573326323712; const F = I as float32; function read(): float32 { return F; }") == 1152921504606846976.0;
+}
