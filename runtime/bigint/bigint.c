@@ -184,7 +184,7 @@ int64_t msBigIntToInt64(const msBigInt* a) {
 	// msBigIntDestroy only frees the mpi limbs — the msAllocTyped cell itself and
 	// the ledger's destroy count both hang off the decref path.
 	msDecref(t);
-	return neg ? -(int64_t)u : (int64_t)u;
+	return neg ? -(int64_t)(u - 1) - 1 : (int64_t)u;
 }
 
 #define BIN_OP(name, call) \
