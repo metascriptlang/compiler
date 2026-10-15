@@ -625,7 +625,18 @@ function relationalOrdered(t: Type): boolean {
 		|| t.kind == TypeKind.Ptr;
 }
 
+function tupleFieldsOrdered(a: Type, b: Type): boolean {
+	if (a.kind != TypeKind.Tuple || b.kind != TypeKind.Tuple || a.typeChildren.length != b.typeChildren.length) return false;
+	for (let i = 0; i < a.typeChildren.length; i += 1) {
+		const x = operandShape(a.typeChildren[i]);
+		const y = operandShape(b.typeChildren[i]);
+		if (x == null || y == null || !relationalOperandsOk(x, y)) return false;
+	}
+	return true;
+}
+
 function relationalOperandsOk(a: Type, b: Type): boolean {
+	if (a.kind == TypeKind.Tuple || b.kind == TypeKind.Tuple) return tupleFieldsOrdered(a, b);
 	if (!relationalOrdered(a) || !relationalOrdered(b)) return false;
 	if (isStringLike(a) != isStringLike(b)) return false;
 	if ((a.kind == TypeKind.Ptr) != (b.kind == TypeKind.Ptr)) return false;
