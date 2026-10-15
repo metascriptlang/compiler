@@ -1,3 +1,4 @@
+// Parked at inbox card 2026-10-09-null-compare-on-narrowed-nullable-number-fails-clang.md
 // Language tests: T | null nullability via Maybe<T> wrapper.
 //
 // Covers the end-to-end pipeline for non-pointer T | null:

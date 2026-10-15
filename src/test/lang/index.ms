@@ -76,3 +76,6 @@ import "./genericArgumentAliasRelation";
 import "./aliasStaticReceiver";
 import "./metaTransparentAliasEquality";
 import "./macroTypeArgumentReplacement";
+import "./comptime";
+import "./inheritance";
+import "./nullableFunction";
