@@ -43,11 +43,16 @@ export extern function padStart(this s: string, targetLen: int32, pad: string): 
 export extern function padEnd(this s: string, targetLen: int32, pad: string): string from "msStringPadEnd";
 
 // ===== Parsing =====
-export extern function parseFloat(this s: string): number from "msStringParseFloat";
-export extern function parseInt(this s: string): int64 from "msStringParseInt";
+export function parseFloat(this s: string): number {
+	return parseFloatPrefix(s);
+}
+export function parseInt(this s: string): int64 {
+	return parseIntPrefix(s);
+}
 
 // ===== Character Construction =====
 export extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
 
 import { clampIndex } from "./shared";
+import { parseFloatPrefix, parseIntPrefix } from "../number/parse";
 export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase, asciiLower, asciiUpper, isSpaceByte } from "./shared";

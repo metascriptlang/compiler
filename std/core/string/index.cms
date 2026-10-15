@@ -82,10 +82,14 @@ export extern function padEnd(this s: string, targetLen: int32, pad: string): st
 // ===== Parsing =====
 
 /** Converts a string representation of a number to a floating-point number. */
-export extern function parseFloat(this s: string): number from "msStringParseFloat";
+export function parseFloat(this s: string): number {
+	return parseFloatPrefix(s);
+}
 
 /** Converts a string representation of an integer to a number. */
-export extern function parseInt(this s: string): int64 from "msStringParseInt";
+export function parseInt(this s: string): int64 {
+	return parseIntPrefix(s);
+}
 
 // ===== Capacity & Length =====
 
@@ -126,4 +130,5 @@ export function fromCharCode(this typeof String, code: int32): string {
 export extern function String<T>(val: T): string;
 export { asBytes, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
 import { clampIndex } from "./shared";
+import { parseFloatPrefix, parseIntPrefix } from "../number/parse";
 export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";

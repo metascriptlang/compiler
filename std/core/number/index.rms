@@ -1,9 +1,8 @@
-extern function msStringParseFloat(v: string): float64 from "msStringParseFloat";
 extern function cTrunc(x: float64): float64 from "trunc";
 extern function cFabs(x: float64): float64 from "fabs";
 
 export function Number(v: string): float64 {
-	return msStringParseFloat(v);
+	return stringToNumber(v);
 }
 
 export function Number(v: boolean): float64 {
@@ -76,3 +75,19 @@ export class Number {
 	static readonly NEGATIVE_INFINITY: float64 = -1e308 * 10.0;
 	static readonly NaN: float64 = 1e308 * 10.0 - 1e308 * 10.0;
 }
+
+export {
+	decimalEnd,
+	digitValue,
+	infinity,
+	isDigitByte,
+	msStringParseFloat,
+	notANumber,
+	powerOfTwoDigitsToNumber,
+	radixShift,
+	skipSpace,
+	spaceLength,
+	startsInfinity,
+	trailingSpaceLength,
+} from "./parse";
+import { stringToNumber } from "./parse";

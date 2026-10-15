@@ -1313,30 +1313,6 @@ double msStringParseFloat(msString s) {
 }
 #endif
 
-int64_t msStringParseInt(msString s) {
-	if (s.len == 0 || s.p == NULL) return 0;
-	const char* p = s.p->data;
-	while (*p == ' ' || (*p >= '\t' && *p <= '\r')) p++;
-	bool negative = false;
-	if (*p == '+' || *p == '-') {
-		negative = *p == '-';
-		p++;
-	}
-	uint64_t limit = negative ? (uint64_t)INT64_MAX + 1 : (uint64_t)INT64_MAX;
-	uint64_t value = 0;
-	bool overflow = false;
-	for (; *p >= '0' && *p <= '9'; p++) {
-		uint64_t digit = (uint64_t)(*p - '0');
-		if (overflow || value > (limit - digit) / 10) {
-			overflow = true;
-			continue;
-		}
-		value = value * 10 + digit;
-	}
-	if (overflow) return negative ? INT64_MIN : INT64_MAX;
-	return negative ? (int64_t)((uint64_t)0 - value) : (int64_t)value;
-}
-
 /* ===== Capacity ===== */
 
 int64_t msStringCapacity(msString s) {
