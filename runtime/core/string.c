@@ -1193,9 +1193,20 @@ msString msUint64ToString(uint64_t value) {
 	return msStringNew(buf, len);
 }
 
+static _Noreturn void msRaiseRadixError(void) {
+	fprintf(stderr, "Error: toString() radix argument must be between 2 and 36\n");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+static int msCheckedRadix(double radix) {
+	double r = trunc(radix);
+	if (!(r >= 2.0 && r <= 36.0)) msRaiseRadixError();
+	return (int)r;
+}
+
 msString msIntToStringRadix(int64_t iv, double radix) {
-	int r = (int)radix;
-	if (r < 2 || r > 36) r = 10;
+	int r = msCheckedRadix(radix);
 	if (r == 10) return msIntToString(iv);
 	char buf[66]; /* enough for 64-bit binary + sign + null */
 	int neg = iv < 0;
@@ -1212,8 +1223,7 @@ msString msIntToStringRadix(int64_t iv, double radix) {
 }
 
 msString msUint64ToStringRadix(uint64_t uv, double radix) {
-	int r = (int)radix;
-	if (r < 2 || r > 36) r = 10;
+	int r = msCheckedRadix(radix);
 	if (r == 10) return msUint64ToString(uv);
 	char buf[66];
 	static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -1226,13 +1236,68 @@ msString msUint64ToStringRadix(uint64_t uv, double radix) {
 	return msStringNew(buf + pos, 65 - pos);
 }
 
+static double msNextDouble(double v) {
+	uint64_t bits;
+	__builtin_memcpy(&bits, &v, sizeof bits);
+	bits += 1;
+	__builtin_memcpy(&v, &bits, sizeof bits);
+	return v;
+}
+
 msString msNumberToStringRadix(double value, double radix) {
-	int r = (int)radix;
-	if (r < 2 || r > 36) r = 10;
-	if (r == 10) return msNumberToString(value);
-	int64_t iv = (int64_t)value;
-	if ((double)iv != value) return msNumberToString(value); /* non-integer: fallback to base 10 */
-	return msIntToStringRadix(iv, radix);
+	int r = msCheckedRadix(radix);
+	if (r == 10 || value != value || value == 0.0 || value - value != 0.0) return msNumberToString(value);
+	static const char chars[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+	enum { kBufferSize = 2200 };
+	char buffer[kBufferSize];
+	int integerCursor = kBufferSize / 2;
+	int fractionCursor = integerCursor;
+	bool negative = value < 0.0;
+	if (negative) value = -value;
+	double integer = floor(value);
+	double fraction = value - integer;
+	double delta = 0.5 * (msNextDouble(value) - value);
+	double minDelta = msNextDouble(0.0);
+	if (delta < minDelta) delta = minDelta;
+	if (fraction >= delta) {
+		buffer[fractionCursor++] = '.';
+		do {
+			fraction *= r;
+			delta *= r;
+			int digit = (int)fraction;
+			buffer[fractionCursor++] = chars[digit];
+			fraction -= digit;
+			if (fraction > 0.5 || (fraction == 0.5 && (digit & 1))) {
+				if (fraction + delta > 1) {
+					while (true) {
+						fractionCursor--;
+						if (fractionCursor == kBufferSize / 2) {
+							integer += 1;
+							break;
+						}
+						char c = buffer[fractionCursor];
+						int prev = c > '9' ? (c - 'a' + 10) : (c - '0');
+						if (prev + 1 < r) {
+							buffer[fractionCursor++] = chars[prev + 1];
+							break;
+						}
+					}
+					break;
+				}
+			}
+		} while (fraction >= delta);
+	}
+	while (integer / r >= 9007199254740992.0) {
+		integer /= r;
+		buffer[--integerCursor] = '0';
+	}
+	do {
+		double remainder = fmod(integer, (double)r);
+		buffer[--integerCursor] = chars[(int)remainder];
+		integer = (integer - remainder) / r;
+	} while (integer > 0);
+	if (negative) buffer[--integerCursor] = '-';
+	return msStringNew(buffer + integerCursor, fractionCursor - integerCursor);
 }
 
 msString msBoolToString(int value) {

@@ -158,7 +158,21 @@ export function msNumberToString(n: number): string {
 	unreachable;
 }
 
+function checkRadix(radix: number): void {
+	@emit(`if (!(${radix} >= 2 && ${radix} < 37)) {
+		const m = "toString() radix argument must be between 2 and 36";
+		if (typeof process === "object" && process !== null && typeof process.exit === "function") {
+			process.stderr.write("Error: " + m + "\\n");
+			process.exit(1);
+		}
+		const e = new Error(m);
+		e.msDefect = true;
+		throw e;
+	}`);
+}
+
 export function msNumberToStringRadix(n: number, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
@@ -179,11 +193,13 @@ export function msUint64ToString(n: uint64): string {
 }
 
 export function msIntToStringRadix(n: int64, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
 
 export function msUint64ToStringRadix(n: uint64, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }

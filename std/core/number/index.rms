@@ -49,6 +49,46 @@ export function Number(v: char): float64 {
 	return v as float64;
 }
 
+export function toString(this n: float64, radix: int32 = 10): string {
+	return float64RadixText(n, radix);
+}
+
+export function toString(this n: float32, radix: int32 = 10): string {
+	return float64RadixText(n as float64, radix);
+}
+
+export function toString(this n: int64, radix: int32 = 10): string {
+	return int64RadixText(n, radix);
+}
+
+export function toString(this n: int32, radix: int32 = 10): string {
+	return int64RadixText(n as int64, radix);
+}
+
+export function toString(this n: int16, radix: int32 = 10): string {
+	return int64RadixText(n as int64, radix);
+}
+
+export function toString(this n: int8, radix: int32 = 10): string {
+	return int64RadixText(n as int64, radix);
+}
+
+export function toString(this n: uint64, radix: int32 = 10): string {
+	return uint64RadixText(n, checkedRadix(radix), false);
+}
+
+export function toString(this n: uint32, radix: int32 = 10): string {
+	return uint64RadixText(n as uint64, checkedRadix(radix), false);
+}
+
+export function toString(this n: uint16, radix: int32 = 10): string {
+	return uint64RadixText(n as uint64, checkedRadix(radix), false);
+}
+
+export function toString(this n: uint8, radix: int32 = 10): string {
+	return uint64RadixText(n as uint64, checkedRadix(radix), false);
+}
+
 export function isNaN(this typeof Number, x: float64): boolean {
 	return x != x;
 }
@@ -95,3 +135,10 @@ export {
 	trailingSpaceLength,
 } from "./parse";
 import { stringToNumber } from "./parse";
+export {
+	digitsText,
+	exactIntegerLimit,
+	halfUlp,
+	radixDigits,
+} from "./radix";
+import { checkedRadix, float64RadixText, int64RadixText, uint64RadixText } from "./radix";
