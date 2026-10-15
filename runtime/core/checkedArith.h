@@ -1,6 +1,6 @@
 /*
- * Checked integer division, modulo and power, ToInt32, the float power, and the compound
- * assignments C has no operator for on a float target. The includer declares
+ * Checked integer arithmetic, division, modulo and power, ToInt32, the float power, and the
+ * compound assignments C has no operator for on a float target. The includer declares
  * msRaiseDivByZero, msRaiseOverflow and msRaiseRangeError first
  * (runtime/core/system.h, runtime/manual.h).
  */
@@ -171,6 +171,55 @@ static inline double msPowF64(double x, double y) {
 }
 
 #define msPowAssignF64(lv, b) msDivAssign_(lv, b, msPowF64)
+
+/* A macro, not a typed function: the builtin checks the exact result of
+   operands of any width against T, where a parameter would truncate them first. */
+#define msOverflowChk_(T, builtin, a, b) ({ \
+	T __ovr; \
+	if (builtin((a), (b), &__ovr)) msRaiseOverflow(); \
+	__ovr; \
+})
+#define msAddI8(a, b) msOverflowChk_(int8_t, __builtin_add_overflow, a, b)
+#define msAddI16(a, b) msOverflowChk_(int16_t, __builtin_add_overflow, a, b)
+#define msAddI32(a, b) msOverflowChk_(int32_t, __builtin_add_overflow, a, b)
+#define msAddI64(a, b) msOverflowChk_(int64_t, __builtin_add_overflow, a, b)
+#define msSubI8(a, b) msOverflowChk_(int8_t, __builtin_sub_overflow, a, b)
+#define msSubI16(a, b) msOverflowChk_(int16_t, __builtin_sub_overflow, a, b)
+#define msSubI32(a, b) msOverflowChk_(int32_t, __builtin_sub_overflow, a, b)
+#define msSubI64(a, b) msOverflowChk_(int64_t, __builtin_sub_overflow, a, b)
+#define msMulI8(a, b) msOverflowChk_(int8_t, __builtin_mul_overflow, a, b)
+#define msMulI16(a, b) msOverflowChk_(int16_t, __builtin_mul_overflow, a, b)
+#define msMulI32(a, b) msOverflowChk_(int32_t, __builtin_mul_overflow, a, b)
+#define msMulI64(a, b) msOverflowChk_(int64_t, __builtin_mul_overflow, a, b)
+#define msNegI8(a) msOverflowChk_(int8_t, __builtin_sub_overflow, 0, a)
+#define msNegI16(a) msOverflowChk_(int16_t, __builtin_sub_overflow, 0, a)
+#define msNegI32(a) msOverflowChk_(int32_t, __builtin_sub_overflow, 0, a)
+#define msNegI64(a) msOverflowChk_(int64_t, __builtin_sub_overflow, 0, a)
+
+#define msDivI8(a, b) msOverflowChk_(int8_t, __builtin_add_overflow, msDivI32(a, b), 0)
+#define msDivI16(a, b) msOverflowChk_(int16_t, __builtin_add_overflow, msDivI32(a, b), 0)
+#define msPowI8(a, b) msOverflowChk_(int8_t, __builtin_add_overflow, msPowI32(a, b), 0)
+#define msPowI16(a, b) msOverflowChk_(int16_t, __builtin_add_overflow, msPowI32(a, b), 0)
+#define msDivAssignI8(lv, b) msDivAssign_(lv, b, msDivI8)
+#define msDivAssignI16(lv, b) msDivAssign_(lv, b, msDivI16)
+
+#define msArithAssign_(lv, b, builtin) (*({ \
+	__typeof__(lv)* __aap = &(lv); \
+	if (builtin(*__aap, (b), __aap)) msRaiseOverflow(); \
+	__aap; \
+}))
+#define msAddAssign(lv, b) msArithAssign_(lv, b, __builtin_add_overflow)
+#define msSubAssign(lv, b) msArithAssign_(lv, b, __builtin_sub_overflow)
+#define msMulAssign(lv, b) msArithAssign_(lv, b, __builtin_mul_overflow)
+#define msPostStep_(lv, builtin) ({ \
+	__typeof__(lv)* __psp = &(lv); \
+	__typeof__(lv) __old = *__psp; \
+	if (builtin(__old, 1, __psp)) msRaiseOverflow(); \
+	__old; \
+})
+#define msPostInc(lv) msPostStep_(lv, __builtin_add_overflow)
+#define msPostDec(lv) msPostStep_(lv, __builtin_sub_overflow)
+
 #define msModAssignF64(lv, b) msDivAssign_(lv, b, fmod)
 #define msAndAssignF64(lv, b) msDivAssign_(lv, b, msNumberAnd)
 #define msOrAssignF64(lv, b) msDivAssign_(lv, b, msNumberOr)

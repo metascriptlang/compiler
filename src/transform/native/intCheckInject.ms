@@ -13,12 +13,12 @@
 // as do all divisions under --danger. An 8- or 16-bit operation runs at 32 bits
 // and its result is converted back, so it wraps at its own width.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, runtimeRef } from "../util";
+import { makeCall, runtimeRef, makeNumber } from "../util";
 
 export function lowerNumberBitwiseOperands(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (n: Node): Node => toInt32Visitor(n));
@@ -60,6 +60,8 @@ export function injectIntChecks(program: Node, ctx: TransformContext): Node {
 }
 
 function intCheckVisitor(node: Node, ctx: TransformContext): Node {
+	if (node.kind == NodeKind.UnaryExpr) return ctx.rangeChecks ? checkedNegate(node) : node;
+	if (node.kind == NodeKind.UpdateExpr) return ctx.rangeChecks ? checkedStep(node) : node;
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator == "**") return lowerPow(node, d, ctx);
@@ -74,16 +76,76 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (d.operator == "/" || d.operator == "%") {
 		const t = integerRepr(node.nodeType);
 		if (t == null || cannotRaise(d.right, t)) return node;
+		if (d.operator == "/" && isSubIntSigned(t.kind)) return typedCall(ownWidthName("msDiv", t), [d.left, d.right], node);
 		return atOwnWidth(makeCall(runtimeRef(helperName(d.operator == "/" ? "msDiv" : "msMod", t), node.location), [d.left, d.right], node.location), t, node);
 	}
 	if (d.operator == "/=" || d.operator == "%=") {
 		const t = integerRepr(d.left.nodeType);
 		if (t == null || cannotRaise(d.right, t)) return node;
-		const call = makeCall(runtimeRef(helperName(d.operator == "/=" ? "msDivAssign" : "msModAssign", t), node.location), [d.left, d.right], node.location);
+		const name = d.operator == "/=" && isSubIntSigned(t.kind) ? ownWidthName("msDivAssign", t) : helperName(d.operator == "/=" ? "msDivAssign" : "msModAssign", t);
+		const call = makeCall(runtimeRef(name, node.location), [d.left, d.right], node.location);
+		call.nodeType = d.left.nodeType;
+		return call;
+	}
+	const arith = overflowPrefix(d.operator);
+	if (arith != "") {
+		const t = signedRepr(node.nodeType);
+		if (t == null || (isLiteral(d.left) && isLiteral(d.right))) return node;
+		return typedCall(ownWidthName(arith, t), [d.left, d.right], node);
+	}
+	const assign = overflowAssign(d.operator);
+	if (assign != "" && signedRepr(d.left.nodeType) != null) {
+		const call = makeCall(runtimeRef(assign, node.location), [d.left, d.right], node.location);
 		call.nodeType = d.left.nodeType;
 		return call;
 	}
 	return node;
+}
+
+function overflowPrefix(op: string): string {
+	return match (op) {
+		"+" => "msAdd",
+		"-" => "msSub",
+		"*" => "msMul",
+		_ => "",
+	};
+}
+
+function overflowAssign(op: string): string {
+	return match (op) {
+		"+=" => "msAddAssign",
+		"-=" => "msSubAssign",
+		"*=" => "msMulAssign",
+		_ => "",
+	};
+}
+
+function checkedNegate(node: Node): Node {
+	const d = node.data as UnaryExprData;
+	if (d.unaryOp != "-" || isLiteral(d.operand)) return node;
+	const t = signedRepr(node.nodeType);
+	if (t == null) return node;
+	return typedCall(ownWidthName("msNeg", t), [d.operand], node);
+}
+
+function checkedStep(node: Node): Node {
+	const d = node.data as UpdateExprData;
+	if (signedRepr(d.updateArg.nodeType) == null) return node;
+	const increment = d.updateOp == "++";
+	if (!d.isPrefix) return typedCall(increment ? "msPostInc" : "msPostDec", [d.updateArg], node);
+	return typedCall(increment ? "msAddAssign" : "msSubAssign", [d.updateArg, makeNumber(1, node.location)], node);
+}
+
+function typedCall(name: string, args: Node[], node: Node): Node {
+	const call = makeCall(runtimeRef(name, node.location), args, node.location);
+	call.nodeType = node.nodeType;
+	return call;
+}
+
+function isLiteral(n: Node): boolean {
+	let e = n;
+	while (e.kind == NodeKind.HiddenStdConv) e = (e.data as HiddenStdConvData).convExpr;
+	return e.kind == NodeKind.NumberLiteral;
 }
 
 function floatAssignHelper(d: BinaryExprData): string {
@@ -107,6 +169,7 @@ function lowerPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 	const t = integerRepr(node.nodeType);
 	if (t != null) {
 		const prefix = ctx.rangeChecks ? "msPow" : "msPowWrap";
+		if (ctx.rangeChecks && isSubIntSigned(t.kind)) return typedCall(ownWidthName(prefix, t), [d.left, d.right], node);
 		return atOwnWidth(makeCall(runtimeRef(helperName(prefix, t), node.location), [d.left, d.right], node.location), t, node);
 	}
 	if (!isFloatRepr(node.nodeType)) return node;
@@ -138,6 +201,25 @@ function integerRepr(t: Type | null): Type | null {
 		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => r,
 		_ => null,
 	};
+}
+
+function signedRepr(t: Type | null): Type | null {
+	const r = integerRepr(t);
+	return r != null && isSigned(r.kind) ? r : null;
+}
+
+function isSubIntSigned(kind: TypeKind): boolean {
+	return kind == TypeKind.Int8 || kind == TypeKind.Int16;
+}
+
+function ownWidthName(prefix: string, t: Type): string {
+	const suffix = match (t.kind) {
+		TypeKind.Int8 => "I8",
+		TypeKind.Int16 => "I16",
+		TypeKind.Int32 => "I32",
+		_ => "I64",
+	};
+	return prefix + suffix;
 }
 
 function isSigned(kind: TypeKind): boolean {
