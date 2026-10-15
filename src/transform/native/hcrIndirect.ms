@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, NewExprData, ObjectLiteralData, Symbol, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
-import { hasGenericParams, createPtr, createStruct, voidType } from "../../checker/types";
+import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
@@ -203,7 +203,7 @@ export function lowerHcrIndirection(
 				bound.set(id, pointer);
 				bindings = bindings + `${cString(targetId)}, ${cString(symbol)}, ${cString(key)}, `;
 				if (isVariable) {
-					const storageType = createStruct(`_ms_hcr_import_value${bindSlot}`, ["value"], [sym.symbolType], true);
+					const storageType = spelled(createStruct(`_ms_hcr_import_value${bindSlot}`, ["value"], [sym.symbolType], true));
 					storageTypes.set(id, storageType);
 					emitted.push(hcrStorageDecl(storageType, loc));
 					emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${pointer};`, loc));
