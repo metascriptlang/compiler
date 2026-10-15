@@ -73,6 +73,26 @@ when (!bare && !solana) {
 		return a == b;
 	}
 
+	@compilerFunc
+	function msBigIntIsTruthy(b: bigint | null): boolean {
+		if (b == null) return false;
+		return b != 0n;
+	}
+
+	extern function msBigIntToDebugString(b: bigint): string;
+
+	@compilerFunc
+	function msBigIntDebugText(b: bigint | null): string {
+		if (b == null) return "null";
+		return msBigIntToDebugString(b);
+	}
+
+	@compilerFunc
+	function msBigIntToStringOrNull(b: bigint | null, radix: int32): string {
+		if (b == null) return "null";
+		return b.toString(radix);
+	}
+
 	export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
 	export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";
 }

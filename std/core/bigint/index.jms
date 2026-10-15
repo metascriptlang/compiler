@@ -46,6 +46,24 @@ function msBigIntFromNumber(v: float64): bigint {
 	unreachable;
 }
 
+@compilerFunc
+function msBigIntIsTruthy(b: bigint | null): boolean {
+	if (b == null) return false;
+	return b != 0n;
+}
+
+@compilerFunc
+function msBigIntDebugText(b: bigint | null): string {
+	if (b == null) return "null";
+	return b.toString(10) + "n";
+}
+
+@compilerFunc
+function msBigIntToStringOrNull(b: bigint | null, radix: int32): string {
+	if (b == null) return "null";
+	return b.toString(radix);
+}
+
 export function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint {
 	@emit(`return globalThis.BigInt.asIntN(Number(${bits}), ${b});`);
 	unreachable;

@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -164,6 +164,13 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		const bcall = makeCall(runtimeRef("msBigIntToString", loc), [obj, radixArg], loc);
 		bcall.nodeType = stringType();
 		return bcall;
+	}
+	if (isNullableBigInt(objType)) {
+		const cdn = callNode.data as CallExprData;
+		const radixArg = cdn.arguments.length > 0 ? cdn.arguments[0] : makeNumber(10, loc);
+		const ncall = makeCall(runtimeRef("msBigIntToStringOrNull", loc), [obj, radixArg], loc);
+		ncall.nodeType = stringType();
+		return ncall;
 	}
 	// Priority 1: user-defined toString extension → leave for extensionMethodLower
 	if (ctx.checkerCtx != null) {

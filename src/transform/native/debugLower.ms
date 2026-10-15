@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, int32Type } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, int32Type, isNullableBigInt } from "../../checker/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
@@ -48,6 +48,11 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	// Interpolation and concat drop the suffix; that split is TS behaviour, not ours.
 	if (t.kind == TypeKind.BigInt && !ctx.jsBackend) {
 		const call = makeCall(runtimeRef("msBigIntToDebugString", loc), [arg], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	if (t.kind == TypeKind.BigInt || isNullableBigInt(t)) {
+		const call = makeCall(runtimeRef("msBigIntDebugText", loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
 	}

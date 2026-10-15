@@ -6,6 +6,7 @@
 //   123n     →  msBigIntFromLit("123n")     (the runtime parser owns 0x/0b/0o/_)
 //   a + b    →  msBigIntAdd(a, b)           (- * / % ** & | ^ << >> alike)
 //   -a / ~a  →  msBigIntNeg(a) / msBigIntNot(a)
+//   !a       →  msBigIntIsZero(a), or !msBigIntIsTruthy(a) when a is bigint | null
 //   a < b    →  msBigIntCmp(a, b) < 0       (=== and !== compare against 0 too)
 //   a == b   →  msBigIntEqualsNullable(a, b) (a side is bigint | null, a pointer
 //               that is NULL for null; `== null` stays a pointer test)
@@ -205,6 +206,12 @@ function rewriteBigIntOp(node: Node, ctx: TransformContext): Node {
 
 	if (node.kind == NodeKind.UnaryExpr) {
 		const d = node.data as UnaryExprData;
+		if (d.unaryOp == "!" && isNullableBigNode(d.operand)) {
+			const truthy = bigCall("msBigIntIsTruthy", [d.operand], node.location, booleanType());
+			const not = makeUnary("!", truthy, node.location);
+			not.nodeType = booleanType();
+			return not;
+		}
 		if (!isBigNode(d.operand)) return node;
 		if (d.unaryOp == "-") return bigCall("msBigIntNeg", [d.operand], node.location, bigType());
 		if (d.unaryOp == "~") return bigCall("msBigIntNot", [d.operand], node.location, bigType());

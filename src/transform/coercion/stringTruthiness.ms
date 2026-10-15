@@ -10,10 +10,10 @@
 // Conservative syntactic heuristic — no type info needed.
 
 import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, ConditionalExprData, TypeKind } from "../../ast/node";
-import { isStructType, isMaybeType, unwrapRefNullUnion, peelTransparentInstance } from "../../checker/types";
+import { isStructType, isMaybeType, unwrapRefNullUnion, peelTransparentInstance, isNullableBigInt, booleanType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeMember, makeNumber, makeBool, makeNull, makeUnary } from "../util";
+import { makeBinary, makeMember, makeNumber, makeBool, makeNull, makeUnary, makeCall, runtimeRef } from "../util";
 
 import { firstStmtKindAfter, firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
@@ -67,6 +67,11 @@ function wrapTruthiness(cond: Node): Node {
 	// on C; on js the double negation is already the native truthiness of 0n.
 	if (ct != null && ct.kind == TypeKind.BigInt) {
 		return makeUnary("!", makeUnary("!", cond, cond.location), cond.location);
+	}
+	if (isNullableBigInt(ct)) {
+		const truthy = makeCall(runtimeRef("msBigIntIsTruthy", cond.location), [cond], cond.location);
+		truthy.nodeType = booleanType();
+		return truthy;
 	}
 	// Non-nullable value types → always true (Reference: rejects objects in boolean context)
 	if (ct != null && isStructType(ct)) return makeBool(true, cond.location);
