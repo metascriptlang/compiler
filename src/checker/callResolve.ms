@@ -28,7 +28,7 @@ import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, su
 import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
-import { dispatchDeclaredEntry, dispatchEntryFor } from "./context";
+import { dispatchMethodOf, dispatchEntryFor } from "./context";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
 // Used by `resolveGenericNewExpr` to read concrete type args from a contextual
@@ -4547,7 +4547,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Filters by static/instance: static access (SymbolKind.Class) only matches static methods,
 	// instance access only matches instance methods. Checks overloads if primary doesn't match.
 	if (resolvedObjType.typeName != "") {
-		const declaredMethod = resolvedObjType.sym != null ? dispatchDeclaredEntry(resolvedObjType.sym, d.property) : null;
+		const declaredMethod = fieldOwnerSym != null ? dispatchMethodOf(fieldOwnerSym, d.property) : null;
 		let classMethSym: Symbol | null = declaredMethod != null ? declaredMethod.sym : null;
 		// Filter: instance methods have "this" as first param, static methods don't.
 		// If the found symbol doesn't match the access type, check overloads for one that does.

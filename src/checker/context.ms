@@ -783,6 +783,19 @@ export function dispatchDeclaredEntry(classSym: Symbol, methodName: string): Dis
 	return null;
 }
 
+export function dispatchMethodOf(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	let cur: Type | null = classSym.symbolType;
+	let d = 0;
+	while (cur != null && d < 64) {
+		const own = classOwnSym(cur);
+		const entry = own != null ? dispatchDeclaredEntry(own, methodName) : null;
+		if (entry != null) return entry;
+		cur = classBaseStruct(cur);
+		d += 1;
+	}
+	return null;
+}
+
 function classOwnSym(t: Type): Symbol | null {
 	let s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
 	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) s = s.typeExtra.kind == TypeKind.Ref && s.typeExtra.typeReturn != null ? s.typeExtra.typeReturn : s.typeExtra;
