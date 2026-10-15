@@ -890,6 +890,12 @@ when (mscDeclaresRuntime) {
 	extern function msPrintln(s: string): void;
 
 	@compilerFunc
+	extern function msWarnln(s: string): void;
+
+	@compilerFunc
+	extern function msEprintln(s: string): void;
+
+	@compilerFunc
 	extern function __FILE__(): cstring from "__FILE__";
 
 	@compilerFunc

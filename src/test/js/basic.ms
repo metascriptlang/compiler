@@ -9,6 +9,13 @@ test "E2E JS: const variable" {
 	assert js.value.contains("42");
 }
 
+test "E2E JS: console.warn and console.error write through the console's own streams" {
+	const js = compileToJS("console.warn(\"w\", 1);\nconsole.error(\"e\");\nconsole.log(\"l\");");
+	assert js.ok;
+	assert js.value.contains("console.warn(");
+	assert js.value.contains("console.error(");
+}
+
 test "E2E JS: function call" {
 	const js = compileToJS("function add(a: number, b: number): number { return a + b; }\nconst r = add(1, 2);");
 	assert js.ok;
