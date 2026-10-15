@@ -7,10 +7,10 @@
 import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, VariableDeclData, ForOfStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
-import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
+import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams } from "./types";
+import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
-import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf } from "./ctorRoutine";
+import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { splitTopLevel } from "../utils/string";
 import { isFrameValue } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
@@ -18,7 +18,7 @@ import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
-import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
+import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { checkRoutineBorrows } from "./varPartitions";
@@ -690,18 +690,6 @@ function unwrapToFunctionDecl(node: Node): Node {
 	return null as unknown as Node;
 }
 
-// Substitute type param names in an array of type annotation strings.
-function substituteTypeStrings(strs: string[], names: string[], types: Type[]): void {
-	for (let i = 0; i < names.length; i += 1) {
-		if (i >= types.length) break;
-		const pname = names[i];
-		const cname = monoConcreteTypeName(types[i]);
-		for (let si = 0; si < strs.length; si += 1) {
-			strs[si] = monoSubstAnnotation(strs[si], pname, cname);
-		}
-	}
-}
-
 const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref | NodeFlag.OptionalChainEnd;
 
 function isCheckerWrapper(node: Node): boolean {
@@ -1242,12 +1230,10 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	// Clone the constructor body
 	const clonedBody = ctorData.ctorBody != null ? monoCloneNode(ctorData.ctorBody) : null as unknown as Node;
 
-	// Build FunctionDecl params from constructor params with type substitution
 	const fnParams: string[] = [];
 	const fnParamTypes: string[] = [];
 	for (const p of ctorData.ctorParams) { fnParams.push(p); }
 	for (const pt of ctorData.ctorParamTypes) { fnParamTypes.push(pt); }
-	substituteTypeStrings(fnParamTypes, names, types);
 
 	// Substitute type vars in body
 	if (clonedBody != null) {
@@ -1265,19 +1251,16 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults };
 	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
 
-	// Set constructor node type (param types for codegen)
-	const resolvedParamTypes: Type[] = [];
-	for (let pi = 0; pi < fnParamTypes.length; pi += 1) {
-		const pt = resolveAnnotation(fnParamTypes[pi], ctx, loc.line, loc.column);
-		resolvedParamTypes.push(pt);
-	}
+	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);
+	const formals = ctorFormalTypes(ctorNode.resolvedSym);
+	if (formals == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine type`);
+	const resolvedParamTypes = formals.map((t: Type): Type => substituteAllParams(t, names, types));
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const ctorSym = mintCtorRoutine(bodyCtx, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
-	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);
 	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
 	_checkedInstances.set(ctorSym, { sym: ctorSym, concreteTypes: types });
 
