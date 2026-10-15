@@ -21,7 +21,7 @@ import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
-	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
+	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams,
 	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 } from "./types";
@@ -1000,7 +1000,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 	// the identifier's declaration. If it's a const binding initialized to a
 	// condition expression, recursively narrow using that expression. Matches
 	// (matches the reference's getTypeOfDottedName + narrowTypeByAliasedCondition).
-	if (expr.kind == NodeKind.Identifier) {
+	if (expr.kind == NodeKind.Identifier && !isMatchingReference(expr, refNode)) {
 		const aliased = getAliasedCondition(expr);
 		if (aliased != null && aliasStillHolds(expr, refNode)) {
 			return narrowType(t, aliased, refNode, assumeTrue);
@@ -1014,7 +1014,8 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		return narrowTypeByPredicate(t, expr, refNode, assumeTrue);
 	}
 	// Truthiness narrowing: bare expression used as a condition.
-	// `if (x)` where x: T | null → truthy: T (null removed), falsy: null.
+	// `if (x)` where x: T | null → truthy: T (null removed), falsy: null plus
+	// every member that has a falsy value (0, NaN, "", false, 0n).
 	// Handles both Identifier and MemberExpr via isMatchingReference.
 	// Positioned as the last-resort case — aliased conditions, type
 	// predicates, and equality checks all get priority above.
@@ -1022,7 +1023,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		if (assumeTrue) {
 			return removeNullFromType(t);
 		}
-		return extractNullFromType(t);
+		return narrowToFalsy(t);
 	}
 	// Boolean-discriminator DU narrowing: `if (r.ok)` where r is
 	// `{ ok: true, ... } | { ok: false, ... }` narrows r to the matching variant.
@@ -1200,6 +1201,18 @@ function extractNullFromType(t: Type | null): Type | null {
 		if (v.kind == TypeKind.Null) return v;
 	}
 	return t;
+}
+
+function narrowToFalsy(t: Type | null): Type | null {
+	if (t == null) return t;
+	if (isMaybeType(t)) return holdsFalsyValue(unwrapMaybeType(t)) ? t : nullType();
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	const kept: Type[] = [];
+	for (const v of t.typeChildren) {
+		if (v.kind == TypeKind.Null || holdsFalsyValue(v)) kept.push(v);
+	}
+	if (kept.length == 0 || kept.length == t.typeChildren.length) return t;
+	return kept.length == 1 ? kept[0] : createUnion(kept);
 }
 
 // Hidden conversions are repr plumbing (fitNode's variant↔union wrap/project);

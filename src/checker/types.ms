@@ -3151,6 +3151,14 @@ export function isNullableBigInt(t: Type | null): boolean {
 	return held != null && held.kind == TypeKind.BigInt;
 }
 
+export function holdsFalsyValue(t: Type): boolean {
+	const held = peelTransparentInstance(t);
+	const k = held.kind;
+	if (k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Function || k == TypeKind.Array
+		|| k == TypeKind.SizedArray || k == TypeKind.Span || k == TypeKind.Tuple || k == TypeKind.Set) return false;
+	return !isStructType(held);
+}
+
 // ===== Needs RC =====
 // Types that need reference counting. Pure type query — no codegen dependency.
 
