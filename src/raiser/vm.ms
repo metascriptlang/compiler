@@ -1902,7 +1902,7 @@ function vmHandleNegF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const dst = getReg(vm, vm.baseReg + inst.a);
 	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
-	dst.floatVal = 0.0 - asNum(src);
+	dst.floatVal = -asNum(src);
 	dst.intVal = 0;
 	dst.strVal = "";
 }
@@ -2184,6 +2184,23 @@ test "a float divided by zero is an infinity or NaN, as on C and JS" {
 	const nan = execFloatDiv(0.0, 0.0);
 	assert nan != nan;
 	assert execFloatDiv(1.0, 4.0) == 0.25;
+}
+
+function execFloatNeg(a: float64): float64 {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.NegF64, 1, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserFloat(a)]
+	)).exitValue.floatVal;
+}
+
+test "a negated float zero keeps its sign, as on C and JS" {
+	assert 1.0 / execFloatNeg(0.0) == -1.0 / 0.0;
+	assert 1.0 / execFloatNeg(-0.0) == 1.0 / 0.0;
+	assert execFloatNeg(2.5) == -2.5;
 }
 
 test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal == 42; }
