@@ -1235,6 +1235,29 @@ function growCreatedStep(): Result<uint64, ProgramError> {
 
 function growCreatedEntry(): void { codeOf(growCreatedStep()); }
 
+function growHugeStep(): Result<uint64, ProgramError> {
+	const target = try instructionData().readU64(0);
+	const fresh = try account(1);
+	const _created = try createAccount(try account(0), fresh, try minimumBalance(10240), 48, programKey());
+	const _grown = try fresh.resize(target);
+	return Result.ok(0);
+}
+
+function growHugeEntry(): void { codeOf(growHugeStep()); }
+
+function u64Bytes(v: uint64): uint8[] {
+	const out: uint8[] = [];
+	for (let i: uint64 = 0; i < 8; i += 1) out.push(((v >> (i * 8)) & 255) as uint8);
+	return out;
+}
+
+test "a resize to a length past int64 is refused as a realloc, not stopped" {
+	for (const huge of [9223372036854775808 as uint64, 9223372036854775856 as uint64, 18446744073709551615 as uint64]) {
+		const refused = [wallet(1, 1000000000), wallet(2, 0), wallet(3, 77)];
+		assert run(programKey(), refused, u64Bytes(huge), growHugeEntry).result == ProgramError.invalidRealloc().code;
+	}
+}
+
 test "an account a CPI created grows only into the bytes the runtime reserved for it before the CPI" {
 	const kept = [wallet(1, 1000000000), wallet(2, 0), wallet(3, 77)];
 	assert run(programKey(), kept, sizeBytes(10240), growCreatedEntry).result == 0;
