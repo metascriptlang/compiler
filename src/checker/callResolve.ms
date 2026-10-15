@@ -4303,12 +4303,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	}
 	// Class-aware field delegation (system module symbol lookup):
 	// When a built-in TypeKind (Promise, Result, etc.) has a typeName but getProperty() can't
-	// find the field, look up the class symbol by name and try field resolution on its struct.
+	// find the field, look up the global class symbol by name and try field resolution on its struct.
 	// For generic classes, substitute class-level generic params (T, E) with concrete types
 	// from the actual object (e.g. Result<string, number> → T=string, E=number).
 	// Skip for static class access — static methods are found via class method lookup below.
 	if (isUnresolvedType(propType) && !isStaticClassAccess && resolvedObjType.typeName != "") {
-		const classSym = fieldOwnerSym != null ? fieldOwnerSym : lookupSymbol(ctx.table, resolvedObjType.typeName);
+		const globals = ctx.preludeCtx != null ? ctx.preludeCtx.table : ctx.table;
+		const classSym = fieldOwnerSym != null ? fieldOwnerSym : lookupSymbol(globals, resolvedObjType.typeName);
 		if (classSym != null) {
 			ensureShaped(classSym, ctx);
 			let classStruct = classSym.symbolType;
