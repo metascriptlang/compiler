@@ -149,10 +149,15 @@ static inline int32_t msNumberShl(double a, int32_t b) { return (int32_t)((uint3
 static inline int32_t msNumberShr(double a, int32_t b) { return msToInt32(a) >> ((uint32_t)b & 31); }
 static inline uint32_t msNumberShrU(double a, int32_t b) { return (uint32_t)msToInt32(a) >> ((uint32_t)b & 31); }
 
-/* ECMAScript Number::exponentiate (ES2024 6.1.6.1.3): a NaN exponent and a +-1 base with an
- * infinite exponent give NaN, where C's pow answers 1; every other case is pow's. */
+/* ECMAScript Number::exponentiate (ES2024 6.1.6.1.3) as node computes it, to the bit.
+ * Keep sqrt off --os=solana: SBF links no sqrt (runtime/freestanding/math.h only declares it). */
 static inline double msPowF64(double x, double y) {
 	if (y != y || (fabs(x) == 1.0 && fabs(y) == INFINITY)) return NAN;
+	if (x != x) x = NAN;
+	if (y == 2.0) return x * x;
+#ifndef MSOS_SOLANA
+	if (y == 0.5) return fabs(x) == INFINITY ? INFINITY : sqrt(x + 0.0);
+#endif
 	return pow(x, y);
 }
 
