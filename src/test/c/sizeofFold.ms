@@ -35,3 +35,10 @@ test "sizeof refuses void rather than folding it to zero" {
 	assert !result.ok;
 	assert result.error.contains("'sizeof' needs a type with a known layout");
 }
+
+test "a union of string literals folds sizeof to the string that holds it" {
+	const result = compileToC("type Align = \"auto\" | \"center\";\nstruct Holder { a: Align | null }\nconst w: int32 = sizeof(Align);\nconst h: int32 = sizeof(Holder);\nconsole.log(w, h);");
+	assert result.ok;
+	assert result.value.contains("= (int32_t)16;");
+	assert result.value.contains("= (int32_t)24;");
+}

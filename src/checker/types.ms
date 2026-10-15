@@ -68,6 +68,19 @@ export function floatInt64Align(tg: TargetInfo): int32 {
 	return 8;
 }
 
+function lenPtrAlign(tg: TargetInfo): int32 {
+	const a = floatInt64Align(tg);
+	return a > tg.ptrSize ? a : tg.ptrSize;
+}
+
+export function isStringLiteralUnion(t: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren.length == 0) return false;
+	for (const child of t.typeChildren) {
+		if (child == null || child.kind != TypeKind.StringLiteral) return false;
+	}
+	return true;
+}
+
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
 // Copies all fields from source into target, preserving target's object identity.
 // This is critical for circular type resolution: forward placeholder objects are
@@ -4394,6 +4407,7 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	}
 	if (t.kind == TypeKind.Union) {
 		if (unwrapRefNullUnion(t) != null) return ps;
+		if (isStringLiteralUnion(t)) return alignOfTypeAt(tg, stringType(), depth);
 		return alignOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {
@@ -4422,7 +4436,7 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		TypeKind.Number | TypeKind.Float64 => floatInt64Align(tg),
 		TypeKind.Int64 | TypeKind.Uint64 => floatInt64Align(tg),
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Function | TypeKind.Null => ps,
-		TypeKind.String | TypeKind.StringLiteral | TypeKind.Array | TypeKind.Span => ps,
+		TypeKind.String | TypeKind.StringLiteral | TypeKind.Array | TypeKind.Span => lenPtrAlign(tg),
 		TypeKind.BigInt => ps,
 		_ => 0,
 	};
@@ -4460,6 +4474,7 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	}
 	if (t.kind == TypeKind.Union) {
 		if (unwrapRefNullUnion(t) != null) return ps;
+		if (isStringLiteralUnion(t)) return sizeOfTypeAt(tg, stringType(), depth);
 		return sizeOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {
@@ -4487,10 +4502,9 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 => 4,
 		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => 8,
-		TypeKind.String | TypeKind.StringLiteral => ps * 2,
+		TypeKind.String | TypeKind.StringLiteral | TypeKind.Array | TypeKind.Span => alignTo(8 + ps, lenPtrAlign(tg)),
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Null => ps,
 		TypeKind.Function => ps * 2,
-		TypeKind.Array | TypeKind.Span => ps * 2,
 		TypeKind.BigInt => ps,
 		_ => SIZE_NOT_COMPUTABLE,
 	};
@@ -4981,8 +4995,9 @@ test "an enum literal is sized by its enum" {
 test "sizeOfType primitives 32-bit" {
 	const tg: TargetInfo = { ptrSize: 4, floatSize: 8 };
 	assert sizeOfType(tg, numberType()) == 8;
-	assert sizeOfType(tg, stringType()) == 8;
-	assert sizeOfType(tg, createArray(numberType())) == 8;
+	assert sizeOfType(tg, stringType()) == 16;
+	assert sizeOfType(tg, createArray(numberType())) == 16;
+	assert alignOfType(tg, stringType()) == 8;
 	assert sizeOfType(tg, createFunction([], [], numberType())) == 8;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Ref)) == 4;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Int32)) == 4;
@@ -5099,6 +5114,30 @@ test "sizeOfType char before int64 follows the target alignment rule" {
 	const obj = createStruct("Head", ["c", "x"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int64)], true);
 	assert sizeOfType(wasm, obj) == 16;
 	assert sizeOfType(i386, obj) == 12;
+}
+
+test "a string, an array and a span are sized as their runtime length-and-pointer pair" {
+	const wasm: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "wasm32", os: "wasm" };
+	const i386: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "linux" };
+	const host: TargetInfo = { ptrSize: 8, floatSize: 8, cpu: "arm64", os: "macos" };
+	assert sizeOfType(wasm, stringType()) == 16;
+	assert alignOfType(wasm, createArray(numberType())) == 8;
+	assert sizeOfType(i386, stringType()) == 12;
+	assert sizeOfType(i386, createSpan(numberType())) == 12;
+	assert alignOfType(i386, stringType()) == 4;
+	assert sizeOfType(host, stringType()) == 16;
+	const held = createStruct("Held", ["v", "t"], [stringType(), createPrimitive(TypeKind.Uint8)], true);
+	assert sizeOfType(wasm, held) == 24;
+	assert sizeOfType(i386, held) == 16;
+}
+
+test "a union of string literals is sized as the string that holds it" {
+	const host: TargetInfo = { ptrSize: 8, floatSize: 8, cpu: "arm64", os: "macos" };
+	const i386: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "linux" };
+	const align = createUnion([createStringLiteral("auto"), createStringLiteral("center")]);
+	assert sizeOfType(host, align) == 16;
+	assert alignOfType(host, align) == 8;
+	assert sizeOfType(i386, align) == 12;
 }
 
 test "field offsets share target padding with struct size" {

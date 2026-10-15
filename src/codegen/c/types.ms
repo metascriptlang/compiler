@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, isStringLiteralUnion, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -1580,11 +1580,7 @@ function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
 	// Pure string literal union → msString (TypeScript: string at runtime)
-	let allStrLit = true;
-	for (const child of t.typeChildren) {
-		if (child == null || child.kind != TypeKind.StringLiteral) allStrLit = false;
-	}
-	if (allStrLit && t.typeChildren.length > 0) {
+	if (isStringLiteralUnion(t)) {
 		typeCacheSet(g.typeCache, typeKey(t), "msString");
 		return "msString";
 	}
