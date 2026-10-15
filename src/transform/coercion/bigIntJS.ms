@@ -37,7 +37,11 @@ function is64Kind(kind: TypeKind): boolean {
 function reprKind(t: Type | null): TypeKind {
 	const r = peelToRepr(t);
 	if (r == null) return TypeKind.Unknown;
-	return r.kind == TypeKind.Enum ? TypeKind.Int32 : r.kind;
+	return match (r.kind) {
+		TypeKind.Enum => TypeKind.Int32,
+		TypeKind.Char => TypeKind.Uint8,
+		_ => r.kind,
+	};
 }
 
 function is64Type(t: Type | null): boolean {
@@ -46,7 +50,7 @@ function is64Type(t: Type | null): boolean {
 
 function isNarrowIntType(t: Type | null): boolean {
 	if (t == null) return false;
-	return isIntegerType(t) && !is64Kind(t.kind);
+	return t.kind == TypeKind.Char || (isIntegerType(t) && !is64Kind(t.kind));
 }
 
 function isFloatLikeType(t: Type | null): boolean {
