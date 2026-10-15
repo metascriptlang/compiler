@@ -11,7 +11,7 @@ export function accountReadSigned(bytes: Readonly<Span<uint8>>, offset: int32, w
 	if (width < 8 && (bytes[offset + width - 1] & 0x80) != 0) {
 		value |= (0xffffffffffffffff as uint64) << ((width * 8) as uint64);
 	}
-	return value as int64;
+	return int64Bits(value);
 }
 
 export function accountWriteUnsigned(bytes: Span<uint8>, offset: int32, width: int32, value: uint64): void {

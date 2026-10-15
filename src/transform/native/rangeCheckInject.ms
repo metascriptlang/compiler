@@ -102,6 +102,17 @@ function isFloatSource(src: Type | null): boolean {
 	return s.kind == TypeKind.Float32 || s.kind == TypeKind.Float64 || s.kind == TypeKind.Number;
 }
 
+function int64CheckFor(src: Type | null): string {
+	const s = peelToRepr(src);
+	if (s == null) return "";
+	if (s.kind == TypeKind.Uint64) return "msCheckRangeI64FromU64";
+	return isFloatSource(s) ? "msCheckRangeI64" : "";
+}
+
+function isInt64Check(fnName: string): boolean {
+	return fnName == "msCheckRangeI64" || fnName == "msCheckRangeI64FromU64";
+}
+
 function enumCovers(src: Type | null, dest: Type): boolean {
 	const s = peelToRepr(src);
 	if (s == null) return true;
@@ -117,7 +128,7 @@ function enumCovers(src: Type | null, dest: Type): boolean {
 export function rangeCheckHelper(src: Type | null, dest: Type, rangeChecks: boolean): string {
 	if (!rangeChecks) return "";
 	if (dest.kind == TypeKind.Enum) return dest.typeNames.length == 0 || enumCovers(src, dest) ? "" : "msCheckRangeI32";
-	if (dest.kind == TypeKind.Int64) return isFloatSource(src) ? "msCheckRangeI64" : "";
+	if (dest.kind == TypeKind.Int64) return int64CheckFor(src);
 	const fnName = getRangeCheckForTypeKind(dest.kind);
 	if (fnName == "" || isUnsignedKind(dest.kind) || destCovers(src, dest)) return "";
 	return fnName;
@@ -129,7 +140,7 @@ export function makeRangeCheckFor(
 	dest: Type,
 	loc: SourceLocation,
 ): Node {
-	if (fnName == "msCheckRangeI64") return makeCall(runtimeRef(fnName, loc), [expr], loc);
+	if (isInt64Check(fnName)) return makeCall(runtimeRef(fnName, loc), [expr], loc);
 	if (dest.kind == TypeKind.Enum) {
 		const bounds = enumOrdinalBounds(dest);
 		return makeRangeCheck(expr, fnName, bounds[0], bounds[1], loc);
@@ -148,7 +159,7 @@ function checkedConv(
 	const fnName = rangeCheckHelper(src, dest, ctx.rangeChecks);
 	if (fnName == "") return node;
 	const call = makeRangeCheckFor(fnName, expr, dest, node.location);
-	if (fnName == "msCheckRangeI64") call.nodeType = dest;
+	if (isInt64Check(fnName)) call.nodeType = dest;
 	return call;
 }
 

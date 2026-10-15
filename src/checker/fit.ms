@@ -16,6 +16,7 @@ import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 import { isArrayShaped } from "./types";
+import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
 
 // ===== Operator Inference =====
@@ -1148,7 +1149,7 @@ export function isNodeIntLit(node: Node): boolean {
 
 // INT64_MIN is the one int64 that is its own negation.
 function isInt64Min(v: int64): boolean {
-	return v < 0 && ((0 - (v as uint64)) as int64) == v;
+	return v < 0 && int64Bits(0 - (v as uint64)) == v;
 }
 
 // Nim splits this in two. A BIT-PATTERN literal may fill the whole UNSIGNED
@@ -1444,9 +1445,13 @@ export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): 
 		return;
 	}
 	if (!isIntegerType(target) || isUnsignedIntegerType(target)) return;
-	const folded = constIntegerOf(expr);
-	if (folded == null) return;
+	const folded = constantLiteralOf(expr, 0);
+	if (folded == null || !isNodeIntLit(folded)) return;
 	const value = (folded.data as NumberLiteralData).intVal;
+	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) {
+		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+		return;
+	}
 	if (foldedIntFits(value, target)) return;
 	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
 }

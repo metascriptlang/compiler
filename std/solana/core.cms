@@ -297,9 +297,10 @@ function withGrowth(packed: uint32, growth: int64): uint32 {
 }
 
 @noinline function grown(account: Account, currentLength: uint64, newLength: uint64): Result<uint64, ProgramError> {
+	if (newLength > msSolDataRoom(account.address)) { return Result.err(ProgramError.invalidRealloc()); }
 	const packed = msSolLoadU32(account.address + 4);
 	const growth: int64 = growthOf(packed) + ((newLength - currentLength) as int64);
-	if (growth > 10240 || newLength > msSolDataRoom(account.address)) { return Result.err(ProgramError.invalidRealloc()); }
+	if (growth > 10240) { return Result.err(ProgramError.invalidRealloc()); }
 	msSolFill(account.address + 88 + currentLength, 0, newLength - currentLength);
 	msSolStoreU32(account.address + 4, withGrowth(packed, growth));
 	msSolStoreU64(account.address + 80, newLength);
@@ -637,10 +638,10 @@ export function clock(): Result<Clock, ProgramError> {
 	if (msSolGetClock(msSolWordsAddress(words)) != 0) { return Result.err(ProgramError.unsupportedSysvar()); }
 	const value: Clock = {
 		slot: words[0],
-		epochStartTimestamp: words[1] as int64,
+		epochStartTimestamp: int64Bits(words[1]),
 		epoch: words[2],
 		leaderScheduleEpoch: words[3],
-		unixTimestamp: words[4] as int64,
+		unixTimestamp: int64Bits(words[4]),
 	};
 	return Result.ok(value);
 }
@@ -998,7 +999,7 @@ export function argI16(offset: uint64): int16 {
 export function argI32(offset: uint64): int32 {
 	return (((argU32(offset) as int64) ^ 2147483648) - 2147483648) as int32;
 }
-export function argI64(offset: uint64): int64 { return argU64(offset) as int64; }
+export function argI64(offset: uint64): int64 { return int64Bits(argU64(offset)); }
 
 export function argBool(offset: uint64): boolean {
 	return argU8(offset) == 1;

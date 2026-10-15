@@ -9,6 +9,8 @@
 // MS name === JS name is the convention here. A `from "JsName"` clause on
 // extern class would be required to bind to a differently-named global.
 
+export extern function int64Bits(u: uint64): int64 from "BigInt.asIntN(64, #)";
+
 @builtin("StdSet")
 export extern class Set<T> {
 	size: number;

@@ -571,6 +571,7 @@ static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
 
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
+_Noreturn void msRaiseRangeErrorU64(uint64_t val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
 _Noreturn void msRaiseUnreachable(const char* text);
@@ -646,6 +647,11 @@ static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { retur
 
 static inline int64_t msCheckRangeI64(double v) {
 	if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) msRaiseRangeErrorF(v, INT64_MIN, INT64_MAX);
+	return (int64_t)v;
+}
+
+static inline int64_t msCheckRangeI64FromU64(uint64_t v) {
+	if (v > (uint64_t)INT64_MAX) msRaiseRangeErrorU64(v, INT64_MIN, INT64_MAX);
 	return (int64_t)v;
 }
 

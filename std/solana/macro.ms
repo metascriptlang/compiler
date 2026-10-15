@@ -106,7 +106,7 @@ export macro instruction(): Node {
 		for (let b = 0; b < 8; b++) { value |= (bytes[offset + b] as uint64) << ((b * 8) as uint64); }
 		return { kind: NodeKind.TypeAssertion, line: decl.line, column: decl.column, asType: "uint64",
 			asExpr: { kind: NodeKind.NumberLiteral, line: decl.line, column: decl.column,
-				value: (value as int64) as number, intVal: value as int64, isFloat: false, isBitPattern: true, outOfRangeText: "" } };
+				value: int64Bits(value) as number, intVal: int64Bits(value), isFloat: false, isBitPattern: true, outOfRangeText: "" } };
 	}
 	function call(callee: Node, arguments: Node[]): Node {
 		return { kind: NodeKind.CallExpr, line: decl.line, column: decl.column,
@@ -886,7 +886,7 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 				column: seeds.column,
 				value: word as number,
 				isFloat: false,
-				intVal: word as int64,
+				intVal: int64Bits(word),
 				outOfRangeText: "",
 				isBitPattern: true,
 			});

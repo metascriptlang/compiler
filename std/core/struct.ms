@@ -83,12 +83,16 @@ export function hashString(s: string): int64 {
 @builtin("HiXorLo")
 extern function msHiXorLo(a: uint64, b: uint64): uint64;
 
+export function int64Bits(u: uint64): int64 {
+	return u > 9223372036854775807 ? -((~u) as int64) - 1 : u as int64;
+}
+
 // 0 marks an empty Map/Set slot, so a key that mixes to 0 takes the sentinel.
 export function hashWangYi1(x: uint64): int64 {
 	const p0 = 0xa0761d6478bd642f as uint64;
 	const p1 = 0xe7037ed1a0b428db as uint64;
 	const p58 = (0xeb44accab455d165 as uint64) ^ (8 as uint64);
-	const h = msHiXorLo(msHiXorLo(p0, x ^ p1), p58) as int64;
+	const h = int64Bits(msHiXorLo(msHiXorLo(p0, x ^ p1), p58));
 	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }
@@ -104,14 +108,14 @@ export function hashCombine(h: int64, v: int64): int64 {
 	let r = (h as uint64) + (v as uint64);
 	r = r + (r << (10 as uint64));
 	r = r ^ (r >> (6 as uint64));
-	return r as int64;
+	return int64Bits(r);
 }
 
 export function hashFinish(h: int64): int64 {
 	let r = (h as uint64) + ((h as uint64) << (3 as uint64));
 	r = r ^ (r >> (11 as uint64));
 	r = r + (r << (15 as uint64));
-	const f = r as int64;
+	const f = int64Bits(r);
 	if (f == (0 as int64)) return 314159265 as int64;
 	return f;
 }

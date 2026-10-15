@@ -101,6 +101,12 @@ test "integer literal boundary: int64 magnitude 2^63 is legal only with the minu
 	assert hasError("function f(): int64 { const v: int64 = 9223372036854775809; return v; }", "cannot convert");
 }
 
+test "integer literal boundary: a uint64 constant past int64 converted to a signed integer is rejected" {
+	assert hasError("const x = (9223372036854775808 as uint64) as int64;", "cannot convert 9223372036854775808 to int64");
+	assert hasError("const x = (18446744073709551615 as uint64) as int32;", "cannot convert 18446744073709551615 to int32");
+	assert strictErrorCount("const x = (9223372036854775807 as uint64) as int64;") == 0;
+}
+
 test "integer literal boundary: a minus in front of an unsigned target is rejected" {
 	assert hasError("function f(): uint64 { const v: uint64 = -1; return v; }", "cannot convert");
 	assert hasError("function f(): uint8 { const v: uint8 = -1; return v; }", "cannot convert");

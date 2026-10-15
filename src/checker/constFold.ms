@@ -6,6 +6,7 @@ import {
 } from "../ast/node";
 import { isIntegerType, isFloatType, createPrimitive } from "./types";
 import { makeNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
+import { int64Bits } from "../utils/stdBackport";
 
 const CONSTANT_CHAIN_LIMIT: int32 = 64;
 
@@ -241,7 +242,7 @@ export function exactUntypedInteger(expr: Node, depth: int32): Node {
 				"~" => ~(value as uint64),
 				_ => value as uint64,
 			};
-			return makeTypedInteger(bits as int64, createPrimitive(TypeKind.Int64), expr.location);
+			return makeTypedInteger(int64Bits(bits), createPrimitive(TypeKind.Int64), expr.location);
 		},
 		_ => {},
 	};
@@ -476,9 +477,9 @@ function isUnsignedIntegerType(t: Type): boolean {
 
 function wrapToWidth(bits: uint64, t: Type): int64 {
 	const width = integerBitWidth(t);
-	if (width == 64) return bits as int64;
+	if (width == 64) return int64Bits(bits);
 	const modulus: int64 = (1 as int64) << (width as int64);
-	const low: int64 = (bits as int64) & (modulus - 1);
+	const low: int64 = int64Bits(bits) & (modulus - 1);
 	if (isUnsignedIntegerType(t)) return low;
 	return low >= modulus / 2 ? low - modulus : low;
 }
@@ -521,7 +522,7 @@ function signedResultIsExact(op: string, left: int64, right: int64, t: Type): bo
 		return rightMagnitude == 0 || leftMagnitude <= limit / rightMagnitude;
 	}
 	const bits: uint64 = op == "+" ? (left as uint64) + (right as uint64) : (left as uint64) - (right as uint64);
-	const result = bits as int64;
+	const result = int64Bits(bits);
 	if (op == "+") {
 		if (left >= 0 && right >= 0 && result < 0) return false;
 		if (left < 0 && right < 0 && result >= 0) return false;
@@ -713,7 +714,7 @@ export function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
 			}
 			const floating = od.isFloat || (node.nodeType != null && (isFloatType(node.nodeType) || node.nodeType.kind == TypeKind.Number));
 			const result = match (op) {
-				"-" => floating ? makeNumber(-nv, loc) : makeIntNumber((0 - (od.intVal as uint64)) as int64, loc),
+				"-" => floating ? makeNumber(-nv, loc) : makeIntNumber(int64Bits(0 - (od.intVal as uint64)), loc),
 				"+" => floating ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
 				_ => node,
 			};

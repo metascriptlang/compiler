@@ -15,7 +15,7 @@ function signed(magnitude: uint32, negative: boolean): int32 {
 
 @inline
 function wideSigned(magnitude: uint64, negative: boolean): int64 {
-	return negative ? (~magnitude + 1) as int64 : magnitude as int64;
+	return negative ? int64Bits(~magnitude + 1) : magnitude as int64;
 }
 
 @inline

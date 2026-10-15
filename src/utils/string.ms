@@ -1,6 +1,8 @@
 // String Utilities — specialized helpers not covered by std/core/string extension methods.
 // Generic operations (charAt, slice, trim, contains) use extension methods directly.
 
+import { int64Bits } from "./stdBackport";
+
 // Extract the part after the last occurrence of a delimiter.
 // "Kind.A" with "." → "A". "A" with "." → "A" (unchanged).
 export function bareAfterDelim(s: string, delim: string): string {
@@ -181,7 +183,7 @@ function scanInteger(s: string): ScannedInteger {
 		if (acc > (limit - digit) / radix) { fits = false; break; }
 		acc = acc * radix + digit;
 	}
-	return { value: (neg ? 0 - acc : acc) as int64, fits, bitPattern: radix != 10 };
+	return { value: int64Bits(neg ? 0 - acc : acc), fits, bitPattern: radix != 10 };
 }
 
 export function parseIntegerLiteral(s: string): int64 {
