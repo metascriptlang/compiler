@@ -20,6 +20,7 @@ export class console {
 
 export class process {
 	/** Terminate the process with the given status code. */
+	@builtin("Exit")
 	static extern exit(code: int32 = 0): never from "msExit";
 }
 

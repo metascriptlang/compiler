@@ -9,7 +9,7 @@
 @import("node:child_process", { execSync, spawnSync });
 @import("node:fs", { existsSync, readdirSync });
 
-export extern function exit(code: number): void;
+export extern function exit(code: number): never;
 export extern function cwd(): string;
 extern class process {
 	static extern platform: string;

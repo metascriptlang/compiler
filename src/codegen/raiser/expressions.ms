@@ -1376,12 +1376,11 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		return compileToStringCall(s, node);
 	}
 
-	// exit(code) / process.exit(code) — Nim's VM has no quit op at comptime;
-	// on the run path exit is a Tier-0 concern: halt the VM with the code.
-	if (isExitCall(d.callee) && d.arguments.length == 1) {
+	const builtinKind = callBuiltinKind(node);
+	// exit(code) / process.exit(code) is a Tier-0 concern: halt the VM with the code.
+	if (builtinKind == "Exit" && d.arguments.length <= 1) {
 		return compileExitCall(s, node);
 	}
-	const builtinKind = callBuiltinKind(node);
 	if (builtinKind == "MapFatal" && d.arguments.length == 1) {
 		return compileMapFatalCall(s, node);
 	}
@@ -2005,26 +2004,14 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 	return arrReg;
 }
 
-// exit(code) / process.exit(code) — name-based like setLength: the import
-// graph proves the callee, the codegen intercept wins every call site.
-function isExitCall(callee: Node): boolean {
-	if (callee.kind == NodeKind.Identifier) {
-		return (callee.data as IdentifierData).name == "exit";
-	}
-	if (callee.kind == NodeKind.MemberExpr) {
-		const md = callee.data as MemberExprData;
-		if (md.property != "exit") return false;
-		if (md.object.kind != NodeKind.Identifier) return false;
-		return (md.object.data as IdentifierData).name == "process";
-	}
-	return false;
-}
-
 function compileExitCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const valueReg = compileExpr(s, d.arguments[0]);
 	const codeReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.Conv, codeReg, valueReg, RaiserConvClass.I32));
+	if (d.arguments.length == 0) {
+		emitLoadConst(s, codeReg, raiserInt(0));
+	} else {
+		emitInst(s, raiserABC(RaiserOpcode.Conv, codeReg, compileExpr(s, d.arguments[0]), RaiserConvClass.I32));
+	}
 	// b=1 marks the halt abrupt: it skips the strand drain, the way
 	// process.exit bypasses msDrainUntilIdle on C.
 	emitInst(s, raiserABC(RaiserOpcode.Halt, codeReg, 1, 0));
