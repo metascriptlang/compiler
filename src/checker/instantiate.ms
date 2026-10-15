@@ -5,6 +5,7 @@
 // the specialized version. No separate monomorphize pass needed.
 
 import { methodOwnerClass } from "./visibility";
+import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, VariableDeclData, ForOfStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
@@ -800,6 +801,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
 	if (hasFlag(sym, SymbolFlag.Borrow)) setFlag(instSym, SymbolFlag.Borrow);
+	if (isAsyncFunctionNode(cloned)) setFlag(instSym, SymbolFlag.Async);
 	cacheInstance(host, sym, instSym);
 	cloned.resolvedSym = instSym;
 
