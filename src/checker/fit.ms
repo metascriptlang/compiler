@@ -2087,7 +2087,11 @@ export function tryStructUpcast(expr: Node, formalIn: Type | null, exprTypeIn: T
 	if (formal.kind != TypeKind.Struct || exprType.kind != TypeKind.Struct) return null as unknown as Node;
 	if (!isValueStructDecl(formal) || !isValueStructDecl(exprType)) return null as unknown as Node;
 	if (valueStructBaseDepth(exprType, formal) == 0) return null as unknown as Node;
-	return structCast(expr, formal, formal.typeName);
+	const conv = createNode(NodeKind.TypeAssertion, { asExpr: expr, asType: formal.typeName } as NodeData, createToken(TokenKind.Ident, "", expr.location.line));
+	conv.nodeType = formal;
+	conv.flags = conv.flags.incl(NodeFlag.Sem);
+	conv.location = expr.location;
+	return conv;
 }
 
 function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null {
@@ -2099,15 +2103,7 @@ function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null 
 	const from = source.typeReturn;
 	if (to == null || from == null || to.kind != TypeKind.Struct || from.kind != TypeKind.Struct || sameType(to, from)) return null;
 	if (!isAssignable(exprType, formal)) return null;
-	return structCast(expr, source == exprType ? target : formal, to.typeName);
-}
-
-function structCast(expr: Node, castType: Type, typeName: string): Node {
-	const conv = createNode(NodeKind.TypeAssertion, { asExpr: expr, asType: typeName } as NodeData, createToken(TokenKind.Ident, "", expr.location.line));
-	conv.nodeType = castType;
-	conv.flags = conv.flags.incl(NodeFlag.Sem);
-	conv.location = expr.location;
-	return conv;
+	return classUpcast(expr, source == exprType ? target : formal);
 }
 
 export function reportReadonlyDrop(ctx: CheckerContext, source: Type | null, target: Type | null, line: int32, column: int32): void {
