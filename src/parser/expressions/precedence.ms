@@ -14,7 +14,7 @@ export function getPrecedence(kind: TokenKind): int32 {
 		TokenKind.Plus | TokenKind.Minus => 50,
 		TokenKind.LtLt | TokenKind.GtGt | TokenKind.GtGtGt => 45,
 		TokenKind.Lt | TokenKind.Gt | TokenKind.LtEq | TokenKind.GtEq |
-		TokenKind.In | TokenKind.Instanceof => 40,
+		TokenKind.In | TokenKind.Instanceof | TokenKind.As => 40,
 		TokenKind.EqEq | TokenKind.BangEq | TokenKind.EqEqEq | TokenKind.BangEqEq => 30,
 		TokenKind.Amp => 27,
 		TokenKind.Caret => 25,
