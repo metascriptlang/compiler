@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType } from "../../checker/types";
+import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing } from "../../checker/types";
 import { SymbolFlag, hasFlag, lookupCtorDefaults, CtorEntry } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -145,6 +145,13 @@ function literalDiscriminantOf(u: Type): string {
 	if (strDisc != "") return strDisc;
 	const boolDisc = findSharedBooleanDiscriminant(u);
 	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(u);
+}
+
+function unstoredLiteral(object: Readonly<Node>, property: string): string {
+	const owner = object.nodeType != null ? peelToStructOrUnion(object.nodeType) : null;
+	if (owner == null || owner.kind != TypeKind.Struct) return "";
+	const ft = getProperty(owner, property);
+	return ft.kind == TypeKind.BooleanLiteral && storesNothing(owner, ft) ? cBoolLiteral(booleanLiteralValue(ft)) : "";
 }
 
 function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
@@ -1625,6 +1632,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayName(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 		}
+		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
+			const md = d.left.data as MemberExprData;
+			if (unstoredLiteral(md.object, md.property) != "") {
+				ctx.results.push(`((void)${left}, ${right})`);
+				return;
+			}
+		}
 		let finalRight = right;
 		if (d.operator == "=" && d.left.nodeType != null && d.right.nodeType != null
 				&& d.left.kind != NodeKind.MemberExpr && d.left.kind != NodeKind.ArrayAccess) {
@@ -1834,6 +1848,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Pre-formatted property (e.g. "p->data" from nativeLower) — emit raw
 		if (findChar(d.property, ">") >= 0) {
 			ctx.results.push(`${obj}.${d.property}`);
+			return;
+		}
+		const unstored = unstoredLiteral(d.object, d.property);
+		if (unstored != "") {
+			ctx.results.push(`((void)(${obj}), ${unstored})`);
 			return;
 		}
 		// .length/.byteLength → .len for runtime types (arrays, strings, spans)
@@ -2408,17 +2427,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					emitProcLocalsLine(p, `${cType} ${tmpName};`);
 					emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${cType}));`);
 				}
-				// For enum-disc match-type unions (typeExtra=Enum), the
-				// discriminator IS the wrapper's `_tag`, so the key is skipped.
-				// For boolean/string-disc DUs (typeExtra=Boolean/String), the
-				// discriminator field exists IN each variant struct — must be
-				// written.
 				const skipDiscKey = discFieldInVariant ? -1 : unionDiscKeyIdx;
+				const owner = shape.fieldsType != null ? peelToStructOrUnion(shape.fieldsType) : null;
 				let i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(ctx, cc, i);
 					// Skip discriminant key — handled by _tag in union wrap
 					if (i == skipDiscKey) { i += 1; continue; }
+					if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, d.keys[i]))) {
+						if (d.properties[i].kind != NodeKind.BooleanLiteral) emitStmtsLine(p, `(void)(${val});`);
+						i += 1;
+						continue;
+					}
 					// Skip NullLiteral fields — memset already zeroed them.
 					// This avoids void* → value-type errors for self-referential pointer fields
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).

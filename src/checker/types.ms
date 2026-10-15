@@ -1146,7 +1146,7 @@ export function duSharedFieldOffsetDiffers(unionType: Type | null, fieldName: st
 		let hasField = false;
 		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
 			const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
-			sig = sig + "|" + duLayoutName(ft);
+			if (!storesNothing(variant, ft)) sig = sig + "|" + duLayoutName(ft);
 			if (variant.typeNames[fi] == fieldName) { hasField = true; break; }
 		}
 		if (!hasField) continue;
@@ -1183,7 +1183,7 @@ export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: stri
 		let hasField = false;
 		for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
 			const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
-			sig = sig + "|" + duLayoutName(ft);
+			if (!storesNothing(variant, ft)) sig = sig + "|" + duLayoutName(ft);
 			if (variant.typeNames[fi] == fieldName) { hasField = true; break; }
 		}
 		if (!hasField) continue;
@@ -1280,6 +1280,13 @@ export function inlineVariantStruct(member: Type | null): Type | null {
 		cur = cur.typeReturn;
 	}
 	return cur != null && cur.kind == TypeKind.Struct ? cur : null;
+}
+
+export function storesNothing(owner: Type, field: Type | null): boolean {
+	if (field == null) return false;
+	if (field.kind == TypeKind.Void) return true;
+	const n = owner.typeName;
+	return field.kind == TypeKind.BooleanLiteral && owner.kind == TypeKind.Struct && (n == "" || n.startsWith("{") || n.startsWith("__anon"));
 }
 
 // Peel Ref/Ptr/GenericInstance wrappers until reaching a Struct or Union body.
@@ -4447,6 +4454,7 @@ function alignOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 	if (t.typeChildren != null) {
 		let i = 0;
 		while (i < t.typeChildren.length) {
+			if (storesNothing(t, t.typeChildren[i])) { i = i + 1; continue; }
 			const a = alignOfTypeAt(tg, t.typeChildren[i], depth);
 			if (a > maxAlign) maxAlign = a;
 			i = i + 1;
@@ -4522,7 +4530,7 @@ function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32
 		let i = 0;
 		while (i < t.typeChildren.length) {
 			const field = t.typeChildren[i];
-			if (field != null && field.kind != TypeKind.Void) {
+			if (field != null && !storesNothing(t, field)) {
 				const fieldSize = sizeOfTypeAt(tg, field, depth);
 				if (fieldSize < 0) return fieldSize;
 				const fieldAlign = alignOfTypeAt(tg, field, depth);
@@ -5060,7 +5068,7 @@ test "sizeOfType follows a generic instance to its substituted body" {
 	const named = createUnion([v0, v1]);
 	const inst = createGenericInstance(named, [createPrimitive(TypeKind.Int32), stringType()]);
 	inst.typeReturn = named;
-	assert sizeOfType(tg, inst) == 32;
+	assert sizeOfType(tg, inst) == 24;
 }
 
 test "sizeOfType gives an awaitable the width of its future handle" {

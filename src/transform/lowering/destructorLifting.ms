@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, createNodeAt, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, storesNothing } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
 import { genericParamsOf, classParentOf, createUnionInOrder } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -1236,7 +1236,7 @@ function emitVariantSinkAssign(armBuf: NodeBuf, s1: Symbol, s2: Symbol, vName: s
 	let fi = 0;
 	while (fi < variant.typeNames.length) {
 		const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
-		if (ft != null && ft.kind == TypeKind.Void) { fi += 1; continue; }
+		if (storesNothing(variant, ft)) { fi += 1; continue; }
 		const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
 		const yBase = makeMember(hookParamDeref(s2, loc), vName, loc);
 		armBuf.items.push(makeExprStmt(makeAssign(
@@ -1244,6 +1244,10 @@ function emitVariantSinkAssign(armBuf: NodeBuf, s1: Symbol, s2: Symbol, vName: s
 			makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
 		fi += 1;
 	}
+}
+
+function fieldStored(owner: Type, i: number): boolean {
+	return i >= owner.typeChildren.length || !storesNothing(owner, owner.typeChildren[i]);
 }
 
 function isScalarVariant(member: Type | null, variant: Type | null): boolean {
@@ -1271,6 +1275,7 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 	if (hook == "destroy") {
 		let fi = variant.typeNames.length - 1;
 		while (fi >= 0) {
+			if (!fieldStored(variant, fi)) { fi -= 1; continue; }
 			const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
 			const yBase = makeMember(hookParamDeref(s1, loc), vName, loc);
 			const visited: NameSet = createNameSet();
@@ -1282,6 +1287,7 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 	} else {
 		let fi = 0;
 		while (fi < variant.typeNames.length) {
+			if (!fieldStored(variant, fi)) { fi += 1; continue; }
 			const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
 			const yBase = (hook == "trace") ? makeIdentResolved(s2, loc)
 				: isUnary ? makeMember(hookParamDeref(s1, loc), vName, loc)
@@ -1418,6 +1424,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		} else if (hook == "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
 			for (let i = objType.typeNames.length - 1; i >= firstOwn; i -= 1) {
+				if (!fieldStored(objType, i)) continue;
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
@@ -1434,6 +1441,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 				genOpCall(requireOpByKey(baseClassType(typeName, lctx), attachedOpOf(hook)), hook, x1, x2, buf, loc);
 			}
 			for (let i = firstOwn; i < objType.typeNames.length; i += 1) {
+				if (!fieldStored(objType, i)) continue;
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}

@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, isStringLiteralUnion, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, isStringLiteralUnion, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, storesNothing } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -473,7 +473,9 @@ function anonFieldsKey(t: Type, open: Type[]): string {
 	while (i < t.typeNames.length) {
 		if (i > 0) key = key + ",";
 		key = key + t.typeNames[i] + ":";
-		if (i < t.typeChildren.length && t.typeChildren[i] != null) {
+		if (i < t.typeChildren.length && storesNothing(t, t.typeChildren[i])) {
+			key = key + "none";
+		} else if (i < t.typeChildren.length && t.typeChildren[i] != null) {
 			key = key + anonFieldKey(t.typeChildren[i], open);
 		} else {
 			key = key + "void";
@@ -1546,9 +1548,10 @@ function genObjectType(g: CGen, t: Type): string {
 
 	let structDef = `#ifndef ${name}_DEFINED\n#define ${name}_DEFINED\nstruct ${name} {\n`;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
+		if (i < t.typeChildren.length && storesNothing(t, t.typeChildren[i])) continue;
 		structDef = structDef + `  ${fieldTypes[i]} ${mangleFieldName(t.typeNames[i])};\n`;
 	}
-	structDef = structDef + "};\n#endif\n";
+	structDef = structDef + "};\n" + layoutAssert(g, t, `struct ${name}`) + "#endif\n";
 
 	// Emit struct body directly (reference parity: natural recursion gives correct order).
 	// By-value dependency on a union still mid-generation defers to the queue
@@ -1569,6 +1572,11 @@ function genObjectType(g: CGen, t: Type): string {
 	g.typesBeingDefined.pop();
 
 	return cTypeName;
+}
+
+function layoutAssert(g: CGen, t: Type, cType: string): string {
+	const size = sizeOfType(g.target, t);
+	return size < 0 ? "" : `_Static_assert(sizeof(${cType}) == ${size}, "${cType} layout");\n`;
 }
 
 // ===== Union Type Generation =====
@@ -1698,9 +1706,8 @@ function genUnionType(g: CGen, t: Type): string {
 		if (variant != null && variant.typeNames != null) {
 			let fi = 0;
 			while (fi < variant.typeNames.length) {
-				// Skip void-typed fields (e.g. `Result<void, E>` v0 has `void value`)
-				// — emitting `void value;` is invalid C.
-				if (fieldTypes[fi] != "void") {
+				const stored = fi >= variant.typeChildren.length || !storesNothing(variant, variant.typeChildren[fi]);
+				if (stored && fieldTypes[fi] != "void") {
 					addLine(b, `${fieldTypes[fi]} ${mangleFieldName(variant.typeNames[fi])};`);
 				}
 				fi += 1;
@@ -1708,6 +1715,7 @@ function genUnionType(g: CGen, t: Type): string {
 		}
 		b.indent -= 1;
 		addLine(b, "} " + varName + ";");
+		if (variant != null) add(b, layoutAssert(g, variant, varName));
 
 		vi += 1;
 	}
@@ -1738,6 +1746,7 @@ function genUnionType(g: CGen, t: Type): string {
 	addLine(b, "};");
 	b.indent -= 1;
 	addLine(b, "};");
+	add(b, layoutAssert(g, t, `struct ${name}`));
 	addLine(b, "#endif");
 	addNewline(b);
 
@@ -2336,7 +2345,7 @@ test "interface emits struct" {
 	const result = getTypeDesc(g, createStruct("Point", propNames, propTypes, true));
 	assert result == "Point";
 	const types = extract(sec(g, CSection.Types));
-	assert types == "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n#endif\n\n";
+	assert types == "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n_Static_assert(sizeof(struct Point) == 8, \"struct Point layout\");\n#endif\n\n";
 }
 
 test "class (Ref<Object>) emits struct with pointer" {
@@ -2348,7 +2357,7 @@ test "class (Ref<Object>) emits struct with pointer" {
 	const result = getTypeDesc(g, createRef(createStruct("Person", propNames, propTypes, true)));
 	assert result == "Person*";
 	const types = extract(sec(g, CSection.Types));
-	assert types == "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n#endif\n\n";
+	assert types == "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n_Static_assert(sizeof(struct Person) == 16, \"struct Person layout\");\n#endif\n\n";
 }
 
 test "array type" {
