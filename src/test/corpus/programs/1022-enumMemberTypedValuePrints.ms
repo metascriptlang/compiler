@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser prints an enum member as its ordinal, `0 1` (card 2026-10-03-raiser-enum-member-prints-ordinal)
+// @xfail(raiser): raiser prints an enum member as its ordinal, `0 1` (card 2026-09-25-raiser-enum-to-string-prints-the-number)
 // @stdout: A B
 // @exit: 0
 
