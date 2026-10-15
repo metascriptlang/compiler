@@ -1748,6 +1748,10 @@ function floatFitsSigned(f: float64, bits: int32): boolean {
 	return f > -limit - 1 && f < limit;
 }
 
+function floatFitsUnsigned(f: float64, bits: int32): boolean {
+	return f > -1.0 && f < Math.pow(2, bits as float64);
+}
+
 function convToFloat(src: RaiserValue, fromUnsigned: boolean, toFloat32: boolean): number {
 	if (src.kind != RaiserValueKind.Int) return toFloat32 ? (asNum(src) as float32) as float64 : asNum(src);
 	if (fromUnsigned) return toFloat32 ? ((src.intVal as uint64) as float32) as float64 : (src.intVal as uint64) as float64;
@@ -1788,12 +1792,17 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, vm.baseReg + inst.a, raiserString(fromUnsigned && src.kind == RaiserValueKind.Int ? `${src.intVal as uint64}` : raiserToString(src)));
 		return;
 	}
-	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0 && src.floatVal < 18446744073709551616.0) {
+	const bits = convClassBits(cls);
+	const signed = convClassSigned(cls);
+	if (src.kind == RaiserValueKind.Float && !signed && !floatFitsUnsigned(src.floatVal, bits)) {
+		const top: uint64 = bits == 64 ? 18446744073709551615 : ((1 as uint64) << (bits as uint64)) - 1;
+		vmError(vm, `value ${src.floatVal} not in range 0 .. ${top}`);
+		return;
+	}
+	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0) {
 		setReg(vm, vm.baseReg + inst.a, raiserInt(int64Bits(src.floatVal as uint64)));
 		return;
 	}
-	const bits = convClassBits(cls);
-	const signed = convClassSigned(cls);
 	const hi: int64 = bits == 64
 		? 9223372036854775807
 		: ((1 as int64) << ((bits - 1) as int64)) - 1;
@@ -2053,6 +2062,26 @@ test "a float converted to a signed integer out of its range stops, as on C" {
 	const i8 = execConv(raiserFloat(128.0), RaiserConvClass.I8);
 	assert i8.error.indexOf("value 128 not in range -128 .. 127") >= 0;
 	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
+}
+
+test "a float converted to an unsigned integer out of its range stops, as on C and JS" {
+	assert execConv(raiserFloat(-1.0), RaiserConvClass.U8).error == "value -1 not in range 0 .. 255";
+	assert execConv(raiserFloat(256.0), RaiserConvClass.U8).error == "value 256 not in range 0 .. 255";
+	assert execConv(raiserFloat(65536.5), RaiserConvClass.U16).error == "value 65536.5 not in range 0 .. 65535";
+	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.U32).error == "value NaN not in range 0 .. 4294967295";
+	assert execConv(raiserFloat(1.0 / 0.0), RaiserConvClass.U64).error == "value Infinity not in range 0 .. 18446744073709551615";
+	assert execConv(raiserFloat(-1.0 / 0.0), RaiserConvClass.U64).error == "value -Infinity not in range 0 .. 18446744073709551615";
+	assert execConv(raiserFloat(18446744073709551616.0), RaiserConvClass.U64).error == "value 18446744073709552000 not in range 0 .. 18446744073709551615";
+	assert execConv(raiserFloat(-9223372036854777856.0), RaiserConvClass.U64).error.indexOf("not in range 0 .. 18446744073709551615") >= 0;
+}
+
+test "a float in an unsigned integer's range truncates toward zero" {
+	assert execConv(raiserFloat(-0.9), RaiserConvClass.U8).exitValue.intVal == 0;
+	assert execConv(raiserFloat(255.9), RaiserConvClass.U8).exitValue.intVal == 255;
+	assert execConv(raiserFloat(4294967295.5), RaiserConvClass.U32).exitValue.intVal == 4294967295;
+	assert execConv(raiserFloat(9223372036854775808.0), RaiserConvClass.U64).exitValue.intVal == int64Bits(9223372036854775808);
+	assert execConv(raiserFloat(18446744073709549568.0), RaiserConvClass.U64).exitValue.intVal == int64Bits(18446744073709549568);
+	assert execConv(raiserFloat(128.75), RaiserConvClass.U8, RaiserConvClass.F32 as int32).exitValue.intVal == 128;
 }
 
 test "a uint64 past int64 converted to a signed integer stops, as on C" {
