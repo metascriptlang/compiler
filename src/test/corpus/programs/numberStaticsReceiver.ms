@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Number'
 // @stdout: 9007199254740991 true true false
 
 function widen(x: float64): float64 {

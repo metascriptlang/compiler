@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'super' at comptime (a derived constructor calling super)
 // @stdout: 9 1 true false false true xy!z
 // @exit: 0
 

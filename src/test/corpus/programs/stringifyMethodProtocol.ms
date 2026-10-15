@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // @stdout: explicit=$7 base=1/2 sub=sub:1 num=5 flag=true joined=$7-5
 
 class Money {
