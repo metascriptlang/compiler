@@ -12,7 +12,8 @@ import { hasExtraGlobalImports } from "../checker/prelude";
 import { TargetInfo, hostTargetInfo } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises } from "../checker/raises";
-import { hasErrors, CheckerError, CheckerContext, GcMode } from "../checker/context";
+import { hasErrors, CheckerError, CheckerContext, GcMode, Severity, ExportRegistry } from "../checker/context";
+import { checkProgramWithRegistry, preludeContextFor } from "../checker/checkPass";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
@@ -220,6 +221,28 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	// refuses a construct reports it here instead of emitting silently-wrong JS.
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	return Result.ok(generateJS(transformed, []));
+}
+
+export function raiserErrors(source: string): string {
+	resetBuildState();
+	const pr = parseSource(source);
+	if (!pr.ok) return "parse failed";
+	const ctx: CheckerContext = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, preludeContextFor("", ".rms"));
+	let text = "";
+	for (const e of ctx.errors) {
+		if (e.severity == Severity.Error) text = text + e.message + "\n";
+	}
+	return text;
+}
+
+export function refusedOnEveryBackend(source: string, needle: string): string {
+	const c = compileToC(source);
+	if (c.ok || !c.error.includes(needle)) return "C: " + (c.ok ? "accepted" : c.error);
+	const js = compileToJS(source);
+	if (js.ok || !js.error.includes(needle)) return "JS: " + (js.ok ? "accepted" : js.error);
+	const raiser = raiserErrors(source);
+	if (!raiser.includes(needle)) return "Raiser: " + (raiser == "" ? "accepted" : raiser);
+	return "";
 }
 
 export function compileTestBuildToJS(source: string): CompileResult {

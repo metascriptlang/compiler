@@ -236,8 +236,25 @@ export function nullishPayloadType(t: Type | null): Type | null {
 export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 	const t = expr.nodeType;
 	if (t == null) return null;
+	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
 	const peeled = peelToStructOrUnion(t);
 	if (peeled == null || peeled.kind != TypeKind.Struct) return null;
+	return declaredToString(ctx, expr);
+}
+
+export function distinctTextRefusal(t: Type): string {
+	const shown = typeDisplayName(t);
+	return "cannot turn " + shown + " into text: a distinct type has none of its base's operations — convert it first (x as "
+		+ typeDisplayName(distinctBody(t)) + ") or declare function toString(this x: " + shown + "): string";
+}
+
+export function distinctText(ctx: CheckerContext, expr: Node, t: Type): Node | null {
+	const text = declaredToString(ctx, expr);
+	if (text == null) addError(ctx, distinctTextRefusal(t), expr.location.line, expr.location.column);
+	return text;
+}
+
+function declaredToString(ctx: CheckerContext, expr: Node): Node | null {
 	const loc = expr.location;
 	const memberNode = createNodeAt(NodeKind.MemberExpr,
 		{ object: expr, property: "toString", isOptional: false }, loc);

@@ -1,9 +1,11 @@
 // @stdout: calls=3
-// @skip-raiser: the raiser prints the value of a distinct and `[object]` for a Map where C and JS print the type name; stringifyEvaluatesOperand.ms pins the raiser's evaluation
-// note: console.log evaluates its argument exactly once, also when the argument's type has no text of its own and prints a placeholder (a distinct number, a distinct string, a Map).
+// @skip-raiser: the raiser prints `[object]` for a Map where C and JS print the type name; stringifyEvaluatesOperand.ms pins the raiser's evaluation
+// note: console.log evaluates its argument exactly once: a distinct number or string through its declared toString, and a Map, whose text is a placeholder.
 
 type Small = distinct int8;
 type Name = distinct string;
+function toString(this x: Small): string { return "S" + (x as int8).toString(); }
+function toString(this x: Name): string { return x as string; }
 
 let calls = 0;
 const shared = new Map<string, int32>();

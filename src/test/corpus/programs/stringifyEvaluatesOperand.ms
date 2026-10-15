@@ -1,8 +1,10 @@
 // @stdout: calls=9 texts=9
-// note: a value converted to text is evaluated exactly once, also when its type has no text of its own and prints a placeholder (a distinct number, a distinct string, a Map): in a template, in String(x) and in a string concatenation. The texts themselves differ by backend and are not printed here.
+// note: a value converted to text is evaluated exactly once, in a template, in String(x) and in a string concatenation: a distinct number or string through its declared toString, and a Map, whose text is a placeholder that differs by backend and is not printed here.
 
 type Small = distinct int8;
 type Name = distinct string;
+function toString(this x: Small): string { return "S" + (x as int8).toString(); }
+function toString(this x: Name): string { return x as string; }
 
 let calls = 0;
 const shared = new Map<string, int32>();
