@@ -1327,6 +1327,10 @@ export function convertedTo(ctx: CheckerContext, operand: Node, slot: Type): Typ
 	return operand == ctx.conversionOperand && ctx.conversionTarget != null ? ctx.conversionTarget : slot;
 }
 
+export function wrapsIntoUnsignedTarget(ctx: CheckerContext, operand: Node): boolean {
+	return operand == ctx.conversionOperand && ctx.conversionTarget != null && isUnsignedIntegerType(ctx.conversionTarget);
+}
+
 export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type, shown: Type): void {
 	if (target.kind == TypeKind.Enum) {
 		reportConstEnumCast(ctx, expr, target);
