@@ -1713,6 +1713,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				}
 			}
 		}
+		if (extMultiFiltered.length > 1 && isContextSensitive(d.arguments[ai])) continue;
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
 		if (extMultiFiltered.length > 1 && literalArgs[ai]) paramExpected = null;
@@ -3758,6 +3759,52 @@ function mostSpecificGenericExt(exts: ExtensionMethod[]): int32 {
 	return winner;
 }
 
+function rankExtensionOverloads(ctx: CheckerContext, exts: ExtensionMethod[], candidates: Type[], args: Node[], argTypes: Type[],
+	scopeDepths: number[], recvRelations: TypeRelation[], objType: Type | null, skipMask: boolean[], rejected: boolean[]): number {
+	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, args, argTypes, scopeDepths, recvRelations, exts, skipMask, rejected);
+	if (idx == -2) {
+		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
+		// wins over `this number[]` on a uint8[] object instead of tying.
+		if (objType != null && !isUnresolvedType(objType)) {
+			let exactIdx = -1;
+			let exactCount = 0;
+			let xi = 0;
+			while (xi < exts.length) {
+				const xft = getExtFnType(exts[xi]);
+				if (!exts[xi].isStatic && xft.kind == TypeKind.Function && xft.typeChildren.length > 0
+						&& sameType(xft.typeChildren[0], objType)) {
+					exactIdx = xi;
+					exactCount = exactCount + 1;
+				}
+				xi = xi + 1;
+			}
+			if (exactCount == 1) {
+				idx = exactIdx;
+			}
+		}
+		// Tiebreaker: prefer concrete extension over generic
+		if (idx == -2) {
+			let concreteIdx = -1;
+			let concreteCount = 0;
+			let ti = 0;
+			while (ti < exts.length) {
+				if (!hasGenericParams(getExtFnType(exts[ti]))) {
+					concreteIdx = ti;
+					concreteCount = concreteCount + 1;
+				}
+				ti = ti + 1;
+			}
+			const specificIdx = concreteCount == 0 ? mostSpecificGenericExt(exts) : -1;
+			if (concreteCount == 1) {
+				idx = concreteIdx;
+			} else if (specificIdx >= 0) {
+				idx = specificIdx;
+			}
+		}
+	}
+	return idx;
+}
+
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
 	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
@@ -3824,48 +3871,25 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		di = di + 1;
 	}
 	const args = (callNode.data as CallExprData).arguments;
-	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, args, argTypes, scopeDepths, recvRelations, exts);
+	const skipMask: boolean[] = [];
+	const rejected: boolean[] = [];
+	for (let ai = 0; ai < args.length; ai += 1) skipMask.push(ai < argTypes.length && argTypes[ai] == null && isContextSensitive(args[ai]));
+	for (let ci = 0; ci < candidates.length; ci += 1) rejected.push(false);
+	let idx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
 	if (idx == -2) {
-		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
-		// wins over `this number[]` on a uint8[] object instead of tying.
-		if (objType != null && !isUnresolvedType(objType)) {
-			let exactIdx = -1;
-			let exactCount = 0;
-			let xi = 0;
-			while (xi < exts.length) {
-				const xft = getExtFnType(exts[xi]);
-				if (!exts[xi].isStatic && xft.kind == TypeKind.Function && xft.typeChildren.length > 0
-						&& sameType(xft.typeChildren[0], objType)) {
-					exactIdx = xi;
-					exactCount = exactCount + 1;
-				}
-				xi = xi + 1;
-			}
-			if (exactCount == 1) {
-				idx = exactIdx;
-			}
+		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
+		return getReturnType(candidates[0]);
+	}
+	let settled = false;
+	if (idx >= 0 && skipMask.includes(true)) {
+		let tryIdx = idx;
+		while (tryIdx >= 0 && !contextArgsFit(ctx, args, skipMask, candidates[tryIdx])) {
+			rejected[tryIdx] = true;
+			tryIdx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
 		}
-		// Tiebreaker: prefer concrete extension over generic
-		if (idx == -2) {
-			let concreteIdx = -1;
-			let concreteCount = 0;
-			let ti = 0;
-			while (ti < exts.length) {
-				if (!hasGenericParams(getExtFnType(exts[ti]))) {
-					concreteIdx = ti;
-					concreteCount = concreteCount + 1;
-				}
-				ti = ti + 1;
-			}
-			const specificIdx = concreteCount == 0 ? mostSpecificGenericExt(exts) : -1;
-			if (concreteCount == 1) {
-				idx = concreteIdx;
-			} else if (specificIdx >= 0) {
-				idx = specificIdx;
-			} else {
-				addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
-				return getReturnType(candidates[0]);
-			}
+		if (tryIdx >= 0) {
+			idx = tryIdx;
+			settled = true;
 		}
 	}
 	if (idx == -1) {
@@ -3892,6 +3916,14 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	// Fill default args for extension overloads
 	// defaultOffset: 0 for static (parser stripped receiver from fnDefaults), 1 for non-static
 	let winnerType = candidates[idx];
+	for (let ai = 0; ai < skipMask.length; ai += 1) {
+		if (!skipMask[ai]) continue;
+		if (!settled) {
+			clearCheckerState(args[ai]);
+			callCheckExpr(ctx, args[ai], ai < winnerType.typeChildren.length ? winnerType.typeChildren[ai] : null);
+		}
+		argTypes[ai] = args[ai].nodeType!;
+	}
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
@@ -3998,14 +4030,15 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 
 // Resolve overloads with inheritance penalty.
 function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[], args: Node[],
-	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[]): number {
+	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[], skipMask: boolean[], rejected: boolean[]): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
 	let ambiguous = false;
+	const onlySkipped = skipMask.includes(true) && !skipMask.includes(false);
 	let i = 0;
 	while (i < candidates.length) {
-		if (candidates[i].kind != TypeKind.Function) { i = i + 1; continue; }
-		const score = scoreCandidateWithSkip(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]), [], literalRelations(candidates[i].typeChildren, args, argTypes));
+		if (candidates[i].kind != TypeKind.Function || rejected[i]) { i = i + 1; continue; }
+		const score = scoreCandidateWithSkip(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]), skipMask, literalRelations(candidates[i].typeChildren, args, argTypes));
 		if (isNoMatch(score)) { i = i + 1; continue; }
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {
@@ -4017,7 +4050,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 		while (pi < candidates[i].typeChildren.length && pi < argTypes.length) {
 			const pType = candidates[i].typeChildren[pi];
 			const aType = argTypes[pi];
-			if (pType.kind == TypeKind.Struct && aType.kind == TypeKind.Struct) {
+			if (aType != null && pType.kind == TypeKind.Struct && aType.kind == TypeKind.Struct) {
 				if (pType.typeName != "" && aType.typeName != "" && pType.typeName != aType.typeName) {
 					const depth = inheritanceDepth(aType, pType, ctx);
 					if (depth > 0 && (maxDepth == -1 || depth > maxDepth)) {
@@ -4040,7 +4073,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 				bestIdx = i;
 				bestScore = score;
 				ambiguous = false;
-			} else if (cmp == 0) {
+			} else if (cmp == 0 && !onlySkipped) {
 				ambiguous = true;
 			}
 		}
