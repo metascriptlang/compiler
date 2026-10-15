@@ -747,15 +747,25 @@ export function findAccessor(ctx: CheckerContext, objType: Type, routineName: st
 	return findFirstMatchingExt(exts, objType);
 }
 
+function hasConcreteReceiver(ext: ExtensionMethod): boolean {
+	if (ext.isStatic) return true;
+	const fnType = getExtFnType(ext);
+	if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) return false;
+	const receiver = fnType.typeChildren[0];
+	return !isUnresolvedType(receiver) && receiver.kind != TypeKind.Unknown && receiver.kind != TypeKind.GenericParam;
+}
+
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
 	let cur: Type | null = objType;
 	let depth = 0;
 	while (cur != null && depth < 64) {
-		let i = 0;
-		while (i < exts.length) {
-			if (isReceiverMatch(exts[i], cur)) return exts[i];
-			i = i + 1;
+		let catchAll: ExtensionMethod | null = null;
+		for (const ext of exts) {
+			if (!isReceiverMatch(ext, cur)) continue;
+			if (hasConcreteReceiver(ext)) return ext;
+			if (catchAll == null) catchAll = ext;
 		}
+		if (catchAll != null) return catchAll;
 		cur = classBaseStruct(cur);
 		depth += 1;
 	}
