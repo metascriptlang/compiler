@@ -54,8 +54,7 @@ const UP_FIELD: string = "$up";
 
 // The hidden env-pointer parameter name on every lifted function. The C ABI
 // for closure calls passes the env as the LAST argument (or only argument for
-// nullary closures). Kept as a constant to avoid magic-string drift; analyzer
-// (`src/analyzer/inject.ms:isEnvParam`) recognizes the same prefix.
+// nullary closures). Kept as a constant to avoid magic-string drift.
 const ENV_PARAM_NAME: string = "_envP";
 
 function freshEnvParamSym(ctx: TransformContext): Symbol {

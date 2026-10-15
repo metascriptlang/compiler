@@ -1745,25 +1745,15 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 // Register RC-typed function parameters for scope cleanup.
 // The function owns the parameter values — they need destroy at scope exit.
 
-function isEnvParam(name: string): boolean {
-	// Lambda-lifted closure env pointer — managed by closure infrastructure, skip from cleanup
-	if (name.length < 6) return false;
-	return name.slice(0, 6) == "__envP";
-}
-
 function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, body: Node): void {
 	if (dctx.ctx.checkerCtx == null) return;
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
-		const pName = paramNames[pi];
-		// Skip closure env params (item 11) — they're managed by msClosure infrastructure
-		if (!isEnvParam(pName)) {
-			const pRcInfo = classifyRc(paramTypes[pi], dctx);
-			if (pRcInfo.needsCleanup) {
-				// Params are borrows registered as cursors (Nim default — no sink
-				// params, ea38c2a): the caller owns the value; stores inside the
-				// callee copy at the assignment point.
-				registerVar(dctx, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
-			}
+		const pRcInfo = classifyRc(paramTypes[pi], dctx);
+		if (pRcInfo.needsCleanup) {
+			// Params are borrows registered as cursors (no sink params, ea38c2a):
+			// the caller owns the value; stores inside the callee copy at the
+			// assignment point.
+			registerVar(dctx, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 		}
 	}
 }
@@ -1794,7 +1784,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const outerFinallyVars = dctx.finallyProtectedVars;
 	const outerBody = dctx.currentFuncBody;
-	const outerName = dctx.currentFuncName;
 	const outerCache = dctx.cfgCache;
 
 	// Phase A: scan finally blocks for protected variables
@@ -1805,7 +1794,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
-	dctx.currentFuncName = fnName;
 	dctx.cfgCache = createCfgCache();
 
 	// Register RC-typed params for cleanup.
@@ -1833,7 +1821,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;
-	dctx.currentFuncName = outerName;
 	dctx.cfgCache = outerCache;
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
@@ -2623,13 +2610,6 @@ test "processBlockBody handles null" {
 	const dctx = testDrcContext("const x = 1;");
 	const result = processBlockBody(null as unknown as Node, dctx, false, false, testLoc());
 	assert result == null;
-}
-
-test "isEnvParam detects __envP" {
-	assert isEnvParam("__envP");
-	assert isEnvParam("__envP_raw");
-	assert !isEnvParam("param");
-	assert !isEnvParam("env");
 }
 
 test "recordMoveInContext finds correct scope" {

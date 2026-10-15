@@ -61,7 +61,6 @@ export interface DrcContext {
 	finallyProtectedVars: Symbol[];   // vars in enclosing finally blocks — never last-read (Phase A); identity by Symbol
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
 	currentFuncBody: Node | null;   // current function body for CFG building — Phase C
-	currentFuncName: string;        // current function name — for DRC hook detection
 	stmtBorrowReads: BorrowRead[];  // Normal-mode inline reads of RC vars in the current statement
 	                                // — retro-hoisted to borrow temps if the var moves later in it
 	inEnsureMove: number;           // depth of explicit `move` arguments being walked — a copy
@@ -91,7 +90,6 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		finallyProtectedVars: [],
 		cfgCache: createCfgCache(),
 		currentFuncBody: null,
-		currentFuncName: "",
 		stmtBorrowReads: [],
 		inEnsureMove: 0,
 		skipAwaitableCapture: false,
