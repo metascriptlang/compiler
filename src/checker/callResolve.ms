@@ -1212,7 +1212,7 @@ function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): T
 		node.nodeType = errorType();
 		return node.nodeType;
 	}
-	if (!foldAtCompileTime(ctx, node, callType)) {
+	if (!foldAtCompileTime(ctx, node, callType, callType)) {
 		node.nodeType = errorType();
 		return node.nodeType;
 	}
@@ -1222,10 +1222,12 @@ function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): T
 export function foldUserOperatorConstant(ctx: CheckerContext, expr: Node, expected: Type | null): void {
 	if (isEngineCheckMode() || ctx.compileTimeBodyDepth > 0 || !isUserOperatorConstant(expr, 0)) return;
 	const mark = ctx.errors.length;
-	if (!foldAtCompileTime(ctx, expr, expected)) ctx.errors = ctx.errors.slice(0, mark);
+	if (!foldAtCompileTime(ctx, expr, expected, expr.nodeType)) ctx.errors = ctx.errors.slice(0, mark);
 }
 
-function foldAtCompileTime(ctx: CheckerContext, node: Node, expected: Type | null): boolean {
+// The folded value keeps `staticType`, the type of the expression it replaces:
+// an enum result folds to its ordinal typed as the enum.
+function foldAtCompileTime(ctx: CheckerContext, node: Node, expected: Type | null, staticType: Type | null): boolean {
 	const loc = node.location;
 	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ReturnStmt, { argument: cloneNodeForCheck(node) }, loc)] }, loc);
 	const errorsBefore = errorCount(ctx);
@@ -1238,6 +1240,7 @@ function foldAtCompileTime(ctx: CheckerContext, node: Node, expected: Type | nul
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
 	callCheckExpr(ctx, node, expected);
+	if (node.kind == NodeKind.NumberLiteral && staticType != null && peelTransparentInstance(staticType).kind == TypeKind.Enum) node.nodeType = staticType;
 	node.flags = node.flags.incl(NodeFlag.Folded);
 	return true;
 }
