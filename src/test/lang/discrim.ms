@@ -128,6 +128,20 @@ test "match-type enum disc narrowed by == keeps its kind as a whole value" {
 	}
 }
 
+function makeStrD(): PairD {
+	return { kind: NodeK.Str, strVal: "hello" };
+}
+
+test "match-type enum disc narrowed by != keeps its kind as a whole value" {
+	const s = makeStrD();
+	if (s.kind != NodeK.Num) {
+		const c = s;
+		assert c.kind == NodeK.Str;
+		assert s.kind == NodeK.Str;
+		assert showD(s) == `{"kind":"Str","strVal":"hello"}`;
+	}
+}
+
 // =====================================================================
 // SHAPE 4: Match-type with boolean discriminator
 // =====================================================================
