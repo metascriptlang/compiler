@@ -1281,11 +1281,12 @@ class Gen {
 		this.scope.pop();
 		const cost = body.cost + (ROUTINE_FRAMES as int64);
 		this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [Ty.Int32], len: 0, cost: cost });
-		let text = indent + "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" +
+		const head = this.rng.chance(50) ? "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" : "const " + name + " = (" + n + ": int32): " + tyName(t) + " => {\n";
+		let text = indent + head +
 			indent + "\tif (" + n + " <= 0 || " + n + " >= " + String(ROUTINE_FRAMES) + ") { return " + body.text + "; }\n" +
 			(outer.length == 0 ? "" : indent + "\tif (" + n + " == 2) { return " + outer[this.rng.below(outer.length)].name + "; }\n") +
 			indent + "\treturn " + name + "(" + n + " - 1);\n" +
-			indent + "}\n";
+			indent + (head.startsWith("const ") ? "};\n" : "}\n");
 		if (this.rng.chance(50)) {
 			const alias = this.entName("k");
 			this.ents.push({ kind: EntKind.Callable, name: alias, ty: t, params: [Ty.Int32], len: 0, cost: cost });
@@ -1622,16 +1623,19 @@ test "a nested routine recurses at most its frame bound and may be named as a va
 	const f = withWeights("fams=closure w.closure.routine=40");
 	let routines = 0;
 	let aliases = 0;
+	let arrows = 0;
 	for (let seed = 1; seed <= 20; seed++) {
 		const text = generate(seed as uint64, f);
 		for (const line of text.split("\n")) {
 			const t = line.trim();
-			if (t.startsWith("function r") && t.endsWith(" {") && line.startsWith("\t")) { routines++; }
+			if ((t.startsWith("function r") || (t.startsWith("const r") && t.contains(": int32): "))) && t.endsWith(" {") && line.startsWith("\t")) { routines++; }
+			if (t.startsWith("const r") && t.endsWith(" => {")) { arrows++; }
 			if (t.startsWith("if (q") && t.contains(" <= 0 || q") && !t.contains(" >= " + String(ROUTINE_FRAMES) + ") { return ")) { assert false; }
 			if (t.startsWith("const k") && t.contains(" = r") && t.endsWith(";") && !t.contains("(")) { aliases++; }
 		}
 	}
 	assert routines > 10;
+	assert arrows > 3 && arrows < routines;
 	assert aliases > 3;
 	assert countOver(" == 2) { return ", 20, f) > 10;
 }
