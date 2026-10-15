@@ -187,6 +187,7 @@ class Gen {
 	bodyDepth: int32 = 0;
 	famShape: Shape = Shape.Other;
 	elseArms: int32 = 0;
+	atTop: boolean = false;
 	arithInElse: int32 = 0;
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
@@ -1281,7 +1282,7 @@ class Gen {
 		this.scope.pop();
 		const cost = body.cost + (ROUTINE_FRAMES as int64);
 		this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [Ty.Int32], len: 0, cost: cost });
-		const head = this.rng.chance(50) ? "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" : "const " + name + " = (" + n + ": int32): " + tyName(t) + " => {\n";
+		const head = this.rng.chance(50) && !this.atTop ? "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" : "const " + name + " = (" + n + ": int32): " + tyName(t) + " => {\n";
 		let text = indent + head +
 			indent + "\tif (" + n + " <= 0 || " + n + " >= " + String(ROUTINE_FRAMES) + ") { return " + body.text + "; }\n" +
 			(outer.length == 0 ? "" : indent + "\tif (" + n + " == 2) { return " + outer[this.rng.below(outer.length)].name + "; }\n") +
@@ -1499,7 +1500,20 @@ export function generate(seed: uint64, f: Features): string {
 	let fns = "";
 	for (let i = 0; i < f.funcs; i++) { fns += g.fn(i) + "\n"; }
 
+	let top = "";
+	for (let b = 0; b < f.top; b++) {
+		g.scope = [];
+		g.ents = [];
+		g.cost = 0 as int64;
+		g.costCap = FN_COST_CAP;
+		g.mult = 1 as int64;
+		g.atTop = true;
+		top += g.block(0, "", false, Ty.Int32, false);
+		g.atTop = false;
+	}
+
 	g.scope = [];
+	g.ents = [];
 	g.cost = 0 as int64;
 	g.costCap = TOP_COST_CAP;
 	g.mult = 1 as int64;
@@ -1525,7 +1539,7 @@ export function generate(seed: uint64, f: Features): string {
 	for (const v of g.globals) { prints += "console.log(\"" + v.name + " \" + String(" + v.name + "));\n"; }
 
 	return "// smith seed=" + String(seed) + " features=" + f.format() + "\n" +
-		g.helperText + plantDecls(f.plant) + globals + "\n" + fns + entries + plantSite + prints;
+		g.helperText + plantDecls(f.plant) + globals + "\n" + fns + top + entries + plantSite + prints;
 }
 
 test "the same seed and features give the same program" {
@@ -1640,13 +1654,30 @@ test "a nested routine recurses at most its frame bound and may be named as a va
 	assert countOver(" == 2) { return ", 20, f) > 10;
 }
 
+test "a top-level block declares no function inside a block" {
+	const f = withWeights("fams=closure w.closure.routine=40");
+	let routines = 0;
+	for (let seed = 1; seed <= 20; seed++) {
+		const text = generate(seed as uint64, f);
+		const at = text.indexOf("\nconsole.log(\"e");
+		let inTop = false;
+		for (const line of text.slice(0, at < 0 ? text.length : at).split("\n")) {
+			if (line.startsWith("for (") || line.startsWith("if (")) { inTop = true; }
+			if (line.startsWith("function ")) { inTop = false; }
+			if (inTop && line.startsWith("\t") && line.trim().startsWith("function r")) { assert false; }
+			if (inTop && line.trim().startsWith("const r") && line.endsWith(" => {")) { routines++; }
+		}
+	}
+	assert routines > 0;
+}
+
 test "default weights keep the pinned stream" {
 	const sizes = [21703, 13475, 18941, 17328];
 	const closureSizes = [11356, 11418, 13350, 9328];
-	const closure = withWeights("fams=closure w.closure.routine=0");
+	const closure = withWeights("fams=closure top=0 w.closure.routine=0");
 	for (let i = 0; i < 4; i++) {
-		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic w.closure.routine=0")).replace(" w.closure.routine=0", "").byteLength == sizes[i];
-		assert generate((i + 1) as uint64, closure).replace(" w.closure.routine=0", "").byteLength == closureSizes[i];
+		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic top=0 w.closure.routine=0")).replace(" top=0", "").replace(" w.closure.routine=0", "").byteLength == sizes[i];
+		assert generate((i + 1) as uint64, closure).replace(" top=0", "").replace(" w.closure.routine=0", "").byteLength == closureSizes[i];
 	}
 }
 
