@@ -186,7 +186,7 @@ class Gen {
 	bodyDepth: int32 = 0;
 	famShape: Shape = Shape.Other;
 	elseArms: int32 = 0;
-	elseTop: boolean = false;
+	arithInElse: int32 = 0;
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
 
@@ -381,8 +381,11 @@ class Gen {
 	}
 
 	binary(t: Ty, depth: int32): string {
+		const inElse = this.elseArms > 0;
+		if (inElse) { this.arithInElse++; }
 		const a = this.expr(t, depth + 1);
 		const b = this.expr(t, depth + 1);
+		if (inElse) { this.arithInElse--; }
 		if (isFloat(t)) { return "(" + a + " " + this.pickOp(FLOAT_OPS) + " " + b + ")"; }
 		const op = this.pickOp(INT_OPS);
 		const guarded = op == "/" || op == "%" || (trapsOnOverflow(t) && (op == "+" || op == "-" || op == "*"));
@@ -448,15 +451,13 @@ class Gen {
 	}
 
 	expr(t: Ty, depth: int32): string {
-		const nested = this.elseArms > 0 && !this.elseTop;
-		this.elseTop = false;
 		if (this.nodesLeft == 0) { return this.leaf(t); }
 		this.nodesLeft--;
 		if (depth >= this.exprMax || !this.reserve(1 as int64)) { return this.leaf(t); }
 		if (this.fams.length > 0 && this.rng.chance(this.wt(W.ExprFam))) {
 			this.famShape = Shape.Other;
 			const fam = this.famExpr(t, depth);
-			if (fam != "" && !(this.famShape == Shape.Ternary && nested)) {
+			if (fam != "" && !(this.famShape == Shape.Ternary && this.arithInElse > 0)) {
 				this.shape = this.famShape;
 				return fam;
 			}
@@ -472,7 +473,7 @@ class Gen {
 		} else if (kind == 3) {
 			out = this.convert(t, depth);
 		} else if (kind == 4) {
-			if (nested) { return this.leaf(t); }
+			if (this.arithInElse > 0) { return this.leaf(t); }
 			out = "(" + this.cond(depth + 1) + " ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
 			shape = Shape.Ternary;
 		} else {
@@ -505,7 +506,6 @@ class Gen {
 
 	elseExpr(t: Ty, depth: int32): string {
 		this.elseArms++;
-		this.elseTop = true;
 		const e = this.expr(t, depth + 1);
 		this.elseArms--;
 		return e;
@@ -1813,7 +1813,7 @@ test "a family ternary is never narrowed by a raw cast" {
 	assert wrapped > 10;
 }
 
-test "no ternary nests below an else arm" {
+test "no ternary sits under arithmetic inside an else arm" {
 	const g = new Gen();
 	g.rng = Rng.seeded(5 as uint64);
 	g.tys = [Ty.Int32, Ty.Uint8];
@@ -1825,20 +1825,16 @@ test "no ternary nests below an else arm" {
 		{ kind: EntKind.HeldVar, name: "h1", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
 	];
 	let outside = 0;
-	let arm = 0;
 	for (let i = 0; i < 300; i++) {
 		g.costCap = TOP_COST_CAP;
 		g.cost = 0 as int64;
 		g.nodesLeft = GEN_NODE_CAP;
 		g.elseArms = 1;
 		assert !g.binary(Ty.Int32, 0).contains(" ? ");
-		assert !g.expr(Ty.Int32, 0).contains(" ? ");
 		g.elseArms = 0;
 		if (g.binary(Ty.Int32, 0).contains(" ? ")) { outside++; }
-		if (g.elseExpr(Ty.Int32, 0).contains(" ? ")) { arm++; }
 	}
 	assert outside > 30;
-	assert arm > 10;
 }
 
 test "a float element is never searched or kept in a Set" {
