@@ -106,11 +106,25 @@ type PairD = match (kind: NodeK) {
 	NodeK.Str => { strVal: string },
 };
 
+function showD<T>(x: T): string {
+	return JSON.stringify(x);
+}
+
 test "match-type enum disc narrowed by == is copied as a whole value" {
 	const s: PairD = { kind: NodeK.Str, strVal: "hello" };
 	if (s.kind == NodeK.Str) {
 		const c = s;
 		assert c.strVal == "hello";
+	}
+}
+
+test "match-type enum disc narrowed by == keeps its kind as a whole value" {
+	const s: PairD = { kind: NodeK.Str, strVal: "hello" };
+	if (s.kind == NodeK.Str) {
+		const c = s;
+		assert c.kind == NodeK.Str;
+		assert JSON.stringify(s) == `{"kind":"Str","strVal":"hello"}`;
+		assert showD(s) == `{"kind":"Str","strVal":"hello"}`;
 	}
 }
 

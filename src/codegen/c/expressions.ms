@@ -685,9 +685,7 @@ class ObjLitShape {
 	unionWrapName: string;
 	unionWrapType: Type | null;
 	unionWrapIdx: number;
-	unionDiscKeyIdx: number;
 	isRefUnion: boolean;
-	discFieldInVariant: boolean;
 	fieldsType: Type | null;
 }
 
@@ -699,13 +697,7 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 	let unionWrapName = "";
 	let unionWrapType: Type | null = null;
 	let unionWrapIdx = -1;
-	let unionDiscKeyIdx = -1;
 	let isRefUnion = false;
-	// True when the resolved Union has a literal-disc field that lives in
-	// each variant struct (vs enum-disc match-type where the disc is the
-	// wrapper's `_tag`). Construction must write the disc field instead
-	// of skipping it.
-	let discFieldInVariant = false;
 	if (node.nodeType != null) {
 		// Unwrap Ref<Union> for discriminated union construction
 		let litType = node.nodeType;
@@ -764,9 +756,6 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 					ki = ki + 1;
 				}
 			}
-			unionDiscKeyIdx = discKeyIdx;
-			const dt = litType.typeExtra;
-			discFieldInVariant = dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String);
 			if (discKeyIdx >= 0) {
 				// Discriminated: resolve variant from discriminant value
 				const discValNode = d.properties[discKeyIdx];
@@ -858,7 +847,7 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 		const u = peelToStructOrUnion(unionWrapType);
 		fieldsType = u != null && u.typeChildren != null && unionWrapIdx < u.typeChildren.length ? u.typeChildren[unionWrapIdx] : null;
 	}
-	return { cType, isClassObj, unionWrapName, unionWrapType, unionWrapIdx, unionDiscKeyIdx, isRefUnion, discFieldInVariant, fieldsType };
+	return { cType, isClassObj, unionWrapName, unionWrapType, unionWrapIdx, isRefUnion, fieldsType };
 }
 
 // ===== Iterative genExpr infrastructure =====
@@ -2394,9 +2383,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const unionWrapName = shape.unionWrapName;
 			const unionWrapType = shape.unionWrapType;
 			const unionWrapIdx = shape.unionWrapIdx;
-			const unionDiscKeyIdx = shape.unionDiscKeyIdx;
 			const isRefUnion = shape.isRefUnion;
-			const discFieldInVariant = shape.discFieldInVariant;
 			if (cType != "") {
 				// Reference pattern: allocate temp, zero-init, assign fields
 				const dest = destOf(ctx, node);
@@ -2428,13 +2415,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					emitProcLocalsLine(p, `${cType} ${tmpName};`);
 					emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${cType}));`);
 				}
-				const skipDiscKey = discFieldInVariant ? -1 : unionDiscKeyIdx;
 				const owner = shape.fieldsType != null ? peelToStructOrUnion(shape.fieldsType) : null;
 				let i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(ctx, cc, i);
-					// Skip discriminant key — handled by _tag in union wrap
-					if (i == skipDiscKey) { i += 1; continue; }
 					if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, d.keys[i]))) {
 						if (d.properties[i].kind != NodeKind.BooleanLiteral) emitStmtsLine(p, `(void)(${val});`);
 						i += 1;

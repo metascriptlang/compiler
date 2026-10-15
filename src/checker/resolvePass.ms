@@ -2306,14 +2306,13 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 		}
 	}
 
-	// Resolve each variant type.
-	// - Enum disc: stamp variant with `<alias>.<key>` (dotted form). The dot
-	//   serves dual purpose: error messages display `MyData.Ok`, and
-	//   `variantStructCName` excludes dotted names from direct C use (falls
-	//   back to synthetic `<Union>_v<N>` which matches the typedef emitted
-	//   by `genUnionType`).
-	// - Boolean disc: variants stay anonymous. Inject the disc field as
-	//   `BooleanLiteral` for narrowing; C stores no field of one value (`storesNothing`).
+	// Resolve each variant type. Every variant carries the disc field as a
+	// literal type (`BooleanLiteral` or `EnumLiteral`), so a narrowed variant
+	// used as a whole value keeps it. An enum variant is stamped
+	// `<alias>.<key>` (dotted): error messages display `MyData.Ok`, and
+	// `variantStructCName` excludes dotted names from direct C use (falls back
+	// to the synthetic `<Union>_v<N>` that `genUnionType` emits). C stores no
+	// field of one value in an anonymous struct (`storesNothing`).
 	const variantTypes: Type[] = [];
 	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
 		let resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
@@ -2322,19 +2321,15 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 			resolved = resolved.typeReturn;
 		}
 		if (resolved != null && resolved.kind == TypeKind.Struct && vi < d.variantKeys.length) {
-			if (isBooleanDisc) {
-				const discValue = d.variantKeys[vi] == "true";
-				const discFieldType = createBooleanLiteral(discValue);
-				const newNames: string[] = [d.discriminantName];
-				for (const n of resolved.typeNames) newNames.push(n);
-				const newChildren: Type[] = [discFieldType];
-				for (const c of resolved.typeChildren) newChildren.push(c);
-				resolved.typeNames = newNames;
-				resolved.typeChildren = newChildren;
-			} else {
-				const bareKey = bareAfterDelim(d.variantKeys[vi], ".");
-				resolved.typeName = d.aliasName + "." + bareKey;
-			}
+			const bareKey = bareAfterDelim(d.variantKeys[vi], ".");
+			const discFieldType = isBooleanDisc ? createBooleanLiteral(d.variantKeys[vi] == "true") : createEnumLiteral(discType, bareKey);
+			const newNames: string[] = [d.discriminantName];
+			for (const n of resolved.typeNames) newNames.push(n);
+			const newChildren: Type[] = [discFieldType];
+			for (const c of resolved.typeChildren) newChildren.push(c);
+			resolved.typeNames = newNames;
+			resolved.typeChildren = newChildren;
+			if (!isBooleanDisc) resolved.typeName = d.aliasName + "." + bareKey;
 		}
 		variantTypes.push(resolved);
 	}
