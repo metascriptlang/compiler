@@ -474,6 +474,19 @@ test "engine: a uint64 past int64 converted into an enum stops with its unsigned
 	assert ok.output == "1 1\n", ok.output;
 }
 
+test "engine: a bigint is refused on the vm instead of carrying the number through" {
+	const NO_BIGINT = "bigint is not supported on the Raiser VM";
+	const cast = evalOrcVM("function u(v: uint64): uint64 { return v; } const b = u(18446744073709551615) as bigint; console.log(`${b}`);");
+	assert cast.error.includes(NO_BIGINT), cast.error;
+	assert cast.output == "", cast.output;
+	const fromFloat = evalOrcVM("function f(v: float64): float64 { return v; } console.log(`${f(1.5) as bigint}`);");
+	assert fromFloat.error.includes(NO_BIGINT), fromFloat.error;
+	const literal = evalOrcVM("console.log(`${5n + 3n}`);");
+	assert literal.error.includes(NO_BIGINT), literal.error;
+	const comptime = evalSourceFull("function u(v: uint64): uint64 { return v; } const b = u(18446744073709551615) as bigint; return 1;");
+	assert comptime.lastError.includes(NO_BIGINT), comptime.lastError;
+}
+
 test "engine: a conversion into char stops outside 0 .. 255 and truncates a float, as on C and JS" {
 	const decl = "let a: int32[] = [-1, 300, 200]; let f: float64[] = [300.7, 65.9];";
 	assert evalOrcVM(decl + " console.log(`${(a[0] as char) as int32}`);").error.indexOf("value -1 not in range 0 .. 255") >= 0;

@@ -1,4 +1,5 @@
 // @stdout: 44 4464 3 42
+// @xfail(raiser): bigint is not supported on the Raiser VM
 // note: a cast to a type alias converts like a cast to the aliased integer type on every backend (JS printed 300 70000 3.9 42: the conversion was chosen from the cast's spelling, and an alias name matched no integer kind).
 
 type Big = bigint;

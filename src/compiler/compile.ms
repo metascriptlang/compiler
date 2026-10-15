@@ -30,6 +30,7 @@ import { inferRaises, resetRaises } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
+import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
@@ -3962,6 +3963,10 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		if (opts.verbose) verboseLog("compiling " + modPath);
 		const checked = graphCheckedModule(graph, modPath, mod, opts);
 		checked.ctx.errors = [];
+		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
+			refuseBigIntOnRaiser(checked.ctx, checked.program);
+			exitOnCheckerErrors(checked.ctx, modPath, mod.rawSource);
+		}
 		unitPaths.push(modPath);
 		unitPrograms.push(checked.program);
 		unitCtxs.push(checked.ctx);

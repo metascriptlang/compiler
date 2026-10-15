@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Undefined variable 'BigInt'
+// @xfail(raiser): bigint is not supported on the Raiser VM
 // note: BigInt(x) takes every value TS takes: a string that is not an integer throws SyntaxError, a number that is not an integer (NaN and Infinity included) throws RangeError, booleans and every integer width convert exactly; the messages are node's.
 
 function show(label: string, f: () => bigint): void {

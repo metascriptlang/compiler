@@ -22,6 +22,7 @@ import { nonNullMemberOfNullable } from "../../checker/compat";
 import { typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
+import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
@@ -389,6 +390,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 // Returns the register holding the result.
 
 export function compileExpr(s: RaiserCompState, node: Node): int32 {
+	if (carriesBigInt(node.nodeType)) return refuseBigInt(s, node);
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
@@ -754,6 +756,11 @@ function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, tar
 	const msg = refusal + " on the Raiser VM" + NO_BYTE_MEMORY;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
 	return emitTrapNil(s, msg);
+}
+
+function refuseBigInt(s: RaiserCompState, node: Node): int32 {
+	queueRaiserCompileError(RAISER_NO_BIGINT_MSG, node.location.line, node.location.column);
+	return emitTrapNil(s, RAISER_NO_BIGINT_MSG);
 }
 
 function refusePointerOp(s: RaiserCompState, node: Node): int32 {
