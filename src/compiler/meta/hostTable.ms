@@ -894,6 +894,15 @@ function _bridgeMsCheckRangeI32(args: RaiserValue[]): RaiserValue {
 	return v.kind == RaiserValueKind.Float ? raiserInt(v.floatVal as int64) : v;
 }
 
+function _bridgeMsCheckRangeI32FromU64(args: RaiserValue[]): RaiserValue {
+	const v = args[0];
+	if (v.intVal >= 0) return _bridgeMsCheckRangeI32(args);
+	const lo = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int64 : args[1].intVal;
+	const hi = args[2].kind == RaiserValueKind.Float ? args[2].floatVal as int64 : args[2].intVal;
+	raiseFromHost(`value ${v.intVal as uint64} not in range ${lo} .. ${hi}`, true);
+	return v;
+}
+
 function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
 	if (args[0].kind == RaiserValueKind.Nil) raiseFromHost(unboxString(args[1]) + unboxString(args[2]) + "'", true);
 	return args[0];
@@ -916,6 +925,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
 	registerHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
 	registerHostFn("msCheckRangeI32", _bridgeMsCheckRangeI32, HostCapability.Pure);
+	registerHostFn("msCheckRangeI32FromU64", _bridgeMsCheckRangeI32FromU64, HostCapability.Pure);
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);
@@ -1050,6 +1060,7 @@ export function ensureHostTableLoaded(): void {
 
 import { raiserInt, raiserFloat, raiserString, RaiserValueKind } from "../../raiser/value";
 import { lookupHostFn, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
+import { int64Bits } from "../../utils/stdBackport";
 
 test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();
@@ -1088,6 +1099,18 @@ test "the enum range bridge raises for a float outside the range without convert
 	assert (takeHostRaise() ?? "").endsWith(" not in range 0 .. 2");
 	assert _bridgeMsCheckRangeI32([raiserFloat(2.5), raiserInt(0), raiserInt(2)]).intVal == 2;
 	assert takeHostRaise() == null;
+}
+
+test "the enum range bridge for a uint64 source reports a value past int64 unsigned and refuses it" {
+	takeHostRaise();
+	_bridgeMsCheckRangeI32FromU64([raiserInt(int64Bits(9223372036854775808)), raiserInt(0), raiserInt(2)]);
+	assert takeHostRaise() == "value 9223372036854775808 not in range 0 .. 2";
+	_bridgeMsCheckRangeI32FromU64([raiserInt(int64Bits(18446744073709551613)), raiserInt(-5), raiserInt(1)]);
+	assert takeHostRaise() == "value 18446744073709551613 not in range -5 .. 1";
+	assert _bridgeMsCheckRangeI32FromU64([raiserInt(1), raiserInt(-5), raiserInt(1)]).intVal == 1;
+	assert takeHostRaise() == null;
+	_bridgeMsCheckRangeI32FromU64([raiserInt(2), raiserInt(-5), raiserInt(1)]);
+	assert takeHostRaise() == "value 2 not in range -5 .. 1";
 }
 
 test "ensureHostTableLoaded is idempotent" {

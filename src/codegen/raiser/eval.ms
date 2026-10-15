@@ -462,6 +462,18 @@ test "engine: a value outside an enum's members stops the conversion into it" {
 	assert fromFloat.output == "1\n", fromFloat.output;
 }
 
+test "engine: a uint64 past int64 converted into an enum stops with its unsigned value, as on C and JS" {
+	const decl = "enum D { A, B, C } enum S { Neg = -5, Zero = 0, One = 1 }" +
+		" let u: uint64[] = [9223372036854775808, 18446744073709551613, 1];";
+	const past = evalOrcVM(decl + " console.log(`${(u[0] as D) as int32}`);");
+	assert past.error.indexOf("value 9223372036854775808 not in range 0 .. 2") >= 0, past.error;
+	const negative = evalOrcVM(decl + " console.log(`${(u[1] as S) as int32}`);");
+	assert negative.error.indexOf("value 18446744073709551613 not in range -5 .. 1") >= 0, negative.error;
+	const ok = evalOrcVM(decl + " console.log(`${(u[2] as D) as int32} ${(u[2] as S) as int32}`);");
+	assert ok.error == "", ok.error;
+	assert ok.output == "1 1\n", ok.output;
+}
+
 test "engine: a conversion into char stops outside 0 .. 255 and truncates a float, as on C and JS" {
 	const decl = "let a: int32[] = [-1, 300, 200]; let f: float64[] = [300.7, 65.9];";
 	assert evalOrcVM(decl + " console.log(`${(a[0] as char) as int32}`);").error.indexOf("value -1 not in range 0 .. 255") >= 0;
