@@ -23,7 +23,7 @@
 // std/serialize/discDetect.ms and is shared with JSON encode.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey } from "../discDetect";
+import { detectUnionDisc, parseDiscKey, unwrapType } from "../discDetect";
 // bindSym targets — the macros bind every emitted name in THIS module's scope,
 // so the user imports nothing but the entry macro. encode lives in encoder.ms
 // (not the index hub) precisely so binding it cannot cycle. See SERIALIZE.md §11.
@@ -32,10 +32,8 @@ import { encode } from "./encoder";
 
 export macro cborValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
-	let tt = t.nodeType;
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	let tt = unwrapType(t.nodeType);
+	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
@@ -75,7 +73,8 @@ export macro cborValueOf(t: Node): Node {
 			}
 		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element.
-			const peeled: Node = elemType.typExprArgs[0];
+			let peeled: Node = unwrapType(elemType);
+			if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
 			if (peeled.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = peeled.typExprTypeName;
