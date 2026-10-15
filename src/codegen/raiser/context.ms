@@ -446,11 +446,6 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 
 // --- Builtin helpers ---
 
-export function registerBuiltin(s: RaiserCompState, name: string, funcIdx: int32): void {
-	const entry: RaiserBuiltinEntry = { name, funcIdx };
-	s.builtins.items.push(entry);
-}
-
 export function resolveBuiltin(s: RaiserCompState, name: string): int32 {
 	for (let i = 0; i < s.builtins.items.length; i = i + 1) {
 		if (s.builtins.items[i].name == name) {

@@ -1395,23 +1395,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// Project root for deriving module IDs
 	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
 
-	// Build import source → module ID mapping for all modules
-	// This maps how modules reference each other (import specifier) to the __mod["id"] key
-	const modIdValues: string[] = [];
-	const modIdKeys: string[] = [];
-	for (const modPath of graph.loadOrder) {
-		const mod = findModule(graph, modPath);
-		if (mod == null) continue;
-		const moduleId = replaceExt(relative(projectRoot, modPath), "");
-		modIdKeys.push(modPath);
-		modIdValues.push(moduleId);
-		// Also register the import specifier form (e.g., "std/process" for "std/process/index")
-		for (const imp of mod.imports) {
-			modIdKeys.push(imp.sourceSpecifier);
-			modIdValues.push(moduleId);
-		}
-	}
-
 	// Collect all external @import entries (from .jms files), dedup by modulePath
 	const extImportKeys: string[] = [];
 	const extImportNames: string[][] = [];
@@ -1494,22 +1477,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
-		// Build per-module import specifier → module ID mapping
-		const localMapKeys: string[] = [];
-		const localMapValues: string[] = [];
-		for (let gi = 0; gi < modIdKeys.length; gi += 1) {
-			localMapKeys.push(modIdKeys[gi]);
-			localMapValues.push(modIdValues[gi]);
-		}
-		for (const imp of mod.imports) {
-			const resolvedId = replaceExt(relative(projectRoot, imp.sourcePath), "");
-			localMapKeys.push(imp.sourceSpecifier);
-			localMapValues.push(resolvedId);
-		}
-
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
-		const isPrelude = moduleId.startsWith("std/core/");
-		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers);
+		const result = generateJSBundleModule(transformed, modPath, opts.sourcemap, helpers);
 		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
 		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals, reexports);
 

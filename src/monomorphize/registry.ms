@@ -1,42 +1,9 @@
-// Monomorphization Registry — tracks generic instantiations, dedup, name mangling
-//
-// Reference implementation equivalent: generic instantiation cache.
-// sameInstantiation() + genericCacheGet() in reference instantiation.
+// Monomorphization naming — type-argument keys and mangled instance names
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
 import { nominalTypeKey, hasTypeIdentity } from "../checker/types";
-
-// ===== Data Structures =====
-
-// Represents one concrete instantiation key
-// Example: identity<number> → { genericName: "identity", typeArgKeys: ["number"] }
-export class MonoKey {
-	genericName: string;
-	typeArgKeys: string[];
-}
-
-// Tracks one instantiation entry
-export interface MonoEntry {
-	mangledName: string;         // e.g., "identity__number"
-	genericName: string;         // original name
-	genericParamNames: string[]; // ["T", "U"]
-	concreteTypes: Type[];       // [numberType(), stringType()]
-	isInstantiated: boolean;     // true after Pass 2 clones the body
-}
-
-// The registry itself
-export interface MonoRegistry {
-	entries: MonoEntry[];
-}
-
-// ===== Constructors =====
-
-export function createMonoRegistry(): MonoRegistry {
-	const entries: MonoEntry[] = [];
-	return { entries };
-}
 
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
@@ -218,17 +185,6 @@ export function mangleMonoName(baseName: string, concreteTypes: Type[]): string 
 	return baseName + "__" + buildTypeArgKeys(concreteTypes).join("_");
 }
 
-// ===== Deduplication =====
-
-// Compare two type arg key arrays for exact match (Standard reference pattern)
-function sameTypeArgKeys(a: string[], b: string[]): boolean {
-	if (a.length != b.length) return false;
-	for (let i = 0; i < a.length; i += 1) {
-		if (a[i] != b[i]) return false;
-	}
-	return true;
-}
-
 // Build typeArgKeys from concrete types
 export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
 	const keys: string[] = [];
@@ -236,46 +192,6 @@ export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
 		keys.push(monoTypeKey(concreteTypes[i]));
 	}
 	return keys;
-}
-
-// ===== Registry Operations =====
-
-// Find an existing entry for this generic + type args combination.
-// Returns the entry or null (Standard reference pattern)
-export function monoFindEntry(registry: MonoRegistry, genericName: string, typeArgKeys: string[]): MonoEntry {
-	for (let i = 0; i < registry.entries.length; i += 1) {
-		const entry = registry.entries[i];
-		if (entry.genericName == genericName && sameTypeArgKeys(typeArgKeys, buildTypeArgKeys(entry.concreteTypes))) {
-			return entry;
-		}
-	}
-	return null as unknown as MonoEntry;
-}
-
-// Register a new instantiation. Returns the entry (existing if duplicate, new if not).
-// Standard reference pattern: generic cache addition.
-export function monoRegister(
-	registry: MonoRegistry,
-	genericName: string,
-	genericParamNames: string[],
-	concreteTypes: Type[]
-): MonoEntry {
-	// Check for existing (dedup)
-	const typeArgKeys = buildTypeArgKeys(concreteTypes);
-	const existing = monoFindEntry(registry, genericName, typeArgKeys);
-	if (existing != null) return existing;
-
-	// Create new entry
-	const mangledName = mangleMonoName(genericName, concreteTypes);
-	const entry: MonoEntry = {
-		mangledName: mangledName,
-		genericName: genericName,
-		genericParamNames: genericParamNames,
-		concreteTypes: concreteTypes,
-		isInstantiated: false,
-	};
-	registry.entries.push(entry);
-	return entry;
 }
 
 // ===== Tests =====
@@ -337,35 +253,6 @@ test "mangleMonoName two params" {
 	assert mangleMonoName("pair", types) == "pair__number_string";
 }
 
-test "registry dedup" {
-	const reg = createMonoRegistry();
-	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	const params: string[] = ["T"];
-	const types1: Type[] = [num];
-	const entry1 = monoRegister(reg, "identity", params, types1);
-	assert entry1.mangledName == "identity__number";
-	assert reg.entries.length == 1;
-
-	// Same instantiation → dedup
-	const num2: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	const types2: Type[] = [num2];
-	const entry2 = monoRegister(reg, "identity", params, types2);
-	assert entry2.mangledName == "identity__number";
-	assert reg.entries.length == 1;
-}
-
-test "registry different types" {
-	const reg = createMonoRegistry();
-	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	const params: string[] = ["T"];
-	const types1: Type[] = [num];
-	const types2: Type[] = [str];
-	monoRegister(reg, "identity", params, types1);
-	monoRegister(reg, "identity", params, types2);
-	assert reg.entries.length == 2;
-}
-
 test "monoTypeKey anonymous structs key apart" {
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	const named: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["name"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
@@ -399,27 +286,11 @@ test "monoTypeKey keys distinct types by identity" {
 	assert monoTypeKey(anon) == "distinct_float64";
 }
 
-test "registry separates instantiations over distinct types" {
-	const reg = createMonoRegistry();
+test "mangleMonoName separates instantiations over distinct types" {
 	const f64: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
 	const meters = declaredAt({ kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] }, SymbolKind.TypeAlias, "/p/m.ms");
 	const seconds = declaredAt({ kind: TypeKind.Distinct, typeName: "Seconds", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] }, SymbolKind.TypeAlias, "/p/m.ms");
-	const params: string[] = ["T"];
-	monoRegister(reg, "show", params, [meters]);
-	monoRegister(reg, "show", params, [seconds]);
-	assert reg.entries.length == 2;
 	assert mangleMonoName("show", [meters]) != mangleMonoName("show", [seconds]);
-}
-
-test "registry separates anonymous struct instantiations" {
-	const reg = createMonoRegistry();
-	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	const named: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["name"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	const tagged: Type = { kind: TypeKind.Struct, typeName: "", typeNames: ["tag"], typeChildren: [str], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag>, attachedOps: [] };
-	const params: string[] = ["T"];
-	monoRegister(reg, "wrap", params, [named]);
-	monoRegister(reg, "wrap", params, [tagged]);
-	assert reg.entries.length == 2;
 }
 
 test "monoRoutineBaseName keys a generic routine by owner and ordinal" {
@@ -442,11 +313,4 @@ test "monoTypeKey keys named unions by owner" {
 	ub.sym = symB;
 	assert monoTypeKey(ua) != monoTypeKey(ub);
 	assert mangleMonoName("id", [ua]) != mangleMonoName("id", [ub]);
-}
-
-test "findEntry returns null for missing" {
-	const reg = createMonoRegistry();
-	const keys: string[] = ["number"];
-	const result = monoFindEntry(reg, "nonexistent", keys);
-	assert result == null;
 }

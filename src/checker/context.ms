@@ -37,48 +37,17 @@ export interface ModuleExports {
 
 export interface ExportRegistry {
 	entries: ModuleExports[];
-	nameIndex: HashMap<string, ExportedSymInfo[]>;  // name → all exports with that name (cross-module)
 	moduleIndex: HashMap<string, number>;  // modulePath → index in entries[]
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [], nameIndex: new HashMap<string, ExportedSymInfo[]>(), moduleIndex: new HashMap<string, number>() };
-}
-
-function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
-	for (const sym of exports) {
-		if (sym.name.length == 0) continue;
-		const bucket = registry.nameIndex.get(sym.name);
-		if (bucket != null) {
-			bucket.push(sym);
-		} else {
-			registry.nameIndex.set(sym.name, [sym]);
-		}
-	}
-}
-
-export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
-	for (const sym of exports) {
-		if (sym.name.length == 0) continue;
-		const bucket = registry.nameIndex.get(sym.name);
-		if (bucket == null) continue;
-		let ri = 0;
-		while (ri < bucket.length) {
-			if (bucket[ri] == sym) {
-				bucket.splice(ri, 1);
-			} else {
-				ri += 1;
-			}
-		}
-		if (bucket.length == 0) registry.nameIndex.delete(sym.name);
-	}
+	return { entries: [], moduleIndex: new HashMap<string, number>() };
 }
 
 export function registerModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
 	const entry: ModuleExports = { modulePath, symbols: exports };
 	registry.moduleIndex.set(modulePath, registry.entries.length);
 	registry.entries.push(entry);
-	addToNameIndex(registry, exports);
 }
 
 // Replace existing module's exports (Phase 2 updates Phase 1 placeholders)
@@ -86,9 +55,7 @@ export function updateModuleExports(registry: ExportRegistry, modulePath: string
 	const i = registry.moduleIndex.get(modulePath);
 	if (i != null) {
 		const e = registry.entries[i];
-		removeFromNameIndex(registry, e.symbols);
 		e.symbols = exports;
-		addToNameIndex(registry, exports);
 		return;
 	}
 	registerModuleExports(registry, modulePath, exports);
@@ -100,13 +67,6 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 		return registry.entries[i];
 	}
 	return null as unknown as ModuleExports;
-}
-
-// O(1) cross-module lookup by name — returns all exports with that name across all modules.
-export function findExportsByName(registry: ExportRegistry, name: string): ExportedSymInfo[] {
-	const arr = registry.nameIndex.get(name);
-	if (arr != null) return arr;
-	return [];
 }
 
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
@@ -1032,15 +992,6 @@ export function isNativePattern(native: string): boolean {
 	return findChar(native, "#") >= 0 || findChar(native, "@") >= 0 || findChar(native, "(") >= 0;
 }
 
-export function getExtReceiverName(flags: string): string {
-	const seg = findFlagSegment(flags, "ext:");
-	if (seg == "") return "";
-	const rest = seg.slice(4, seg.length);
-	const colonPos = findChar(rest, ":");
-	if (colonPos <= 0) return "";
-	return rest.slice(0, colonPos);
-}
-
 export const LIFECYCLE_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
 
 export function isLifecycleHookName(name: string): boolean {
@@ -1715,37 +1666,6 @@ test "missing symbol returns null" {
 	assert found == null;
 }
 
-function namedExportInfo(name: string): ExportedSymInfo {
-	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
-}
-
-test "the name index keeps registration order across export updates" {
-	const r = createExportRegistry();
-	const a1 = namedExportInfo("dup");
-	const b1 = namedExportInfo("dup");
-	const c1 = namedExportInfo("dup");
-	const b2 = namedExportInfo("dup");
-	registerModuleExports(r, "/src/a.ms", [a1]);
-	registerModuleExports(r, "/src/b.ms", [b1]);
-	registerModuleExports(r, "/src/c.ms", [c1]);
-	updateModuleExports(r, "/src/b.ms", [b2]);
-	const hits = findExportsByName(r, "dup");
-	assert hits.length == 3;
-	assert hits[0] == a1;
-	assert hits[1] == c1;
-	assert hits[2] == b2;
-	const shared = namedExportInfo("twice");
-	registerModuleExports(r, "/src/d.ms", [shared, shared]);
-	assert findExportsByName(r, "twice").length == 2;
-	updateModuleExports(r, "/src/d.ms", []);
-	assert findExportsByName(r, "twice").length == 0;
-	updateModuleExports(r, "/src/a.ms", []);
-	const rest = findExportsByName(r, "dup");
-	assert rest.length == 2;
-	assert rest[0] == c1;
-	assert rest[1] == b2;
-}
-
 test "extractGenericNames single" {
 	const names = extractGenericNames("gen:T");
 	assert names.length == 1;
@@ -1813,12 +1733,6 @@ test "isExtensionFlag prefix" {
 test "isExtensionFlag pipe-delimited" {
 	assert isExtensionFlag("async|ext:s:string");
 	assert isExtensionFlag("gen:T|ext:self:Array");
-}
-
-test "getExtReceiverName" {
-	assert getExtReceiverName("ext:s:string") == "s";
-	assert getExtReceiverName("async|ext:self:Array") == "self";
-	assert getExtReceiverName("") == "";
 }
 
 test "getExtReceiverType" {

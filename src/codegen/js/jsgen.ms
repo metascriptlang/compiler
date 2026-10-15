@@ -259,16 +259,13 @@ export interface BundleModuleResult {
 	smap: SourceInfo;
 }
 
-export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, sourceFile: string, sourcemap: boolean, helpers: JSHelpers): BundleModuleResult {
+export function generateJSBundleModule(program: Node, sourceFile: string, sourcemap: boolean, helpers: JSHelpers): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
 	gen.helpers = helpers;
-	gen.bundleIsPrelude = isPrelude;
 	gen.smap = sourcemap;
 	gen.sourceFile = sourceFile;
 	gen.jsImports = [];
-	gen.importSourceToModuleId = importSourceMap;
-	gen.importSourceToModuleIdKeys = importSourceMapKeys;
 	emitNodeDispatch(gen, program);
 	return { code: finalize(gen), exportedNames: gen.exportedNames, exportedLocals: gen.bundleExportLocals, smap: gen.smapInfo };
 }

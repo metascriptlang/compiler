@@ -32,13 +32,9 @@ export class JSGenerator {
 	indentLevel: int32;
 	jsImports: JsImportEntry[];
 	bundleMode: boolean;
-	bundleIsPrelude: boolean; // true if current module is std/core/* (global scope, skip imports)
 	exportedNames: string[];
 	bundleExportLocals: string[];
 	importedNames: string[]; // track const-destructured names to avoid redeclaration in IIFEs
-	// Maps import source specifier → resolved module ID for __mod["id"] lookups
-	importSourceToModuleId: string[];
-	importSourceToModuleIdKeys: string[];
 	thisName: string;
 	staticSlots: string[]; // module-scope storage for `static` decls written inside bodies
 	helpers: JSHelpers;
@@ -78,7 +74,7 @@ export class JSGenerator {
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], bundleExportLocals: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
 		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),

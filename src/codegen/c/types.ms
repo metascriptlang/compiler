@@ -8,7 +8,7 @@ import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType
 import { AttachedOp } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
-import { findChar, splitTopLevel } from "../../utils/string";
+import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet } from "./context";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
@@ -488,36 +488,6 @@ export function annotationToC(annotation: string): string {
 	}
 	// Named types — mangle (value-type struct by default)
 	return mangle(s);
-}
-
-// ===== Anonymous Struct Definition Builder =====
-// Parses "{ field : type , field2 : type2 }" into a guarded C struct definition string.
-// Used by proto-path (index.ms) for anonymous struct definitions.
-
-export function buildAnonStructDef(structName: string, rawName: string): string {
-	// Strip outer braces
-	let body = rawName.trim();
-	if (body.byteLength > 0 && body.charAt(0) == "{") body = body.slice(1, body.byteLength);
-	if (body.byteLength > 0 && body.charAt(body.byteLength - 1) == "}") body = body.slice(0, body.byteLength - 1);
-
-	// splitTopLevel handles nested brackets/generics and auto-trims
-	const fields = splitTopLevel(body, ",");
-
-	let def = `#ifndef ${structName}_DEFINED\n`;
-	def = def + `#define ${structName}_DEFINED\n`;
-	def = def + `typedef struct ${structName} ${structName};\n`;
-	def = def + `struct ${structName} {\n`;
-
-	for (const field of fields) {
-		const colonPos = findChar(field, ":");
-		if (colonPos < 0) continue;
-		const fname = field.slice(0, colonPos).trim();
-		const ftype = field.slice(colonPos + 1, field.length).trim();
-		def = def + `  ${annotationToC(ftype)} ${safeName(fname)};\n`;
-	}
-
-	def = def + "};\n#endif\n";
-	return def;
 }
 
 // ===== Type Signature Key =====
