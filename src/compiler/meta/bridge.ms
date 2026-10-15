@@ -1646,6 +1646,19 @@ function contradictoryNumber(isFloat: boolean, raw: RaiserValue, exact: RaiserVa
 	return "";
 }
 
+export function wireLiteralIsFloat(objHeap: RaiserObjectHeap, h: int64): boolean {
+	const declared = heapObjectGetField(objHeap, h, "isFloat");
+	return declared.kind == RaiserValueKind.Nil ? heapObjectGetField(objHeap, h, "value").kind == RaiserValueKind.Float : readBool(objHeap, h, "isFloat");
+}
+
+export function wireLiteralIntegerRefusal(objHeap: RaiserObjectHeap, h: int64): string {
+	return contradictoryNumber(wireLiteralIsFloat(objHeap, h), heapObjectGetField(objHeap, h, "value"), heapObjectGetField(objHeap, h, "intVal"), readFloat(objHeap, h, "value"));
+}
+
+export function wireLiteralInteger(objHeap: RaiserObjectHeap, h: int64): int64 {
+	return wireInteger(heapObjectGetField(objHeap, h, "value"), heapObjectGetField(objHeap, h, "intVal"), readFloat(objHeap, h, "value"));
+}
+
 function wireInteger(raw: RaiserValue, exact: RaiserValue, value: number): int64 {
 	if (exact.kind == RaiserValueKind.Int) return exact.intVal;
 	if (raw.kind == RaiserValueKind.Int) return raw.intVal;
@@ -1667,8 +1680,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.NumberLiteral => {
 			const raw = heapObjectGetField(objHeap, h, "value");
 			const value = readFloat(objHeap, h, "value");
-			const declared = heapObjectGetField(objHeap, h, "isFloat");
-			const isFloat = declared.kind == RaiserValueKind.Nil ? raw.kind == RaiserValueKind.Float : readBool(objHeap, h, "isFloat");
+			const isFloat = wireLiteralIsFloat(objHeap, h);
 			const exact = heapObjectGetField(objHeap, h, "intVal");
 			const contradiction = contradictoryNumber(isFloat, raw, exact, value);
 			if (contradiction != "") _wireRefusals.push({ message: contradiction, location: loc });

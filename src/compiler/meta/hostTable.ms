@@ -51,6 +51,9 @@ import {
 	boxString, boxInt, boxFloat, boxBool,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
+import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal } from "./bridge";
+import { nodeKindName } from "../../ast/fieldspec";
+import { NodeKind } from "../../ast/node";
 
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
@@ -681,6 +684,11 @@ function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
 	return boxFloat(performance.now());
 }
 
+function isWireNumberLiteral(objHeap: RaiserObjectHeap, h: int64): boolean {
+	const kind = heapObjectGetField(objHeap, h, "kind");
+	return kind.kind == RaiserValueKind.Int && kind.intVal == (NodeKind.NumberLiteral as int64);
+}
+
 // Literal value accessors. Each one FIXES the representation of its result the
 // way Nim's opcNIntVal/opcNFloatVal do (vm.nim:1867-1881, decodeB(rkInt/rkFloat)):
 // the VM's arithmetic and compare opcodes are typed (AddI64 vs AddF64, BltI64 vs
@@ -694,16 +702,36 @@ function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull == null) return boxBool(false);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	const v = heapObjectGetField(objHeap, args[0].intVal, "value");
-	return boxBool(v.kind == RaiserValueKind.Float);
+	return boxBool(isWireNumberLiteral(objHeap, args[0].intVal) && wireLiteralIsFloat(objHeap, args[0].intVal));
+}
+
+function wireNodeKindText(objHeap: RaiserObjectHeap, n: RaiserValue): string {
+	if (n.kind != RaiserValueKind.Object) return "null";
+	const kind = heapObjectGetField(objHeap, n.intVal, "kind");
+	return kind.kind == RaiserValueKind.Int ? nodeKindName(kind.intVal as NodeKind) : "a node without a kind";
 }
 
 function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxInt(0);
-	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull == null) return boxInt(0);
-	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	return boxInt(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
+	const objHeap = activeHostObjectHeap();
+	if (objHeap == null || args.length < 1) {
+		raiseFromHost("intValue needs an integer literal node", true);
+		return raiserInt(0);
+	}
+	const n = args[0];
+	if (n.kind != RaiserValueKind.Object || !isWireNumberLiteral(objHeap, n.intVal)) {
+		raiseFromHost("intValue needs an integer literal, got " + wireNodeKindText(objHeap, n), true);
+		return raiserInt(0);
+	}
+	if (wireLiteralIsFloat(objHeap, n.intVal)) {
+		raiseFromHost("intValue needs an integer literal, got a float literal; read it with floatValue", true);
+		return raiserInt(0);
+	}
+	const refusal = wireLiteralIntegerRefusal(objHeap, n.intVal);
+	if (refusal != "") {
+		raiseFromHost("intValue: " + refusal, true);
+		return raiserInt(0);
+	}
+	return raiserInt(wireLiteralInteger(objHeap, n.intVal));
 }
 
 function _bridgeMsNodeFloatValue(args: RaiserValue[]): RaiserValue {

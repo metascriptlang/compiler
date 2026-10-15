@@ -211,3 +211,45 @@ function main(): void {
 		assert result.ok, result.ok ? "" : result.error;
 	}
 }
+
+function intValueOf(arg: string): string {
+	const result = compileToCWithStd(`
+import { Node, NodeKind, intValue } from "std/meta";
+function f(): int32 { return 1; }
+const x = 5;
+macro iv(n: Node): Node { return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: \`\${intValue(n)}\` }; }
+console.log(iv(${arg}));
+`);
+	return result.ok ? "ok" : result.error;
+}
+
+test "comptime macro values: intValue refuses a node that is not an integer literal and names its kind" {
+	assert intValueOf("x").includes("intValue needs an integer literal, got Identifier"), intValueOf("x");
+	assert intValueOf("f()").includes("intValue needs an integer literal, got CallExpr"), intValueOf("f()");
+	assert intValueOf("-5").includes("intValue needs an integer literal, got UnaryExpr"), intValueOf("-5");
+	assert intValueOf("\"7\"").includes("intValue needs an integer literal, got StringLiteral"), intValueOf("\"7\"");
+	assert intValueOf("8.5").includes("intValue needs an integer literal, got a float literal"), intValueOf("8.5");
+	assert intValueOf("41") == "ok", intValueOf("41");
+}
+
+test "comptime macro values: intValue reads every bit of an integer literal" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind, childAt, intValue, isFloatLiteral } from "std/meta";
+
+export macro bits(node: Node): Node {
+	const past53 = childAt(node, 0);
+	const past63 = childAt(childAt(node, 1), 0);
+	const top = childAt(childAt(node, 2), 0);
+	if (intValue(past53) != 9007199254740993) { error("intValue lost the low bit past 2^53: " + intValue(past53).toString(), node); }
+	if (isFloatLiteral(past63) || isFloatLiteral(top)) { error("a uint64 literal past 2^63 reports as float", node); }
+	if (intValue(past63) != -9223372036854775807 - 1) { error("intValue of 2^63 is not its bit pattern: " + intValue(past63).toString(), node); }
+	if (intValue(top) != -1) { error("intValue of 2^64-1 is not its bit pattern: " + intValue(top).toString(), node); }
+	return { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: "ok" };
+}
+
+function main(): void {
+	const x = bits({ a: 9007199254740993, b: 9223372036854775808 as uint64, c: 18446744073709551615 as uint64 });
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+}
