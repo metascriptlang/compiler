@@ -719,11 +719,6 @@ function enumMemberOrdinal(objHeap: RaiserObjectHeap, n: RaiserValue): RaiserVal
 	return index < 0 ? raiserNil() : raiserInt(enumMemberValue(enumType, index) as int64);
 }
 
-function isBoundEnumMember(objHeap: RaiserObjectHeap, n: RaiserValue): boolean {
-	const sym = boundSymOfObject(objHeap, n.intVal);
-	return sym != null && sym.symbolKind == SymbolKind.EnumMember;
-}
-
 function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	if (objHeap == null || args.length < 1) {
@@ -775,10 +770,9 @@ function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
 	}
 	const n = args[0];
 	if (isWireNode(objHeap, n, NodeKind.Identifier)) {
-		const name = unboxString(heapObjectGetField(objHeap, n.intVal, "name"));
-		if (!isBoundEnumMember(objHeap, n)) return boxString(name);
-		raiseFromHost("stringValue does not read an enum member, got " + name, true);
-		return boxString("");
+		const sym = boundSymOfObject(objHeap, n.intVal);
+		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) return boxString(sym.name);
+		return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "name")));
 	}
 	if (!isWireNode(objHeap, n, NodeKind.StringLiteral)) {
 		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(objHeap, n), true);

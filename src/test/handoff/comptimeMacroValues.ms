@@ -285,14 +285,17 @@ function main(): void {
 	assert result.ok, result.ok ? "" : result.error;
 }
 
-test "comptime macro values: stringValue refuses an enum member and names what the macro got" {
+test "comptime macro values: stringValue of an enum member is its declared name" {
 	const result = compileToCWithStd(`
 import { Node, NodeKind, stringValue } from "std/meta";
 enum Color { Red, Green }
-macro named(n: Node): Node { return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: stringValue(n) }; }
+macro named(n: Node): Node {
+	if (stringValue(n) != "Green") { error("stringValue of Color.Green gave " + stringValue(n), n); }
+	return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: stringValue(n) };
+}
 console.log(named(Color.Green));
 `);
-	assert !result.ok && result.error.includes("stringValue does not read an enum member, got Color_Green"), result.ok ? "accepted" : result.error;
+	assert result.ok, result.ok ? "" : result.error;
 }
 
 test "comptime macro values: floatValue reads an integer literal the checker typed as a float" {
