@@ -426,6 +426,7 @@ function evalFull(code: string): RaiserContext {
 }
 
 function compileForOrc(code: string): RaiserModule {
+	ensureHostTableLoaded();
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) { unreachable; }
 	const program = parseResult.value;
