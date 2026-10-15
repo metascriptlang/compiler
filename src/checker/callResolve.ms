@@ -3563,6 +3563,11 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 		}
 	}
 	if (best == null) {
+		const text = builtinTextFor(ctx, name, baseArgs, fnType.typeReturn);
+		if (text != null) {
+			sym.borrowedFrom = text;
+			return;
+		}
 		addError(ctx, `@delegate '${name}': no ${shown} to delegate to`, at.line, at.column);
 		return;
 	}
@@ -3582,6 +3587,12 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 	}
 	sym.borrowedFrom = best;
 	markUsedIn(ctx, best);
+}
+
+function builtinTextFor(ctx: CheckerContext, name: string, baseArgs: Type[], ret: Type | null): Symbol | null {
+	if (name != "toString" || baseArgs.length != 1 || ret == null || !isStringLike(ret)) return null;
+	const text = lookupSymbol(ctx.table, "String");
+	return text != null && text.builtinKind == "ToString" ? text : null;
 }
 
 function peelDistinctReturn(t: Type | null): Type | null {

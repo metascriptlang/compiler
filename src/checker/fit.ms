@@ -245,7 +245,7 @@ export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 export function distinctTextRefusal(t: Type): string {
 	const shown = typeDisplayName(t);
 	return "cannot turn " + shown + " into text: a distinct type has none of its base's operations — convert it first (x as "
-		+ typeDisplayName(distinctBody(t)) + ") or declare function toString(this x: " + shown + "): string";
+		+ typeDisplayName(distinctBody(t)) + "), or declare function toString(this x: " + shown + "): string with a body or with @delegate";
 }
 
 export function distinctText(ctx: CheckerContext, expr: Node, t: Type): Node | null {
