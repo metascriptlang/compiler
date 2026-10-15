@@ -27,9 +27,11 @@ import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises, resetRaises } from "../checker/raises";
-import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
+import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
+import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
+import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
@@ -64,7 +66,7 @@ import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
-import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch } from "./defines";
+import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
@@ -419,7 +421,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictDefs, opts.strictNullChecks);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -1019,7 +1021,8 @@ interface CompileJob {
 //   2. DISPATCH (parallel) — spawn one worker per cache miss. Each worker calls
 //      compileCFile() on its own thread — real thread-level parallelism.
 //   3. COLLECT (serial, main thread) — waitFor each future in input order, check
-//      exit codes, publish cache entries, emit oFiles deterministically.
+//      exit codes, publish cache entries, fill each job's slot so oFiles keep
+//      directive order whichever files hit the cache.
 // --emit=c is emit-only: write generated C, compile/link nothing.
 // Compiling @compile'd C here would (a) drop .o files beside the source, not in
 // out/, and (b) fail for targets whose sysroot lives in the host build tool
@@ -1347,7 +1350,6 @@ function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, op
 	if (program == null || ctx == null) throw new Error(`internal: module ${modPath} was not checked by the graph phase`);
 	setOuterProgramForComptime(program);
 	setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-	ctx.strictDefs = opts.strictDefs;
 	ctx.strictNullChecks = opts.strictNullChecks;
 	exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
 	return { program, ctx };
@@ -1357,6 +1359,17 @@ function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: str
 	const ctxs: CheckerContext[] = [];
 	for (const m of mods) ctxs.push(m.ctx);
 	return ctxs;
+}
+
+function bundleExportList(names: string[], locals: string[], reexports: BundleReexport[]): string {
+	const specifiers: string[] = [];
+	for (let i = 0; i < names.length; i += 1) specifiers.push(exportSpecifier(locals[i], names[i]));
+	for (const r of reexports) specifiers.push(exportSpecifier(jsBundleReferenceName(r.sym, r.name), r.name));
+	return specifiers.length == 0 ? "" : `export { ${specifiers.join(", ")} };\n`;
+}
+
+function exportSpecifier(local: string, name: string): string {
+	return local == name ? name : `${local} as ${name}`;
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
@@ -1471,6 +1484,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
+	let entryExports = "";
 	const helpers = createJSHelpers();
 	setJsProgramScope(true);
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
@@ -1482,6 +1496,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 		}
 		refusePointerOpsOnJs(unitCtxs[ui], unitPrograms[ui]);
+		const reexports = modPath == entryPath ? checkJsBundleExports(unitCtxs[ui], unitPrograms[ui]) : [];
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
@@ -1503,6 +1518,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const isPrelude = moduleId.startsWith("std/core/");
 		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers);
 		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
+		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals, reexports);
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
 		bundle = bundle + separator;
@@ -1531,7 +1547,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// Same reason as generateJSModule: node must meet module syntax before a top-level await.
 	if (extImportKeys.length == 0 && anyTopLevelAwait) output = output + "export {};\n";
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
-	output = output + bundle;
+	output = output + bundle + entryExports;
 
 	// `--output` wins here exactly as it does for the C binary. Deriving the
 	// name from the entry file alone collides for directory-style programs,
@@ -2810,6 +2826,13 @@ setGlobalHookOwners(sharedHookOwners);
 	if (totalCheckerErrors > 0) {
 		printDiag(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);
 		throw new Error(BUILD_STOPPED);
+	}
+	if (opts.targetOs == "solana" && !isDefined(opts.defines, "testBuild")) {
+		for (const m of checkedMods) {
+			if (m.modPath != entryPath || topLevelCallsAnything(m.program)) continue;
+			renderModuleError(m.modPath, m.source, { message: emptyTopLevelMessage(basename(m.modPath)), line: 1, column: 1, severity: ErrorSeverity.Error });
+			throw new Error(BUILD_STOPPED);
+		}
 	}
 
 

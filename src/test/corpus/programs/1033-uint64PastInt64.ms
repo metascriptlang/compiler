@@ -16,4 +16,4 @@ let q = a;
 q /= 3;
 let m = a;
 m %= 7;
-console.log(b < a, a > b, a <= b, a >= b, a / 2, a % 10, a >> 60, `${a}`, a.toString(), a as number, a as float32, a as int64, s, q, m, half(9223372036854775808.0));
+console.log(b < a, a > b, a <= b, a >= b, a / 2, a % 10, a >> 60, `${a}`, a.toString(), a as number, a as float32, int64Bits(a), s, q, m, half(9223372036854775808.0));

@@ -61,8 +61,9 @@ and chooses where Smith strikes: a feature vector and construct weights per batc
    failure identity (lane pair + symptom + type/width axis). C-Reduce's README
    claims non-C support; that claim is unverified for `.ms` and verifying it
    is part of slice 4.
-5. **Graduation**: a reduced, confirmed regression becomes a corpus program
-   named by invariant; the bundle is then deleted.
+5. **Graduation**: a reduced, confirmed regression becomes a compiler inbox
+   card; the session that fixes it writes the corpus program, named by
+   invariant, into the card's `Pinned by:`. The bundle can then be deleted.
 
 ## Non-goals
 
@@ -107,7 +108,7 @@ picks the next vector; scouts where Smith cannot generate yet.
 |---|---|---|
 | G0 core | driver controls (lost lane, malformed metadata, rerun cannot overwrite evidence); 100-seed swarm and closure-only campaigns | measured programs per hour and finding rate |
 | G1 SAN | the driver stops forcing SAN off; leak / UAF become a bundle kind | a planted SAN divergence goes the full loop |
-| G2 reducer | `creduce --not-c` + identity predicate; the 2026-10-08 findings as real inputs | one planted and one real divergence graduated into the corpus |
+| G2 reducer | `creduce --not-c` + identity predicate; the 2026-10-08 findings as real inputs | one planted and one real divergence reduced; a real one pinned by its fixing session (`Pinned by:`) |
 | G3 handle | per-construct weights and shape knobs (nesting, capture in loop, aggregate into sink) in `Features`; heap/ownership families H6, H10, H2, H12 written with them | one vector concentrates ≥ 70% of a batch on the chosen construct |
 | G4 eyes | **NEW MECHANISM**: coverage-instrumented `msc`, a per-pass report per batch; findings still confirmed on a normal build | a per-pass report for `lambdaLifting`, `generatorLower`, DRC inject that reruns identically |
 | G5 manual strategist | an agent session aims one pass (first: `lambdaLifting`, two of three 2026-10-08 findings) against random swarm on the same CPU budget | per-pass branch coverage and distinct findings per CPU-hour for both arms |
@@ -130,7 +131,7 @@ deferred; nothing else is ported. Evidence for each sits with its section or com
 | 7 | voting across compilers / levels | lanes c / orc / danger / js / esm | done |
 | 8 | observe every global | every global and entry result printed, no CRC | done (person's call: no extra observation) |
 | 9 | driver classification and controls | `drive.ms`: VOID causes, write-once bundles, stale-run checks | done |
-| 10 | sanitizer runs | `run --san`, bundle kind `san`, mode kept on rerun | done, with no planted `san` bundle (see Debt) |
+| 10 | sanitizer runs | `run --san`, bundle kind `san`, mode kept on rerun, `plant=san`, identity mode `san` | done; the plant goes the full loop (below) |
 | 11 | creduce | `reduce.ms`, `creduce --not-c` | done |
 | 12 | identity predicate | `identity.ms`: mode, symptom, split, shape, keep, forbid, determinism, `msc check` | done |
 | 13 | per-construct probabilities | `w.*` keys in `Features`, defaults byte-identical | done (`coveragePlan.md` weight table) |
@@ -150,6 +151,17 @@ Reductions: planted `smith1` 21,853 → 139 bytes; the real JS double-negation f
 `2026-10-08-ternary-hoist-lost-when-else-holds-a-nested-ternary.md`). For both C cases creduce
 stopped above 800 bytes. The last step to a clean repro was manual, guided by the emitted C.
 
+Planted SAN loop, 2026-10-15 (installed msc BUILD `682b18673`). `plant=san` declares `malloc`
+and `free` as externs and writes one byte through a freed pointer inside `plantDelta()`,
+which returns 0, so stdout is unchanged and only ASan sees it; `run` refuses it without
+`--san`. `run 1 3 --plant=san --san`: 3/3 bundles of kind `san`. `rerun` of two of them was
+NOT REPRODUCED before the fix (the recorded line holds the ASan pid and addresses) and
+REPRODUCED after it (`stableDetail` in `drive.ms` blanks `==<pid>==` and `0x…` on both
+sides). `reduce` inferred identity `mode: san`, `symptom: heap-use-after-free`, `keep:
+plantDelta`, and cut 9,832 → 176 bytes in the 600 s cap; before the `san` mode it refused
+the bundle with "no single-lane finding to pin". Leaks are not covered: ASan's leak check
+does not run on macOS.
+
 ### Debt — workarounds to repay
 
 | blocker | workaround | remove when |
@@ -157,7 +169,6 @@ stopped above 800 bytes. The last step to a clean repro was manual, guided by th
 | `std/process` has no `findOnPath` on JS | `drive.ms` is tested on C only | JS `std/process` gains it, or `drive.ms` stops importing it |
 | no content manifest for the support tree | support identity = git tree hashes of `src`, `std`, `runtime`, or the `BUILD` text | a support-tree manifest hash exists |
 | bundle directory names carry an 8-hex content hash | a collision would read "already recorded" | a collision is seen; then use the full hash |
-| safe MetaScript cannot express a leak or double destroy, and `Plant` only makes a C↔JS split | the `san` kind is covered by inline tests on captured runner lines only | a SAN plant becomes expressible (a test-only runtime hook, or a fixture) |
 | creduce has no total time limit | a `perl` fork-and-alarm watchdog (`--cap`) | creduce gains a cap |
 | `execFileResult` has no timeout | each predicate lane runs under a `perl` alarm | `std/process` gains a timeout |
 | printed lines do not carry the declared type | wrong-code splits are pinned by label, value shape and `keep:`; a plain `.ms` input needs `--identity` | prints carry the type, so the width can be pinned |
@@ -299,5 +310,8 @@ family coverage.
 ## Done when (arc)
 
 - A bundle reruns byte-identically from its metadata alone.
-- At least one planted divergence AND one real divergence have gone the full
-  loop: detected → bundled → reduced → graduated into `src/test/corpus/`.
+- At least one planted divergence AND one real divergence have gone
+  detected → bundled → reduced, and a real one has graduated: the compiler
+  session that fixed it named its corpus program in the inbox card's
+  `Pinned by:` (decided 2026-10-15). Smith writes no corpus pin itself; the pin
+  belongs to the fixing session, and a second one would duplicate it.

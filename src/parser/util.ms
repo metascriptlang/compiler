@@ -205,6 +205,13 @@ export function getLastParamPatterns(): Node[] {
 	return _lastParamPatterns;
 }
 
+let _lastParamsClosed = false;
+
+// Whether the most recent parseParamList consumed the closing `)`.
+export function getLastParamsClosed(): boolean {
+	return _lastParamsClosed;
+}
+
 export function paramPatternName(slot: int32): string {
 	return `_destr${slot}`;
 }
@@ -284,6 +291,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 	_lastParamTypeExprs = [];
 	_lastParamLocations = [];
 	_lastParamPatterns = [];
+	_lastParamsClosed = false;
 	if (current(state).kind != TokenKind.LParen) { return params; }
 	advance(state);
 	let seenOptional = false;
@@ -423,6 +431,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 	}
 	if (current(state).kind == TokenKind.RParen) {
 		advance(state);
+		_lastParamsClosed = true;
 	} else {
 		addError(state, `Expected ')' after the parameters of '${fnName}' at line ${current(state).line}`);
 	}

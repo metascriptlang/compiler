@@ -251,6 +251,7 @@ function runLinkCache(): void {
 		}
 		recordTrue("resource given by --link replaced", holdsUtf16(`${resource}/probe`, "BravoTwo") && !holdsUtf16(`${resource}/probe`, "AlphaOne"));
 	}
+	if (!windows) runLinkOrder();
 }
 
 function holdsUtf16(path: string, text: string): boolean {
@@ -259,6 +260,25 @@ function holdsUtf16(path: string, text: string): boolean {
 	let wide = "";
 	for (let i = 0; i < text.length; i++) wide = wide + text.charAt(i) + "\u0000";
 	return content.value.byteIndexOf(wide, 0) >= 0;
+}
+
+function firstLinkedWeakProbeWins(result: int32, edit: string): string {
+	return `__attribute__((weak)) int probeValue(void) { return ${result}; }\n// ${edit}\n`;
+}
+
+function runLinkOrder(): void {
+	const order = fixture("link-order", "@compile(\"./first.c\");\n@compile(\"./second.c\");\n@compile(\"./third.c\");", firstLinkedWeakProbeWins(1, "initial"), "", "first.c");
+	put(`${order}/second.c`, firstLinkedWeakProbeWins(2, "initial"));
+	put(`${order}/third.c`, firstLinkedWeakProbeWins(3, "initial"));
+	need(build(order, "order-initial") == 0, "link order initial");
+	need(value(order) == "1", "link order initial value");
+	put(`${order}/first.c`, firstLinkedWeakProbeWins(1, "first edited"));
+	need(build(order, "order-first-edited") == 0, "link order first edited");
+	record("an edited first native source keeps its place in the link", "1", value(order));
+	put(`${order}/first.c`, firstLinkedWeakProbeWins(1, "first and second edited"));
+	put(`${order}/second.c`, firstLinkedWeakProbeWins(2, "first and second edited"));
+	need(build(order, "order-two-edited") == 0, "link order two edited");
+	record("two edited native sources before a cached one keep their place in the link", "1", value(order));
 }
 
 function makeArchive(dir: string, name: string, result: int32): string {

@@ -30,7 +30,7 @@ import {
 	QuoteExprData, ComptimeBlockData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 
@@ -510,6 +510,10 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.JSXSpreadAttribute => {
 			const d = node.data as JSXSpreadAttributeData;
 			h = hN(h, d.jsxSpreadArg);
+		},
+		NodeKind.ComputedProperty => {
+			const d = node.data as ComputedPropertyData;
+			h = hN(h, d.computedKey); h = hN(h, d.computedValue);
 		},
 	};
 

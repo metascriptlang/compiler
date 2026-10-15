@@ -12,12 +12,12 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isStaticExtensionSym } from "../../checker/context";
+import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
@@ -136,12 +136,20 @@ export function jsReferenceName(gen: JSGenerator, sym: Symbol | null, text: stri
 	return jsNameOf(gen, sym, text, referenceName(sym, text));
 }
 
+export function jsBundleReferenceName(sym: Symbol, text: string): string {
+	const gen = createJSGenerator();
+	gen.bundleMode = true;
+	return jsReferenceName(gen, sym, text);
+}
+
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
 		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
 	}
-	if (sym.nativeName != null && sym.nativeName != "") return safeJsName(name);
+	if (sym.nativeName != null && sym.nativeName != "") {
+		return hasFlag(sym, SymbolFlag.ImportC) && !isNativePattern(sym.nativeName) ? sym.nativeName : safeJsName(name);
+	}
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name, declared);
 	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
@@ -358,18 +366,11 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 
 // Native-binding pattern substitution — reference parity: jsgen.nim importjs.
 // A symbol's `nativeName` is a JS template with placeholders:
-//   #   consume next arg          @   splat remaining args         $1  symbol name
+//   #   consume next arg          @   splat remaining args
+//   \x1f  literal '#'             \x1d  literal '@'
 // Used by extern functions in .jms preludes (e.g.
 // `extern function set<K,V>(this m, k, v) from "#.set(#, #)"`) to bind MS
 // extension calls to native JS dispatch without wrapper functions or mangling.
-function hasNativePattern(s: string): boolean {
-	for (let i = 0; i < s.length; i += 1) {
-		const c = s.charAt(i);
-		if (c == "#" || c == "@") return true;
-		if (c == "$" && i + 1 < s.length && s.charAt(i + 1) == "1") return true;
-	}
-	return false;
-}
 
 function emittedNode(node: Node): Node {
 	return match (node.kind) {
@@ -402,7 +403,7 @@ function nativeFormal(formals: Type[] | null, idx: int32): Type | null {
 	return formals[idx];
 }
 
-function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symName: string, formals: Type[] | null = null, resultType: Type | null = null): void {
+function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], formals: Type[] | null = null, resultType: Type | null = null): void {
 	const outCopy = nativeResultCopy(gen, resultType);
 	if (outCopy != "") emit(gen, outCopy + "(");
 	let argIdx = 0;
@@ -429,9 +430,12 @@ function emitNativePattern(gen: JSGenerator, pattern: string, args: Node[], symN
 				first = false;
 			}
 			i = i + 1;
-		} else if (ch == "$" && i + 1 < pattern.length && pattern.charAt(i + 1) == "1") {
-			emit(gen, symName);
-			i = i + 2;
+		} else if (ch == "\x1f") {
+			emit(gen, "#");
+			i = i + 1;
+		} else if (ch == "\x1d") {
+			emit(gen, "@");
+			i = i + 1;
 		} else {
 			emit(gen, ch);
 			i = i + 1;
@@ -470,14 +474,14 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	// receiver is prepended to match the post-lower arg shape used by free
 	// extension functions.
 	const sym = d.callee.resolvedSym;
-	if (sym != null && sym.nativeName != "" && hasNativePattern(sym.nativeName)) {
+	if (sym != null && sym.nativeName != "" && isNativePattern(sym.nativeName)) {
 		let patternArgs = d.arguments;
 		if (d.callee.kind == NodeKind.MemberExpr) {
 			patternArgs = [(d.callee.data as MemberExprData).object];
 			for (const a of d.arguments) patternArgs.push(a);
 		}
 		markNamed(gen, calleeOriginNode(d.callee), sym.name);
-		emitNativePattern(gen, sym.nativeName, patternArgs, sym.name, nativeFormals(sym), node.nodeType);
+		emitNativePattern(gen, sym.nativeName, patternArgs, nativeFormals(sym), node.nodeType);
 		return;
 	}
 
@@ -508,9 +512,9 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 			&& sym.overloads != null && sym.overloads.length > 0) {
 		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
 		const ws = w.winnerSym;
-		if (ws != null && ws.nativeName != "" && hasNativePattern(ws.nativeName)) {
+		if (ws != null && ws.nativeName != "" && isNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);
-			emitNativePattern(gen, ws.nativeName, d.arguments, ws.name, nativeFormals(ws), node.nodeType);
+			emitNativePattern(gen, ws.nativeName, d.arguments, nativeFormals(ws), node.nodeType);
 			return;
 		}
 		markNamed(gen, d.callee, (d.callee.data as IdentifierData).name);

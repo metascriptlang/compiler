@@ -1,7 +1,7 @@
 // A generic std/solana function costs one thin wrapper per account type, not one body: the checks
 // live in shared cores that take the type's constants (discriminator word, size), and the wrapper
 // only passes them and keeps the typed result. The proof kernels and wrappers marked @inline
-// (owned, delegated, external, externalMutable, readArgs) are copied into each caller as
+// (external, externalMutable, readArgs) are copied into each caller as
 // `static inline`, so no out-of-line copy of them may remain. This builds a program that
 // instantiates every generic for nine account types and reads each copy's size from the `.debug`
 // copy's symbol table. The probe builds with --lto=off: the default LTO link inlines the
@@ -16,10 +16,12 @@
 // of a shared core was inlined into the wrappers), a family lost its copies, an @inline family
 // left an out-of-line copy (its @inline was dropped, or the caller no longer sees the placed body),
 // the input parser is inlined into more than one function, or dispatch pulled in a signed division.
-// `mutable` is @inline too, but its probe call is the one direct use of a body that holds the
-// envelope check, the field check and the exclusive claim, and LLVM may keep it out of line: up to
-// nine copies of at most 320 bytes (296 measured, calls into shared cores), zero when inlined.
-// `selectInstruction` is not @inline and has one caller: zero or one copy.
+// `owned`, `delegated` and `mutable` are @inline too, but each probe call is the one direct use of a
+// body that holds the lookup core call, the field check and (mutable) the exclusive claim, and LLVM
+// may keep it out of line: up to nine copies of at most 256 bytes (owned and delegated, 208
+// measured) or 320 (mutable, 240 measured), zero when inlined. The .text bound carries those copies
+// (94,328 measured, 86,528 on the previous tree).
+// `selectLiteralInstruction` is not @inline and has one caller: zero or one copy, 136 bytes measured.
 // RED PRE-FIX: createPdaOf 920 bytes a copy, realloc 824, close 752, verifiedPda 512 and 520,
 // selectInstruction 688, ownProgram 600, __divdi3 linked; a pass-through wrapper (close, realloc,
 // verifiedPda of a Delegated) that takes its result through a temporary measured 112 bytes, 16
@@ -131,7 +133,7 @@ function run${i}(): Result<uint64, ProgramError> {
 	const seen = try owned<Pet${i}>(7);
 	const rolled = try delegated<Pet${i}>(8);
 	const _closed = try close(x.pet, x.payer.asWritable());
-	return Result.ok(made.account.data().bump as uint64 + direct.data().bump as uint64 +
+	return Result.ok(made.asMutable().data().bump as uint64 + direct.data().bump as uint64 +
 		seen.data().bump as uint64 + rolled.data().bump as uint64);
 }
 `;
@@ -215,15 +217,15 @@ const BOUNDS: Bound[] = [
 	{ family: "realloc", least: TYPES, copies: TYPES, most: 24 },
 	{ family: "Delegated_verifiedPda", least: TYPES, copies: TYPES, most: 16 },
 	{ family: "Delegated_verifiedPdaWithBump", least: TYPES, copies: TYPES, most: 16 },
-	{ family: "owned", least: 0, copies: 0, most: 0 },
+	{ family: "owned", least: 0, copies: TYPES, most: 256 },
 	{ family: "mutable", least: 0, copies: TYPES, most: 320 },
-	{ family: "delegated", least: 0, copies: 0, most: 0 },
+	{ family: "delegated", least: 0, copies: TYPES, most: 256 },
 	{ family: "create", least: TYPES, copies: TYPES, most: 256 },
 	{ family: "Mutable_verifiedPda", least: TYPES, copies: TYPES, most: 256 },
 	{ family: "Mutable_verifiedPdaWithBump", least: TYPES, copies: TYPES, most: 256 },
 	{ family: "createPdaOf", least: TYPES, copies: TYPES, most: 352 },
 	{ family: "readArgs", least: 0, copies: 0, most: 0 },
-	{ family: "selectInstruction", least: 0, copies: 1, most: 224 },
+	{ family: "selectLiteralInstruction", least: 0, copies: 1, most: 160 },
 	{ family: "External_read", least: 2, copies: 2, most: 192 },
 	{ family: "ExternalMutable_read", least: 2, copies: 2, most: 192 },
 	{ family: "external", least: 0, copies: 0, most: 0 },
@@ -236,7 +238,7 @@ const ONE_COPY: Bound[] = [
 	{ family: "account", least: 0, copies: 0, most: 256 },
 ];
 
-const TEXT_MOST = 90000;
+const TEXT_MOST = 91000;
 
 removeAll(dir);
 ensureDir(dir);

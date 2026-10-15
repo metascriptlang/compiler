@@ -1085,6 +1085,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.JSXExpressionContainer) return { jsxExpr: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.JSXAttribute) return { jsxAttrName: unescapeP(f[0]), jsxAttrValue: nd(f[1].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.JSXSpreadAttribute) return { jsxSpreadArg: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
+	if (kind == NodeKind.ComputedProperty) return { computedKey: nd(f[0].parseInt() as int32, nodes) as Node, computedValue: nd(f[1].parseInt() as int32, nodes) as Node } as NodeData;
 	return { nullPlaceholder: true } as NodeData;
 }
 
@@ -1519,7 +1520,7 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 		const samples = pkSamples(sym, nt, ct);
 		// Completeness tripwire: one sample per NodeKind member, in enum
 		// order — extend pkSamples when NodeKind grows.
-		assert samples.length == 91;
+		assert samples.length == 92;
 		for (let i = 0; i < samples.length; i += 1) {
 			assert (samples[i].kind as int32) == i;
 		}

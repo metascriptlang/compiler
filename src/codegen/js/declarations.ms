@@ -2,14 +2,15 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
-	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, createNodeAt, SymbolKind,
+	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, ExprStmtData, createNodeAt, SymbolKind,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
-import { jsDefaultValue } from "./valueCopy";
+import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
+import { mangleQualified, mangleModuleName } from "../c/names";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { isGenericFn, routineKindFlag } from "../../checker/context";
+import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
@@ -404,6 +405,11 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 
 // ===== Export Declaration =====
 
+function recordBundleExport(gen: JSGenerator, name: string, local: string): void {
+	gen.exportedNames.push(name);
+	gen.bundleExportLocals.push(local);
+}
+
 export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ExportDeclData;
 	const inner = d.exportedDecl;
@@ -446,23 +452,36 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	if (inner.kind == NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
 	if (inner.kind == NodeKind.FunctionDecl && isGenericRoutine(inner, (inner.data as FunctionDeclData).fnFlags)) return;
 	if (inner.kind == NodeKind.ClassDecl && !classEmitsShell(inner)) { emitClassDecl(gen, inner); return; }
+	const isDefault = node.flags.has(NodeFlag.ExportDefault);
 	if (gen.bundleMode) {
-		// Bundle mode: emit declaration without `export`, track exported name
-		let exportName = "";
-		if (inner.kind == NodeKind.FunctionDecl) { exportName = safeJsName((inner.data as FunctionDeclData).fnName); }
-		else if (inner.kind == NodeKind.VariableDecl) { exportName = safeJsName((inner.data as VariableDeclData).declName); }
-		else if (inner.kind == NodeKind.EnumDecl) { /* flat constants — no single variable to export */ }
-		else if (inner.kind == NodeKind.ClassDecl) { exportName = safeJsName((inner.data as ClassDeclData).className); }
-		if (exportName != "") { gen.exportedNames.push(exportName); }
-		// Emit the declaration itself (no export keyword)
+		if (isDefault && inner.kind == NodeKind.ExprStmt) {
+			const local = mangleQualified("default", mangleModuleName(gen.sourceFile));
+			emitIndent(gen);
+			emit(gen, `const ${local} = `);
+			emitCopyOnRead(gen, (inner.data as ExprStmtData).expr);
+			emit(gen, ";\n");
+			recordBundleExport(gen, "default", local);
+			return;
+		}
+		let declName = "";
+		if (inner.kind == NodeKind.FunctionDecl && !isExtensionRoutine((inner.data as FunctionDeclData).fnFlags)) { declName = (inner.data as FunctionDeclData).fnName; }
+		else if (inner.kind == NodeKind.VariableDecl) { declName = (inner.data as VariableDeclData).declName; }
+		else if (inner.kind == NodeKind.ClassDecl) { declName = (inner.data as ClassDeclData).className; }
+		const before = gen.buf.length;
 		emitNode(gen, inner);
+		if (declName != "" && gen.buf.length > before) recordBundleExport(gen, isDefault ? "default" : declName, jsSymbolName(gen, inner.resolvedSym, declName));
 		return;
 	}
 	// Non-bundle: ES module export
 	if (inner.kind == NodeKind.ClassDecl && classEmitsNoJs(inner)) return;
 	if (inner.kind == NodeKind.ActorDecl && inner.flags.has(NodeFlag.ExternC)) return;
 	emitIndent(gen);
-	emit(gen, "export ");
+	emit(gen, isDefault ? "export default " : "export ");
+	if (isDefault && inner.kind == NodeKind.ExprStmt) {
+		emitCopyOnRead(gen, (inner.data as ExprStmtData).expr);
+		emit(gen, ";\n");
+		return;
+	}
 	match (inner.kind) {
 		NodeKind.FunctionDecl => {
 			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as FunctionDeclData).fnName)); }

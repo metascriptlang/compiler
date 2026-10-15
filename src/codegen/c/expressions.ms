@@ -1460,13 +1460,11 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			const arrType = getTypeDesc(g, node.nodeType);
 			if (d.newArguments.length == 1) {
 				const sizeExpr = genExpr(g, p, d.newArguments[0]);
-				// Allocate array with N slots: { .len = N, .p = calloc(sizeof(Content) + N * sizeof(elem)) }
 				const elemType = node.nodeType.typeReturn != null ? getTypeDesc(g, node.nodeType.typeReturn) : "void*";
 				const contentType = getArrayContentType(arrType);
 				const tmp = getTemp(p, arrType);
 				emitStmtsLine(p, `${tmp.snippet}.len = ${sizeExpr};`);
-				emitStmtsLine(p, `${tmp.snippet}.p = (${contentType}*)calloc(1, sizeof(${contentType}) + ${sizeExpr} * sizeof(${elemType}));`);
-				emitStmtsLine(p, `${tmp.snippet}.p->cap = ${sizeExpr};`);
+				emitStmtsLine(p, `${tmp.snippet}.p = (${contentType}*)msArrayPayloadNew(${tmp.snippet}.len, sizeof(${elemType}));`);
 				ctx.results.push(tmp.snippet);
 			} else {
 				ctx.results.push(`(${arrType}){0}`);

@@ -3,13 +3,13 @@ export * from "./error";
 export * from "./discriminator";
 export * from "./pda";
 export * from "./littleEndian";
+export * from "./borsh";
 export {
 	Account,
 	AccountMeta,
 	AssociatedToken,
 	Bytes,
 	Clock,
-	CpiAccount,
 	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
 	MAX_CPI_ACCOUNTS,
@@ -62,6 +62,7 @@ export {
 	logData,
 	logEvent,
 	logPubkey,
+	logText,
 	logU64,
 	minimumBalance,
 	owner,
@@ -92,6 +93,7 @@ export {
 	remainingComputeUnits,
 	resize,
 	returnData,
+	returnDataFrom,
 	setLamports,
 	setReturnData,
 	signerAccount,
@@ -141,14 +143,12 @@ export {
 	read,
 	readArgs,
 	realloc,
-	selectInstruction,
 	signer,
 	systemAccount,
 	transferLamports,
 	verifiedPda,
 	verifiedPdaWithBump,
 	writable,
-	writablePda,
 	writableSigner,
 } from "./typed";
 export * from "./macro";

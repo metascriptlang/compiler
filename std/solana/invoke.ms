@@ -1,5 +1,5 @@
 import { Node, NodeKind, bindSym } from "std/meta";
-import { invokeCpi } from "./cpi";
+import { invokeCpi } from "./core";
 
 export macro invokeSigned(
 	program: Node,

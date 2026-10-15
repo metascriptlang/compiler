@@ -2,7 +2,7 @@
 // If/else dispatch loop. C backend has optional computed-goto fast path (vmDispatch.c).
 
 import {
-	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource,
+	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx,
 	getBx, getSignedAx
 } from "./bytecode";
@@ -23,6 +23,7 @@ import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
 import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
+import { int64Bits } from "../utils/stdBackport";
 
 @include("runtime/promise/dispatch.h");
 extern function msMonoTimeMs(): int64;
@@ -289,6 +290,7 @@ function vmError(vm: RaiserVM, msg: string): void {
 }
 
 const MAX_CALL_DEPTH = 1024;
+const MAX_ARRAY_COUNT = 4294967295;
 
 // --- Execute ---
 
@@ -399,7 +401,7 @@ function vmFireDueTimer(vm: RaiserVM): void {
 	if (items.length == 0 || items[0].dueMs > msMonoTimeMs()) return;
 	const timer = items[0];
 	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
-	items.length = items.length - 1;
+	items.shrink(items.length - 1);
 	futureComplete(vm, timer.future, raiserNil());
 }
 
@@ -448,10 +450,7 @@ export function vmOrphanFailures(vm: RaiserVM): string[] {
 
 // --- Exceptions ---
 // A per-frame stack of safepoints, each holding the ip of the handler metadata
-// its `Try` registered, plus one in-flight exception. A `finally` can be
-// entered from an unwind or from a return; `savedIp` is the instruction it
-// hands control back to when it ends, so FinallyEnd re-executes the Throw that
-// is still searching or the Ret that is still returning.
+// its `Try` registered, plus one in-flight exception.
 
 function popSafePoint(vm: RaiserVM): number {
 	const n = vm.safePoints.length;
@@ -466,7 +465,7 @@ function popSafePoint(vm: RaiserVM): number {
 function unwindFrame(vm: RaiserVM): void {
 	const len = vm.callStack.items.length;
 	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.length = len - 1;
+	vm.callStack.items.shrink(len - 1);
 	vm.funcIdx = frame.funcIdx;
 	vm.ip = frame.returnIp;
 	vm.baseReg = frame.baseReg;
@@ -961,27 +960,27 @@ function runStrandSlice(vm: RaiserVM): void {
 			const rhs = getReg(vm, base + inst.c);
 			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) / (rhs.intVal as uint64)) as int64));
+				setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) / (rhs.intVal as uint64))));
 			}
 		} else if (op == RaiserOpcode.ModU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			if (rhs.intVal == 0) { vmError(vm, "integer modulo by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) % (rhs.intVal as uint64)) as int64));
+				setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) % (rhs.intVal as uint64))));
 			}
 		} else if (op == RaiserOpcode.AddU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) + (rhs.intVal as uint64)) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64))));
 		} else if (op == RaiserOpcode.SubU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) - (rhs.intVal as uint64)) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64))));
 		} else if (op == RaiserOpcode.MulU64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) * (rhs.intVal as uint64)) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64))));
 		} else if (op == RaiserOpcode.AddrReg) {
 			setReg(vm, base + inst.a, raiserRegAddr((base + inst.b) as int64));
 		} else if (op == RaiserOpcode.AddrGlobal) {
@@ -1067,7 +1066,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const count = (rhs.intVal & 63) as uint64;
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) << count) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) << count)));
 		} else if (op == RaiserOpcode.ShiftRight) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
@@ -1079,13 +1078,13 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.SignExtend) {
 			const val = getReg(vm, base + inst.a);
 			const imm = 64 - (inst.b as int64);
-			const raised = ((val.intVal as uint64) << (imm as uint64)) as int64;
+			const raised = int64Bits((val.intVal as uint64) << (imm as uint64));
 			setReg(vm, base + inst.a, raiserInt(raised >> imm));
 		} else if (op == RaiserOpcode.ShiftRightU) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			const count = (rhs.intVal & 63) as uint64;
-			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) >> count) as int64));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) >> count)));
 		} else if (op == RaiserOpcode.Conv) {
 			vmHandleConv(vm, inst);
 		// --- Complex ops (previously handled in MetaScript fallback) ---
@@ -1184,7 +1183,10 @@ function runStrandSlice(vm: RaiserVM): void {
 			// Only reached when the guarded region completed without raising.
 			popSafePoint(vm);
 		} else if (op == RaiserOpcode.FinallyEnd) {
-			if (vm.savedIp >= 0) {
+			if (vm.unwinding) {
+				vm.savedIp = -1;
+				unwindStep(vm);
+			} else if (vm.savedIp >= 0) {
 				vm.ip = vm.savedIp;
 				vm.savedIp = -1;
 			}
@@ -1267,7 +1269,7 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	// Pop frame
 	const len = vm.callStack.items.length;
 	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.length = len - 1;
+	vm.callStack.items.shrink(len - 1);
 
 	// Copy return value to caller's dest register (fresh object avoids aliasing)
 	const retCopy = raiserNil();
@@ -1501,6 +1503,11 @@ function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	if (lenVal.kind != RaiserValueKind.Int) {
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
+	}
+	if (inst.c == 1) {
+		if (lenVal.intVal < 0) vmError(vm, `value ${lenVal.intVal} not in range 0 .. 9223372036854775807`);
+		else if (lenVal.intVal > MAX_ARRAY_COUNT) vmError(vm, "over- or underflow");
+		return;
 	}
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot set the length of a slice"); return;
@@ -1752,7 +1759,7 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const cls = convTarget(inst.c);
 	const fromUnsigned = convSource(inst.c) == (RaiserConvClass.U64 as int32);
 	if (cls == RaiserConvClass.F64Bits) {
-		setReg(vm, vm.baseReg + inst.a, raiserInt(msFloat64Bits(asNum(src)) as int64));
+		setReg(vm, vm.baseReg + inst.a, raiserInt(int64Bits(msFloat64Bits(asNum(src)))));
 		return;
 	}
 	if (cls == RaiserConvClass.I32Wrap) {
@@ -1782,16 +1789,21 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		return;
 	}
 	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0 && src.floatVal < 18446744073709551616.0) {
-		setReg(vm, vm.baseReg + inst.a, raiserInt((src.floatVal as uint64) as int64));
+		setReg(vm, vm.baseReg + inst.a, raiserInt(int64Bits(src.floatVal as uint64)));
 		return;
 	}
 	const bits = convClassBits(cls);
 	const signed = convClassSigned(cls);
+	const hi: int64 = bits == 64
+		? 9223372036854775807
+		: ((1 as int64) << ((bits - 1) as int64)) - 1;
+	const lo: int64 = -hi - 1;
 	if (src.kind == RaiserValueKind.Float && signed && !floatFitsSigned(src.floatVal, bits)) {
-		const hi: int64 = bits == 64
-			? 9223372036854775807
-			: ((1 as int64) << ((bits - 1) as int64)) - 1;
-		vmError(vm, `value ${src.floatVal} not in range ${-hi - 1} .. ${hi}`);
+		vmError(vm, `value ${src.floatVal} not in range ${lo} .. ${hi}`);
+		return;
+	}
+	if (src.kind == RaiserValueKind.Int && signed && fromUnsigned && src.intVal < 0) {
+		vmError(vm, `value ${src.intVal as uint64} not in range ${lo} .. ${hi}`);
 		return;
 	}
 	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
@@ -1799,9 +1811,7 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, vm.baseReg + inst.a, raiserInt(whole));
 		return;
 	}
-	if (convClassSigned(cls)) {
-		const hi: int64 = ((1 as int64) << ((bits - 1) as int64)) - 1;
-		const lo: int64 = -hi - 1;
+	if (signed) {
 		if (whole < lo || whole > hi) {
 			vmError(vm, `value ${whole} not in range ${lo} .. ${hi}`);
 			return;
@@ -2027,11 +2037,11 @@ test "halt returns constant" {
 	assert vm.exitValue.intVal == 42;
 }
 
-function execConv(value: RaiserValue, cls: RaiserConvClass): RaiserVM {
+function execConv(value: RaiserValue, cls: RaiserConvClass, from: int32 = -1): RaiserVM {
 	return execModule(makeTestModule(
 		[
 			raiserABx(RaiserOpcode.LoadConst, 0, 0),
-			raiserABC(RaiserOpcode.Conv, 1, 0, cls as int32),
+			raiserABC(RaiserOpcode.Conv, 1, 0, convOperand(cls, from)),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
 		[value]
@@ -2043,6 +2053,14 @@ test "a float converted to a signed integer out of its range stops, as on C" {
 	const i8 = execConv(raiserFloat(128.0), RaiserConvClass.I8);
 	assert i8.error.indexOf("value 128 not in range -128 .. 127") >= 0;
 	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
+}
+
+test "a uint64 past int64 converted to a signed integer stops, as on C" {
+	const u64 = RaiserConvClass.U64 as int32;
+	assert execConv(raiserInt(int64Bits(9223372036854775808)), RaiserConvClass.I64, u64).error == "value 9223372036854775808 not in range -9223372036854775808 .. 9223372036854775807";
+	assert execConv(raiserInt(int64Bits(9223372036854775813)), RaiserConvClass.I32, u64).error == "value 9223372036854775813 not in range -2147483648 .. 2147483647";
+	assert execConv(raiserInt(9223372036854775807), RaiserConvClass.I64, u64).exitValue.intVal == 9223372036854775807;
+	assert execConv(raiserInt(int64Bits(9223372036854775813)), RaiserConvClass.U32, u64).exitValue.intVal == 5;
 }
 
 test "a float wrapped to int32 takes the bitwise operand conversion of C and JS" {
@@ -2321,6 +2339,48 @@ test "ArraySetLen truncates" {
 		[raiserInt(7), raiserInt(1)]
 	));
 	assert vm.exitValue.intVal == 1;
+}
+
+test "ArraySetLen with C = 1 refuses a negative count" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(-1)]
+	));
+	assert vm.halted;
+	assert vm.error == "value -1 not in range 0 .. 9223372036854775807";
+}
+
+test "ArraySetLen with C = 1 refuses a count past 2^32 - 1" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(4294967296)]
+	));
+	assert vm.error == "over- or underflow";
+}
+
+test "ArraySetLen with C = 1 accepts a valid count without growing" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
+			raiserABC(RaiserOpcode.ArrayLen, 2, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(3)]
+	));
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 0;
 }
 
 test "ArraySetLen nil-extends" {

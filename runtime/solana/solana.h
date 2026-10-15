@@ -55,6 +55,7 @@ uint64_t msSolHostAlloc(uint64_t size);
 uint64_t msSolHostScratch(uint64_t size);
 uint64_t msSolHostInput(uint64_t size);
 void msSolHostEnter(uint64_t input);
+void msSolHostLeave(void);
 uint64_t msSolHostResult(void);
 uint64_t msSolHostFaultCodeOf(void);
 msString msSolHostFaultMessage(void);
@@ -63,6 +64,7 @@ msString msSolHostLogAt(uint64_t index);
 uint64_t msSolHostInvocationTotal(void);
 uint64_t msSolHostInvocationAt(uint64_t index);
 void msSolHostSetClock(uint64_t slot, uint64_t epochStart, uint64_t epoch, uint64_t leaderEpoch, uint64_t unixTime);
+void msSolHostSetSysvarStatus(uint64_t status);
 void msSolHostLog(uint64_t address, uint64_t length);
 void msSolHostLog64(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e);
 void msSolHostLogPubkey(uint64_t address);
@@ -219,6 +221,10 @@ static inline uint64_t msSolAccountAt(uint64_t index) {
     return address;
 }
 
+static inline uint64_t msSolAccountSlot(uint64_t index) {
+    return ((const uint64_t*)msSolContext()->accountTable)[index];
+}
+
 static inline uint64_t msSolInstructionData(void) {
     return msSolContext()->instructionData;
 }
@@ -238,6 +244,10 @@ static inline uint64_t msSolProgramId(void) {
 
 static inline void msSolSetResult(uint64_t code) {
     msSolContext()->result = code;
+}
+
+static inline uint64_t msSolResult(void) {
+    return msSolContext()->result;
 }
 
 static inline void* msSolPointer(uint64_t address) {
@@ -446,7 +456,7 @@ static inline uint64_t msSolGetReturnData(uint64_t data, uint64_t length, uint64
    lamports-per-byte-year marks the words as read. */
 static inline uint64_t msSolRentAddress(void) {
     msSolanaContext* context = msSolContext();
-    if (context->rent[0] == 0) msSolGetRent((uint64_t)(uintptr_t)context->rent);
+    if (context->rent[0] == 0 && msSolGetRent((uint64_t)(uintptr_t)context->rent) != 0) return 0;
     return (uint64_t)(uintptr_t)context->rent;
 }
 

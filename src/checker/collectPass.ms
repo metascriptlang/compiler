@@ -4,11 +4,14 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, isNativePattern } from "./context";
 import { isGlobalImport } from "./prelude";
+import { getParserDefines } from "../parser/context";
+import { definedValue } from "../compiler/defines";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
-import { getModuleDir, appendFlag } from "../utils/string";
+import { getModuleDir, appendFlag, findChar } from "../utils/string";
+import { isDigit } from "../lexer/chars";
 import { normalize } from "std/fs/path";
 import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
@@ -121,7 +124,7 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			const sym = declOfStatement(dd.decoratedNode).resolvedSym;
 			if (sym != null) {
 				const info = extractDecoratorInfo(node);
-				if (info.nativeName != "") sym.nativeName = info.nativeName;
+				if (info.nativeName != "" && sym.nativeName == "") sym.nativeName = formatExternName(ctx, "declaration", sym.name, info.nativeName, node.location);
 				if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
 			}
 		},
@@ -449,6 +452,59 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 	}
 }
 
+function formatExternName(ctx: CheckerContext, kind: string, name: string, raw: string, at: SourceLocation): string {
+	if (findChar(raw, "$") < 0) return raw;
+	let out = "";
+	let i = 0;
+	while (i < raw.length) {
+		const ch = raw.charAt(i);
+		const next = i + 1 < raw.length ? raw.charAt(i + 1) : "";
+		const digitAfter = i + 2 < raw.length && isDigit(raw.charCodeAt(i + 2) as int32);
+		if (ch != "$") {
+			out += ch;
+			i += 1;
+		} else if (next == "$") {
+			out += "$";
+			i += 2;
+		} else if (next == "1" && !digitAfter) {
+			out += name;
+			i += 2;
+		} else {
+			addError(ctx, `extern ${kind} '${name}': invalid from name "${raw}"; '$1' stands for the declared name and '$$' for a literal '$'`, at.line, at.column);
+			return raw;
+		}
+	}
+	return out;
+}
+
+function refuseJsPatternOffJs(ctx: CheckerContext, kind: string, name: string, native: string, at: SourceLocation): void {
+	if (!isNativePattern(native) || definedValue(getParserDefines(), "backend") != "c") return;
+	addError(ctx,
+		`extern ${kind} '${name}': "${native}" is a JS pattern and needs the JS target; declare it inside \`when (js) { … }\` or in a .jms file`,
+		at.line, at.column);
+}
+
+function refusePlaceholderMismatch(ctx: CheckerContext, d: FunctionDeclData, pattern: string): void {
+	if (!isNativePattern(pattern)) return;
+	let placeholders = 0;
+	for (let i = 0; i < pattern.length; i++) {
+		if (pattern.charAt(i) == "#") placeholders += 1;
+	}
+	const splatAt = findChar(pattern, "@");
+	if (splatAt >= 0 && findChar(pattern.slice(splatAt, pattern.length), "#") >= 0) {
+		addError(ctx,
+			`extern function '${d.fnName}': in the pattern "${pattern}" a '#' follows '@', which has already taken every remaining argument; move the '#' before the '@'`,
+			d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	const params = d.params.length;
+	if (placeholders == params || (splatAt >= 0 && placeholders < params)) return;
+	const literalHint = placeholders > params ? "; write a literal '#' as '\\x1f', or as '\\\\x23' inside a JS string of the pattern" : "";
+	addError(ctx,
+		`extern function '${d.fnName}': the pattern "${pattern}" has ${placeholders} '#' placeholder(s) but the function takes ${params} parameter(s)${literalHint}`,
+		d.nameLocation.line, d.nameLocation.column);
+}
+
 // ===== Individual Collectors =====
 
 export function collectFunction(ctx: CheckerContext, node: Node): void {
@@ -488,7 +544,9 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 		setFlag(sym, SymbolFlag.ImportC);
 		// Wire nativeName from AST 'from "c_name"' clause
 		if (d.nativeName != null && d.nativeName != "") {
-			sym.nativeName = d.nativeName;
+			sym.nativeName = formatExternName(ctx, "function", d.fnName, d.nativeName, d.nameLocation);
+			refuseJsPatternOffJs(ctx, "function", d.fnName, sym.nativeName, d.nameLocation);
+			refusePlaceholderMismatch(ctx, d, sym.nativeName);
 		} else {
 			// extern without 'from' — function name IS the C name (no module mangling)
 			sym.nativeName = d.fnName;
@@ -803,8 +861,9 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		md.methodFlags = md.methodFlags == "" ? `gen:${classGenerics}` : `${md.methodFlags}|gen:${classGenerics}`;
 	}
 	const fnType = createFunction([], [], inferredType());
-	if (md.nativeName != null && md.nativeName != "") {
-		fnType.typeName = md.nativeName;
+	const methodNative = md.nativeName != null && md.nativeName != "" ? formatExternName(ctx, "method", md.methodName, md.nativeName, md.nameLocation) : "";
+	if (methodNative != "") {
+		fnType.typeName = methodNative;
 	}
 	if (builtinKind != "") {
 		fnType.typeName = builtinKind;
@@ -812,8 +871,9 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	const mangledName = className + "_" + md.methodName;
 	const methodSym = makeSymbol(mangledName, SymbolKind.Function, fnType, false);
 	fnType.sym = methodSym;
-	if (md.nativeName != null && md.nativeName != "") {
-		methodSym.nativeName = md.nativeName;
+	if (methodNative != "") {
+		methodSym.nativeName = methodNative;
+		refuseJsPatternOffJs(ctx, "method", md.methodName, methodNative, md.nameLocation);
 	}
 	if (builtinKind != "") {
 		methodSym.builtinKind = builtinKind;
@@ -1028,7 +1088,8 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 	setFlag(sym, SymbolFlag.ImportC);
 	// Wire nativeName from AST 'from "c_name"' clause
 	if (d.nativeName != null && d.nativeName != "") {
-		sym.nativeName = d.nativeName;
+		sym.nativeName = formatExternName(ctx, "declaration", d.externName, d.nativeName, node.location);
+		refuseJsPatternOffJs(ctx, "declaration", d.externName, sym.nativeName, node.location);
 	} else {
 		sym.nativeName = d.externName;
 	}
@@ -1058,7 +1119,7 @@ export function registerConverter(ctx: CheckerContext, sym: Symbol, tier: int32,
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
-function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string {
+export function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string {
 	if (ctx.currentModule != null) {
 		for (const imp of ctx.currentModule.imports) {
 			if (imp.sourceSpecifier == specifier) return imp.sourcePath;

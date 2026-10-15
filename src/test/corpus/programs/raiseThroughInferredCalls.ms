@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM crashes (exit 139) on a try/catch that follows a call whose `return` inside try/finally raised
 // @stdout: chain 8 | deep 4 | deep caught -1 | recur 14
 // @stdout: finally ran
 // @stdout: binary caught big 7 | nested caught big 8

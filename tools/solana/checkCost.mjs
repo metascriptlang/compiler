@@ -65,7 +65,8 @@ const OPS = [
 // The three structs holding `rolled: Delegated<Pet>` were reset on 2026-10-10, when a Delegated field became pinned by
 // `@seeds @bump`: the canonical search costs about 430 CU that the unpinned field never paid.
 // `realloc<Pet>` rose by 45 on 2026-10-12: a growth now finds where the account's record ends in the input, the
-// bound a callee's growth cannot move (tools/solana/resizeAfterCpi.mjs).
+// bound a callee's growth cannot move (tools/solana/resizeAfterCpi.mjs). It rose by 3 more the same day: a rent read that fails now fails
+// the instruction instead of answering a minimum balance of 0.
 const BASELINE = {
 	"idle": 166,
 	"owned<Pet>": 230,
@@ -79,7 +80,7 @@ const BASELINE = {
 	"pdaWithBump (Mutable)": 610,
 	"pda (Delegated)": 709,
 	"pdaWithBump (Delegated)": 715,
-	"realloc<Pet>": 549,
+	"realloc<Pet>": 552,
 	"close<Pet>": 426,
 	"instruction<Dispatch> (last)": 318,
 	"external<Mint>": 358,

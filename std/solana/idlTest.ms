@@ -4,6 +4,7 @@ import {
 	Mutable,
 	Program,
 	Pubkey,
+	Signer,
 	System,
 	Token,
 	Token2022,
@@ -58,6 +59,48 @@ struct OddAccounts {
 
 function computed(value: uint64): uint8[8] { return leBytes(value); }
 
+enum InheritedOp { One, Two, Three }
+
+struct PayerAccounts {
+	payer: WritableSigner;
+	systemProgram: Program<System>;
+}
+
+struct OneLevelAccounts extends PayerAccounts {
+	@seeds("escrow", payer, leBytes(given.seed)) @bump escrow: Writable;
+	@address(CLOCK_ID) clock: Account;
+}
+
+struct AuthorityAccounts extends PayerAccounts {
+	authority: Signer;
+	@seeds("config", authority) @bump config: Mutable<Escrow>;
+}
+
+struct TwoLevelAccounts extends AuthorityAccounts {
+	@seeds("vault", payer, config.maker) @bump vault: Writable;
+}
+
+struct Stamped { seed: uint64; maker: Pubkey; }
+struct Bumped extends Stamped { bump: uint8; }
+struct Flagged extends Bumped { flag: uint8; }
+
+struct InheritedSeedAccounts {
+	@seeds("one", leBytes(bumped.seed)) @bump(bumped.bump) bumped: Mutable<Bumped>;
+	@seeds("two", flagged.maker, [flagged.flag], leBytes(flagged.seed)) @bump(flagged.bump) flagged: Mutable<Flagged>;
+}
+
+function inheritedIdl(): string {
+	return anchorIdl<InheritedOp>({
+		name: "inherited",
+		One: [OneLevelAccounts, MakeArgs],
+		Two: [TwoLevelAccounts],
+		Three: [InheritedSeedAccounts],
+		accounts: [Escrow],
+		events: [],
+		errors: "",
+	});
+}
+
 export function pdaSeedsIdl(): string {
 	return anchorIdl<VaultOp>({
 		name: "vault",
@@ -70,8 +113,61 @@ export function pdaSeedsIdl(): string {
 	});
 }
 
+enum PlainOp { Ping, Pay }
+
+function plainIdl(): string {
+	return anchorIdl<PlainOp>({
+		name: "plain",
+		Ping: [],
+		Pay: [PayerAccounts, MakeArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+}
+
+enum GaugeOp { Measure }
+
+struct Gauge {
+	reading: float64;
+	scale: float32;
+	count: uint32;
+}
+
+struct MeasureArgs {
+	ratio: float32;
+	limit: float64;
+}
+
+function gaugeIdl(): string {
+	return anchorIdl<GaugeOp>({
+		name: "gauge",
+		Measure: [PayerAccounts, MeasureArgs],
+		accounts: [Gauge],
+		events: [],
+		errors: "",
+	});
+}
+
 when (!testBuild) {
 	console.log(pdaSeedsIdl());
+}
+
+test "an instruction given no accounts struct has no accounts and no args" {
+	const idl = plainIdl();
+	assert idl.indexOf("{\"name\":\"ping\",\"discriminator\":[") >= 0;
+	assert idl.indexOf("],\"accounts\":[],\"args\":[]},{\"name\":\"pay\"") >= 0;
+	assert idl.indexOf("\"accounts\":[{\"name\":\"payer\",\"writable\":true,\"signer\":true}") >= 0;
+}
+
+test "a float32 and a float64 field are the IDL's f32 and f64" {
+	assert gaugeIdl().indexOf("\"fields\":[{\"name\":\"reading\",\"type\":\"f64\"}," +
+		"{\"name\":\"scale\",\"type\":\"f32\"},{\"name\":\"count\",\"type\":\"u32\"}]") >= 0;
+}
+
+test "a float32 and a float64 argument are the IDL's f32 and f64" {
+	assert gaugeIdl().indexOf("\"args\":[{\"name\":\"ratio\",\"type\":\"f32\"}," +
+		"{\"name\":\"limit\",\"type\":\"f64\"}]") >= 0;
 }
 
 test "a literal, an account and an argument seed give the account its PDA" {
@@ -118,4 +214,45 @@ test "a seed the IDL cannot express leaves the account without a pda, as Anchor 
 	assert idl.indexOf("{\"name\":\"narrow\",\"writable\":true}") >= 0;
 	assert idl.indexOf("{\"name\":\"unknown_arg\",\"writable\":true}") >= 0;
 	assert idl.indexOf("{\"name\":\"runtime\"}") >= 0;
+}
+
+test "a struct that extends another lists the base's accounts first, with their flags and address" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("\"accounts\":[{\"name\":\"payer\",\"writable\":true,\"signer\":true}," +
+		"{\"name\":\"system_program\",\"address\":\"11111111111111111111111111111111\"}," +
+		"{\"name\":\"escrow\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[101,115,99,114,111,119]}," +
+		"{\"kind\":\"account\",\"path\":\"payer\"}," +
+		"{\"kind\":\"arg\",\"path\":\"seed\"}]}}," +
+		"{\"name\":\"clock\",\"address\":\"SysvarC1ock11111111111111111111111111111111\"}],\"args\"") >= 0;
+}
+
+test "two levels of extends list the accounts base before derived, and a seed reaches every level" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("\"accounts\":[{\"name\":\"payer\",\"writable\":true,\"signer\":true}," +
+		"{\"name\":\"system_program\",\"address\":\"11111111111111111111111111111111\"}," +
+		"{\"name\":\"authority\",\"signer\":true}," +
+		"{\"name\":\"config\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[99,111,110,102,105,103]}," +
+		"{\"kind\":\"account\",\"path\":\"authority\"}]}}," +
+		"{\"name\":\"vault\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[118,97,117,108,116]}," +
+		"{\"kind\":\"account\",\"path\":\"payer\"}," +
+		"{\"kind\":\"account\",\"path\":\"config.maker\",\"account\":\"Escrow\"}]}}],\"args\"") >= 0;
+}
+
+test "a seed that names a field the account's data inherits one struct up is an account seed" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("{\"name\":\"bumped\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[111,110,101]}," +
+		"{\"kind\":\"account\",\"path\":\"bumped.seed\",\"account\":\"Bumped\"}]}}") >= 0;
+}
+
+test "a seed reaches the fields the account's data declares and inherits one and two structs up" {
+	const idl = inheritedIdl();
+	assert idl.indexOf("{\"name\":\"flagged\",\"writable\":true,\"pda\":{\"seeds\":[" +
+		"{\"kind\":\"const\",\"value\":[116,119,111]}," +
+		"{\"kind\":\"account\",\"path\":\"flagged.maker\",\"account\":\"Flagged\"}," +
+		"{\"kind\":\"account\",\"path\":\"flagged.flag\",\"account\":\"Flagged\"}," +
+		"{\"kind\":\"account\",\"path\":\"flagged.seed\",\"account\":\"Flagged\"}]}}") >= 0;
 }

@@ -51,6 +51,7 @@ import "./nominalInstantiation";
 import "./nullableInstantiation";
 import "./numericRepresentation";
 import "./optionalParameters";
+import "./outArgumentBox";
 import "./receiverViews";
 import "./serializationVariants";
 import "./spawnThunkValues";

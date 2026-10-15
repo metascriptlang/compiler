@@ -2,7 +2,7 @@
 
 import { bold, cyan, yellow, dim, green } from "../utils/color";
 
-export const VERSION = "0.3.3";
+export const VERSION = "0.3.4";
 
 export function printUsage(): void {
 	console.log("");
@@ -42,6 +42,8 @@ export function printUsage(): void {
 	console.log("  " + cyan("-h") + ", " + cyan("--help") + "            Display this help");
 	console.log("  " + cyan("-v") + ", " + cyan("--version") + "         Show version");
 	console.log("  " + cyan("--target") + "=<c|js>       Target backend " + dim("(default: c)"));
+	console.log("  " + cyan("--os") + "=<os>             Target OS " +
+		dim("(bare|solana|wasm|emcc|linux|macos|windows|ios|android; default: host)"));
 	console.log("  " + cyan("--output") + "=<file>       Output file path");
 	console.log("  " + cyan("-t") + ", " + cyan("--time") + "            Show compilation timing");
 	console.log("  " + cyan("--verbose") + "             Verbose phase output");
@@ -50,7 +52,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--no-color") + "            Disable color output");
 	console.log("  " + cyan("--release") + "             Optimize for speed " + dim("(-O2)"));
 	console.log("  " + cyan("--danger") + "              Maximum optimization " + dim("(-O3, +LTO where the toolchain can link it)"));
-	console.log("  " + cyan("--cc") + "=<clang|gcc>      C compiler " + dim("(default: auto-detect)"));
+	console.log("  " + cyan("--cc") + "=<clang|gcc|path> C compiler " + dim("(default: managed Zig)"));
 	console.log("  " + cyan("--strip") + "               Strip symbols from binary " + dim("(--os=solana always strips the program; --strip also drops its .debug copy)"));
 	console.log("  " + cyan("--gc") + "=<mode>           GC mode " + dim("(drc|orc|none|manual)"));
 	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));

@@ -62,4 +62,19 @@ export extern function splice<T>(this arr: T[], start: number, deleteCount: numb
 // identically; on the GROW path C zero-fills the new slots while JS leaves
 // holes that read as undefined, so callers that extend must write every new
 // index themselves (std/core/array/index.rms does exactly that).
-export extern function setLength<T>(this arr: T[], newLen: number): void from "#.length = #";
+export function setLength<T>(this arr: T[], newLen: number): void {
+	arr.length = newLen as int32;
+}
+export function shrink<T>(this arr: T[], n: int64): void {
+	@emit(`if (${n} < 0 || ${n} > ${arr}.length) {
+		const m = "value " + ${n} + " not in range 0 .. " + ${arr}.length;
+		if (typeof process === "object" && process !== null && typeof process.exit === "function") {
+			process.stderr.write("Error: " + m + "\\n");
+			process.exit(1);
+		}
+		const e = new Error(m);
+		e.msDefect = true;
+		throw e;
+	}
+	${arr}.length = Number(${n});`);
+}

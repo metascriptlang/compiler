@@ -35,9 +35,9 @@ export struct InitAccounts {
 function init(): Result<uint64, ProgramError> {
 	const x = try accounts<InitAccounts>();
 	const made = try createPda<Counter>(x.payer, x.counter, ["counter"]);
-	const counter = made.account.data();
+	const counter = made.asMutable().data();
 	counter.value = 42;
-	counter.bump = made.bump;
+	counter.bump = made.foundBump();
 	return Result.ok(0);
 }
 

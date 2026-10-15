@@ -29,7 +29,7 @@ function churnShrink(): void {
 	const stack: Frame[] = [];
 	let k = 0;
 	while (k < 16) { stack.push({ name: bigName("f"), depth: k }); k = k + 1; }
-	stack.length = stack.length - 1;
+	stack.shrink(stack.length - 1);
 	stack.length = 0;
 }
 

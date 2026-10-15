@@ -22,7 +22,7 @@ import {
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
-	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../ast/node";
 import { TransformContext } from "./context";
 import { makeBlock } from "./util";
@@ -479,6 +479,11 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.JSXSpreadAttribute => {
 			const d = node.data as JSXSpreadAttributeData;
 			d.jsxSpreadArg = f(d.jsxSpreadArg);
+		},
+		NodeKind.ComputedProperty => {
+			const d = node.data as ComputedPropertyData;
+			d.computedKey = f(d.computedKey);
+			d.computedValue = f(d.computedValue);
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here — keeping

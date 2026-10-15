@@ -3,7 +3,7 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData, FunctionDeclData, ExportDeclData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData } from "../../ast/node";
 import { JSGenerator, JSHelpers, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
 import { forEachChild } from "../../ast/visitor";
@@ -71,19 +71,7 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		NodeKind.SpreadExpr => { emitSpreadExpr(gen, node); },
 		NodeKind.NewExpr => { emitNewExpr(gen, node); },
 		NodeKind.MoveExpr => { emitMoveExpr(gen, node); },
-		NodeKind.TryExpr => {
-			// try expr → (function(){ const $r = expr; if (!$r.ok) throw $r; return $r.value; })()
-			const td = node.data as TryExprData;
-			emit(gen, "(function(){ const $r = ");
-			emitNodeDispatch(gen, td.tryArg);
-			if (td.hasCatch && td.catchVal != null) {
-				emit(gen, "; if (!$r.ok) return ");
-				emitNodeDispatch(gen, td.catchVal);
-				emit(gen, "; return $r.value; })()");
-			} else {
-				emit(gen, "; if (!$r.ok) throw $r; return $r.value; })()");
-			}
-		},
+		NodeKind.TryExpr => { throw new Error(`internal: TryExpr reached JS codegen unlowered at ${node.location.line}:${node.location.column}`); },
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { const hd = node.data as HiddenDerefData; emitNodeDispatch(gen, hd.expr); },
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { const hd = node.data as HiddenStdConvData; emitNodeDispatch(gen, hd.convExpr); },
 		NodeKind.AwaitExpr => { emitAwaitExpr(gen, node); },
@@ -264,10 +252,10 @@ function insertAfterHeader(gen: JSGenerator, headerChunks: int32, text: string):
 }
 
 // Bundle mode: generate JS for a single module without header/imports.
-// Returns the code body + list of exported names for the IIFE return statement.
 export interface BundleModuleResult {
 	code: string;
 	exportedNames: string[];
+	exportedLocals: string[];
 	smap: SourceInfo;
 }
 
@@ -282,7 +270,7 @@ export function generateJSBundleModule(program: Node, importSourceMap: string[],
 	gen.importSourceToModuleId = importSourceMap;
 	gen.importSourceToModuleIdKeys = importSourceMapKeys;
 	emitNodeDispatch(gen, program);
-	return { code: finalize(gen), exportedNames: gen.exportedNames, smap: gen.smapInfo };
+	return { code: finalize(gen), exportedNames: gen.exportedNames, exportedLocals: gen.bundleExportLocals, smap: gen.smapInfo };
 }
 
 // Generate JS without header (for internal/test use)

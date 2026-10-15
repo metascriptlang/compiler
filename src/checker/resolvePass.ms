@@ -10,10 +10,11 @@ import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { isSysType, peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createUnionInOrder, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { getIdentId } from "./idents";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { forEachChild } from "../ast/visitor";
-import { nestedViewType, ownedAlternativeOf, findViewType } from "./types";
+import { nestedViewType, ownedAlternativeOf, findViewType, createOutVar } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -114,6 +115,41 @@ function stripRestParamPrefix(params: string[]): boolean {
 		return true;
 	}
 	return false;
+}
+
+// A function carries its out/ref parameters as positions in fnFlags; a method or constructor the parser
+// leaves them on the name ("out:x"). Lifting the prefix into the same flags lets one wrap serve both,
+// and lets a generic class's instantiated method find them.
+function liftParamModifiers(params: string[], flags: string): string {
+	let outAt = "";
+	let refAt = "";
+	for (let i = 0; i < params.length; i += 1) {
+		if (params[i].length > 4 && params[i].slice(0, 4) == "out:") {
+			params[i] = params[i].slice(4, params[i].length);
+			outAt = outAt == "" ? `${i}` : `${outAt},${i}`;
+		} else if (params[i].length > 4 && params[i].slice(0, 4) == "ref:") {
+			params[i] = params[i].slice(4, params[i].length);
+			refAt = refAt == "" ? `${i}` : `${refAt},${i}`;
+		}
+	}
+	if (outAt != "") flags = flags == "" ? `out:${outAt}` : `${flags}|out:${outAt}`;
+	if (refAt != "") flags = flags == "" ? `ref:${refAt}` : `${flags}|ref:${refAt}`;
+	return flags;
+}
+
+function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
+	if (flags == "" || (flags.indexOf("out:") < 0 && flags.indexOf("ref:") < 0)) return;
+	for (const fp of splitTopLevel(flags, "|")) {
+		const trimFp = fp.trim();
+		if (trimFp.length > 4 && (trimFp.slice(0, 4) == "out:" || trimFp.slice(0, 4) == "ref:")) {
+			for (const ip of splitTopLevel(trimFp.slice(4, trimFp.length), ",")) {
+				const idx = parseIntStr(ip.trim());
+				if (idx >= 0 && idx < paramTypes.length) {
+					paramTypes[idx] = trimFp.slice(0, 4) == "out:" ? createOutVar(paramTypes[idx]) : createVar(paramTypes[idx]);
+				}
+			}
+		}
+	}
 }
 
 // ===== A. Resolve Annotation Strings =====
@@ -986,6 +1022,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				addError(ctx, `generic type '${trimmed}' requires ${count} type argument(s)`, line, col);
 				return errorType();
 			}
+			if (sym != null && isStaticHiddenTypeParam(ctx, trimmed, sym)) {
+				if (line > 0) addError(ctx, `a static member cannot reference the class type parameter '${trimmed}': one static is shared by every instantiation of the class`, line, col);
+				return errorType();
+			}
 			if (sym != null) {
 				markUsedIn(ctx, sym);
 				// Demand-driven: ensure shaped before using
@@ -1012,6 +1052,12 @@ function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
 	markUsedIn(ctx, nsSym);
 	noteImported(ctx, exported.sym);
 	return exported.sym;
+}
+
+function isStaticHiddenTypeParam(ctx: CheckerContext, name: string, sym: Symbol): boolean {
+	const boundary = ctx.staticInitBoundary;
+	return boundary != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.GenericParam
+		&& boundary.symbols.get(getIdentId(ctx.table.identCache, name)) == sym;
 }
 
 function lookupTypeSym(ctx: CheckerContext, name: string): Symbol | null {
@@ -1579,23 +1625,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	resolveTypeExprs(node.typeExprs, ctx);
 
 	// Wrap out/ref param types in TypeKind.Var (reference parity: tyVar — both are T* in C)
-	if (d.fnFlags != "" && (d.fnFlags.indexOf("out:") >= 0 || d.fnFlags.indexOf("ref:") >= 0)) {
-		const flagParts = splitTopLevel(d.fnFlags, "|");
-		for (const fp of flagParts) {
-			const trimFp = fp.trim();
-			if ((trimFp.length > 4 && trimFp.slice(0, 4) == "out:") ||
-				(trimFp.length > 4 && trimFp.slice(0, 4) == "ref:")) {
-				const idxStr = trimFp.slice(4, trimFp.length);
-				const idxParts = splitTopLevel(idxStr, ",");
-				for (const ip of idxParts) {
-					const idx = parseIntStr(ip.trim());
-					if (idx >= 0 && idx < paramTypes.length) {
-						paramTypes[idx] = createVar(paramTypes[idx]);
-					}
-				}
-			}
-		}
-	}
+	wrapModifierTypes(d.fnFlags, paramTypes);
 
 	if (d.fnFlags != "" && d.fnFlags.indexOf("sink:") >= 0) {
 		if (d.fnFlags.indexOf("extern", 0) < 0) {
@@ -2385,6 +2415,9 @@ export function resolveExtern(ctx: CheckerContext, node: Node): void {
 
 function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext): void {
 	const cd = member.data as ConstructorDeclData;
+	for (const p of cd.ctorParams) {
+		if (p.slice(0, 4) == "out:" || p.slice(0, 4) == "ref:") addError(ctx, "a constructor parameter cannot be 'out' or 'ref': '" + p.slice(4, p.length) + "'", member.location.line, member.location.column);
+	}
 	const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
@@ -2494,7 +2527,9 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 					defineGenericParam(ctx, mgp);
 				}
 			}
+			md.methodFlags = liftParamModifiers(md.methodParams, md.methodFlags);
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
+			wrapModifierTypes(md.methodFlags, paramTypes);
 			resolveTypeExprs(member.typeExprs, ctx);
 			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
 			resolveTypeExpr(member.typeExpr, ctx);
@@ -2523,8 +2558,11 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				// Resolve static property type and update the staticFields symbol
 				let staticType = inferredType();
 				if (pd.propType != "") {
+					const savedBoundary = ctx.staticInitBoundary;
+					ctx.staticInitBoundary = ctx.table.current;
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					ctx.staticInitBoundary = savedBoundary;
 					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
@@ -2738,8 +2776,11 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			if (pd.propIsStatic) {
 				let staticType = inferredType();
 				if (pd.propType != "") {
+					const savedBoundary = ctx.staticInitBoundary;
+					ctx.staticInitBoundary = ctx.table.current;
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					ctx.staticInitBoundary = savedBoundary;
 					refuseViewField(ctx, pd.propName, d.actorName, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;

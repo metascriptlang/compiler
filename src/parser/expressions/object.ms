@@ -2,7 +2,7 @@
 // Extracted from expression.ms with callback injection
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, Expression, createNode, ObjectLiteralData, SourceLocation, makeLoc } from "../../ast/node";
+import { Node, NodeKind, Expression, createNode, ObjectLiteralData, StringLiteralData, SourceLocation, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, takePendingComments } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
@@ -51,9 +51,14 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			if (current(state).kind == TokenKind.RBracket) { advance(state); }
 			if (current(state).kind == TokenKind.Colon) { advance(state); }
 			const compVal = try exprParser(state, 0);
-			keys.push("__computed__");
 			keyLocs.push(makeLoc(compToken.line, compToken.column));
-			values.push(withLeading(compVal, leading));
+			if (keyExpr.kind == NodeKind.StringLiteral) {
+				keys.push((keyExpr.data as StringLiteralData).value);
+				values.push(withLeading(compVal, leading));
+			} else {
+				keys.push("__computed__");
+				values.push(withLeading(createNode(NodeKind.ComputedProperty, { computedKey: keyExpr, computedValue: compVal }, compToken), leading));
+			}
 			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
 			continue;
 		}

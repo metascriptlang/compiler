@@ -397,6 +397,31 @@ function allDigits(text: string): boolean {
 	return true;
 }
 
+function isDigit(c: string): boolean { return c >= "0" && c <= "9"; }
+function isHex(c: string): boolean { return isDigit(c) || (c >= "a" && c <= "f") || (c >= "A" && c <= "F"); }
+
+function stableDetail(s: string): string {
+	let out = "";
+	let i = 0;
+	while (i < s.length) {
+		if (s.slice(i, i + 2) == "0x" && isHex(s.charAt(i + 2))) {
+			let j = i + 2;
+			while (j < s.length && isHex(s.charAt(j))) { j++; }
+			out += "0x_";
+			i = j;
+		} else if (s.slice(i, i + 2) == "==" && isDigit(s.charAt(i + 2))) {
+			let j = i + 2;
+			while (j < s.length && isDigit(s.charAt(j))) { j++; }
+			out += s.slice(j, j + 2) == "==" ? "==_" : s.slice(i, j);
+			i = j;
+		} else {
+			out += s.charAt(i);
+			i++;
+		}
+	}
+	return out;
+}
+
 function inList(list: string[], item: string): boolean {
 	for (const x of list) { if (x == item) { return true; } }
 	return false;
@@ -527,7 +552,9 @@ export function rerunBundle(dir: string): int32 {
 	if (v.split != r.split) { diffs += "  split " + r.split + " → " + v.split + "\n"; }
 	for (const x of v.lanes) {
 		const recorded = "lane: " + x.lane + " " + (x.pass ? "pass" : "fail") + " " + x.detail;
-		if (!inList(r.laneLines, recorded) && v.kind != "timeout") { diffs += "  lane " + x.lane + " now '" + recorded + "'\n"; }
+		const stable: string[] = [];
+		for (const l of r.laneLines) { stable.push(stableDetail(l)); }
+		if (!inList(stable, stableDetail(recorded)) && v.kind != "timeout") { diffs += "  lane " + x.lane + " now '" + recorded + "'\n"; }
 		const now = laneFile(p.cells + "/" + name + "." + x.lane, outFile(r.mode));
 		const then = laneFile(dir + "/lanes", x.lane + "." + outFile(r.mode));
 		if (now != then) { diffs += "  lane " + x.lane + " " + outFile(r.mode) + " differs from the bundle\n"; }
@@ -642,4 +669,14 @@ test "a prepared sandbox holds no cell or runner log from an earlier run" {
 	assert prepareSandbox(p) == "";
 	assert !exists(p.cells + "/smith9-x.c/out.log");
 	assert !exists(p.sandbox + "/runner.log");
+}
+
+test "a sanitizer line compares without its pid and addresses" {
+	const a = "lane: san fail exit=134 [==45700==ERROR: AddressSanitizer: heap-use-after-free on address 0x6020000008d0 at pc 0x000102b47058 bp 0x00016d2d0650]";
+	const b = "lane: san fail exit=134 [==46042==ERROR: AddressSanitizer: heap-use-after-free on address 0x6020000008d0 at pc 0x000104b0b058 bp 0x00016af94ec0]";
+	assert a != b;
+	assert stableDetail(a) == stableDetail(b);
+	assert stableDetail(a) == "lane: san fail exit=134 [==_==ERROR: AddressSanitizer: heap-use-after-free on address 0x_ at pc 0x_ bp 0x_]";
+	assert stableDetail("lane: c fail exit=1 [x == 2] 0x [a==b]") == "lane: c fail exit=1 [x == 2] 0x [a==b]";
+	assert stableDetail("lane: js fail exit=1 [g0 1 != 2]") != stableDetail("lane: js fail exit=1 [g0 1 != 3]");
 }

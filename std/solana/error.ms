@@ -61,6 +61,7 @@ export function invalidSeeds(this typeof ProgramError): ProgramError { return bu
 export function accountNotRentExempt(this typeof ProgramError): ProgramError {
 	return builtinError(16);
 }
+export function unsupportedSysvar(this typeof ProgramError): ProgramError { return builtinError(17); }
 export function illegalOwner(this typeof ProgramError): ProgramError { return builtinError(18); }
 export function invalidRealloc(this typeof ProgramError): ProgramError { return builtinError(20); }
 export function invalidAccountOwner(this typeof ProgramError): ProgramError {

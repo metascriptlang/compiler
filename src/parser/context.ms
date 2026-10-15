@@ -25,11 +25,62 @@ export class ParserState {
 	// `when` guard, where a bare `ident =>` must NOT start an arrow function —
 	// that `=>` belongs to the match arm. Parenthesized arrows still parse.
 	noBareArrow: int32;
+	// >0 only between a conditional's `?` and the next expression parse, which reads
+	// and clears it: the true arm and what it inherits may not take `(x): T =>` unless a
+	// `:` follows the arrow, because that `:` ends the conditional.
+	noArrowReturnType: int32;
 	trailingDecls: Node[];
+	splits: TokenSplit[];
+}
+
+export interface TokenSplit {
+	position: int32;
+	original: Token;
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, trailingDecls: [] };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [] };
+}
+
+export interface ParserMark {
+	position: int32;
+	errorCount: int32;
+	panicMode: boolean;
+	pendingComments: Token[];
+	pendingTypeArg: string;
+	noBareArrow: int32;
+	noArrowReturnType: int32;
+	trailingDeclCount: int32;
+	splitCount: int32;
+}
+
+export function markState(state: ParserState): ParserMark {
+	return {
+		position: state.position,
+		errorCount: state.errors.length,
+		panicMode: state.panicMode,
+		pendingComments: state.pendingComments.slice(0),
+		pendingTypeArg: state.pendingTypeArg,
+		noBareArrow: state.noBareArrow,
+		noArrowReturnType: state.noArrowReturnType,
+		trailingDeclCount: state.trailingDecls.length,
+		splitCount: state.splits.length,
+	};
+}
+
+export function rewindState(state: ParserState, mark: ParserMark): void {
+	state.position = mark.position;
+	while (state.errors.length > mark.errorCount) state.errors.pop();
+	state.panicMode = mark.panicMode;
+	state.pendingComments = mark.pendingComments;
+	state.pendingTypeArg = mark.pendingTypeArg;
+	state.noBareArrow = mark.noBareArrow;
+	state.noArrowReturnType = mark.noArrowReturnType;
+	while (state.trailingDecls.length > mark.trailingDeclCount) state.trailingDecls.pop();
+	while (state.splits.length > mark.splitCount) {
+		const split = state.splits.pop()!;
+		state.tokens.splice(split.position, 2, split.original);
+	}
 }
 
 export function takeTrailingDecls(state: ParserState, mark: int32): Node[] {
@@ -259,6 +310,7 @@ export function splitAngleAssign(state: ParserState): void {
 	state.tokens[pos] = { kind: closer, value: ">".repeat(width), line: tok.line, column: tok.column, rawValue: "" };
 	const assign: Token = { kind: TokenKind.Assign, value: "=", line: tok.line, column: tok.column + width, rawValue: "" };
 	state.tokens.splice(pos + 1, 0, assign);
+	state.splits.push({ position: pos, original: tok });
 }
 
 

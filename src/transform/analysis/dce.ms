@@ -15,7 +15,7 @@
 // before destructorLifting). By this point if(true)/if(false) conditions are already
 // BooleanLiteral nodes from constant folding at step 2.
 
-import { AttachedOp, Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
+import { AttachedOp, Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, VariableDeclData, ReturnStmtData, BinaryExprData, MemberExprData, IdentifierData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
@@ -24,7 +24,7 @@ import { CheckerContext, createContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { getDeclName } from "../../checker/collectPass";
 import { getOpByKey } from "../../codegen/c/types";
-import { makeBlock } from "../util";
+import { makeBlock, makeExprStmt } from "../util";
 import { lowerBuiltins } from "../native/builtinLower";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
@@ -231,7 +231,7 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 
 		// CallExpr: check if callee returns never (standard pattern)
 		NodeKind.CallExpr => {
-			return isNeverCall(node, ctx);
+			return isNeverCall(node, ctx) || neverOrNull(node) != null;
 		},
 
 		// Block: check last statement
@@ -358,11 +358,41 @@ function eliminateDeadWhile(node: Node): Node {
 	return node;
 }
 
+function neverValueStmt(stmt: Node): Node {
+	const value = neverValueOf(stmt);
+	return value == null ? stmt : makeExprStmt(value, stmt.location);
+}
+
+function neverValueOf(stmt: Node): Node | null {
+	return match (stmt.kind) {
+		NodeKind.VariableDecl => neverOrNull((stmt.data as VariableDeclData).initializer),
+		NodeKind.ReturnStmt => neverOrNull((stmt.data as ReturnStmtData).argument),
+		NodeKind.ExprStmt => {
+			const expr = (stmt.data as ExprStmtData).expr;
+			if (expr.kind != NodeKind.BinaryExpr) return null;
+			const assign = expr.data as BinaryExprData;
+			if (assign.operator != "=" || !isPlainPlace(assign.left)) return null;
+			return neverOrNull(assign.right);
+		},
+		_ => null,
+	};
+}
+
+function neverOrNull(expr: Node | null): Node | null {
+	return expr != null && expr.nodeType != null && expr.nodeType.kind == TypeKind.Never ? expr : null;
+}
+
+function isPlainPlace(node: Node): boolean {
+	if (node.kind == NodeKind.Identifier) return true;
+	return node.kind == NodeKind.MemberExpr && isPlainPlace((node.data as MemberExprData).object);
+}
+
 // ===== Statement List Walker =====
 // Bottom-up: recurse into each stmt, then apply dead branch/while elimination
 
 function walkStmtList(stmts: Node[], ctx: TransformContext): void {
 	for (let i = 0; i < stmts.length; i += 1) {
+		stmts[i] = neverValueStmt(stmts[i]);
 		dceInNode(stmts[i], ctx);
 		stmts[i] = eliminateDeadBranch(stmts[i]);
 		stmts[i] = eliminateDeadWhile(stmts[i]);

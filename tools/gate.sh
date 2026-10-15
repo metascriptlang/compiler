@@ -1722,7 +1722,7 @@ solana_check() {
   local name=$1 rc
   shift
   "$@"; rc=$?
-  [ "$rc" -eq 0 ] || printf 'FAIL %s: exit %s\n' "$name" "$rc"
+  [ "$rc" -eq 0 ] || printf 'FAIL solana %s: exit %s\n' "$name" "$rc"
   return "$rc"
 }
 
@@ -1755,6 +1755,8 @@ solana_replays() {
     && solana_check idl-build "$CAND" build examples/escrow/idl.cms --output="$dir/escrow-idl" \
     && solana_check idl-run "$dir/escrow-idl" >"$dir/escrow-idl.json"; then
     solana_check escrow-replay node tools/solana/escrow.mjs "$dir/escrow.so" "$dir/escrow-idl.json" || rc=1
+    solana_check escrow-release-build "$CAND" build examples/escrow/program.ms --os=solana --release --output="$dir/escrowRelease.so" \
+      && { solana_check escrow-release-replay node tools/solana/escrow.mjs "$dir/escrowRelease.so" "$dir/escrow-idl.json" || rc=1; } || rc=1
   else
     rc=1
   fi
@@ -1767,13 +1769,23 @@ solana_replays() {
   fi
   solana_check resize-build "$CAND" build tools/solana/resizeProbe.ms --os=solana --output="$dir/resizeProbe.so" \
     && { solana_check resize-replay node tools/solana/resizeAfterCpi.mjs "$dir/resizeProbe.so" || rc=1; } || rc=1
+  solana_check fidelity-build "$CAND" build tools/solana/hostFidelityProbe.ms --os=solana --release --output="$dir/hostFidelityProbe.so" \
+    && { solana_check fidelity-replay node tools/solana/hostFidelity.mjs "$dir/hostFidelityProbe.so" || rc=1; } || rc=1
+  solana_check token-build "$CAND" build tools/solana/tokenOpsProbe.ms --os=solana --release --output="$dir/tokenOpsProbe.so" \
+    && { solana_check token-replay node tools/solana/tokenOps.mjs "$dir/tokenOpsProbe.so" || rc=1; } || rc=1
+  local pin
+  for pin in logText:logTextProbe createAccountPrefund:createAccountPrefundProbe failFirst:failFirstProbe arrayCount:arrayCountProbe tokenInterface:tokenInterfaceProbe; do
+    solana_check "${pin%%:*}-build" "$CAND" build "tools/solana/${pin#*:}.ms" --os=solana --release --output="$dir/${pin#*:}.so" \
+      && { solana_check "${pin%%:*}-replay" node "tools/solana/${pin%%:*}.mjs" "$dir/${pin#*:}.so" || rc=1; } || rc=1
+  done
   return $rc
 }
 
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/index.cms std/solana/vrf.ms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
+  for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.cms std/solana/vrf.ms \
+    std/solana/idlTest.ms std/solana/accountCodecTest.ms \
     examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done

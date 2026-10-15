@@ -108,6 +108,44 @@ test "fieldVisibility: as converts a struct only to itself, a distinct of it or 
 	assert errorsOf(lib, pre + "const b = d as P;\nconst t = p as T;\nconst back = t as P;\nconst lit = { x: 9 } as P;\nconst raw = { x: 5 };\nconst adopted = raw as P;\nconsole.log(b.x, back.x, lit.x, adopted.x);\n").length == 0;
 }
 
+test "fieldVisibility: as builds a struct only from a struct, a distinct of one, or a union holding one" {
+	const lib = "export struct P { x: int32; }\nexport struct Box<T> { x: int32; }\nexport struct Proof { private n: int32; }\nexport struct Q { y: int32; }\nexport type D = distinct P;\nexport enum Color { Red, Green }\n";
+	const pre = "import { P, Q, Box, Proof, D, Color } from \"./lib\";\nconst n: int32 = 5;\nconst s = \"a\";\n";
+	const refusal = ": only a struct, a distinct of it, or a struct it extends converts to a struct";
+	assert reports(lib, pre + "const q = (0 as uint64) as Proof;\n", "cannot convert uint64 to Proof" + refusal);
+	assert reports(lib, pre + "const q = (0 as uint64) as Proof;\n", "Proof has private fields, so only the module that declares it builds one");
+	assert reports(lib, pre + "const q = n as P;\n", "cannot convert int32 to P" + refusal);
+	assert reports(lib, pre + "const q = true as P;\n", "cannot convert boolean to P" + refusal);
+	assert reports(lib, pre + "const q = s as P;\n", "cannot convert string to P" + refusal);
+	assert reports(lib, pre + "const q = Color.Red as P;\n", "cannot convert Color to P" + refusal);
+	assert reports(lib, pre + "const q = n as Box<int32>;\n", "cannot convert int32 to Box<int32>" + refusal);
+	assert reports(lib, pre + "const q = n as D;\n", "cannot convert int32 to D" + refusal);
+	assert reports(lib, pre + "const q = [1, 2] as P;\n", "cannot convert int32[] to P" + refusal);
+	assert reports(lib, pre + "function pick(b: boolean): int32 | string { return b ? 1 : \"s\"; }\nconst q = pick(true) as P;\n", "cannot convert int32 | string to P" + refusal);
+	assert reports(lib, pre + "function forge<V>(v: V): P { return v as P; }\nconsole.log(forge<int32>(1).x);\n", "cannot convert int32 to P" + refusal);
+	assert reports(lib, pre + "function f(): int32 { return 1; }\nconst q = f as Proof;\n", "cannot convert function to Proof" + refusal);
+	assert reports(lib, pre + "const q = ((): int32 => 1) as Proof;\n", "cannot convert function to Proof" + refusal);
+	assert reports(lib, pre + "const q = new Map<string, int32>() as Proof;\n", "cannot convert Map<string, int32> to Proof" + refusal);
+	assert reports(lib, pre + "const q = Promise.resolve(3) as Proof;\n", "cannot convert Promise<int32> to Proof" + refusal);
+	assert reports(lib, pre + "function v(): void {}\nconst q = v() as Proof;\n", "cannot convert void to Proof" + refusal);
+	assert reports(lib, pre + "extern function mkp(): Ptr<void> from \"mkp\";\nconst q = mkp() as Proof;\n", "cannot convert Ptr<void> to Proof" + refusal);
+	assert reports(lib, pre + "extern function mks(): cstring from \"mks\";\nconst q = mks() as Proof;\n", "cannot convert cstring to Proof" + refusal);
+	assert reports(lib, pre + "function f(a: int32[]): Proof { return a[0..1] as Proof; }\n", "cannot convert Span<int32> to Proof" + refusal);
+	assert reports(lib, pre + "function g(): int32 { return 1; }\nfunction pick(b: boolean): (() => int32) | null { return b ? g : null; }\nconst q = pick(true) as Proof;\n", "to Proof" + refusal);
+	assert reports(lib, pre + "function pick(b: boolean): P | Q { return b ? ({ x: 1 } as P) : ({ y: 2 } as Q); }\nconst q = pick(true) as Proof;\n", "to Proof" + refusal);
+	assert reports(lib, pre + "function ma(): int32[] | null { return null; }\nconst q = ma() as Proof;\n", "to Proof" + refusal);
+	assert reports(lib, pre + "function mm(): Map<string, int32> | null { return null; }\nconst q = mm() as Proof;\n", "to Proof" + refusal);
+	assert !reports(lib, pre + "const q = null as Proof;\n", "converts to a struct");
+	assert !reports(lib, pre + "const q = missing as Proof;\n", "converts to a struct");
+}
+
+test "fieldVisibility: as still takes a struct, a union holding one, or an object literal to a struct" {
+	const lib = "export struct P { x: int32; }\nexport struct Proof { private n: int32; }\nexport type D = distinct P;\n";
+	const pre = "import { P, Proof, D } from \"./lib\";\nconst p: P = { x: 1 };\nfunction pick(b: boolean): P | int32 { return b ? p : 2; }\n";
+	assert errorsOf(lib, pre + "const a = p as P;\nconst b = p as D;\nconst c = pick(true) as P;\nconst d = { x: 7 } as P;\nconsole.log(a.x, c.x, d.x);\n").length == 0;
+	assert errorsOf(lib, pre + "function boom(): never { throw new Error(\"x\"); }\nfunction forge<V>(v: V): P { return v as P; }\nconst viaNever = (): P => boom() as P;\nconsole.log(forge<P>(p).x);\n").length == 0;
+}
+
 test "fieldVisibility: as takes a nullable struct to its payload and still refuses an unrelated one" {
 	const lib = "export struct P { x: int32; }\nexport struct Q { x: int32; }\n";
 	const pre = "import { P, Q } from \"./lib\";\nconst m = new Map<string, P>();\nm.set(\"a\", { x: 3 });\nfunction first(n: P | null): P { return n as P; }\nclass Store<K> { cells: Map<K, P> = new Map<K, P>(); at(k: K): P { return this.cells.get(k) as P; } }\n";
@@ -125,6 +163,13 @@ test "fieldVisibility: as converts a generic struct instance only to itself, a d
 	assert reports(lib, pre + "const q = p as Box<A>;\n", "cannot convert P to Box<A>");
 	assert reports(lib, pre + "const q = ba as P;\n", "cannot convert Box<A> to P");
 	assert reports(lib, pre + "function forge<T>(raw: P): Box<T> { return raw as Box<T>; }\nconsole.log(forge<A>(p).x);\n", "cannot convert P to Box<A>");
+}
+
+test "fieldVisibility: as unwraps a generic distinct of a generic struct to the struct it wraps" {
+	const lib = "export struct A { a: int32; }\nexport struct B { b: int32; }\nexport struct Box<T> { v: T; }\nexport type Boxed<T> = distinct Box<T>;\n";
+	const pre = "import { A, B, Box, Boxed } from \"./lib\";\nconst ba: Box<A> = { v: { a: 9 } };\n";
+	assert errorsOf(lib, pre + "function unbox<T>(b: Boxed<T>): T { const x = b as Box<T>; return x.v; }\nconst w = ba as Boxed<A>;\nconst back = w as Box<A>;\nconsole.log(unbox(w).a, back.v.a);\n").length == 0;
+	assert reports(lib, pre + "const w = ba as Boxed<A>;\nconst q = w as Box<B>;\n", "cannot convert Boxed<A> to Box<B>");
 }
 
 test "fieldVisibility: a refused struct conversion says who builds a struct with private fields" {
@@ -192,4 +237,47 @@ test "fieldVisibility: code a macro or template expands is checked with the macr
 	assert refusesPrivate(lib, use + "const s = mint({ address: 7 });\nconsole.log(s.account.address);\n", "account");
 	assert refusesPrivate(lib, use + "class Plain { read(s: Signer): uint64 { return s.account.address; } }\n", "account");
 	assert refusesPrivate(lib, use + "function local(): void { const proof: Signer = { account: { address: 4 } }; }\n", "account");
+}
+
+const sealedLib = "export struct Proof { private word: uint64; }\nexport struct Mixed { pub: uint64; private word: uint64; }\nexport struct Box<T> { private v: T; }\nexport struct Wrap { n: uint64; p: Proof; }\nexport class Cls { x: uint64 = 1; }\nexport struct Holder { c: Cls; }\n"
+	+ "export function make(): Proof { return { word: 7 }; }\nexport function makeBox<T>(v: T): Box<T> { return { v: v }; }\nexport function needs(p: Proof): uint64 { return 1; }\n"
+	+ "function inside(flag: boolean): uint64 {\n\tlet a: Proof;\n\tif (flag) { a = {} as Proof; } else { a = { word: 1 }; }\n\tconst b: Proof = {};\n\tconst many: Proof[2] = [];\n\tconst more = new Array<Proof>(2);\n\tconst m: Mixed = { pub: 1 };\n\tconst w: Wrap = { n: 1 };\n\tlet bx: Box<uint64>;\n\tbx = { v: 1 };\n\treturn needs(a) + needs(b) + needs(many[0]) + needs(more[0]) + needs(w.p) + m.pub + bx.v + needs({});\n}\nexport const total: uint64 = inside(true);\n";
+const sealedUse = "import { Proof, Mixed, Box, Wrap, Holder, make, makeBox, needs } from \"./lib\";\n";
+const sealedWhy = "has a private field and can only be built by the module that declares it";
+
+test "fieldVisibility: a struct with a private field has no default value outside its module" {
+	const forms: string[] = [
+		"function f(): uint64 { let p: Proof; return needs(p); }\n",
+		"function f(flag: boolean): uint64 { let p: Proof; if (flag) { p = make(); } return needs(p); }\n",
+		"function f(): uint64 { let r: Proof; return needs(r); }\nfunction g(): Proof { let r: Proof; return r; }\n",
+		"function f(): uint64 { return needs({} as Proof); }\n",
+		"function f(): uint64 { const p: Proof = {}; return needs(p); }\n",
+		"function f(): uint64 { return needs({}); }\n",
+		"function f(): uint64 { const m: Mixed = { pub: 1 }; return m.pub; }\n",
+		"function f(): uint64 { const w: Wrap = { n: 1 }; return w.n; }\n",
+		"function f(): uint64 { let b: Box<uint64>; return b.n; }\n",
+		"let sealed: Proof;\nfunction f(): uint64 { return needs(sealed); }\n",
+		"class Keeps { p: Proof; constructor() {} }\n",
+	];
+	for (const form of forms) assert reports(sealedLib, sealedUse + form, sealedWhy), form;
+}
+
+test "fieldVisibility: a sized array or a counted array of a struct with a private field is refused outside its module" {
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { let many: Proof[2]; return needs(many[0]); }\n", sealedWhy);
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many: Proof[2] = []; return needs(many[0]); }\n", "2 of 2 slots are left without a value");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many: Proof[3] = [make()]; return needs(many[0]); }\n", "2 of 3 slots are left without a value");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many = new Array<Proof>(2); return needs(many[0]); }\n", "would fill the array with default values");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const many: Proof[] = new Array(2); return needs(many[0]); }\n", "would fill the array with default values");
+}
+
+test "fieldVisibility: a sized array or a counted array of a struct holding a class is refused" {
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { let hs: Holder[2]; return hs[0].c.x; }\n", "may be read before it is assigned");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const hs: Holder[2] = []; return hs[0].c.x; }\n", "2 of 2 slots are left without a value");
+	assert reports(sealedLib, sealedUse + "function f(): uint64 { const hs = new Array<Holder>(2); return hs[0].c.x; }\n", "would fill the array with default values");
+}
+
+test "fieldVisibility: a value from the declaring module, a full assignment and the declaring module itself are accepted" {
+	assert errorsOf("export const unused = 0;\n", "export const total: uint64 = 0;\n").length == 0;
+	assert errorsOf(sealedLib, sealedUse + "function pass(p: Proof): uint64 { return needs(p); }\nfunction every(flag: boolean): uint64 {\n\tlet x: Proof;\n\tif (flag) { x = make(); } else { x = make(); }\n\treturn needs(x);\n}\nfunction opt(): uint64 {\n\tlet o: Proof | null = null;\n\tif (o != null) return needs(o);\n\treturn 0;\n}\nconst boxed = makeBox<uint64>(3);\nconst full: Proof[2] = [make(), make()];\nconst dyn: Proof[] = [];\ndyn.push(make());\nconst grown = new Array<Proof>();\ngrown.push(make());\nconsole.log(pass(make()) + every(true) + opt() + needs(full[0]) + needs(dyn[0]) + needs(grown[0]));\n").length == 0;
+	assert errorsOf("export const unused = 0;\n", sealedLib).length == 0;
 }
