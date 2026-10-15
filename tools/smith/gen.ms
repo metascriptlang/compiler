@@ -1270,6 +1270,10 @@ class Gen {
 	}
 
 	routineDecl(t: Ty, indent: string): string {
+		const outer: Var[] = [];
+		for (const v of this.scope) {
+			if (v.ty == t) { outer.push(v); }
+		}
 		const name = this.entName("r");
 		const n = this.entName("q");
 		this.scope.push({ name: n, ty: Ty.Int32, writable: false });
@@ -1279,6 +1283,7 @@ class Gen {
 		this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [Ty.Int32], len: 0, cost: cost });
 		let text = indent + "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" +
 			indent + "\tif (" + n + " <= 0 || " + n + " >= " + String(ROUTINE_FRAMES) + ") { return " + body.text + "; }\n" +
+			(outer.length == 0 ? "" : indent + "\tif (" + n + " == 2) { return " + outer[this.rng.below(outer.length)].name + "; }\n") +
 			indent + "\treturn " + name + "(" + n + " - 1);\n" +
 			indent + "}\n";
 		if (this.rng.chance(50)) {
@@ -1628,6 +1633,7 @@ test "a nested routine recurses at most its frame bound and may be named as a va
 	}
 	assert routines > 10;
 	assert aliases > 3;
+	assert countOver(" == 2) { return ", 20, f) > 10;
 }
 
 test "default weights keep the pinned stream" {
