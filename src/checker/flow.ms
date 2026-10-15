@@ -9,7 +9,7 @@
 
 import {
 	Node, NodeKind, DeclKind,
-	FlowNode, FlowFlag, FlowList,
+	FlowNode, FlowFlag, FlowList, FlowReduceLabelData,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
@@ -76,6 +76,7 @@ export interface FlowState {
 	refKey: string;                  // cached getFlowCacheKey(reference); "" means not yet computed; "@nondotted" means unnarrowable
 	sharedFlows: SharedFlowEntry[];  // per-query Shared-flow cache
 	flowLoopStack: FlowLoopInfo[];   // in-progress loop analyses (re-entry detection)
+	reduceLabels: FlowReduceLabelData[];
 	// Phase 6 deferred fields (not yet used):
 	//   - initialType: Type — distinguish declaredType (widened) from
 	//     initialType (usually equal, but differs for parameters with init
@@ -93,6 +94,7 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 		refKey: "",
 		sharedFlows: [],
 		flowLoopStack: [],
+		reduceLabels: [],
 	};
 }
 
@@ -337,9 +339,15 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: N
 			current = current.antecedent;
 			continue;
 		}
+		if (flags.has(FlowFlag.ReduceLabel)) {
+			state.reduceLabels.push(current.reduceLabelData!);
+			result = walkForNonNullCheck(state, current.antecedent, refNode);
+			state.reduceLabels.pop();
+			break;
+		}
 		if (flags.has(FlowFlag.BranchLabel)) {
 			// All antecedents must prove non-null for the join to be non-null.
-			let list: FlowList | null = current.antecedents;
+			let list: FlowList | null = branchLabelAntecedents(state.reduceLabels, current);
 			let allNonNull = list != null;
 			while (list != null) {
 				if (!walkForNonNullCheck(state, list.flow, refNode)) {
@@ -356,7 +364,7 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: N
 			result = false;
 			break;
 		}
-		// Assignment / ArrayMutation / Call / ReduceLabel / SwitchClause /
+		// Assignment / ArrayMutation / Call / SwitchClause /
 		// Shared — walk up.
 		current = current.antecedent;
 	}
@@ -489,7 +497,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			// it iteratively (mirrors TS getTypeAtFlowNode) so a long chain of
 			// sequential `if`s doesn't grow the call stack. Real merges (2+
 			// antecedents) still recurse into getTypeAtBranchLabel.
-			const ants = current.antecedents;
+			const ants = branchLabelAntecedents(state.reduceLabels, current);
 			if (ants != null && ants.next == null) {
 				current = ants.flow;
 				continue;
@@ -504,7 +512,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 				result = cachedLabel;
 				break;
 			}
-			result = getTypeAtBranchLabel(state, current);
+			result = getTypeAtBranchLabel(state, ants);
 			cacheSharedFlow(state, current, result);
 			break;
 		}
@@ -521,9 +529,13 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			break;
 		}
 		if (flags.has(FlowFlag.ReduceLabel)) {
-			// Try/finally ReduceLabel (Phase 6). Phase 2: pass through.
-			current = current.antecedent;
-			continue;
+			const outerMemo = state.sharedFlows;
+			state.sharedFlows = [];
+			state.reduceLabels.push(current.reduceLabelData!);
+			result = getTypeAtFlowNode(state, current.antecedent);
+			state.reduceLabels.pop();
+			state.sharedFlows = outerMemo;
+			break;
 		}
 		// Unknown flow kind — walk up to avoid getting stuck.
 		current = current.antecedent;
@@ -676,11 +688,18 @@ function narrowTypeBySwitchOnTypeof(t: Type, sd: SwitchStmtData, clauseStart: in
 // declared type (the narrowing from other branches is irrelevant because a
 // superset dominates).
 
-function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
+function branchLabelAntecedents(reduceLabels: FlowReduceLabelData[], flow: FlowNode): FlowList | null {
+	for (let i = reduceLabels.length - 1; i >= 0; i -= 1) {
+		if (reduceLabels[i].target == flow) return reduceLabels[i].antecedents;
+	}
+	return flow.antecedents;
+}
+
+function getTypeAtBranchLabel(state: FlowState, antecedentList: FlowList | null): FlowType {
 	const antecedents: Type[] = [];
 	let anyIncomplete = false;
 	let subtypeReduction = false;
-	let list: FlowList | null = flow.antecedents;
+	let list: FlowList | null = antecedentList;
 	while (list != null) {
 		// Skip Unreachable antecedents — they represent dead-code paths
 		// (e.g. the then-branch of `if (x === null) return;`) and contribute
@@ -1401,16 +1420,28 @@ function callNeverReturns(call: Node | null): boolean {
 
 export function isEndOfBodyReachable(body: Node): boolean {
 	if (body.flowNode == null) return false;
+	return reachesStart(body.flowNode, []);
+}
+
+function reachesStart(from: FlowNode, reduceLabels: FlowReduceLabelData[]): boolean {
 	const seen = new HashSet<FlowNode>();
-	const todo: FlowNode[] = [body.flowNode];
+	const todo: FlowNode[] = [from];
 	while (todo.length > 0) {
 		const flow = todo.pop();
 		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
 		seen.add(flow);
 		if (flow.flags.has(FlowFlag.Start)) return true;
 		if (flow.flags.has(FlowFlag.Call) && callNeverReturns(flow.node)) continue;
+		if (flow.flags.has(FlowFlag.ReduceLabel)) {
+			if (flow.antecedent == null) continue;
+			reduceLabels.push(flow.reduceLabelData!);
+			const reached = reachesStart(flow.antecedent, reduceLabels);
+			reduceLabels.pop();
+			if (reached) return true;
+			continue;
+		}
 		if (flow.flags.has(FlowFlag.LoopLabel) || flow.flags.has(FlowFlag.BranchLabel)) {
-			let list: FlowList | null = flow.antecedents;
+			let list: FlowList | null = flow.flags.has(FlowFlag.BranchLabel) ? branchLabelAntecedents(reduceLabels, flow) : flow.antecedents;
 			while (list != null) {
 				todo.push(list.flow);
 				list = list.next;
