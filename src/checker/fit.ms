@@ -2094,6 +2094,7 @@ function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null 
 	const target = formal.kind == TypeKind.Union ? nonNullMemberOfNullable(formal) : formal;
 	const source = exprType.kind == TypeKind.Union ? nonNullMemberOfNullable(exprType) : exprType;
 	if (target == null || source == null || target.kind != TypeKind.Ref || source.kind != TypeKind.Ref) return null;
+	if (hasGenericParams(target)) return null;
 	const to = target.typeReturn;
 	const from = source.typeReturn;
 	if (to == null || from == null || to.kind != TypeKind.Struct || from.kind != TypeKind.Struct || sameType(to, from)) return null;
