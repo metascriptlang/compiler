@@ -174,19 +174,41 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 }
 
 let _vmPreludeSyms: HashSet<Symbol> | null = null;
+let _vmStdHelpers: HashSet<Symbol> | null = null;
+
+function addWithOverloads(set: HashSet<Symbol>, s: Symbol): void {
+	set.add(s);
+	for (const o of s.overloads) set.add(o);
+}
 
 function isVmPreludeSym(sym: Symbol): boolean {
 	if (_raiserPreludeBuilding) return false;
 	if (_vmPreludeSyms == null) {
 		const own = new HashSet<Symbol>();
-		for (const s of raiserPreludeCtx().table.current.symbols.values()) {
-			own.add(s);
-			for (const o of s.overloads) own.add(o);
-		}
+		for (const s of raiserPreludeCtx().table.current.symbols.values()) addWithOverloads(own, s);
 		_vmPreludeSyms = own;
 	}
 	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
 	return _vmPreludeSyms!.has(origin);
+}
+
+function isVmStdHelper(sym: Symbol): boolean {
+	if (_raiserPreludeBuilding) return false;
+	if (_vmStdHelpers == null) {
+		const prelude = raiserPreludeCtx();
+		const own = new HashSet<Symbol>();
+		for (const scope of prelude.preludeModuleScopes.values()) {
+			for (const s of scope) addWithOverloads(own, s);
+		}
+		if (prelude.extensionRegistry != null) {
+			for (const ext of prelude.extensionRegistry.methods) {
+				if (ext.sym != null) addWithOverloads(own, ext.sym!);
+			}
+		}
+		_vmStdHelpers = own;
+	}
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	return _vmStdHelpers!.has(origin);
 }
 
 function engineBodyCtx(definingModulePath: string, owner: Symbol | null): CheckerContext | null {
@@ -208,11 +230,17 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	return bodyCtx;
 }
 
-function vmStdSeeds(skipName: string): Symbol[] {
+function vmStdSeeds(sym: Symbol): Symbol[] {
 	const prelude = raiserPreludeCtx();
 	const seeds: Symbol[] = [];
+	const home = prelude.preludeModuleScopes.get(sym.modulePath);
+	if (home != null) {
+		for (const s of home) {
+			if (s.name != sym.name) seeds.push(s);
+		}
+	}
 	for (const s of prelude.table.current.symbols.values()) {
-		if (s.name != skipName && !isPreludeExport(prelude, s)) seeds.push(s);
+		if (s.name != sym.name && !isPreludeExport(prelude, s)) seeds.push(s);
 	}
 	return seeds;
 }
@@ -315,8 +343,9 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
-	if (isVmPreludeSym(sym)) {
-		for (const s of vmStdSeeds(sym.name)) seeds.push(s);
+	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
+	if (isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym))) {
+		for (const s of vmStdSeeds(sym)) seeds.push(s);
 	} else if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
 			if (!isClass || s.name != sym.name) seeds.push(s);

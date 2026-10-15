@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, registerCtorDefaults, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, registerCtorDefaults, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults, moduleScopeSymbols } from "./symbol";
 import { isLifecycleHookName, getExtReceiverType, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -3634,6 +3634,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		openScope(subCtx.table, ScopeKind.Module);
 		subCtx.modulePath = subResolved;
 		runThreePasses(subCtx, subPr.value);
+		ctx.preludeModuleScopes.set(subResolved, moduleScopeSymbols(subCtx.table));
 
 		// Stamp headerPath on .h-translated symbols so C codegen emits #include
 		const subScope = subCtx.table.current;
@@ -4005,6 +4006,7 @@ function packContentView(shared: CheckerContext): CheckerContext {
 	view.converterTargetTypes = shared.converterTargetTypes;
 	view.preludeInterf = shared.preludeInterf;
 	view.preludeExports = shared.preludeExports;
+	view.preludeModuleScopes = shared.preludeModuleScopes;
 	view.interf = shared.interf;
 	view.interfSet = shared.interfSet;
 	view.importSet = shared.importSet;

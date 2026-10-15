@@ -1343,6 +1343,7 @@ export class CheckerContext {
 	usedImports: HashSet<Symbol>;
 	preludeInterf: HashMap<string, Symbol[]>;
 	preludeExports: HashSet<Symbol>;
+	preludeModuleScopes: HashMap<string, Symbol[]>;
 	ownModules: HashSet<string>;
 }
 
@@ -1427,6 +1428,7 @@ export function createContext(): CheckerContext {
 		usedImports: new HashSet<Symbol>(),
 		preludeInterf: new HashMap<string, Symbol[]>(),
 		preludeExports: new HashSet<Symbol>(),
+		preludeModuleScopes: new HashMap<string, Symbol[]>(),
 		ownModules: new HashSet<string>(),
 	};
 }

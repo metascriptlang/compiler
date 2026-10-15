@@ -652,6 +652,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	for (const members of ctx.preludeInterf.values()) {
 		for (const m of members) enqSym(m, false);
 	}
+	for (const members of ctx.preludeModuleScopes.values()) {
+		for (const m of members) enqSym(m, false);
+	}
 	while (symCursor < syms.length || typeCursor < types.length || nodeCursor < nodes.length) {
 		if (symCursor < syms.length) {
 			const s = syms[symCursor];
@@ -782,6 +785,13 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const idx: int32[] = [];
 		for (const m of members) idx.push(idxSym(m));
 		lines.push(`U\t${escapeP(spec)}\t${intsCsv(idx)}`);
+	}
+	for (const path of ctx.preludeModuleScopes.keys()) {
+		const members = ctx.preludeModuleScopes.get(path);
+		if (members == null) continue;
+		const idx: int32[] = [];
+		for (const m of members) idx.push(idxSym(m));
+		lines.push(`M\t${escapeP(path)}\t${intsCsv(idx)}`);
 	}
 
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
@@ -1119,6 +1129,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const convRows: string[][] = [];
 	const compilerFuncRows: string[][] = [];
 	const interfRows: string[][] = [];
+	const moduleScopeRows: string[][] = [];
 	const aliasRows: string[][] = [];
 	let importRow = "";
 	let exportRow = "";
@@ -1208,6 +1219,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			compilerFuncRows.push(f);
 		} else if (f[0] == "U") {
 			interfRows.push(f);
+		} else if (f[0] == "M") {
+			moduleScopeRows.push(f);
 		} else if (f[0] == "K") {
 			aliasRows.push(f);
 		} else if (f[0] == "Y") {
@@ -1331,6 +1344,13 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		}
 		ctx.preludeInterf.set(unescapeP(f[1]), members);
 		for (const m of members) ctx.preludeExports.add(m);
+	}
+	for (const f of moduleScopeRows) {
+		const members: Symbol[] = [];
+		for (const si of parseIntsCsv(f[2])) {
+			if (si >= 0 && si < syms.length) members.push(syms[si]);
+		}
+		ctx.preludeModuleScopes.set(unescapeP(f[1]), members);
 	}
 
 	ctx.includeDirectives = includeDirectives;
