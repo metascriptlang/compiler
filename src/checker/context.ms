@@ -125,14 +125,20 @@ export function exportSym(ctx: CheckerContext, sym: Symbol): void {
 
 export function exportSymAs(ctx: CheckerContext, sym: Symbol, name: string): void {
 	setFlag(sym, SymbolFlag.Exported);
-	if (ctx.interfSet.has(sym)) return;
-	ctx.interfSet.add(sym);
-	ctx.interf.push(sym);
-	if (name != sym.name) ctx.interfNames.set(sym, name);
+	if (!ctx.interfSet.has(sym)) {
+		ctx.interfSet.add(sym);
+		ctx.interf.push(sym);
+		ctx.interfNames.set(sym, [name]);
+		return;
+	}
+	const names = exportedNamesOf(ctx, sym);
+	if (names.includes(name)) return;
+	names.push(name);
+	ctx.interfNames.set(sym, names);
 }
 
-function exportedNameOf(ctx: CheckerContext, sym: Symbol): string {
-	return ctx.interfNames.get(sym) ?? sym.name;
+function exportedNamesOf(ctx: CheckerContext, sym: Symbol): string[] {
+	return ctx.interfNames.get(sym) ?? [sym.name];
 }
 
 export function noteImported(ctx: CheckerContext, sym: Symbol): void {
@@ -163,7 +169,7 @@ export function isExportedBy(ctx: CheckerContext, sym: Symbol): boolean {
 
 function pushExport(ctx: CheckerContext, modulePath: string, exports: ExportedSymInfo[], covered: HashSet<Symbol>, sym: Symbol): void {
 	if (covered.has(sym)) return;
-	exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx, exportedNameOf(ctx, sym)));
+	for (const name of exportedNamesOf(ctx, sym)) exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx, name));
 	covered.add(sym);
 	for (const ov of sym.overloads) covered.add(ov);
 }
@@ -1285,7 +1291,7 @@ export class CheckerContext {
 	instantiatingCtx: CheckerContext;
 	interf: Symbol[];
 	interfSet: HashSet<Symbol>;
-	interfNames: HashMap<Symbol, string>;
+	interfNames: HashMap<Symbol, string[]>;
 	importSet: HashSet<Symbol>;
 	shadowedImports: HashMap<Symbol, Symbol>;
 	usedImports: HashSet<Symbol>;
@@ -1371,7 +1377,7 @@ export function createContext(): CheckerContext {
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
-		interfNames: new HashMap<Symbol, string>(),
+		interfNames: new HashMap<Symbol, string[]>(),
 		importSet: new HashSet<Symbol>(),
 		shadowedImports: new HashMap<Symbol, Symbol>(),
 		usedImports: new HashSet<Symbol>(),

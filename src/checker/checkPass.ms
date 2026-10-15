@@ -3845,6 +3845,7 @@ function packContentView(shared: CheckerContext): CheckerContext {
 	view.preludeExports = shared.preludeExports;
 	view.interf = shared.interf;
 	view.interfSet = shared.interfSet;
+	view.interfNames = shared.interfNames;
 	view.importSet = shared.importSet;
 	view.shadowedImports = shared.shadowedImports;
 	return view;
