@@ -46,7 +46,7 @@ function main(): void { console.log(plain(3) + target(1, 4)); }
 `);
 	assert c.ok;
 	const plain = bodyOf(c.value, "plain");
-	assert plain.contains("(&q_1_, &(src_1_));");
+	assert plain.contains("(&q_1_, (&(src_1_)));");
 	assert !plain.contains("q_1_ = T");
 	const target = bodyOf(c.value, "target");
 	assert target.contains("(&b_1_.q, x, 1LL);");
@@ -80,7 +80,7 @@ function kept(n: int64): int64 {
 function main(): void { console.log(kept(2)); }
 `);
 	assert c.ok;
-	assert bodyOf(c.value, "kept").contains("(q_1_ = T");
+	assert bodyOf(c.value, "kept").contains("q_1_ = T");
 }
 
 test "a struct call result passed by address is not copied first" {

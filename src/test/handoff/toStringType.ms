@@ -9,8 +9,7 @@ test "number.toString() result typed as string" {
 	const src = "function fmt(n: number): string {\n\tconst s = n.toString();\n\treturn s;\n}";
 	const result = compileToC(src);
 	assert result.ok;
-	// Should NOT contain void* for the toString result
-	assert !result.value.contains("void* s");
+	assert result.value.contains("msString s_1_;");
 }
 
 test "field.toString() result typed as string" {

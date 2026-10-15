@@ -62,3 +62,4 @@ import "./copiedBodyHeader";
 import "./solanaVaultHost";
 import "./externPattern";
 import "./notCallable";
+import "./callResultInPlace";
