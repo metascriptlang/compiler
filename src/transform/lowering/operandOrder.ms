@@ -8,9 +8,8 @@ import {
 	CallExprData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	ArrayLiteralData, ObjectLiteralData, NewExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
-import { makeSymbol } from "../../checker/symbol";
 import { isStructType } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, newLoweredSym } from "../context";
 import { makeVarDecl, makeTypedIdentResolved, makeBinary, isValueLayoutType } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 
@@ -36,7 +35,7 @@ function isCallKind(e: Node): boolean {
 export function bindTemp(sp: Spiller, init: Node, declKind: DeclKind, t: Type | null, pre: Node[], loc: SourceLocation): Symbol {
 	const name = "__ord_" + sp.ctx.tempCounter.toString();
 	sp.ctx.tempCounter += 1;
-	const sym = makeSymbol(name, SymbolKind.Variable, t, declKind != DeclKind.Const);
+	const sym = newLoweredSym(sp.ctx, SymbolKind.Variable, name, t, declKind != DeclKind.Const);
 	const decl = makeVarDecl(name, init, declKind, loc);
 	decl.nodeType = t;
 	decl.resolvedSym = sym;

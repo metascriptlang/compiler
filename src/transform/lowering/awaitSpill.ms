@@ -371,6 +371,6 @@ test "an assignment from an await keeps its target" { assert firstStmtKindAfter(
 test "a spill temp is minted with its module's identity" {
 	const first = bodyAfter("async function f() { const v = (await p) + 1; }")[0];
 	assert first.kind == NodeKind.VariableDecl;
-	assert first.resolvedSym != null && first.resolvedSym.name.startsWith("__aw_");
+	assert first.resolvedSym != null && first.resolvedSym.name.startsWith("__ord_");
 	assert first.resolvedSym.item > 0;
 }
