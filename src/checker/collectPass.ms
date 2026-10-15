@@ -1225,6 +1225,14 @@ function sharedPreludeSym(ctx: CheckerContext, alias: string, importName: string
 	return hasFlag(sym, SymbolFlag.Exported) ? sym : null;
 }
 
+// The symbol `import { importName as alias } from sourcePath` binds.
+function importTargetOf(ctx: CheckerContext, alias: string, importName: string, sourcePath: string): Symbol | null {
+	if (sourcePath == "") return null;
+	const info = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
+	if (info == null || info.sym == null) return null;
+	return sharedPreludeSym(ctx, alias, importName, info) ?? info.sym;
+}
+
 function exportPreludeModule(ctx: CheckerContext, specifier: string): void {
 	if (ctx.preludeCtx == null) return;
 	const table = ctx.preludeCtx.preludeInterf.get(specifier);
@@ -1259,11 +1267,11 @@ function collectPreludeNames(ctx: CheckerContext, imp: ImportDeclData, node: Nod
 		const alias = imp.importAliases[i];
 		const loc = i < imp.nameLocations.length ? imp.nameLocations[i] : node.location;
 		const local = lookupLocal(ctx.table, alias);
+		const sym = preludeExportOf(ctx, imp.importSource, name);
 		if (local != null) {
-			if (reexport) exportSym(ctx, local);
+			if (reexport) exportSymAs(ctx, ctx.preludeCtx != null && sym != null ? sym : local, alias);
 			continue;
 		}
-		const sym = preludeExportOf(ctx, imp.importSource, name);
 		if (sym == null) {
 			if (ctx.preludeCtx != null) {
 				addError(ctx, "Module '" + imp.importSource + "' has no export '" + name + "'", loc.line, loc.column);
@@ -1325,8 +1333,15 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 		const importName = d.importNames[i];
 		const localAlias = d.importAliases[i];
 
-		// Dedup: skip if already imported (same file may import same symbol twice, e.g. main + test section)
-		if (lookupLocal(ctx.table, localAlias) != null) continue;
+		const bound = lookupLocal(ctx.table, localAlias);
+		if (bound != null) {
+			const target = importTargetOf(ctx, localAlias, importName, sourcePath);
+			if (target != null && target != bound && ctx.importSet.has(bound)) {
+				const at = i < d.nameLocations.length ? d.nameLocations[i] : node.location;
+				addError(ctx, `Duplicate identifier '${localAlias}': it already names an import of another declaration`, at.line, at.column);
+			}
+			continue;
+		}
 
 		if (sourcePath != "") {
 			const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
@@ -1527,9 +1542,12 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 			return;
 		}
 
-		// Mark all as exported (whether freshly imported or pre-existing)
-		for (const alias of imp.importAliases) {
-			const sym = lookupSymbol(ctx.table, alias);
+		// Export what the source module exports under each name, not a local binding that shares it.
+		const reexportPath = resolveImportSourcePath(ctx, imp.importSource);
+		for (let i = 0; i < imp.importAliases.length; i += 1) {
+			const alias = imp.importAliases[i];
+			const target = importTargetOf(ctx, alias, imp.importNames[i], reexportPath);
+			const sym = target ?? lookupSymbol(ctx.table, alias);
 			if (sym != null) {
 				exportSymAs(ctx, sym, alias);
 			}

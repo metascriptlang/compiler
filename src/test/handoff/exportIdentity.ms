@@ -141,6 +141,42 @@ test "export identity: fit follows the declaration of a generic or enum, not its
 	}
 }
 
+const IMPORT_FIRST_PATH = "test/exportIdentity/first.ms";
+const IMPORT_SECOND_PATH = "test/exportIdentity/second.ms";
+const IMPORT_HUB_PATH = "test/exportIdentity/hub.ms";
+
+function importEntries(mainSource: string): MapEntry[] {
+	return [
+		{ entryPath: IMPORT_FIRST_PATH, entrySource: "export function pick(): int32 { return 1; }\n" },
+		{ entryPath: IMPORT_SECOND_PATH, entrySource: "export function pick(): int32 { return 2; }\n" },
+		{ entryPath: IMPORT_HUB_PATH, entrySource: `export { pick } from "./first";\n` },
+		{ entryPath: IDENTITY_MAIN_PATH, entrySource: mainSource },
+	];
+}
+
+test "import identity: one name bound to two imported declarations is refused" {
+	const sources = [
+		`import { pick } from "./first";\nimport { pick } from "./second";\nconsole.log(pick());\n`,
+		`import { pick as p } from "./first";\nimport { pick as p } from "./second";\nconsole.log(p());\n`,
+	];
+	for (const mainSource of sources) {
+		const cCode = compileProjectToC(importEntries(mainSource), IDENTITY_MAIN_PATH);
+		assert cCode.startsWith("ERROR: check [") && cCode.contains("Duplicate identifier"), mainSource;
+	}
+}
+
+test "import identity: one declaration imported twice, directly or through a re-export, binds once" {
+	const sources = [
+		`import { pick } from "./first";\nimport { pick } from "./first";\nconsole.log(pick());\n`,
+		`import { pick } from "./first";\nimport { pick } from "./hub";\nconsole.log(pick());\n`,
+	];
+	for (const mainSource of sources) {
+		const cCode = compileProjectToC(importEntries(mainSource), IDENTITY_MAIN_PATH);
+		const jsCode = compileProjectToJS(importEntries(mainSource), IDENTITY_MAIN_PATH);
+		assert !cCode.startsWith("ERROR") && !jsCode.startsWith("ERROR"), mainSource;
+	}
+}
+
 test "export identity: a same-shaped generic interface of another module fits structurally" {
 	const libSource = `export interface Box<T> { v: T; }\n` +
 		`export function mkA(): Box<string> { return { v: "a" }; }\n`;
