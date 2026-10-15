@@ -12,7 +12,7 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext } from "../context";
@@ -145,6 +145,12 @@ function memberToString(v: Node, loc: SourceLocation, ctx: TransformContext): No
 	return lowerToString(call, v, t, loc, ctx);
 }
 
+function isRadixLiteral(n: Node): boolean {
+	if (n.kind != NodeKind.NumberLiteral) return false;
+	const v = (n.data as NumberLiteralData).value;
+	return v >= 2 && v <= 36;
+}
+
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	const base = isStringLike(objType) ? stringType() : literalBase(objType);
 	if (base != objType) return lowerToString(callNode, obj, base, loc, ctx);
@@ -176,9 +182,10 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	if (isNumeric(objType)) {
 		const cd2 = callNode.data as CallExprData;
 		const radixArg = cd2.arguments.length > 0 ? cd2.arguments[0] : makeNumber(10, loc);
-		let fn = "msNumberToStringRadix";
-		if (objType.kind == TypeKind.Uint64) { fn = "msUint64ToStringRadix"; }
-		else if (objType.kind == TypeKind.Int64) { fn = "msIntToStringRadix"; }
+		const checked = !ctx.jsBackend && cd2.arguments.length > 0 && !isRadixLiteral(radixArg);
+		let fn = checked ? "msNumberToStringRadixChecked" : "msNumberToStringRadix";
+		if (objType.kind == TypeKind.Uint64) { fn = checked ? "msUint64ToStringRadixChecked" : "msUint64ToStringRadix"; }
+		else if (objType.kind == TypeKind.Int64) { fn = checked ? "msIntToStringRadixChecked" : "msIntToStringRadix"; }
 		const call = makeCall(runtimeRef(fn, loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;

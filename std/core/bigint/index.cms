@@ -33,6 +33,7 @@ when (!bare && !solana) {
 	extern function msBigIntParse(s: string): bigint;
 
 	export function toString(this b: bigint, radix: int32 = 10): string {
+		if (radix < 2 || radix > 36) throw new RangeError("toString() radix argument must be between 2 and 36");
 		return msBigIntToString(b, radix);
 	}
 

@@ -73,6 +73,32 @@ export function isSafeInteger(this typeof Number, x: float64): boolean {
 	return x - x == 0.0 && cTrunc(x) == x && cFabs(x) <= 9007199254740991.0;
 }
 
+extern function msNumberToStringRadix(v: float64, radix: float64): string;
+extern function msIntToStringRadix(v: int64, radix: float64): string;
+extern function msUint64ToStringRadix(v: uint64, radix: float64): string;
+
+function throwUnlessRadix(radix: int32): void {
+	if (radix < 2 || radix > 36) throw new RangeError("toString() radix argument must be between 2 and 36");
+}
+
+@compilerFunc
+function msNumberToStringRadixChecked(v: float64, radix: int32): string {
+	throwUnlessRadix(radix);
+	return msNumberToStringRadix(v, radix as float64);
+}
+
+@compilerFunc
+function msIntToStringRadixChecked(v: int64, radix: int32): string {
+	throwUnlessRadix(radix);
+	return msIntToStringRadix(v, radix as float64);
+}
+
+@compilerFunc
+function msUint64ToStringRadixChecked(v: uint64, radix: int32): string {
+	throwUnlessRadix(radix);
+	return msUint64ToStringRadix(v, radix as float64);
+}
+
 // Statics-only attachment onto the callable Number symbol: reads resolve
 // through findStaticField and emit as native member accesses on js / C
 export class Number {

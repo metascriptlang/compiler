@@ -159,16 +159,7 @@ export function msNumberToString(n: number): string {
 }
 
 function checkRadix(radix: number): void {
-	@emit(`if (!(${radix} >= 2 && ${radix} < 37)) {
-		const m = "toString() radix argument must be between 2 and 36";
-		if (typeof process === "object" && process !== null && typeof process.exit === "function") {
-			process.stderr.write("Error: " + m + "\\n");
-			process.exit(1);
-		}
-		const e = new Error(m);
-		e.msDefect = true;
-		throw e;
-	}`);
+	if (!(radix >= 2.0 && radix < 37.0)) throw new RangeError("toString() radix argument must be between 2 and 36");
 }
 
 export function msNumberToStringRadix(n: number, radix: number): string {
