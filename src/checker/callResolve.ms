@@ -3239,6 +3239,67 @@ function retypeLiteralArg(ctx: CheckerContext, arg: Node, literal: boolean, form
 	return true;
 }
 
+function noMatchScore(): CandidateScore {
+	const score = emptyCandidateScore();
+	score.exactMatches = -1;
+	return score;
+}
+
+function nextRanked(scores: CandidateScore[], candidates: Type[], rejected: boolean[]): int32 {
+	let best: int32 = -1;
+	for (let ci = 0; ci < scores.length; ci += 1) {
+		if (rejected[ci] || isNoMatch(scores[ci])) continue;
+		if (best < 0 || cmpCandidates(scores[ci], scores[best], candidates[ci], candidates[best]) > 0) best = ci;
+	}
+	return best;
+}
+
+interface WinnerFormals {
+	checked: Type;
+	explicit: Type;
+}
+
+function winnerFormals(ctx: CheckerContext, callNode: Node, winnerSym: Symbol, winnerType: Type, args: Node[], argTypes: Type[], skipMask: boolean[], expectedType: Type | null): WinnerFormals {
+	if (winnerType.kind != TypeKind.Function || !hasGenericParams(winnerType)) return { checked: winnerType, explicit: winnerType };
+	let explicit = winnerType;
+	const bindings = deriveCallBindings(ctx, callNode, winnerSym, winnerType, null);
+	if (bindings.names.length > 0) explicit = instantiateGeneric(winnerType, bindings.names, bindings.types);
+	for (const ai of genericArgOrder(ctx, args, true)) {
+		if (skipMask[ai] || argTypes[ai] == null || ai >= winnerType.typeChildren.length) continue;
+		const fwd = createUnifyBindings();
+		unifyType(winnerType.typeChildren[ai], argTypes[ai], fwd);
+		mergeUnifyBindings(bindings, fwd);
+	}
+	mergeUnifyBindings(bindings, bindFromExpectedReturn(winnerType, expectedType));
+	const checked = bindings.names.length > 0 ? instantiateGeneric(winnerType, bindings.names, bindings.types) : winnerType;
+	return { checked, explicit };
+}
+
+function contextArgsFit(ctx: CheckerContext, args: Node[], skipMask: boolean[], winnerType: Type): boolean {
+	if (winnerType.kind != TypeKind.Function || winnerType.typeChildren == null) return true;
+	for (let ai = 0; ai < args.length && ai < winnerType.typeChildren.length; ai += 1) {
+		if (!skipMask[ai]) continue;
+		const formal = winnerType.typeChildren[ai];
+		const mark = ctx.errors.length;
+		clearCheckerState(args[ai]);
+		callCheckExpr(ctx, args[ai], formal);
+		const argType = args[ai].nodeType;
+		if (ctx.errors.length > mark || (argType != null && !fitsFormal(argType, formal))) {
+			ctx.errors = ctx.errors.slice(0, mark);
+			return false;
+		}
+	}
+	return true;
+}
+
+function fitsFormal(argType: Type, formal: Type): boolean {
+	if (!hasGenericParams(formal)) return isAssignable(argType, formal);
+	const bindings = createUnifyBindings();
+	unifyType(formal, argType, bindings);
+	const bound = bindings.names.length > 0 ? instantiateGeneric(formal, bindings.names, bindings.types) : formal;
+	return hasGenericParams(bound) || isAssignable(argType, bound);
+}
+
 function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
 	let sym = primary;
 	let impl = findOverloadImpl(sym);
@@ -3291,11 +3352,14 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	let bestIdx: int32 = -1;
 	let bestScore: CandidateScore = null as unknown as CandidateScore;
 	let ambiguous = false;
+	const scores: CandidateScore[] = [];
 	let ci: int32 = 0;
 	while (ci < candidates.length) {
 		const candType = candidates[ci];
-		if (candType == null || candType.kind != TypeKind.Function) { ci = ci + 1; continue; }
-		const score = scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
+		const score = candType == null || candType.kind != TypeKind.Function
+			? noMatchScore()
+			: scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
+		scores.push(score);
 		if (score.exactMatches < 0) { ci = ci + 1; continue; }
 		if (bestIdx < 0) {
 			bestIdx = ci;
@@ -3363,40 +3427,35 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		return getReturnType(sym.symbolType);
 	}
 
-	let winnerType = candidates[bestIdx];
-
-	// Phase C parity: if the winner is generic, apply Sources 1+2 (explicit
-	// type args + backward inference) BEFORE rechecking context-sensitive
-	// args, so closure params don't inherit GenericParam from the
-	// un-substituted formal type. Reuses the shared deriveCallBindings
-	// helper used by checkCallExpr's non-overload path.
-	let explicitWinner = winnerType;
-	if (winnerType.kind == TypeKind.Function && hasGenericParams(winnerType)) {
-		const winnerSym = candSyms[bestIdx];
-		const bindings = deriveCallBindings(ctx, callNode, winnerSym, winnerType, null);
-		if (bindings.names.length > 0) explicitWinner = instantiateGeneric(winnerType, bindings.names, bindings.types);
-		for (const ai of genericArgOrder(ctx, args, true)) {
-			if (skipMask[ai] || argTypes[ai] == null || ai >= winnerType.typeChildren.length) continue;
-			const fwd = createUnifyBindings();
-			unifyType(winnerType.typeChildren[ai], argTypes[ai], fwd);
-			mergeUnifyBindings(bindings, fwd);
+	let formals = winnerFormals(ctx, callNode, candSyms[bestIdx], candidates[bestIdx], args, argTypes, skipMask, expectedType);
+	let settled = false;
+	if (skipMask.includes(true)) {
+		const rejected: boolean[] = [];
+		for (let ri = 0; ri < candidates.length; ri += 1) rejected.push(false);
+		let tryIdx = bestIdx;
+		let tried = formals;
+		while (tryIdx >= 0 && !contextArgsFit(ctx, args, skipMask, tried.checked)) {
+			rejected[tryIdx] = true;
+			tryIdx = nextRanked(scores, candidates, rejected);
+			if (tryIdx >= 0) tried = winnerFormals(ctx, callNode, candSyms[tryIdx], candidates[tryIdx], args, argTypes, skipMask, expectedType);
 		}
-		mergeUnifyBindings(bindings, bindFromExpectedReturn(winnerType, expectedType));
-		if (bindings.names.length > 0) {
-			winnerType = instantiateGeneric(winnerType, bindings.names, bindings.types);
+		if (tryIdx >= 0) {
+			bestIdx = tryIdx;
+			formals = tried;
+			settled = true;
 		}
 	}
+	let winnerType = formals.checked;
+	const explicitWinner = formals.explicit;
 
-	// Pass 2: check context-sensitive args for the first time, using the
-	// winner's param types. Object literals get stamped with the specific
-	// variant / struct type; arrow functions get their parameter types
-	// inferred from the candidate. Pass 1 skipped these (so no Sem flag is
-	// set) — no reset needed.
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
 		for (let ai = 0; ai < args.length; ai += 1) {
 			if (ai >= winnerType.typeChildren.length) break;
 			if (skipMask[ai]) {
-				if (isContextSensitive(args[ai])) callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+				if (!settled) {
+					clearCheckerState(args[ai]);
+					callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+				}
 			} else if (!retypeLiteralArg(ctx, args[ai], literalArgs[ai], winnerType.typeChildren[ai])) {
 				continue;
 			}
