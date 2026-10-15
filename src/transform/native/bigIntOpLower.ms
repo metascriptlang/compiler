@@ -20,6 +20,10 @@ import { booleanType, createPrimitive, int32Type, isNumeric, typeDisplayName } f
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeAssign, makeBinary, makeCall, makeNumber, makeString, runtimeRef } from "../util";
+import { parseInput } from "../testUtil";
+import { CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
+import { createTransformContextWithChecker } from "../context";
+import { checkProgram } from "../../checker/checkPass";
 
 export function lowerBigIntOps(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => rewriteBigIntOp(node, ctx));
@@ -75,12 +79,28 @@ function fromBig(node: Node, ctx: TransformContext): Node {
 		d.asExpr = bigCall("msBigIntToFloat64", [d.asExpr], loc, dst);
 		return node;
 	}
+	const bits = signedBits(dst);
+	if (bits > 0) {
+		d.asExpr = bigCall("msBigIntToSigned", [d.asExpr, makeNumber(bits, loc)], loc, createPrimitive(TypeKind.Int64));
+		return node;
+	}
 	if (dst != null && isNumeric(dst)) {
 		d.asExpr = bigCall("msBigIntToInt64", [d.asExpr], loc, createPrimitive(TypeKind.Int64));
 		return node;
 	}
 	addError(ctx.checkerCtx, "cannot convert bigint to " + typeDisplayName(dst), loc.line, loc.column);
 	return node;
+}
+
+function signedBits(t: Type | null): int32 {
+	if (t == null) return 0;
+	return match (t.kind) {
+		TypeKind.Int8 => 8,
+		TypeKind.Int16 => 16,
+		TypeKind.Int32 => 32,
+		TypeKind.Int64 => 64,
+		_ => 0,
+	};
 }
 
 function arithFn(op: string): string {
@@ -205,4 +225,34 @@ function reportUnloweredUpdate(node: Node, ctx: TransformContext): Node {
 	if (!isBigNode(d.updateArg)) return node;
 	addError(ctx.checkerCtx, "increment/decrement on bigint is only supported as a statement", node.location.line, node.location.column);
 	return node;
+}
+
+function extractionOf(target: string): string {
+	const result = parseInput("function f(b: bigint): void { const r = b as " + target + "; }");
+	if (!result.ok) return "";
+	const ctx = createTransformContextWithChecker(checkProgram(result.value));
+	lowerBigIntOps(result.value, ctx);
+	let callee = "";
+	walkNode(result.value, (n: Node): Node => {
+		if (n.kind != NodeKind.VariableDecl || (n.data as VariableDeclData).declName != "r") return n;
+		const init = (n.data as VariableDeclData).initializer;
+		const call = init.kind == NodeKind.TypeAssertion ? (init.data as TypeAssertionData).asExpr : init;
+		if (call.kind == NodeKind.CallExpr) {
+			const fn = (call.data as CallExprData).callee;
+			if (fn.kind == NodeKind.Identifier) callee = (fn.data as IdentifierData).name;
+		}
+		return n;
+	});
+	return callee;
+}
+
+test "bigint to a signed integer checks the true value" {
+	assert extractionOf("int8") == "msBigIntToSigned";
+	assert extractionOf("int32") == "msBigIntToSigned";
+	assert extractionOf("int64") == "msBigIntToSigned";
+}
+
+test "bigint to an unsigned integer wraps" {
+	assert extractionOf("uint8") == "msBigIntToInt64";
+	assert extractionOf("uint64") == "msBigIntToInt64";
 }

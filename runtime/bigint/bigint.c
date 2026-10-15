@@ -187,6 +187,26 @@ int64_t msBigIntToInt64(const msBigInt* a) {
 	return neg ? -(int64_t)(u - 1) - 1 : (int64_t)u;
 }
 
+static _Noreturn void bigRangeFail(const msBigInt* a, int64_t lo, int64_t hi) {
+	char* s = msBigIntToCString(a, 10);
+	fprintf(stderr, "Error: value %s not in range %lld .. %lld\n", s, (long long)lo, (long long)hi);
+	free(s);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+int64_t msBigIntToSigned(const msBigInt* a, int32_t bits) {
+	size_t n = mbedtls_mpi_bitlen(&a->v);
+	int neg = mbedtls_mpi_cmp_int(&a->v, 0) < 0;
+	size_t width = (size_t)bits - 1;
+	int fits = n <= width || (neg && n == width + 1 && mbedtls_mpi_lsb(&a->v) == width);
+	if (!fits) {
+		int64_t hi = (int64_t)(((uint64_t)1 << width) - 1);
+		bigRangeFail(a, -hi - 1, hi);
+	}
+	return msBigIntToInt64(a);
+}
+
 #define BIN_OP(name, call) \
 	msBigInt* name(const msBigInt* a, const msBigInt* b) { \
 		msBigInt* r = newBig(); \

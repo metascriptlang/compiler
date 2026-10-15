@@ -21,6 +21,7 @@ msBigInt* msBigIntFromUint64(uint64_t v);
 msBigInt* msBigIntFromFloat64(double v);
 
 int64_t msBigIntToInt64(const msBigInt* a);
+int64_t msBigIntToSigned(const msBigInt* a, int32_t bits);
 double msBigIntToFloat64(const msBigInt* a);
 char* msBigIntToCString(const msBigInt* a, int32_t radix);
 
