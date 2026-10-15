@@ -1,4 +1,4 @@
-// @xfail(raiser): error: cannot compile node kind BigIntLiteral
+// @xfail(raiser): error: Undefined variable 'BigInt'
 
 function main(): void {
 	const s: bigint[] = [9223372036854775807n, -9223372036854775808n, 127n, -128n, 2147483647n, -2147483648n];
