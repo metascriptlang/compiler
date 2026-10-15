@@ -4308,7 +4308,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// from the actual object (e.g. Result<string, number> → T=string, E=number).
 	// Skip for static class access — static methods are found via class method lookup below.
 	if (isUnresolvedType(propType) && !isStaticClassAccess && resolvedObjType.typeName != "") {
-		const classSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
+		const classSym = fieldOwnerSym != null ? fieldOwnerSym : lookupSymbol(ctx.table, resolvedObjType.typeName);
 		if (classSym != null) {
 			ensureShaped(classSym, ctx);
 			let classStruct = classSym.symbolType;
