@@ -20,6 +20,7 @@ import "./whenStmt";
 import "./multimod/main";
 import "./accessorContexts";
 import "./aliasRepresentation";
+import "./assertInNonVoidArrow";
 import "./assertionEvaluation";
 import "./brandedStringIdentity";
 import "./byteArrayValueFit";
