@@ -161,6 +161,12 @@ function isVisiting(visited: Type[], t: Type): boolean {
 	return false;
 }
 
+function breaksCycleAtTarget(t: Type): boolean {
+	if (t.typeName != "" || t.typeReturn == null) return false;
+	return t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow
+		|| t.kind == TypeKind.Sink || t.kind == TypeKind.Lent || t.kind == TypeKind.Var;
+}
+
 function collectFieldDecorators(t: Type): Node[][] {
 	const out: Node[][] = [];
 	for (let i = 0; i < t.typeNames.length; i = i + 1) out.push([]);
@@ -386,7 +392,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 
 	// Cycle break — emit name placeholder and stop descending.
 	// Pre-push check so Alias peel below also benefits (e.g., `type X = X`).
-	if (isVisiting(visited, t)) {
+	if (isVisiting(visited, t) && !breaksCycleAtTarget(t)) {
 		if (impl && (t.kind == TypeKind.Alias || t.typeName == "")) {
 			throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
 		}
@@ -3531,6 +3537,31 @@ test "mapTypeToAst — Ref<Struct> wraps TypeObject inside TypeGeneric" {
 	const d = out.data as TypeGenericData;
 	assert (d.typExprBase.data as IdentifierData).name == "Ref";
 	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
+}
+
+test "mapTypeToAst — a class reaching itself through its own Ref gives getTypeImpl Ref<Holder> inside" {
+	const loc = makeLoc(1, 0);
+	const holder = makeStructType("Holder", ["next"], []);
+	const ref = makeModifierType(TypeKind.Ref, holder);
+	holder.typeChildren = [ref];
+	const out = mapTypeToAst(ref, loc, true);
+	const d = out.data as TypeGenericData;
+	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
+	const next = (d.typExprArgs[0].data as TypeObjectData).typExprFieldTypes[0];
+	assert next.kind == NodeKind.TypeGeneric;
+	const nextData = next.data as TypeGenericData;
+	assert (nextData.typExprBase.data as IdentifierData).name == "Ref";
+	assert (nextData.typExprArgs[0].data as IdentifierData).name == "Holder";
+}
+
+test "mapTypeToAst — an unnamed struct reaching itself through its Ref still stops getTypeImpl" {
+	const loc = makeLoc(1, 0);
+	const anon = makeStructType("", ["next"], []);
+	const ref = makeModifierType(TypeKind.Ref, anon);
+	anon.typeChildren = [ref];
+	let threw = false;
+	try { mapTypeToAst(ref, loc, true); } catch (e) { threw = true; }
+	assert threw;
 }
 
 test "mapTypeToAst — modifier with null inner falls through to <null> sentinel" {
