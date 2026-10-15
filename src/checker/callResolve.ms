@@ -1510,6 +1510,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					const winner = filtered[0];
 					if (winner.sym != null) {
 						ensureShaped(winner.sym, ctx);
+						markUsedIn(ctx, winner.sym);
 						if (node.resolvedSym == null || node.resolvedSym.instantiatedFrom != winner.sym) {
 							const target = signatureTarget(ctx, winner.sym, node, allByName);
 							node.resolvedSym = target;
@@ -3785,6 +3786,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	const extWinnerSym = idx >= 0 && idx < exts.length ? exts[idx].sym : null;
 	if (extWinnerSym != null) {
+		markUsedIn(ctx, extWinnerSym);
 		const looked = callNode.resolvedSym;
 		callNode.resolvedSym = looked != null && looked.instantiatedFrom == extWinnerSym ? looked : signatureTarget(ctx, extWinnerSym, callNode, findAllExtensionsByName(ctx.extensionRegistry!, methodName));
 		// Mark for transform: skip registry re-lookup (reference resolves UFCS in sem)
@@ -4656,9 +4658,6 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				callDemandReturn(ctx, ext.sym, node);
 				node.resolvedSym = ext.sym;
 				markUsedIn(ctx, ext.sym);
-				// Also mark the imported symbol (may be a different object than ext.sym)
-				const importedSym = lookupSymbol(ctx.table, ext.sym.name);
-				if (importedSym != null) markUsedIn(ctx, importedSym);
 				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, extReceiverDisplay(ext), false);
 			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr

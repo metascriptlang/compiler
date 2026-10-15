@@ -3085,6 +3085,14 @@ function reportUnusedSymbols(ctx: CheckerContext, program: Node): void {
 	}
 }
 
+function usesImportedSet(ctx: CheckerContext, sym: Symbol): boolean {
+	if (ctx.usedImports.has(sym)) return true;
+	for (const member of sym.overloads) {
+		if (ctx.usedImports.has(member)) return true;
+	}
+	return false;
+}
+
 // Phase B: report unused imports using ImportDecl.nameLocations for correct positions.
 // sym.location points to the original declaration in the source module — wrong for diagnostics.
 function reportUnusedImports(ctx: CheckerContext, program: Node): void {
@@ -3106,7 +3114,7 @@ function reportUnusedImports(ctx: CheckerContext, program: Node): void {
 			const sym = lookupSymbol(ctx.table, alias);
 			if (sym == null) continue;
 			if (ctx.importSet.has(sym)) {
-				if (ctx.usedImports.has(sym) || isExportedBy(ctx, sym)) continue;
+				if (usesImportedSet(ctx, sym) || isExportedBy(ctx, sym)) continue;
 			} else if (hasFlag(sym, SymbolFlag.Used) || hasFlag(sym, SymbolFlag.Exported)) {
 				continue;
 			}
