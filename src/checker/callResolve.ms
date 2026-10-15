@@ -1433,9 +1433,6 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			adoptExpansionResult(node, expandedValue);
 			node.typeArg = expandedValue.typeArg;
 			node.nodeType = null as unknown as Type;
-			node.resolvedSym = null;
-			node.flags = 0 as BitSet<NodeFlag>;
-			node.variantSlot = 0;
 			keepFoldedType(node, expandedValue);
 			// Re-check the mutated node so its nodeType is set. This drives correct
 			// type inference for the parent (e.g., the VariableDecl declaring `x`).

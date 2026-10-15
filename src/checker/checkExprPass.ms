@@ -2672,11 +2672,6 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 		}
 		adoptExpansionResult(node, expandedValue);
 		node.typeArg = expandedValue.typeArg;
-		if (expandedValue.location != null) node.location = expandedValue.location;
-		node.nodeType = null as unknown as Type;
-		node.resolvedSym = null;
-		node.flags = 0 as BitSet<NodeFlag>;
-		node.variantSlot = 0;
 		keepFoldedType(node, expandedValue);
 		if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
 		checkExpr(ctx, node, expectedType);
