@@ -735,8 +735,23 @@ function eqComparableOperand(orig: Type, shaped: Type): Type | null {
 		const payload = operandShape(orig.typeReturn);
 		return payload == null || binaryOperandSkip(payload) ? null : orig.typeReturn;
 	}
+	if (shaped.kind == TypeKind.BigInt) return orig;
 	if (shaped.kind == TypeKind.Union && !hasGenericParams(orig)) return orig;
 	return null;
+}
+
+function holdsBigInt(t: Type | null): boolean {
+	const s = operandShape(t);
+	if (s == null || s.kind != TypeKind.Union || s.typeChildren == null) return s != null && s.kind == TypeKind.BigInt;
+	for (const m of s.typeChildren) {
+		if (m != null && holdsBigInt(m)) return true;
+	}
+	return false;
+}
+
+function bigIntEqualityHint(a: Type | null, b: Type | null): string {
+	if (holdsBigInt(a) == holdsBigInt(b)) return "";
+	return " — convert one side first: `b == BigInt(x)` or `Number(b) == x`";
 }
 
 function binaryPointerish(k: TypeKind): boolean {
@@ -790,6 +805,7 @@ function equalityOperandsOk(ao: Type, bo: Type): boolean {
 		return false;
 	}
 	if (a.kind == TypeKind.Set || b.kind == TypeKind.Set) return sameSetElement(a, b);
+	if (a.kind == TypeKind.BigInt || b.kind == TypeKind.BigInt) return a.kind == b.kind || a.kind == TypeKind.Void || b.kind == TypeKind.Void;
 	if (isNumeric(a) && isNumeric(b)) return true;
 	if (a.kind == TypeKind.StringLiteral && b.kind == TypeKind.StringLiteral) return a.typeName == b.typeName;
 	if (isStringLike(a) && isStringLike(b)) return true;
@@ -934,7 +950,8 @@ export function checkSwitchCase(ctx: CheckerContext, disc: Node, test: Node): vo
 	if (!binaryOperandsFail(ctx, "===", disc.nodeType, testType)) return;
 	if (valueOfInPlace(ctx, disc) && disc.nodeType != null && !binaryOperandsFail(ctx, "===", disc.nodeType, testType)) return;
 	addError(ctx, "case of type '" + typeDisplayName(testType) + "' is not comparable to the switch value of type '"
-		+ typeDisplayName(disc.nodeType!) + "'" + typeofComparisonHint(disc.nodeType, testType), test.location.line, test.location.column);
+		+ typeDisplayName(disc.nodeType!) + "'" + typeofComparisonHint(disc.nodeType, testType) + bigIntEqualityHint(disc.nodeType, testType),
+		test.location.line, test.location.column);
 }
 
 function comparedOperandType(operand: Node): Type {
@@ -1000,6 +1017,12 @@ export function refuseDisjointStrings(ctx: CheckerContext, op: string, left: Nod
 
 export function checkBinaryOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): boolean {
 	if (!binaryOperandsFail(ctx, op, leftType, rightType)) return false;
+	const bigIntHint = binaryOperandClass(op) == "eq" ? bigIntEqualityHint(leftType, rightType) : "";
+	if (bigIntHint != "") {
+		addError(ctx, "This comparison appears to be unintentional because the types '" + typeDisplayName(leftType) + "' and '"
+			+ typeDisplayName(rightType) + "' have no overlap" + bigIntHint, node.location.line, node.location.column);
+		return true;
+	}
 	addError(ctx, "operator '" + op + "' cannot be applied to types '" + typeDisplayName(leftType)
 		+ "' and '" + typeDisplayName(rightType) + "' — declare `function `" + op + "`(a: "
 		+ typeDisplayName(leftType) + ", b: " + typeDisplayName(rightType) + ")`",

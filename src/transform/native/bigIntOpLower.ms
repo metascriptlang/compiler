@@ -1,6 +1,6 @@
 // bigint Operation Lowering (C backend) — msBigInt is an opaque heap value, so
 // every operator becomes a runtime call. The checker has already rejected mixed
-// arithmetic, so only a comparison meets a non-bigint operand.
+// arithmetic and equality, so only a relational comparison meets a non-bigint operand.
 //
 // Rewrites:
 //   123n     →  msBigIntFromLit("123n")     (the runtime parser owns 0x/0b/0o/_)
