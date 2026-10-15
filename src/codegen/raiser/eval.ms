@@ -19,14 +19,14 @@ import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecod
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
-import { RaiserFuncMap } from "./context";
+import { RaiserFuncMap, RaiserEnumMap, createFuncMap } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, routineKey } from "./context";
+import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import {  } from "../../parser/context";
-import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
+import { generateRaiser, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
@@ -128,7 +128,7 @@ export function evalASTFull(program: Node): RaiserContext {
 interface ComptimeEngine {
 	image: RaiserModule;
 	funcMap: RaiserFuncMap;
-	enumMap: RaiserFuncMap;
+	enumMap: RaiserEnumMap;
 	vm: RaiserVM;
 	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
 }
@@ -144,8 +144,8 @@ function freshEngine(): ComptimeEngine {
 	const entryFn = createRaiserFunction("__engineEntry", entryCode, entryConsts, 0, 0, 2);
 	const functions: RaiserFunction[] = [entryFn];
 	const image = createRaiserModule("comptime-engine", functions, 0);
-	const funcMap: RaiserFuncMap = { items: [], symbolIndices: new HashMap<Symbol, int32>() };
-	const enumMap: RaiserFuncMap = { items: [], symbolIndices: null };
+	const funcMap = createFuncMap();
+	const enumMap: RaiserEnumMap = { items: [] };
 	const vm = createVM(image, "arena");
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
@@ -305,7 +305,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
 	const name = isClass ? sym.name + "_new" : sym.name;
-	const seenIdx = _engine.funcMap.symbolIndices!.get(sym);
+	const seenIdx = isClass ? _engine.funcMap.ctorIndices.get(sym) : _engine.funcMap.symbolIndices.get(sym);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null) return -1;
 	const seedCtx = seedCtxForSym(sym);
@@ -951,8 +951,7 @@ test "number toString through full pipeline" {
 }
 
 // Enum member access through the FULL pipeline: the checker rewrites `Color.Green`
-// → Identifier "Color_Green" before codegen, so the codegen-only enum path
-// (evalProject, MemberExpr-based) never exercises this. Without resolution of the
+// → Identifier "Color_Green" before codegen. Without resolution of the
 // mangled identifier the VM yields nil / 0 and match-on-enum collapses to arm 0.
 test "enum member through full pipeline" {
 	const ctx = evalFull("enum Color { Red, Green, Blue } return Color.Green as number;");
@@ -987,7 +986,7 @@ test "objects through transform" {
 }
 
 test "build.ms pattern through transform" {
-	const ctx = evalFull("import { defineConfig } from \"std/build\"; export default defineConfig({ root: \"src/main.ms\" });");
+	const ctx = evalFull("export default { root: \"src/main.ms\" };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
@@ -1137,126 +1136,6 @@ test "closure pair nested fn (no transforms)" {
 test "closure pair multi-field env (no transforms)" {
 	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.a + _envP.b; } const a = 10; const b = 32; const f = { fn: liftedFn, env: { a: a, b: b } }; return f();");
 	assert ctx.lastResult.intVal == 42;
-}
-
-// --- Class Tests ---
-test "class ctor returns object" {
-	const ctx = evalProject(["const p = Point_new(42); return p.x;", "class Point { x: number; constructor(x) { this.x = x; } }"]);
-	assert ctx.lastResult.intVal == 42;
-}
-
-test "class with method" {
-	const ctx = evalProject(["return readBox();", "class Box { val: int32; constructor(v: int32) { this.val = v; } getVal(): int32 { return this.val; } } function readBox(): int32 { return new Box(99).getVal(); }"]);
-	assert ctx.lastResult.intVal == 99;
-}
-
-test "class with multiple methods" {
-	const ctx = evalProject(["return calc();", "class Calc { a: int32; b: int32; constructor(a: int32, b: int32) { this.a = a; this.b = b; } sum(): int32 { return this.a + this.b; } product(): int32 { return this.a * this.b; } } function calc(): int32 { const m = new Calc(3, 4); return m.sum() + m.product(); }"]);
-	assert ctx.lastResult.intVal == 19;
-}
-
-test "class and function in same module" {
-	const ctx = evalProject(["const pt = Pt_new(55); return readX(pt);", "class Pt { x: number; constructor(x) { this.x = x; } } function readX(p) { return p.x; }"]);
-	assert ctx.lastResult.intVal == 55;
-}
-
-// --- Project test helper ---
-// Checks and lowers each module on its own; a name one module uses from
-// another stays unresolved and links by name.
-//
-// codes[0] = entry module, codes[1..n] = dependencies (deepest last).
-// Modules are pushed in reverse order so dependencies initialize before the entry.
-
-function evalProject(codes: string[]): RaiserContext {
-	const modules: RaiserModuleInput[] = [];
-	const names: string[] = ["a", "b", "c", "d", "e", "f"];
-	let i = codes.length - 1;
-	while (i >= 0) {
-		const pr = parseSource(codes[i]);
-		if (!pr.ok) { unreachable; return createContext(); }
-		const path = "/src/" + names[i] + ".ms";
-		const input: RaiserModuleInput = { modulePath: path, program: transformForRaiser(pr.value, checkProgram(pr.value)) };
-		modules.push(input);
-		i = i - 1;
-	}
-	const raiserMod = generateRaiserProject(modules);
-	const ctx = createContext();
-	load(ctx, raiserMod);
-	execute(ctx);
-	return ctx;
-}
-
-// --- Project Tests ---
-test "single file via project API" {
-	const ctx = evalProject(["return 2 + 3;"]);
-	assert ctx.lastResult.intVal == 5;
-}
-
-test "two modules: no cross-call" {
-	const ctx = evalProject(["return 42;", "const x = 1;"]);
-	assert ctx.lastResult.intVal == 42;
-}
-
-test "module with function no call" {
-	const ctx = evalProject(["return 99;", "function add(a, b) { return a + b; }"]);
-	assert ctx.lastResult.intVal == 99;
-}
-
-test "cross-module function call" {
-	const ctx = evalProject(["return sumPair(3, 4);", "function sumPair(a: number, b: number): number { return a + b; }"]);
-	assert unboxFloat(ctx.lastResult) == 7;
-}
-
-test "multiple functions from same module" {
-	const ctx = evalProject(["return (sumPair(3, 4) as number) + (product(2, 5) as number);", "function sumPair(a: number, b: number): number { return a + b; } function product(a: number, b: number): number { return a * b; }"]);
-	assert unboxFloat(ctx.lastResult) == 17;
-}
-
-test "sequential cross-module calls via variable" {
-	const ctx = evalProject(["const x = dbl(3); return dbl(x);", "function dbl(x: number): number { return x * 2; }"]);
-	assert unboxFloat(ctx.lastResult) == 12;
-}
-
-test "nested cross-module call" {
-	const ctx = evalProject(["return dbl(dbl(3));", "function dbl(x: number): number { return x * 2; }"]);
-	assert unboxFloat(ctx.lastResult) == 12;
-}
-
-test "chain: A calls B calls C" {
-	const ctx = evalProject(["return quadruple(3);", "function quadruple(x: number): number { return dbl(dbl(x)); }", "function dbl(x: number): number { return x * 2; }"]);
-	assert unboxFloat(ctx.lastResult) == 12;
-}
-
-test "diamond dependency" {
-	const ctx = evalProject(["return (fromB(10) as number) + (fromC(10) as number);", "function fromC(x: number): number { return base(x) * 3; }", "function fromB(x: number): number { return base(x) * 2; }", "function base(x: number): number { return x + 1; }"]);
-	assert unboxFloat(ctx.lastResult) == 55;
-}
-
-test "module init order" {
-	const ctx = evalProject(["console.log(\"A\");", "console.log(\"B\");"]);
-	assert ctx.lastOutput == "B\nA\n";
-}
-
-test "cross-module enum" {
-	const ctx = evalProject(["return Color.Blue;", "enum Color { Red, Green, Blue }"]);
-	assert ctx.lastResult.intVal == 2;
-}
-
-test "cross-module function with enum" {
-	const ctx = evalProject(["return isVertical(Dir.Up);", "enum Dir { Up, Down, Left, Right } function isVertical(d) { if (d == Dir.Up) { return 1; } if (d == Dir.Down) { return 1; } return 0; }"]);
-	assert ctx.lastResult.intVal == 1;
-}
-
-test "entry module export default" {
-	const ctx = evalProject(["export default wrap(42);", "function wrap(x) { return { value: x }; }"]);
-	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const val = heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "value");
-	assert val.intVal == 42;
-}
-
-test "recursive function cross-module" {
-	const ctx = evalProject(["return fact(5);", "function fact(n: number): number { if (n <= 1) { return 1; } return n * fact(n - 1); }"]);
-	assert unboxFloat(ctx.lastResult) == 120;
 }
 
 // Regression: chained MemberExpr through nested ObjectLiteral.

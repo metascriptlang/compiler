@@ -24,12 +24,12 @@ import {
 } from "../../raiser/module";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
-	RaiserFuncMap, RaiserFuncEntry, RaiserGlobalMap, RaiserBuiltinMap, RaiserBuiltinEntry,
+	RaiserFuncMap, RaiserEnumMap, RaiserFuncEntry, RaiserGlobalMap, createFuncMap,
 	createCompState, emitInst, emitLoadConst, emitRet, allocReg, raiserClassKey,
-	addConst, declareLocal, resetTemps, resolveFunc, emitClosurePair,
+	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
-	routineKey, resolveRoutine, RaiserCompState,
+	resolveRoutine, RaiserCompState,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
@@ -112,12 +112,11 @@ function ctorArity(ctorSyms: Symbol[]): int32 {
 
 // --- Compile a function body ---
 
-export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null): RaiserFunction {
+export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserEnumMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
 	if (globals != null) s.globals = globals;
-	s.scopedFunctions = globals != null;
 
 	// Declare params as locals R[0..arity-1]
 	for (const paramSym of paramSyms) {
@@ -151,9 +150,7 @@ function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: stri
 	for (const member of classBody) {
 		if (member.kind != NodeKind.MethodDecl || !emitsRoutine(member, (member.data as MethodDeclData).methodFlags)) continue;
 		const md = member.data as MethodDeclData;
-		const methodKey = `${className}_${md.methodName}`;
-		const viaSym = member.resolvedSym != null ? resolveRoutine(s, member.resolvedSym, methodKey) : -1;
-		const methodIdx = viaSym >= 0 ? viaSym : resolveFunc(s, methodKey);
+		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
 		if (methodIdx < 0) continue;
 		const closureReg = emitClosurePair(s, methodIdx, -1);
 		const methodNameIdx = addConst(s, raiserString(md.methodName));
@@ -183,7 +180,7 @@ function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]):
 }
 
 function compileClassInit(
-	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
+	funcMap: RaiserFuncMap, enumMap: RaiserEnumMap,
 	className: string, classBody: Node[],
 	ctorSyms: Symbol[], ctorBody: Node | null, globals: RaiserGlobalMap | null = null
 ): RaiserFunction {
@@ -191,7 +188,6 @@ function compileClassInit(
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
 	if (globals != null) s.globals = globals;
-	s.scopedFunctions = globals != null;
 	const thisReg = allocReg(s);
 	s.receiverReg = thisReg;
 	for (let i = 0; i < ctorSyms.length; i += 1) {
@@ -223,7 +219,7 @@ function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbo
 }
 
 function compileClassConstructor(
-	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
+	funcMap: RaiserFuncMap, enumMap: RaiserEnumMap,
 	className: string, classBody: Node[],
 	ctorSyms: Symbol[], ctorBody: Node | null, globals: RaiserGlobalMap | null = null,
 	classSym: Symbol | null = null
@@ -232,7 +228,6 @@ function compileClassConstructor(
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
 	if (globals != null) s.globals = globals;
-	s.scopedFunctions = globals != null;
 
 	// Declare ctor params
 	const arity = ctorArity(ctorSyms);
@@ -272,7 +267,7 @@ function compileClassConstructor(
 interface RaiserReservedSlot { idx: number; fnName: string; paramSyms: Symbol[]; body: Node; }
 interface RaiserReservedCtor { idx: number; initIdx: number; className: string; classBody: Node[]; ctorSyms: Symbol[]; ctorBody: Node | null; classSym: Symbol | null; }
 
-export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string, wantSym: Symbol | null = null): int32 {
+export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserEnumMap, program: Node, wantFn: string, wantSym: Symbol | null = null): int32 {
 	const pd = program.data as ProgramData;
 	let wantIdx = -1;
 
@@ -285,14 +280,10 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 			const fd = fnNode.data as FunctionDeclData;
 			const idx = image.functions.length;
 			image.functions.push(raiserPlaceholderFunc());
-			const entry: RaiserFuncEntry = { name: fd.fnName, index: idx };
-			funcMap.items.push(entry);
-			if (funcMap.symbolIndices != null && fnNode.resolvedSym != null) {
-				funcMap.symbolIndices.set(fnNode.resolvedSym, idx);
-			}
+			funcMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), idx);
 			if (fd.fnName == wantFn) {
 				wantIdx = idx;
-				if (funcMap.symbolIndices != null && wantSym != null) funcMap.symbolIndices.set(wantSym, idx);
+				if (wantSym != null) funcMap.symbolIndices.set(wantSym, idx);
 			}
 			reserved.push({ idx, fnName: fd.fnName, paramSyms: paramSymbolsOf(fnNode, fd.fnName), body: fd.fnBody });
 		}
@@ -302,37 +293,37 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 			const ctorKey = cd.className + "_new";
 			const ctorIdx = image.functions.length;
 			image.functions.push(raiserPlaceholderFunc());
-			funcMap.items.push({ name: ctorKey, index: ctorIdx });
-			if (funcMap.symbolIndices != null && classNode.resolvedSym != null) {
-				funcMap.symbolIndices.set(classNode.resolvedSym, ctorIdx);
-			}
-			if (ctorKey == wantFn) {
+			const classSym = declaredSymbol(classNode, cd.className);
+			funcMap.ctorIndices.set(classSym, ctorIdx);
+			const wantsClass = ctorKey == wantFn;
+			if (wantsClass) {
 				wantIdx = ctorIdx;
-				if (funcMap.symbolIndices != null && wantSym != null) funcMap.symbolIndices.set(wantSym, ctorIdx);
+				if (wantSym != null) funcMap.ctorIndices.set(wantSym, ctorIdx);
 			}
 			let ctorSyms: Symbol[] = [];
 			let ctorBody: Node | null = null;
+			let ctorRoutine: Symbol | null = null;
 			for (const member of cd.classBody) {
 				if (member.kind == NodeKind.MethodDecl && emitsRoutine(member, (member.data as MethodDeclData).methodFlags)) {
 					const md = member.data as MethodDeclData;
 					const methodKey = `${cd.className}_${md.methodName}`;
 					const idx = image.functions.length;
 					image.functions.push(raiserPlaceholderFunc());
-					funcMap.items.push({ name: methodKey, index: idx });
-					if (funcMap.symbolIndices != null && member.resolvedSym != null) {
-						funcMap.symbolIndices.set(member.resolvedSym, idx);
-					}
+					funcMap.symbolIndices.set(declaredSymbol(member, methodKey), idx);
 					reserved.push({ idx, fnName: methodKey, paramSyms: paramSymbolsOf(member, methodKey), body: md.methodBody });
 				} else if (member.kind == NodeKind.ConstructorDecl) {
 					const ctd = member.data as ConstructorDeclData;
 					ctorSyms = paramSymbolsOf(member, `${cd.className} constructor`);
 					ctorBody = ctd.ctorBody;
+					ctorRoutine = declaredSymbol(member, `${cd.className} constructor`);
 				}
 			}
 			const initIdx = image.functions.length;
 			image.functions.push(raiserPlaceholderFunc());
-			funcMap.items.push({ name: cd.className + "_init", index: initIdx });
-			ctors.push({ idx: ctorIdx, initIdx, className: cd.className, classBody: cd.classBody, ctorSyms, ctorBody, classSym: classNode.resolvedSym });
+			funcMap.initIndices.set(classSym, initIdx);
+			if (ctorRoutine != null) funcMap.symbolIndices.set(ctorRoutine, initIdx);
+			if (wantsClass && wantSym != null) funcMap.initIndices.set(wantSym, initIdx);
+			ctors.push({ idx: ctorIdx, initIdx, className: cd.className, classBody: cd.classBody, ctorSyms, ctorBody, classSym });
 		}
 		const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
 		if (enumNode != null) {
@@ -420,10 +411,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	}
 
 	// --- Pass 1: Global declaration collection ---
-	const globalFuncMapItems: RaiserFuncEntry[] = [];
-	const globalFuncMap: RaiserFuncMap = { items: globalFuncMapItems, symbolIndices: null };
+	const globalFuncMap = createFuncMap();
 	const globalEnumMapItems: RaiserFuncEntry[] = [];
-	const globalEnumMap: RaiserFuncMap = { items: globalEnumMapItems, symbolIndices: null };
+	const globalEnumMap: RaiserEnumMap = { items: globalEnumMapItems };
 	let funcIdx = 0;
 	const projectDecls: RaiserProjectDecl[] = [];
 	const noNodes: Node[] = [];
@@ -437,13 +427,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 			const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
 			if (fnNode != null && emitsRoutine(fnNode, (fnNode.data as FunctionDeclData).fnFlags)) {
 				const fd = fnNode.data as FunctionDeclData;
-				const entry: RaiserFuncEntry = { name: fd.fnName, index: funcIdx };
-				globalFuncMap.items.push(entry);
-				globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + fd.fnName, index: funcIdx });
-				if (fnNode.resolvedSym != null && fnNode.resolvedSym.modulePath != "") {
-					globalFuncMap.items.push({ name: fnNode.resolvedSym.modulePath + ":" + fnNode.resolvedSym.name, index: funcIdx });
-					globalFuncMap.items.push({ name: routineKey(fnNode.resolvedSym), index: funcIdx });
-				}
+				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
 				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms: paramSymbolsOf(fnNode, fd.fnName), body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
 				funcIdx += 1;
 			}
@@ -466,15 +450,14 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 			const classNode = unwrapToClassDecl(pd.programStmts[i]);
 			if (classNode != null) {
 				const cd = classNode.data as ClassDeclData;
+				const classSym = declaredSymbol(classNode, cd.className);
 				let hasCtor = false;
 				// Methods first (must match Phase 2b compilation order)
 				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
 					if (cd.classBody[ci].kind == NodeKind.MethodDecl && emitsRoutine(cd.classBody[ci], (cd.classBody[ci].data as MethodDeclData).methodFlags)) {
 						const md = cd.classBody[ci].data as MethodDeclData;
 						const methodKey = `${cd.className}_${md.methodName}`;
-						const mEntry: RaiserFuncEntry = { name: methodKey, index: funcIdx };
-						globalFuncMap.items.push(mEntry);
-						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + methodKey, index: funcIdx });
+						globalFuncMap.symbolIndices.set(declaredSymbol(cd.classBody[ci], methodKey), funcIdx);
 						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: methodKey, paramSyms: paramSymbolsOf(cd.classBody[ci], methodKey), body: md.methodBody, className: "", classBody: noNodes, ctorBody: nullNode });
 						funcIdx += 1;
 					}
@@ -484,47 +467,28 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 					if (cd.classBody[ci].kind == NodeKind.ConstructorDecl) {
 						hasCtor = true;
 						const ctorKey = cd.className + "_new";
-						const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
-						globalFuncMap.items.push(cEntry);
-						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + ctorKey, index: funcIdx });
+						globalFuncMap.ctorIndices.set(classSym, funcIdx);
 						const ctd = cd.classBody[ci].data as ConstructorDeclData;
 						const ctorSyms = paramSymbolsOf(cd.classBody[ci], `${cd.className} constructor`);
-						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: classNode.resolvedSym, isCtor: true, fnName: ctorKey, paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody });
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym, isCtor: true, fnName: ctorKey, paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody });
 						funcIdx += 1;
-						globalFuncMap.items.push({ name: cd.className + "_init", index: funcIdx });
-						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + cd.className + "_init", index: funcIdx });
-						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym: classNode.resolvedSym, isCtor: false, fnName: cd.className + "_init", paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody });
+						globalFuncMap.initIndices.set(classSym, funcIdx);
+						globalFuncMap.symbolIndices.set(declaredSymbol(cd.classBody[ci], `${cd.className} constructor`), funcIdx);
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym, isCtor: false, fnName: cd.className + "_init", paramSyms: ctorSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: ctd.ctorBody });
 						funcIdx += 1;
 					}
 				}
 				if (!hasCtor) {
 					const ctorKey = cd.className + "_new";
-					const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
-					globalFuncMap.items.push(cEntry);
-					globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + ctorKey, index: funcIdx });
-					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: classNode.resolvedSym, isCtor: true, fnName: ctorKey, paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode });
+					globalFuncMap.ctorIndices.set(classSym, funcIdx);
+					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym, isCtor: true, fnName: ctorKey, paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode });
 					funcIdx += 1;
-					globalFuncMap.items.push({ name: cd.className + "_init", index: funcIdx });
-					globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + cd.className + "_init", index: funcIdx });
-					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym: classNode.resolvedSym, isCtor: false, fnName: cd.className + "_init", paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode });
+					globalFuncMap.initIndices.set(classSym, funcIdx);
+					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym, isCtor: false, fnName: cd.className + "_init", paramSyms: noSyms, body: nullNode, className: cd.className, classBody: cd.classBody, ctorBody: nullNode });
 					funcIdx += 1;
 				}
 			}
 		}
-	}
-
-	// --- Register builtins ---
-	const builtinNames: string[] = ["defineConfig"];
-	const builtinMapItems: RaiserBuiltinEntry[] = [];
-	const builtinMap: RaiserBuiltinMap = { items: builtinMapItems };
-	for (let bi = 0; bi < builtinNames.length; bi += 1) {
-		const bName = builtinNames[bi];
-		const bIdx = funcIdx;
-		const bEntry: RaiserFuncEntry = { name: bName, index: bIdx };
-		globalFuncMap.items.push(bEntry);
-		const builtinEntry: RaiserBuiltinEntry = { name: bName, funcIdx: bIdx };
-		builtinMap.items.push(builtinEntry);
-		funcIdx += 1;
 	}
 
 	// --- Pass 2: Reserve slots; bodies compile on demand (roots = init functions) ---
@@ -555,18 +519,6 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	defer clearRaiserFuncDemand();
 	defer setRaiserModulePath("");
 
-	// --- Emit builtin stubs ---
-	for (let bi = 0; bi < builtinNames.length; bi += 1) {
-		const bName = builtinNames[bi];
-		const stubCode: RaiserInstruction[] = [
-			raiserABC(RaiserOpcode.Move, 0, 1, 0),
-			raiserABC(RaiserOpcode.Ret, 0, 0, 0),
-		];
-		const stubConsts: RaiserValue[] = [];
-		const stubFunc = createRaiserFunction(bName, stubCode, stubConsts, 1, 0, 2);
-		functions.push(stubFunc);
-	}
-
 	// --- Pass 3: Compile init functions for each module ---
 	const initIndices: number[] = [];
 	for (let mi = 0; mi < modules.length; mi += 1) {
@@ -575,9 +527,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 		const s = createCompState();
 		s.funcMap = globalFuncMap;
 		s.enumMap = globalEnumMap;
-		s.builtins = builtinMap;
 		s.globals = globals;
-		s.scopedFunctions = true;
 
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
 			compileStmt(s, pd.programStmts[i]);
@@ -1373,15 +1323,8 @@ test "config with array of objects" {
 	assert name == "var_hoist";
 }
 
-test "import defineConfig passthrough" {
-	const ctx = evalRaiser("import { defineConfig } from \"std/build\"; return defineConfig({ root: \"src/main.ms\" });");
-	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
-	assert root == "src/main.ms";
-}
-
-test "full build.ms pattern" {
-	const ctx = evalRaiser("import { defineConfig } from \"std/build\"; return defineConfig({ root: \"src/main.ms\", build: { target: \"native\" } });");
+test "nested config object" {
+	const ctx = evalRaiser("return { root: \"src/main.ms\", build: { target: \"native\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
@@ -1398,8 +1341,8 @@ test "export default object" {
 	assert root == "src/main.ms";
 }
 
-test "export default with defineConfig" {
-	const ctx = evalRaiser("import { defineConfig } from \"std/build\"; export default defineConfig({ root: \"app.ms\", build: { target: \"native\", outDir: \"out\" } });");
+test "export default nested object" {
+	const ctx = evalRaiser("export default { root: \"app.ms\", build: { target: \"native\", outDir: \"out\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "app.ms";
@@ -1410,7 +1353,7 @@ test "export default with defineConfig" {
 }
 
 test "real: neon/build.ms" {
-	const src = "import { defineConfig, BuildOptions } from \"std/build\";\nexport default defineConfig({\n\troot: \"src/index.ms\",\n\tformat: {\n\t\ttabWidth: 4,\n\t\tuseTabs: true,\n\t\tsemi: true,\n\t},\n\tbuild: {\n\t\ttargets: [\n\t\t\t{ target: \"native\", outDir: \"build/c\" },\n\t\t\t{ target: \"js\", outDir: \"build/js\" },\n\t\t],\n\t},\n});";
+	const src = "export default {\n\troot: \"src/index.ms\",\n\tformat: {\n\t\ttabWidth: 4,\n\t\tuseTabs: true,\n\t\tsemi: true,\n\t},\n\tbuild: {\n\t\ttargets: [\n\t\t\t{ target: \"native\", outDir: \"build/c\" },\n\t\t\t{ target: \"js\", outDir: \"build/js\" },\n\t\t],\n\t},\n};";
 	const ctx = evalRaiser(src);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	// root
@@ -1480,7 +1423,7 @@ test "float comparison: greater than" {
 }
 
 test "real: void/build.ms" {
-	const src = "import { defineConfig } from \"std/build\";\nexport default defineConfig({\n\troot: \"src/index.ms\",\n\tbuild: {\n\t\ttarget: \"native\",\n\t\toutDir: \"out\",\n\t\toutFile: \"void\",\n\t\toptimize: \"debug\",\n\t},\n});";
+	const src = "export default {\n\troot: \"src/index.ms\",\n\tbuild: {\n\t\ttarget: \"native\",\n\t\toutDir: \"out\",\n\t\toutFile: \"void\",\n\t\toptimize: \"debug\",\n\t},\n};";
 	const ctx = evalRaiser(src);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	// root
@@ -1555,21 +1498,6 @@ test "arr[i] += value" {
 test "arr[i] *= value" {
 	const ctx = evalRaiser("let arr = [1, 2, 3]; arr[0] *= 10; return arr[0];");
 	assert ctx.lastResult.intVal == 10;
-}
-
-test "constructor and field access" {
-	const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = Point_new(3, 4); return p.x;");
-	assert ctx.lastResult.intVal == 3;
-}
-
-test "second field access" {
-	const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = Point_new(3, 4); return p.y;");
-	assert ctx.lastResult.intVal == 4;
-}
-
-test "method returning constant" {
-	const ctx = evalRaiser("class Box { answer() { return 42; } } const b = Box_new(); return b.answer();");
-	assert ctx.lastResult.intVal == 42;
 }
 
 test "new with constructor sets fields" {
@@ -1720,16 +1648,6 @@ test "bidir top level" {
 test "two objects linked" {
 	const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; cl.ref = self; self.get = cl; self.n = n; return self; } const c = mk(5); return c.n;");
 	assert ctx.lastResult.intVal == 5;
-}
-
-test "class direct field with methods" {
-	const ctx = evalRaiser("class Box { constructor(v) { this.val = v; } getVal() { return this.val; } } const b = Box_new(42); return b.val;");
-	assert ctx.lastResult.intVal == 42;
-}
-
-test "no explicit constructor" {
-	const ctx = evalRaiser("class Greeter { greet() { return 42; } } const g = Greeter_new(); return g.greet();");
-	assert ctx.lastResult.intVal == 42;
 }
 
 test "method calling another method" {

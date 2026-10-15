@@ -119,6 +119,7 @@ import "./pointerSlotRelation";
 import "./positionalNameBinding";
 import "./preludeExportOwnership";
 import "./raiserProgramArgv";
+import "./raiserProjectImage";
 import "./slotRelation";
 import "./storageMutability";
 import "./tupleIndex";

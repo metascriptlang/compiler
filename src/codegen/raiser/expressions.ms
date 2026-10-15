@@ -25,9 +25,9 @@ import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETI
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
-	resolveFunc, isLocalString, isEnumName, findEnumConstant,
+	isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine,
+	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
@@ -470,7 +470,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 					return r;
 				}
 			}
-			const funcIdx = resolveRoutine(s, node.resolvedSym, d.name);
+			const funcIdx = resolveRoutine(s, node.resolvedSym);
 			if (funcIdx >= 0) {
 				const r = allocReg(s);
 				emitLoadConst(s, r, raiserInt(funcIdx));
@@ -1509,7 +1509,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		const overridden = overriddenMethodName(calleeSym);
 		if (overridden != "" && d.arguments.length > 0) return compileDispatchedCall(s, node, overridden);
-		let funcIdx = resolveRoutine(s, calleeSym, calleeId.name);
+		let funcIdx = resolveRoutine(s, calleeSym);
 		if (funcIdx < 0 && calleeSym != null) {
 			funcIdx = callRaiserOnDemand(calleeSym);
 		}
@@ -1530,13 +1530,12 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 	let initName = superSym.name;
 	let funcIdx = -1;
 	if (superSym.symbolKind == SymbolKind.Function) {
-		funcIdx = resolveRoutine(s, superSym, superSym.name);
+		funcIdx = resolveRoutine(s, superSym);
 	} else {
 		const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
 		const parent = body != null && body.sym != null ? body.sym : superSym;
 		initName = parent.name + "_init";
-		funcIdx = s.scopedFunctions && parent.modulePath != "" ? resolveFunc(s, parent.modulePath + ":" + initName) : -1;
-		if (funcIdx < 0) funcIdx = resolveFunc(s, initName);
+		funcIdx = resolveClassInit(s, parent);
 	}
 	const thisReg = s.receiverReg;
 	if (funcIdx < 0 || thisReg < 0) {
@@ -1782,10 +1781,7 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	if (newCallee.kind == NodeKind.Identifier) {
 		const classId = newCallee.data as IdentifierData;
 		const sym = newCallee.resolvedSym;
-		const ctorName = (sym != null ? sym.name : classId.name) + "_new";
-		let funcIdx = s.scopedFunctions && sym != null && sym.modulePath != ""
-			? resolveFunc(s, sym.modulePath + ":" + ctorName)
-			: resolveFunc(s, ctorName);
+		let funcIdx = sym != null ? resolveConstructor(s, sym) : -1;
 		if (funcIdx < 0 && sym != null) funcIdx = callRaiserOnDemand(sym);
 		if (funcIdx >= 0) {
 			const knownCtorless = sym != null && !sym.symFlags.has(SymbolFlag.HasConstructor);

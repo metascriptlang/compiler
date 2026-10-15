@@ -9,6 +9,7 @@ import { RaiserValue, RaiserClassType, raiserInt, raiserString, raiserNil } from
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
+import { placedInstanceOf } from "../../checker/instantiate";
 
 // --- Bytecode-compiler error queue ---
 // The expression/statement compilers used to silently emit LoadConst nil
@@ -90,8 +91,17 @@ export interface RaiserFuncEntry {
 }
 
 export interface RaiserFuncMap {
+	symbolIndices: HashMap<Symbol, int32>;
+	ctorIndices: HashMap<Symbol, int32>;
+	initIndices: HashMap<Symbol, int32>;
+}
+
+export interface RaiserEnumMap {
 	items: RaiserFuncEntry[];
-	symbolIndices: HashMap<Symbol, int32> | null;
+}
+
+export function createFuncMap(): RaiserFuncMap {
+	return { symbolIndices: new HashMap<Symbol, int32>(), ctorIndices: new HashMap<Symbol, int32>(), initIndices: new HashMap<Symbol, int32>() };
 }
 
 export interface RaiserGlobalEntry {
@@ -104,20 +114,7 @@ export interface RaiserGlobalMap {
 	items: RaiserGlobalEntry[];
 }
 
-// --- Builtin registry ---
-// Maps builtin function names to their function indices in the module.
-
-export interface RaiserBuiltinEntry {
-	name: string;
-	funcIdx: int32;
-}
-
-export interface RaiserBuiltinMap {
-	items: RaiserBuiltinEntry[];
-}
-
 // --- Compiler state ---
-// Enum tracking reuses RaiserFuncMap: entries encoded as "EnumName.MemberName" → index.
 
 export interface RaiserCompState {
 	code: RaiserInstruction[];
@@ -133,13 +130,11 @@ export interface RaiserCompState {
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
-	enumMap: RaiserFuncMap;
-	builtins: RaiserBuiltinMap;
+	enumMap: RaiserEnumMap;
 	copyTypes: Type[];
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;
-	scopedFunctions: boolean;
 	receiverReg: int32;
 }
 
@@ -150,21 +145,10 @@ export function createCompState(): RaiserCompState {
 	const locals: RaiserLocals = { items: localItems };
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
-	const funcEntries: RaiserFuncEntry[] = [];
-	const funcMap: RaiserFuncMap = { items: funcEntries, symbolIndices: null };
 	const enumItems: RaiserFuncEntry[] = [];
-	const enumMap: RaiserFuncMap = { items: enumItems, symbolIndices: null };
-	const builtinItems: RaiserBuiltinEntry[] = [];
-	const builtins: RaiserBuiltinMap = { items: builtinItems };
+	const enumMap: RaiserEnumMap = { items: enumItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, scopedFunctions: false, receiverReg: -1 };
-}
-
-// Overloads share module and name and differ by the declaration-time disamb,
-// the same key C mangles routine names with.
-export function routineKey(sym: Symbol): string {
-	const name = sym.name;
-	return sym.modulePath + ":" + name + "#" + sym.disamb;
+		funcMap: createFuncMap(), enumMap, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1 };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -258,7 +242,7 @@ export function declareLocal(s: RaiserCompState, sym: Symbol, reg: int32, isStri
 }
 
 export function declaredSymbol(node: Node, name: string): Symbol {
-	if (node.resolvedSym == null) throw new Error(`internal: the Raiser local '${name}' reached codegen without a symbol`);
+	if (node.resolvedSym == null) throw new Error(`internal: '${name}' reached Raiser codegen without a symbol`);
 	return node.resolvedSym!;
 }
 
@@ -371,45 +355,22 @@ export function clearRaiserFuncDemand(): void {
 	_raiserFuncDemandFn = (_idx: int32): void => {};
 }
 
-export function registerFunc(s: RaiserCompState, name: string, index: int32): void {
-	const entry: RaiserFuncEntry = { name, index };
-	s.funcMap.items.push(entry);
+function demandIndex(index: int32 | null): int32 {
+	if (index == null) return -1;
+	_raiserFuncDemandFn(index);
+	return index;
 }
 
-export function resolveFunc(s: RaiserCompState, name: string): int32 {
-	for (let i = s.funcMap.items.length - 1; i >= 0; i = i - 1) {
-		if (s.funcMap.items[i].name == name) {
-			_raiserFuncDemandFn(s.funcMap.items[i].index);
-			return s.funcMap.items[i].index;
-		}
-	}
-	return -1;
+export function resolveRoutine(s: RaiserCompState, sym: Symbol | null): int32 {
+	return sym != null && isRoutineSym(sym) ? demandIndex(s.funcMap.symbolIndices.get(placedInstanceOf(sym))) : -1;
 }
 
-export function resolveRoutine(s: RaiserCompState, sym: Symbol | null, name: string): int32 {
-	if (sym != null && isRoutineSym(sym)) {
-		if (s.funcMap.symbolIndices != null) {
-			const index = s.funcMap.symbolIndices.get(sym);
-			return index != null ? index : -1;
-		}
-		if (s.scopedFunctions && sym.modulePath != "") {
-			const exact = resolveFunc(s, routineKey(sym));
-			if (exact >= 0) return exact;
-			return resolveFunc(s, sym.modulePath + ":" + sym.name);
-		}
-		const exact = resolveFunc(s, routineKey(sym));
-		if (exact >= 0) return exact;
-		const byName = resolveFunc(s, sym.name);
-		return byName >= 0 && compiledForAnotherRoutine(s, byName) ? -1 : byName;
-	}
-	return resolveFunc(s, name);
+export function resolveConstructor(s: RaiserCompState, classSym: Symbol): int32 {
+	return demandIndex(s.funcMap.ctorIndices.get(placedInstanceOf(classSym)));
 }
 
-function compiledForAnotherRoutine(s: RaiserCompState, index: int32): boolean {
-	for (const item of s.funcMap.items) {
-		if (item.index == index && item.name.indexOf("#") >= 0) return true;
-	}
-	return false;
+export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
+	return demandIndex(s.funcMap.initIndices.get(placedInstanceOf(classSym)));
 }
 
 // --- Enum helpers ---
@@ -446,15 +407,6 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 }
 
 // --- Builtin helpers ---
-
-export function resolveBuiltin(s: RaiserCompState, name: string): int32 {
-	for (let i = 0; i < s.builtins.items.length; i = i + 1) {
-		if (s.builtins.items[i].name == name) {
-			return s.builtins.items[i].funcIdx;
-		}
-	}
-	return -1;
-}
 
 // --- Closure pair helpers ---
 // Emit a closure pair object { fn: funcIdx, env: envReg | -1 } into destReg.

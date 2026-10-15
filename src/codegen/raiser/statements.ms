@@ -6,8 +6,8 @@ import {
 	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData,
-	ExportDeclData, DecoratedDeclData, ImportDeclData,
-	IdentifierData, SwitchStmtData, SwitchCaseData,
+	ExportDeclData, DecoratedDeclData,
+	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
@@ -18,8 +18,8 @@ import {
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
-	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, isRoutineSym, resolveRoutine, addConst,
+	emitClosurePair,
+	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst,
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue } from "./valueCopy";
@@ -67,7 +67,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		NodeKind.DoWhileStmt => { compileDoWhileStmt(s, node); },
 		NodeKind.ForStmt => { compileForStmt(s, node); },
 		NodeKind.ForOfStmt => { compileForOfStmt(s, node); },
-		NodeKind.ImportDecl => { compileImportDecl(s, node); },
+		NodeKind.ImportDecl => {},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
 			if (d.exportedDecl.kind == NodeKind.ExprStmt) {
@@ -141,9 +141,8 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 
 function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
 	if (d.initializer != null) {
-		if (d.initializer.kind == NodeKind.Identifier && (d.initializer.resolvedSym == null || isRoutineSym(d.initializer.resolvedSym))) {
-			const initId = d.initializer.data as IdentifierData;
-			const fIdx = resolveRoutine(s, d.initializer.resolvedSym, initId.name);
+		if (d.initializer.kind == NodeKind.Identifier) {
+			const fIdx = resolveRoutine(s, d.initializer.resolvedSym);
 			if (fIdx >= 0) {
 				const pairReg = emitClosurePair(s, fIdx, -1);
 				const global = resolveGlobal(s, node.resolvedSym);
@@ -353,24 +352,6 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	// Patch exit + break
 	patchJumpTo(s, exitJump, codeLen(s));
 	patchLoopBreaks(s);
-}
-
-// --- Import Declaration ---
-// Binds imported names from builtin modules as local variables.
-// Each imported name is resolved from the builtin registry and bound
-// as a local holding the function index (for later Call resolution).
-
-function compileImportDecl(s: RaiserCompState, node: Node): void {
-	const d = node.data as ImportDeclData;
-	// Bind each imported name — check if it's a registered builtin
-	for (const name of d.importNames) {
-		const funcIdx = resolveBuiltin(s, name);
-		if (funcIdx >= 0) {
-			// Builtin found — register as a named function for direct calls
-			registerFunc(s, name, funcIdx);
-		}
-		// Unknown imports are silently skipped
-	}
 }
 
 // --- Switch Statement ---
