@@ -1,3 +1,5 @@
+// @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
+// @stdout: PASS: spawnOnly
 // PARALOCK scenario — spawn only.
 //
 // Covers: spawn(fn) → affine Promise<T>, parallel fan-out via array

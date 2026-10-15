@@ -1,3 +1,6 @@
+// @skip-js: imports std/net, whose only module is index.cms, so the JS backend cannot resolve it
+// @skip-raiser: imports std/net, whose only module is index.cms, so the Raiser cannot resolve it
+// @stdout: PASS: asyncOnly
 // PARALOCK scenario — async only.
 //
 // Covers: async function definition + composition + await cooperative
