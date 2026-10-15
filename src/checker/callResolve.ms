@@ -3947,6 +3947,13 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			}
 		}
 	}
+	if (extWinnerSym != null && !exts[idx].isStatic && callNode.resolvedSym == extWinnerSym && extWinnerSym.builtinKind == ""
+			&& extWinnerSym.declNode != null && declTakesReceiver(extWinnerSym.declNode) && isGenericRoutine(winnerType, extWinnerSym)) {
+		const recvBindings = createUnifyBindings();
+		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
+		const inst = tryInstantiateGenericCallee(ctx, callNode, winnerType, argTypes, getGenericDeclFlags(extWinnerSym.declNode), null, recvBindings);
+		if (inst != null) winnerType = stripReceiverParam(inst);
+	}
 	const callee = (callNode.data as CallExprData).callee;
 	callee.resolvedSym = callNode.resolvedSym;
 	callee.nodeType = winnerType;
