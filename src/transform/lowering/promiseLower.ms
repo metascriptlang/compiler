@@ -25,6 +25,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
+import { promisePendingAlloc } from "./asyncBridge";
 import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, makeValueShareFn } from "../util";
 
 // ===== Type-tag dispatch =====
@@ -257,21 +258,8 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc);
 	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
+	if (builtinKind == "PromisePending") return promisePendingAlloc(node);
+	if (builtinKind == "PromiseSettle" || builtinKind == "PromiseFail") return node;
 	return null as unknown as Node;
 }
 
-// Rewrite `new Promise(executor)` → `msPromiseNew(executor)`. Invoked by
-// builtinLower's main walker for NewExpr nodes — only fires when the target
-// type is awaitable (Promise<T>).
-export function lowerNewPromise(node: Node): Node {
-	if (node.nodeType != null && isAwaitable(node.nodeType)) {
-		const d = node.data as NewExprData;
-		if (d.newArguments.length == 1) {
-			const loc = node.location;
-			const newCall = makeCall(runtimeRef("msPromiseNew", loc), d.newArguments, loc);
-			newCall.nodeType = node.nodeType;
-			return newCall;
-		}
-	}
-	return node;
-}

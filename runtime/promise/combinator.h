@@ -100,15 +100,6 @@ typedef struct {
  * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
 void* msPromiseAny(msRefArray* futures);
 
-/* ===== new Promise(executor) ===== */
-
-typedef struct {
-	msFuture* future;
-	bool settled;         /* only first resolve/reject takes effect */
-} msPromiseNewEnv;
-
-msFuture* msPromiseNew(msClosure executor);
-
 /* ===== Promise.then / .catch / .finally ===== */
 
 /* Type tags for typed callback dispatch.

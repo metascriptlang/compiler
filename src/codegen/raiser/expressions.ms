@@ -1415,6 +1415,23 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
 	}
+	if (asyncKind == "PromisePending") {
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
+		return dest;
+	}
+	if ((asyncKind == "PromiseSettle" || asyncKind == "PromiseFail") && d.arguments.length >= 1) {
+		const futReg = compileExpr(s, d.arguments[0]);
+		let valueReg = 0;
+		if (d.arguments.length > 1 && (d.arguments[1].nodeType == null || d.arguments[1].nodeType!.kind != TypeKind.Void)) {
+			valueReg = compileExpr(s, d.arguments[1]);
+		} else {
+			valueReg = allocReg(s);
+			emitLoadConst(s, valueReg, raiserNil());
+		}
+		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, 0));
+		return futReg;
+	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
 		// finished is indistinguishable from the value itself.

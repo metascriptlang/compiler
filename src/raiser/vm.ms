@@ -1180,6 +1180,12 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleAwait(vm, inst);
 		} else if (op == RaiserOpcode.Sleep) {
 			vmHandleSleep(vm, inst);
+		} else if (op == RaiserOpcode.FutureNew) {
+			setReg(vm, base + inst.a, raiserFuture(newFuture(vm)));
+		} else if (op == RaiserOpcode.FutureSettle) {
+			futureComplete(vm, getReg(vm, base + inst.a).intVal, getReg(vm, base + inst.b));
+		} else if (op == RaiserOpcode.FutureFail) {
+			futureFail(vm, getReg(vm, base + inst.a).intVal, vmExceptionText(vm, getReg(vm, base + inst.b)), getReg(vm, base + inst.b));
 		} else if (op == RaiserOpcode.Try) {
 			vm.safePoints.push(vm.ip - 1 + getBx(inst));
 		} else if (op == RaiserOpcode.Catch) {

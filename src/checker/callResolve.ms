@@ -759,11 +759,25 @@ function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 	for (const arg of args) { callCheckExpr(ctx, arg, null); }
 }
 
+function isStdPromise(sym: Symbol | null): boolean {
+	return sym != null && sym.modulePath.replaceAll("\\", "/").contains("std/core/promise/");
+}
+
+function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Type | null): Type {
+	const d = node.data as NewExprData;
+	const factory = createNode(NodeKind.Identifier, { name: "promiseFromExecutor" } as NodeData, createToken(TokenKind.Ident, "promiseFromExecutor", d.newCallee.location.line));
+	factory.location = d.newCallee.location;
+	node.kind = NodeKind.CallExpr;
+	node.data = { callee: factory, arguments: d.newArguments, isDirectCall: true, resolvedOverloadIdx: -1 } as NodeData;
+	return checkCallExpr(ctx, node, expected);
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
+		if (id.name == "Promise" && isStdPromise(lookupSymbol(ctx.table, "Promise"))) return checkPromiseConstruction(ctx, node, expected);
 		// new Arc(value): atomic-refcounted shared box. Pointee type is the explicit
 		// <T> if present, else inferred from the single argument. Represented as a
 		// Ref with the IsAtomic flag — codegen boxes the value via msAllocArc.

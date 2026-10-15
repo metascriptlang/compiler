@@ -19,14 +19,14 @@
 //
 // Both cases clear fnFlags so generatorLower skips these functions.
 
-import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, VariableDeclData, Symbol, SymbolKind, IfStmtData, TryCatchStmtData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, VariableDeclData, Symbol, SymbolKind, IfStmtData, TryCatchStmtData, CallExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
 import { mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { TransformContext, mintSym } from "../context";
 import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
-	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
+	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeUnary, makeWhile, makeBool, makeNumber, makeString,
 	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, runtimeRef,
 	isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
@@ -194,6 +194,47 @@ function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promis
 		[makeTypedIdentResolved(retFutSym, promiseType, loc), valueExpr],
 		loc,
 	), loc)];
+}
+
+export function promisePendingAlloc(node: Node): Node {
+	return makeRetFutAlloc(awaitedType(node.nodeType), node.location);
+}
+
+function futurePending(futSym: Symbol, promiseType: Type, loc: SourceLocation): Node {
+	const pending = makeUnary("!", makeCall(runtimeRef("msFutureFinished", loc), [makeTypedIdentResolved(futSym, promiseType, loc)], loc), loc);
+	pending.nodeType = booleanType();
+	return pending;
+}
+
+export function promiseSettleStmts(call: Node, ctx: TransformContext): Node {
+	const cd = call.data as CallExprData;
+	const loc = call.location;
+	const promise = cd.arguments[0];
+	const promiseType = promise.nodeType!;
+	const inner = awaitedType(promiseType);
+	const isVoid = inner == null || inner.kind == TypeKind.Void || cd.arguments.length < 2;
+	const futSym = mintSym(ctx, SymbolKind.Variable, "$settled", promiseType);
+	const futDecl = makeVarDecl(futSym.name, promise, DeclKind.Const, loc);
+	futDecl.nodeType = promiseType;
+	futDecl.resolvedSym = futSym;
+	const value = isVoid ? null : cd.arguments[1];
+	const complete = makeBlock(makeFutureCompleteStmts(value, isVoid, promiseType, inner, loc, futSym, ctx), loc);
+	return makeBlock([futDecl, makeIf(futurePending(futSym, promiseType, loc), complete, null, loc)], loc);
+}
+
+export function promiseFailStmts(call: Node, ctx: TransformContext): Node {
+	const cd = call.data as CallExprData;
+	const loc = call.location;
+	const promiseType = cd.arguments[0].nodeType!;
+	const futSym = mintSym(ctx, SymbolKind.Variable, "$failed", promiseType);
+	const futDecl = makeVarDecl(futSym.name, cd.arguments[0], DeclKind.Const, loc);
+	futDecl.nodeType = promiseType;
+	futDecl.resolvedSym = futSym;
+	const reason = cd.arguments[1];
+	const pending = futurePending(futSym, promiseType, loc);
+	const owned = makeExprStmt(makeCall(runtimeRef("msIncref", loc), [reason], loc), loc);
+	const fail = makeExprStmt(makeCall(runtimeRef("msFutureFail", loc), [makeTypedIdentResolved(futSym, promiseType, loc), reason], loc), loc);
+	return makeBlock([futDecl, makeIf(pending, makeBlock([owned, fail], loc), null, loc)], loc);
 }
 
 // pendingFinallies: outer→inner finally bodies of every SPLIT try the return
