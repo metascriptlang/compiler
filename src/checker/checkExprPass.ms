@@ -591,6 +591,9 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 
 function checkNumberLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
+	if (node.flags.has(NodeFlag.Folded) && expectedType != null && (expectedType.kind == TypeKind.Char || expectedType.kind == TypeKind.Enum)) {
+		node.nodeType = expectedType; return;
+	}
 	reportLiteralRange(ctx, node);
 	if (expectedType != null && isIntegerType(expectedType)) {
 		if (literalFitsInType(node, expectedType, false)) {
@@ -737,6 +740,7 @@ function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type 
 	node.resolvedSym = null;
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
+	if (!hoists) keepComptimeOrdinalType(node, staticType);
 	const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
 		|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
 		? expectedType : staticType;
@@ -3464,7 +3468,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer } from "./instantiate";
-import { anyArgIsParametric, keepFoldedType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
+import { anyArgIsParametric, keepFoldedType, keepComptimeOrdinalType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);

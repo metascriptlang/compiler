@@ -1010,11 +1010,19 @@ export function integerLiteralText(d: NumberLiteralData): string {
 	return magnitudePast2p63 ? uint64ToDecimal(d.intVal as uint64) : int64ToDecimal(d.intVal);
 }
 
+function int64LiteralFits(d: NumberLiteralData, negated: boolean): boolean {
+	const negatesToMin = negated && isInt64Min(d.intVal);
+	if (d.value < 0) return !negatesToMin;
+	const magnitudeReached2p63 = d.intVal < 0;
+	return !magnitudeReached2p63 || negatesToMin;
+}
+
 // Nim splits this in two. A BIT-PATTERN literal may fill the whole UNSIGNED
 // width of its target and still be legal — `0x80` as int8 is -128, deliberately
 // (lexer.nim:494-509). A DECIMAL literal is held to the target's SIGNED range
-// (lexer.nim:536-548). `negated` is the unary minus the caller folded in: the
-// token itself is always a magnitude, because the lexer never eats the sign.
+// (lexer.nim:536-548). `negated` is the unary minus the caller folded in: a
+// parsed token is a magnitude, because the lexer never eats the sign, while a
+// literal built by compile-time evaluation or a macro carries its sign in `value`.
 export function literalFitsInType(node: Node, target: Type, negated: boolean): boolean {
 	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) {
 		return literalFitsInType(node, target.typeReturn, negated);
@@ -1040,14 +1048,11 @@ export function literalFitsInType(node: Node, target: Type, negated: boolean): b
 		TypeKind.Int8   => v >= -128 && v <= 127,
 		TypeKind.Int16  => v >= -32768 && v <= 32767,
 		TypeKind.Int32  => v >= -2147483648 && v <= 2147483647,
-		// Past 2^53 the double cannot answer this, so the magnitude is read off
-		// intVal: a negative bit pattern means the magnitude reached 2^63, which
-		// only a negated literal may do, and only exactly.
-		TypeKind.Int64  => d.intVal >= 0 || (negated && isInt64Min(d.intVal)),
+		TypeKind.Int64  => int64LiteralFits(d, negated),
 		TypeKind.Uint8  => v >= 0 && v <= 255,
 		TypeKind.Uint16 => v >= 0 && v <= 65535,
 		TypeKind.Uint32 => v >= 0 && v <= 4294967295,
-		TypeKind.Uint64 => !negated || mag == 0,
+		TypeKind.Uint64 => v >= 0,
 		_ => false,
 	};
 }
@@ -1059,7 +1064,9 @@ export function wideOperandLiteralSlot(operand: Node): Type | null {
 }
 
 export function intLiteralExactInFloat(lit: Node, target: Type): boolean {
-	return intExactInMantissa((lit.data as NumberLiteralData).intVal as uint64, mantissaBitsOf(target));
+	const d = lit.data as NumberLiteralData;
+	const bits = d.intVal as uint64;
+	return intExactInMantissa(d.value < 0 ? 0 - bits : bits, mantissaBitsOf(target));
 }
 
 export function literalAdoptsFloat32(lit: Node): boolean {

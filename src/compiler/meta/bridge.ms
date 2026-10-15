@@ -62,7 +62,8 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
+import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
+import { isUnsignedIntegerType } from "../../checker/compat";
 import { hasFlag, isFrameValue, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { collectDeclaredNames } from "../../checker/instantiate";
@@ -87,6 +88,32 @@ export function mkNumber(val: number, loc: SourceLocation): Node {
 
 function mkInt(val: int64, loc: SourceLocation): Node {
 	return createNode(NodeKind.NumberLiteral, { value: val as number, isFloat: false, intVal: val }, synthToken(loc));
+}
+
+function mkUnsigned(bits: int64, loc: SourceLocation): Node {
+	return createNode(NodeKind.NumberLiteral, { value: (bits as uint64) as number, isFloat: false, intVal: bits }, synthToken(loc));
+}
+
+function mkFloat(val: number, loc: SourceLocation): Node {
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: true, intVal: 0 }, synthToken(loc));
+}
+
+function materialType(t: Type | null): Type | null {
+	const bare = skipModifier(t);
+	if (bare == null) return null;
+	return peelToRepr(unwrapRefBase(isMaybeType(bare) ? unwrapMaybeType(bare) : bare));
+}
+
+function intValueToNode(bits: int64, t: Type | null, loc: SourceLocation): Node {
+	const slot = materialType(t);
+	if (slot == null) return mkInt(bits, loc);
+	if (isFloatType(slot) || slot.kind == TypeKind.Number) return mkFloat(bits as number, loc);
+	return isUnsignedIntegerType(slot) ? mkUnsigned(bits, loc) : mkInt(bits, loc);
+}
+
+function elementTypeOf(t: Type | null): Type | null {
+	const slot = materialType(t);
+	return slot != null && (slot.kind == TypeKind.Array || slot.kind == TypeKind.SizedArray) ? slot.typeReturn : null;
 }
 
 export function mkString(val: string, loc: SourceLocation): Node {
@@ -746,9 +773,15 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === Literals ===
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
-			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(literalBits(d));
-			heapObjectSetField(objHeap, handle, "value", v);
-			if (!d.isFloat) heapObjectSetField(objHeap, handle, "intVal", v);
+			if (d.isFloat) {
+				heapObjectSetField(objHeap, handle, "value", raiserFloat(d.value));
+			} else {
+				const bits = literalBits(d);
+				const magnitudePast2p63 = bits < 0 && d.value > 0;
+				heapObjectSetField(objHeap, handle, "value", magnitudePast2p63 ? raiserFloat(d.value) : raiserInt(bits));
+				if (magnitudePast2p63) setBool(objHeap, handle, "isFloat", false);
+				heapObjectSetField(objHeap, handle, "intVal", raiserInt(bits));
+			}
 			setBool(objHeap, handle, "isBitPattern", d.isBitPattern);
 			setStr(objHeap, handle, "outOfRangeText", d.outOfRangeText);
 		},
@@ -1505,9 +1538,13 @@ function gensymNames(objHeap: RaiserObjectHeap, h: int64, names: string[]): stri
 }
 
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
+	return valueToTypedNode(val, null, objHeap, arrHeap, fallbackLoc);
+}
+
+export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
-		RaiserValueKind.Int => mkInt(val.intVal, fallbackLoc),
-		RaiserValueKind.Float => mkNumber(val.floatVal, fallbackLoc),
+		RaiserValueKind.Int => intValueToNode(val.intVal, t, fallbackLoc),
+		RaiserValueKind.Float => mkFloat(val.floatVal, fallbackLoc),
 		RaiserValueKind.Bool => mkBool(val.intVal != 0, fallbackLoc),
 		RaiserValueKind.String => mkString(val.strVal, fallbackLoc),
 		RaiserValueKind.Nil => mkNull(fallbackLoc),
@@ -1518,7 +1555,7 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 			let i = 0;
 			while (i < len) {
 				const elem = heapArrayGet(arrHeap, handle, i);
-				elements.push(valueToNode(elem, objHeap, arrHeap, fallbackLoc));
+				elements.push(valueToTypedNode(elem, elementTypeOf(t), objHeap, arrHeap, fallbackLoc));
 				i = i + 1;
 			}
 			return createNodeAt(NodeKind.ArrayLiteral, { elements }, fallbackLoc);
@@ -1556,19 +1593,20 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 				return out;
 			}
 			// No "kind" field — fall back to ObjectLiteral
-			return deserializeObjectLiteral(handle, objHeap, arrHeap, fallbackLoc);
+			return deserializeObjectLiteral(handle, t, objHeap, arrHeap, fallbackLoc);
 		},
 		_ => mkNull(fallbackLoc),
 	};
 }
 
-function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
+function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
 	const obj = objHeap.objects[handle];
+	const record = materialType(shape);
 	const keys: string[] = [];
 	const values: Node[] = [];
 	for (const field of obj.fields) {
 		keys.push(field.name);
-		values.push(valueToNode(field.value, objHeap, arrHeap, loc));
+		values.push(valueToTypedNode(field.value, record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, field.name) : null, objHeap, arrHeap, loc));
 	}
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
@@ -2355,6 +2393,18 @@ test "round-trip NumberLiteral keeps an integer past 2^53 exact" {
 	const d = back.data as NumberLiteralData;
 	assert !d.isFloat;
 	assert d.intVal == 9007199254740993;
+}
+
+test "round-trip NumberLiteral keeps an unsigned integer past 2^63 positive" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	for (const bits of [-9223372036854775807 - 1, -1] as int64[]) {
+		const orig = createNode(NodeKind.NumberLiteral, { value: (bits as uint64) as number, isFloat: false, intVal: bits }, synthToken(makeLoc(1, 0)));
+		const d = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, orig.location).data as NumberLiteralData;
+		assert !d.isFloat;
+		assert d.value > 0 && d.intVal == bits, `${d.value} ${d.intVal}`;
+	}
+	assert takeWireRefusals().length == 0;
 }
 
 test "round-trip NumberLiteral keeps an integral float a float" {
