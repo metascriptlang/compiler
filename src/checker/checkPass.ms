@@ -45,7 +45,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./tem
 import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
+import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -693,6 +693,14 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
+	const hoistedOnDemand = _bindingsCheckedOnDemand.get(node);
+	if (hoistedOnDemand != null) {
+		_bindingsCheckedOnDemand.delete(node);
+		for (const h of hoistedOnDemand) ctx.pendingHoisted.push(h);
+		varDecl(ctx.initTracker, d.declName);
+		markInitialized(ctx.initTracker, d.declName);
+		return;
+	}
 	if (isComptimeNodeAliasDecl(d)) {
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
 		checkExpr(ctx, d.initializer, null);
@@ -731,6 +739,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// semProcAux sets s.typ from semParamList before the body is analysed).
 	// Restricted to ArrowFunction/FunctionExpr so `const x = x + 1` keeps TDZ.
 	let preRegisteredSelfRefSym: Symbol | null = null;
+	let typedBySignature = false;
 	if (d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrowFunction
 				|| d.initializer.kind == NodeKind.FunctionExpr)) {
@@ -741,16 +750,19 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			defineOrError(ctx, preRegisteredSelfRefSym, node);
 		} else if (selfRefType != null && isUnresolvedType(hoisted.symbolType)) {
 			hoisted.symbolType = selfRefType;
+			typedBySignature = true;
 		}
 	}
 	const forward = lookupLocal(ctx.table, d.declName);
 	const forwardLocal = forward != null && forward.declNode == node && _forwardLocals.has(forward) ? forward : null;
-	if (forwardLocal != null) _routinesInFlight.push(forwardLocal);
+	const binding = forward != null && forward.declNode == node && hasFlag(forward, SymbolFlag.Global) ? forward : null;
+	if (binding != null) binding.state = SymbolState.Checking;
+	const typing = forwardLocal != null ? forwardLocal
+		: binding != null && d.declType == "" && !typedBySignature ? binding : null;
+	if (typing != null) _routinesInFlight.push(typing);
 	checkExpr(ctx, d.initializer, declType);
-	if (forwardLocal != null) {
-		_routinesInFlight.pop();
-		_forwardLocals.delete(forwardLocal);
-	}
+	if (typing != null) _routinesInFlight.pop();
+	if (forwardLocal != null) _forwardLocals.delete(forwardLocal);
 	if (ctx.targetOs == "solana" && d.declKind == DeclKind.Const && d.initializer != null
 			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
 		foldUserOperatorConstant(ctx, d.initializer, declType);
@@ -830,6 +842,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		checkStaticStorageDecl(ctx, node, d);
 	}
 	refuseStoredView(ctx, node, d, varType);
+	if (binding != null) binding.state = SymbolState.Checked;
 	// `let x;` with no initializer → NOT marked → will warn on use
 }
 
@@ -1116,6 +1129,7 @@ function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, f
 
 let _routinesInFlight: Symbol[] = [];
 let _methodsCheckedOnDemand: HashSet<Node> = new HashSet<Node>();
+let _bindingsCheckedOnDemand: HashMap<Node, Node[]> = new HashMap<Node, Node[]>();
 let _discardedInFlightCalls: DiscardedCall[] = [];
 
 interface DiscardedCall {
@@ -1179,7 +1193,7 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	if (at >= 0) {
 		const discarded = discardedCall(ctx, read);
 		if (discarded != null) _discardedInFlightCalls.push({ call: discarded, sym });
-		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read);
+		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read, "the return type of");
 		else if (!local && ctx.currentFunction == sym) readOwnReturn(ctx, sym, read);
 		return;
 	}
@@ -1257,14 +1271,42 @@ function settleDiscardedCalls(sym: Symbol): void {
 	_discardedInFlightCalls.shrink(kept);
 }
 
-function refuseInferenceCycle(ctx: CheckerContext, at: number, read: Node): void {
+function refuseInferenceCycle(ctx: CheckerContext, at: number, read: Node, what: string): void {
 	const head = routineDisplayName(ctx, _routinesInFlight[at]);
 	const chain: string[] = [];
 	for (let i = at; i < _routinesInFlight.length; i += 1) chain.push(routineDisplayName(ctx, _routinesInFlight[i]));
 	chain.push(head);
 	const through = chain.slice(1, chain.length - 1).map((n: string): string => "'" + n + "'").join(", ");
-	addError(ctx, `cannot infer the return type of '${head}': ${through} ${chain.length > 3 ? "read" : "reads"} it while '${head}' is still being checked (${chain.join(" -> ")}); annotate the return type of '${head}'`,
+	addError(ctx, `cannot infer ${what} '${head}': ${through} ${chain.length > 3 ? "read" : "reads"} it while '${head}' is still being checked (${chain.join(" -> ")}); annotate ${what} '${head}'`,
 		read.location.line, read.location.column);
+}
+
+function demandBindingType(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl || decl.resolvedSym != sym) return;
+	const d = decl.data as VariableDeclData;
+	if (d.declType != "" || d.initializer == null) return;
+	if (sym.state == SymbolState.Checking) {
+		const at = _routinesInFlight.indexOf(sym);
+		if (at < 0) return;
+		if (at == _routinesInFlight.length - 1) {
+			addError(ctx, `cannot infer the type of '${sym.name}': its own initializer reads it; annotate the type of '${sym.name}'`, read.location.line, read.location.column);
+		} else {
+			refuseInferenceCycle(ctx, at, read, "the type of");
+		}
+		return;
+	}
+	if (ctx.decoratorsPending) return;
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx, sym);
+	if (sym.modulePath != "" && bodyCtx.modulePath != sym.modulePath) return;
+	const top = moduleScopeOf(bodyCtx);
+	if (top.symbols.get(sym.nameId) != sym) return;
+	const saved = enterDeclarationState(bodyCtx, top);
+	const hoistMark = bodyCtx.pendingHoisted.length;
+	checkStmt(bodyCtx, decl);
+	_bindingsCheckedOnDemand.set(decl, bodyCtx.pendingHoisted.slice(hoistMark, bodyCtx.pendingHoisted.length));
+	bodyCtx.pendingHoisted.shrink(hoistMark);
+	leaveDeclarationState(bodyCtx, saved);
 }
 
 function routineDisplayName(ctx: CheckerContext, sym: Symbol): string {
@@ -3916,6 +3958,7 @@ export function checkProgramWithRegistryCancellable(
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
+registerDemandBinding(demandBindingType);
 registerSelfReadType(selfReadType);
 registerLaterDeclarationNote(laterDeclarationNote);
 

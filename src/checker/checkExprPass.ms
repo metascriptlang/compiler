@@ -12,7 +12,7 @@ import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
-import { callCheckStmt, callDemandReturn, callLaterDeclarationNote, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
+import { callCheckStmt, callDemandBinding, callDemandReturn, callLaterDeclarationNote, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef, isIterator, getIteratorYieldType } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
@@ -2508,6 +2508,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	markUsedIn(ctx, sym);
 	if (sym.symbolKind == SymbolKind.Function || (sym.symbolKind == SymbolKind.Variable && sym.symbolType != null
 			&& sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn))) callDemandReturn(ctx, sym, node);
+	if (sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Global) && sym.state != SymbolState.Checked) callDemandBinding(ctx, sym, node);
 	if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
 	if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 	if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr

@@ -15,7 +15,7 @@ type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
 type ApplyModulePassesFn = (ctx: CheckerContext, program: Node) => void;
 type DecoratorDefersFn = (ctx: CheckerContext, stmt: Node) => boolean;
 type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
-type DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
+type DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
 type SelfReadTypeFn = (callee: Node) => Type | null;
 type LaterDeclarationNoteFn = (name: string) => string;
 
@@ -50,7 +50,9 @@ let decoratorDefersFn: DecoratorDefersFn = (ctx: CheckerContext, stmt: Node): bo
 let applyDecoratedStmtFn: ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]): Node => {
 	return stmt;
 };
-let demandReturnFn: DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+let demandReturnFn: DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+};
+let demandBindingFn: DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
 };
 let selfReadTypeFn: SelfReadTypeFn = (callee: Node): Type | null => {
 	return null;
@@ -151,8 +153,16 @@ export function callDemandReturn(ctx: CheckerContext, sym: Symbol, read: Node): 
 	demandReturnFn(ctx, sym, read);
 }
 
-export function registerDemandReturn(fn: DemandReturnFn): void {
+export function registerDemandReturn(fn: DemandFn): void {
 	demandReturnFn = fn;
+}
+
+export function callDemandBinding(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	demandBindingFn(ctx, sym, read);
+}
+
+export function registerDemandBinding(fn: DemandFn): void {
+	demandBindingFn = fn;
 }
 
 export function callSelfReadType(callee: Node): Type | null {
