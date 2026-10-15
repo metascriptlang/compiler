@@ -2078,6 +2078,18 @@ export function distinctCallTarget(t: Type | null): Type | null {
 	return body != null && body.kind == TypeKind.Function ? body : null;
 }
 
+export function distinctNumericBase(t: Type | null): Type | null {
+	let cur = t;
+	let depth = 0;
+	let body = distinctBody(cur);
+	while (body != null && depth < PEEL_MAX_DEPTH) {
+		cur = body;
+		body = distinctBody(cur);
+		depth += 1;
+	}
+	return cur != t && isNumeric(cur) ? cur : null;
+}
+
 export function distinctWidenBody(t: Type | null): Type | null {
 	if (t == null) return null;
 	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;

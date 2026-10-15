@@ -140,6 +140,7 @@ import "./relationalOperands";
 import "./typeNameValue";
 import "./routineInterface";
 import "./enumConversionRange";
+import "./distinctConversionRange";
 import "./deferBlockCheck";
 import "./forOfPattern";
 import "./viewBorrows";

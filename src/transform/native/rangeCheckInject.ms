@@ -7,7 +7,7 @@
 // get wrapped with a runtime range check call.
 
 import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
-import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive } from "../../checker/types";
+import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive, distinctNumericBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
@@ -181,6 +181,12 @@ function checkedEnumSource(ctx: TransformContext, expr: Node, dest: Type): Node 
 	return call;
 }
 
+function checkedDistinctSource(ctx: TransformContext, expr: Node, base: Type): Node {
+	const checked = checkedConv(ctx, expr, expr.nodeType, base, expr);
+	if (checked != expr) checked.nodeType = base;
+	return checked;
+}
+
 function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
@@ -188,6 +194,11 @@ function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 		if (node.nodeType == null) return node;
 		if (node.nodeType.kind == TypeKind.Enum && d.asExpr != null) {
 			d.asExpr = checkedEnumSource(ctx, d.asExpr, node.nodeType);
+			return node;
+		}
+		const base = distinctNumericBase(node.nodeType);
+		if (base != null && d.asExpr != null) {
+			d.asExpr = checkedDistinctSource(ctx, d.asExpr, base);
 			return node;
 		}
 		return checkedConv(ctx, d.asExpr, src, node.nodeType, node);

@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, TypeAssertionData, HiddenStdConvData, BinaryE
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
-import { createPrimitive, isWideningInt64Conv, peelToRepr } from "../../checker/types";
+import { createPrimitive, isWideningInt64Conv, peelToRepr, distinctNumericBase } from "../../checker/types";
 import { isFloatKind, readsUnionMember } from "./bigIntJS";
 import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
@@ -30,7 +30,7 @@ function checkConvRange(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		if (d.asExpr == null || node.nodeType == null) return node;
-		d.asExpr = checkedSource(d.asExpr, node.nodeType, ctx);
+		d.asExpr = checkedSource(d.asExpr, distinctNumericBase(node.nodeType) ?? node.nodeType, ctx);
 		return node;
 	}
 	if (node.kind == NodeKind.HiddenStdConv) {
@@ -53,7 +53,7 @@ function materializeIntConv(node: Node): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		if (node.nodeType == null || d.asType == "!") return node;
-		const kind = node.nodeType.kind;
+		const kind = (distinctNumericBase(node.nodeType) ?? node.nodeType).kind;
 		if (node.flags.has(NodeFlag.ConvCheck)) return isIntConvKind(kind) && !readsUnionMember(d) ? truncateTo(node, kind, node.location) : node;
 		if (kind == TypeKind.Char) return d.asExpr != null && isByteSource(d.asExpr.nodeType) ? truncateTo(d.asExpr, kind, node.location) : node;
 		if (!isIntConvKind(kind)) {

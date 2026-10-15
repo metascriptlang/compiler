@@ -14,7 +14,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { callCheckStmt, callDemandBinding, callDemandReturn, callUndefinedVariableMessage, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { checkArcPointeeSendable } from "./sendable";
-import { isLockedRef, isIterator, getIteratorYieldType } from "./types";
+import { isLockedRef, isIterator, getIteratorYieldType, distinctNumericBase } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -1946,13 +1946,14 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	// (not an anonymous struct that codegen then can't cast to Foo).
 	// `as unknown` is a type-system escape hatch — don't use it as context.
 	const asFnBody = distinctCallTarget(targetType);
-	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : targetType) : null;
+	const convTarget = distinctNumericBase(targetType) ?? targetType;
+	const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : convTarget) : null;
 	const operandMark = ctx.errors.length;
 	const prevConversion = ctx.conversionOperand;
-	ctx.conversionOperand = isNumeric(targetType) && targetType.kind != TypeKind.Char ? d.asExpr : null as unknown as Node;
+	ctx.conversionOperand = isNumeric(convTarget) && convTarget.kind != TypeKind.Char ? d.asExpr : null as unknown as Node;
 	checkExpr(ctx, d.asExpr, innerExpected);
 	ctx.conversionOperand = prevConversion;
-	reportConstCast(ctx, d.asExpr, targetType);
+	reportConstCast(ctx, d.asExpr, convTarget);
 	let srcType = d.asExpr.nodeType;
 	const operandType = srcType;
 	const operandNode = d.asExpr;
