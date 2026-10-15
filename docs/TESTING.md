@@ -171,6 +171,8 @@ lines), and ALL determinism obligations live on the program:
     `/usr/bin/time -l`, asserting exit + signal + stdout + peak RSS (the
     former native/ tier semantics).
   - `// @stdout: <substr>` — merged output must CONTAIN the substring.
+    Every `@stdout` line of a program is checked and each missing one is named
+    (`guard/corpusStdoutEveryLine.ms`; before it, only the last line was).
     Enforced on every lane (RSS, SAN **and** parity). Byte-compare across lanes stays the
     primary assertion, so most programs still want no `@stdout`; reach for
     it when the lanes cannot judge correctness on their own, i.e. when
