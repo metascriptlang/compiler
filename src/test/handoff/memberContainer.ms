@@ -23,11 +23,14 @@ function memberModuleOf(boxModule: string): string {
 	return found[0].resolvedSym.modulePath;
 }
 
-function entryErrors(entrySource: string): string[] {
+const boxModule = "export class Box { size: int32 = 3; }\nexport function make(): Box { return new Box(); }\n";
+const promiseModule = "export function wait(): Promise<int32> { return Promise.resolve(7); }\n";
+
+function entryErrors(entrySource: string, libSource: string): string[] {
 	resetBuildState();
 	const entries: MapEntry[] = [
 		{ entryPath: canonicalModulePath("/memberContainer/a.ms"), entrySource },
-		{ entryPath: canonicalModulePath("/memberContainer/b.ms"), entrySource: "export class Box { size: int32 = 3; }\nexport function make(): Box { return new Box(); }\n" },
+		{ entryPath: canonicalModulePath("/memberContainer/b.ms"), entrySource: libSource },
 	];
 	const graph = loadModuleGraph(entries[0].entryPath, createMapProvider(entries));
 	checkModuleGraph(graph, "");
@@ -55,11 +58,21 @@ test "memberContainer: an interface field names the module of the interface the 
 }
 
 test "memberContainer: a field the value's class lacks is refused, not read from a class in scope spelled the same" {
-	const messages = entryErrors("import { make } from \"./b\";\nclass Box { size: int32 = 1; extra: int32 = 5; }\nconst local = new Box();\nconst n = make().extra + local.size;\n");
+	const messages = entryErrors("import { make } from \"./b\";\nclass Box { size: int32 = 1; extra: int32 = 5; }\nconst local = new Box();\nconst n = make().extra + local.size;\n", boxModule);
 	assert messages.length == 1 && messages[0].contains("'extra'"), messages.join("\n");
 }
 
 test "memberContainer: a field the value's class declares is read with a class in scope spelled the same" {
-	const messages = entryErrors("import { make } from \"./b\";\nclass Box { extra: int32 = 5; }\nconst local = new Box();\nconst n = make().size + local.extra;\n");
+	const messages = entryErrors("import { make } from \"./b\";\nclass Box { extra: int32 = 5; }\nconst local = new Box();\nconst n = make().size + local.extra;\n", boxModule);
+	assert messages.length == 0, messages.join("\n");
+}
+
+test "memberContainer: a field a builtin promise lacks is refused, not read from a module class spelled Promise" {
+	const messages = entryErrors("import { wait } from \"./b\";\nclass Promise { extra: int32 = 5; }\nconst local = new Promise();\nconst n = wait().extra + local.extra;\n", promiseModule);
+	assert messages.length == 1 && messages[0].contains("'extra'"), messages.join("\n");
+}
+
+test "memberContainer: a field the builtin promise declares is read beside a module class spelled Promise" {
+	const messages = entryErrors("import { wait } from \"./b\";\nclass Promise { extra: int32 = 5; }\nconst local = new Promise();\nconst done = wait().finished;\nconst n = local.extra;\n", promiseModule);
 	assert messages.length == 0, messages.join("\n");
 }
