@@ -1981,8 +1981,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		node.kind = NodeKind.NullLiteral;
 		node.data = { nullPlaceholder: true };
-		node.nodeType = targetType;
-		node.flags = node.flags.incl(NodeFlag.Sem);
+		node.flags = node.flags.incl(NodeFlag.Sem).incl(NodeFlag.AssertedNull);
 		node.nodeType = targetType; return;
 	}
 			else if (srcType != null && targetType.kind == TypeKind.Borrow

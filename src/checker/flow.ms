@@ -8,7 +8,7 @@
 // narrowing for let-variables ships in Phase 6.
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, NodeFlag, DeclKind,
 	FlowNode, FlowFlag, FlowList,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
@@ -1218,7 +1218,7 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 
 function assignedValueType(value: Node): Type {
 	const t = value.nodeType!;
-	return value.kind == NodeKind.NullLiteral && isNullableShape([t]) ? nullType() : t;
+	return value.kind == NodeKind.NullLiteral && !value.flags.has(NodeFlag.AssertedNull) && isNullableShape([t]) ? nullType() : t;
 }
 
 function stripHidden(n: Node | null): Node | null {
