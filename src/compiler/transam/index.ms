@@ -47,7 +47,7 @@ import {
 } from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { checkProgramWithRegistryCancellable, preludeContextFor } from "../../checker/checkPass";
+import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule } from "../../checker/checkPass";
 import { registerModuleProgram, lookupModuleProgram } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
@@ -59,7 +59,7 @@ import { ExportRegistry, createExportRegistry, findModuleExports, registerModule
 import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
-import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
+import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../../ast/node";
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
@@ -154,6 +154,12 @@ export class TransAmDb {
 	graph: ModuleGraph | null;                 // loaded graph whose modules this db checks
 	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
 	contexts: HashMap<int32, CheckerContext>;  // check key → checker context
+	bound: HashMap<string, BoundCheck>;         // bound and not finished: in progress, or bound on demand from an import cycle
+}
+
+interface BoundCheck {
+	revision: int32;
+	unit: BoundModule;
 }
 
 function dbTree(db: TransAmDb, key: int32): Node {
@@ -182,6 +188,7 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		graph: null,
 		trees: new HashMap<int32, Node>(),
 		contexts: new HashMap<int32, CheckerContext>(),
+		bound: new HashMap<string, BoundCheck>(),
 	};
 }
 
@@ -558,11 +565,90 @@ function earlyAdoptions(db: TransAmDb, filePath: string, parsed: Node, program: 
 	const parsedStmts = (parsed.data as ProgramData).programStmts;
 	const stmts = (program.data as ProgramData).programStmts;
 	for (let i = 0; i < stmts.length; i += 1) {
-		const sym = early.get(declOfStatement(parsedStmts[i]));
-		if (sym != null) adopted.set(declOfStatement(stmts[i]), sym);
+		const parsedDecl = declOfStatement(parsedStmts[i]);
+		const decl = declOfStatement(stmts[i]);
+		const sym = early.get(parsedDecl);
+		if (sym != null) adopted.set(decl, sym);
+		if (decl.kind != NodeKind.ClassDecl) continue;
+		const parsedBody = (parsedDecl.data as ClassDeclData).classBody;
+		const body = (decl.data as ClassDeclData).classBody;
+		for (let m = 0; m < body.length; m += 1) {
+			const method = early.get(parsedBody[m]);
+			if (method != null) adopted.set(body[m], method);
+		}
 	}
 	return adopted;
 }
+
+function checkMacroDeps(db: TransAmDb, filePath: string, imports: ImportEntry[]): void {
+	for (const ie of imports) {
+		if (ie.sourcePath == "" || ie.sourcePath == filePath) continue;
+		if (db.checkInProgress.has(ie.sourcePath)) continue;
+		const depExports = findModuleExports(db.exportRegistry, ie.sourcePath);
+		if (depExports == null) continue;
+		let depHasMacro = false;
+		for (const es of depExports.symbols) {
+			if (es.sym.symbolKind == SymbolKind.Macro) {
+				depHasMacro = true;
+				break;
+			}
+		}
+		if (depHasMacro) {
+			dbTypeCheck(db, ie.sourcePath);
+		}
+	}
+}
+
+function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
+	const entry = db.bound.get(filePath);
+	return entry != null && entry.revision == db.revision.value ? entry.unit : null;
+}
+
+function dbBindModule(db: TransAmDb, filePath: string, cachedProgram: Node, program: Node, imports: ImportEntry[], startVersion: int32): BoundModule {
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
+	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
+	const mod = graphMod != null ? graphMod : createModule(filePath);
+	if (graphMod == null) {
+		mod.imports = imports;
+		addModule(graph, mod);
+	}
+	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
+	registerModuleProgram(filePath, program);
+	const unit = bindModuleForCheck(
+		program, db.exportRegistry, graph, mod,
+		db.preludeCtx, db.cancelCtx, startVersion,
+		earlyAdoptions(db, filePath, cachedProgram, program),
+		true
+	);
+	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, unit });
+	return unit;
+}
+
+let _checkingDb: TransAmDb | null = null;
+
+function dbBoundModule(modulePath: string): CheckerContext | null {
+	const db = _checkingDb;
+	if (db == null) return null;
+	const fileId = getFileId(db.fileInput, modulePath);
+	if (fileId < 0) return null;
+	const filePath = getFilePath(db.fileInput, fileId);
+	const bound = boundAtRevision(db, filePath);
+	if (bound != null) return bound.ctx;
+	if (db.checkInProgress.has(filePath)) return null;
+	const cachedProgram = dbParse(db, filePath);
+	if (cachedProgram == null) return null;
+	const program = cloneNodeForCheck(cachedProgram);
+	const startVersion = getCancelVersion(db.cancelCtx);
+	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), startVersion);
+	const imports = buildImportEntries(db, filePath, program);
+	db.checkInProgress.add(filePath);
+	checkMacroDeps(db, filePath, imports);
+	const unit = dbBindModule(db, filePath, cachedProgram, program, imports, startVersion);
+	db.checkInProgress.delete(filePath);
+	return unit.ctx;
+}
+
+registerBoundModuleFn(dbBoundModule);
 
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
@@ -584,7 +670,8 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	// typeExpr/typeExprs (resolvePass needs them) and drops nodeType/resolvedSym
 	// so the checker re-populates them fresh.
 	// This replaces the previous double-parse (parseSourceLenient was called twice).
-	const program = cloneNodeForCheck(cachedProgram);
+	const bound = boundAtRevision(db, filePath);
+	const program = bound != null ? bound.program : cloneNodeForCheck(cachedProgram);
 
 	const startVersion = getCancelVersion(db.cancelCtx);
 
@@ -598,22 +685,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	// from dep-order compilation; the db must do it on demand.
 	const imports = buildImportEntries(db, filePath, program);
 	db.checkInProgress.add(filePath);
-	for (const ie of imports) {
-		if (ie.sourcePath == "" || ie.sourcePath == filePath) continue;
-		if (db.checkInProgress.has(ie.sourcePath)) continue;
-		const depExports = findModuleExports(db.exportRegistry, ie.sourcePath);
-		if (depExports == null) continue;
-		let depHasMacro = false;
-		for (const es of depExports.symbols) {
-			if (es.sym.symbolKind == SymbolKind.Macro) {
-				depHasMacro = true;
-				break;
-			}
-		}
-		if (depHasMacro) {
-			dbTypeCheck(db, ie.sourcePath);
-		}
-	}
+	checkMacroDeps(db, filePath, imports);
 
 	pushFrame(db.depStack, key);
 	const pKey = createQueryKey(TaQueryKind.Parse, fileId);
@@ -654,21 +726,12 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		}
 	}
 
-	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
-	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
-	const mod = graphMod != null ? graphMod : createModule(filePath);
-	if (graphMod == null) {
-		mod.imports = imports;
-		addModule(graph, mod);
-	}
-	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
-	registerModuleProgram(filePath, program);
-	const checkerCtx = checkProgramWithRegistryCancellable(
-		program, db.exportRegistry, graph, mod,
-		db.preludeCtx, db.cancelCtx, startVersion,
-		earlyAdoptions(db, filePath, cachedProgram, program),
-		true
-	);
+	const outerDb = _checkingDb;
+	_checkingDb = db;
+	const unit = bound != null ? bound : dbBindModule(db, filePath, cachedProgram, program, imports, startVersion);
+	const checkerCtx = finishModuleCheck(unit);
+	_checkingDb = outerDb;
+	db.bound.delete(filePath);
 
 	// If cancelled, discard frame without caching — partial result not reliable
 	if (checkCancel(db.cancelCtx, startVersion)) {
@@ -679,7 +742,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	db.contexts.set(checkCtxKey(fileId), checkerCtx);
 	updateModuleExports(db.exportRegistry, filePath, collectExports(checkerCtx, filePath));
-	if (graphMod != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
+	if (db.graph != null && findModule(db.graph, filePath) != null) setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
 	db.trees.set(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	inputHashes.push(db.revision.value);
 	const checkHash = checkOutputHash(checkerCtx, inputHashes);

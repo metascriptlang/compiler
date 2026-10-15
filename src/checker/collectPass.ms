@@ -846,7 +846,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		fnType.typeName = builtinKind;
 	}
 	const mangledName = className + "_" + md.methodName;
-	const methodSym = makeSymbol(mangledName, SymbolKind.Function, fnType, false);
+	const methodSym = declSymbol(ctx, member, mangledName, SymbolKind.Function, fnType, false);
 	fnType.sym = methodSym;
 	if (methodNative != "") {
 		methodSym.nativeName = methodNative;
