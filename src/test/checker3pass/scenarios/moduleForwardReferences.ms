@@ -41,6 +41,65 @@ function on(f: () => void): int32 { handlers.push(f); return handlers.length as 
 const id: int32 = on((): void => { console.log(id + 1); });
 `;
 
+const SRC_TOP_LET = `
+console.log(x);
+let x = 5;
+`;
+
+const SRC_TOP_CONST = `
+if (true) { console.log(y); }
+const y: int32 = 5;
+`;
+
+const SRC_LOCAL = `
+function f(): void { console.log(z); let z = 1; }
+`;
+
+const SRC_RUNS_BEFORE = `
+class K { static s: int32 = k; }
+(() => { console.log(u); })();
+for (const e of later) { console.log(e); }
+const k = 1;
+let u = 1;
+const later = [1, 2];
+`;
+
+const SRC_DEFERRED = `
+function g(): int32 { return w; }
+const h = (): int32 => w;
+class K { p: int32 = w; m(): int32 { return w; } }
+(() => { const inner = (): int32 => w; })();
+test "reads later" { assert w == 1; }
+let w = 1;
+`;
+
+test "a module let read before its declaration is refused" {
+	const text = checkOnly(SRC_TOP_LET).errors.join("\n");
+	assert text.contains("Block-scoped variable 'x' used before its declaration"), "a top-level read above its let must be refused: " + text;
+}
+
+test "a module const read in a block before its declaration is refused" {
+	const text = checkOnly(SRC_TOP_CONST).errors.join("\n");
+	assert text.contains("Block-scoped variable 'y' used before its declaration"), "a read in a top-level block above its const must be refused: " + text;
+}
+
+test "a local let read before its declaration in the same body is refused" {
+	const text = checkOnly(SRC_LOCAL).errors.join("\n");
+	assert text.contains("Block-scoped variable 'z' used before its declaration"), "a local read above its let must be refused: " + text;
+}
+
+test "a static initializer, an invoked arrow and a loop header run before the declaration and are refused" {
+	const text = checkOnly(SRC_RUNS_BEFORE).errors.join("\n");
+	assert text.contains("Block-scoped variable 'k' used before its declaration"), "a static initializer read must be refused: " + text;
+	assert text.contains("Block-scoped variable 'u' used before its declaration"), "an invoked arrow read must be refused: " + text;
+	assert text.contains("Block-scoped variable 'later' used before its declaration"), "a loop header read must be refused: " + text;
+}
+
+test "a read inside a function, closure, method, instance initializer or test above the declaration checks" {
+	const result = checkOnly(SRC_DEFERRED);
+	assert result.errors.length == 0, "deferred reads of a later binding must check: " + result.errors.join("\n");
+}
+
 test "a module binding without an annotation read above its declaration has its initializer's type" {
 	const result = checkOnly(SRC_FORWARD);
 	assert result.errors.length == 0, "forward reads of unannotated module bindings must check: " + result.errors.join("\n");
@@ -53,6 +112,7 @@ test "a forward read of an unannotated module binding is checked against its ini
 
 test "a module binding read by its own initializer is refused" {
 	const text = checkOnly(SRC_SELF).errors.join("\n");
+	assert text.contains("Block-scoped variable 'x' used before its declaration"), "a self-read initializer reads before its declaration: " + text;
 	assert text.contains("cannot infer the type of 'x': its own initializer reads it; annotate the type of 'x'"), "a self-read initializer must be refused: " + text;
 }
 
