@@ -114,3 +114,10 @@ test "module const handoff: a float constant converted to an integer folds to it
 	assert foldedInteger("const S: uint64 = 18446744073709549568.0 as uint64; function read(): uint64 { return S; }") == -2048;
 	assert foldedInteger("const F: float32 = 16777217.0 as float32; const S: int32 = F as int32; function read(): int32 { return S; }") == 16777216;
 }
+
+test "module const handoff: a constant converted to char folds to its value" {
+	assert foldedInteger("function read(): char { return 200.9 as char; }") == 200;
+	assert foldedInteger("function read(): char { return (-0.5) as char; }") == 0;
+	assert foldedInteger("const K = 1000; function read(): char { return (K - 900) as char; }") == 100;
+	assert foldedInteger("function read(): int16 { return (200 as char) as int16; }") == 200;
+}

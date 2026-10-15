@@ -101,8 +101,16 @@ function integerAsFloat32(d: NumberLiteralData): number {
 }
 
 function convertedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Node {
-	if (literal.kind == NodeKind.NumberLiteral && t != null && isIntegerType(t) && constHoldsFloat(literal)) return truncatedInteger(literal, t, loc);
+	if (literal.kind == NodeKind.NumberLiteral && t != null && (isIntegerType(t) || t.kind == TypeKind.Char) && constHoldsFloat(literal)) return truncatedInteger(literal, t, loc);
+	if (t != null && t.kind == TypeKind.Char) return byteLiteral(literal, t, loc);
 	return retypedLiteral(literal, t, loc);
+}
+
+function byteLiteral(literal: Node, t: Type, loc: SourceLocation): Node {
+	if (literal.kind != NodeKind.NumberLiteral) return null as unknown as Node;
+	const value = (literal.data as NumberLiteralData).intVal;
+	const unsignedHigh = value < 0 && literal.nodeType != null && isUnsignedIntegerType(literal.nodeType);
+	return !unsignedHigh && value >= 0 && value <= 255 ? makeTypedInteger(value, t, loc) : null as unknown as Node;
 }
 
 function truncatedInteger(literal: Node, t: Type, loc: SourceLocation): Node {
@@ -122,6 +130,7 @@ export function floatTruncatesInto(v: number, t: Type): boolean {
 		TypeKind.Uint16 => v > -1.0 && v < 65536.0,
 		TypeKind.Uint32 => v > -1.0 && v < 4294967296.0,
 		TypeKind.Uint64 => v > -1.0 && v < 18446744073709551616.0,
+		TypeKind.Char   => v > -1.0 && v < 256.0,
 		_ => false,
 	};
 }
@@ -384,7 +393,7 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		},
 		NodeKind.TypeAssertion => {
 			const target = expr.nodeType;
-			if (target == null || !(isIntegerType(target) || isFloatType(target) || target.kind == TypeKind.Number)) return none;
+			if (target == null || !(isIntegerType(target) || isFloatType(target) || target.kind == TypeKind.Number || target.kind == TypeKind.Char)) return none;
 			const asserted = (expr.data as TypeAssertionData).asExpr;
 			const ordinal = isIntegerType(target) ? enumMemberOrdinal(asserted) : -1;
 			if (ordinal >= 0) return makeTypedInteger(wrapToWidth(ordinal as uint64, target), target, expr.location);

@@ -1182,14 +1182,32 @@ function overflowsInt64Here(expr: Node): boolean {
 
 export function fitIntegerConstant(ctx: CheckerContext, expr: Node, exprType: Type | null, formal: Type | null): Node {
 	const none = null as unknown as Node;
-	if (formal == null || exprType == null || !isIntegerType(exprType)) return none;
+	if (formal == null || exprType == null) return none;
 	const slot = isMaybeType(formal) && formal.typeReturn != null ? formal.typeReturn : formal;
-	if (!isIntegerType(slot) || !isFoldedIntegerConstant(expr)) return none;
+	if (slot.kind == TypeKind.Char) return fitCharConstant(ctx, expr, exprType, slot);
+	if (!isIntegerType(exprType) || !isIntegerType(slot) || !isFoldedIntegerConstant(expr)) return none;
 	const exact = exactUntypedInteger(expr, 0);
 	if (exact == null) return none;
 	const value = integerValueOf(exact);
 	if (integerValueFits(value, slot)) return typedIntegerLiteral(value, slot, expr.location);
 	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(slot), expr.location.line, expr.location.column);
+	return wrapInConv(expr, slot);
+}
+
+function fitCharConstant(ctx: CheckerContext, expr: Node, exprType: Type, slot: Type): Node {
+	const folded = foldedNumber(expr);
+	if (folded == null || exprType.kind == TypeKind.Char) return null as unknown as Node;
+	const value = (folded.data as NumberLiteralData).intVal;
+	if (constHoldsFloat(folded)) {
+		addError(ctx, "implicit " + typeDisplayName(exprType) + " → char conversion takes the float " + floatValueText(constFloatValue(folded))
+			+ ", and a float never becomes an integer implicitly — write an explicit 'as char'", expr.location.line, expr.location.column);
+	} else if (constIsUnsignedHigh(folded)) {
+		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to char", expr.location.line, expr.location.column);
+	} else if (!foldedIntFits(value, slot)) {
+		addError(ctx, "cannot convert " + int64ToDecimal(value) + " to char", expr.location.line, expr.location.column);
+	} else {
+		return null as unknown as Node;
+	}
 	return wrapInConv(expr, slot);
 }
 
@@ -1214,6 +1232,7 @@ function foldedIntFits(value: int64, target: Type): boolean {
 		TypeKind.Uint16 => value >= 0 && value <= 65535,
 		TypeKind.Uint32 => value >= 0 && value <= 4294967295,
 		TypeKind.Uint64 => value >= 0,
+		TypeKind.Char   => value >= 0 && value <= 255,
 		_ => false,
 	};
 }
@@ -1297,7 +1316,7 @@ export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): 
 		reportConstEnumCast(ctx, expr, target);
 		return;
 	}
-	if (!isIntegerType(target)) return;
+	if (!isIntegerType(target) && target.kind != TypeKind.Char) return;
 	const folded = constantLiteralOf(expr, 0);
 	if (folded == null || folded.kind != NodeKind.NumberLiteral) return;
 	if (constHoldsFloat(folded)) {
