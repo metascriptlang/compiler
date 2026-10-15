@@ -188,11 +188,17 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 }
 
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
-	if (val >= -9223372036854775808.0 && val < 9223372036854775808.0 && val == (double)(int64_t)val) {
-		msRaiseRangeError((int64_t)val, lo, hi);
-	}
-	fprintf(stderr, "Error: value %.17g not in range %lld .. %lld\n",
-		val, (long long)lo, (long long)hi);
+	msString text = msNumberToString(val);
+	fprintf(stderr, "Error: value %.*s not in range %lld .. %lld\n",
+		(int)text.len, text.p != NULL ? text.p->data : "", (long long)lo, (long long)hi);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+_Noreturn void msRaiseRangeErrorFToU64(double val) {
+	msString text = msNumberToString(val);
+	fprintf(stderr, "Error: value %.*s not in range 0 .. 18446744073709551615\n",
+		(int)text.len, text.p != NULL ? text.p->data : "");
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
