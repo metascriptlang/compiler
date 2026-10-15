@@ -61,3 +61,4 @@ import "./noinlinePragma";
 import "./copiedBodyHeader";
 import "./solanaVaultHost";
 import "./externPattern";
+import "./notCallable";
