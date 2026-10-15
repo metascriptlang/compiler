@@ -14,7 +14,7 @@
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey, pickAtomicAccessor } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor } from "../discDetect";
 
 // Macro: jv must be a JsonValue. Witness expression must be typed `T | null`
 // (e.g., user passes `null as Person | null`). Honest nullable typing — null
@@ -356,6 +356,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			}
 			if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
+				elemIsStruct = namesStruct(elemType);
 			} else if (elemType.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = elemType.typExprTypeName;
@@ -364,7 +365,10 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				}
 			} else if (elemType.kind == NodeKind.TypeGeneric) {
 				const peeled: Node = elemType.typExprArgs[0];
-				if (peeled.kind == NodeKind.TypeObject) {
+				if (namesStruct(peeled)) {
+					elemIsStruct = true;
+					en = peeled.name;
+				} else if (peeled.kind == NodeKind.TypeObject) {
 					elemIsStruct = true;
 					en = peeled.typExprTypeName;
 					if (en == "") {
@@ -932,6 +936,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				elemIsEnum = true;
 			} else if (ec.kind == NodeKind.Identifier) {
 				en = ec.name;
+				elemIsStruct = namesStruct(ec);
 			} else if (ec.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 			} else {

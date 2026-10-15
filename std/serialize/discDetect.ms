@@ -22,7 +22,11 @@ import { Node, NodeKind, TypeUnionData, TypeGenericData, TypeObjectData, Identif
 	StringLiteralData, BooleanLiteralData,
 	CallExprData, MemberExprData, TypeAssertionData,
 	createNodeAt, makeLoc,
-	SourceLocation } from "std/meta";
+	SourceLocation, TypeKind, typeKind } from "std/meta";
+
+export function namesStruct(n: Node): boolean {
+	return n.kind == NodeKind.Identifier && typeKind(n) == TypeKind.Struct;
+}
 
 export interface DiscVariant {
 	key: string;     // disc value: "circle" | "true" | "Click" etc.

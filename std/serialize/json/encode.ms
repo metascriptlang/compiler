@@ -11,7 +11,7 @@
 // Walks t.nodeType (synthesized type-AST per SERIALIZE Phase A1). Refs/Ptrs
 // unwrap via TypeGeneric (modifierToAst maps to TypeGeneric with base name).
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey } from "../discDetect";
 
 export macro jsonValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
@@ -53,6 +53,7 @@ export macro jsonValueOf(t: Node): Node {
 		}
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
+			elemIsStruct = namesStruct(elemType);
 		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemIsStruct = true;
 			en = elemType.typExprTypeName;
@@ -62,7 +63,10 @@ export macro jsonValueOf(t: Node): Node {
 		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element
 			const peeled: Node = elemType.typExprArgs[0];
-			if (peeled.kind == NodeKind.TypeObject) {
+			if (namesStruct(peeled)) {
+				elemIsStruct = true;
+				en = peeled.name;
+			} else if (peeled.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = peeled.typExprTypeName;
 				if (en == "") {
