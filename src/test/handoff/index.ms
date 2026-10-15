@@ -129,6 +129,7 @@ import "./macroNamedLikeDirective";
 import "./compileTimeNameUse";
 import "./genericInstanceCast";
 import "./comptimeCallFold";
+import "./comptimeConversionRange";
 import "./readonlyViewRefArgument";
 import "./nullFirstTernaryArg";
 import "./fieldVisibility";
