@@ -10,31 +10,31 @@
 import { compileToJS } from "../helpers";
 
 test "explicit int32 cast truncates" {
-	const result = compileToJS("const f = 3.9; const a = f as int32;");
+	const result = compileToJS("let f = 3.9; const a = f as int32;");
 	assert result.ok;
 	assert result.value.contains("| 0");
 }
 
 test "uint8 conversion masks to a byte" {
-	const result = compileToJS("const f = 3.9; const a = f as uint8;");
+	const result = compileToJS("let f = 3.9; const a = f as uint8;");
 	assert result.ok;
 	assert result.value.contains("& 255");
 }
 
 test "uint16 conversion masks to a half word" {
-	const result = compileToJS("const f = 3.9; const a = f as uint16;");
+	const result = compileToJS("let f = 3.9; const a = f as uint16;");
 	assert result.ok;
 	assert result.value.contains("& 65535");
 }
 
 test "uint32 conversion shifts unsigned" {
-	const result = compileToJS("const f = 3.9; const a = f as uint32;");
+	const result = compileToJS("let f = 3.9; const a = f as uint32;");
 	assert result.ok;
 	assert result.value.contains(">>> 0");
 }
 
 test "int64 conversion truncates through the global Math" {
-	const result = compileToJS("const f = 3.9; const a = f as int64;");
+	const result = compileToJS("let f = 3.9; const a = f as int64;");
 	assert result.ok;
 	assert result.value.contains("Math.trunc");
 }
@@ -43,7 +43,7 @@ test "int64 conversion truncates through the global Math" {
 // module global. The receiver this pass synthesizes has to stay unbound so it
 // reaches the engine's Math — hence the pass trailing resolveRuntimeIdents.
 test "synthesized Math receiver is not mangled to the prelude class" {
-	const result = compileToJS("const f = 3.9; const a = f as int64;");
+	const result = compileToJS("let f = 3.9; const a = f as int64;");
 	assert result.ok;
 	assert !result.value.contains("_Math");
 }

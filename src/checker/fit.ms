@@ -12,7 +12,7 @@ import { peelTransparentInstance, literalBase, classAncestorInstance, errorType,
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue } from "./constFold";
+import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue, floatTruncatesInto } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
@@ -1297,9 +1297,15 @@ export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): 
 		reportConstEnumCast(ctx, expr, target);
 		return;
 	}
-	if (!isIntegerType(target) || isUnsignedIntegerType(target)) return;
+	if (!isIntegerType(target)) return;
 	const folded = constantLiteralOf(expr, 0);
-	if (folded == null || !isNodeIntLit(folded)) return;
+	if (folded == null || folded.kind != NodeKind.NumberLiteral) return;
+	if (constHoldsFloat(folded)) {
+		const v = constFloatValue(folded);
+		if (!floatTruncatesInto(v, target)) addError(ctx, "cannot convert " + floatValueText(v) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+		return;
+	}
+	if (isUnsignedIntegerType(target) || !isNodeIntLit(folded)) return;
 	const value = (folded.data as NumberLiteralData).intVal;
 	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) {
 		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);

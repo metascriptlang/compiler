@@ -87,9 +87,43 @@ function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Nod
 	return copy;
 }
 
+function builtinFloatConstant(ident: Node): Node {
+	const sym = ident.resolvedSym;
+	if (sym == null || (sym.builtinKind != "NaN" && sym.builtinKind != "Infinity")) return null as unknown as Node;
+	const n = makeNumber(sym.builtinKind == "NaN" ? NaN : Infinity, ident.location);
+	n.nodeType = createPrimitive(TypeKind.Float64);
+	return n;
+}
+
 function integerAsFloat32(d: NumberLiteralData): number {
 	const narrowed: float32 = d.intVal < 0 && d.value > 0 ? (d.intVal as uint64) as float32 : d.intVal as float32;
 	return narrowed as float64;
+}
+
+function convertedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Node {
+	if (literal.kind == NodeKind.NumberLiteral && t != null && isIntegerType(t) && constHoldsFloat(literal)) return truncatedInteger(literal, t, loc);
+	return retypedLiteral(literal, t, loc);
+}
+
+function truncatedInteger(literal: Node, t: Type, loc: SourceLocation): Node {
+	const v = constFloatValue(literal);
+	if (!floatTruncatesInto(v, t)) return null as unknown as Node;
+	const value: int64 = v >= 9223372036854775808.0 ? int64Bits(v as uint64) : v as int64;
+	return makeTypedInteger(value, t, loc);
+}
+
+export function floatTruncatesInto(v: number, t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Int8   => v > -129.0 && v < 128.0,
+		TypeKind.Int16  => v > -32769.0 && v < 32768.0,
+		TypeKind.Int32  => v > -2147483649.0 && v < 2147483648.0,
+		TypeKind.Int64  => v >= -9223372036854775808.0 && v < 9223372036854775808.0,
+		TypeKind.Uint8  => v > -1.0 && v < 256.0,
+		TypeKind.Uint16 => v > -1.0 && v < 65536.0,
+		TypeKind.Uint32 => v > -1.0 && v < 4294967296.0,
+		TypeKind.Uint64 => v > -1.0 && v < 18446744073709551616.0,
+		_ => false,
+	};
 }
 
 export function constHoldsFloat(folded: Node): boolean {
@@ -317,6 +351,8 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		NodeKind.NumberLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
 		NodeKind.BooleanLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
 		NodeKind.Identifier => {
+			const builtin = builtinFloatConstant(expr);
+			if (builtin != null) return builtin;
 			const initializer = constInitializer(expr);
 			if (initializer == null) return none;
 			const value = constantLiteralOf(initializer, depth + 1);
@@ -348,13 +384,13 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		},
 		NodeKind.TypeAssertion => {
 			const target = expr.nodeType;
-			if (target == null || !isIntegerType(target)) return none;
+			if (target == null || !(isIntegerType(target) || isFloatType(target) || target.kind == TypeKind.Number)) return none;
 			const asserted = (expr.data as TypeAssertionData).asExpr;
-			const ordinal = enumMemberOrdinal(asserted);
+			const ordinal = isIntegerType(target) ? enumMemberOrdinal(asserted) : -1;
 			if (ordinal >= 0) return makeTypedInteger(wrapToWidth(ordinal as uint64, target), target, expr.location);
 			const inner = constantLiteralOf(asserted, depth + 1);
 			if (inner == null) return none;
-			return retypedLiteral(inner, target, expr.location);
+			return convertedLiteral(inner, target, expr.location);
 		},
 		NodeKind.HiddenStdConv => {
 			const inner = constantLiteralOf((expr.data as HiddenStdConvData).convExpr, depth + 1);
@@ -444,7 +480,7 @@ function constantTreeOf(expr: Node, depth: int32): Node {
 		},
 		NodeKind.TypeAssertion => {
 			const inner = scalarTreeOf((expr.data as TypeAssertionData).asExpr, depth + 1);
-			return inner != null ? retypedLiteral(inner, expr.nodeType, expr.location) : none;
+			return inner != null ? convertedLiteral(inner, expr.nodeType, expr.location) : none;
 		},
 		NodeKind.BinaryExpr => {
 			const d = expr.data as BinaryExprData;
