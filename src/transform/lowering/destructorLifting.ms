@@ -2491,13 +2491,7 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	refuseArrayOfHookedDistinct(t, lctx, loc);
 		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
 		// with the defining module's emission or codegen's ensureTypeInfoDef.
-		//
-		// Skip match-type variant structs (typeName like "Alias.Key") — their
-		// hooks are emitted via the parent Union's `<Union>_v<N>` helper
-		// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
-		// invalid C identifier anyway).
-		if (t.kind == TypeKind.Struct && t.typeName != ""
-			&& t.typeName.indexOf(".") < 0) {
+		if (t.kind == TypeKind.Struct && t.typeName != "") {
 			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
 		} else if (t.kind == TypeKind.Struct && t.typeName == ""
 			&& t.typeNames.length > 0

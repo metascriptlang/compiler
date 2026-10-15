@@ -101,6 +101,19 @@ test "match-type enum disc string variant" {
 	}
 }
 
+type PairD = match (kind: NodeK) {
+	NodeK.Num => { numVal: number },
+	NodeK.Str => { strVal: string },
+};
+
+test "match-type enum disc narrowed by == is copied as a whole value" {
+	const s: PairD = { kind: NodeK.Str, strVal: "hello" };
+	if (s.kind == NodeK.Str) {
+		const c = s;
+		assert c.strVal == "hello";
+	}
+}
+
 // =====================================================================
 // SHAPE 4: Match-type with boolean discriminator
 // =====================================================================
