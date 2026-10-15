@@ -506,19 +506,22 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
-	// Overloaded call — bind the check-time winner; the identifier's own
+	// Overloaded call — bind the check-time winner; the callee's own
 	// resolvedSym is always the primary.
-	if (d.callee.kind == NodeKind.Identifier && sym != null
+	const qualified = d.callee.kind == NodeKind.MemberExpr ? d.callee.data as MemberExprData : null;
+	const viaNamespace = qualified != null && qualified.object.resolvedSym != null && qualified.object.resolvedSym.symbolKind == SymbolKind.Module;
+	if ((d.callee.kind == NodeKind.Identifier || viaNamespace) && sym != null
 			&& sym.overloads != null && sym.overloads.length > 0) {
 		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
 		const ws = w.winnerSym;
+		const written = viaNamespace ? qualified!.property : (d.callee.data as IdentifierData).name;
 		if (ws != null && ws.nativeName != "" && isNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);
 			emitNativePattern(gen, ws.nativeName, d.arguments, nativeFormals(ws), node.nodeType);
 			return;
 		}
-		markNamed(gen, d.callee, (d.callee.data as IdentifierData).name);
-		emit(gen, jsReferenceName(gen, ws, (d.callee.data as IdentifierData).name));
+		markNamed(gen, d.callee, written);
+		emit(gen, jsReferenceName(gen, ws, written));
 		emit(gen, "(");
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
