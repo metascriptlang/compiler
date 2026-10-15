@@ -1511,7 +1511,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					if (winner.sym != null) {
 						ensureShaped(winner.sym, ctx);
 						if (node.resolvedSym == null || node.resolvedSym.instantiatedFrom != winner.sym) {
-							const target = signatureTarget(ctx, winner.sym, node);
+							const target = signatureTarget(ctx, winner.sym, node, allByName);
 							node.resolvedSym = target;
 							d.callee.resolvedSym = target;
 						}
@@ -3065,9 +3065,12 @@ function reportUnmetConstraint(ctx: CheckerContext, declType: Type, i: int32, eb
 // Tier 1: locate the implementation symbol in an overload set.
 // The implementation is the unique member without the OverloadSig flag.
 // Returns null if no implementation exists (all candidates are sigs).
-function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node): Symbol {
+function signatureTarget(ctx: CheckerContext, winner: Symbol, callNode: Node, named: ExtensionMethod[]): Symbol {
 	if (!hasFlag(winner, SymbolFlag.OverloadSig) || hasFlag(winner, SymbolFlag.ImportC)) return winner;
-	const set = lookupSymbol(ctx.table, winner.name);
+	let set: Symbol | null = winner.overloads.length > 0 ? winner : null;
+	for (const e of named) {
+		if (set == null && e.sym != null && e.sym.overloads.indexOf(winner) >= 0) set = e.sym;
+	}
 	const impl = set != null ? findOverloadImpl(set) : null;
 	if (set == null || impl == null) {
 		addError(ctx, `Overloaded function '${winner.name}' has no implementation — at least one definition must have a body`,
@@ -3783,7 +3786,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	const extWinnerSym = idx >= 0 && idx < exts.length ? exts[idx].sym : null;
 	if (extWinnerSym != null) {
 		const looked = callNode.resolvedSym;
-		callNode.resolvedSym = looked != null && looked.instantiatedFrom == extWinnerSym ? looked : signatureTarget(ctx, extWinnerSym, callNode);
+		callNode.resolvedSym = looked != null && looked.instantiatedFrom == extWinnerSym ? looked : signatureTarget(ctx, extWinnerSym, callNode, findAllExtensionsByName(ctx.extensionRegistry!, methodName));
 		// Mark for transform: skip registry re-lookup (reference resolves UFCS in sem)
 		if (!hasFlag(extWinnerSym, SymbolFlag.NativeMethod)) {
 			callNode.flags = callNode.flags.incl(NodeFlag.ExtCall);
