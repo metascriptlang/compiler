@@ -1051,6 +1051,29 @@ Extension functions stay out of the bundle's exports because their export is mod
 Exports of other modules stay internal, and `--split` output is unaffected. Measured 2026-10-14 with
 node 24.1 by `src/test/guard/jsBundleEntryExports.ms`.
 
+**Dynamic `import()`.** `await import("./x")` gives the namespace of `./x`, typed
+`Promise<typeof import("./x")>`. A module that only `import()` reaches runs its body at the first
+import, in a later task and never inside the call. Imports issued while it evaluates share that one
+evaluation. A body that throws, or whose top-level await rejects, rejects that import and every later
+one with the same error. With a top-level await, the import settles once the body and every module it
+imports have settled. The specifier must be a string literal; `--app=lib` and targets without an event
+loop refuse `import()` (`src/test/handoff/dynamicImport.ms`). Pinned by the corpus programs
+`dynamicImport*` on c, orc, js, esm and raiser.
+
+When a module body starts another `import()`, the place of that second body relative to the outer
+importer's continuation is host-defined under `--split`: native ES modules load it after the
+continuation, while C and the bundle evaluate it before the continuation. Measured
+2026-10-17 with node 24.1 on `main` → `import("./a")`, where `a`'s body calls `import("./b")`:
+
+| lane | stdout |
+|---|---|
+| C | `start` `a body` `b body` `main got 1` `a got 2` |
+| JS bundle | `start` `a body` `b body` `main got 1` `a got 2` |
+| `--split` (5 of 5 runs) | `start` `a body` `main got 1` `b body` `a got 2` |
+
+The Raiser stops on this program with "deadlock: no runnable strand" (inbox card
+`2026-10-16-raiser-import-awaited-inside-a-module-body-deadlocks`).
+
 ### Converter Declarations
 
 Compile-time source since 2026-07-31 (main `9ce47eb`); runtime source since 2026-09-20 (`wt/inbox-directive`).
