@@ -364,11 +364,10 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	if (gen.multiFile) {
 		const spec = lookupImportSpec(gen, d.importSource);
 		if (spec == "") return;
-		emitIndent(gen);
 		if (d.importNames.length == 1 && d.importNames[0] == "*") {
-			emit(gen, `import * as ${d.importAliases[0]} from "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `import * as ${d.importAliases[0]} from "${spec}";\n`;
 		} else {
-			emit(gen, `import "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `import "${spec}";\n`;
 		}
 		return;
 	}
@@ -425,8 +424,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		if (gen.multiFile) {
 			const spec = lookupImportSpec(gen, imp.importSource);
 			if (spec == "") return;
-			emitIndent(gen);
-			emit(gen, `export * from "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `export * from "${spec}";\n`;
 			return;
 		}
 		if (imp.importNames.length == 1 && imp.importNames[0] == "*") {

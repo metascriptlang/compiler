@@ -5,7 +5,7 @@
 
 import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData } from "../../ast/node";
 import { JSGenerator, JSHelpers, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier } from "./emit";
-import { SourceInfo } from "./sourcemap";
+import { SourceInfo, shiftLines } from "./sourcemap";
 import { forEachChild } from "../../ast/visitor";
 import {
 	emitNumberLiteral, emitStringLiteral, emitBooleanLiteral, emitNullLiteral,
@@ -153,7 +153,8 @@ export function generateJS(program: Node, jsImports: JsImportEntry[]): string {
 }
 
 // Multi-file mode: one ES module per source module. Derived imports are only
-// known after the body is emitted, yet they go in front of it: node loads a
+// known after the body is emitted, yet they go in front of it, behind the
+// source imports whose order decides module evaluation order: node loads a
 // `.js` file without a package type as CommonJS and switches to ESM only when
 // it meets module syntax before anything CommonJS cannot parse, and a
 // top-level await ahead of a trailing import is such a thing. A module with a
@@ -207,6 +208,7 @@ export function generateJSModule(
 			emit(gen, "\";\n");
 		}
 	}
+	const headerChunks = gen.buf.length;
 	emitNodeDispatch(gen, program);
 	let bindings = "";
 	for (let mi = 0; mi < gen.neededModules.length; mi += 1) {
@@ -216,8 +218,8 @@ export function generateJSModule(
 		for (let ni = 0; ni < gen.neededNames[mi].length; ni += 1) specifiers.push(importSpecifier(gen.neededNames[mi][ni], gen.neededLocals[mi][ni]));
 		bindings = bindings + "import { " + specifiers.join(", ") + ` } from "${spec}";\n`;
 	}
-	if (bindings == "" && !hasImport && hasTopLevelAwait(program)) bindings = "export {};\n";
-	if (bindings != "") gen.buf.push(bindings);
+	if (bindings == "" && gen.moduleRequests == "" && !hasImport && hasTopLevelAwait(program)) bindings = "export {};\n";
+	insertAfterHeader(gen, headerChunks, gen.moduleRequests + bindings);
 	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
 }
 
@@ -230,6 +232,24 @@ export function hasTopLevelAwait(node: Node): boolean {
 		if (!found) found = hasTopLevelAwait(child);
 	});
 	return found;
+}
+
+function insertAfterHeader(gen: JSGenerator, headerChunks: int32, text: string): void {
+	if (text == "") return;
+	const body = gen.buf;
+	gen.buf = [];
+	for (let i = 0; i < body.length; i += 1) {
+		if (i == headerChunks) gen.buf.push(text);
+		gen.buf.push(body[i]);
+	}
+	if (headerChunks >= body.length) gen.buf.push(text);
+	if (gen.smap) {
+		let lines: int32 = 0;
+		for (let i: int32 = 0; i < text.byteLength; i += 1) {
+			if (text.byteAt(i) == "\n".code) lines += 1;
+		}
+		shiftLines(gen.smapInfo, lines);
+	}
 }
 
 // Bundle mode: generate JS for a single module without header/imports.
