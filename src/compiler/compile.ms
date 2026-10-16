@@ -34,7 +34,7 @@ import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
 import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
-import { sealRuntimeProcs } from "../transform/util";
+import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
@@ -2006,6 +2006,8 @@ function hcrRootFunctions(modulePaths: string[]): Symbol[] {
 			roots.push(info.sym);
 		}
 	}
+	const uninitialized = compilerFuncSym("msModuleBindingUninitialized");
+	if (uninitialized != null) roots.push(uninitialized);
 	return roots;
 }
 
