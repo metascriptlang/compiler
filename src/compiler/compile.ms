@@ -1617,6 +1617,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	}
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
+	rtFiles = rtFiles + "\n" + "runtime/promise/moduleEval.c";
 	if (opts.isHcr) rtFiles = rtFiles + "\n" + "runtime/hcr.c";
 
 	if (rtFiles == "") return [];
