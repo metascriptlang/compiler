@@ -959,9 +959,6 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	}
 	const order = unionOrderHint(source, target);
 	if (order != "") return order;
-	if (isAnonStructAdoption(source, target)) {
-		return " — the value is copied into the object only from a variable name: bind it to a local first";
-	}
 	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(shapeTarget);
@@ -1003,28 +1000,21 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 // targets keep reference/aliasing semantics and stay rejected; extra-field
 // (prefix) matches stay rejected — the C copy would drop fields the js
 // identity keeps, a built-in parity split.
-export function isAnonStructAdoption(sourceIn: Type | null, targetIn: Type | null): boolean {
-	if (sourceIn == null || targetIn == null) return false;
+export function isAnonStructAdoption(sourceIn: Type | null, target: Type | null): boolean {
+	if (sourceIn == null || target == null) return false;
 	const source = sourceIn.kind == TypeKind.Ref && sourceIn.typeReturn != null ? sourceIn.typeReturn : sourceIn;
-	const heldObject = sourceIn.kind == TypeKind.Struct && sourceIn.sym == null
-		&& targetIn.kind == TypeKind.Ref && !isAtomicRef(targetIn) && targetIn.typeReturn != null && targetIn.typeReturn.sym == null;
-	const target = heldObject ? targetIn.typeReturn! : targetIn;
 	if (source.kind != TypeKind.Struct || target.kind != TypeKind.Struct) return false;
-	if (!heldObject) {
-		if (!isAnonLiteralName(source.typeName)) return false;
-		if (target.typeName == "" || isAnonLiteralName(target.typeName)) return false;
-		if (target.sym != null && target.sym.symbolKind == SymbolKind.Interface) return false;
-		if (isMaybeType(target)) return false;
-	}
+	if (!isAnonLiteralName(source.typeName)) return false;
+	if (target.typeName == "" || isAnonLiteralName(target.typeName)) return false;
+	if (target.sym != null && target.sym.symbolKind == SymbolKind.Interface) return false;
+	if (isMaybeType(target)) return false;
 	const sNames = source.typeNames;
 	const tNames = target.typeNames;
 	if (sNames.length != tNames.length) return false;
 	for (let i = 0; i < tNames.length; i += 1) {
 		if (sNames[i] != tNames[i]) return false;
 		if (i >= source.typeChildren.length || i >= target.typeChildren.length) return false;
-		const sField = source.typeChildren[i];
-		const tField = target.typeChildren[i];
-		if (!sameType(sField, tField) && !(heldObject && sField.kind == TypeKind.BooleanLiteral && tField.kind == TypeKind.Boolean)) return false;
+		if (!sameType(source.typeChildren[i], target.typeChildren[i])) return false;
 	}
 	return true;
 }

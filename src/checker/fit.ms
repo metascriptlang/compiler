@@ -3,7 +3,7 @@
 // through the checkerCallbacks door.
 
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
-import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, ConditionalExprData, StringLiteralData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, ConditionalExprData, StringLiteralData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
@@ -2278,9 +2278,8 @@ export function tryAdoptAnonStruct(ctx: CheckerContext, expr: Node, formalIn: Ty
 	if (formal == null || exprType == null) return null as unknown as Node;
 	if (expr.kind != NodeKind.Identifier) return null as unknown as Node;
 	if (!isAnonStructAdoption(exprType, formal)) return null as unknown as Node;
-	const shape = formal.kind == TypeKind.Ref ? formal.typeReturn! : formal;
 	const owner = declaringSymOf(formalIn);
-	const hidden = hiddenPrivateField(ctx, owner, shape.typeNames);
+	const hidden = hiddenPrivateField(ctx, owner, formal.typeNames);
 	if (hidden != "") {
 		refusePrivateField(ctx, owner, hidden, expr.location.line, expr.location.column);
 		return null as unknown as Node;
@@ -2290,18 +2289,18 @@ export function tryAdoptAnonStruct(ctx: CheckerContext, expr: Node, formalIn: Ty
 	const keys: string[] = [];
 	const keyLocs: SourceLocation[] = [];
 	const identD = expr.data as IdentifierData;
-	for (let i = 0; i < shape.typeNames.length; i += 1) {
+	for (let i = 0; i < formal.typeNames.length; i += 1) {
 		const objNode = createNode(NodeKind.Identifier, { name: identD.name } as NodeData, tok);
 		objNode.resolvedSym = expr.resolvedSym;
 		objNode.nodeType = exprType;
 		objNode.flags = objNode.flags.incl(NodeFlag.Sem);
 		objNode.location = expr.location;
-		const mem = createNode(NodeKind.MemberExpr, { object: objNode, property: shape.typeNames[i], isOptional: false } as NodeData, tok);
-		mem.nodeType = shape.typeChildren[i];
+		const mem = createNode(NodeKind.MemberExpr, { object: objNode, property: formal.typeNames[i], isOptional: false } as NodeData, tok);
+		mem.nodeType = formal.typeChildren[i];
 		mem.flags = mem.flags.incl(NodeFlag.Sem);
 		mem.location = expr.location;
 		props.push(mem);
-		keys.push(shape.typeNames[i]);
+		keys.push(formal.typeNames[i]);
 		keyLocs.push(expr.location);
 	}
 	const lit = createNode(NodeKind.ObjectLiteral, { properties: props, keys: keys, keyLocations: keyLocs } as NodeData, tok);
@@ -2485,6 +2484,11 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			return expr;
 		}
 	}
+	const variantRefusal = variantIntoObjectRefusal(expr, exprType, formal);
+	if (variantRefusal != "") {
+		addError(ctx, variantRefusal, expr.location.line, expr.location.column);
+		return expr;
+	}
 	if ((formal.kind != TypeKind.Union || isLiteralSet(formal)) && (exprType.kind != TypeKind.Union || isLiteralSet(exprType))) {
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
@@ -2583,6 +2587,25 @@ export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, forma
 		|| hasGenericParams(formal) || isMaybeType(formal)) return true;
 	if (isUnresolvedType(exprType) || isUnknownType(exprType) || exprType.kind == TypeKind.Never) return true;
 	return !slotRefuses(exprType, formal) || convertsBetween(ctx, exprType, formal) || hasValueOfProtocol(ctx, exprType);
+}
+
+export function variantIntoObjectRefusal(expr: Node, exprType: Type | null, formalIn: Type | null): string {
+	const formal = skipModifier(formalIn);
+	if (formal == null || exprType == null || formal.kind != TypeKind.Ref || isAtomicRef(formal) || formal.typeReturn == null) return "";
+	const object = formal.typeReturn;
+	if (object.kind != TypeKind.Struct || (object.sym != null && object.sym.symbolKind != SymbolKind.Interface)) return "";
+	if (exprType.kind != TypeKind.Struct || declaredTagUnionOf(expr) == null) return "";
+	const union = declaredInstanceOf(expr)!;
+	const named = expr.kind == NodeKind.Identifier;
+	const name = named ? (expr.data as IdentifierData).name : "value";
+	const unionName = union.kind == TypeKind.Union && union.typeName != "" ? union.typeName : typeDisplayName(union);
+	let tag = "";
+	if (exprType.typeNames.length > 0) tag = " (" + exprType.typeNames[0] + ": " + typeDisplayName(exprType.typeChildren[0]) + ")";
+	let shape = typeDisplayName(formal);
+	if (shape.endsWith("; }")) shape = shape.slice(0, shape.length - 3) + " }";
+	const share = isResult(union) ? "" : ", or declare '" + unionName + "' with 'type' to share it";
+	return (named ? "'" + name + "'" : "the value") + " is a value of '" + unionName + "'" + tag + "; '" + shape + "' takes an object (a reference). Copy it with '{ ..."
+		+ name + " }', take the parameter as '" + unionName + "'" + share + ".";
 }
 
 function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): void {
