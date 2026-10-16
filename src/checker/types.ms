@@ -2805,7 +2805,7 @@ export function valueCopyRepr(t: Type | null): Type | null {
 		const repr = setRepr(t);
 		if (repr != null) return repr;
 	}
-	if (t != null && t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return t.typeReturn;
+	if (t != null && t.kind == TypeKind.GenericInstance && (isStructType(t.typeReturn) || (t.typeReturn != null && t.typeReturn.kind == TypeKind.Union && t.typeReturn.typeFlags.has(TypeFlag.ValueUnion)))) return t.typeReturn;
 	return t;
 }
 
@@ -2813,6 +2813,7 @@ export function needsValueCopy(t: Type | null): boolean {
 	t = valueCopyRepr(t);
 	if (t == null) return false;
 	if (t.kind == TypeKind.Struct) return t.typeFlags.has(TypeFlag.IsStruct);
+	if (t.kind == TypeKind.Union) return t.typeFlags.has(TypeFlag.ValueUnion);
 	if (t.kind == TypeKind.Tuple) return true;
 	if (t.kind == TypeKind.Array) return true;
 	if (t.kind == TypeKind.SizedArray) return true;

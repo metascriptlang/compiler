@@ -9,6 +9,7 @@ import "./interfaces";
 import "./classes";
 import "./result";
 import "./discrim";
+import "./structMatch";
 import "./json";
 import "./trycatch";
 import "./recursion";
