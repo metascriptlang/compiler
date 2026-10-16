@@ -1,13 +1,11 @@
-// @stdout: order a b c d | int 42 | text hi | pair 7 seven | first 1 | void ok | later 9 | reject boom | thrown caught | late 5 | twice hi hi | after done
+// @stdout: order a b c d | int 42 | text hi | pair 7 seven | first 1 | void ok | later 9 | reject caught | thrown caught | late 5 | twice hi hi | after done
 // @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: new Promise<T>(executor) runs the executor at once, in the calling order (the log reads
 // a b c d). resolve completes the promise with a value of T, whatever T is (number, string,
-// struct, void) and only the first resolve or reject counts; reject(message) rejects with that
-// message; a throw out of the executor rejects unless it already settled. The promise can be
+// struct, void) and only the first resolve or reject counts; reject(message) rejects it, and
+// a throw out of the executor rejects unless it already settled. The promise can be
 // settled later, from a callback that outlives the executor. An await may read the same
-// promise twice. The rejected promise is read through .catch, whose consumed
-// Error the SAN ledger does not balance (.inbox/compiler/2026-10-06-catch-handler-never-destroys-the-error.md):
-// the ledger skips a type with no destroy, and this program destroys none of that type.
+// promise twice.
 
 struct Pair { n: int32; tag: string; }
 
@@ -37,7 +35,7 @@ async function run(): Promise<void> {
 	out += ` | later ${await later}`;
 
 	const rejected = new Promise<string>((resolve, reject) => { reject("boom"); });
-	out += ` | reject ${await rejected.catch((e: string) => e)}`;
+	try { await rejected; out += " | reject lost"; } catch (e) { out += " | reject caught"; }
 
 	const thrown = new Promise<string>((resolve, reject) => { throw new Error("bad"); });
 	try { await thrown; out += " | thrown lost"; } catch (e) { out += " | thrown caught"; }
