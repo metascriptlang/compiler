@@ -30,6 +30,7 @@ import {
 	emitFunctionDecl, emitEnumDecl, emitClassDecl, emitActorDecl,
 	emitMethodDecl, emitConstructorDecl,
 	emitImportDecl, emitExportDecl, emitDecoratedDecl,
+	classEvaluatesStatics, emitDeferredClassBinding, emitDeferredClassValue,
 } from "./declarations";
 
 import { emitTestDecl } from "./test";
@@ -160,13 +161,17 @@ function emitLazyModuleProgram(gen: JSGenerator, program: Node, pd: ProgramData)
 	const body: Node[] = [];
 	for (const stmt of pd.programStmts) {
 		if (runsInModuleBody(stmt)) body.push(stmt);
-		else emitNodeDispatch(gen, stmt);
+		else if (classEvaluatesStatics(declarationOf(stmt))) {
+			emitDeferredClassBinding(gen, declarationOf(stmt));
+			body.push(stmt);
+		} else emitNodeDispatch(gen, stmt);
 	}
 	emit(gen, `function ${lazyModuleInitName(gen.sourceFile)}() {\n`);
 	gen.indentLevel += 1;
 	for (const stmt of body) {
 		const decl = declarationOf(stmt);
 		if (decl.kind == NodeKind.VariableDecl) emitModuleStorageDecl(gen, decl);
+		else if (decl.kind == NodeKind.ClassDecl) emitDeferredClassValue(gen, decl);
 		else if (stmt.kind == NodeKind.ExportDecl && stmt.flags.has(NodeFlag.ExportDefault)) throw new Error(`export default of an expression in ${gen.sourceFile}, a module reached only through import(), is not supported by the single-file JS bundle`);
 		else emitNodeDispatch(gen, stmt);
 	}

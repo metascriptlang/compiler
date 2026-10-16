@@ -149,7 +149,7 @@ export function classEmitsNoJs(node: Node): boolean {
 	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
 }
 
-function emitClassDeclInner(gen: JSGenerator, node: Node): void {
+function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = false): void {
 	const d = node.data as ClassDeclData;
 	if (classEmitsNoJs(node)) return;
 	if (!classEmitsShell(node)) {
@@ -159,8 +159,9 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	const generic = isGenericClass(node);
-	emit(gen, "class ");
-	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
+	const name = jsSymbolName(gen, node.resolvedSym, d.className);
+	emit(gen, assigned ? `${name} = class ` : "class ");
+	emit(gen, name);
 	if (d.classExtends != "") {
 		emit(gen, " extends ");
 		emit(gen, jsBaseClassName(gen, node, d.classExtends));
@@ -227,10 +228,34 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
-	emit(gen, "}\n");
+	emit(gen, assigned ? "};\n" : "}\n");
+	if (assigned) return;
 	for (const member of staticMethods) {
 		emitStaticMethodFn(gen, d.className, member);
 	}
+}
+
+export function classEvaluatesStatics(node: Node): boolean {
+	if (node.kind != NodeKind.ClassDecl || classEmitsNoJs(node) || !classEmitsShell(node)) return false;
+	for (const member of (node.data as ClassDeclData).classBody) {
+		if (member.kind == NodeKind.BlockStmt) return true;
+		if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic && (member.data as PropertyDeclData).propInitializer != null) return true;
+	}
+	return false;
+}
+
+export function emitDeferredClassBinding(gen: JSGenerator, node: Node): void {
+	const d = node.data as ClassDeclData;
+	emitIndent(gen);
+	emit(gen, `let ${jsSymbolName(gen, node.resolvedSym, d.className)};\n`);
+	for (const member of d.classBody) {
+		if (member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic) emitStaticMethodFn(gen, d.className, member);
+	}
+}
+
+export function emitDeferredClassValue(gen: JSGenerator, node: Node): void {
+	emitIndent(gen);
+	emitClassDeclInner(gen, node, true);
 }
 
 function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): void {
