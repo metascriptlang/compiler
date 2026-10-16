@@ -2126,7 +2126,7 @@ export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
 	if (exprType.kind == TypeKind.Union && !isStringLike(exprType)) return -1;
-	if (isStringLike(exprType)) return unionSlotOf(declared, exprType);
+	if (isStringLike(exprType) || exprType.kind == TypeKind.NumberLiteral) return unionSlotOf(declared, exprType);
 	let ci: int32 = 0;
 	for (const child of declared.typeChildren) {
 		if (child == exprType) return ci;
@@ -2145,7 +2145,7 @@ export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type
 	}
 	if (vi < 0) return null as unknown as Node;
 	expr.nodeType = declared;
-	return hiddenSlotConv(expr, isStringLike(exprType) ? exprType : declared.typeChildren[vi], vi);
+	return hiddenSlotConv(expr, isStringLike(exprType) || exprType.kind == TypeKind.NumberLiteral ? exprType : declared.typeChildren[vi], vi);
 }
 
 export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type, convert: boolean = false): Node {

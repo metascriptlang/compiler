@@ -1039,10 +1039,6 @@ export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
 
 function literalSlotOf(formal: Type, value: Type): int32 {
 	const base = literalBase(value);
-	for (let i: int32 = 0; i < formal.typeChildren.length; i += 1) {
-		const child = formal.typeChildren[i];
-		if (value.kind != TypeKind.Union && child.kind == value.kind && child.typeName == value.typeName) return i;
-	}
 	let slot: int32 = -1;
 	let wide = false;
 	for (let i: int32 = 0; i < formal.typeChildren.length; i += 1) {

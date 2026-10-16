@@ -25,6 +25,14 @@ test "number literal types: a literal held beside a string reads as its number" 
 	assert big + 1 == 3000000001;
 }
 
+test "number literal types: every literal beside a string is stored where it is read" {
+	let k: 1 | 2 | string = "s";
+	k = 2;
+	assert k + 1 == 3;
+	k = 1;
+	assert k + 1 == 2;
+}
+
 test "number literal types: 1 and 1.0 spell one value" {
 	const whole: 1 = 1.0;
 	assert whole == 1;
