@@ -187,6 +187,67 @@ export function hasExportName(mod: Module, name: string): boolean {
 	return false;
 }
 
+// ===== Dynamic Module Plan =====
+// Std modules stay eager: the prelude makes them implicit dependencies of every module,
+// and the import edges do not record that.
+
+export class DynamicModulePlan {
+	records: string[] = [];
+	lazy: HashSet<string> = new HashSet<string>();
+	requested: int32[][] = [];
+}
+
+export function planDynamicModules(graph: ModuleGraph, entryPath: string, order: string[], stdPath: string): DynamicModulePlan {
+	const plan = new DynamicModulePlan();
+	const targets = new HashSet<string>();
+	for (const mod of graph.modules) {
+		for (const imp of mod.imports) if (imp.dynamic) targets.add(imp.sourcePath);
+	}
+	if (targets.size == 0) return plan;
+	const reached = new HashSet<string>();
+	const eager = new HashSet<string>();
+	const pending: string[] = [entryPath];
+	while (pending.length > 0) {
+		const path = pending.pop();
+		if (reached.has(path)) continue;
+		reached.add(path);
+		const mod = findModule(graph, path);
+		if (mod != null) for (const imp of mod.imports) pending.push(imp.sourcePath);
+	}
+	pending.push(entryPath);
+	for (const path of order) {
+		if (!reached.has(path) || (stdPath != "" && path.startsWith(stdPath))) pending.push(path);
+	}
+	while (pending.length > 0) {
+		const path = pending.pop();
+		if (eager.has(path)) continue;
+		eager.add(path);
+		const mod = findModule(graph, path);
+		if (mod != null) for (const imp of mod.imports) if (!imp.dynamic) pending.push(imp.sourcePath);
+	}
+	const recordAt = new HashMap<string, int32>();
+	for (const path of order) {
+		if (!eager.has(path)) plan.lazy.add(path);
+		if (!eager.has(path) || targets.has(path)) {
+			recordAt.set(path, plan.records.length);
+			plan.records.push(path);
+		}
+	}
+	for (const path of plan.records) {
+		const requested: int32[] = [];
+		const mod = findModule(graph, path);
+		if (plan.lazy.has(path) && mod != null) {
+			for (const imp of mod.imports) {
+				const at = recordAt.get(imp.sourcePath);
+				if (imp.dynamic || at == null || !plan.lazy.has(imp.sourcePath) || requested.includes(at)) continue;
+				requested.push(at);
+			}
+		}
+		plan.requested.push(requested);
+	}
+	return plan;
+}
+
 // ===== Tests =====
 test "create empty graph" {
 	const g = createModuleGraph();
@@ -283,4 +344,29 @@ test "hasExportName" {
 	assert hasExportName(m, "foo");
 	assert hasExportName(m, "bar");
 	assert !hasExportName(m, "baz");
+}
+
+test "planDynamicModules defers what only import() reaches" {
+	const g = createModuleGraph();
+	const paths = ["/std/core.ms", "/a.ms", "/lazy.ms", "/dep.ms", "/main.ms"];
+	for (const p of paths) addModule(g, createModule(p));
+	findModule(g, "/main.ms").imports.push(createImportEntry(["x"], ["x"], "/a.ms", "./a"));
+	findModule(g, "/main.ms").imports.push(createImportEntry([], [], "/lazy.ms", "./lazy", true));
+	findModule(g, "/main.ms").imports.push(createImportEntry([], [], "/a.ms", "./a", true));
+	findModule(g, "/lazy.ms").imports.push(createImportEntry(["y"], ["y"], "/dep.ms", "./dep"));
+	findModule(g, "/lazy.ms").imports.push(createImportEntry(["x"], ["x"], "/a.ms", "./a"));
+	findModule(g, "/lazy.ms").imports.push(createImportEntry(["s"], ["s"], "/std/core.ms", "std/core"));
+	findModule(g, "/dep.ms").imports.push(createImportEntry(["z"], ["z"], "/lazy.ms", "./lazy"));
+	const plan = planDynamicModules(g, "/main.ms", paths, "/std");
+	assert plan.records.join(",") == "/a.ms,/lazy.ms,/dep.ms";
+	assert plan.lazy.has("/lazy.ms") && plan.lazy.has("/dep.ms") && plan.lazy.size == 2;
+	assert plan.requested[0].length == 0;
+	assert plan.requested[1].length == 1 && plan.requested[1][0] == 2;
+	assert plan.requested[2].length == 1 && plan.requested[2][0] == 1;
+}
+
+test "planDynamicModules is empty without import()" {
+	const g = createModuleGraph();
+	addModule(g, createModule("/main.ms"));
+	assert planDynamicModules(g, "/main.ms", ["/main.ms"], "").records.length == 0;
 }
