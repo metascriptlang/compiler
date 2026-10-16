@@ -1,6 +1,7 @@
 // @stdout: first ok ok | second ok ok | string hi hi | array 2 2 | locals hix 1 o | after hi 2 ok
 // @stdout: module let ok ok | namespace 0.5 lib, 0.5 lib
 // @stdout: ternary 0.5 static 0.25
+// @xfail(raiser): the Raiser cannot read a static class field ('cannot evaluate 'A' at comptime: symbol kind is Class') (inbox 2026-10-09-raiser-cannot-read-a-static-class-field)
 // @ledger-slack(msNumberArrayRefCell): 1
 // note: a read of a class static, a module binding or a namespace member into an owned local or argument temp copies it; the static keeps its value for the next read. The slack is `A.L`, which outlives exit as module-level storage does.
 import { Curves, Ease } from "./lib";
