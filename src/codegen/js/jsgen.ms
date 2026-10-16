@@ -3,7 +3,7 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData } from "../../ast/node";
 import { JSGenerator, JSHelpers, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
 import { forEachChild } from "../../ast/visitor";
@@ -24,7 +24,7 @@ import {
 	emitBlockStmt, emitExprStmt, emitReturnStmt,
 	emitBreakStmt, emitContinueStmt,
 	emitSwitchStmt, emitThrowStmt, emitTryCatchStmt,
-	emitForStmt, emitForOfStmt, emitUnreachableStmt, emitAssertStmt,
+	emitForStmt, emitForOfStmt, emitUnreachableStmt, emitAssertStmt, emitModuleStorageDecl,
 } from "./statements";
 import {
 	emitFunctionDecl, emitEnumDecl, emitClassDecl, emitActorDecl,
@@ -37,6 +37,8 @@ import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
 import { transformProgram } from "../../transform/index";
 import { JsImportEntry } from "../../checker/context";
+import { DynamicModulePlan } from "../../module/graph";
+import { mangleQualified, mangleModuleName } from "../c/names";
 
 // ===== Node Dispatcher =====
 
@@ -116,6 +118,10 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		// Program — emit all statements
 		NodeKind.Program => {
 			const pd = node.data as ProgramData;
+			if (gen.bundleMode && gen.dynamicPlan.lazy.has(gen.sourceFile)) {
+				emitLazyModuleProgram(gen, node, pd);
+				return;
+			}
 			for (const stmt of pd.programStmts) {
 				emitNodeDispatch(gen, stmt);
 			}
@@ -125,6 +131,94 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		_ => { emit(gen, `/* unsupported: ${node.kind} */`); },
 	};
 }
+
+// ===== Modules Reached Only Through import() =====
+
+function lazyModuleInitName(modulePath: string): string {
+	return mangleQualified("msModuleInit", mangleModuleName(modulePath));
+}
+
+function declarationOf(stmt: Node): Node {
+	if (stmt.kind == NodeKind.ExportDecl) return declarationOf((stmt.data as ExportDeclData).exportedDecl);
+	if (stmt.kind == NodeKind.DecoratedDecl) return declarationOf((stmt.data as DecoratedDeclData).decoratedNode);
+	return stmt;
+}
+
+function runsInModuleBody(stmt: Node): boolean {
+	return match (declarationOf(stmt).kind) {
+		NodeKind.FunctionDecl | NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.EnumDecl | NodeKind.ImportDecl
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ExternDecl
+			| NodeKind.MacroDecl | NodeKind.ComptimeBlock | NodeKind.TypeAnnotation | NodeKind.TestDecl | NodeKind.PropertyDecl => false,
+		_ => true,
+	};
+}
+
+// Declarations stay in the flat bundle scope so other modules keep naming them; the
+// body (initializers and statements, in source order) becomes the module's init function.
+function emitLazyModuleProgram(gen: JSGenerator, program: Node, pd: ProgramData): void {
+	if (hasTopLevelAwait(program)) throw new Error(`top-level await in ${gen.sourceFile}, a module reached only through import(), is not supported by the single-file JS bundle`);
+	const body: Node[] = [];
+	for (const stmt of pd.programStmts) {
+		if (runsInModuleBody(stmt)) body.push(stmt);
+		else emitNodeDispatch(gen, stmt);
+	}
+	emit(gen, `function ${lazyModuleInitName(gen.sourceFile)}() {\n`);
+	gen.indentLevel += 1;
+	for (const stmt of body) {
+		const decl = declarationOf(stmt);
+		if (decl.kind == NodeKind.VariableDecl) emitModuleStorageDecl(gen, decl);
+		else if (stmt.kind == NodeKind.ExportDecl && stmt.flags.has(NodeFlag.ExportDefault)) throw new Error(`export default of an expression in ${gen.sourceFile}, a module reached only through import(), is not supported by the single-file JS bundle`);
+		else emitNodeDispatch(gen, stmt);
+	}
+	gen.indentLevel -= 1;
+	emit(gen, "}\n");
+}
+
+export function bundleModuleEvaluator(plan: DynamicModulePlan): string {
+	if (plan.records.length == 0) return "";
+	let table = "const msModuleRecords = [\n";
+	for (let i = 0; i < plan.records.length; i += 1) {
+		const path = plan.records[i];
+		const lazy = plan.lazy.has(path);
+		table = table + `  { init: ${lazy ? lazyModuleInitName(path) : "null"}, requested: [${plan.requested[i].join(", ")}], status: ${lazy ? 0 : 2}, failed: false, error: undefined, dfsIndex: 0, dfsAncestorIndex: 0 },\n`;
+	}
+	return table + "];\n" + MODULE_EVALUATOR;
+}
+
+const MODULE_EVALUATOR = "function msModuleInnerEvaluate(at, stack, index) {\n"
+	+ "  const m = msModuleRecords[at];\n"
+	+ "  if (m.status === 2) { if (m.failed) throw m.error; return index; }\n"
+	+ "  if (m.status === 1) return index;\n"
+	+ "  m.status = 1;\n"
+	+ "  m.dfsIndex = index;\n"
+	+ "  m.dfsAncestorIndex = index;\n"
+	+ "  index += 1;\n"
+	+ "  stack.push(at);\n"
+	+ "  for (const req of m.requested) {\n"
+	+ "    index = msModuleInnerEvaluate(req, stack, index);\n"
+	+ "    const r = msModuleRecords[req];\n"
+	+ "    if (r.status === 1 && r.dfsAncestorIndex < m.dfsAncestorIndex) m.dfsAncestorIndex = r.dfsAncestorIndex;\n"
+	+ "  }\n"
+	+ "  if (m.init !== null) m.init();\n"
+	+ "  if (m.dfsAncestorIndex === m.dfsIndex) {\n"
+	+ "    let popped;\n"
+	+ "    do { popped = stack.pop(); msModuleRecords[popped].status = 2; } while (popped !== at);\n"
+	+ "  }\n"
+	+ "  return index;\n"
+	+ "}\n"
+	+ "function msModuleImport(at) {\n"
+	+ "  return Promise.resolve().then(() => {\n"
+	+ "    const m = msModuleRecords[at];\n"
+	+ "    if (m.status === 0) {\n"
+	+ "      const stack = [];\n"
+	+ "      try { msModuleInnerEvaluate(at, stack, 0); }\n"
+	+ "      catch (e) { for (const k of stack) { const r = msModuleRecords[k]; r.status = 2; r.failed = true; r.error = e; } }\n"
+	+ "    }\n"
+	+ "    if (m.status !== 2) throw new Error(\"internal: import() settled while its module evaluation is unfinished\");\n"
+	+ "    if (m.failed) throw m.error;\n"
+	+ "    return 1;\n"
+	+ "  });\n"
+	+ "}\n";
 
 // Register the dispatcher (lambda wrapper required — top-level fn is generic msClosure, typed var needs msClosureN)
 registerEmitNode((gen: JSGenerator, node: Node): void => { emitNodeDispatch(gen, node); });
@@ -260,9 +354,10 @@ export interface BundleModuleResult {
 	smap: SourceInfo;
 }
 
-export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, sourceFile: string, sourcemap: boolean, helpers: JSHelpers): BundleModuleResult {
+export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, sourceFile: string, sourcemap: boolean, helpers: JSHelpers, dynamicPlan: DynamicModulePlan): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
+	gen.dynamicPlan = dynamicPlan;
 	gen.helpers = helpers;
 	gen.bundleIsPrelude = isPrelude;
 	gen.smap = sourcemap;

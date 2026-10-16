@@ -8,6 +8,7 @@ import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 import { mangleModuleName } from "../c/names";
+import { DynamicModulePlan } from "../../module/graph";
 
 
 // ===== JS Generator =====
@@ -76,6 +77,7 @@ export class JSGenerator {
 	// prologue stamps the synthetic pid and instance field defaults are
 	// emitted as JS class fields (the tier-1 actor surface).
 	inActorDecl: boolean;
+	dynamicPlan: DynamicModulePlan;
 }
 
 export function createJSGenerator(): JSGenerator {
@@ -85,7 +87,7 @@ export function createJSGenerator(): JSGenerator {
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
 		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32,
-		inActorDecl: false };
+		inActorDecl: false, dynamicPlan: new DynamicModulePlan() };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): string {

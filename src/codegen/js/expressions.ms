@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
@@ -21,6 +21,7 @@ import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, isAwaitable } from "../../checker/types";
+import { DYNAMIC_IMPORT } from "../../checker/importCall";
 
 // ===== Literal Emitters =====
 
@@ -469,6 +470,11 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 
+	if (d.callee.resolvedSym != null && d.callee.resolvedSym.builtinKind == DYNAMIC_IMPORT) {
+		emitDynamicImport(gen, d.callee.resolvedSym.modulePath);
+		return;
+	}
+
 	// Native pattern dispatch — runs before name-based emit so the callee's
 	// mangled / Identifier name is replaced by the JS template. For MemberExpr
 	// callees (extern class methods where extensionMethodLower skipped), the
@@ -545,6 +551,18 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	emit(gen, "(");
 	emitJoinedNodes(gen, d.arguments, ", ");
 	emit(gen, ")");
+}
+
+function emitDynamicImport(gen: JSGenerator, modulePath: string): void {
+	if (gen.bundleMode) {
+		const at = gen.dynamicPlan.records.indexOf(modulePath);
+		if (at < 0) throw new Error(`internal: import() of ${modulePath}, which has no module record in the bundle`);
+		emit(gen, `msModuleImport(${at})`);
+		return;
+	}
+	const spec = gen.multiFile ? lookupModuleSpec(gen, modulePath) : "";
+	if (spec == "") throw new Error(`internal: import() of ${modulePath} has no output specifier in this JS emit mode`);
+	emit(gen, `import("${escapeJSString(spec)}")`);
 }
 
 // ===== Member Expression =====

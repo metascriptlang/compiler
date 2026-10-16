@@ -13,7 +13,7 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait } from "../codegen/js/jsgen";
+import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
 import { createJSHelpers, escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
@@ -1483,6 +1483,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
+	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
@@ -1518,7 +1519,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
-		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers);
+		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers, dynamicPlan);
 		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
 		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals, reexports);
 
@@ -1548,6 +1549,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 	// Same reason as generateJSModule: node must meet module syntax before a top-level await.
 	if (extImportKeys.length == 0 && anyTopLevelAwait) output = output + "export {};\n";
+	output = output + bundleModuleEvaluator(dynamicPlan);
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
 	output = output + bundle + entryExports;
 
