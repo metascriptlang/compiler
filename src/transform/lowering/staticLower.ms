@@ -1,6 +1,6 @@
 import {
 	Node, NodeKind, createNodeAt, ClassDeclData, ActorDeclData, PropertyDeclData, BlockStmtData,
-	ExportDeclData, DecoratedDeclData, ExprStmtData, Symbol, SymbolFlag,
+	ExportDeclData, DecoratedDeclData, ExprStmtData, ProgramData, Symbol, SymbolFlag,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkExpandBlocks } from "../walker";
@@ -62,7 +62,7 @@ function staticRunBlock(declNode: Node, stmts: Node[]): Node {
 	return createNodeAt(NodeKind.BlockStmt, { statements: stmts }, declNode.location);
 }
 
-function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[]): void {
+function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[], reevaluated: boolean): void {
 	let write: int32 = 0;
 	for (let read: int32 = 0; read < body.length; read += 1) {
 		const m = body[read];
@@ -77,32 +77,67 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 		if (member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic || pd.propInitializer == null) continue;
-		if (isDataInitLiteral(pd.propInitializer)) continue;
+		if (!reevaluated && isDataInitLiteral(pd.propInitializer)) continue;
 		const assign: Node[] = [staticFieldAssignment(declNode, ownerName, member)];
 		out.push(staticRunBlock(declNode, assign));
 	}
 	body.shrink(write);
 }
 
-function expandClassStmt(stmt: Node, ctx: TransformContext): Node[] {
+function expandClassStmt(stmt: Node, lifted: Node[]): Node[] {
 	let target = stmt;
 	if (target.kind == NodeKind.ExportDecl) {
 		target = (target.data as ExportDeclData).exportedDecl;
 	}
 	if (target == null) return [stmt];
 	const out: Node[] = [stmt];
+	const local = lifted.indexOf(target) >= 0;
 	if (target.kind == NodeKind.ClassDecl) {
 		const cd = target.data as ClassDeclData;
-		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out);
+		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out, local);
 	} else if (target.kind == NodeKind.ActorDecl) {
 		const ad = target.data as ActorDeclData;
-		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out);
+		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out, local);
 	}
 	return out;
 }
 
+function staticsLeftInBody(body: Node[]): boolean {
+	for (const m of body) {
+		if (m.kind == NodeKind.BlockStmt) return true;
+		const member = bareMember(m);
+		if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic
+			&& (member.data as PropertyDeclData).propInitializer != null) return true;
+	}
+	return false;
+}
+
+function requireLoweredInPlace(decl: Node): void {
+	const left = decl.kind == NodeKind.ClassDecl ? staticsLeftInBody((decl.data as ClassDeclData).classBody)
+		: decl.kind == NodeKind.ActorDecl && staticsLeftInBody((decl.data as ActorDeclData).actorBody);
+	if (left) {
+		throw new Error(`internal: the statics of local type '${decl.resolvedSym != null ? decl.resolvedSym.name : "?"}' found no declaration site to run at`);
+	}
+}
+
+// A local type is lifted to the module front for its emission only; its statics run
+// where the body declares it, once per evaluation, so the lifted copy is not expanded.
 export function lowerStaticInit(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandClassStmt, ctx);
+	const lifted: Node[] = ctx != null && ctx.checkerCtx != null ? ctx.checkerCtx.liftedLocalTypeDecls : [];
+	const expand = (stmt: Node, c: TransformContext): Node[] => expandClassStmt(stmt, lifted);
+	const kept: Node[] = [];
+	for (const s of (program.data as ProgramData).programStmts) {
+		if (lifted.indexOf(s) >= 0) {
+			kept.push(s);
+			continue;
+		}
+		for (const e of expand(s, ctx)) {
+			walkExpandBlocks(e, expand, ctx);
+			kept.push(e);
+		}
+	}
+	program.data = { programStmts: kept };
+	for (const d of lifted) requireLoweredInPlace(d);
 	return program;
 }
 

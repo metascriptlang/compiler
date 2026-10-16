@@ -24,6 +24,7 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	const bindings: ModuleBinding[] = [];
 	let firstRun = -1;
 	for (let i = 0; i < stmts.length; i += 1) {
+		if (ctx.checkerCtx.liftedLocalTypeDecls.indexOf(stmts[i]) >= 0) continue;
 		const decl = unwrapDecl(stmts[i]);
 		const sym = lexicalBindingOf(decl);
 		if (sym != null) bindings.push({ sym, statement: i });
