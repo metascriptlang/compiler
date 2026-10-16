@@ -434,6 +434,24 @@ function recordBundleExport(gen: JSGenerator, name: string, local: string): void
 	gen.bundleExportLocals.push(local);
 }
 
+function bundleDefaultLocal(gen: JSGenerator): string {
+	return mangleQualified("default", mangleModuleName(gen.sourceFile));
+}
+
+function emitBundleDefaultExport(gen: JSGenerator, exprStmt: Node, declaration: string): void {
+	const local = bundleDefaultLocal(gen);
+	emitIndent(gen);
+	emit(gen, `${declaration}${local} = `);
+	emitCopyOnRead(gen, (exprStmt.data as ExprStmtData).expr);
+	emit(gen, ";\n");
+	recordBundleExport(gen, "default", local);
+}
+
+export function emitDeferredDefaultExport(gen: JSGenerator, node: Node): void {
+	gen.staticSlots.push(`let ${bundleDefaultLocal(gen)};\n`);
+	emitBundleDefaultExport(gen, (node.data as ExportDeclData).exportedDecl, "");
+}
+
 export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ExportDeclData;
 	const inner = d.exportedDecl;
@@ -478,12 +496,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const isDefault = node.flags.has(NodeFlag.ExportDefault);
 	if (gen.bundleMode) {
 		if (isDefault && inner.kind == NodeKind.ExprStmt) {
-			const local = mangleQualified("default", mangleModuleName(gen.sourceFile));
-			emitIndent(gen);
-			emit(gen, `const ${local} = `);
-			emitCopyOnRead(gen, (inner.data as ExprStmtData).expr);
-			emit(gen, ";\n");
-			recordBundleExport(gen, "default", local);
+			emitBundleDefaultExport(gen, inner, "const ");
 			return;
 		}
 		let declName = "";

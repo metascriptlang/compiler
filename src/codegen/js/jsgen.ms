@@ -30,7 +30,7 @@ import {
 	emitFunctionDecl, emitEnumDecl, emitClassDecl, emitActorDecl,
 	emitMethodDecl, emitConstructorDecl,
 	emitImportDecl, emitExportDecl, emitDecoratedDecl,
-	classEvaluatesStatics, emitDeferredClassBinding, emitDeferredClassValue,
+	classEvaluatesStatics, emitDeferredClassBinding, emitDeferredClassValue, emitDeferredDefaultExport,
 } from "./declarations";
 
 import { emitTestDecl } from "./test";
@@ -157,7 +157,6 @@ function runsInModuleBody(stmt: Node): boolean {
 // Declarations stay in the flat bundle scope so other modules keep naming them; the
 // body (initializers and statements, in source order) becomes the module's init function.
 function emitLazyModuleProgram(gen: JSGenerator, program: Node, pd: ProgramData): void {
-	if (hasTopLevelAwait(program)) throw new Error(`top-level await in ${gen.sourceFile}, a module reached only through import(), is not supported by the single-file JS bundle`);
 	const body: Node[] = [];
 	for (const stmt of pd.programStmts) {
 		if (runsInModuleBody(stmt)) body.push(stmt);
@@ -166,13 +165,13 @@ function emitLazyModuleProgram(gen: JSGenerator, program: Node, pd: ProgramData)
 			body.push(stmt);
 		} else emitNodeDispatch(gen, stmt);
 	}
-	emit(gen, `function ${lazyModuleInitName(gen.sourceFile)}() {\n`);
+	emit(gen, `${hasTopLevelAwait(program) ? "async " : ""}function ${lazyModuleInitName(gen.sourceFile)}() {\n`);
 	gen.indentLevel += 1;
 	for (const stmt of body) {
 		const decl = declarationOf(stmt);
 		if (decl.kind == NodeKind.VariableDecl) emitModuleStorageDecl(gen, decl);
 		else if (decl.kind == NodeKind.ClassDecl) emitDeferredClassValue(gen, decl);
-		else if (stmt.kind == NodeKind.ExportDecl && stmt.flags.has(NodeFlag.ExportDefault)) throw new Error(`export default of an expression in ${gen.sourceFile}, a module reached only through import(), is not supported by the single-file JS bundle`);
+		else if (stmt.kind == NodeKind.ExportDecl && stmt.flags.has(NodeFlag.ExportDefault)) emitDeferredDefaultExport(gen, stmt);
 		else emitNodeDispatch(gen, stmt);
 	}
 	gen.indentLevel -= 1;
@@ -185,44 +184,104 @@ export function bundleModuleEvaluator(plan: DynamicModulePlan): string {
 	for (let i = 0; i < plan.records.length; i += 1) {
 		const path = plan.records[i];
 		const lazy = plan.lazy.has(path);
-		table = table + `  { init: ${lazy ? lazyModuleInitName(path) : "null"}, requested: [${plan.requested[i].join(", ")}], status: ${lazy ? 0 : 2}, failed: false, error: undefined, dfsIndex: 0, dfsAncestorIndex: 0 },\n`;
+		table = table + `  { init: ${lazy ? lazyModuleInitName(path) : "null"}, requested: [${plan.requested[i].join(", ")}], status: ${lazy ? 0 : 2}, hasTLA: ${plan.topLevelAwait.has(path)}, failed: false, error: undefined, dfsIndex: 0, dfsAncestorIndex: 0, asyncEvaluation: false, asyncOrdinal: 0, pendingAsyncDeps: 0, asyncParents: [], cycleRoot: ${i}, waiters: [] },\n`;
 	}
 	return table + "];\n" + MODULE_EVALUATOR;
 }
 
-const MODULE_EVALUATOR = "function msModuleInnerEvaluate(at, stack, index) {\n"
+// Record status: 0 linked, 1 evaluating, 2 evaluated, 3 evaluating async.
+const MODULE_EVALUATOR = "let msModuleNextAsyncOrdinal = 0;\n"
+	+ "function msModuleInnerEvaluate(at, stack, index) {\n"
 	+ "  const m = msModuleRecords[at];\n"
-	+ "  if (m.status === 2) { if (m.failed) throw m.error; return index; }\n"
+	+ "  if (m.status === 2 || m.status === 3) { if (m.failed) throw m.error; return index; }\n"
 	+ "  if (m.status === 1) return index;\n"
 	+ "  m.status = 1;\n"
 	+ "  m.dfsIndex = index;\n"
 	+ "  m.dfsAncestorIndex = index;\n"
 	+ "  index += 1;\n"
+	+ "  m.pendingAsyncDeps = 0;\n"
 	+ "  stack.push(at);\n"
 	+ "  for (const req of m.requested) {\n"
 	+ "    index = msModuleInnerEvaluate(req, stack, index);\n"
-	+ "    const r = msModuleRecords[req];\n"
-	+ "    if (r.status === 1 && r.dfsAncestorIndex < m.dfsAncestorIndex) m.dfsAncestorIndex = r.dfsAncestorIndex;\n"
+	+ "    let r = msModuleRecords[req];\n"
+	+ "    if (r.status === 1) { if (r.dfsAncestorIndex < m.dfsAncestorIndex) m.dfsAncestorIndex = r.dfsAncestorIndex; }\n"
+	+ "    else { r = msModuleRecords[r.cycleRoot]; if (r.failed) throw r.error; }\n"
+	+ "    if (r.asyncEvaluation) { m.pendingAsyncDeps += 1; r.asyncParents.push(at); }\n"
 	+ "  }\n"
-	+ "  if (m.init !== null) m.init();\n"
+	+ "  if (m.pendingAsyncDeps > 0 || m.hasTLA) {\n"
+	+ "    m.asyncEvaluation = true;\n"
+	+ "    m.asyncOrdinal = msModuleNextAsyncOrdinal;\n"
+	+ "    msModuleNextAsyncOrdinal += 1;\n"
+	+ "    if (m.pendingAsyncDeps === 0) msModuleExecuteAsync(at);\n"
+	+ "  } else m.init();\n"
 	+ "  if (m.dfsAncestorIndex === m.dfsIndex) {\n"
 	+ "    let popped;\n"
-	+ "    do { popped = stack.pop(); msModuleRecords[popped].status = 2; } while (popped !== at);\n"
+	+ "    do { popped = stack.pop(); const p = msModuleRecords[popped]; p.cycleRoot = at; p.status = p.asyncEvaluation ? 3 : 2; } while (popped !== at);\n"
 	+ "  }\n"
 	+ "  return index;\n"
 	+ "}\n"
+	+ "function msModuleExecuteAsync(at) {\n"
+	+ "  msModuleRecords[at].init().then(() => msModuleAsyncFulfilled(at), (e) => msModuleAsyncRejected(at, e));\n"
+	+ "}\n"
+	+ "function msModuleSettleWaiters(m) {\n"
+	+ "  const waiters = m.waiters;\n"
+	+ "  m.waiters = [];\n"
+	+ "  for (const w of waiters) { if (m.failed) w.reject(m.error); else w.resolve(1); }\n"
+	+ "}\n"
+	+ "function msModuleGatherAvailableAncestors(m, execList) {\n"
+	+ "  for (const pAt of m.asyncParents) {\n"
+	+ "    const p = msModuleRecords[pAt];\n"
+	+ "    if (msModuleRecords[p.cycleRoot].failed || execList.includes(pAt)) continue;\n"
+	+ "    p.pendingAsyncDeps -= 1;\n"
+	+ "    if (p.pendingAsyncDeps === 0) { execList.push(pAt); if (!p.hasTLA) msModuleGatherAvailableAncestors(p, execList); }\n"
+	+ "  }\n"
+	+ "}\n"
+	+ "function msModuleAsyncFulfilled(at) {\n"
+	+ "  const m = msModuleRecords[at];\n"
+	+ "  if (m.failed) return;\n"
+	+ "  if (m.status !== 3) throw new Error(\"internal: module evaluation finished on a module in status \" + m.status);\n"
+	+ "  m.asyncEvaluation = false;\n"
+	+ "  m.status = 2;\n"
+	+ "  msModuleSettleWaiters(m);\n"
+	+ "  const execList = [];\n"
+	+ "  msModuleGatherAvailableAncestors(m, execList);\n"
+	+ "  execList.sort((a, b) => msModuleRecords[a].asyncOrdinal - msModuleRecords[b].asyncOrdinal);\n"
+	+ "  for (const pAt of execList) {\n"
+	+ "    const p = msModuleRecords[pAt];\n"
+	+ "    if (p.failed) continue;\n"
+	+ "    if (p.hasTLA) { msModuleExecuteAsync(pAt); continue; }\n"
+	+ "    try { p.init(); }\n"
+	+ "    catch (e) { msModuleAsyncRejected(pAt, e); continue; }\n"
+	+ "    p.asyncEvaluation = false;\n"
+	+ "    p.status = 2;\n"
+	+ "    msModuleSettleWaiters(p);\n"
+	+ "  }\n"
+	+ "}\n"
+	+ "function msModuleAsyncRejected(at, e) {\n"
+	+ "  const m = msModuleRecords[at];\n"
+	+ "  if (m.failed) return;\n"
+	+ "  m.failed = true;\n"
+	+ "  m.error = e;\n"
+	+ "  m.status = 2;\n"
+	+ "  m.asyncEvaluation = false;\n"
+	+ "  for (const pAt of m.asyncParents) msModuleAsyncRejected(pAt, e);\n"
+	+ "  msModuleSettleWaiters(m);\n"
+	+ "}\n"
+	+ "function msModuleEvaluateFor(at, w) {\n"
+	+ "  let m = msModuleRecords[at];\n"
+	+ "  if (m.status === 2 || m.status === 3) { at = m.cycleRoot; m = msModuleRecords[at]; }\n"
+	+ "  if (m.status === 0) {\n"
+	+ "    const stack = [];\n"
+	+ "    try { msModuleInnerEvaluate(at, stack, 0); }\n"
+	+ "    catch (e) { for (const k of stack) { const r = msModuleRecords[k]; r.status = 2; r.failed = true; r.error = e; } w.reject(e); return; }\n"
+	+ "    if (m.asyncEvaluation) m.waiters.push(w); else w.resolve(1);\n"
+	+ "  } else if (m.failed) w.reject(m.error);\n"
+	+ "  else if (m.status === 3) m.waiters.push(w);\n"
+	+ "  else if (m.status === 2) w.resolve(1);\n"
+	+ "  else throw new Error(\"internal: import() met a module in status \" + m.status);\n"
+	+ "}\n"
 	+ "function msModuleImport(at) {\n"
-	+ "  return Promise.resolve().then(() => {\n"
-	+ "    const m = msModuleRecords[at];\n"
-	+ "    if (m.status === 0) {\n"
-	+ "      const stack = [];\n"
-	+ "      try { msModuleInnerEvaluate(at, stack, 0); }\n"
-	+ "      catch (e) { for (const k of stack) { const r = msModuleRecords[k]; r.status = 2; r.failed = true; r.error = e; } }\n"
-	+ "    }\n"
-	+ "    if (m.status !== 2) throw new Error(\"internal: import() settled while its module evaluation is unfinished\");\n"
-	+ "    if (m.failed) throw m.error;\n"
-	+ "    return 1;\n"
-	+ "  });\n"
+	+ "  return new Promise((resolve, reject) => { Promise.resolve().then(() => msModuleEvaluateFor(at, { resolve, reject })); });\n"
 	+ "}\n";
 
 // Register the dispatcher (lambda wrapper required — top-level fn is generic msClosure, typed var needs msClosureN)

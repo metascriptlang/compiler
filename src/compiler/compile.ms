@@ -1521,7 +1521,10 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
 		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers, dynamicPlan);
-		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
+		if (hasTopLevelAwait(transformed)) {
+			anyTopLevelAwait = true;
+			if (dynamicPlan.lazy.has(modPath)) dynamicPlan.topLevelAwait.add(modPath);
+		}
 		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals, reexports);
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
