@@ -1,0 +1,6 @@
+import { hash } from "std/hash";
+import { blake2b } from "std/crypto/blake2b";
+
+export function label(): string {
+	return (blake2b("native first use").byteLength + (hash("abc") > 0 ? 0 : 1)).toString();
+}

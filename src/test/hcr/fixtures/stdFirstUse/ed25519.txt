@@ -1,0 +1,8 @@
+import { hash } from "std/hash";
+import { blake2b } from "std/crypto/blake2b";
+import { ed25519FromSeed } from "std/crypto/ed25519";
+
+export function label(): string {
+	const key = ed25519FromSeed("a".repeat(32));
+	return (blake2b("native first use").byteLength + (hash("abc") > 0 ? 0 : 1)).toString() + (key.ok ? " native pair" : " native failed");
+}

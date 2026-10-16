@@ -1,0 +1,5 @@
+import { hash } from "std/hash";
+
+export function label(): string {
+	return hash("abc").toString();
+}

@@ -1,6 +1,7 @@
 import { argv, exit } from "std/process";
 
 @include("runtime/hcr.h");
+@include("runtime/hcrEngine.h");
 @include("./hostCalls.h");
 
 extern function hcrOpen(path: cstring): Ptr<void> from "msHcrImageOpen";
@@ -8,6 +9,8 @@ extern function hcrSymbol(handle: Ptr<void>, name: cstring): Ptr<void> from "msH
 extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
 extern function hcrCallInit(raw: Ptr<void>): void from "msHcrImageCallInit";
 extern function hcrCallProbe(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
+extern function msHcrListCount(raw: Ptr<void>): int32;
+extern function msHcrListItem(raw: Ptr<void>, index: int32): string;
 extern function hcrFixtureCore(): Ptr<void> from "hcrFixtureCore";
 extern function hcrImageExt(): string from "hcrFixtureImageExt";
 extern function hcrFixtureCallName(raw: Ptr<void>, name: cstring): void from "hcrFixtureCallName";
@@ -51,6 +54,23 @@ function imageModuleId(name: string): string {
 
 const images: Ptr<void>[] = [];
 const names: string[] = [];
+const discovered: string[] = [];
+
+function load(path: string): void {
+	const name = imageName(path);
+	if (discovered.includes(name)) return;
+	discovered.push(name);
+	const image = open(path);
+	const imports = required(image, "HcrImports000");
+	const directory = path.substring(0, path.lastIndexOf("/") + 1);
+	for (let i: int32 = 0; i < msHcrListCount(imports); i += 1) {
+		const id = msHcrListItem(imports, i);
+		load(`${directory}module.${id.replaceAll("/", ".")}${hcrImageExt()}`);
+	}
+	images.push(image);
+	names.push(name);
+}
+
 const reloads: string[] = [];
 let inReloads = false;
 for (let i = 1; i < argv.length; i += 1) {
@@ -59,8 +79,7 @@ for (let i = 1; i < argv.length; i += 1) {
 	} else if (inReloads) {
 		reloads.push(argv[i]);
 	} else {
-		images.push(open(argv[i]));
-		names.push(imageName(argv[i]));
+		load(argv[i]);
 	}
 }
 if (images.length == 0) {

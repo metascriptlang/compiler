@@ -637,7 +637,7 @@ function arrayOwner(): void {
 	copy(`${FIXTURES}/arrayOwner/logicEdit.ms`, `${reloaded}/logic.ms`);
 	mustBuild(tag, reloaded, ["build", "app.ms", "--hcr", `--output=g2/module${ext}`], "the edited generation did not build");
 	ensureDir(`${reloaded}/run`);
-	for (const image of [`module${ext}`, `module.core${ext}`, `module.first${ext}`, `module.second${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
+	for (const image of readDir(`${reloaded}/g1`)) {
 		copy(`${reloaded}/g1/${image}`, `${reloaded}/run/${image}`);
 	}
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], reloaded);
@@ -739,7 +739,7 @@ function engine(): void {
 	}
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module.lifecycle${ext}`, `module${ext}.hcrabi`]) {
+	for (const image of readDir(`${dir}/g1`)) {
 		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
 	}
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
@@ -807,7 +807,7 @@ function asyncLoop(): void {
 	}
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
+	for (const image of readDir(`${dir}/g1`)) {
 		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
 	}
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
@@ -860,7 +860,7 @@ function liftKinds(): void {
 	}
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of [`module${ext}`, `module.core${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
+	for (const image of readDir(`${dir}/g1`)) {
 		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
 	}
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
@@ -957,16 +957,53 @@ function coreGroup(): void {
 function stdFirstUse(): void {
 	const tag = "hcrStdFirstUse";
 	const dir = freshDir(`${TMP}/stdFirstUse`);
-	for (const f of ["app.ms", "logic.ms", "upper.txt", "error.txt", "path.txt"]) copy(`${FIXTURES}/stdFirstUse/${f}`, `${dir}/${f}`);
+	ensureDir(`${dir}/watched`);
+	for (const f of ["app.ms", "logic.ms", "upper.txt", "error.txt", "path.txt", "hash.txt", "blake.txt", "ed25519.txt", "deflate.txt", "inflate.txt", "json.txt", "watch.txt"]) copy(`${FIXTURES}/stdFirstUse/${f}`, `${dir}/${f}`);
 	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("HCR-STD ")) seen.push(line);
 	}
-	const want = ["HCR-STD start plain", "HCR-STD reloaded LOUD", "HCR-STD reloaded caught", "HCR-STD reloaded joined.ms"];
+	const want = ["HCR-STD start plain", "HCR-STD reloaded LOUD", "HCR-STD reloaded caught", "HCR-STD reloaded joined.ms", "HCR-STD reloaded 193485963", "HCR-STD reloaded 32", "HCR-STD reloaded 32 native pair", "HCR-STD reloaded deflate ready", "HCR-STD reloaded inflate roundtrip", "HCR-STD reloaded json tag 7", "HCR-STD reloaded watch closed"];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a first use of a standard-library method, class or module did not reload into the running app");
+	}
+	if (platform == "darwin") {
+		const providers = ["_crypto_blake2b_init", "_mz_deflateInit", "_tdefl_compress_buffer", "_tinfl_decompress", "_msGetIoEngine", "_msGetIoEngineIfExists", "_msIoEngineCreate", "_msIoEngineDestroy", "_msIoEnginePoll", "_msIoEngineWake", "_msIoEngineAddWakeFd", "_msIoEngineCancelFd"];
+		const images = `${dir}/out/hcr`;
+		for (const image of readDir(images)) {
+			if (!image.endsWith(".dylib")) continue;
+			const symbols = execFileResult("nm", ["-gU", `${images}/${image}`], ROOT);
+			need(tag, succeeded(symbols), `cannot inspect native providers in '${image}'`);
+			const defined = lines(symbols.output);
+			for (const provider of providers) {
+				let found = false;
+				for (const symbol of defined) {
+					if (symbol.endsWith(" " + provider)) found = true;
+				}
+				need(tag, found == (image == "app.core.dylib"), `native provider '${provider}' has wrong owner '${image}'`);
+			}
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function sharedNativeFlags(): void {
+	const tag = "hcrSharedNativeFlags";
+	let index = 0;
+	for (const source of ["vendor/monocypher/src/monocypher.c", "vendor/miniz/miniz.c", "runtime/io/engineSelect.c"]) {
+		const dir = freshDir(`${TMP}/nativeFlags${index}`);
+		index = index + 1;
+		put(`${dir}/providerConfig.h`, "#if HCR_PROVIDER_CONFIG != 1\n#error missing provider configuration\n#endif\n");
+		put(`${dir}/app.ms`, `@compile("${source}", "-DHCR_PROVIDER_CONFIG=1 -include providerConfig.h");\nconsole.log("configured provider");\n`);
+		mustBuild(tag, dir, ["build", "--hcr", "app.ms"], "valid shared-provider flags were not applied");
+		put(`${dir}/app.ms`, `@compile("${source}", "-include hcr_missing_native_config_header.h");\nconsole.log("invalid provider");\n`);
+		const missing = msc(dir, ["build", "--hcr", "app.ms"]);
+		need(tag, !succeeded(missing) && both(missing).includes("hcr_missing_native_config_header.h"), "shared-provider custom header input was silently ignored");
+		put(`${dir}/app.ms`, `@compile("${source}", "-O2");\n@compile("${source}", "-O3");\nconsole.log("conflicting provider");\n`);
+		const conflicting = msc(dir, ["build", "--hcr", "app.ms"]);
+		need(tag, !succeeded(conflicting) && both(conflicting).includes("conflicting @compile flags"), "shared provider accepted two configurations");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1136,7 +1173,7 @@ function runPrebuilt(tag: string, dir: string, modules: string[], prefix: string
 	copy(STD_HOST, `${dir}/host.cms`);
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const name of [`module${ext}`, `module.core${ext}`, `module${ext}.hcrabi`]) {
+	for (const name of readDir(`${dir}/g1`)) {
 		copy(`${dir}/g1/${name}`, `${dir}/run/${name}`);
 	}
 	for (const moduleId of modules) {
@@ -1586,6 +1623,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrCoreGroup", run: coreGroup },
 	{ name: "hcrStdFirstUse", run: stdFirstUse },
+	{ name: "hcrSharedNativeFlags", run: sharedNativeFlags },
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
 	{ name: "hcrGenericCtor", run: genericCtor },

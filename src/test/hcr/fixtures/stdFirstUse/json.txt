@@ -1,0 +1,23 @@
+import { hash } from "std/hash";
+import { blake2b } from "std/crypto/blake2b";
+import { ed25519FromSeed } from "std/crypto/ed25519";
+import { gzip } from "std/compress/deflate";
+import { gunzip } from "std/compress/inflate";
+import { jsonArray, jsonString, jsonNumber } from "std/serialize/json/builder";
+import { JsonKind } from "std/serialize/json/types";
+
+export function label(): string {
+	const key = ed25519FromSeed("a".repeat(32));
+	const packed = gzip("native first use");
+	if (hash("abc") <= 0 || blake2b("native first use").byteLength != 32 || !key.ok || !packed.ok) return "native failed";
+	const unpacked = gunzip(packed.value);
+	if (!unpacked.ok || unpacked.value != "native first use") return "native failed";
+	const value = jsonArray([jsonArray([jsonString("json tag "), jsonNumber(7)])]);
+	if (value.kind != JsonKind.Array) return "union failed";
+	const nested = value.items[0];
+	if (nested.kind != JsonKind.Array) return "union failed";
+	const text = nested.items[0];
+	const number = nested.items[1];
+	if (text.kind != JsonKind.String || number.kind != JsonKind.Number) return "union failed";
+	return text.strVal + number.numVal.toString();
+}

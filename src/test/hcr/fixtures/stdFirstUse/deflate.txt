@@ -1,0 +1,11 @@
+import { hash } from "std/hash";
+import { blake2b } from "std/crypto/blake2b";
+import { ed25519FromSeed } from "std/crypto/ed25519";
+import { gzip } from "std/compress/deflate";
+
+export function label(): string {
+	const key = ed25519FromSeed("a".repeat(32));
+	const packed = gzip("native first use");
+	const nativeReady = hash("abc") > 0 && blake2b("native first use").byteLength == 32 && key.ok;
+	return nativeReady && packed.ok && packed.value.byteLength > 0 ? "deflate ready" : "native failed";
+}
