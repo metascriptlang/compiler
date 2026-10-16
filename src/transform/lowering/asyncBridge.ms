@@ -77,7 +77,7 @@ import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture, makeVal
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
 // Promise<T> so DRC's cross-pass contract holds; codegen extracts T via awaitedType.
-function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
+export function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	if (inlineInFuture(innerType)) {
 		const inlineCall = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		inlineCall.nodeType = promiseTypeFor(innerType);
@@ -137,7 +137,7 @@ function zeroValueForType(t: Type, loc: SourceLocation): Node {
 // Returns an array of statements (usually 1, but 2 for arrays due to msSinkBoxStruct expansion).
 let asyncNameCounter = 0;
 
-function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutSym: Symbol, ctx: TransformContext): Node[] {
+export function makeFutureCompleteStmts(valueExpr: Node | null, isVoid: boolean, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutSym: Symbol, ctx: TransformContext): Node[] {
 	if (isVoid || valueExpr == null) {
 		return [makeExprStmt(makeCall(
 			runtimeRef("msFutureCompleteVoid", loc),

@@ -37,9 +37,9 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		if (node.kind == NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
-		// new Promise(executor) → msPromiseNew(executor)
+		// new Promise<T>(executor) → msPromiseNewValue(executor, future, resolve)
 		if (node.kind == NodeKind.NewExpr) {
-			return lowerNewPromise(node);
+			return lowerNewPromise(node, ctx);
 		}
 		// arr.length = n → msXxxArraySetLen(&arr, n)
 		if (node.kind == NodeKind.BinaryExpr) {
@@ -396,7 +396,7 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 // ===== arr.length = n → setLength(arr, n) sugar =====
 // setLength is the real API. arr.length = n is syntactic sugar.
 // Rewrites BinaryExpr(=, MemberExpr(arr, "length"), n) → CallExpr to C runtime setLength.
-// `new Promise(executor) → msPromiseNew` lives in lowering/promiseLower.ms.
+// `new Promise(executor) → msPromiseNewValue` lives in lowering/promiseLower.ms.
 
 function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return node;
