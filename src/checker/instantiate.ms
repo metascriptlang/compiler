@@ -574,7 +574,7 @@ function unwrapToFunctionDecl(node: Node): Node {
 			fnBody: md.methodBody,
 			fnFlags: md.methodFlags,
 			fnReturnType: md.methodReturnType,
-			fnDefaults: [],
+			fnDefaults: md.methodDefaults,
 			nativeName: md.nativeName,
 			nameLocation: md.nameLocation,
 		};
