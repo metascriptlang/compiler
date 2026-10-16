@@ -3,7 +3,7 @@
  *
  * "The program ends when the event loop is empty": after the entry module's
  * top-level code returns, keep pumping the dispatcher until nothing is left
- * (no due timers, no queued callbacks, no busy pool workers), then report
+ * (no due timers, no queued callbacks, no pending pool tasks), then report
  * futures that completed FAILED with no observer — the unhandled-rejection
  * contract (exit code 1). process.exit() bypasses both, matching Node.
  */
@@ -108,10 +108,10 @@ void msDrainUntilIdle(void) {
 		int nextTimer = msProcessTimers(d, &didWork);
 		msProcessCallbacks(d, &didWork);
 		if (didWork) { idleSweeps = 0; continue; }
-		bool workersBusy = msPoolBusyPeek() > 0;
-		if (nextTimer >= 0 || workersBusy) {
+		bool tasksPending = msPoolPendingPeek() > 0;
+		if (nextTimer >= 0 || tasksPending) {
 			idleSweeps = 0;
-			msRunOnce(workersBusy && nextTimer < 0 ? 10 : nextTimer);
+			msRunOnce(tasksPending && nextTimer < 0 ? 10 : nextTimer);
 			continue;
 		}
 		/* Fully idle per the cheap checks — one non-blocking sweep catches
