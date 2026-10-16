@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBloc
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, unknownReturnRefusal, returnReprRefusal, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { adoptLiteralArms, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
+import { adoptLiteralArms, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, wrapInConv, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -2296,7 +2296,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				args[pi] = convNode;
 			}
 			const paramValue = skipModifier(paramType);
-			if (paramValue != null && paramValue.kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+			if (!formalAwaitsBinding && paramValue != null && paramValue.kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
 				const uw = widenVariantToUnion(args[pi], paramValue, argNow);
 				if (uw != null as unknown as Node) args[pi] = uw;
@@ -3062,7 +3062,13 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 			continue;
 		}
-		if (!isMaybeType(substituted) || substituted.typeReturn == null) continue;
+		if (!isMaybeType(substituted) || substituted.typeReturn == null) {
+			const convType = substituted.kind == TypeKind.Sink && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+			if (arg.nodeType != null && convType.kind != TypeKind.Var && !hasGenericParams(convType) && needsStdConv(arg.nodeType, convType)) {
+				cd.arguments[pi] = wrapInConv(arg, convType);
+			}
+			continue;
+		}
 		if (arg.kind == NodeKind.NullLiteral) {
 			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType!);
 			if (pi < argTypes.length) argTypes[pi] = substituted;
