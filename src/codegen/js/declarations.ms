@@ -11,7 +11,7 @@ import { mangleQualified, mangleModuleName } from "../c/names";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
 
@@ -102,7 +102,7 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
-		emit(gen, `var ${safeJsName(d.enumName)}_${d.enumMembers[i]} = ${val};\n`);
+		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${val};\n`);
 	}
 }
 
@@ -505,7 +505,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		NodeKind.EnumDecl => {
 			if (gen.multiFile) {
 				const ed = inner.data as EnumDeclData;
-				for (const m of ed.enumMembers) { gen.exportedNames.push(`${safeJsName(ed.enumName)}_${m}`); }
+				for (const m of ed.enumMembers) { gen.exportedNames.push(enumMemberName(inner.resolvedSym, safeJsName(ed.enumName), m)); }
 			}
 			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
 		},
