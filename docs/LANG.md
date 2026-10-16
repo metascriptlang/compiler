@@ -3747,7 +3747,7 @@ const name = j.user.name;   // synthesized: j.getDynamicField("user").getDynamic
 
 Self-referential return enables infinite chaining. Non-opt-in types (e.g. `User` interface with declared fields only) remain strict like TypeScript — `u.weirdField` errors at compile.
 
-**Read-only**: synthesis fires only on the read path. `obj.foo = x` does NOT route through `getDynamicField` — the compiler's `leftPartOfAsgn` guard ensures writes still error strictly.
+**Writes**: `obj.foo = x` goes to `setDynamicField(this T, key: string, value: U)` when `T` declares one, never to `getDynamicField`; without it the write is the usual missing-member error. Measured 2026-10-16 on C and JS with `type P = distinct Todo` declaring both: `p.title`, `p.whatever` and `p.title = "b"` reach the extensions with their keys and print the same on both backends. A compound write is refused: on a `distinct` of `{ n: number }`, `p.n += 2` is `compound assignment '+=' is not supported on dynamic field 'n'` on C and JS.
 
 ##### Runtime converters
 
