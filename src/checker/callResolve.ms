@@ -29,6 +29,7 @@ import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
+import { checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
 // Used by `resolveGenericNewExpr` to read concrete type args from a contextual
@@ -957,6 +958,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// allocation — atomic-rc header + inline ticket lock + typed payload —
 		// so the handle is an atomic Ref like Arc and rides every mechanism Arc
 		// already drives. nativeLower boxes it via msBoxLocked.
+		if (id.name == "Proxy" && checkNewProxy(ctx, node, expected)) return node.nodeType!;
 		if (head == "Locked" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;
@@ -4653,6 +4655,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			return inferredType();
 		}
 	}
+	const proxyParts = proxyPartsOf(ctx, objType);
+	if (proxyParts != null) return readThroughProxy(ctx, node, proxyParts, expectedType);
 	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
 	// reference: skip pointer types → lookup field → make dereference
 	const nullablePtr = objType.kind == TypeKind.Union ? unwrapRefNullUnion(objType) : null;

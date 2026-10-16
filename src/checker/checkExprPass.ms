@@ -15,6 +15,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
+import { keyedProxyAccess, refuseProxyComparison, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { distinctNumericBase, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
@@ -840,6 +841,10 @@ function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type 
 
 function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as UpdateExprData;
+	if (d.updateArg.kind == NodeKind.MemberExpr) {
+		checkInTypeSlot(ctx, (d.updateArg.data as MemberExprData).object);
+		if (updateThroughProxy(ctx, node)) return;
+	}
 	checkExpr(ctx, d.updateArg, null);
 	reportSharedWrite(ctx, d.updateArg);
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
@@ -1076,6 +1081,14 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	}
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
+	}
+	if (isAsgn && d.left.kind == NodeKind.ArrayAccess && (d.left.data as ArrayAccessData).array != null) {
+		checkInTypeSlot(ctx, (d.left.data as ArrayAccessData).array);
+		if (keyedProxyAccess(ctx, d.left) && d.left.kind != NodeKind.MemberExpr) { ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1; node.nodeType = errorType(); return; }
+	}
+	if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
+		checkInTypeSlot(ctx, (d.left.data as MemberExprData).object);
+		if (writeThroughProxy(ctx, node)) { ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1; return; }
 	}
 	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
 	const savedDefinite = ctx.initTracker.definiteTarget;
@@ -1509,6 +1522,7 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 		return;
 	}
 	if (refuseDisjointStrings(ctx, d.operator, d.left, d.right, node)) { node.nodeType = errorType(); return; }
+	if (refuseProxyComparison(ctx, d.operator, d.left.nodeType, d.right.nodeType, node)) { node.nodeType = errorType(); return; }
 	const tplOpName = (d.operator == "!=" || d.operator == "!==") ? "!="
 		: ((d.operator == ">" || d.operator == ">=") ? d.operator : "");
 	if (tplOpName != "" && effLeft != null && effRight != null
@@ -2427,6 +2441,10 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 		ctx.initTracker.leftPartOfAsgn = 0;
 		checkExpr(ctx, d.index, null);
 		ctx.initTracker.leftPartOfAsgn = savedLpa;
+		if (keyedProxyAccess(ctx, node)) {
+			if (node.kind == NodeKind.MemberExpr) checkExpr(ctx, node, expectedType);
+			return;
+		}
 	}
 	if (arrayIsFunction) {
 		addError(ctx, "a function value cannot be indexed — call it first", node.location.line, node.location.column);
