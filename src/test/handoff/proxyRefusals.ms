@@ -31,3 +31,16 @@ test "a Proxy is indexed by a key written in the source" {
 test "an increment through a Proxy is a statement" {
 	assert hasError("interface C { n: int32; }\nclass T { get<K extends keyof C>(t: C, key: K): C[K] { return t[key]; } }\nconst c: C = { n: 1 };\nconst p = new Proxy(c, new T());\nconst w = p.n++;", "'++' through a Proxy is a statement");
 }
+
+test "a handler trap of JavaScript's object model is refused by name" {
+	const src = "interface Todo { title: string; }\nclass Bad { getPrototypeOf(target: Todo): Todo { return target; } construct(target: Todo): Todo { return target; } }\nconst p = new Proxy({ title: \"a\" } as Todo, new Bad());";
+	assert hasError(src, "'Bad' declares the 'getPrototypeOf' trap");
+	assert hasError(src, "'Bad' declares the 'construct' trap");
+}
+
+test "a Proxy does not cross an extern boundary" {
+	const head = "interface Todo { title: string; }\nclass T { get<K extends keyof Todo>(target: Todo, key: K): Todo[K] { return target[key]; } }\n";
+	assert hasError(head + "extern function show(n: int32, p: Proxy<Todo, T>): void;", "extern 'show' parameter 2: a Proxy crosses into foreign code");
+	assert hasError(head + "extern function make(): Proxy<Todo, T>;", "extern 'make' return type: a Proxy crosses into foreign code");
+	assert strictErrorCount(head + "extern function show(t: Todo): void;") == 0;
+}
