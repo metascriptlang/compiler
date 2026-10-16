@@ -10,6 +10,13 @@
 struct Pair { n: int32; tag: string; }
 
 let log = "";
+let pending: ((v: int32) => void) | null = null;
+
+async function settleLater(v: int32): Promise<void> {
+	await sleepAsync(1);
+	const settle = pending;
+	if (settle !== null) settle(v);
+}
 
 async function run(): Promise<void> {
 	log += "a";
@@ -31,7 +38,8 @@ async function run(): Promise<void> {
 	await nothing;
 	out += " | void ok";
 
-	const later = new Promise<int32>((resolve, reject) => { sleepAsync(1).then(() => { resolve(9); }); });
+	const later = new Promise<int32>((resolve, reject) => { pending = resolve; });
+	settleLater(9);
 	out += ` | later ${await later}`;
 
 	const rejected = new Promise<string>((resolve, reject) => { reject("boom"); });
