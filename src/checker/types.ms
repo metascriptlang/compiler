@@ -2353,12 +2353,17 @@ export function destrPositionalElemType(srcType: Type | null, i: int32): Type | 
 	return null;
 }
 
-export function destrNamedFieldType(srcType: Type | null, fieldName: string): Type | null {
-	let bt = srcType;
-	if (bt == null) return null;
-	bt = peelTransparentInstance(bt);
+function destructuredFields(srcType: Type | null): Type | null {
+	if (srcType == null) return null;
+	let bt = peelTransparentInstance(srcType);
 	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
-	if (bt.kind != TypeKind.Struct) return null;
+	const body = bt.kind == TypeKind.GenericInstance ? peelToStructOrUnion(bt) : bt;
+	return body != null && body.kind == TypeKind.Struct ? body : null;
+}
+
+export function destrNamedFieldType(srcType: Type | null, fieldName: string): Type | null {
+	const bt = destructuredFields(srcType);
+	if (bt == null) return null;
 	for (let fi = 0; fi < bt.typeNames.length; fi += 1) {
 		if (bt.typeNames[fi] == fieldName && fi < bt.typeChildren.length) return bt.typeChildren[fi];
 	}
@@ -2398,11 +2403,8 @@ export function destrRestElemType(srcType: Type | null): Type | null {
 
 export function destrObjectRestNames(srcType: Type | null, taken: string[]): string[] {
 	const names: string[] = [];
-	let bt = srcType;
+	const bt = destructuredFields(srcType);
 	if (bt == null) return names;
-	bt = peelTransparentInstance(bt);
-	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
-	if (bt.kind != TypeKind.Struct) return names;
 	for (const fieldName of bt.typeNames) {
 		let isTaken = false;
 		for (const takenName of taken) {
