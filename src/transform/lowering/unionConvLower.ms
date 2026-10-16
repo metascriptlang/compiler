@@ -1,6 +1,6 @@
-import { Node, NodeKind, NodeFlag, TypeKind, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
-import { peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
+import { matchUnionBehindInstance, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
 import { TransformContext, mintSym, reportTransformError } from "../context";
@@ -51,6 +51,7 @@ function targetMembers(target: Type): Type[] {
 function lowerConversion(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.BinaryExpr) return lowerComparison(node, ctx);
 	if (!ctx.jsBackend && !ctx.raiserBackend) storeNarrowedReads(node, ctx);
+	if (!ctx.jsBackend && !ctx.raiserBackend && node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) buildArm(node, ctx);
 	const pair = unionPair(node);
 	if (pair == null) return node;
 	const source = pair[0];
@@ -73,6 +74,50 @@ function lowerConversion(node: Node, ctx: TransformContext): Node {
 	const call = makeCall(makeTypedIdentResolved(conversionRoutine(source, target, ctx, node.location), null, node.location), [operand], node.location);
 	call.nodeType = node.nodeType;
 	return call;
+}
+
+function buildArm(node: Node, ctx: TransformContext): void {
+	const d = node.data as HiddenStdConvData;
+	const union = d.convType == null ? null : matchUnionBehindInstance(d.convType);
+	const from = d.convExpr.nodeType;
+	if (union == null || !isTagCarriedUnion(union) || from == null || node.variantSlot > union.typeChildren.length) return;
+	const slot = node.variantSlot - 1;
+	const arm = inlineVariantStruct(union.typeChildren[slot]);
+	const source = peelToStruct(unwrapRef(from));
+	if (arm == null || source == null || source == arm || source.typeFlags.has(TypeFlag.DuVariant)) return;
+	if (!omitsField(arm)) return;
+	const call = makeCall(makeTypedIdentResolved(armRoutine(union, slot, arm, from, source, ctx, node.location), null, node.location), [d.convExpr], node.location);
+	call.nodeType = union.typeChildren[slot];
+	d.convExpr = call;
+}
+
+function omitsField(arm: Type): boolean {
+	for (const f of arm.typeChildren) {
+		if (storesNothing(arm, f)) return true;
+	}
+	return false;
+}
+
+function armRoutine(union: Type, slot: int32, arm: Type, from: Type, source: Type, ctx: TransformContext, loc: SourceLocation): Symbol {
+	const name = "msArmConv_" + hashToBase36(typeKey(from) + ">" + typeKey(union) + "." + slot);
+	const at = _convNames.indexOf(name);
+	if (at >= 0) return _convSyms[at];
+	const sym = mintSym(ctx, SymbolKind.Function, name, null);
+	_convNames.push(name);
+	_convSyms.push(sym);
+	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", from);
+	const keys: string[] = [];
+	const values: Node[] = [];
+	for (let i = 0; i < arm.typeNames.length; i += 1) {
+		if (storesNothing(arm, arm.typeChildren[i])) continue;
+		if (!source.typeNames.includes(arm.typeNames[i])) throw new Error(`internal: object '${typeDisplayName(source)}' has no field '${arm.typeNames[i]}' of the union arm it converts into`);
+		keys.push(arm.typeNames[i]);
+		values.push(makeMember(read(valueSym, from, loc), arm.typeNames[i], loc));
+	}
+	const member = union.typeChildren[slot];
+	const literal = makeTypedObjectLiteral(keys, values, member, loc);
+	literal.flags = literal.flags.incl(NodeFlag.Sem);
+	return declareRoutine(sym, name, [valueSym], [from], member, [makeReturn(literal, loc)], loc);
 }
 
 function storeNarrowedReads(node: Node, ctx: TransformContext): void {

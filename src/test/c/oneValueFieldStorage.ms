@@ -31,8 +31,22 @@ test "an arm of an enum match union stores no enum discriminator beside the tag"
 	assert result.value.contains("typedef struct {\n  int32_t n;\n} S");
 }
 
-test "an object converted into an arm fills the arm by its stored fields" {
+test "an object converted into an arm is rebuilt by a routine, not by the emitter" {
 	const result = compileToC(pair + "const o: { ok: true; value: string } = { ok: true, value: \"x\" };\nfunction take(x: Pair): boolean { return x.ok; }\nconsole.log(take(o));");
 	assert result.ok;
-	assert result.value.contains("{ .value = ");
+	assert result.value.contains("msArmConv_");
+	assert !result.value.contains("_arm1_");
+}
+
+test "an arm that holds only its discriminator is built from the object too" {
+	const result = compileToC("type Flag = match (ok: boolean) { true => {}, false => { error: string } };\nconst o: { ok: true } = { ok: true };\nconst f: Flag = o;\nconsole.log(f.ok);");
+	assert result.ok;
+	assert result.value.contains("msArmConv_");
+	assert !result.value.contains("_arm1_");
+}
+
+test "an object that is already the arm's own struct is not rebuilt" {
+	const result = compileToC(pair + "function make(good: boolean): Pair { return good ? { ok: true, value: \"y\" } : { ok: false, error: \"n\" }; }\nconsole.log(make(true).ok);");
+	assert result.ok;
+	assert !result.value.contains("msArmConv_");
 }

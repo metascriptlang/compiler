@@ -160,26 +160,6 @@ function unstoredLiteral(g: CGen, object: Readonly<Node>, property: string): str
 	return `${getTypeDesc(g, enumT)}_${mangle(enumT.typeNames[member])}`;
 }
 
-// An object that is not the arm's own struct fills the arm's stored fields by name: the arm
-// stores no one-value discriminator, the object does, so the two C structs differ.
-function armFromObject(g: CGen, p: CProc, inner: string, srcType: Type | null, slot: Type): string {
-	const arm = inlineVariantStruct(slot);
-	const src = srcType != null ? peelToStructOrUnion(srcType) : null;
-	if (arm == null || src == null || src.kind != TypeKind.Struct || getTypeDesc(g, src) == getTypeDesc(g, arm)) return inner;
-	g.labels += 1;
-	const tmp = `_arm${g.labels}_`;
-	emitProcLocalsLine(p, `${getTypeDesc(g, src)} ${tmp};`);
-	emitStmtsLine(p, `${tmp} = ${inner};`);
-	let fields = "";
-	for (let i = 0; i < arm.typeNames.length; i += 1) {
-		if (storesNothing(arm, arm.typeChildren[i])) continue;
-		if (!src.typeNames.includes(arm.typeNames[i])) throw new Error(`internal: object '${typeDisplayName(src)}' has no field '${arm.typeNames[i]}' of the union arm it converts into`);
-		const f = mangleFieldName(arm.typeNames[i]);
-		fields = `${fields}${fields == "" ? "" : ", "}.${f} = ${tmp}.${f}`;
-	}
-	return `((${getTypeDesc(g, arm)}){ ${fields} })`;
-}
-
 function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
 	const lits: string[] = [];
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
@@ -2304,8 +2284,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				}
 			}
 			if (vi < convUnion.typeChildren.length) {
-				const payload = armFromObject(g, p, inner, srcType, convUnion.typeChildren[vi]);
-				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${payload}})`);
+				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
 				return;
 			}
 			ctx.results.push(inner);
