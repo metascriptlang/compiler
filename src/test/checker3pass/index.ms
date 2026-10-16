@@ -43,3 +43,4 @@ import "./scenarios/constructionFieldInit";
 import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";
+import "./scenarios/charAcceptsOnlyChar";
