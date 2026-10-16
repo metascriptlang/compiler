@@ -1747,7 +1747,7 @@ solana_host_test() {
 solana_replays() {
   local dir=$1 rc=0
   if ! command -v node >/dev/null 2>&1 || [ ! -d tools/solana/node_modules/litesvm ]; then
-    printf 'FAIL solana replay-deps: node or tools/solana/node_modules/litesvm missing\n'
+    printf 'FAIL solana replay-deps: node or tools/solana/node_modules/litesvm missing; run (cd tools/solana && npm ci)\n'
     return 1
   fi
   solana_check fields-build "$CAND" build tools/solana/accountValuesProbe.ms --os=solana --release --output="$dir/accountValues.so" \
