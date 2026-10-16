@@ -286,6 +286,8 @@ function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return false;
 	if (a.kind == TypeKind.GenericParam || b.kind == TypeKind.GenericParam) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return false;
+	if (a.kind == TypeKind.NumberLiteral) return fieldReprMismatch(numberLiteralBase(a), b);
+	if (b.kind == TypeKind.NumberLiteral) return fieldReprMismatch(a, numberLiteralBase(b));
 	const openA = openNullableUnionPayload(a, b);
 	if (openA != null) return fieldReprMismatch(openA, b.typeReturn);
 	const openB = openNullableUnionPayload(b, a);
