@@ -4,6 +4,7 @@
 // @stdout: literal 5 5
 // @stdout: nested 21 22 outer 3
 // @xfail(san): a managed class static is never destroyed at exit (.inbox/compiler/2026-10-16-class-static-managed-field-never-destroyed-at-exit.md)
+// @xfail(raiser): the Raiser cannot read a static of a class declared in a function (.inbox/compiler/2026-10-14-class-declared-in-a-function-loses-its-static-fields.md)
 function start(): int32 { return 10; }
 let inits: int32 = start();
 function bump(): int32 { inits += 1; return inits; }
