@@ -1618,6 +1618,8 @@ function dynamicImportReload(): void {
 const DYNAMIC_IMPORT_PINS = [
 	"dynamicImportOrder", "dynamicImportConcurrent", "dynamicImportInitThrows", "dynamicImportCycle",
 	"dynamicImportStaticDep", "dynamicImportDeinitOrder", "dynamicImportSpawn",
+	"dynamicImportTla", "dynamicImportTlaDep", "dynamicImportTlaConcurrent", "dynamicImportTlaRejects",
+	"dynamicImportTlaCycle", "dynamicImportTlaSpawn", "dynamicImportTlaDeinit",
 ];
 
 function stdoutPins(source: string): string[] {
