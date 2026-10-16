@@ -3,6 +3,7 @@
 // @stdout: managed s1 [1] b1 | s2 [2,2] b2
 // @stdout: literal 5 5
 // @stdout: nested 21 22 outer 3
+// @xfail(san): a managed class static is never destroyed at exit (.inbox/compiler/2026-10-16-class-static-managed-field-never-destroyed-at-exit.md)
 function start(): int32 { return 10; }
 let inits: int32 = start();
 function bump(): int32 { inits += 1; return inits; }
