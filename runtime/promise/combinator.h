@@ -59,6 +59,7 @@ static inline msFuture* msPromiseResolve(void* val) {
 /* Create pre-failed future (Reference: newFuture[T]() + fail(err)) */
 static inline msFuture* msPromiseReject(void* err) {
 	msFuture* f = (msFuture*)msFutureCreate();
+	msIncref(err);
 	msFutureFail(f, err);
 	return f;
 }
