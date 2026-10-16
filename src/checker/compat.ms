@@ -816,6 +816,31 @@ export function unknownReturnRefusal(source: Type | null, target: Type | null): 
 	return " — a function returning " + typeDisplayName(held) + " cannot stand in for one returning unknown, which holds only class or interface instances";
 }
 
+export function returnReprRefusal(source: Type | null, target: Type | null, fnText: string, wrapAt: string): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	if (source.typeChildren.length != target.typeChildren.length || unknownReturnRefusal(source, target) != "") return "";
+	for (let i = 0; i < source.typeChildren.length; i += 1) {
+		if (fnSlotReprMismatch(source.typeChildren[i], target.typeChildren[i])) return "";
+		if (!isAssignable(target.typeChildren[i], source.typeChildren[i])) return "";
+	}
+	const held = skipModifier(source.typeReturn);
+	const slot = skipModifier(target.typeReturn);
+	if (held == null || slot == null) return "";
+	const reprOnly = fnSlotReprMismatch(held, slot);
+	if (isAssignable(held, slot) && !reprOnly) return "";
+	const wraps = slot.kind == TypeKind.Void
+		|| (isMaybeType(slot) && slot.typeReturn != null && isAssignable(held, slot.typeReturn))
+		|| (reprOnly && isAssignable(held, slot));
+	if (!wraps) return "";
+	const why = " — a function returning " + typeDisplayName(held) + " cannot stand in for one returning " + typeDisplayName(slot)
+		+ ", because the two results are held differently; ";
+	if (fnText == "") return why + "call it from a lambda of the slot's type";
+	const names: string[] = [];
+	for (let i = 0; i < source.typeChildren.length; i += 1) names.push("a" + String(i));
+	const params = names.join(", ");
+	return why + "wrap it in a lambda: " + wrapAt.replace("$", "(" + params + ") => " + fnText + "(" + params + ")");
+}
+
 function leavesInlineConv(source: Type, target: Type): boolean {
 	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
 }

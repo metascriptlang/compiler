@@ -11,9 +11,9 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { CandidateScore, unknownReturnRefusal, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
+import { CandidateScore, unknownReturnRefusal, returnReprRefusal, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { adoptLiteralArms, distinctText, distinctTextRefusal, textlessValue, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
+import { adoptLiteralArms, distinctText, distinctTextRefusal, textlessValue, wrappedFnText, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
@@ -2081,6 +2081,11 @@ function refuseTextlessArgs(ctx: CheckerContext, args: Node[], hasReceiver: bool
 	return refused;
 }
 
+function wrapArgAt(calleeName: string, args: Node[], pi: int32, hasReceiver: boolean): string {
+	const shown = hasReceiver ? args.length - 1 : args.length;
+	return shown == 1 ? calleeName + "($)" : "pass $ as " + argLabel(pi, hasReceiver);
+}
+
 function argLabelCap(pi: int32, hasReceiver: boolean): string {
 	if (hasReceiver && pi == 0) return "Receiver";
 	return "Argument " + String(hasReceiver ? pi - 1 : pi);
@@ -2245,7 +2250,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 							argTypes[pi] = args[pi].nodeType!;
 						} else {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
+							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi]), wrapArgAt(calleeName, args, pi, hasReceiver)) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}
