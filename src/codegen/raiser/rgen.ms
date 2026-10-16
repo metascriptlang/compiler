@@ -31,7 +31,7 @@ import {
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	globalSymbolKey,
-	routineKey, resolveRoutine, RaiserCompState, queueRaiserCompileError, emitTrapNil,
+	routineKey, resolveRoutine, RaiserCompState,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr, classTargetKey } from "./expressions";
@@ -565,11 +565,6 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		s.globals = globals;
 		s.scopedFunctions = true;
 
-		if (plan.lazy.has(modules[mi].modulePath) && hasTopLevelAwait(modules[mi].program)) {
-			const refusal = `top-level await in ${modules[mi].modulePath}, a module reached only through import(), is not supported on the Raiser`;
-			queueRaiserCompileError(refusal, 1, 0);
-			emitTrapNil(s, refusal);
-		}
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
 			compileStmt(s, pd.programStmts[i]);
 			resetTemps(s);
@@ -615,11 +610,16 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	for (let ri = 0; ri < plan.records.length; ri += 1) {
 		const path = plan.records[ri];
 		let init: number = -1;
+		let hasTLA = false;
 		if (plan.lazy.has(path)) {
-			for (let mi = 0; mi < modules.length; mi += 1) if (modules[mi].modulePath == path) init = initIndices[mi];
+			for (let mi = 0; mi < modules.length; mi += 1) {
+				if (modules[mi].modulePath != path) continue;
+				init = initIndices[mi];
+				hasTLA = hasTopLevelAwait(modules[mi].program);
+			}
 			if (init < 0) throw new Error(`internal: module ${path}, reached only through import(), has no Raiser init function`);
 		}
-		compiled.records.push({ name: mangleModuleName(path), init, requested: plan.requested[ri] });
+		compiled.records.push({ name: mangleModuleName(path), init, requested: plan.requested[ri], hasTLA });
 	}
 	return compiled;
 }

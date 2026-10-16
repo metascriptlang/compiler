@@ -23,6 +23,7 @@ export interface RaiserModuleRecord {
 	name: string;
 	init: number;   // function index of the module body; -1 for a module initialized at startup
 	requested: int32[];
+	hasTLA: boolean;   // a lazy module whose body has a top-level await
 }
 
 export interface RaiserModule {

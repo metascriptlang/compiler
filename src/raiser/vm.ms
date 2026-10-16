@@ -123,10 +123,12 @@ export interface RaiserTimers {
 
 // The module records of the modules import() reaches, evaluated on a task strand that
 // shares the main strand's globals and heap, the way runtime/promise/moduleEval.c
-// evaluates them on the loop thread.
+// evaluates them on the loop thread. A body with a top-level await runs on a strand of
+// its own that shares them too, so its await parks only that strand.
 export enum RaiserModuleStatus {
 	Pending,
 	Evaluating,
+	EvaluatingAsync,
 	Evaluated,
 }
 
@@ -136,11 +138,26 @@ export interface RaiserModuleState {
 	error: RaiserValue;
 	dfsIndex: int32;
 	dfsAncestorIndex: int32;
+	asyncEvaluation: boolean;
+	asyncOrdinal: int32;
+	pendingAsyncDeps: int32;
+	asyncParents: int32[];
+	cycleRoot: int32;
+	waiters: int64[];      // import() futures settled when the evaluation finishes
+	bodyStrand: number;    // strand running the body with a top-level await; -1 otherwise
 }
 
-export interface RaiserModuleWaiter {
+export enum RaiserModuleJobKind {
+	Import,
+	Fulfilled,
+	Rejected,
+}
+
+export interface RaiserModuleJob {
+	kind: RaiserModuleJobKind;
 	record: int32;
-	future: int64;
+	future: int64;         // the import() future of an Import job; -1 otherwise
+	error: RaiserValue;    // what the body of a Rejected job threw
 }
 
 export interface RaiserModuleFrame {
@@ -150,12 +167,17 @@ export interface RaiserModuleFrame {
 
 export interface RaiserModuleEval {
 	states: RaiserModuleState[];
-	pending: RaiserModuleWaiter[];
+	pending: RaiserModuleJob[];
 	strand: number;    // strand running the evaluator task; -1 when no task is armed
-	fresh: boolean;    // the armed task has not run yet
+	fresh: boolean;    // the task resumes in the evaluator rather than in bytecode
 	stack: int32[];
 	frames: RaiserModuleFrame[];
 	index: int32;
+	nextOrdinal: int32;
+	starting: number;  // body strand that runs before the task resumes; -1 when none
+	execList: int32[];
+	execAt: int32;
+	execBody: int32;   // record of the execList body the task is running; -1 otherwise
 }
 
 export interface RaiserSched {
@@ -398,6 +420,11 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	ev.fresh = false;
 	ev.stack.length = 0;
 	ev.frames.length = 0;
+	ev.starting = -1;
+	ev.execList.length = 0;
+	ev.execAt = 0;
+	ev.execBody = -1;
+	for (const st of ev.states) st.bodyStrand = -1;
 }
 
 // --- Futures ---
@@ -528,8 +555,20 @@ function unwindFrame(vm: RaiserVM): void {
 function unhandledException(vm: RaiserVM): void {
 	vm.unwinding = false;
 	vm.savedIp = -1;
-	if (vm.current == vm.sched.modules.strand) {
-		moduleFail(vm, vm.currentException);
+	const body = moduleBodyOf(vm, vm.current);
+	if (body >= 0) {
+		moduleBodyFinish(vm, body, RaiserModuleJobKind.Rejected, vm.currentException);
+		return;
+	}
+	const ev = vm.sched.modules;
+	if (vm.current == ev.strand) {
+		if (ev.execBody >= 0) {
+			const at = ev.execBody;
+			ev.execBody = -1;
+			moduleAsyncRejected(vm, at, vm.currentException);
+		} else {
+			moduleFail(vm, vm.currentException);
+		}
 		moduleTaskContinue(vm);
 		return;
 	}
@@ -878,14 +917,44 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 
 function createModuleEval(mod: RaiserModule): RaiserModuleEval {
 	const states: RaiserModuleState[] = [];
-	for (const record of mod.records) {
-		const status = record.init < 0 ? RaiserModuleStatus.Evaluated : RaiserModuleStatus.Pending;
-		states.push({ status, failed: false, error: raiserNil(), dfsIndex: 0, dfsAncestorIndex: 0 });
+	for (let i = 0; i < mod.records.length; i += 1) {
+		const eager = mod.records[i].init < 0;
+		const status = eager ? RaiserModuleStatus.Evaluated : RaiserModuleStatus.Pending;
+		const asyncParents: int32[] = [];
+		const waiters: int64[] = [];
+		states.push({
+			status,
+			failed: false,
+			error: raiserNil(),
+			dfsIndex: 0,
+			dfsAncestorIndex: 0,
+			asyncEvaluation: false,
+			asyncOrdinal: 0,
+			pendingAsyncDeps: 0,
+			asyncParents,
+			cycleRoot: i,
+			waiters,
+			bodyStrand: -1,
+		});
 	}
-	const pending: RaiserModuleWaiter[] = [];
+	const pending: RaiserModuleJob[] = [];
 	const stack: int32[] = [];
 	const frames: RaiserModuleFrame[] = [];
-	return { states, pending, strand: -1, fresh: false, stack, frames, index: 0 };
+	const execList: int32[] = [];
+	return {
+		states,
+		pending,
+		strand: -1,
+		fresh: false,
+		stack,
+		frames,
+		index: 0,
+		nextOrdinal: 0,
+		starting: -1,
+		execList,
+		execAt: 0,
+		execBody: -1,
+	};
 }
 
 function moduleRecordNamed(mod: RaiserModule, name: string): int32 {
@@ -905,12 +974,12 @@ function vmHandleModuleImport(vm: RaiserVM, inst: RaiserInstruction, func: Raise
 	}
 	const fut = newFuture(vm);
 	vm.sched.futures.items[fut].record = at;
-	vm.sched.modules.pending.push({ record: at, future: fut });
+	vm.sched.modules.pending.push({ kind: RaiserModuleJobKind.Import, record: at, future: fut, error: raiserNil() });
 	if (vm.sched.modules.strand < 0) moduleArmTask(vm);
 	setReg(vm, vm.baseReg + inst.a, raiserFuture(fut));
 }
 
-function moduleArmTask(vm: RaiserVM): void {
+function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const main = vm.sched.strands.items[0];
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
@@ -919,9 +988,13 @@ function moduleArmTask(vm: RaiserVM): void {
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: vm.mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
-	vm.sched.modules.strand = vm.sched.strands.items.length - 1;
+	return vm.sched.strands.items.length - 1;
+}
+
+function moduleArmTask(vm: RaiserVM): void {
+	vm.sched.modules.strand = moduleNewStrand(vm, vm.mod.entry);
 	vm.sched.modules.fresh = true;
 }
 
@@ -937,6 +1010,7 @@ function moduleEnter(ev: RaiserModuleEval, at: int32): void {
 	st.status = RaiserModuleStatus.Evaluating;
 	st.dfsIndex = ev.index;
 	st.dfsAncestorIndex = ev.index;
+	st.pendingAsyncDeps = 0;
 	ev.index += 1;
 	ev.stack.push(at);
 	ev.frames.push({ at, next: 0 });
@@ -972,63 +1046,252 @@ function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
 	vm.ip = 0;
 }
 
-function moduleSettle(vm: RaiserVM, w: RaiserModuleWaiter): void {
-	const st = vm.sched.modules.states[w.record];
-	if (st.failed) futureFail(vm, w.future, vmExceptionText(vm, st.error));
-	else futureComplete(vm, w.future, raiserInt(1));
+// The body runs on its own strand before the task resumes, up to its first await.
+function moduleExecuteAsync(vm: RaiserVM, at: int32): void {
+	const ev = vm.sched.modules;
+	if (vm.current != ev.strand) {
+		vmError(vm, `internal: the body of module '${vm.mod.records[at].name}' started outside the module evaluator task`);
+		return;
+	}
+	const init = vm.mod.records[at].init;
+	const s = moduleNewStrand(vm, init);
+	ensureSlots(vm.sched.strands.items[s].regs, getModuleFunc(vm.mod, init).maxRegs);
+	ev.states[at].bodyStrand = s;
+	ev.starting = s;
+	ev.fresh = true;
+	vm.sched.strands.items[vm.current].status = RaiserStrandStatus.Blocked;
+	vm.yielded = true;
+}
+
+function moduleBodyOf(vm: RaiserVM, strand: number): int32 {
+	const states = vm.sched.modules.states;
+	for (let i = 0; i < states.length; i += 1) {
+		if (states[i].bodyStrand == strand) return i;
+	}
+	return -1;
+}
+
+function moduleBodyFinish(vm: RaiserVM, at: int32, kind: RaiserModuleJobKind, error: RaiserValue): void {
+	const ev = vm.sched.modules;
+	ev.states[at].bodyStrand = -1;
+	vm.sched.strands.items[vm.current].status = RaiserStrandStatus.Done;
+	vm.yielded = true;
+	const held = raiserNil();
+	copyValueInto(held, error);
+	vmIncref(vm, held);
+	ev.pending.push({ kind, record: at, future: -1, error: held });
+	if (ev.strand < 0) moduleArmTask(vm);
+}
+
+// While a body runs up to its first await, it is the only strand that runs.
+function moduleHandoffPick(vm: RaiserVM): number {
+	const ev = vm.sched.modules;
+	if (ev.starting < 0) return -1;
+	if (vm.sched.strands.items[ev.starting].status == RaiserStrandStatus.Ready) return ev.starting;
+	ev.starting = -1;
+	vm.sched.strands.items[ev.strand].status = RaiserStrandStatus.Ready;
+	return ev.strand;
+}
+
+function moduleSettle(vm: RaiserVM, future: int64, at: int32): void {
+	const st = vm.sched.modules.states[at];
+	vm.sched.futures.items[future].record = at;
+	if (st.failed) futureFail(vm, future, vmExceptionText(vm, st.error));
+	else futureComplete(vm, future, raiserInt(1));
+}
+
+function moduleSettleWaiters(vm: RaiserVM, at: int32): void {
+	const st = vm.sched.modules.states[at];
+	for (const future of st.waiters) moduleSettle(vm, future, at);
+	st.waiters.length = 0;
+}
+
+function moduleImportSettle(vm: RaiserVM, future: int64, at: int32): void {
+	const st = vm.sched.modules.states[at];
+	if (st.status == RaiserModuleStatus.EvaluatingAsync) {
+		st.waiters.push(future);
+		return;
+	}
+	if (st.status == RaiserModuleStatus.Evaluated) {
+		moduleSettle(vm, future, at);
+		return;
+	}
+	vmError(vm, `internal: import() of module '${vm.mod.records[at].name}' settled while its evaluation is unfinished`);
+}
+
+function moduleListHas(list: int32[], at: int32): boolean {
+	for (const x of list) {
+		if (x == at) return true;
+	}
+	return false;
+}
+
+function moduleGatherAncestors(vm: RaiserVM, at: int32): void {
+	const ev = vm.sched.modules;
+	for (const p of ev.states[at].asyncParents) {
+		const ps = ev.states[p];
+		if (ev.states[ps.cycleRoot].failed || moduleListHas(ev.execList, p)) continue;
+		ps.pendingAsyncDeps -= 1;
+		if (ps.pendingAsyncDeps == 0) {
+			ev.execList.push(p);
+			if (!vm.mod.records[p].hasTLA) moduleGatherAncestors(vm, p);
+		}
+	}
+}
+
+function moduleAsyncFulfilled(vm: RaiserVM, at: int32): void {
+	const ev = vm.sched.modules;
+	const st = ev.states[at];
+	if (st.failed) return;
+	st.asyncEvaluation = false;
+	st.status = RaiserModuleStatus.Evaluated;
+	moduleSettleWaiters(vm, at);
+	ev.execList.length = 0;
+	ev.execAt = 0;
+	moduleGatherAncestors(vm, at);
+	const list = ev.execList;
+	for (let i = 1; i < list.length; i += 1) {
+		const p = list[i];
+		let j = i;
+		while (j > 0 && ev.states[list[j - 1]].asyncOrdinal > ev.states[p].asyncOrdinal) {
+			list[j] = list[j - 1];
+			j -= 1;
+		}
+		list[j] = p;
+	}
+}
+
+function moduleAsyncRejected(vm: RaiserVM, at: int32, error: RaiserValue): void {
+	const st = vm.sched.modules.states[at];
+	if (st.failed) return;
+	st.failed = true;
+	copyValueInto(st.error, error);
+	vmIncref(vm, error);
+	st.status = RaiserModuleStatus.Evaluated;
+	st.asyncEvaluation = false;
+	for (const p of st.asyncParents) moduleAsyncRejected(vm, p, error);
+	moduleSettleWaiters(vm, at);
+}
+
+function moduleExecBodyFulfilled(vm: RaiserVM, at: int32): void {
+	const st = vm.sched.modules.states[at];
+	st.asyncEvaluation = false;
+	st.status = RaiserModuleStatus.Evaluated;
+	moduleSettleWaiters(vm, at);
+}
+
+function moduleVisitRequested(vm: RaiserVM, top: RaiserModuleFrame, req: int32): void {
+	const ev = vm.sched.modules;
+	const m = ev.states[top.at];
+	const r = ev.states[req];
+	if (r.status == RaiserModuleStatus.Pending) {
+		moduleEnter(ev, req);
+		return;
+	}
+	if (r.status != RaiserModuleStatus.Evaluating && r.failed) {
+		moduleFail(vm, r.error);
+		return;
+	}
+	top.next += 1;
+	let dep = req;
+	if (r.status == RaiserModuleStatus.Evaluating) moduleLowerAncestor(m, r);
+	else dep = r.cycleRoot;
+	const d = ev.states[dep];
+	if (d.failed) {
+		moduleFail(vm, d.error);
+		return;
+	}
+	if (d.asyncEvaluation) {
+		m.pendingAsyncDeps += 1;
+		d.asyncParents.push(top.at);
+	}
+}
+
+// True when the task is busy: a body runs on it, or a body strand starts before it resumes.
+function moduleStepFrame(vm: RaiserVM): boolean {
+	const ev = vm.sched.modules;
+	const top = ev.frames[ev.frames.length - 1];
+	const record = vm.mod.records[top.at];
+	const st = ev.states[top.at];
+	if (top.next < record.requested.length) {
+		moduleVisitRequested(vm, top, record.requested[top.next]);
+		return false;
+	}
+	if (top.next == record.requested.length) {
+		top.next += 1;
+		if (record.init < 0) {
+			vmError(vm, `internal: module '${record.name}', initialized at startup, entered evaluation`);
+			return false;
+		}
+		if (st.pendingAsyncDeps > 0 || record.hasTLA) {
+			st.asyncEvaluation = true;
+			st.asyncOrdinal = ev.nextOrdinal;
+			ev.nextOrdinal += 1;
+			if (st.pendingAsyncDeps > 0) return false;
+			moduleExecuteAsync(vm, top.at);
+			return true;
+		}
+		moduleRunBody(vm, record.init);
+		return true;
+	}
+	ev.frames.pop();
+	if (st.dfsAncestorIndex == st.dfsIndex) {
+		let popped: int32 = -1;
+		while (popped != top.at) {
+			popped = ev.stack.pop();
+			const ps = ev.states[popped];
+			ps.cycleRoot = top.at;
+			ps.status = ps.asyncEvaluation ? RaiserModuleStatus.EvaluatingAsync : RaiserModuleStatus.Evaluated;
+		}
+	}
+	return false;
 }
 
 function moduleAdvanceToBody(vm: RaiserVM): boolean {
 	const ev = vm.sched.modules;
 	while (!vm.halted) {
 		if (ev.frames.length > 0) {
-			const top = ev.frames[ev.frames.length - 1];
-			const record = vm.mod.records[top.at];
-			const st = ev.states[top.at];
-			if (top.next < record.requested.length) {
-				const req = record.requested[top.next];
-				top.next += 1;
-				const r = ev.states[req];
-				if (r.status == RaiserModuleStatus.Pending) moduleEnter(ev, req);
-				else if (r.status == RaiserModuleStatus.Evaluating) moduleLowerAncestor(st, r);
-				else if (r.failed) moduleFail(vm, r.error);
+			if (moduleStepFrame(vm)) return true;
+			continue;
+		}
+		if (ev.execAt < ev.execList.length) {
+			const p = ev.execList[ev.execAt];
+			ev.execAt += 1;
+			if (ev.states[p].failed) continue;
+			if (vm.mod.records[p].hasTLA) {
+				moduleExecuteAsync(vm, p);
+				return true;
+			}
+			ev.execBody = p;
+			moduleRunBody(vm, vm.mod.records[p].init);
+			return true;
+		}
+		ev.execList.length = 0;
+		ev.execAt = 0;
+		if (ev.pending.length == 0) return false;
+		const job = ev.pending[0];
+		let at = job.record;
+		if (job.kind == RaiserModuleJobKind.Import) {
+			const st = ev.states[at];
+			if (st.status == RaiserModuleStatus.EvaluatingAsync || st.status == RaiserModuleStatus.Evaluated) {
+				at = st.cycleRoot;
+			}
+			if (ev.states[at].status == RaiserModuleStatus.Pending) {
+				ev.index = 0;
+				moduleEnter(ev, at);
 				continue;
 			}
-			if (top.next == record.requested.length) {
-				top.next += 1;
-				if (record.init >= 0) {
-					moduleRunBody(vm, record.init);
-					return true;
-				}
-			}
-			ev.frames.pop();
-			if (st.dfsAncestorIndex == st.dfsIndex) {
-				let popped: int32 = -1;
-				while (popped != top.at) {
-					popped = ev.stack.pop();
-					ev.states[popped].status = RaiserModuleStatus.Evaluated;
-				}
-			}
-			if (ev.frames.length > 0 && st.status == RaiserModuleStatus.Evaluating) {
-				moduleLowerAncestor(ev.states[ev.frames[ev.frames.length - 1].at], st);
-			}
-			continue;
-		}
-		if (ev.pending.length == 0) return false;
-		const w = ev.pending[0];
-		const st = ev.states[w.record];
-		if (st.status == RaiserModuleStatus.Pending) {
-			ev.index = 0;
-			moduleEnter(ev, w.record);
-			continue;
-		}
-		if (st.status != RaiserModuleStatus.Evaluated) {
-			vmError(vm, `internal: import() of module '${vm.mod.records[w.record].name}' settled while its evaluation is unfinished`);
-			return false;
 		}
 		for (let i = 1; i < ev.pending.length; i += 1) ev.pending[i - 1] = ev.pending[i];
 		ev.pending.shrink(ev.pending.length - 1);
-		moduleSettle(vm, w);
+		match (job.kind) {
+			RaiserModuleJobKind.Import => moduleImportSettle(vm, job.future, at),
+			RaiserModuleJobKind.Fulfilled => moduleAsyncFulfilled(vm, at),
+			RaiserModuleJobKind.Rejected => {
+				moduleAsyncRejected(vm, at, job.error);
+				vmDecref(vm, job.error);
+			},
+		}
 	}
 	return false;
 }
@@ -1037,7 +1300,7 @@ function moduleAdvanceToBody(vm: RaiserVM): boolean {
 // there gets that same object, a spawned strand a copy in its own heap.
 function moduleErrorForReader(vm: RaiserVM, at: int32): RaiserValue {
 	const error = vm.sched.modules.states[at].error;
-	if (vm.current == 0 || vm.current == vm.sched.modules.strand) return error;
+	if (vm.current == 0 || vm.current == vm.sched.modules.strand || moduleBodyOf(vm, vm.current) >= 0) return error;
 	const main = vm.sched.strands.items[0];
 	return copyGraph(main.arrayHeap, main.objectHeap, vm.arrayHeap, vm.objectHeap, error);
 }
@@ -1067,7 +1330,8 @@ function execStrandLoop(vm: RaiserVM): void {
 		if (cur.status == RaiserStrandStatus.Running) cur.status = RaiserStrandStatus.Ready;
 		strandSave(vm);
 		vmFireDueTimer(vm);
-		let next = schedulePick(vm);
+		let next = moduleHandoffPick(vm);
+		if (next < 0) next = schedulePick(vm);
 		while (next < 0 && vm.sched.timers.items.length > 0 && !vm.halted) {
 			vmWaitForTimer(vm);
 			vmFireDueTimer(vm);
@@ -1504,7 +1768,15 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 		return;
 	}
 	if (vm.callStack.items.length == 0 && vm.current == vm.sched.modules.strand) {
+		const at = vm.sched.modules.execBody;
+		vm.sched.modules.execBody = -1;
+		if (at >= 0) moduleExecBodyFulfilled(vm, at);
 		moduleTaskContinue(vm);
+		return;
+	}
+	const body = vm.callStack.items.length == 0 ? moduleBodyOf(vm, vm.current) : -1;
+	if (body >= 0) {
+		moduleBodyFinish(vm, body, RaiserModuleJobKind.Fulfilled, raiserNil());
 		return;
 	}
 	if (vm.callStack.items.length == 0) {
