@@ -15,7 +15,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
-import { distinctNumericBase } from "./types";
+import { distinctNumericBase, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -735,6 +735,12 @@ function checkStringLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 	if (keepsFoldedNominalType(node, expectedType)) return;
 	// TypeScript parity: string literals get StringLiteral type when expectedType demands it
+	if (expectedType != null && expectedType.kind == TypeKind.GenericParam && isKeyConstraint(expectedType.typeExtra)) {
+		// A type parameter constrained to property names infers the literal (`K extends keyof T`);
+		// the call checks it against the constraint once the type parameters are bound.
+		node.nodeType = createStringLiteral((node.data as StringLiteralData).value);
+		return;
+	}
 	if (expectedType != null) {
 		const sd = node.data as StringLiteralData;
 		if (expectedType.kind == TypeKind.StringLiteral && expectedType.typeName == sd.value) {
@@ -2497,6 +2503,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 		sargs.push(d.index);
 		node.nodeType = rewriteAsMethodCall(ctx, node, d.array, "[]", sargs); return;
 	}
+	if (subscriptRecv != null && subscriptRecv.kind == TypeKind.Struct && accessByKey(ctx, node, d, subscriptRecv, expectedType)) return;
 	if (subscriptRecv != null && !hasGenericParams(subscriptRecv)
 			&& (subscriptRecv.kind == TypeKind.Struct || subscriptRecv.kind == TypeKind.Boolean || isNumeric(subscriptRecv))) {
 		addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
@@ -2962,6 +2969,30 @@ function resolveSuper(ctx: CheckerContext, node: Node): Type {
 // `obj.setDynamicField("foo", x)`). After mutation, checkCallExpr resolves
 // the extension method and validates argument types. Returns the call's
 // inferred type.
+// `obj[key]` with a key of string literal type is the property it names (TypeScript's
+// element access with a literal key), so `t[key]` in an instance with `K = "title"` is
+// `t.title`. A generic key gives the deferred `T[K]`, settled per instance.
+function accessByKey(ctx: CheckerContext, node: Node, d: ArrayAccessData, recv: Type, expectedType: Type | null): boolean {
+	const keyType = d.index != null ? skipModifier(d.index.nodeType) : null;
+	if (keyType == null) return false;
+	if (keyType.kind == TypeKind.GenericParam && isKeyConstraint(keyType.typeExtra)) {
+		node.nodeType = indexedAccessOf(recv, keyType);
+		return true;
+	}
+	const key = keyType.kind == TypeKind.StringLiteral ? keyType.typeName
+		: d.index.kind == NodeKind.StringLiteral ? (d.index.data as StringLiteralData).value : null;
+	if (key == null) return false;
+	if (findFieldInVariant(recv, key) == null) {
+		addError(ctx, `'"${key}"' is not a key of '${typeDisplayName(recv)}'`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return true;
+	}
+	node.kind = NodeKind.MemberExpr;
+	node.data = { object: d.array, property: key, isOptional: false } as MemberExprData;
+	checkExpr(ctx, node, expectedType);
+	return true;
+}
+
 function subscriptOperandOf(receiver: Type | null): Type | null {
 	const peeled = skipModifier(receiver);
 	if (peeled == null) return null;
