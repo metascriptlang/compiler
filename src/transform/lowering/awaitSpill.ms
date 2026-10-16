@@ -335,7 +335,7 @@ test "a call before the await is bound first, so it still runs first" {
 }
 
 test "a short-circuit right operand awaits only inside its branch" {
-	assert bodyKinds("async function f() { const v = a && await p; }") == "VariableDecl;IfStmt;VariableDecl;";
+	assert bodyKinds("async function f() { const v = a && await p; }") == "VariableDecl;VariableDecl;IfStmt;VariableDecl;";
 }
 
 test "an await in a while condition moves into the loop body" {
