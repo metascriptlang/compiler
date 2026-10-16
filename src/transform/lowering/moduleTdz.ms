@@ -1,13 +1,16 @@
 import {
 	Node, NodeKind, NodeFlag, DeclKind, Symbol, SymbolKind, SymbolFlag, ProgramData, ExportDeclData, DecoratedDeclData,
 	VariableDeclData, ClassDeclData, PropertyDeclData, CallExprData, MemberExprData, NewExprData,
+	ExprStmtData, BinaryExprData, UpdateExprData, HiddenDerefData, OutExprData,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { booleanType } from "../../checker/types";
 import { makeSymbol, setFlag } from "../../checker/symbol";
 import { ModuleGraph, Module } from "../../module/graph";
-import { TransformContext, mintSym } from "../context";
-import { makeVarDecl, makeAssign, makeExprStmt, makeIdentResolved, makeBool } from "../util";
+import { TransformContext, mintSym, reportTransformError } from "../context";
+import { mapChildren, hasEffect } from "../walker";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { makeVarDecl, makeAssign, makeExprStmt, makeIdentResolved, makeBool, makeString, makeCallResolved, makeConditional, makeIf, makeBlock, compilerFuncSym } from "../util";
 
 interface ModuleBinding {
 	sym: Symbol;
@@ -67,6 +70,107 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	}
 	(program.data as ProgramData).programStmts = out;
 	return program;
+}
+
+// The Raiser runs no ordered statement hoist, so a guarded use stays an expression
+// there and the VM evaluates it in place.
+export function guardModuleTdzRaiser(program: Node, ctx: TransformContext): Node {
+	if (ctx.tdzFlags.size == 0) return program;
+	mapChildren(program, (c: Node): Node => guardUses(c, false, ctx));
+	return program;
+}
+
+function guardUses(n: Node, inFunction: boolean, ctx: TransformContext): Node {
+	if (n == null) return n;
+	const deferred = inFunction || isFunctionLike(n)
+		|| (n.kind == NodeKind.PropertyDecl && !(n.data as PropertyDeclData).propIsStatic);
+	if (deferred) {
+		const cls = classOperand(n, ctx);
+		if (cls != null) {
+			mapChildren(n, (c: Node): Node => c == cls ? c : guardUses(c, true, ctx));
+			return guarded(n, cls, ctx);
+		}
+		if (n.kind == NodeKind.Identifier) return n.resolvedSym != null && n.resolvedSym.symbolKind == SymbolKind.Class ? n : guarded(n, n, ctx);
+		if (n.kind == NodeKind.ExprStmt) {
+			const assign = (n.data as ExprStmtData).expr;
+			if (assign.kind == NodeKind.BinaryExpr && (assign.data as BinaryExprData).operator == "=" && flagOf((assign.data as BinaryExprData).left, ctx) != null) {
+				return guardedWriteStmt(n, assign, ctx);
+			}
+		}
+		const target = writtenBinding(n);
+		if (target != null && flagOf(target, ctx) != null) {
+			if (n.kind == NodeKind.BinaryExpr) {
+				const bd = n.data as BinaryExprData;
+				bd.right = guardUses(bd.right, true, ctx);
+			}
+			return guarded(n, target, ctx);
+		}
+	}
+	mapChildren(n, (c: Node): Node => guardUses(c, deferred, ctx));
+	return n;
+}
+
+// A class binding names no value on the Raiser: its `new` or `instanceof` is guarded whole.
+function classOperand(n: Node, ctx: TransformContext): Node | null {
+	let operand: Node | null = null;
+	if (n.kind == NodeKind.NewExpr) operand = (n.data as NewExprData).newCallee;
+	else if (n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "instanceof") operand = (n.data as BinaryExprData).right;
+	if (operand == null || operand.resolvedSym == null || operand.resolvedSym.symbolKind != SymbolKind.Class || flagOf(operand, ctx) == null) return null;
+	return operand;
+}
+
+function writtenBinding(n: Node): Node | null {
+	let target: Node | null = null;
+	if (n.kind == NodeKind.BinaryExpr && isAssignOperator((n.data as BinaryExprData).operator)) target = (n.data as BinaryExprData).left;
+	else if (n.kind == NodeKind.UpdateExpr) target = (n.data as UpdateExprData).updateArg;
+	else if (n.kind == NodeKind.HiddenAddr) target = (n.data as HiddenDerefData).expr;
+	else if (n.kind == NodeKind.OutExpr) target = (n.data as OutExprData).outArg;
+	return target != null && target.kind == NodeKind.Identifier ? target : null;
+}
+
+function isAssignOperator(op: string): boolean {
+	return match (op) {
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		_ => false,
+	};
+}
+
+function flagOf(n: Node, ctx: TransformContext): Symbol | null {
+	if (n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
+	return ctx.tdzFlags.get(n.resolvedSym);
+}
+
+function failCall(binding: Node, ctx: TransformContext): Node | null {
+	const fail = compilerFuncSym("msModuleBindingUninitialized");
+	if (fail == null) {
+		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", binding.location);
+		return null;
+	}
+	return makeCallResolved(makeIdentResolved(fail, binding.location), [makeString(binding.resolvedSym!.name, binding.location)], fail, binding.location);
+}
+
+function guarded(use: Node, binding: Node, ctx: TransformContext): Node {
+	const flag = flagOf(binding, ctx);
+	if (flag == null) return use;
+	const fail = failCall(binding, ctx);
+	if (fail == null) return use;
+	const result = makeConditional(makeIdentResolved(flag, use.location), use, fail, use.location);
+	result.nodeType = use.nodeType;
+	return result;
+}
+
+// A write to a module binding throws after its value is evaluated (ECMAScript PutValue).
+function guardedWriteStmt(stmt: Node, assign: Node, ctx: TransformContext): Node {
+	const bd = assign.data as BinaryExprData;
+	bd.right = guardUses(bd.right, true, ctx);
+	const fail = failCall(bd.left, ctx);
+	if (fail == null) return stmt;
+	const loc = stmt.location;
+	const otherwise: Node[] = [];
+	if (hasEffect(bd.right)) otherwise.push(makeExprStmt(cloneNodeKeepSem(bd.right), loc));
+	otherwise.push(makeExprStmt(fail, loc));
+	return makeIf(makeIdentResolved(flagOf(bd.left, ctx)!, loc), makeBlock([stmt], loc), makeBlock(otherwise, loc), loc);
 }
 
 function markModuleFlag(flag: Symbol, modulePath: string): void {
