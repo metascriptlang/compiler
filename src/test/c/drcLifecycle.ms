@@ -369,6 +369,38 @@ test "E2E C: a fresh object returned through two casts to an unmanaged alias kee
 	assert !c.value.contains("msDecrefCyclic(dollartmp");
 }
 
+test "E2E C: an object literal bound through a cast to a union takes its own reference to each field" {
+	const c = compileToC(`
+		class Box { v: int32 = 7; }
+		type A = { a: Box, s: string };
+		type U = A | { n: int32 };
+		function wrap(b: Box): U {
+			const u = { a: b, s: "x" } as U;
+			return u;
+		}
+	`);
+	assert c.ok;
+	assert !c.value.contains("->a = b;");
+	assert c.value.contains("->a = dollarborrow_");
+}
+
+test "E2E C: an object literal cast to a union and read before a raising argument takes its own reference" {
+	const c = compileToC(`
+		class Box { v: int32 = 7; }
+		type A = { a: Box, s: string };
+		type U = A | { n: int32 };
+		class Spec { name: string = "n"; }
+		function tag(s: string): string { return s + "!"; }
+		function hold(u: U, t: string): U { return u; }
+		function wrap(b: Box, spec: Spec): U {
+			return hold({ a: b, s: spec.name } as U, tag(spec.name));
+		}
+	`);
+	assert c.ok;
+	assert !c.value.contains("->a = b;");
+	assert c.value.contains("->a = dollarborrow_");
+}
+
 function occurrences(code: string, token: string): int32 {
 	return (code.split(token).length - 1) as int32;
 }
