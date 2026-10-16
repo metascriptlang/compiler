@@ -19,7 +19,7 @@ import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserS
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
+import { widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
@@ -127,6 +127,8 @@ function isBitwiseOp(op: string): boolean {
 }
 
 function peelDistinct(t: Type): Type {
+	const widened = widenNumberLiteralType(t);
+	if (widened != t) return widened;
 	return t.kind == TypeKind.Distinct && t.typeReturn != null ? peelDistinct(t.typeReturn) : t;
 }
 

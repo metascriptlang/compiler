@@ -37,7 +37,7 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
+import { checkExpr, widenNumberLiteral, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, refuseUnwrittenOut, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -755,6 +755,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
 		foldUserOperatorConstant(ctx, d.initializer, declType);
 	}
+	if (declType == null && d.initializer != null) d.initializer = widenNumberLiteral(d.initializer);
 	const initType = d.initializer != null ? d.initializer.nodeType : null;
 	if (declType == null && initType != null && d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrayLiteral
@@ -2503,6 +2504,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as SwitchStmtData;
 	checkExpr(ctx, d.switchDisc, null);
+	d.switchDisc = widenNumberLiteral(d.switchDisc);
 	// Ref parity: trackCase
 	const oldState = saveInitState(ctx.initTracker);
 	const oldAffine = saveConsumeState(ctx.affineTracker);

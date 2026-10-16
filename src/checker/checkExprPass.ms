@@ -5,7 +5,7 @@ import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refu
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { isOutParam, distinctBody, peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, isStdCollection, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf, isNullableShape } from "./types";
+import { isOutParam, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, distinctBody, peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, isStdCollection, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf, isNullableShape } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf, lookupCtorDefaults, isVisibleSymbol } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
 import {
@@ -20,7 +20,7 @@ import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs,
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
-import { findChar, splitTopLevel, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
+import { findChar, splitTopLevel, fitsInt64Decimal, int64ToDecimal, parseNumberLiteral } from "../utils/string";
 import { basename } from "std/fs/path";
 import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
@@ -589,9 +589,81 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 	node.nodeType = result;
 }
 
+function numberLiteralName(node: Node, negated: boolean): string {
+	const d = node.data as NumberLiteralData;
+	if (d.isFloat) return fractionLiteralName(negated ? 0 - d.value : d.value);
+	if (!literalFitsInType(node, createPrimitive(TypeKind.Int64), negated)) return "";
+	return integerLiteralName(negated ? 0 - d.intVal : d.intVal);
+}
+
+function sameNumberValue(node: Node, negated: boolean, member: Type): boolean {
+	const d = node.data as NumberLiteralData;
+	if (d.isFloat == isFloatType(numberLiteralBase(member))) return false;
+	const value = d.isFloat ? d.value : d.intVal as number;
+	return (negated ? 0 - value : value) == parseNumberLiteral(member.typeName);
+}
+
+function numberLiteralMember(expectedType: Type, node: Node, negated: boolean): Type | null {
+	const name = numberLiteralName(node, negated);
+	if (name == "") return null;
+	const members = expectedType.kind == TypeKind.Union ? expectedType.typeChildren : [expectedType];
+	for (const child of members) {
+		if (child != null && child.kind == TypeKind.NumberLiteral && child.typeName == name) return child;
+	}
+	for (const child of members) {
+		if (child != null && child.kind == TypeKind.NumberLiteral && sameNumberValue(node, negated, child)) {
+			const d = node.data as NumberLiteralData;
+			if (d.isFloat) d.intVal = d.value as int64;
+			else d.value = d.intVal as number;
+			d.isFloat = !d.isFloat;
+			return child;
+		}
+	}
+	return null;
+}
+
+function expectsNumberLiteral(expectedType: Type | null): boolean {
+	if (expectedType == null) return false;
+	if (expectedType.kind == TypeKind.NumberLiteral) return true;
+	if (expectedType.kind != TypeKind.Union) return false;
+	let literal = false;
+	for (const child of expectedType.typeChildren) {
+		if (child == null) continue;
+		if (child.kind == TypeKind.NumberLiteral) literal = true;
+		else if (isNumeric(child)) return false;
+	}
+	return literal;
+}
+
+function isNumberLiteralTyped(t: Type | null): boolean {
+	return t != null && widenNumberLiteralType(t) != t;
+}
+
+export function widenNumberLiteral(node: Node): Node {
+	const held = node.nodeType;
+	if (held == null) return node;
+	const widened = widenNumberLiteralType(held);
+	if (widened == held) return node;
+	let read = node;
+	if (declaredTagUnionOf(node) != null) {
+		const projected = narrowUnionToVariant(node, held);
+		if (projected != null as unknown as Node) read = projected;
+	}
+	read.nodeType = widened;
+	return read;
+}
+
 function checkNumberLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 	reportLiteralRange(ctx, node);
+	if (expectedType != null) {
+		const member = numberLiteralMember(expectedType, node, false);
+		if (member != null) { node.nodeType = member; return; }
+		const name = numberLiteralName(node, false);
+		if (name != "" && expectsNumberLiteral(expectedType)) {
+			node.nodeType = createNumberLiteral(name, isNodeIntLit(node) ? untypedIntegerLiteralType(ctx, node, false) : float64Type()); return;
+		}
+	}
 	if (expectedType != null && isIntegerType(expectedType)) {
 		if (literalFitsInType(node, expectedType, false)) {
 			node.nodeType = expectedType; return;
@@ -990,6 +1062,11 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
 	}
 	ctx.initTracker.assignTarget = null;
+	if (isAsgn && d.operator != "=" && isNumberLiteralTyped(d.left.nodeType)) {
+		addError(ctx, `'${d.operator}' would store a '${typeDisplayName(widenNumberLiteralType(d.left.nodeType!))}' in '${typeDisplayName(d.left.nodeType)}': assign a literal of that type instead`, node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
+	if (!isAsgn) d.left = widenNumberLiteral(d.left);
 	let leftType = d.left.nodeType;
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
@@ -1026,6 +1103,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
 	else checkExpr(ctx, d.right, rightExpected);
 	if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
+	if (d.operator != "=") d.right = widenNumberLiteral(d.right);
 	let rightType = d.right.nodeType;
 	if (!isAsgn && d.operator != "??") {
 		if (d.operator == "&&" || d.operator == "||") {
@@ -2321,6 +2399,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 		const savedLpa = ctx.initTracker.leftPartOfAsgn;
 		ctx.initTracker.leftPartOfAsgn = 0;
 		checkExpr(ctx, d.index, null);
+		d.index = widenNumberLiteral(d.index);
 		ctx.initTracker.leftPartOfAsgn = savedLpa;
 	}
 	if (arrayIsFunction) {
@@ -2587,7 +2666,21 @@ function checkUnaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		node.nodeType = d.operand.nodeType;
 		return;
 	}
+	if (d.unaryOp == "-" && d.operand.kind == NodeKind.NumberLiteral && unaryExpected != null) {
+		const member = numberLiteralMember(unaryExpected, d.operand, true);
+		const name = numberLiteralName(d.operand, true);
+		if (member != null) {
+			d.operand.nodeType = numberLiteralBase(member);
+			node.nodeType = member; return;
+		}
+		if (name != "" && expectsNumberLiteral(unaryExpected)) {
+			const base = isNodeIntLit(d.operand) ? untypedIntegerLiteralType(ctx, d.operand, true) : float64Type();
+			d.operand.nodeType = base;
+			node.nodeType = createNumberLiteral(name, base); return;
+		}
+	}
 	checkExpr(ctx, d.operand, unaryExpected);
+	if (d.unaryOp != "typeof") d.operand = widenNumberLiteral(d.operand);
 	if (d.unaryOp == "!") {
 		refuseFunctionTruthiness(ctx, d.operand);
 	} else if ((d.unaryOp == "-" || d.unaryOp == "+") && unaryArithFails(ctx, d.unaryOp, d.operand.nodeType)

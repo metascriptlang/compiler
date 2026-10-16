@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, isStringLiteralUnion, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, storesNothing, createGenericInstance } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, literalUnionBase, numberLiteralBase, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, storesNothing, createGenericInstance } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -623,6 +623,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.CString => "cstring",
 		TypeKind.StringLiteral => "strlit:" + t.typeName,
 		TypeKind.BooleanLiteral => "boollit:" + t.typeName,
+		TypeKind.NumberLiteral => "numlit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { return "enum:" + mangledTypeName(t.sym, t.typeName); },
@@ -736,6 +737,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",
 		TypeKind.Alias => t.typeReturn == null ? "void" : getSimpleTypeDesc(t.typeReturn),
+		TypeKind.NumberLiteral => getSimpleTypeDesc(numberLiteralBase(t)),
 		TypeKind.Void => "void",
 		// `Null` as a TYPE (not the literal value) appears when a generic param
 		// monomorphizes to T=Null — e.g. `id(null)` without contextual type.
@@ -1588,10 +1590,11 @@ function layoutAssert(g: CGen, t: Type, cType: string): string {
 function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
-	// Pure string literal union → msString (TypeScript: string at runtime)
-	if (isStringLiteralUnion(t)) {
-		typeCacheSet(g.typeCache, typeKey(t), "msString");
-		return "msString";
+	const carried = literalUnionBase(t);
+	if (carried != null) {
+		const carriedDesc = getTypeDesc(g, carried);
+		typeCacheSet(g.typeCache, typeKey(t), carriedDesc);
+		return carriedDesc;
 	}
 
 	// Single cache lookup via typeKey. Naming is unique per type:

@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, matchUnionBehindInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay } from "./types";
+import { peelTransparentInstance, matchUnionBehindInstance, literalBase, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -35,7 +35,7 @@ function promoteNumeric(a: Type, b: Type): Type {
 function widenBranchLiteral(t: Type): Type {
 	if (t.kind == TypeKind.StringLiteral) return stringType();
 	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
-	return closureStorageType(t);
+	return closureStorageType(widenNumberLiteralType(t));
 }
 
 function branchContributesToJoin(t: Type | null): boolean {
@@ -773,7 +773,7 @@ function equalityOperandsOk(ao: Type, bo: Type): boolean {
 		return false;
 	}
 	if (a.kind == TypeKind.Set || b.kind == TypeKind.Set) return sameSetElement(a, b);
-	if (isNumeric(a) && isNumeric(b)) return true;
+	if (isNumeric(widenNumberLiteralType(a)) && isNumeric(widenNumberLiteralType(b))) return true;
 	if (a.kind == TypeKind.StringLiteral && b.kind == TypeKind.StringLiteral) return a.typeName == b.typeName;
 	if (isStringLike(a) && isStringLike(b)) return true;
 	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
@@ -1909,12 +1909,10 @@ export function declaredTagUnionOf(expr: Node): Type | null {
 export function isSlotUnion(t: Type): boolean {
 	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	if (unwrapRefNullUnion(t) != null) return false;
-	let allStrLit = true;
 	for (const child of t.typeChildren) {
 		if (child == null || child.kind == TypeKind.Null) return false;
-		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
-	return !allStrLit;
+	return literalUnionBase(t) == null;
 }
 
 export function convertsBetweenUnions(source: Type | null, target: Type | null): boolean {
@@ -2372,6 +2370,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	const peeledFormal = peelTransparentInstance(formal);
 	const peeledExpr = peelTransparentInstance(exprType);
 	if (peeledFormal != formal || peeledExpr != exprType) return fitSlot(ctx, expr, peeledFormal, peeledExpr);
+	if (!holdsNumberLiteral(formal) && widenNumberLiteralType(exprType) != exprType) {
+		expr.nodeType = widenNumberLiteralType(exprType);
+		return fitSlot(ctx, expr, formal, expr.nodeType);
+	}
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
 	const viewed = viewRefusal(expr, formal);
 	if (viewed != "") { addError(ctx, viewed, expr.location.line, expr.location.column); return expr; }
