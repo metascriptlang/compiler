@@ -83,3 +83,4 @@ import "./comptime";
 import "./inheritance";
 import "./nullableFunction";
 import "./hashBitsPortable";
+import "./oneValueFieldAlias";
