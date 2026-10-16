@@ -385,6 +385,10 @@ function isNamedNominalStruct(t: Type): boolean {
 	return t.kind == TypeKind.Struct && !isMaybeType(t) && t.sym != null && t.typeName != "";
 }
 
+function isAskedTypeBehindItsRef(visited: Type[], t: Type): boolean {
+	return visited.length == 1 && visited[0].kind == TypeKind.Ref && visited[0].typeReturn == t;
+}
+
 // Internal dispatch — threads the `visited` stack for cycle detection.
 // Aliases peel transparently. Already-visiting Types emit a name-only Identifier
 // to break the cycle (e.g., `Tree { children: Tree[] }` → outer Tree expands,
@@ -404,7 +408,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 
 	// A shape unfolds only the type it was asked about: a named struct met inside
 	// another shape is its name, and a macro asks getTypeImpl of that node to unfold it.
-	if (visited.length > 0 && isNamedNominalStruct(t)) {
+	if (visited.length > 0 && isNamedNominalStruct(t) && !isAskedTypeBehindItsRef(visited, t)) {
 		const named = atomicTypeNode(t.typeName, loc);
 		named.nodeType = t;
 		return named;
