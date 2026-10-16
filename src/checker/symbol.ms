@@ -285,6 +285,12 @@ export function lookupSymbolInDefiningScope(table: SymbolTable, definer: string,
 	return null as unknown as Symbol;
 }
 
+export function globalScope(table: SymbolTable): Scope {
+	let scope = table.current;
+	while (scope.parent != null) scope = scope.parent!;
+	return scope;
+}
+
 export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
 	let scope = table.current;
 	while (scope != null && scope.scopeKind != ScopeKind.Module) {

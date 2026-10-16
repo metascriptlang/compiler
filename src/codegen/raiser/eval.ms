@@ -20,7 +20,7 @@ import { RaiserContext, createContext, load, execute } from "../../raiser/contex
 import { RaiserVM, execModule, createVM } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
 import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
-import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState } from "../../checker/symbol";
+import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
@@ -173,7 +173,7 @@ function isVmPreludeSym(sym: Symbol): boolean {
 	if (_raiserPreludeBuilding) return false;
 	if (_vmPreludeSyms == null) {
 		const own = new HashSet<Symbol>();
-		for (const s of raiserPreludeCtx().table.current.symbols.values()) {
+		for (const s of globalScope(raiserPreludeCtx().table).symbols.values()) {
 			own.add(s);
 			for (const o of s.overloads) own.add(o);
 		}
@@ -205,7 +205,7 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 function vmStdSeeds(skipName: string): Symbol[] {
 	const prelude = raiserPreludeCtx();
 	const seeds: Symbol[] = [];
-	for (const s of prelude.table.current.symbols.values()) {
+	for (const s of globalScope(prelude.table).symbols.values()) {
 		if (s.name != skipName && !isPreludeExport(prelude, s)) seeds.push(s);
 	}
 	return seeds;
