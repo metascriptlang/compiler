@@ -6,7 +6,7 @@
 //
 // Runtime coverage for the values: corpus/programs/016-jsIntegerModel.ms.
 
-import { compileToJS } from "../helpers";
+import { compileToJS, compileToJSWithStd } from "../helpers";
 
 test "int32 division by a literal truncates" {
 	const result = compileToJS("function f(a: int32): int32 { return a / 3; }");
@@ -228,7 +228,7 @@ test "a shift after a widening cast masks its count to the cast width" {
 }
 
 test "an indexed operand widened to uint32 shifts at the cast width" {
-	const result = compileToJS("function f(d: uint8[], i: int32): uint32 { return (d[i] as uint32) << 8; }");
+	const result = compileToJSWithStd("function f(d: uint8[], i: int32): uint32 { return (d[i] as uint32) << 8; }");
 	assert result.ok;
 	assert !result.value.contains("& 7");
 }
@@ -282,7 +282,7 @@ test "int64 compound add is left alone" {
 }
 
 test "uint8 step on a call-indexed element hoists the index and wraps" {
-	const result = compileToJS("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: uint8[]): void { a[at()]++; }");
+	const result = compileToJSWithStd("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: uint8[]): void { a[at()]++; }");
 	assert result.ok;
 	assert result.value.contains("& 255");
 }
