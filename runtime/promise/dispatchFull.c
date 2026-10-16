@@ -1022,7 +1022,7 @@ static void msTimerArm(msTimer t) {
 /* Standard reference sleepAsync pattern
  * Create timer future, push to heap, return future */
 msFuture_void* msSleepAsync(int ms) {
-	msFuture_void* fut = msFutureCreateT(msFuture_void);
+	msFuture_void* fut = (msFuture_void*)msFutureCreate();
 	msIncRef(fut);
 	/* The loop thread completes and releases a worker-armed timer: PARALOCK I16/I17. */
 	if (msIsPoolWorker) fut->crossThreadPublished = true;
