@@ -43,6 +43,7 @@ export interface ImportEntry {
 	aliases: string[];         // local alias names (1:1 with names)
 	sourcePath: string;        // resolved absolute path of source module
 	sourceSpecifier: string;   // original import specifier (for diagnostics)
+	dynamic: boolean;
 }
 
 // ===== Module =====
@@ -111,8 +112,8 @@ export function createModule(path: string): Module {
 	};
 }
 
-export function createImportEntry(names: string[], aliases: string[], sourcePath: string, sourceSpecifier: string): ImportEntry {
-	return { names, aliases, sourcePath, sourceSpecifier };
+export function createImportEntry(names: string[], aliases: string[], sourcePath: string, sourceSpecifier: string, dynamic: boolean = false): ImportEntry {
+	return { names, aliases, sourcePath, sourceSpecifier, dynamic };
 }
 
 // ===== Module Lookup =====

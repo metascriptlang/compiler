@@ -526,6 +526,7 @@ function writeStdGraphDeps(graph: ModuleGraph, key: string, stamp: string): void
 		let ii = 0;
 		while (ii < m.imports.length) {
 			const ie = m.imports[ii];
+			if (ie.dynamic) return;
 			const names: string[] = [];
 			let ni = 0;
 			while (ni < ie.names.length) { names.push(ie.names[ni]); ni = ni + 1; }
