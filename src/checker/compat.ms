@@ -1311,7 +1311,7 @@ function sameTypeInner(a: Type, b: Type): boolean {
 		TypeKind.EnumLiteral => sameEnumMember(a, b),
 		TypeKind.GenericInstance => sameGenericBase(a, b) && sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
-			| TypeKind.Conditional => sameTypeList(a.typeChildren, b.typeChildren),
+			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
 		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b),
 		TypeKind.Set => sameInnerType(a, b),
