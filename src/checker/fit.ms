@@ -672,6 +672,14 @@ export function rejectCharArith(ctx: CheckerContext, op: string, leftType: Type 
 	return true;
 }
 
+export function rejectCharUnary(ctx: CheckerContext, op: string, t: Type | null, node: Node): boolean {
+	if (t == null || t.kind != TypeKind.Char || (op != "-" && op != "+")) return false;
+	if (ctx.extensionRegistry != null && resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [t]) != null) return false;
+	addError(ctx, "unary '" + op + "' cannot be applied to 'char': a char is not a number — convert it with an explicit 'as int32'",
+		node.location.line, node.location.column);
+	return true;
+}
+
 export function textlessValue(t: Type | null): string {
 	if (t == null) return "";
 	if (t.kind == TypeKind.Void) return "a 'void' value has no text — a void call produces no value; call it on its own line";
