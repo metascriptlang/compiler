@@ -417,7 +417,7 @@ test "E2E C: an explicit move empties an indexed field path once, at the move" {
 		}
 	`);
 	assert c.ok;
-	const reset = "msArrayNumberWasMoved(t_1_.nodes[dollarbracketTmp_";
+	const reset = "msArrayNumberWasMoved(t_1_.nodes[__call_";
 	assert occurrences(c.value, "msArrayNumberWasMoved(t_1_.nodes[") == 1;
 	assert c.value.contains(reset);
 	assert c.value.indexOf(reset) < c.value.indexOf("(k_1_ = dollarmove_");
