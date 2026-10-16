@@ -146,3 +146,9 @@ test "unsigned arithmetic and a negated literal keep their operators" {
 	assert runtimeCallee(lastStatementValue("function probe(a: uint8): void { let x = a; x++; }")) == "";
 	assert runtimeCallee(returnValue("function probe(): int32 { return -5; }")) == "";
 }
+
+test "a pointer difference keeps its operator" {
+	assert runtimeCallee(returnValue("function probe(p: Ptr<int64>, q: Ptr<int64>): int32 { return q - p; }")) == "";
+	assert runtimeCallee(returnValue("struct Pair { left: int32; right: int32; } function probe(p: Ptr<Pair>, q: Ptr<Pair>): int32 { return q - p; }")) == "";
+	assert runtimeCallee(returnValue("function probe(p: Ptr<uint8>, n: int32): int32 { return ((p + n) - p) * n; }")) == "msMulI32";
+}
