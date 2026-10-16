@@ -59,6 +59,8 @@ export class JSGenerator {
 	neededNames: string[][];
 	neededLocals: string[][];   // the binding each needed name takes in this module
 	moduleRequests: string;     // source imports and re-exports, in source order, hoisted in front of the body
+	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
+	namespaceNames: string[][];
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
@@ -82,7 +84,7 @@ export class JSGenerator {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], bundleExportLocals: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], moduleRequests: "",
+		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], moduleRequests: "", namespaceModules: [], namespaceNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
@@ -109,6 +111,16 @@ export function recordNeededImport(gen: JSGenerator, modulePath: string, name: s
 	gen.neededNames[at].push(name);
 	gen.neededLocals[at].push(local);
 	return local;
+}
+
+export function recordNamespaceExport(gen: JSGenerator, modulePath: string, name: string): void {
+	let at = gen.namespaceModules.indexOf(modulePath);
+	if (at < 0) {
+		gen.namespaceModules.push(modulePath);
+		gen.namespaceNames.push([]);
+		at = gen.namespaceModules.length - 1;
+	}
+	if (!gen.namespaceNames[at].includes(name)) gen.namespaceNames[at].push(name);
 }
 
 function importBindingTaken(gen: JSGenerator, local: string): boolean {

@@ -3740,6 +3740,8 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const moduleSmaps: SourceInfo[] = [];
 	const moduleNeededMods: string[][] = [];
 	const moduleNeededNames: string[][][] = [];
+	const moduleNamespaceMods: string[][] = [];
+	const moduleNamespaceNames: string[][][] = [];
 	const moduleExported: string[][] = [];
 	const moduleTestNames: string[][] = [];
 	const moduleTestFuncs: string[][] = [];
@@ -3779,28 +3781,31 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		moduleSmaps.push(res.smap);
 		moduleNeededMods.push(res.neededModules);
 		moduleNeededNames.push(res.neededNames);
+		moduleNamespaceMods.push(res.namespaceModules);
+		moduleNamespaceNames.push(res.namespaceNames);
 		moduleExported.push(res.exportedNames);
 		moduleTestNames.push(res.testNames);
 		moduleTestFuncs.push(res.testFuncs);
 	}
 
-	// Forced exports: names other modules reference that this module didn't
-	// export (private helpers reachable from generic bodies, caller-side
-	// instances reused by later modules). A name needed here but not defined
-	// here is a compiler bug — node fails loudly at the gate, by design.
+	// Forced exports: names other modules reference or read through a namespace
+	// object that this module didn't export (private helpers reachable from
+	// generic bodies, caller-side instances reused by later modules). A name
+	// needed here but not defined here is a compiler bug — node fails loudly at
+	// the gate, by design.
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const forced: string[] = [];
+		const demanded: string[] = [];
 		for (let vi = 0; vi < unitPaths.length; vi += 1) {
-			if (vi == ui) continue;
 			for (let mi = 0; mi < moduleNeededMods[vi].length; mi += 1) {
-				if (moduleNeededMods[vi][mi] != unitPaths[ui]) continue;
-				for (const n of moduleNeededNames[vi][mi]) {
-					let already = false;
-					for (const e of moduleExported[ui]) { if (e == n) { already = true; } }
-					for (const f of forced) { if (f == n) { already = true; } }
-					if (!already) forced.push(n);
-				}
+				if (vi != ui && moduleNeededMods[vi][mi] == unitPaths[ui]) for (const n of moduleNeededNames[vi][mi]) demanded.push(n);
 			}
+			for (let mi = 0; mi < moduleNamespaceMods[vi].length; mi += 1) {
+				if (moduleNamespaceMods[vi][mi] == unitPaths[ui]) for (const n of moduleNamespaceNames[vi][mi]) demanded.push(n);
+			}
+		}
+		for (const n of demanded) {
+			if (!moduleExported[ui].includes(n) && !forced.includes(n)) forced.push(n);
 		}
 		let code = moduleCodes[ui];
 		if (forced.length > 0) {

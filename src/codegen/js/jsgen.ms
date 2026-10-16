@@ -259,6 +259,8 @@ export interface JsModuleResult {
 	code: string;
 	neededModules: string[];
 	neededNames: string[][];
+	namespaceModules: string[];
+	namespaceNames: string[][];
 	exportedNames: string[];
 	testNames: string[];
 	testFuncs: string[];
@@ -314,7 +316,7 @@ export function generateJSModule(
 	}
 	if (bindings == "" && gen.moduleRequests == "" && !hasImport && hasTopLevelAwait(program)) bindings = "export {};\n";
 	insertAfterHeader(gen, headerChunks, gen.moduleRequests + bindings);
-	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
+	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, namespaceModules: gen.namespaceModules, namespaceNames: gen.namespaceNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
 }
 
 export function hasTopLevelAwait(node: Node): boolean {
