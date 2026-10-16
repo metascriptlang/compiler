@@ -661,6 +661,17 @@ export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type 
 	return true;
 }
 
+export function rejectCharArith(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, node: Node): boolean {
+	if (leftType == null || rightType == null || binaryOperandClass(compoundBase(op)) != "arith") return false;
+	const leftChar = leftType.kind == TypeKind.Char;
+	const rightChar = rightType.kind == TypeKind.Char;
+	if ((!leftChar && !rightChar) || !isNumeric(leftType) || !isNumeric(rightType)) return false;
+	const target = leftChar && rightChar ? "int32" : typeDisplayName(leftChar ? rightType : leftType);
+	addError(ctx, "operator '" + op + "' cannot be applied to '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType)
+		+ "': a char is not a number — convert it with an explicit 'as " + target + "'", node.location.line, node.location.column);
+	return true;
+}
+
 function mixesNumericOperands(op: string): boolean {
 	return op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**"
 		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=" || op == "**="
