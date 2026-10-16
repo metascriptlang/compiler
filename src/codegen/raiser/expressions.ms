@@ -1422,6 +1422,13 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
 		return dest;
 	}
+	if (asyncKind == "PromiseReject" && d.arguments.length == 1) {
+		const errorReg = compileExpr(s, d.arguments[0]);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
+		emitInst(s, raiserABC(RaiserOpcode.FutureFail, dest, errorReg, 0));
+		return dest;
+	}
 	if ((asyncKind == "PromiseSettle" || asyncKind == "PromiseFail") && d.arguments.length >= 1) {
 		const futReg = compileExpr(s, d.arguments[0]);
 		let valueReg = 0;
