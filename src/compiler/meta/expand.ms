@@ -66,9 +66,9 @@ import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, 
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { clearObjectHeap, clearArrayHeap, heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
+import { heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
-import { RaiserVM } from "../../raiser/vm";
+import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
 import { valueToExpansion, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
@@ -1888,8 +1888,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		} else {
 			addError(ctx, `Macro '${d.macroName}': ${diagMsg}`, diagLine, diagCol);
 		}
-		clearObjectHeap(vm.objectHeap);
-		clearArrayHeap(vm.arrayHeap);
+		vmReleaseHeaps(vm);
 		return node;
 	}
 
@@ -1909,8 +1908,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	if (vmCtx.lastError != "") {
 		addError(ctx, `Macro '${d.macroName}' failed: ${vmCtx.lastError}`,
 			node.location.line, node.location.column);
-		clearObjectHeap(vmCtx.objectHeap);
-		clearArrayHeap(vmCtx.arrayHeap);
+		vmReleaseHeaps(vm);
 		return node;
 	}
 
@@ -1952,8 +1950,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	}
 
 	// Reclaim VM heaps
-	clearObjectHeap(vmCtx.objectHeap);
-	clearArrayHeap(vmCtx.arrayHeap);
+	vmReleaseHeaps(vm);
 	vmCtx = null;
 	return result;
 }

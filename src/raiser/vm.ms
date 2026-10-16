@@ -12,7 +12,7 @@ import {
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserRegAddr, raiserGlobalAddr, raiserElemAddr, raiserFieldAddr, heapObjectSetField,
-	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool,
+	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, clearArrayHeap, clearObjectHeap,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -166,6 +166,36 @@ export interface RaiserVM {
 	hostCallsRestricted: boolean;
 	hostPolicySource: string;
 	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
+	frameFloor: number;
+	suspendedRuns: RaiserRun[];
+}
+
+interface RaiserRun {
+	floor: number;
+	funcIdx: number;
+	baseReg: number;
+	ip: number;
+	halted: boolean;
+	yielded: boolean;
+	exitValue: RaiserValue;
+	error: string;
+	diagMessage: string;
+	diagLine: number;
+	diagColumn: number;
+	diagEndLine: number;
+	diagEndColumn: number;
+	loopCount: number;
+	globals: RaiserValue[];
+	regs: RaiserRegFile;
+	callStack: RaiserCallFrames;
+	arrayHeap: RaiserArrayHeap;
+	objectHeap: RaiserObjectHeap;
+	sched: RaiserSched;
+	current: number;
+	safePoints: number[];
+	currentException: RaiserValue;
+	unwinding: boolean;
+	savedIp: number;
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -226,7 +256,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, frameFloor: 0, suspendedRuns: [] };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -315,8 +345,9 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 		return raiserNil();
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx);
+	if (vm.frameFloor > 0 && !runSuspendedAt(vm, vm.frameFloor)) suspendRun(vm);
 	vm.funcIdx = funcIdx;
-	vm.baseReg = 0;
+	vm.baseReg = vm.frameFloor;
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
@@ -325,16 +356,72 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.loopCount = 0;
 	vm.callStack.items.length = 0;
 	resetStrands(vm, funcIdx);
-	ensureSlots(vm.regs, callee.maxRegs);
+	ensureSlots(vm.regs, vm.baseReg + callee.maxRegs);
 	let i = 0;
 	while (i < args.length) {
 		const slot = raiserNil();
 		copyValueInto(slot, args[i]);
-		setReg(vm, i, slot);
+		setReg(vm, vm.baseReg + i, slot);
 		i = i + 1;
 	}
 	execLoop(vm);
 	return vm.exitValue;
+}
+
+export function vmReleaseHeaps(vm: RaiserVM): void {
+	if (vm.frameFloor > 0) return;
+	clearObjectHeap(vm.objectHeap);
+	clearArrayHeap(vm.arrayHeap);
+}
+
+function runSuspendedAt(vm: RaiserVM, floor: number): boolean {
+	const runs = vm.suspendedRuns;
+	return runs.length > 0 && runs[runs.length - 1].floor == floor;
+}
+
+function suspendRun(vm: RaiserVM): void {
+	vm.suspendedRuns.push({
+		floor: vm.frameFloor, funcIdx: vm.funcIdx, baseReg: vm.baseReg, ip: vm.ip, halted: vm.halted, yielded: vm.yielded,
+		exitValue: vm.exitValue, error: vm.error, diagMessage: vm.diagMessage, diagLine: vm.diagLine, diagColumn: vm.diagColumn,
+		diagEndLine: vm.diagEndLine, diagEndColumn: vm.diagEndColumn, loopCount: vm.loopCount, globals: vm.globals, regs: vm.regs,
+		callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, sched: vm.sched, current: vm.current,
+		safePoints: vm.safePoints, currentException: vm.currentException, unwinding: vm.unwinding, savedIp: vm.savedIp,
+	});
+	const frames: RaiserCallFrame[] = [];
+	vm.callStack = { items: frames };
+	const strandItems: RaiserStrand[] = [];
+	const futureItems: RaiserFuture[] = [];
+	const timerItems: RaiserTimer[] = [];
+	vm.sched = { strands: { items: strandItems }, futures: { items: futureItems }, timers: { items: timerItems }, nextStrandId: 1 };
+	vm.safePoints = [];
+	vm.currentException = raiserNil();
+}
+
+function resumeRun(vm: RaiserVM, run: RaiserRun): void {
+	vm.funcIdx = run.funcIdx;
+	vm.baseReg = run.baseReg;
+	vm.ip = run.ip;
+	vm.halted = run.halted;
+	vm.yielded = run.yielded;
+	vm.exitValue = run.exitValue;
+	vm.error = run.error;
+	vm.diagMessage = run.diagMessage;
+	vm.diagLine = run.diagLine;
+	vm.diagColumn = run.diagColumn;
+	vm.diagEndLine = run.diagEndLine;
+	vm.diagEndColumn = run.diagEndColumn;
+	vm.loopCount = run.loopCount;
+	vm.globals = run.globals;
+	vm.regs = run.regs;
+	vm.callStack = run.callStack;
+	vm.arrayHeap = run.arrayHeap;
+	vm.objectHeap = run.objectHeap;
+	vm.sched = run.sched;
+	vm.current = run.current;
+	vm.safePoints = run.safePoints;
+	vm.currentException = run.currentException;
+	vm.unwinding = run.unwinding;
+	vm.savedIp = run.savedIp;
 }
 
 // --- Strand scheduling ---
@@ -346,7 +433,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.unwinding = false;
 	vm.savedIp = -1;
 	// The main strand keeps the VM's existing heap objects: the host holds that
-	// identity across runs (context.ms captures it, expand.ms clears it).
+	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
 	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
@@ -2002,7 +2089,15 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	const prevArgv = activeProgramArgv();
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
 	setActiveProgramArgv(vm.programArgv);
+	const outerFloor = vm.frameFloor;
+	const suspended = vm.suspendedRuns.length;
+	vm.frameFloor = vm.regs.slots.length;
 	const result = fn(args);
+	if (vm.suspendedRuns.length > suspended) {
+		resumeRun(vm, vm.suspendedRuns[suspended]);
+		vm.suspendedRuns.shrink(suspended);
+	}
+	vm.frameFloor = outerFloor;
 	if (prevObjHeap != null && prevArrHeap != null) {
 		setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	}
@@ -3428,6 +3523,38 @@ test "vmCallFunction: nested Call/Ret through trampoline" {
 	const args: RaiserValue[] = [a];
 	const r = vmCallFunction(vm, 1, args);
 	assert r.intVal == 7;
+}
+
+test "vmCallFunction: a host call that runs the VM again resumes the run that made it" {
+	_resetHostRegistryForTests();
+	const innerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	];
+	const innerConsts: RaiserValue[] = [raiserInt(100)];
+	const inner = createRaiserFunction("inner", innerCode, innerConsts, 1, 0, 4);
+	const outerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.Move, 3, 0, 0),
+		raiserABC(RaiserOpcode.CallHost, 2, 0, 1),
+		raiserABC(RaiserOpcode.AddI64, 4, 1, 2),
+		raiserABC(RaiserOpcode.Ret, 4, 0, 0),
+	];
+	const outerConsts: RaiserValue[] = [raiserString("reenter"), raiserInt(7)];
+	const outer = createRaiserFunction("outer", outerCode, outerConsts, 1, 0, 8);
+	const funcs: RaiserFunction[] = [inner, outer];
+	const vm = createVM(createRaiserModule("t", funcs, 0), "arena");
+	registerHostFn("reenter", (args: RaiserValue[]): RaiserValue => {
+		const first = vmCallFunction(vm, 0, [raiserInt(args[0].intVal)]);
+		const second = vmCallFunction(vm, 0, [raiserInt(args[0].intVal + 1)]);
+		return raiserInt(first.intVal + second.intVal);
+	});
+	const r = vmCallFunction(vm, 1, [raiserInt(5)]);
+	assert vm.error == "";
+	assert r.intVal == 218;
+	assert vm.suspendedRuns.length == 0;
+	assert vm.frameFloor == 0;
 }
 
 // --- Strand scheduling ---
