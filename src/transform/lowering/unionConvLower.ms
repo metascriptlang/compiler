@@ -1,5 +1,5 @@
-import { Node, NodeKind, NodeFlag, TypeKind, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData } from "../../ast/node";
-import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv } from "../../checker/fit";
+import { Node, NodeKind, NodeFlag, TypeKind, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
+import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead } from "../../checker/fit";
 import { peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { sameType } from "../../checker/compat";
@@ -50,6 +50,7 @@ function targetMembers(target: Type): Type[] {
 
 function lowerConversion(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.BinaryExpr) return lowerComparison(node, ctx);
+	if (!ctx.jsBackend && !ctx.raiserBackend) storeNarrowedReads(node, ctx);
 	const pair = unionPair(node);
 	if (pair == null) return node;
 	const source = pair[0];
@@ -72,6 +73,29 @@ function lowerConversion(node: Node, ctx: TransformContext): Node {
 	const call = makeCall(makeTypedIdentResolved(conversionRoutine(source, target, ctx, node.location), null, node.location), [operand], node.location);
 	call.nodeType = node.nodeType;
 	return call;
+}
+
+function storeNarrowedReads(node: Node, ctx: TransformContext): void {
+	if (node.kind == NodeKind.ArrayLiteral) {
+		storeEach((node.data as ArrayLiteralData).elements, null, ctx);
+	} else if (node.kind == NodeKind.ObjectLiteral) {
+		storeEach((node.data as ObjectLiteralData).properties, null, ctx);
+	} else if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		const fn = d.callee.nodeType;
+		if (fn != null && fn.kind == TypeKind.Function && fn.typeChildren.length == d.arguments.length) storeEach(d.arguments, fn.typeChildren, ctx);
+	}
+}
+
+function storeEach(values: Node[], formals: Type[] | null, ctx: TransformContext): void {
+	for (let i = 0; i < values.length; i += 1) {
+		const v = values[i];
+		const narrowed = v.nodeType;
+		if ((v.kind != NodeKind.Identifier && v.kind != NodeKind.MemberExpr) || narrowed == null) continue;
+		if (formals != null && !sameType(formals[i], narrowed)) continue;
+		const read = convertStoredUnionRead(v, narrowed, narrowed);
+		if (read != null) values[i] = lowerConversion(read, ctx);
+	}
 }
 
 function comparesByKind(kind: string): boolean {

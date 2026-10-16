@@ -48,6 +48,7 @@ import "./nominalArrayLayout";
 import "./vecOfStructCopies";
 import "./matchGuardConstFold";
 import "./literalUnionBranchJoin";
+import "./narrowedReadStoredAsDeclared";
 import "./sizedArrayLiteral";
 import "./sizedArrayResultSlot";
 import "./objectLiteralDestination";
