@@ -58,6 +58,7 @@ import "./raiseChecks";
 import "./inlineFunctions";
 import "./pointerAddress";
 import "./noinlinePragma";
+import "./moduleBindingTdz";
 import "./copiedBodyHeader";
 import "./solanaVaultHost";
 import "./externPattern";
