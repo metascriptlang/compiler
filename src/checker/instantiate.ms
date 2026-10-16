@@ -394,7 +394,8 @@ const _instanceRight: Type[] = [];
 
 export function sameInstanceType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
-	if (a == null || b == null || a.kind != b.kind) return false;
+	if (a == null || b == null) return false;
+	if (a.kind != b.kind) return sameType(a, b);
 	if (a.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam)
 		!= b.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam)) return false;
 	for (let i = 0; i < _instanceLeft.length; i += 1) {
