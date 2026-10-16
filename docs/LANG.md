@@ -521,13 +521,19 @@ if (f()) {}                 // cannot be tested for truthiness (also while/for/t
 const n = f();
 const s = n + 1;            // operator '+' cannot be applied to 'void'
 const b = n === 1;          // 'void' and 'number' have no overlap
+const t = "n=" + n;         // a 'void' value has no text (also `${f()}`, String(f()), a never value)
+function g(): int32 | void  // 'int32 | void' puts void in a union, and void is no value — write 'int32 | null'
 ```
+
+The last two are refused where TypeScript accepts them (TS prints `undefined`; C printed
+`<object>` without calling, JS `undefined`, the Raiser `null`), on C, JS and the Raiser alike
+(measured 2026-10-16, candidate of `wt/type-refusals`; pins `checker3pass/scenarios/textOfVoid.ms`,
+`checker3pass/scenarios/voidInUnion.ms`).
 
 Forgiven, observing the null carrier — identical output on C and JS:
 
 ```typescript
 const n = f();              // bind: n is void, carrier null
-console.log("n=" + n);      // n=null
 const eq = n === null;      // true
 const m = n;                // chained bind carries null too
 let x: void = f(); x = f(); // void slot, re-assignment stays legal
@@ -2881,7 +2887,7 @@ MetaScript introduces `char` as a first-class primitive for **byte-tier** work: 
 
 - **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
 - **Literals**: there is no char literal: `'A'` is a one-character `string`, as in TypeScript, and `const c: char = 'A'` is `Type 'string' is not assignable to type 'char'`. Write the code and convert it: `const c: char = "A".code as char` prints `A` in a template on C, JS and the Raiser (measured 2026-10-16).
-- **Numeric**: `char` takes part in comparison and arithmetic (`c == 65`, `c + 1`) and converts with `as`, but no implicit conversion crosses between `char` and another number: `const c: char = 65` and `const n: int32 = c` are `implicit int32 → char conversion crosses between char and a number — write an explicit 'as char'` (and its mirror) on C, JS and the Raiser. Pinned by `checker3pass/scenarios/charAcceptsOnlyChar.ms`.
+- **Numeric**: `char` compares with a char or a number (`c == 65`, `c < d`) and converts with `as`, but takes no part in arithmetic: `c + 1`, `i + c` (any int, float or `number` width), `c + d` and `total += c` are `operator '+' cannot be applied to 'char' and 'int32': a char is not a number — convert it with an explicit 'as int32'`; write `(c as int32) + 1`, and `((c as int32) + 1) as char` to get a char back (measured 2026-10-16, candidate of `wt/type-refusals`, the same refusal on C, JS and the Raiser; pinned by `checker3pass/scenarios/charArithmetic.ms`). No implicit conversion crosses between `char` and another number either: `const c: char = 65` and `const n: int32 = c` are `implicit int32 → char conversion crosses between char and a number — write an explicit 'as char'` (and its mirror) on C, JS and the Raiser. Pinned by `checker3pass/scenarios/charAcceptsOnlyChar.ms`.
 - **No `as` between text and numbers**: `s[i] as int32`, `s as char`, `s as boolean` and `n as string` are checker errors (`cannot convert string to int32 — …`) on C, JS and the Raiser, as in TypeScript and Nim; read `s.charCodeAt(i)` or `s.byteAt(i)`, or format with `String(n)`. `"0xff" as bigint` still parses. Measured 2026-10-06, pinned by `checker3pass/scenarios/textConversions.ms`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
 
