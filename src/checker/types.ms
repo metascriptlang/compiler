@@ -4143,6 +4143,16 @@ export function typeNameOf(t: Type | null): string {
 	_tnoTime = _tnoTime + (performance.now() - _n0);
 	return r;
 }
+
+let _displayingUnions: Type[] = [];
+
+function isDisplaying(t: Type): boolean {
+	for (const open of _displayingUnions) {
+		if (open == t) return true;
+	}
+	return false;
+}
+
 function typeNameOfInner(t: Type | null): string {
 	if (t == null) return "";
 	// Reference parity: ownership modifiers are transparent — unwrap before naming.
@@ -4205,12 +4215,14 @@ function typeNameOfInner(t: Type | null): string {
 			// Children are rendered for display, so use typeDisplayName so a
 			// `null` member shows as "null" instead of an empty segment that
 			// would produce "string |  | int32".
-			if (t2.typeChildren.length > 0) {
+			if (t2.typeChildren.length > 0 && !(t2.typeName != "" && isDisplaying(t2))) {
+				_displayingUnions.push(t2);
 				let display = "";
 				for (const child of t2.typeChildren) {
 					if (display != "") display = display + " | ";
 					display = display + typeDisplayName(child);
 				}
+				_displayingUnions.pop();
 				return prefix + display;
 			}
 			return prefix + t2.typeName;

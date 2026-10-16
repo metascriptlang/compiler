@@ -563,9 +563,7 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 		return;
 	}
 	if (t.kind == TypeKind.Union) {
-		if (t.typeName != "") {
-			tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
-		}
+		if (t.typeName != "" && !tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected)) return;
 		injectConcreteTypeSyms(t.typeExtra, ctx, callerCtx, injected);
 		if (t.typeChildren != null) {
 			for (const child of t.typeChildren) {
