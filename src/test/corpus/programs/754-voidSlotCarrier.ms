@@ -27,18 +27,18 @@ function main(): void {
 
 	const a = [tick("a")];
 	ok = check("arrayLen", a.length == 1) && ok;
-	console.log("elem=" + a[0]);
+	console.log("elem is null " + (a[0] == null));
 
 	const b = [tick("b"), tick("c")];
 	ok = check("arrayLen2", b.length == 2) && ok;
 
 	const o = { v: tick("d") };
-	console.log("field=" + o.v);
+	console.log("field is null " + (o.v == null));
 
 	// Mixed object: the valued field runs before the void one and keeps its value.
 	const m = { a: value("e"), v: tick("f") };
 	ok = check("mixedValue", m.a == 1) && ok;
-	console.log("mixedVoid=" + m.v);
+	console.log("mixedVoid is null " + (m.v == null));
 
 	ok = check("order", trace == "abcdef") && ok;
 
