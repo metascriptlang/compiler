@@ -166,6 +166,7 @@ export enum RaiserOpcode {
 	ObjConv,          // ABC: fatal unless R[A] is nil or an instance of class K[B], named K[C]
 	BTruthy,          // ABC: if R[A] is truthy (ToBoolean) skip C
 	NarrowS,          // ABC: fatal unless R[A] fits a signed B-bit integer, or an unsigned one when C is 1
+	ModuleImport,     // ABx: R[A] = future of import() of the module record named K[Bx]
 }
 
 export enum RaiserConvClass {

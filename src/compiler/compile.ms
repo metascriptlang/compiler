@@ -4010,7 +4010,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	// through the same registry — load it first or both see an empty table.
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules);
+	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath));
 	// Comptime parity: queued bytecode-compile errors are collected and
 	// reported, not fatal — std module bodies the program never calls can
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks

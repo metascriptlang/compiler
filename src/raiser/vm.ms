@@ -105,6 +105,7 @@ export interface RaiserFuture {
 	valueArrayHeap: RaiserArrayHeap;
 	valueObjectHeap: RaiserObjectHeap;
 	waiters: number[];   // strand indices blocked on this future
+	record: int32;       // module record an import() future settles from; -1 for any other future
 }
 
 export interface RaiserFutures {
@@ -120,11 +121,49 @@ export interface RaiserTimers {
 	items: RaiserTimer[];
 }
 
+// The module records of the modules import() reaches, evaluated on a task strand that
+// shares the main strand's globals and heap, the way runtime/promise/moduleEval.c
+// evaluates them on the loop thread.
+export enum RaiserModuleStatus {
+	Pending,
+	Evaluating,
+	Evaluated,
+}
+
+export interface RaiserModuleState {
+	status: RaiserModuleStatus;
+	failed: boolean;
+	error: RaiserValue;
+	dfsIndex: int32;
+	dfsAncestorIndex: int32;
+}
+
+export interface RaiserModuleWaiter {
+	record: int32;
+	future: int64;
+}
+
+export interface RaiserModuleFrame {
+	at: int32;
+	next: int32;   // next requested module to visit; requested.length = body due, beyond = body ran
+}
+
+export interface RaiserModuleEval {
+	states: RaiserModuleState[];
+	pending: RaiserModuleWaiter[];
+	strand: number;    // strand running the evaluator task; -1 when no task is armed
+	fresh: boolean;    // the armed task has not run yet
+	stack: int32[];
+	frames: RaiserModuleFrame[];
+	index: int32;
+}
+
 export interface RaiserSched {
 	strands: RaiserStrands;
 	futures: RaiserFutures;
 	timers: RaiserTimers;
 	nextStrandId: number;
+	modules: RaiserModuleEval;
 }
 
 export interface RaiserVM {
@@ -223,7 +262,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const futures: RaiserFutures = { items: futureItems };
 	const timerItems: RaiserTimer[] = [];
 	const timers: RaiserTimers = { items: timerItems };
-	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1 };
+	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
 	const safePoints: number[] = [];
 	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null };
 }
@@ -353,6 +392,12 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.yielded = false;
 	vm.sched.futures.items.length = 0;
 	vm.sched.timers.items.length = 0;
+	const ev = vm.sched.modules;
+	ev.pending.length = 0;
+	ev.strand = -1;
+	ev.fresh = false;
+	ev.stack.length = 0;
+	ev.frames.length = 0;
 }
 
 // --- Futures ---
@@ -361,7 +406,7 @@ function newFuture(vm: RaiserVM): int64 {
 	const waiters: number[] = [];
 	const valueArrayHeap = createArrayHeap();
 	const valueObjectHeap = createStructHeap();
-	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), valueArrayHeap, valueObjectHeap, waiters };
+	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), valueArrayHeap, valueObjectHeap, waiters, record: -1 };
 	vm.sched.futures.items.push(f);
 	return vm.sched.futures.items.length - 1;
 }
@@ -483,6 +528,11 @@ function unwindFrame(vm: RaiserVM): void {
 function unhandledException(vm: RaiserVM): void {
 	vm.unwinding = false;
 	vm.savedIp = -1;
+	if (vm.current == vm.sched.modules.strand) {
+		moduleFail(vm, vm.currentException);
+		moduleTaskContinue(vm);
+		return;
+	}
 	const msg = vmExceptionText(vm, vm.currentException);
 	const s = vm.sched.strands.items[vm.current];
 	if (s.resultFuture >= 0) {
@@ -590,7 +640,8 @@ function vmHandleThrow(vm: RaiserVM, inst: RaiserInstruction): void {
 // Re-raise a failed future in its reader — the VM's msFutureRaiseFrom.
 function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 	f.errorObserved = true;
-	copyValueInto(vm.currentException, raiserString(f.errorMsg));
+	if (f.record >= 0) copyValueInto(vm.currentException, moduleErrorForReader(vm, f.record));
+	else copyValueInto(vm.currentException, raiserString(f.errorMsg));
 	vm.unwinding = true;
 	vm.savedIp = vm.ip - 1;
 	unwindStep(vm);
@@ -823,6 +874,174 @@ function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
 	vm.yielded = true;
 }
 
+// --- Module records ---
+
+function createModuleEval(mod: RaiserModule): RaiserModuleEval {
+	const states: RaiserModuleState[] = [];
+	for (const record of mod.records) {
+		const status = record.init < 0 ? RaiserModuleStatus.Evaluated : RaiserModuleStatus.Pending;
+		states.push({ status, failed: false, error: raiserNil(), dfsIndex: 0, dfsAncestorIndex: 0 });
+	}
+	const pending: RaiserModuleWaiter[] = [];
+	const stack: int32[] = [];
+	const frames: RaiserModuleFrame[] = [];
+	return { states, pending, strand: -1, fresh: false, stack, frames, index: 0 };
+}
+
+function moduleRecordNamed(mod: RaiserModule, name: string): int32 {
+	for (let i = 0; i < mod.records.length; i += 1) {
+		if (mod.records[i].name == name) return i;
+	}
+	return -1;
+}
+
+function vmHandleModuleImport(vm: RaiserVM, inst: RaiserInstruction, func: RaiserFunction): void {
+	const bx = getBx(inst);
+	const name = bx < getFuncConstLen(func) ? getFuncConst(func, bx).strVal : "";
+	const at = moduleRecordNamed(vm.mod, name);
+	if (at < 0) {
+		vmError(vm, `import() of module '${name}', which has no module record`);
+		return;
+	}
+	const fut = newFuture(vm);
+	vm.sched.futures.items[fut].record = at;
+	vm.sched.modules.pending.push({ record: at, future: fut });
+	if (vm.sched.modules.strand < 0) moduleArmTask(vm);
+	setReg(vm, vm.baseReg + inst.a, raiserFuture(fut));
+}
+
+function moduleArmTask(vm: RaiserVM): void {
+	const main = vm.sched.strands.items[0];
+	const slots: RaiserValue[] = [];
+	const regs: RaiserRegFile = { slots };
+	const frames: RaiserCallFrame[] = [];
+	const callStack: RaiserCallFrames = { items: frames };
+	const sp: number[] = [];
+	const id = vm.sched.nextStrandId;
+	vm.sched.nextStrandId = id + 1;
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: vm.mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	vm.sched.strands.items.push(s);
+	vm.sched.modules.strand = vm.sched.strands.items.length - 1;
+	vm.sched.modules.fresh = true;
+}
+
+function moduleTaskContinue(vm: RaiserVM): void {
+	if (moduleAdvanceToBody(vm)) return;
+	vm.sched.strands.items[vm.current].status = RaiserStrandStatus.Done;
+	vm.sched.modules.strand = -1;
+	vm.yielded = true;
+}
+
+function moduleEnter(ev: RaiserModuleEval, at: int32): void {
+	const st = ev.states[at];
+	st.status = RaiserModuleStatus.Evaluating;
+	st.dfsIndex = ev.index;
+	st.dfsAncestorIndex = ev.index;
+	ev.index += 1;
+	ev.stack.push(at);
+	ev.frames.push({ at, next: 0 });
+}
+
+function moduleLowerAncestor(m: RaiserModuleState, r: RaiserModuleState): void {
+	if (r.dfsAncestorIndex < m.dfsAncestorIndex) m.dfsAncestorIndex = r.dfsAncestorIndex;
+}
+
+function moduleFail(vm: RaiserVM, error: RaiserValue): void {
+	const ev = vm.sched.modules;
+	for (const at of ev.stack) {
+		const st = ev.states[at];
+		st.status = RaiserModuleStatus.Evaluated;
+		st.failed = true;
+		copyValueInto(st.error, error);
+		vmIncref(vm, error);
+	}
+	ev.stack.length = 0;
+	ev.frames.length = 0;
+}
+
+function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
+	const body = getModuleFunc(vm.mod, funcIdx);
+	ensureSlots(vm.regs, body.maxRegs);
+	vm.callStack.items.length = 0;
+	const sp: number[] = [];
+	vm.safePoints = sp;
+	vm.unwinding = false;
+	vm.savedIp = -1;
+	vm.funcIdx = funcIdx;
+	vm.baseReg = 0;
+	vm.ip = 0;
+}
+
+function moduleSettle(vm: RaiserVM, w: RaiserModuleWaiter): void {
+	const st = vm.sched.modules.states[w.record];
+	if (st.failed) futureFail(vm, w.future, vmExceptionText(vm, st.error));
+	else futureComplete(vm, w.future, raiserInt(1));
+}
+
+function moduleAdvanceToBody(vm: RaiserVM): boolean {
+	const ev = vm.sched.modules;
+	while (!vm.halted) {
+		if (ev.frames.length > 0) {
+			const top = ev.frames[ev.frames.length - 1];
+			const record = vm.mod.records[top.at];
+			const st = ev.states[top.at];
+			if (top.next < record.requested.length) {
+				const req = record.requested[top.next];
+				top.next += 1;
+				const r = ev.states[req];
+				if (r.status == RaiserModuleStatus.Pending) moduleEnter(ev, req);
+				else if (r.status == RaiserModuleStatus.Evaluating) moduleLowerAncestor(st, r);
+				else if (r.failed) moduleFail(vm, r.error);
+				continue;
+			}
+			if (top.next == record.requested.length) {
+				top.next += 1;
+				if (record.init >= 0) {
+					moduleRunBody(vm, record.init);
+					return true;
+				}
+			}
+			ev.frames.pop();
+			if (st.dfsAncestorIndex == st.dfsIndex) {
+				let popped: int32 = -1;
+				while (popped != top.at) {
+					popped = ev.stack.pop();
+					ev.states[popped].status = RaiserModuleStatus.Evaluated;
+				}
+			}
+			if (ev.frames.length > 0 && st.status == RaiserModuleStatus.Evaluating) {
+				moduleLowerAncestor(ev.states[ev.frames[ev.frames.length - 1].at], st);
+			}
+			continue;
+		}
+		if (ev.pending.length == 0) return false;
+		const w = ev.pending[0];
+		const st = ev.states[w.record];
+		if (st.status == RaiserModuleStatus.Pending) {
+			ev.index = 0;
+			moduleEnter(ev, w.record);
+			continue;
+		}
+		if (st.status != RaiserModuleStatus.Evaluated) {
+			vmError(vm, `internal: import() of module '${vm.mod.records[w.record].name}' settled while its evaluation is unfinished`);
+			return false;
+		}
+		for (let i = 1; i < ev.pending.length; i += 1) ev.pending[i - 1] = ev.pending[i];
+		ev.pending.shrink(ev.pending.length - 1);
+		moduleSettle(vm, w);
+	}
+	return false;
+}
+
+// The error object lives in the main strand's heap, where the body threw it: a reader
+// there gets that same object, a spawned strand a copy in its own heap.
+function moduleErrorForReader(vm: RaiserVM, at: int32): RaiserValue {
+	const error = vm.sched.modules.states[at].error;
+	if (vm.current == 0 || vm.current == vm.sched.modules.strand) return error;
+	const main = vm.sched.strands.items[0];
+	return copyGraph(main.arrayHeap, main.objectHeap, vm.arrayHeap, vm.objectHeap, error);
+}
+
 export function execLoop(vm: RaiserVM): void {
 	execStrandLoop(vm);
 	// The host reads its result off the mirror once this returns (context.ms,
@@ -867,6 +1086,10 @@ function execStrandLoop(vm: RaiserVM): void {
 			return;
 		}
 		strandResume(vm, next);
+		if (next == vm.sched.modules.strand && vm.sched.modules.fresh) {
+			vm.sched.modules.fresh = false;
+			moduleTaskContinue(vm);
+		}
 	}
 }
 
@@ -1199,6 +1422,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleAwait(vm, inst);
 		} else if (op == RaiserOpcode.Sleep) {
 			vmHandleSleep(vm, inst);
+		} else if (op == RaiserOpcode.ModuleImport) {
+			vmHandleModuleImport(vm, inst, func);
 		} else if (op == RaiserOpcode.Try) {
 			vm.safePoints.push(vm.ip - 1 + getBx(inst));
 		} else if (op == RaiserOpcode.Catch) {
@@ -1276,6 +1501,10 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (finIp >= 0) {
 		vm.savedIp = vm.ip - 1;
 		vm.ip = finIp;
+		return;
+	}
+	if (vm.callStack.items.length == 0 && vm.current == vm.sched.modules.strand) {
+		moduleTaskContinue(vm);
 		return;
 	}
 	if (vm.callStack.items.length == 0) {

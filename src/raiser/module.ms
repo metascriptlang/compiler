@@ -19,11 +19,18 @@ export interface RaiserFunction {
 
 // --- Module ---
 
+export interface RaiserModuleRecord {
+	name: string;
+	init: number;   // function index of the module body; -1 for a module initialized at startup
+	requested: int32[];
+}
+
 export interface RaiserModule {
 	name: string;
 	functions: RaiserFunction[];
 	entry: number;
 	globalCount: int32;
+	records: RaiserModuleRecord[];
 }
 
 // --- Constructors ---
@@ -33,7 +40,7 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
-	return { name, functions, entry, globalCount: 0 };
+	return { name, functions, entry, globalCount: 0, records: [] };
 }
 
 // --- Test Helper ---

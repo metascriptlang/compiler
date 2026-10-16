@@ -1437,6 +1437,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
 	}
+	if (isModuleImportCall(d.callee) && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
+		const dest = allocReg(s);
+		const name = addConst(s, raiserString((d.arguments[0].data as StringLiteralData).value));
+		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
+		return dest;
+	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
 		// finished is indistinguishable from the value itself.
@@ -2023,6 +2029,10 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 	emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.arguments[0]), RaiserConvClass.I64));
 	emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, arrReg, count, 0));
 	return arrReg;
+}
+
+function isModuleImportCall(callee: Node): boolean {
+	return callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "msModuleImport";
 }
 
 // exit(code) / process.exit(code) — name-based like setLength: the import
