@@ -1,6 +1,5 @@
 // @stdout: generic-instance-json-parse all-ok
 // note: JSON.parse<T> reads a generic instance through its implementation, as the encoder does, at the top level, as a field and as an array element.
-import { exit } from "std/process";
 
 type G<T> = { v: T; w: int32 };
 interface Box<T> { v: T; w: int32 }
@@ -34,4 +33,3 @@ check("wrong kind refused", !wrong.ok && wrong.error.includes("field 'v'"));
 if (failures == 0) {
 	console.log("generic-instance-json-parse all-ok");
 }
-exit(failures);

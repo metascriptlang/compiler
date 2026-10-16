@@ -1,6 +1,5 @@
 // @stdout: generic-instance-json all-ok
 // note: a generic instance reaches the serializer macro as G<T>; it must read the instance's own fields, one-value literal fields included.
-import { exit } from "std/process";
 
 type G<T> = { v: T; w: int32 };
 interface Box<T> { v: T; w: int32 }
@@ -48,4 +47,3 @@ check("through a generic function false", show(gFalse), '{"v":false,"w":6}');
 if (failures == 0) {
 	console.log("generic-instance-json all-ok");
 }
-exit(failures);

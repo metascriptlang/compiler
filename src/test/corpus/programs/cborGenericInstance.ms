@@ -1,7 +1,6 @@
 // @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
 // @stdout: generic-instance-cbor all-ok
 // note: the CBOR codec reads a generic instance through its implementation, at the top level, as a field and as an array element.
-import { exit } from "std/process";
 import { cborEncode, decode, cborValueToStruct, cborInt, _cborArrayOfStructs, _cborToStructArray } from "std/serialize/cbor";
 
 type G<T> = { v: T; w: int32 };
@@ -45,4 +44,3 @@ check("array of instances", ra.ok && qa.bs.length == 2 && qa.bs[1].v == 3);
 if (failures == 0) {
 	console.log("generic-instance-cbor all-ok");
 }
-exit(failures);
