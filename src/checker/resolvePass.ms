@@ -2177,7 +2177,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 				defineGenericParam(ctx, p.trim());
 			}
 		}
-		const resolved = resolveDiscriminatedUnion(ctx, d);
+		const resolved = resolveDiscriminatedUnion(ctx, d, node.flags.has(NodeFlag.ValueUnion));
 		if (hasGenericAliasDU) {
 			closeScope(ctx.table);
 		}
@@ -2278,7 +2278,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 //   typeChildren = variant types, typeName = alias name,
 //   typeExtra = discriminant enum Type,
 //   typeNames = [discFieldName, variantKey0, variantKey1, ...]
-function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): Type | null {
+function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData, valueUnion: boolean): Type | null {
 	// Resolve discriminant type — must be an enum or boolean.
 	// Boolean disc is the natural fit for two-variant unions like
 	// `type Result<T,E> = match (ok: boolean) { true => {...}, false => {...} }`.
@@ -2356,6 +2356,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 		names.push(key);
 	}
 	unionType.typeNames = names;
+	if (valueUnion) unionType.typeFlags = unionType.typeFlags.incl(TypeFlag.ValueUnion);
 	return unionType;
 }
 

@@ -80,6 +80,7 @@ export enum TypeFlag {
 	HasGenericParam,
 	BorrowDot,
 	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
+	ValueUnion,           // a discriminated union declared `struct X = match`: a value, copied where a `type X = match` union is shared
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -296,6 +297,7 @@ export enum NodeFlag {
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
 	OptionalChainEnd, // parser: last link of a run that starts at `?.` — the null test covers every link from the `?.` to here
+	ValueUnion,    // parser: this TypeAliasDecl is a discriminated union written `struct X = match`
 }
 
 // ===== Node Kind Enum =====

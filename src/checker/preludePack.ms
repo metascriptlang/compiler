@@ -1440,7 +1440,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		const ret = createNodeAt(NodeKind.ReturnStmt, { argument: add } as NodeData, makeLoc(9, 2));
 		const body = createNodeAt(NodeKind.BlockStmt, { statements: [ret] } as NodeData, makeLoc(8, 30));
 		const decl = createNodeAt(NodeKind.FunctionDecl, { fnName: "pkTestFn", params: ["start"], fnParamTypes: ["int32"], fnBody: body, fnFlags: "", fnReturnType: "int32", fnDefaults: [zero], nativeName: "", nameLocation: makeLoc(7, 9) } as NodeData, makeLoc(7, 1));
-		decl.flags = decl.flags.incl(NodeFlag.OptionalChainEnd);
+		decl.flags = decl.flags.incl(NodeFlag.OptionalChainEnd).incl(NodeFlag.ValueUnion);
 		sym.declNode = decl;
 		sym.defaultParams = [zero];
 		const cache = ctx.table.identCache;
@@ -1473,7 +1473,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert got.declNode != null;
 		assert got.declNode.kind == NodeKind.FunctionDecl;
 		const gd = got.declNode.data as FunctionDeclData;
-		assert got.declNode.flags.has(NodeFlag.OptionalChainEnd), "a node flag past bit 31 did not survive the pack";
+		assert got.declNode.flags.has(NodeFlag.OptionalChainEnd) && got.declNode.flags.has(NodeFlag.ValueUnion), "a node flag past bit 31 did not survive the pack";
 		assert gd.fnName == "pkTestFn";
 		assert gd.params[0] == "start";
 		const gbody = gd.fnBody.data as BlockStmtData;

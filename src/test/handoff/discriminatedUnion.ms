@@ -6,6 +6,7 @@ import { compileToC } from "../helpers";
 import { hasErrors } from "../../checker/context";
 import { isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
+import { TypeFlag } from "../../ast/node";
 
 test "parse discriminated union type alias" {
 	const ctx = checkSource("enum Color { Red, Green, Blue }\ntype Shape = match (color: Color) {\n\tColor.Red => { radius: number },\n\tColor.Green => { width: number, height: number },\n\tColor.Blue => { side: number },\n};");
@@ -191,4 +192,31 @@ test "codegen emits enum _tag for discriminated union" {
 	} else {
 		console.log("C-TAG-ERR: " + c.error);
 	}
+}
+
+const structMatchBody = "(kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n}";
+
+test "a struct match declares the union the type form declares, as a value" {
+	const asStruct = checkSource("enum Kind { A, B }\nstruct Data = match " + structMatchBody + ";");
+	const asType = checkSource("enum Kind { A, B }\ntype Data = match " + structMatchBody + ";");
+	assert !hasErrors(asStruct);
+	const sv = lookupSymbol(asStruct.table, "Data").symbolType;
+	const tv = lookupSymbol(asType.table, "Data").symbolType;
+	assert isDiscriminatedUnion(sv);
+	assert getDiscriminantName(sv) == "kind";
+	assert findVariantByDiscriminant(sv, "Kind.B") == 1;
+	assert sv.typeFlags.has(TypeFlag.ValueUnion);
+	assert !tv.typeFlags.has(TypeFlag.ValueUnion);
+}
+
+test "a generic struct match is a value union" {
+	const ctx = checkSource("struct Either<T, E> = match (ok: boolean) {\n\ttrue => { value: T },\n\tfalse => { error: E },\n};");
+	assert !hasErrors(ctx);
+	assert lookupSymbol(ctx.table, "Either").symbolType.typeFlags.has(TypeFlag.ValueUnion);
+}
+
+test "a struct match is checked for exhaustiveness and for its enum members" {
+	const body = "enum Kind { A, B }\nstruct Data = match " + structMatchBody + ";\n";
+	assert hasError(body + "function f(d: Data): number { return match (d.kind) { Kind.A => 1 }; }", "Non-exhaustive match: missing 'Kind.B'");
+	assert hasError("enum Kind { A, B }\nstruct Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.C => { y: string },\n};", "not a member");
 }

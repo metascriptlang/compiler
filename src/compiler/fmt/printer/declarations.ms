@@ -200,7 +200,7 @@ export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const verbatim = aliasWithInnerComments(node, options);
 	if (verbatim != "") return docText(verbatim);
 	const distinct = d.aliasIsDistinct ? "distinct " : "";
-	const head = "type " + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
+	const head = (node.flags.has(NodeFlag.ValueUnion) ? "struct " : "type ") + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
 	if (d.discriminantName != "" && d.discriminantName != null) {
 		// Discriminated union: type X<...> = match (disc: Enum) { ... }
 		// Use docIndent so the layout engine respects useTabs/tabWidth.
