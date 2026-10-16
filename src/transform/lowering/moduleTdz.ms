@@ -40,7 +40,7 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	for (const b of bindings) {
 		const reached = deferred.has(b.sym) && (cycle.size > 0 || (firstRun >= 0 && firstRun <= b.statement));
 		if (!reached && !importedByCycleMember(ctx.checkerCtx.moduleGraph, cycle, modulePath, b.sym.name)) continue;
-		const flag = mintSym(ctx, SymbolKind.Variable, b.sym.name + "$init", booleanType());
+		const flag = mintSym(ctx, SymbolKind.Variable, initFlagName(b.sym.name), booleanType());
 		markModuleFlag(flag, modulePath);
 		ctx.tdzFlags.set(b.sym, flag);
 		const loc = stmts[b.statement].location;
@@ -54,7 +54,7 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	for (const sym of deferredOrder) {
 		if (sym.modulePath == "" || sym.modulePath == modulePath || !cycle.has(sym.modulePath)) continue;
 		if (!isLexicalBindingSym(sym) || self == null || !importsByName(self, sym.modulePath, sym.name)) continue;
-		const flag = makeSymbol(sym.name + "$init", SymbolKind.Variable, booleanType(), true);
+		const flag = makeSymbol(initFlagName(sym.name), SymbolKind.Variable, booleanType(), true);
 		markModuleFlag(flag, sym.modulePath);
 		ctx.tdzFlags.set(sym, flag);
 	}
@@ -173,10 +173,15 @@ function guardedWriteStmt(stmt: Node, assign: Node, ctx: TransformContext): Node
 	return makeIf(makeIdentResolved(flagOf(bd.left, ctx)!, loc), makeBlock([stmt], loc), makeBlock(otherwise, loc), loc);
 }
 
+export function initFlagName(binding: string): string {
+	return binding + "$init";
+}
+
 function markModuleFlag(flag: Symbol, modulePath: string): void {
 	flag.modulePath = modulePath;
 	setFlag(flag, SymbolFlag.Global);
 	setFlag(flag, SymbolFlag.Mutable);
+	setFlag(flag, SymbolFlag.InitFlag);
 }
 
 function unwrapDecl(stmt: Node): Node {

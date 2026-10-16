@@ -1161,6 +1161,21 @@ function registryVariables(): void {
 	]);
 }
 
+// ---- hcrModuleTdz: a module binding's initialized flag follows its cell across reloads ----
+
+function moduleTdz(): void {
+	const tag = "hcrModuleTdz";
+	const dir = buildLogicGenerations(tag, "moduleTdz", ["logic.ms", "logicAdd.ms", "logicReset.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-TDZ", [
+		"HCR-TDZ early: Cannot access 'later' before initialization",
+		"HCR-TDZ start: v1 6 8",
+		"HCR-TDZ g2: reloaded logic",
+		"HCR-TDZ added: v2 6 8 20 tag",
+		"HCR-TDZ g3: reloaded logic",
+		"HCR-TDZ reset: v3 200 9 21 tag",
+	]);
+}
+
 function registryGeneric(): void {
 	const tag = "hcrRegistryGeneric";
 	const dir = freshDir(`${TMP}/registryGeneric`);
@@ -1599,6 +1614,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrModulePassReload", run: modulePassReload },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
+	{ name: "hcrModuleTdz", run: moduleTdz },
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },

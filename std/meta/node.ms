@@ -222,6 +222,7 @@ export enum SymbolFlag {
 	Inline,
 	InheritsConstructor,
 	NoInline,
+	InitFlag, // a module binding's initialized flag (moduleTdz); HCR keeps it in step with the binding's state cell
 }
 
 // ===== Symbol =====

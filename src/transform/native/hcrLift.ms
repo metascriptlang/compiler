@@ -1,10 +1,11 @@
 import {
 	Node, NodeKind, SourceLocation, createNode, DeclKind, SymbolKind, SymbolFlag,
-	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, ExprStmtData,
+	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, ExprStmtData, BinaryExprData,
 	MacroInvocationData, Symbol, Type, TypeKind, noFieldDecorators,
 } from "../../ast/node";
 import { createPtr, createStruct, booleanType, isUnresolvedType } from "../../checker/types";
-import { makeSymbol, setFlag } from "../../checker/symbol";
+import { makeSymbol, setFlag, hasFlag } from "../../checker/symbol";
+import { initFlagName } from "../lowering/moduleTdz";
 import { constantLiteralOf } from "../../checker/constFold";
 import { skipConvDfa } from "../../analyzer/alias";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
@@ -13,7 +14,7 @@ import { cStringLiteral } from "../../codegen/c/literals";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeIdentResolved, makeHiddenDeref, makeMember, makeBinary, makeExprStmt,
+	makeIdentResolved, makeHiddenDeref, makeMember, makeBinary, makeUnary, makeExprStmt,
 	makeVarDecl, makeIf, makeBlock, syntheticToken,
 } from "../util";
 
@@ -44,16 +45,31 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 		makeEmitStmt(`/*DATINITSECTION*/  _ms_hcr_first = msHcrModuleBegin(${cStringLiteral(moduleId)});`, loc),
 	];
 	const kept: Node[] = [];
+	const extracted: (HcrGlobal | null)[] = [];
 	for (const stmt of pd.programStmts) {
 		const g = extractGlobal(stmt, ctx, globals.length as int32);
+		extracted.push(g);
+		if (g == null) continue;
+		globals.push(g);
+		bySymbol.set(g.sym, g);
+	}
+	const flagged = flaggedBindings(globals);
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
+		const stmt = pd.programStmts[i];
+		const g = extracted[i];
 		if (g == null) {
+			const set = initFlagSet(stmt);
+			if (set != null) {
+				const binding = flagged.get(set);
+				kept.push(binding == null || binding.literalAlias ? stmt
+					: makeIf(makeIdentResolved(binding.fresh, stmt.location), makeBlock([stmt], stmt.location), null, stmt.location));
+				continue;
+			}
 			kept.push(isDeclarationOrEmit(stmt)
 				? stmt
 				: makeIf(makeIdentResolved(first, stmt.location), makeBlock([stmt], stmt.location), null, stmt.location));
 			continue;
 		}
-		globals.push(g);
-		bySymbol.set(g.sym, g);
 		result.push(hcrStorageDecl(g.storageType, stmt.location));
 		result.push(makeHcrVariableDecl(g.pointer, stmt.location));
 		result.push(makeHcrVariableDecl(g.fresh, stmt.location));
@@ -61,7 +77,10 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 			`/*DATINITSECTION*/  ${g.fresh.nativeName} = msHcrRegisterVariable(${cStringLiteral(moduleId)}, ${cStringLiteral(g.cName)}, ${cStringLiteral(g.key)}, sizeof(*${g.pointer.nativeName}), (void**)&${g.pointer.nativeName});`,
 			stmt.location,
 		));
-		if (g.initNode != null) {
+		const binding = flagged.get(g.sym);
+		if (binding != null) {
+			kept.push(followCell(g, binding, stmt.location));
+		} else if (g.initNode != null) {
 			const lhs = makeIdentResolved(g.sym, stmt.location);
 			lhs.nodeType = g.declType;
 			const assign = makeBinary(lhs, "=", g.initNode, stmt.location);
@@ -88,6 +107,35 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 	for (const stmt of kept) result.push(rewriteGlobalRefs(stmt, bySymbol));
 	pd.programStmts = result;
 	return program;
+}
+
+function flaggedBindings(globals: HcrGlobal[]): HashMap<Symbol, HcrGlobal> {
+	const byName = new HashMap<string, HcrGlobal>();
+	for (const g of globals) byName.set(g.sym.name, g);
+	const flagged = new HashMap<Symbol, HcrGlobal>();
+	for (const g of globals) {
+		const flag = byName.get(initFlagName(g.sym.name));
+		if (flag != null && hasFlag(flag.sym, SymbolFlag.InitFlag)) flagged.set(flag.sym, g);
+	}
+	return flagged;
+}
+
+function initFlagSet(stmt: Node): Symbol | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const expr = (stmt.data as ExprStmtData).expr;
+	if (expr == null || expr.kind != NodeKind.BinaryExpr || (expr.data as BinaryExprData).operator != "=") return null;
+	const target = (expr.data as BinaryExprData).left;
+	if (target.kind != NodeKind.Identifier || target.resolvedSym == null) return null;
+	return hasFlag(target.resolvedSym, SymbolFlag.InitFlag) ? target.resolvedSym : null;
+}
+
+function followCell(flag: HcrGlobal, binding: HcrGlobal, loc: SourceLocation): Node {
+	const lhs = makeIdentResolved(flag.sym, loc);
+	lhs.nodeType = flag.declType;
+	const assign = makeBinary(lhs, "=", makeUnary("!", makeIdentResolved(binding.fresh, loc), loc), loc);
+	assign.nodeType = flag.declType;
+	const changed = makeBinary(makeIdentResolved(flag.fresh, loc), "||", makeIdentResolved(binding.fresh, loc), loc);
+	return makeIf(changed, makeBlock([makeExprStmt(assign, loc)], loc), null, loc);
 }
 
 function unwrapDeclaration(node: Node): Node {
