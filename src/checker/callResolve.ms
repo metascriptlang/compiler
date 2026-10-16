@@ -3989,6 +3989,20 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 				winnerType = stripReceiverParam(instSym.symbolType);
 			}
 		}
+	} else if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.builtinKind == ""
+			&& extWinnerSym.declNode != null && extWinnerSym.declNode.kind == NodeKind.MethodDecl && winnerType.kind == TypeKind.Function) {
+		const recvBindings = createUnifyBindings();
+		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
+		if (isGenericInstanceMethod(extWinnerSym)) {
+			const methodInst = tryInstantiateGenericCallee(ctx, callNode, winnerType, argTypes, getGenericDeclFlags(extWinnerSym.declNode), null, recvBindings);
+			if (methodInst != null) winnerType = stripReceiverParam(methodInst);
+		} else if (recvBindings.names.length > 0) {
+			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
+			if (instSym != null) {
+				ensureShaped(instSym, ctx);
+				callNode.resolvedSym = instSym;
+			}
+		}
 	}
 	if (extWinnerSym != null && !exts[idx].isStatic && callNode.resolvedSym == extWinnerSym && extWinnerSym.builtinKind == ""
 			&& extWinnerSym.declNode != null && declTakesReceiver(extWinnerSym.declNode) && isGenericRoutine(winnerType, extWinnerSym)) {
