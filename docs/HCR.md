@@ -1042,14 +1042,49 @@ cannot drive a waiting `msc run`, so the inline test in `compile.ms` holds the c
 holds the path of the engine). Before, the host started and stopped at `HCR-HOST the core image
 does not export msHcrEngineStart`.
 
-The core image keeps only what the images of its build use, so the first edit that reaches a
-standard-library symbol nothing used before changes the core and answers `RestartRequired`; the
-old generation keeps running. On 2026-10-06, macOS arm64, tree `0b8cab6cfc5b`, a signal app on
+Before the engine-core/std-image split, the core image kept only what its images used. A first
+standard-library use could change the core and answer `RestartRequired`, leaving the old
+generation running. On 2026-10-06, macOS arm64, tree `0b8cab6cfc5b`, a signal app on
 Neon's `src/core` (imported from outside the project, so in the core image) reloaded an edit of
 its `render` text in a 287 ms warm build with the counter kept. The next edit added
 `throw new Error(...)` to `render`, which made `Error`'s `_init` and TypeInfo alive in
 `std/core/system`, and answered `the core image changed`. `src/test/hcr/fixtures/step/app.ms`
 keeps `Error` alive through `mustNotThrow` for this reason.
+
+### Standard-library first use: macOS candidate evidence
+
+The engine dependency group stays complete and app-independent; other std modules use the
+existing module-image protocol. See `hcrCoreModulePaths`, `hcrModuleId` and
+`HCR_SHARED_NATIVE_SOURCES` in `src/compiler/compile.ms`. Shared native C providers stay in
+one fixed core group: putting their objects into whichever image first requested them failed
+when a second image needed the same library; compiling copies also duplicated the I/O engine's
+thread-local state. This adds native-source ownership, not a native-library reload protocol.
+
+Measured on macOS arm64, committed tree `22e5ad3e711d9d9722dbc998d234b2a93a140bc4` plus
+tracked source diff SHA256 `5d1fe9c161cf894a15d6a0e9174a32f44e7ddacc92223557b2729ecf2dac1313`,
+compiler SHA256 `6d9f3a2152e8a8ae1710b989811ccf072698846642708169d1c3265faa97c4a8`.
+Command: `HCR_ONLY=hcrStdFirstUse,hcrSharedNativeFlags MSC="$PWD/msc" msc run --target=raiser src/test/hcr/run.ms`.
+Actual runner output: `ok   hcrStdFirstUse` and `ok   hcrSharedNativeFlags` (61 s and 21 s).
+
+| First-use axis | Observed consumer |
+|---|---|
+| String method, Error, path, hash | Reloaded; exact fixture output matched |
+| BLAKE2b, then Ed25519 | Both called after adding their images; shared provider remains core-owned |
+| Gzip, then gunzip | Original text round-tripped after adding both images |
+| Nested JSON array/string/number | Tagged-union allocation and access worked after image discovery |
+| Filesystem watcher | Open, file write, close worked; event delivery not asserted here |
+
+`hcrStdFirstUse` compares complete core bytes after each accepted reload and, on macOS,
+checks twelve native exports are defined only by the core. `hcrSharedNativeFlags` checks valid
+header/macro input, a missing header, and conflicting per-file flags on two provider sources.
+An earlier run timed out at the path edit; the unchanged original later passed. No root-cause
+fix is claimed for that timeout. Forty HCR cases passed across a timeout-interrupted run and
+an eleven-case tail; one case stayed explicitly parked. This is split coverage, not a single
+full-run verdict. Native reachability owner tests passed 1625 tests in 66 files; the JS owner
+run stopped before emission with the same seventeen prerequisite errors as its earlier log.
+
+No idle cold/warm A/B result, broad native-std portability, cryptographic correctness, watcher
+event-delivery, sanitizer or memory-safety verdict is inferred from this matrix.
 
 ## Neon Fast Refresh boundary
 
