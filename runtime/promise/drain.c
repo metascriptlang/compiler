@@ -34,6 +34,10 @@ static int msOrphanOverflow = 0;
 void msNoteOrphanFailure(void* fut) {
 	if (fut == NULL) return;
 	MS_ORPHAN_LOCK();
+	if (atomic_load_explicit(&((msFutureBase*)fut)->errorObserved, memory_order_relaxed)) {
+		MS_ORPHAN_UNLOCK();
+		return;
+	}
 	/* Reuse cleared slots first: poll-style readers (waitFor) note then clear
 	 * transiently, so live entries are sparse once the count has grown. */
 	int slot = -1;
