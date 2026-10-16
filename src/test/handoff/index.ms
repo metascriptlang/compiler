@@ -178,3 +178,4 @@ import "./b3InferredKind";
 import "./noneKindNoType";
 import "./asPrecedence";
 import "./unclosedDelimiter";
+import "./literalTypeAssign";

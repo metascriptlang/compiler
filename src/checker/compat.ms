@@ -447,6 +447,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Distinct => sameDistinct(source, target),
 			TypeKind.Module => source.typeName == target.typeName,
 			TypeKind.EnumLiteral => sameEnumMember(source, target),
+			TypeKind.StringLiteral | TypeKind.BooleanLiteral => source.typeName == target.typeName,
 			TypeKind.GenericInstance => {
 				if (!sameGenericBase(source, target)) {
 					const ancestor = classAncestorInstance(source, target);
@@ -608,25 +609,16 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return true;
 	}
 
-	// StringLiteral → StringLiteral (same value only)
-	if (source.kind == TypeKind.StringLiteral && target.kind == TypeKind.StringLiteral) {
-		return source.typeName == target.typeName;
-	}
-
 	// StringLiteral → CString (string literal can be passed as cstring)
 	if (source.kind == TypeKind.StringLiteral && target.kind == TypeKind.CString) {
 		return true;
 	}
 
 	// BooleanLiteral → Boolean (subtype: `true` assignable to boolean).
-	// BooleanLiteral → BooleanLiteral matches only on identical value.
 	// Boolean → BooleanLiteral falls through to the default `false` (general
 	// boolean cannot satisfy a specific true/false constraint).
 	if (source.kind == TypeKind.BooleanLiteral && target.kind == TypeKind.Boolean) {
 		return true;
-	}
-	if (source.kind == TypeKind.BooleanLiteral && target.kind == TypeKind.BooleanLiteral) {
-		return source.typeName == target.typeName;
 	}
 
 	// EnumLiteral → Enum (subtype: NodeKind.BinaryExpr assignable to NodeKind)
