@@ -51,6 +51,7 @@ export enum TypeKind {
 	// after Error.
 	BigInt,
 	Set,
+	Module,
 }
 
 // ===== Calling Convention =====

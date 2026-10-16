@@ -350,6 +350,10 @@ function openNullableUnionPayload(union: Type, carrier: Type): Type | null {
 	return payload;
 }
 
+function isOpenSlot(t: Type): boolean {
+	return t.kind == TypeKind.None || t.kind == TypeKind.Inferred || t.kind == TypeKind.GenericParam || t.kind == TypeKind.Error;
+}
+
 function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (dropsReadonlyView(source, target)) return false;
 	// allowsNil (sigmatch.nim:730): a cursor link is nilable by design — null is
@@ -427,7 +431,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum => sameNominal(source, target),
-			TypeKind.Distinct => source.typeName == target.typeName,
+			TypeKind.Distinct | TypeKind.Module => source.typeName == target.typeName,
 			TypeKind.EnumLiteral => sameEnumMember(source, target),
 			TypeKind.GenericInstance => {
 				if (!sameGenericBase(source, target)) {
@@ -498,6 +502,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		if (source.kind == TypeKind.Null) return false;
 		return isAssignable(source, target.typeReturn);
 	}
+
+	if (source.kind == TypeKind.Module || target.kind == TypeKind.Module) return isOpenSlot(source) || isOpenSlot(target);
 
 	// Inference sentinels (Inferred = open signature, None = typeless node) and
 	// user unknown stay lenient — shape rules are enforced at fitNode.

@@ -213,8 +213,19 @@ function isReadonlyAttachedStatic(owner: Node, field: Symbol | null): boolean {
 	return (field.declNode.data as PropertyDeclData).propIsReadonly;
 }
 
+function refuseNamespaceWrite(ctx: CheckerContext, target: Node): boolean {
+	const object = (target.data as MemberExprData).object;
+	const viaNamespace = (object.resolvedSym != null && object.resolvedSym.symbolKind == SymbolKind.Module)
+		|| (object.nodeType != null && object.nodeType.kind == TypeKind.Module);
+	if (!viaNamespace) return false;
+	addError(ctx, `cannot assign to '${(target.data as MemberExprData).property}' because it is a read-only property of a module namespace: only the module that declares it can write it`,
+		target.location.line, target.location.column);
+	return true;
+}
+
 function reportReadonlyField(ctx: CheckerContext, target: Node): void {
 	const md = target.data as MemberExprData;
+	if (refuseNamespaceWrite(ctx, target)) return;
 	if (md.object.nodeType == null) return;
 	if (isReadonlyAttachedStatic(md.object, target.resolvedSym)) {
 		addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
@@ -776,6 +787,7 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	reportSharedWrite(ctx, d.updateArg);
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
 		const umd = d.updateArg.data as MemberExprData;
+		refuseNamespaceWrite(ctx, d.updateArg);
 		if (umd.property == "length" && umd.object.nodeType != null &&
 			(umd.object.nodeType.kind == TypeKind.Array || umd.object.nodeType.kind == TypeKind.SizedArray || umd.object.nodeType.kind == TypeKind.Span || isStringLike(umd.object.nodeType) || umd.object.nodeType.kind == TypeKind.CString)) {
 			if (umd.object.nodeType.kind == TypeKind.SizedArray) {

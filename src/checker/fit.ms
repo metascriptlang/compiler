@@ -265,6 +265,12 @@ export function nullishPayloadType(t: Type | null): Type | null {
 	return t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
 }
 
+export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
+	if (expr.nodeType == null || expr.nodeType.kind != TypeKind.Module) return false;
+	addError(ctx, `a module namespace (${typeDisplayName(expr.nodeType)}) has no text form here; read one of its exports instead`, expr.location.line, expr.location.column);
+	return true;
+}
+
 // Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
 // stringification the call site needs is planted DURING checking, so it is bound
 // by the same overload resolution a hand-written `x.toString()` gets and reaches
@@ -272,7 +278,7 @@ export function nullishPayloadType(t: Type | null): Type | null {
 // and enums have no declaration and stay on the builtin-lowering path.
 export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 	const t = expr.nodeType;
-	if (t == null) return null;
+	if (t == null || refuseNamespaceText(ctx, expr)) return null;
 	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
 	const peeled = peelToStructOrUnion(t);
 	if (peeled == null || peeled.kind != TypeKind.Struct) return null;

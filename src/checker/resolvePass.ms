@@ -569,6 +569,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		return errorType();
 	}
 
+	if (trimmed.length > 7 && trimmed.slice(0, 7) == "typeof ") return resolveTypeQuery(ctx, trimmed.slice(7, trimmed.length).trim(), line, col);
+
 	// Tier 3: infer X — produce a GenericParam placeholder for conditional type unification
 	if (trimmed.length > 6 && trimmed.slice(0, 6) == "infer ") {
 		const inferName = trimmed.slice(6, trimmed.length).trim();
@@ -1063,6 +1065,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
+}
+
+function resolveTypeQuery(ctx: CheckerContext, operand: string, line: int32, col: int32): Type {
+	const sym = lookupSymbol(ctx.table, operand);
+	if (sym != null && sym.symbolKind == SymbolKind.Module && sym.symbolType != null) {
+		markUsedIn(ctx, sym);
+		return sym.symbolType;
+	}
+	if (line > 0) {
+		addError(ctx, `'typeof ${operand}' in a type names a namespace import only ('import * as ${operand} from "…"'); the type of another value is not supported as a type query`, line, col);
+		return errorType();
+	}
+	return inferredType();
 }
 
 function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
