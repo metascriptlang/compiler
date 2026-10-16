@@ -1,5 +1,5 @@
-// @stdout: true:lib 7 true:lib true:lib 1:lib 1:7 true
-// note: a union variant that a guard narrowed reaches a parameter, a typed local or an array element written as the same object type, as the reference TypeScript relates a narrowed constituent to a structurally identical object type. The variant is rebuilt as that object member-wise, so the callee holds a copy (a write through the parameter does not reach the union). Covered for an inline match union and for Result, a discriminant written boolean in the parameter, and a written object passed where the match type is expected.
+// @stdout: true:lib 7 lib {"ok":true,"value":"lib"} 1:lib true
+// note: a narrowed variant of a by-value union is a value and reaches an object parameter or array only as a written copy ('{ ...p }'); it stays itself as its union type, through a generic and through JSON.stringify. The refusal into an object is pinned in handoff/variantIntoObject.
 
 type Pair = match (ok: boolean) {
 	true => { value: string },
@@ -24,36 +24,32 @@ function takeCount(x: { ok: true; value: int32 }): int32 {
 	return x.value;
 }
 
-function takeWide(x: { ok: boolean; value: string }): string {
-	return `${x.ok}:${x.value}`;
-}
-
 function takePair(x: Pair): boolean {
 	return x.ok;
+}
+
+function same<T>(x: T): T {
+	return x;
 }
 
 function main(): void {
 	const p = mk(true);
 	const r = count(true);
 	const texts: { ok: true; value: string }[] = [];
-	const counts: { ok: true; value: int32 }[] = [];
 	let arg = "";
 	let num = 0;
-	let wide = "";
-	let local = "";
+	let through = "";
+	let json = "";
+	let taken = false;
 	if (p.ok) {
-		arg = takeOk(p);
-		wide = takeWide(p);
-		const q: { ok: true; value: string } = p;
-		local = `${q.ok}:${q.value}`;
-		texts.push(p);
+		arg = takeOk({ ...p });
+		texts.push({ ...p });
+		through = same(p).value;
+		json = JSON.stringify(p);
+		taken = takePair(p);
 	}
-	if (r.ok) {
-		num = takeCount(r);
-		counts.push(r);
-	}
-	const written: { ok: true; value: string } = { ok: true, value: "w" };
-	console.log(`${arg} ${num} ${wide} ${local} ${texts.length}:${texts[0].value} ${counts.length}:${counts[0].value} ${takePair(written)}`);
+	if (r.ok) num = takeCount({ ...r });
+	console.log(`${arg} ${num} ${through} ${json} ${texts.length}:${texts[0].value} ${taken}`);
 }
 
 main();

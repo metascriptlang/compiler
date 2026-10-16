@@ -438,7 +438,7 @@ test "a nested discriminant test narrows through the narrowed union" {
 	assert seen;
 }
 
-// --- a narrowed variant meets a parameter written as the same object type ---
+// --- a narrowed variant reaches an object by a written copy or as its union ---
 import { okText, okCount } from "./fixtures/objectParameters";
 
 type VariantPair = match (ok: boolean) {
@@ -456,50 +456,29 @@ function variantCount(good: boolean): Result<int32, string> {
 	return Result.err("no");
 }
 
-function variantWide(x: { ok: boolean; value: string }): string {
-	return `${x.ok}:${x.value}`;
-}
-
 function variantTaker(x: VariantPair): boolean {
 	return x.ok;
 }
 
-test "a narrowed match variant passes to a parameter of the same object type" {
+test "a narrowed match variant copied with a spread passes to a parameter written as an object" {
 	const p = variantPair(true);
 	let seen = "";
-	if (p.ok) seen = okText(p);
+	if (p.ok) seen = okText({ ...p });
 	assert seen == "true:lib";
 }
 
-test "a narrowed Result passes to a parameter of the same object type" {
+test "a narrowed Result copied with a spread passes to a parameter written as an object" {
 	const r = variantCount(true);
 	let seen = 0;
-	if (r.ok) seen = okCount(r);
+	if (r.ok) seen = okCount({ ...r });
 	assert seen == 7;
 }
 
-test "a narrowed variant passes where the discriminant is written boolean" {
+test "a narrowed match variant passes to a parameter of its union type" {
 	const p = variantPair(true);
-	let seen = "";
-	if (p.ok) seen = variantWide(p);
-	assert seen == "true:lib";
-}
-
-test "a narrowed variant is stored in a typed local and pushed into an array declared before the guard" {
-	const p = variantPair(true);
-	const r = variantCount(true);
-	const texts: { ok: true; value: string }[] = [];
-	const counts: { ok: true; value: int32 }[] = [];
-	let seen = "";
-	if (p.ok) {
-		const q: { ok: true; value: string } = p;
-		seen = q.value;
-		texts.push(p);
-	}
-	if (r.ok) counts.push(r);
-	assert seen == "lib";
-	assert texts.length == 1 && texts[0].value == "lib";
-	assert counts.length == 1 && counts[0].value == 7;
+	let seen = false;
+	if (p.ok) seen = variantTaker(p);
+	assert seen;
 }
 
 test "a value written as the variant's object type passes where the match type is expected" {
