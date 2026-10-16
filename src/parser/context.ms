@@ -263,6 +263,20 @@ export function consumeSemicolon(state: ParserState): void {
 	}
 }
 
+export function expectCloser(state: ParserState, open: Token, close: TokenKind): void {
+	if (current(state).kind == close) {
+		advance(state);
+		return;
+	}
+	const closeText = match (close) {
+		TokenKind.RParen => ")",
+		TokenKind.RBracket => "]",
+		TokenKind.RBrace => "}",
+		_ => `${close}`,
+	};
+	addError(state, `Expected '${closeText}' to close the '${open.value}' opened at line ${open.line}, column ${open.column}`);
+}
+
 // Skip balanced delimiter pairs: parens, braces, brackets.
 // Consumes the opening token and everything through the matching close.
 // Caller must ensure current token is `open` before calling.

@@ -550,3 +550,36 @@ test "declaration keywords read as names when no name follows" {
 test "type on its own line before a name is an expression statement" {
 	assert firstStmtKind("type\nA = 1;") == NodeKind.ExprStmt;
 }
+
+function firstParseError(src: string): string {
+	const res = parseSource(src);
+	return res.ok ? "" : res.error;
+}
+
+test "an unclosed bracket is an error naming its opener, before the next statement and at EOF" {
+	const missingParen = "Expected ')' to close the '(' opened at line 1, column ";
+	const missingBracket = "Expected ']' to close the '[' opened at line 1, column ";
+	const missingBrace = "Expected '}' to close the '{' opened at line 1, column ";
+	const shapes = [
+		["log(\"a \" + xs.join(\",\";\nlog(\"b\");", missingParen + "19"],
+		["f(g(1);\nf(2);", missingParen + "2"],
+		["new C(1;\nf(2);", missingParen + "6"],
+		["const r = [1, 2;\nf(2);", missingBracket + "11"],
+		["const r = (1 + 2;\nf(2);", missingParen + "11"],
+		["const r = a[0;\nf(2);", missingBracket + "12"],
+		["const r = { a: 1, b: 2;\nf(2);", missingBrace + "11"],
+		["const r = { [k: 1 };", missingBracket + "13"],
+		["log(\"a\"\n", missingParen + "4"],
+		["f(g(1)", missingParen + "2"],
+		["new C(1", missingParen + "6"],
+		["const r = [1, 2\n", missingBracket + "11"],
+		["const r = (1 + 2", missingParen + "11"],
+		["const r = a[0", missingBracket + "12"],
+		["const r = { a: 1", missingBrace + "11"],
+	];
+	for (const shape of shapes) assert firstParseError(shape[0]) == shape[1], shape[0] + " -> " + firstParseError(shape[0]);
+}
+
+test "closed brackets of every shape still parse" {
+	assert firstParseError("log(\"a \" + xs.join(\",\"));\nf(g(1));\nnew C(1);\nconst r = [1, 2];\nconst p = (1 + 2);\nconst q = a[0];\nconst o = { a: 1, [k]: 2 };\nconst s = a[1..2];\nconst e = [];\nf();") == "";
+}
