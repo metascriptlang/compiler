@@ -31,7 +31,7 @@
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, NodeFlag, DeclKind, Type, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData, ExportDeclData, MoveExprData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, Type, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData, ExportDeclData, MoveExprData, TypeAssertionData } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -119,11 +119,18 @@ function hoistRaisingCalls(expr: Node, hoisted: Node[], ctx: TransformContext): 
 
 function hoistNestedRaisingCalls(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	if (ctx.jsBackend) return hoistTernaries(expr, hoisted, ctx);
-	if (expr == null || (expr.kind != NodeKind.CallExpr && expr.kind != NodeKind.NewExpr)) return hoistRaisingCalls(expr, hoisted, ctx);
+	const call = topLevelCall(expr);
+	if (call == null) return hoistRaisingCalls(expr, hoisted, ctx);
 	callsToStatements += 1;
-	hoistChildrenInOrder(expr, hoisted, ctx);
+	hoistChildrenInOrder(call, hoisted, ctx);
 	callsToStatements -= 1;
 	return expr;
+}
+
+function topLevelCall(expr: Node | null): Node | null {
+	let n = expr;
+	while (n != null && n.kind == NodeKind.TypeAssertion) n = (n.data as TypeAssertionData).asExpr;
+	return n != null && (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) ? n : null;
 }
 
 function hoistTargetCalls(target: Node, hoisted: Node[], ctx: TransformContext): Node {
