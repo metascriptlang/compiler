@@ -156,3 +156,4 @@ import "./toStringType";
 import "./b3InferredKind";
 import "./noneKindNoType";
 import "./numberLiteralFieldLayout";
+import "./variantIntoObject";
