@@ -1,4 +1,4 @@
-// Parked at inbox card 2026-09-27-api-compile-unresolved-type-unused-generic-body.md
+// Parked at inbox card 2026-10-03-generic-class-with-no-generic-field-is-not-a-template.md
 
 import { compileToC } from "../helpers";
 

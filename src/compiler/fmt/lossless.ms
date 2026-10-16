@@ -44,18 +44,21 @@ function sameToken(a: Token, b: Token): boolean {
 	return a.kind == b.kind && a.value == b.value;
 }
 
-function splitCloser(kind: TokenKind): TokenKind {
-	return match (kind) {
-		TokenKind.GtEq => TokenKind.Gt,
-		TokenKind.GtGtEq => TokenKind.GtGt,
-		TokenKind.GtGtGtEq => TokenKind.GtGtGt,
-		_ => TokenKind.Eof,
-	};
-}
-
-function splitAt(a: Token, b: Token[], j: int32): boolean {
-	const closer = splitCloser(a.kind);
-	return closer != TokenKind.Eof && j + 1 < b.length && b[j].kind == closer && b[j + 1].kind == TokenKind.Assign;
+function greaterUnits(tokens: Token[]): Token[] {
+	const out: Token[] = [];
+	for (const t of tokens) {
+		const joined = t.kind == TokenKind.GtGt || t.kind == TokenKind.GtGtGt || t.kind == TokenKind.GtEq
+			|| t.kind == TokenKind.GtGtEq || t.kind == TokenKind.GtGtGtEq;
+		if (!joined) {
+			out.push(t);
+			continue;
+		}
+		for (let k = 0; k < t.value.byteLength; k += 1) {
+			const assign = t.value.byteAt(k) == "=".code;
+			out.push({ kind: assign ? TokenKind.Assign : TokenKind.Gt, value: assign ? "=" : ">", line: t.line, column: t.column + k, rawValue: "" });
+		}
+	}
+	return out;
 }
 
 function describe(t: Token, kind: boolean): string {
@@ -71,14 +74,12 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	if (!before.ok) return Result.err("source does not lex: " + before.error);
 	const after = lex(formatted);
 	if (!after.ok) return Result.err("formatted output does not lex: " + after.error);
-	const a = significantTokens(before.value);
-	const b = significantTokens(after.value);
+	const a = greaterUnits(significantTokens(before.value));
+	const b = greaterUnits(significantTokens(after.value));
 	let i = 0;
 	let j = 0;
 	while (i < a.length && j < b.length) {
-		if (splitAt(a[i], b, j)) {
-			j += 1;
-		} else if (!sameToken(a[i], b[j])) {
+		if (!sameToken(a[i], b[j])) {
 			const kind = a[i].value == b[j].value;
 			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[j], kind) + " of the output");
 		}
@@ -128,4 +129,10 @@ test "lossless: a bitwise compound assignment keeps its operator" {
 test "lossless: the error names the first differing token" {
 	const r = checkLossless("try { f(); } finally { g(); }", "try { f(); } catch { } finally { g(); }");
 	assert !r.ok && r.error.contains("`finally` at 1:14");
+}
+
+test "lossless: type-argument closers written apart may print joined" {
+	assert checkLossless("let t: Array<Array<T> > = v;", "let t: Array<Array<T>> = v;\n").ok;
+	assert checkLossless("const f = (): Array<Array<Array<T> > > => v;", "const f = (): Array<Array<Array<T>>> => v;\n").ok;
+	assert !checkLossless("let t: Array<Array<T> > = v;", "let t: Array<Array<T>> v;\n").ok;
 }

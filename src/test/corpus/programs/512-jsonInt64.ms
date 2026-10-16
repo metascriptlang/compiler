@@ -1,4 +1,3 @@
-// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // @stdout: int64-json all-ok
 // Oracle program — int64 fidelity THROUGH the JSON surface, the one place the
 // two backends deliberately diverge today with no corpus coverage.
@@ -34,7 +33,7 @@ function deltaOk(r: Result<Holder, string>, base: int64): boolean {
 }
 
 function main(): void {
-	// Typed decode — exact strtoll on C (parser.ms parseNumber → parseInt).
+	// Typed decode — exact int64 parse (parser.ms parseNumber → parseInt).
 	check("typedAbove2p53", deltaOk(JSON.parse<Holder>("{\"id\":9007199254740993}"), 9007199254740992));
 	check("typedMax", deltaOk(JSON.parse<Holder>("{\"id\":9223372036854775807}"), 9223372036854775806));
 	check("typedNeg", deltaOk(JSON.parse<Holder>("{\"id\":-9007199254740993}"), -9007199254740994));

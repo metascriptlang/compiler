@@ -40,12 +40,8 @@ test "union type param emits struct, not void" {
 			return kind;
 		}
 	`);
-	if (!r.ok) console.log("COMPILE ERROR: " + r.error);
-	assert r.ok;
+	assert r.ok, r.error;
 	const cCode = r.value;
-	console.log("=== C OUTPUT ===");
-	console.log(cCode);
-	console.log("=== END ===");
 	// The union param should NOT be emitted as 'void'
 	assert !cCode.contains("void data");
 	// It should contain the MyData type name
@@ -72,8 +68,7 @@ test "union type param in class factory" {
 			return d;
 		}
 	`);
-	if (!r.ok) console.log("COMPILE ERROR (class factory): " + r.error);
-	assert r.ok;
+	assert r.ok, r.error;
 	const cCode = r.value;
 	assert !cCode.contains("void data");
 	assert cCode.contains("DocData");

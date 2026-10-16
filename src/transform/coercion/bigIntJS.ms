@@ -114,8 +114,6 @@ export function readsUnionMember(d: TypeAssertionData): boolean {
 	return d.asExpr.nodeType != null && d.asExpr.nodeType.kind == TypeKind.Union;
 }
 
-// `x as bigint` / `b as <numeric>`. int64 and uint64 are already native BigInt
-// on this backend, so those legs only need the width clamp C applies.
 function bigintCast(node: Node, d: TypeAssertionData): Node | null {
 	if (d.asExpr == null) return null;
 	const srcT = d.asExpr.nodeType;
@@ -129,11 +127,18 @@ function bigintCast(node: Node, d: TypeAssertionData): Node | null {
 		return bigIntOf(d.asExpr, loc);
 	}
 	const dstK = reprKind(node.nodeType);
-	if (dstK == TypeKind.Int64) return asN(false, 64, d.asExpr, loc);
+	if (dstK == TypeKind.Int64) return typedCall("msBigIntToSigned", [d.asExpr, makeNumber(64, loc)], dstK, loc);
 	if (dstK == TypeKind.Uint64) return asN(true, 64, d.asExpr, loc);
 	const bits = narrowBits(dstK);
 	if (bits > 0) return numberOf(asN(!isSignedNarrowKind(dstK), bits, d.asExpr, loc), loc);
+	if (dstK == TypeKind.Float32) return typedCall("msBigIntToFloat32", [d.asExpr], dstK, loc);
 	return numberOf(d.asExpr, loc);
+}
+
+function typedCall(fnName: string, args: Node[], kind: TypeKind, loc: SourceLocation): Node {
+	const call = makeCall(runtimeRef(fnName, loc), args, loc);
+	call.nodeType = createPrimitive(kind);
+	return call;
 }
 
 function bigConvert(inner: Node, srcK: TypeKind, dstK: TypeKind, loc: SourceLocation): Node {

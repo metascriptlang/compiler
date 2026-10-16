@@ -1759,10 +1759,30 @@ function floatFitsSigned(f: float64, bits: int32): boolean {
 	return f > -limit - 1 && f < limit;
 }
 
+function floatFitsUnsigned(f: float64, bits: int32): boolean {
+	return f > -1.0 && f < Math.pow(2, bits as float64);
+}
+
 function convToFloat(src: RaiserValue, fromUnsigned: boolean, toFloat32: boolean): number {
 	if (src.kind != RaiserValueKind.Int) return toFloat32 ? (asNum(src) as float32) as float64 : asNum(src);
 	if (fromUnsigned) return toFloat32 ? ((src.intVal as uint64) as float32) as float64 : (src.intVal as uint64) as float64;
 	return toFloat32 ? (src.intVal as float32) as float64 : src.intVal as float64;
+}
+
+function vmConvToChar(vm: RaiserVM, inst: RaiserInstruction, src: RaiserValue, fromUnsigned: boolean): void {
+	if (src.kind == RaiserValueKind.Float) {
+		if (!floatFitsUnsigned(src.floatVal, 8)) {
+			vmError(vm, `value ${src.floatVal} not in range 0 .. 255`);
+			return;
+		}
+		setReg(vm, vm.baseReg + inst.a, raiserInt(src.floatVal as int64));
+		return;
+	}
+	if (src.intVal < 0 || src.intVal > 255) {
+		vmError(vm, `value ${fromUnsigned ? `${src.intVal as uint64}` : `${src.intVal}`} not in range 0 .. 255`);
+		return;
+	}
+	setReg(vm, vm.baseReg + inst.a, raiserInt(src.intVal));
 }
 
 function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
@@ -1799,12 +1819,21 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, vm.baseReg + inst.a, raiserString(fromUnsigned && src.kind == RaiserValueKind.Int ? `${src.intVal as uint64}` : raiserToString(src)));
 		return;
 	}
-	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0 && src.floatVal < 18446744073709551616.0) {
-		setReg(vm, vm.baseReg + inst.a, raiserInt(int64Bits(src.floatVal as uint64)));
+	if (cls == RaiserConvClass.Char) {
+		vmConvToChar(vm, inst, src, fromUnsigned);
 		return;
 	}
 	const bits = convClassBits(cls);
 	const signed = convClassSigned(cls);
+	if (src.kind == RaiserValueKind.Float && !signed && !floatFitsUnsigned(src.floatVal, bits)) {
+		const top: uint64 = bits == 64 ? 18446744073709551615 : ((1 as uint64) << (bits as uint64)) - 1;
+		vmError(vm, `value ${src.floatVal} not in range 0 .. ${top}`);
+		return;
+	}
+	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0) {
+		setReg(vm, vm.baseReg + inst.a, raiserInt(int64Bits(src.floatVal as uint64)));
+		return;
+	}
 	const hi: int64 = bits == 64
 		? 9223372036854775807
 		: ((1 as int64) << ((bits - 1) as int64)) - 1;
@@ -1874,12 +1903,7 @@ function vmHandleDivF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const dst = getReg(vm, vm.baseReg + inst.a);
 	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
-	const rv = asNum(rhs);
-	if (rv != 0.0) {
-		dst.floatVal = asNum(lhs) / rv;
-	} else {
-		dst.floatVal = 0.0;
-	}
+	dst.floatVal = asNum(lhs) / asNum(rhs);
 	dst.intVal = 0;
 	dst.strVal = "";
 }
@@ -1889,7 +1913,7 @@ function vmHandleNegF64(vm: RaiserVM, inst: RaiserInstruction): void {
 	const dst = getReg(vm, vm.baseReg + inst.a);
 	vmDecref(vm, dst);
 	dst.kind = RaiserValueKind.Float;
-	dst.floatVal = 0.0 - asNum(src);
+	dst.floatVal = -asNum(src);
 	dst.intVal = 0;
 	dst.strVal = "";
 }
@@ -2066,6 +2090,44 @@ test "a float converted to a signed integer out of its range stops, as on C" {
 	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
 }
 
+test "a float converted to an unsigned integer out of its range stops, as on C and JS" {
+	assert execConv(raiserFloat(-1.0), RaiserConvClass.U8).error == "value -1 not in range 0 .. 255";
+	assert execConv(raiserFloat(256.0), RaiserConvClass.U8).error == "value 256 not in range 0 .. 255";
+	assert execConv(raiserFloat(65536.5), RaiserConvClass.U16).error == "value 65536.5 not in range 0 .. 65535";
+	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.U32).error == "value NaN not in range 0 .. 4294967295";
+	assert execConv(raiserFloat(1.0 / 0.0), RaiserConvClass.U64).error == "value Infinity not in range 0 .. 18446744073709551615";
+	assert execConv(raiserFloat(-1.0 / 0.0), RaiserConvClass.U64).error == "value -Infinity not in range 0 .. 18446744073709551615";
+	assert execConv(raiserFloat(18446744073709551616.0), RaiserConvClass.U64).error == "value 18446744073709552000 not in range 0 .. 18446744073709551615";
+	assert execConv(raiserFloat(-9223372036854777856.0), RaiserConvClass.U64).error.indexOf("not in range 0 .. 18446744073709551615") >= 0;
+}
+
+test "a float in an unsigned integer's range truncates toward zero" {
+	assert execConv(raiserFloat(-0.9), RaiserConvClass.U8).exitValue.intVal == 0;
+	assert execConv(raiserFloat(255.9), RaiserConvClass.U8).exitValue.intVal == 255;
+	assert execConv(raiserFloat(4294967295.5), RaiserConvClass.U32).exitValue.intVal == 4294967295;
+	assert execConv(raiserFloat(9223372036854775808.0), RaiserConvClass.U64).exitValue.intVal == int64Bits(9223372036854775808);
+	assert execConv(raiserFloat(18446744073709549568.0), RaiserConvClass.U64).exitValue.intVal == int64Bits(18446744073709549568);
+	assert execConv(raiserFloat(128.75), RaiserConvClass.U8, RaiserConvClass.F32 as int32).exitValue.intVal == 128;
+}
+
+test "an integer or a float converted to char stops outside 0 .. 255, as on C and JS" {
+	assert execConv(raiserInt(300), RaiserConvClass.Char, RaiserConvClass.I32 as int32).error == "value 300 not in range 0 .. 255";
+	assert execConv(raiserInt(-1), RaiserConvClass.Char, RaiserConvClass.I64 as int32).error == "value -1 not in range 0 .. 255";
+	assert execConv(raiserInt(int64Bits(18446744073709551615)), RaiserConvClass.Char, RaiserConvClass.U64 as int32).error == "value 18446744073709551615 not in range 0 .. 255";
+	assert execConv(raiserFloat(300.7), RaiserConvClass.Char).error == "value 300.7 not in range 0 .. 255";
+	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.Char).error == "value NaN not in range 0 .. 255";
+	assert execConv(raiserInt(255), RaiserConvClass.Char, RaiserConvClass.I32 as int32).exitValue.intVal == 255;
+	assert execConv(raiserFloat(65.9), RaiserConvClass.Char).exitValue.intVal == 65;
+	assert execConv(raiserFloat(-0.5), RaiserConvClass.Char).exitValue.intVal == 0;
+}
+
+test "a char past 127 converted to int8 stops, as on C and JS" {
+	const ch = RaiserConvClass.Char as int32;
+	assert execConv(raiserInt(200), RaiserConvClass.I8, ch).error == "value 200 not in range -128 .. 127";
+	assert execConv(raiserInt(127), RaiserConvClass.I8, ch).exitValue.intVal == 127;
+	assert execConv(raiserInt(200), RaiserConvClass.I16, ch).exitValue.intVal == 200;
+}
+
 test "a uint64 past int64 converted to a signed integer stops, as on C" {
 	const u64 = RaiserConvClass.U64 as int32;
 	assert execConv(raiserInt(int64Bits(9223372036854775808)), RaiserConvClass.I64, u64).error == "value 9223372036854775808 not in range -9223372036854775808 .. 9223372036854775807";
@@ -2112,6 +2174,44 @@ test "unsigned add, sub and mul wrap past 64 bits" {
 	assert execBinOp(RaiserOpcode.MulU64, -1, 3).exitValue.intVal == -3;
 	assert execBinOp(RaiserOpcode.AddU64, 4611686018427387904, 4611686018427387904).exitValue.intVal == -9223372036854775807 - 1;
 	assert execBinOp(RaiserOpcode.SubU64, 0, 1).exitValue.intVal == -1;
+}
+
+function execFloatDiv(a: float64, b: float64): float64 {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.DivF64, 2, 0, 1),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserFloat(a), raiserFloat(b)]
+	)).exitValue.floatVal;
+}
+
+test "a float divided by zero is an infinity or NaN, as on C and JS" {
+	assert execFloatDiv(1.0, 0.0) == 1.0 / 0.0;
+	assert execFloatDiv(-1.0, 0.0) == -1.0 / 0.0;
+	assert execFloatDiv(1.0, -0.0) == -1.0 / 0.0;
+	const nan = execFloatDiv(0.0, 0.0);
+	assert nan != nan;
+	assert execFloatDiv(1.0, 4.0) == 0.25;
+}
+
+function execFloatNeg(a: float64): float64 {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.NegF64, 1, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserFloat(a)]
+	)).exitValue.floatVal;
+}
+
+test "a negated float zero keeps its sign, as on C and JS" {
+	assert 1.0 / execFloatNeg(0.0) == -1.0 / 0.0;
+	assert 1.0 / execFloatNeg(-0.0) == 1.0 / 0.0;
+	assert execFloatNeg(2.5) == -2.5;
 }
 
 test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal == 42; }

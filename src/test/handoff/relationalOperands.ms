@@ -17,7 +17,7 @@ function pair(left: string, right: string, op: string): int32 {
 
 test "relationalOperands: every relational operator refuses an operand it cannot order" {
 	const ops = ["<", "<=", ">", ">="];
-	const others = ["Result<uint64, string>", "S", "K", "string", "int32[]", "Map<string, int32>", "(() => void)"];
+	const others = ["Result<uint64, string>", "S", "K", "string", "int32[]", "Map<string, int32>", "(() => void)", "Ptr<uint64>"];
 	for (const op of ops) {
 		for (const o of others) {
 			assert pair("uint64", o, op) == 1;
@@ -36,8 +36,26 @@ test "relationalOperands: ordered pairs and a declared overload are accepted" {
 		assert pair("E", "E", op) == 0;
 		assert pair("E", "int32", op) == 0;
 		assert pair("bigint", "bigint", op) == 0;
+		assert pair("Ptr<uint64>", "Ptr<uint64>", op) == 0;
+		assert pair("Ptr<uint64>", "Ptr<uint8>", op) == 0;
 	}
 	assert pair("V", "V", "<") == 0;
+}
+
+test "relationalOperands: a pointer orders only against a pointer" {
+	for (const op of ["<", "<=", ">", ">="]) {
+		assert pair("Ptr<uint64>", "E", op) == 1;
+		assert pair("E", "Ptr<uint64>", op) == 1;
+		assert pair("Ptr<uint8>", "float64", op) == 1;
+		assert pair("int64", "Ptr<uint8>", op) == 1;
+	}
+}
+
+test "relationalOperands: a union of ordered primitives is accepted on either side" {
+	for (const op of ["<", "<=", ">", ">="]) {
+		assert pair("int32 | float64", "int32", op) == 0;
+		assert pair("uint64", "int32 | float64", op) == 0;
+	}
 }
 
 test "relationalOperands: a generic instantiated with a Result is refused" {

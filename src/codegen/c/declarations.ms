@@ -5,7 +5,7 @@
 
 import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { hasGenericParams, isIntegerType, isNumeric, classParentOf } from "../../checker/types";
+import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, getProperty, peelToStructOrUnion } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
@@ -762,8 +762,15 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const p = g.initProc;
 	let braced = "";
 	let closuresOk = true;
+	let literalsOk = true;
+	const owner = peelToStructOrUnion(node.nodeType);
 	let i = 0;
 	for (const prop of od.properties) {
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+			if (prop.kind != NodeKind.BooleanLiteral) literalsOk = false;
+			i = i + 1;
+			continue;
+		}
 		const sv = prop.kind == NodeKind.StringLiteral ? (prop.data as StringLiteralData).value : "";
 		const snippet = prop.kind == NodeKind.StringLiteral
 			? msStringPoolRef(internString(g.stringPool, sv), cStringByteLen(sv))
@@ -776,7 +783,7 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const bakeLocals = readProcLocals(p);
 	const bakeStmts = readProcStmts(p);
 	clearProcBuffers(p);
-	if (!closuresOk || bakeLocals.length > 0 || bakeStmts.length > 0) return false;
+	if (!closuresOk || !literalsOk || bakeLocals.length > 0 || bakeStmts.length > 0) return false;
 	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${body}TypeInfo;`);
 	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, &${body}TypeInfo, 0 }, { ${braced} } };`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);

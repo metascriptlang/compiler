@@ -307,6 +307,10 @@ function bindIfStmt(state: BinderState, node: Node): void {
 
 function bindWhileStmt(state: BinderState, node: Node): void {
 	const d = node.data as WhileStmtData;
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.whileCondition, d.whileBody]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const preBody = createBranchLabel();
 	const postLoop = createBranchLabel();
@@ -327,6 +331,10 @@ function bindWhileStmt(state: BinderState, node: Node): void {
 
 function bindDoWhileStmt(state: BinderState, node: Node): void {
 	const d = node.data as DoWhileStmtData;
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.doBody, d.doCondition]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const preCond = createBranchLabel();
 	const postLoop = createBranchLabel();
@@ -348,6 +356,10 @@ function bindDoWhileStmt(state: BinderState, node: Node): void {
 function bindForStmt(state: BinderState, node: Node): void {
 	const d = node.data as ForStmtData;
 	if (d.forInit != null) bindStatement(state, d.forInit);
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.forCondition, d.forBody, d.forUpdate]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const preBody = createBranchLabel();
 	const preIncr = createBranchLabel();
@@ -377,6 +389,10 @@ function bindForStmt(state: BinderState, node: Node): void {
 function bindForOfStmt(state: BinderState, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	bindExpression(state, d.forOfIterable);
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.forOfBody]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const postLoop = createBranchLabel();
 	addAntecedent(preLoop, state.currentFlow);
@@ -398,6 +414,10 @@ function bindForOfStmt(state: BinderState, node: Node): void {
 function bindForInStmt(state: BinderState, node: Node): void {
 	const d = node.data as ForInStmtData;
 	bindExpression(state, d.forInObject);
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.forInBody]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const postLoop = createBranchLabel();
 	addAntecedent(preLoop, state.currentFlow);
@@ -413,6 +433,16 @@ function bindForInStmt(state: BinderState, node: Node): void {
 	addAntecedent(preLoop, state.currentFlow);
 	addAntecedent(postLoop, preLoop);
 	state.currentFlow = finishFlowLabel(postLoop);
+}
+
+function bindDeadLoop(state: BinderState, parts: Node[]): void {
+	const savedBreak = state.currentBreakTarget;
+	const savedContinue = state.currentContinueTarget;
+	state.currentBreakTarget = null;
+	state.currentContinueTarget = null;
+	for (const part of parts) bindStatement(state, part);
+	state.currentBreakTarget = savedBreak;
+	state.currentContinueTarget = savedContinue;
 }
 
 function bindSwitchStmt(state: BinderState, node: Node): void {
@@ -1048,6 +1078,10 @@ function findIdent(node: Node | null, name: string): Node | null {
 			if (found == null) found = findIdent(d.whileCondition, name);
 			if (found == null) found = findIdent(d.whileBody, name);
 		},
+		NodeKind.DoWhileStmt => { found = findIdent((node.data as DoWhileStmtData).doBody, name); },
+		NodeKind.ForStmt => { found = findIdent((node.data as ForStmtData).forBody, name); },
+		NodeKind.ForOfStmt => { found = findIdent((node.data as ForOfStmtData).forOfBody, name); },
+		NodeKind.ForInStmt => { found = findIdent((node.data as ForInStmtData).forInBody, name); },
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
 			if (found == null) found = findIdent(d.expr, name);
@@ -1123,6 +1157,23 @@ test "binder marks code after return as unreachable" {
 	assert yRef != null;
 	assert yRef.flowNode != null;
 	assert yRef.flowNode.flags.has(FlowFlag.Unreachable);
+}
+
+test "binder binds every loop kind in dead code to the unreachable flow" {
+	const loops = [
+		"while (n > 0) { g(x); }",
+		"do { g(x); } while (n > 0);",
+		"for (let i = 0; i < n; i += 1) { g(x); }",
+		"for (const k of ks) { g(x); }",
+		"for (const k in ks) { g(x); }",
+	];
+	for (const loop of loops) {
+		const program = bindSource("function f(x: number, n: number, ks: number[]): void { return; " + loop + " }");
+		const fnData = (program.data as ProgramData).programStmts[0].data as FunctionDeclData;
+		const xRef = findIdent(fnData.fnBody, "x");
+		assert xRef != null && xRef.flowNode != null;
+		assert xRef.flowNode.flags.has(FlowFlag.Unreachable);
+	}
 }
 
 test "binder splits flow on if condition" {

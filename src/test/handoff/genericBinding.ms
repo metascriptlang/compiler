@@ -101,6 +101,12 @@ test "genericBinding: inferred and explicit type arguments both meet constraints
 	}
 }
 
+test "generic binding: match arms infer empty array elements" {
+	const source = "function f(n: number, xs: number[]): number[] { const result = match (n) { 1 => xs, _ => [] }; return result; } function main(): void { console.log(f(2, [7, 8]).length); }";
+	const c = compileToC(source);
+	assert c.ok, c.error;
+}
+
 test "generic binding: an explicit covering type is not replaced by narrower arguments" {
 	const pre = "class Animal { name: string = \"\"; } class Dog extends Animal { breed: string = \"\"; } function pair<T>(a: T, b: T): T { return a; } ";
 	for (const arguments of ["new Dog(), new Dog()", "new Animal(), new Dog()", "new Dog(), new Animal()"]) {

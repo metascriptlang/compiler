@@ -162,6 +162,35 @@ plantDelta`, and cut 9,832 → 176 bytes in the 600 s cap; before the `san` mode
 the bundle with "no single-lane finding to pin". Leaks are not covered: ASan's leak check
 does not run on macOS.
 
+Eyes (G4), 2026-10-15. `cov` runs a batch through a coverage-instrumented compiler built
+by hand (command in `../CLAUDE.md`) and writes, per module of the pipeline directories
+(`PIPELINE_DIRS` in `cov.ms`), the regions, branches and functions the batch reached. The
+instrumented compiler only measures; findings are still judged on the installed `msc`.
+`llvm-cov` names the generated C file, not the `.ms` module, so `moduleOf` maps each cache
+file back by the path encoding. A module's counts include whatever its C carries
+(instantiated generics), so compare one module across batches, not modules with each other.
+
+Three things made a second run of the same batch differ, each measured by diffing two
+reports: parallel emission (codegen and `compile.ms` rows), fixed by `--emit-jobs=1`; the
+global cache's time-based collection (`stampDirs.ms`), fixed by `MSC_NO_GLOBAL_CACHE=1`; the
+file-hash memo in `cache.ms`, which settles by file time (one branch apart). The driver
+directories (`src/compiler`, `src/utils`, `src/diagnostics`) are therefore outside the report.
+
+Instrumented compiler built from `d8835e9d3` (installed `msc` BUILD `a7b08f008`, which differs
+only in `src/compiler/meta/bridge.ms`), Apple clang 21, generator `5f48a6efb` clean, seeds
+1..20, each vector run twice:
+
+| vector | two runs | `lambdaLifting.ms` branches | `generatorLower.ms` branches | `analyzer/inject.ms` branches | pipeline branches | wall per run |
+|---|---|---|---|---|---|---|
+| default | identical | 5,863 / 27,757 | 1,513 / 13,097 | 4,831 / 28,953 | 135,879 / 1,315,148 | 64–113 s |
+| `--swarm` | identical | 6,260 / 27,757 | 1,513 / 13,097 | 4,831 / 28,953 | 135,730 / 1,315,148 | 74–96 s |
+| `fams=closure` | identical | 6,299 / 27,757 | 1,513 / 13,097 | 4,788 / 28,953 | 128,098 / 1,315,148 | 67–72 s |
+
+Wall time ran beside other sessions' jobs (load average 12–36), so it is not throughput.
+`generatorLower` reaches the same branches under every vector: Smith generates no
+generator, so that count is what any program reaches. Not measured: the coverage of an
+empty program (the floor to subtract), batches above 20, Linux or Windows hosts.
+
 ### Debt — workarounds to repay
 
 | blocker | workaround | remove when |

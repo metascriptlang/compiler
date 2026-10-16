@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, TypeAssertionData, HiddenStdConvData, BinaryE
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
-import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
+import { createPrimitive, isWideningInt64Conv, peelToRepr } from "../../checker/types";
 import { isFloatKind, readsUnionMember } from "./bigIntJS";
 import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
@@ -55,6 +55,7 @@ function materializeIntConv(node: Node): Node {
 		if (node.nodeType == null || d.asType == "!") return node;
 		const kind = node.nodeType.kind;
 		if (node.flags.has(NodeFlag.ConvCheck)) return isIntConvKind(kind) && !readsUnionMember(d) ? truncateTo(node, kind, node.location) : node;
+		if (kind == TypeKind.Char) return d.asExpr != null && isByteSource(d.asExpr.nodeType) ? truncateTo(d.asExpr, kind, node.location) : node;
 		if (!isIntConvKind(kind)) {
 			if (isFloatKind(kind) && d.asExpr != null) {
 				const srcT = d.asExpr.nodeType;
@@ -77,6 +78,7 @@ function materializeIntConv(node: Node): Node {
 				return numberOf64(d.convExpr, d.convType.kind, node.location);
 			}
 		}
+		if (d.convType.kind == TypeKind.Char) return isByteSource(d.convExpr != null ? d.convExpr.nodeType : null) ? truncateTo(d.convExpr, TypeKind.Char, node.location) : node;
 		if (!isIntConvKind(d.convType.kind)) return node;
 		// A widening conv marks the 64-bit boundary for BigInt mode; in Number
 		// mode the value is already integral, so the node just drops at codegen.
@@ -101,7 +103,7 @@ function numberOf64(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
 export function truncateTo(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
 	const result = match (kind) {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 => makeBinary(inner, "|", makeNumber(0, loc), loc),
-		TypeKind.Uint8 => makeBinary(inner, "&", makeNumber(255, loc), loc),
+		TypeKind.Uint8 | TypeKind.Char => makeBinary(inner, "&", makeNumber(255, loc), loc),
 		TypeKind.Uint16 => makeBinary(inner, "&", makeNumber(65535, loc), loc),
 		TypeKind.Uint32 => makeBinary(inner, ">>>", makeNumber(0, loc), loc),
 		TypeKind.Int64 | TypeKind.Uint64 => makeCall(makeMember(runtimeRef("Math", loc), "trunc", loc), [inner], loc),
@@ -109,6 +111,13 @@ export function truncateTo(inner: Node, kind: TypeKind, loc: SourceLocation): No
 	};
 	result.nodeType = createPrimitive(kind);
 	return result;
+}
+
+function isByteSource(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	if (r == null) return false;
+	const kind = r.kind == TypeKind.Enum ? TypeKind.Int32 : r.kind;
+	return isFloatKind(kind) || (isIntConvKind(kind) && kind != TypeKind.Int64 && kind != TypeKind.Uint64);
 }
 
 export function isIntConvKind(kind: TypeKind): boolean {

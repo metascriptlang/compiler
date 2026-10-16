@@ -195,3 +195,54 @@ test "a thrown string rethrown keeps its message" {
 	}
 	assert msg == "negative";
 }
+
+function drainOnFailure(items: string[], n: int32): string[] {
+	const removed: string[] = [];
+	const run = (): void => {
+		try {
+			raiseAbove(n, 1);
+		} catch (error) {
+			for (let i = items.length - 1; i >= 0; i -= 1) {
+				removed.push(items[i]);
+			}
+		}
+	};
+	run();
+	return removed;
+}
+
+test "a counted loop in a catch reached only by a call's raise runs" {
+	assert drainOnFailure(["a", "b"], 1).length == 0;
+	assert drainOnFailure(["a", "b"], 2).join(",") == "b,a";
+}
+
+interface Adopted<T> {
+	value: T;
+	disposed: boolean;
+}
+
+interface Point {
+	x: int32;
+}
+
+function adoptAll<T>(values: T[], limit: int32): Adopted<T>[] {
+	const created: Adopted<T>[] = [];
+	try {
+		let n: int32 = 0;
+		for (const value of values) {
+			n += 1;
+			created.push({ value: value, disposed: false });
+			raiseAbove(n, limit);
+		}
+	} catch (error) {
+		for (const child of created) { child.disposed = true; }
+	}
+	return created;
+}
+
+test "a for-of loop in the catch of a generic routine runs per instance" {
+	const words = adoptAll<string>(["a", "b", "c"], 1);
+	assert words.length == 2 && words[0].disposed && words[1].disposed;
+	const points = adoptAll<Point>([{ x: 1 }], 1);
+	assert points.length == 1 && !points[0].disposed && points[0].value.x == 1;
+}

@@ -9,7 +9,7 @@ test "a test binary killed by SIGABRT is reported with its signal" {
 	assert !r.ok, "a killed test binary must not read as a pass";
 	if (!r.ok) {
 		assert r.error.exitCode === 134, "msc test exited " + r.error.exitCode.toString() + "\n" + r.error.output + r.error.errorOutput;
-		assert r.error.output.contains("terminated by signal 6"), "no signal report\n" + r.error.output + r.error.errorOutput;
+		assert r.error.errorOutput.contains("terminated by signal 6"), "no signal report\n" + r.error.output + r.error.errorOutput;
 	}
 }
 
@@ -19,6 +19,6 @@ test "a test binary that overflows its stack is reported and fails" {
 	assert !r.ok, "a crashed test binary must not read as a pass";
 	if (!r.ok) {
 		const want = platform == "windows" ? "terminated with status 0xC00000FD" : "terminated by signal 11";
-		assert r.error.output.contains(want), "no crash report\n" + r.error.output + r.error.errorOutput;
+		assert r.error.errorOutput.contains(want), "no crash report\n" + r.error.output + r.error.errorOutput;
 	}
 }

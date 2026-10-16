@@ -1,5 +1,5 @@
 // @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
-// @stdout: tailrec-shortcircuit r=
+// @stdout: tailrec-shortcircuit r=true-false-3000001
 // `a || f(x)` and `a && f(x)` leave f(x) in tail position — the operator only
 // decides whether the call happens, nothing runs after it. The left operand is
 // evaluated once into a temp, so a side-effecting guard stays sound.

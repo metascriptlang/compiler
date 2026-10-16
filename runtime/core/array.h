@@ -138,6 +138,7 @@ void msStringArrayPush(msStringArray* arr, msString value);
 msString msStringArrayPop(msStringArray* arr);
 msString msStringArrayShift(msStringArray* arr);
 int64_t msStringArrayIndexOf(msStringArray* arr, msString value);
+int64_t msStringArrayLastIndexOf(msStringArray* arr, msString value, int64_t fromIndex);
 bool msStringArrayIncludes(msStringArray* arr, msString value);
 msStringArray msStringArraySlice(msStringArray* arr, int64_t start, int64_t end);
 msStringArray msStringArrayConcat(msStringArray* a, const msStringArray* b);

@@ -161,10 +161,18 @@ function isVisiting(visited: Type[], t: Type): boolean {
 	return false;
 }
 
-function breaksCycleAtTarget(t: Type): boolean {
-	if (t.typeName != "" || t.typeReturn == null) return false;
-	return t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow
-		|| t.kind == TypeKind.Sink || t.kind == TypeKind.Lent || t.kind == TypeKind.Var;
+function cyclePlaceholderName(t: Type, impl: boolean): string {
+	if (isMaybeType(t) || (impl && t.kind == TypeKind.Alias)) return "";
+	return t.typeName;
+}
+
+function cycleBrokenByNamedType(visited: Type[], t: Type, impl: boolean): boolean {
+	let inside = false;
+	for (const v of visited) {
+		if (v == t) inside = true;
+		else if (inside && cyclePlaceholderName(v, impl) != "") return true;
+	}
+	return false;
 }
 
 function collectFieldDecorators(t: Type): Node[][] {
@@ -397,13 +405,14 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 
 	// Cycle break — emit name placeholder and stop descending.
 	// Pre-push check so Alias peel below also benefits (e.g., `type X = X`).
-	if (isVisiting(visited, t) && !breaksCycleAtTarget(t)) {
-		if (impl && (t.kind == TypeKind.Alias || t.typeName == "")) {
-			throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
+	if (isVisiting(visited, t)) {
+		const placeholder = cyclePlaceholderName(t, impl);
+		if (placeholder != "" || !cycleBrokenByNamedType(visited, t, impl)) {
+			if (placeholder == "" && impl) throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
+			const result = namedTypeNode(placeholder != "" ? placeholder : "<cycle>", placeholder != "" ? t.sym : null, loc);
+			result.nodeType = t;
+			return result;
 		}
-		const result = namedTypeNode(nameOrDefault(t, "<cycle>"), t.typeName != "" ? t.sym : null, loc);
-		result.nodeType = t;
-		return result;
 	}
 
 	visited.push(t);
@@ -936,6 +945,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as ArrayPatternData;
 			setNodes(objHeap, arrHeap, handle, "patternElements", d.patternElements);
 			setBool(objHeap, handle, "hasRestElement", d.hasRestElement);
+			setDefaults(objHeap, arrHeap, handle, "patternDefaults", d.patternDefaults, includeTypeAst);
 		},
 		NodeKind.ObjectPattern => {
 			const d = node.data as ObjectPatternData;
@@ -1014,6 +1024,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setBool(objHeap, handle, "forOfIsConst", d.forOfIsConst);
 			setNode(objHeap, arrHeap, handle, "forOfIterable", d.forOfIterable);
 			setNode(objHeap, arrHeap, handle, "forOfBody", d.forOfBody);
+			setNode(objHeap, arrHeap, handle, "forOfPattern", d.forOfPattern);
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
@@ -1534,7 +1545,12 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					}
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
-					const rawFlags = (readInt(objHeap, handle, "flags") as uint32) as BitSet<NodeFlag>;
+					const flagsValue = readInt(objHeap, handle, "flags");
+					const flagsFit = flagsValue >= 0 && flagsValue <= 4294967295 && Math.floor(flagsValue) == flagsValue;
+					if (!flagsFit) {
+						_wireRefusals.push({ message: `flags must be a NodeFlag set, an integer in 0 .. 4294967295, not ${flagsValue}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
+					}
+					const rawFlags = ((flagsFit ? flagsValue : 0) as uint32) as BitSet<NodeFlag>;
 					const pipeline = rawFlags.difference(PARSER_NODE_FLAGS);
 					if (!pipeline.isEmpty()) {
 						_wireRefusals.push({ message: `flags may hold only what the parser writes (${PARSER_NODE_FLAGS.toString()}), not ${pipeline.toString()}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
@@ -1828,7 +1844,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.ArrayPattern => {
 			const patternElements = readNodes(objHeap, arrHeap, h, "patternElements", loc);
 			const hasRestElement = readBool(objHeap, h, "hasRestElement");
-			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement, patternDefaults: [] }, loc);
+			const patternDefaults = readDefaults(objHeap, arrHeap, h, "patternDefaults", loc);
+			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement, patternDefaults }, loc);
 		},
 		NodeKind.ObjectPattern => {
 			const patternProps = readNodes(objHeap, arrHeap, h, "patternProps", loc);
@@ -1909,9 +1926,10 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const forOfIsConst = readBool(objHeap, h, "forOfIsConst");
 			const forOfIterable = readNode(objHeap, arrHeap, h, "forOfIterable", loc);
 			const forOfBody = readNode(objHeap, arrHeap, h, "forOfBody", loc);
+			const forOfPattern = readNode(objHeap, arrHeap, h, "forOfPattern", loc);
 			return createNodeAt(NodeKind.ForOfStmt, {
 				forOfBinding, forOfIsConst, forOfIterable, forOfBody,
-				forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
+				forOfPattern, bindingLocation: loc, forOfLabel: "",
 			}, loc);
 		},
 		NodeKind.ForInStmt => {
@@ -2659,6 +2677,22 @@ test "an enum ordinal written as flags is refused, not read as a set" {
 	assert takeWireRefusals().length == 1;
 }
 
+test "flags that are no 32-bit set are refused, not converted" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const forged: RaiserValue[] = [raiserInt(4294967296), raiserInt(-1), raiserFloat(1.5), raiserFloat(0.0 / 0.0), raiserFloat(1.0 / 0.0)];
+	for (const flags of forged) {
+		const val = nodeToValue(mkNumber(1, loc), objH, arrH);
+		heapObjectSetField(objH, val.intVal, "flags", flags);
+		const back = valueToNode(val, objH, arrH, loc);
+		assert back.flags == (0 as BitSet<NodeFlag>);
+		const refused = takeWireRefusals();
+		assert refused.length == 1, `${refused.length}`;
+		assert refused[0].message.contains("an integer in 0 .. 4294967295"), refused[0].message;
+	}
+}
+
 test "a node that crossed the wire with only parser flags is not refused" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
@@ -2848,6 +2882,53 @@ test "round-trip MatchCase without guard (null)" {
 	assert back.kind == NodeKind.MatchCase;
 	const d = back.data as MatchCaseData;
 	assert d.caseGuard == null;
+}
+
+test "round-trip ForOfStmt keeps a nested pattern and its defaults" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const ident = (name: string): Node => createNode(NodeKind.Identifier, { name }, synthToken(loc));
+	const inner = createNode(NodeKind.ObjectPattern, {
+		patternProps: [createNode(NodeKind.ObjectPatternProp, { propKey: "a", propAlias: ident("a"), propDefault: mkNumber(4, loc) }, synthToken(loc))],
+		hasRestProp: false,
+	}, synthToken(loc));
+	const pattern = createNode(NodeKind.ArrayPattern, {
+		patternElements: [ident("k"), inner, ident("v")],
+		hasRestElement: false,
+		patternDefaults: [null as unknown as Node, null as unknown as Node, mkNumber(9, loc)],
+	}, synthToken(loc));
+	const orig = createNode(NodeKind.ForOfStmt, {
+		forOfBinding: "_destructure", forOfIsConst: true, forOfIterable: ident("rows"),
+		forOfBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+		forOfPattern: pattern, bindingLocation: loc, forOfLabel: "",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const p = (back.data as ForOfStmtData).forOfPattern;
+	assert p != null && p.kind == NodeKind.ArrayPattern;
+	const pd = p.data as ArrayPatternData;
+	assert pd.patternElements.length == 3;
+	assert pd.patternElements[1].kind == NodeKind.ObjectPattern;
+	assert ((pd.patternElements[1].data as ObjectPatternData).patternProps[0].data as ObjectPatternPropData).propDefault != null;
+	assert pd.patternDefaults.length == 3;
+	assert pd.patternDefaults[0] == null && pd.patternDefaults[1] == null;
+	assert pd.patternDefaults[2].kind == NodeKind.NumberLiteral;
+}
+
+test "round-trip ForOfStmt over a single name keeps no pattern" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.ForOfStmt, {
+		forOfBinding: "x", forOfIsConst: true,
+		forOfIterable: createNode(NodeKind.Identifier, { name: "rows" }, synthToken(loc)),
+		forOfBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+		forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as ForOfStmtData;
+	assert d.forOfBinding == "x";
+	assert d.forOfPattern == null;
 }
 
 // ===== mapTypeToAst tests — Day 1 (atomic types) =====
@@ -3362,6 +3443,32 @@ test "mapTypeToAst — self-referential Struct (Tree<children: Tree[]>) terminat
 	const arrData = d.typExprFieldTypes[0].data as TypeArrayData;
 	assert arrData.typExprElement.kind == NodeKind.Identifier;
 	assert (arrData.typExprElement.data as IdentifierData).name == "Tree";
+}
+
+test "mapTypeToAst — a cycle re-entered at an unnamed Ref names the recursion at the struct inside it" {
+	const loc = makeLoc(1, 0);
+	const rule = makeStructType("Rule", ["blocks"], []);
+	const ruleRef = makeModifierType(TypeKind.Ref, rule);
+	rule.typeChildren = [makeArrayType(TypeKind.Array, ruleRef, 0)];
+	const box = makeStructType("Box", ["rule"], [ruleRef]);
+	for (const impl of [true, false]) {
+		const out = mapTypeToAst(box, loc, impl);
+		const ruleShape = ((out.data as TypeObjectData).typExprFieldTypes[0].data as TypeGenericData).typExprArgs[0];
+		assert ruleShape.kind == NodeKind.TypeObject;
+		const blocks = (ruleShape.data as TypeObjectData).typExprFieldTypes[0].data as TypeArrayData;
+		const inner = (blocks.typExprElement.data as TypeGenericData).typExprArgs[0];
+		assert inner.kind == NodeKind.Identifier && (inner.data as IdentifierData).name == "Rule" && inner.nodeType == rule;
+	}
+}
+
+test "mapTypeToAst — an unnamed struct cycle with no named type in it stops getTypeImpl with an internal error" {
+	const loc = makeLoc(1, 0);
+	const anon = makeStructType("", ["next"], []);
+	const anonRef = makeModifierType(TypeKind.Ref, anon);
+	anon.typeChildren = [anonRef];
+	let threw = false;
+	try { mapTypeToAst(anonRef, loc, true); } catch (e) { threw = true; }
+	assert threw;
 }
 
 test "mapTypeToAst — mutually-recursive Structs (A.b: B, B.a: A) terminate" {

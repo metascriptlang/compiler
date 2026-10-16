@@ -1543,7 +1543,9 @@ typedef struct {
 } NodeData;
 ```
 
-For boolean-disc and TS-style DUs, `_tag` is `int32_t` (variant index). The discriminator field (`ok`, `kind`) lives inside each variant struct at the same offset, so accessing `r.ok` reads it through `v0`/`v1` overlapping memory.
+For boolean-disc and TS-style DUs, `_tag` is `int32_t` (variant index), and reading `r.ok` on the union reads `_tag`. On C, a field whose type has one value (`ok: true`, `ok: false`) in an anonymous object type is stored nowhere: a read gives the literal and a write evaluates both sides and stores nothing. Each `match` arm and both variants of `Result<T, E>` are such types, so the payload starts at the union's alignment, and the variant has that one layout wherever it goes, inside the union or narrowed and passed to `JSON.stringify` or a generic. `Result<Key, Failure>` with a 32-byte `Key` of alignment 1 and an 8-byte `Failure` is 40 bytes with the payload at offset 8, where it was 48 with the payload at 9 when each variant stored `ok`. A named struct (`struct Hit { ok: true; at: uint8 }` in `Hit | Miss`) and a tuple element of type `true` keep their storage, and JS keeps every field. Measured 2026-10-16 on C and `--target=js` with corpus `resultDiscriminantOnce`: `sizeof` 40, 40, 24, 56 and 32 for `Result<Key, Failure>`, `Result<Failure, Key>`, `Result<int32, string>`, a `match (ok: boolean)` union and `Hit | Miss`, and the same output on both backends for a narrowed variant through `JSON.stringify`, a generic, object rest and spread, and `{ ok: true; n: int32 }` beside `{ ok: boolean; n: int32 }`. Not measured: a one-value enum member or string literal field, which stays stored.
+
+`sizeof` folds to the size C gives, and C checks it: each anonymous struct, union arm and union is emitted with `_Static_assert(sizeof(T) == n)`, so a size the compiler computes differently from C stops the build instead of folding a wrong number. A `string`, an array and a span are a length and a pointer, `{ int64_t len; ptr }`: 16 bytes on 64-bit targets, arm and wasm32, 12 on i386. A union of string literals is held in a `string`. Measured 2026-10-16: `type Align = "auto" | "center"` with `struct Holder { a: Align | null }` prints `16 24` for `sizeof(Align)` and `sizeof(Holder)` on C and `--target=js` (it printed `24 32`); `sizeof(string)` and `sizeof(Result<int32, string>)` fold to 16 and 24 with `--cpu=arm`, 12 and 16 with `--cpu=i386`; a probe of 40 anonymous structs and unions over every field kind passes its asserts under `zig cc -fsyntax-only` for i386, arm, wasm32, x86_64 and aarch64. Not run: a 32-bit binary (the runtime does not yet compile for i386 and arm).
 
 #### Choosing the right form
 
@@ -3604,6 +3606,16 @@ that takes `T` itself, otherwise write `x()`.
 One step only: the result of a `valueOf` is not read again. The receiver matches by type name, so another
 distinct of the same shape does not borrow it, and the extension must be visible like any other (imported
 from its module, or re-exported through a hub).
+
+**Ordering**: `<` `<=` `>` `>=` order numbers, enums, strings, booleans against booleans, bigints, and
+pointers against pointers. A class, interface, struct or array has no order of its own: two of them
+are read through `valueOf` or refused, never compared by address. A union operand reads each member,
+an ordered one as itself and any other through its `valueOf`, joins the reads (numbers and enums to
+the wider number, text to `string`), and picks the member held with `typeof`/`instanceof`, a subclass
+before its base. It is refused, naming the member, when a member neither orders nor has `valueOf`,
+cannot compare with the other side, or cannot be told apart at run time from another member (two
+plain objects, two enums); when the union holds `null`; and when the operand is not a name or a field
+path (store it in a local first). Corpus `orderingThroughValueOf` runs every accepted shape on C and JS.
 
 Consequences: `const c2 = count`, `id(count)`, `[count]`, `nn ?? count` and `() => count` in a
 `() => Accessor<T>` slot keep the accessor; `console.log(count)` and `String(count)` print the handle

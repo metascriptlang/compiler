@@ -297,9 +297,10 @@ function withGrowth(packed: uint32, growth: int64): uint32 {
 }
 
 @noinline function grown(account: Account, currentLength: uint64, newLength: uint64): Result<uint64, ProgramError> {
+	if (newLength > msSolDataRoom(account.address)) { return Result.err(ProgramError.invalidRealloc()); }
 	const packed = msSolLoadU32(account.address + 4);
 	const growth: int64 = growthOf(packed) + ((newLength - currentLength) as int64);
-	if (growth > 10240 || newLength > msSolDataRoom(account.address)) { return Result.err(ProgramError.invalidRealloc()); }
+	if (growth > 10240) { return Result.err(ProgramError.invalidRealloc()); }
 	msSolFill(account.address + 88 + currentLength, 0, newLength - currentLength);
 	msSolStoreU32(account.address + 4, withGrowth(packed, growth));
 	msSolStoreU64(account.address + 80, newLength);

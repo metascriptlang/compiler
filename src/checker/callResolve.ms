@@ -11,7 +11,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
+import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
 import { adoptLiteralArms, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -19,7 +19,7 @@ import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBra
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
 import { bindFromExplicitTypeArgs, builtinTypeNamed, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { isContextSensitive } from "./speculate";
+import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
@@ -970,6 +970,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		ai = ai + 1;
 	}
 	const declaringClass = hasCtor ? constructorDeclaringClass(d.newCallee.resolvedSym!) : null;
+	if (d.newCallee.resolvedSym != null) checkNewArity(ctx, node, d.newCallee.resolvedSym, innerType, declaringClass);
 	if (declaringClass != null) {
 		const defaults = declaringClass.defaultParams;
 		if (defaults != null && defaults.length > 0) {
@@ -1013,6 +1014,39 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		return resolvedType;
 	}
 	return inferredType();
+}
+
+function requiredCtorArgs(formals: Type[], defaults: Node[] | null): int32 {
+	let required: int32 = 0;
+	for (let i = 0; i < formals.length; i += 1) {
+		const hasDefault = defaults != null && i < defaults.length && defaults[i] != null;
+		if (!hasDefault && formals[i].kind != TypeKind.Varargs) required = i + 1;
+	}
+	return required;
+}
+
+function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerType: Type | null, declaringClass: Symbol | null): void {
+	const args = (node.data as NewExprData).newArguments;
+	if (hasFlag(classSym, SymbolFlag.ImportC)) return;
+	for (const a of args) { if (a.kind == NodeKind.SpreadExpr) return; }
+	let required: int32 = 0;
+	let allowed: int32 = args.length;
+	if (hasFlag(classSym, SymbolFlag.HasConstructor)) {
+		const ctor = ctorFnTypeOf(classSym);
+		if (ctor == null) return;
+		const formals = ctor.typeChildren;
+		required = requiredCtorArgs(formals, (declaringClass != null ? declaringClass : classSym).defaultParams);
+		if (formals.length == 0 || formals[formals.length - 1].kind != TypeKind.Varargs) allowed = formals.length;
+	} else {
+		if (classSym.symbolKind != SymbolKind.Class && classSym.symbolKind != SymbolKind.Struct) return;
+		if (innerType == null || innerType.kind != TypeKind.Struct) return;
+		allowed = innerType.typeNames.length;
+	}
+	if (args.length < required) {
+		addError(ctx, `Too few arguments to 'new ${classSym.name}': expected at least ${required}, got ${args.length}`, node.location.line, node.location.column);
+	} else if (args.length > allowed) {
+		addError(ctx, `Too many arguments to 'new ${classSym.name}': expected at most ${allowed}, got ${args.length}`, node.location.line, node.location.column);
+	}
 }
 
 function fieldsWithoutDefault(ctx: CheckerContext, classSym: Symbol, depth: int32): string[] {
@@ -1618,6 +1652,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		let spawnMoveKeys: string[] = [];
 		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == "PromiseSpawn") spawnMoveKeys = desugarSpawnMoveList(ctx, d);
 	const argOrder = genericArgOrder(ctx, d.arguments, _isGenericCall);
+	const literalArgs: boolean[] = [];
+	for (const arg of d.arguments) literalArgs.push(isLiteralTree(arg));
 	for (let oi = 0; oi < argOrder.length; oi += 1) {
 		const ai = argOrder[oi];
 		let paramExpected: Type | null = null;
@@ -1681,6 +1717,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
+		if (extMultiFiltered.length > 1 && literalArgs[ai]) paramExpected = null;
 		callCheckExpr(ctx, d.arguments[ai], paramExpected);
 		ctx.pendingSpawnThunk = false;
 		let argType = d.arguments[ai].nodeType;
@@ -1827,7 +1864,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
-		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, extMultiObjType, extMultiMethodName, node);
+		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, literalArgs, extMultiObjType, extMultiMethodName, node);
 	}
 	// @builtin("PromiseSpawn"): infer affine `Promise<T>` from closure's return type.
 	// PARALOCK: spawn produces `Promise<T>` tagged with AwaitableAffine +
@@ -3155,22 +3192,40 @@ function intLiteralArg(arg: Node): Node | null {
 function literalRelations(paramTypes: Type[], args: Node[], argTypes: Type[]): int32[] {
 	const rels: int32[] = [];
 	for (let i = 0; i < args.length; i += 1) {
-		const lit = intLiteralArg(args[i]);
-		const formal = i < paramTypes.length ? skipModifier(paramTypes[i]) : null;
-		const floatFormal = formal != null && (formal.kind == TypeKind.Float32 || formal.kind == TypeKind.Float64 || formal.kind == TypeKind.Number);
-		if (lit == null || formal == null || (!isIntegerType(formal) && !floatFormal)
-			|| (argTypes[i] != null && argTypes[i].kind == formal.kind)) {
-			rels.push(-1);
-			continue;
-		}
-		if (floatFormal) {
-			rels.push((intLiteralExactInFloat(lit, formal) ? TypeRelation.Convertible : TypeRelation.None) as int32);
-			continue;
-		}
-		const fits = literalFitsInType(lit, formal, lit != args[i]);
-		rels.push((fits ? TypeRelation.FromLiteral : TypeRelation.None) as int32);
+		rels.push(literalRelation(args[i], argTypes[i], i < paramTypes.length ? paramTypes[i] : null));
 	}
 	return rels;
+}
+
+function literalRelation(arg: Node, argType: Type | null, slot: Type | null): int32 {
+	const formal = skipModifier(slot);
+	if (formal == null) return -1;
+	if (arg.kind == NodeKind.ArrayLiteral) return isLiteralTree(arg) ? elementsRelation((arg.data as ArrayLiteralData).elements, formal) : -1;
+	const lit = intLiteralArg(arg);
+	const floatFormal = formal.kind == TypeKind.Float32 || formal.kind == TypeKind.Float64 || formal.kind == TypeKind.Number;
+	if (lit == null || (!isIntegerType(formal) && !floatFormal) || (argType != null && argType.kind == formal.kind)) return -1;
+	if (floatFormal) return (intLiteralExactInFloat(lit, formal) ? TypeRelation.Convertible : TypeRelation.None) as int32;
+	return (literalFitsInType(lit, formal, lit != arg) ? TypeRelation.FromLiteral : TypeRelation.None) as int32;
+}
+
+function elementsRelation(elements: Node[], formal: Type): int32 {
+	const arr = withoutArrayEnvelope(peelTransparentInstance(formal));
+	const elemFormal = arr.kind == TypeKind.Array || arr.kind == TypeKind.SizedArray || arr.kind == TypeKind.Span ? arr.typeReturn : null;
+	if (elements.length == 0 || elemFormal == null) return -1;
+	let weakest = TypeRelation.Exact;
+	for (const e of elements) {
+		const lit = literalRelation(e, e.nodeType, elemFormal);
+		const rel = lit >= 0 ? lit as TypeRelation : typeRelation(elemFormal, e.nodeType);
+		if (rel < weakest) weakest = rel;
+	}
+	return weakest as int32;
+}
+
+function retypeLiteralArg(ctx: CheckerContext, arg: Node, literal: boolean, formal: Type | null): boolean {
+	if (!literal || formal == null || formal.kind == TypeKind.Varargs || hasGenericParams(formal)) return false;
+	clearCheckerState(arg);
+	callCheckExpr(ctx, arg, formal);
+	return true;
 }
 
 function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
@@ -3208,7 +3263,9 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// literal's children that would survive into Pass 2 and defeat inference.
 	const argTypes: Type[] = [];
 	const skipMask: boolean[] = [];
+	const literalArgs: boolean[] = [];
 	for (const arg of args) {
+		literalArgs.push(isLiteralTree(arg));
 		if (isContextSensitive(arg)) {
 			argTypes.push(null as unknown as Type);
 			skipMask.push(true);
@@ -3327,9 +3384,10 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
 		for (let ai = 0; ai < args.length; ai += 1) {
 			if (ai >= winnerType.typeChildren.length) break;
-			if (!skipMask[ai]) continue;
-			if (isContextSensitive(args[ai])) {
-				callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+			if (skipMask[ai]) {
+				if (isContextSensitive(args[ai])) callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+			} else if (!retypeLiteralArg(ctx, args[ai], literalArgs[ai], winnerType.typeChildren[ai])) {
+				continue;
 			}
 			const refinedArgType = args[ai].nodeType;
 			if (refinedArgType != null) { argTypes[ai] = refinedArgType; }
@@ -3595,7 +3653,7 @@ function mostSpecificGenericExt(exts: ExtensionMethod[]): int32 {
 }
 
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
-	argTypes: Type[], objType: Type | null, methodName: string, callNode: Node): Type {
+	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
 	// and `this unknown` would otherwise tie into ambiguity. A catch-all
 	// `this unknown` receiver only participates when no concrete-receiver
@@ -3659,7 +3717,8 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		scopeDepths.push(exts[di].scopeDepth);
 		di = di + 1;
 	}
-	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths, recvRelations, exts);
+	const args = (callNode.data as CallExprData).arguments;
+	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, args, argTypes, scopeDepths, recvRelations, exts);
 	if (idx == -2) {
 		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
 		// wins over `this number[]` on a uint8[] object instead of tying.
@@ -3731,7 +3790,12 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
-	if (winnerType.kind == TypeKind.Function) relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
+	if (winnerType.kind == TypeKind.Function) {
+		for (let ai = 0; ai < literalArgs.length && ai < winnerType.typeChildren.length; ai += 1) {
+			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], winnerType.typeChildren[ai]) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
+		}
+		relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
+	}
 	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
 			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
 			&& isGenericFn((extWinnerSym.declNode.data as FunctionDeclData).fnFlags)) {
@@ -3827,7 +3891,7 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 }
 
 // Resolve overloads with inheritance penalty.
-function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[],
+function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[], args: Node[],
 	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[]): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
@@ -3835,7 +3899,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 	let i = 0;
 	while (i < candidates.length) {
 		if (candidates[i].kind != TypeKind.Function) { i = i + 1; continue; }
-		const score = scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
+		const score = scoreCandidateWithSkip(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]), [], literalRelations(candidates[i].typeChildren, args, argTypes));
 		if (isNoMatch(score)) { i = i + 1; continue; }
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {

@@ -390,7 +390,7 @@ export function captureGenericParams(state: ParserState): string {
 	return names;
 }
 
-function angleCloserWidth(kind: TokenKind): int32 {
+export function angleCloserWidth(kind: TokenKind): int32 {
 	if (kind == TokenKind.Gt) return 1;
 	if (kind == TokenKind.GtGt) return 2;
 	if (kind == TokenKind.GtGtGt) return 3;

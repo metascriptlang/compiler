@@ -1,5 +1,5 @@
-// Parked at inbox card 2026-09-27-generic-ref-layout-identity.md
-// Parked at inbox card 2026-10-03-std-generic-instance-takes-another-modules-same-named-type.md
+// Parked at inbox card 2026-10-15-generic-variant-instances-with-permuted-type-arguments-share-a-layout.md
+// Parked at inbox card 2026-10-15-std-generic-instance-takes-an-imported-modules-same-named-type.md
 
 import { fixtureShapeValue } from "./fixtures/sameNamedShape";
 

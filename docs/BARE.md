@@ -97,6 +97,8 @@ Read `<mangled>` out of the generated `_dispatch.c` (`out/<mode>/.cache/_dispatc
 
 ⚠ **Correctness caveat**: targeted init initializes *only* that module. Any prelude module whose globals you actually touch needs its own `__Init000()` call added. The 11.9 KB figure is the floor for a module that uses nothing; a real module pays for what it uses. This is the same module-level DCE gap Phase 3b describes for Solana — it does not block a wasm build, it just means the init root is all-or-nothing unless you hand-pick.
 
+⚠ **A raise left pending at a module init** is reported and exits 1 inside that `__Init000()`, so the host never resumes (each init ends with `msTestErrorFlag()`, `genModuleInitFns`; HCR images excepted, their engine reads the status). Measured 2026-10-15 on tree `5cb77466d`, macOS `--app=lib` dylibs driven by C hosts: a host calling the entry's `__DatInit000()` + `__Init000()` whose top level throws printed `Error: unhandled exception: solo failed`, exit 1, and not its next line (before: it resumed with `msErr=1` and no report); a host calling `MsMain()` on main → a → b, b throwing, stopped at b's error (before: a's and main's top levels ran on zero-valued exports and the last error was reported).
+
 #### Two other costs
 
 1. **WASI imports appear and must be shimmed.** Rooting the runtime pulls `wasi_snapshot_preview1.{proc_exit, fd_close, fd_write, fd_seek}`. Defining `__wasi_*` in a `@compile`-ed `.c` resolves them internally and the imports disappear — verified, back to exactly the host imports you declared. Same strategy as `spacetimedb-bindings-cpp/src/abi/wasi_shims.cpp` (~190 LOC, nearly all stubs returning success; `fd_write` forwards to the host log).

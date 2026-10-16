@@ -9,8 +9,8 @@
 //                             build+run+byte-compare as a parity cell, only
 //                             the RSS bound stays native-only (node's heap is
 //                             not comparable to C RSS)
-//   // @stdout: <substr>   -> merged output must contain <substr> (legacy native
-//                             tier semantics; parity programs omit it)
+//   // @stdout: <substr>   -> merged output must contain <substr>; every @stdout
+//                             line is checked (parity programs mostly omit it)
 //   // @exit: <n>          -> expected exit code (default 0)
 //   // @xfail(<lane>): why -> known-fail for that lane; XPASS is reported LOUD
 //   // @serial             -> contention-sensitive (actor/spawn): its run cells
@@ -290,7 +290,7 @@ interface Spec {
 	name: string;
 	entry: string;
 	maxRssMb: float64;
-	stdoutSub: string;
+	stdoutSubs: string[];
 	expectExit: int32;
 	xfailLanes: string[];
 	serial: boolean;
@@ -479,7 +479,7 @@ function directiveValue(line: string, key: string): string {
 function parseSpec(name: string, entry: string): Spec {
 	const spec: Spec = {
 		name, entry,
-		maxRssMb: -1.0, stdoutSub: "", expectExit: 0,
+		maxRssMb: -1.0, stdoutSubs: [], expectExit: 0,
 		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
 		slackTypes: [], slackNs: [],
 	};
@@ -491,7 +491,7 @@ function parseSpec(name: string, entry: string): Spec {
 		const rss = directiveValue(t, "@maxrss");
 		if (rss != "") { spec.maxRssMb = rss.parseInt() as float64; }
 		const sub = directiveValue(t, "@stdout");
-		if (sub != "") { spec.stdoutSub = sub; }
+		if (sub != "") { spec.stdoutSubs.push(sub); }
 		const ec = directiveValue(t, "@exit");
 		if (ec != "") { spec.expectExit = ec.parseInt() as int32; }
 		if (t.indexOf("// @serial") == 0) { spec.serial = true; }
@@ -767,33 +767,48 @@ function finishRssCell(c: Cell): void {
 	const rssMB = parseRssMB(timeLog);
 
 	const exitOk = signal == 0 && !died && exitCode == c.spec.expectExit;
-	const merged = stdoutLog + timeLog;
-	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
+	const missing = missingStdoutLines(c.spec, stdoutLog + timeLog);
+	const outOk = missing.length == 0;
 	const rssOk = rssMB >= 0.0 && rssMB <= c.spec.maxRssMb;
 
 	let detail = "rss=" + rssMB + "MB exit=" + rawExit;
 	if (!exitOk) { detail = detail + " [exit≠" + c.spec.expectExit + " sig=" + signal + "]"; }
-	if (!outOk) { detail = detail + missingStdout(c, c.dir + "stdout.log", stdoutLog); }
+	if (!outOk) { detail = detail + missingStdout(missing, c.dir + "stdout.log", stdoutLog); }
 	if (!rssOk) { detail = detail + " [RSS>" + c.spec.maxRssMb + "MB]"; }
 	c.pass = exitOk && outOk && rssOk;
 	c.detail = detail;
 	c.finished = true;
 }
 
-function missingStdout(c: Cell, path: string, seen: string): string {
+function missingStdoutLines(spec: Spec, merged: string): string[] {
+	const missing: string[] = [];
+	for (const sub of spec.stdoutSubs) { if (!merged.contains(sub)) { missing.push(sub); } }
+	return missing;
+}
+
+function quotedList(items: string[]): string {
+	const quoted: string[] = [];
+	for (const item of items) { quoted.push("'" + item + "'"); }
+	return joinWith(quoted, ", ");
+}
+
+function missingStdout(missing: string[], path: string, seen: string): string {
 	const again = readFileOr(path, "");
-	const found = again.contains(c.spec.stdoutSub) ? ", which has the line" : "";
-	return ` [stdout missing '${c.spec.stdoutSub}'; read ${seen.length} bytes of ${path}, a re-read ${again.length}${found}]`;
+	let found = 0;
+	for (const sub of missing) { if (again.contains(sub)) { found = found + 1; } }
+	const note = found > 0 ? `, which has ${found} of ${missing.length}` : "";
+	return ` [stdout missing ${quotedList(missing)}; read ${seen.length} bytes of ${path}, a re-read ${again.length}${note}]`;
 }
 
 function finishParityCell(c: Cell): void {
 	const rawExit = readExit(c);
 	const merged = readFileOr(c.dir + "out.log", "");
 	const exitOk = rawExit == c.spec.expectExit;
-	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
+	const missing = missingStdoutLines(c.spec, merged);
+	const outOk = missing.length == 0;
 
 	let detail = "exit=" + rawExit;
-	if (!outOk) { detail = detail + missingStdout(c, c.dir + "out.log", merged); }
+	if (!outOk) { detail = detail + missingStdout(missing, c.dir + "out.log", merged); }
 	c.pass = exitOk && outOk;
 	c.detail = detail;
 	c.finished = true;
@@ -862,8 +877,8 @@ function finishSanCell(c: Cell): void {
 	const errLog = readFileOr(c.dir + "err.log", "");
 	const died = rawExit >= 128;
 	const exitOk = !died && rawExit == c.spec.expectExit;
-	const merged = stdoutLog + errLog;
-	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
+	const missing = missingStdoutLines(c.spec, stdoutLog + errLog);
+	const outOk = missing.length == 0;
 	const asanLine = firstLineContaining(errLog, "AddressSanitizer");
 	const doubleLine = firstLineContaining(errLog, "DOUBLE-DESTROY");
 	const imbalance = parseLedgerFailure(errLog, c.spec);
@@ -872,7 +887,7 @@ function finishSanCell(c: Cell): void {
 	let detail = "exit=" + rawExit;
 	if (!ledgerLive) { detail = detail + " [no LEDGER output — instrumentation dropped?]"; }
 	if (!exitOk) { detail = detail + " [exit≠" + c.spec.expectExit + "]"; }
-	if (!outOk) { detail = detail + " [stdout missing '" + c.spec.stdoutSub + "']"; }
+	if (!outOk) { detail = detail + " [stdout missing " + quotedList(missing) + "]"; }
 	if (asanLine != "") { detail = detail + " [" + asanLine + "]"; }
 	if (doubleLine != "") { detail = detail + " [" + doubleLine + "]"; }
 	if (imbalance != "") { detail = detail + " [ledger " + imbalance + "]"; }

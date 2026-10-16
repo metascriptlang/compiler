@@ -20,6 +20,15 @@ msc run tools/smith/main.ms run 1 3 --san                     # SAN lane (ASan +
 msc run tools/smith/main.ms run 1 3 --plant=san --san        # planted use after free; only the SAN lane judges it
 msc run tools/smith/main.ms rerun out/smith/bundles/<name>    # VOID / NOT REPRODUCED / REPRODUCED
 msc test tools/smith/gen.ms                                   # generator, features and rng contracts
+msc run tools/smith/main.ms cov 1 20 --msc=out/smith/cov/msc-cov   # per-pass coverage of a batch
+```
+
+`cov` needs a coverage-instrumented compiler and the commit it was built from beside it:
+
+```bash
+msc build src/index.ms --gc=drc --release --cc=clang --lto=off \
+  --passC="-fprofile-instr-generate -fcoverage-mapping" --passL="-fprofile-instr-generate" \
+  --output=out/smith/cov/msc-cov && git rev-parse HEAD > out/smith/cov/msc-cov.src
 ```
 
 The compiler under test follows the corpus convention: `MSC=<path>`, else `./msc`,
