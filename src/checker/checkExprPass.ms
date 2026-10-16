@@ -3543,7 +3543,7 @@ function conversionOperandBody(t: Type): Type {
 
 function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
 	if (operand.kind == NodeKind.ObjectLiteral) return false;
-	const target = structBehindConversion(targetType);
+	const target = structBehindConversion(conversionOperandBody(targetType));
 	if (target == null) return false;
 	const body = conversionOperandBody(srcType);
 	if (body.kind == TypeKind.Null) return false;
