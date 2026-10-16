@@ -726,7 +726,7 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 		}
 	}
 	if (isAwaitable(node.nodeType)) {
-		emit(gen, "new Promise(");
+		emit(gen, "((executor) => new Promise((resolve, reject) => executor(resolve, (reason) => reject(new Error(reason)))))(");
 		emitJoinedNodes(gen, d.newArguments, ", ");
 		emit(gen, ")");
 		return;
