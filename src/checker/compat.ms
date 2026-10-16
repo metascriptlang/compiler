@@ -451,6 +451,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			|| (target.kind == TypeKind.Struct && source.kind == TypeKind.GenericInstance)) {
 		const ancestor = classAncestorInstance(source, target);
 		if (ancestor != null) return isAssignable(ancestor, target);
+		const sBody = structBodyOf(source);
+		const tBody = structBodyOf(target);
+		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody));
 	}
 
 	// Generic-alias instance carries its resolved body in typeReturn
@@ -1086,6 +1089,13 @@ export function sameNominal(a: Type, b: Type): boolean {
 function sameGenericBase(a: Type, b: Type): boolean {
 	if (a.typeExtra != null && b.typeExtra != null) return sameNominal(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra));
 	return a.typeName == b.typeName;
+}
+
+function structBodyOf(t: Type): Type | null {
+	const body = t.kind == TypeKind.GenericInstance ? t.typeReturn : t;
+	if (body == null) return null;
+	if (t.kind == TypeKind.GenericInstance && t.typeExtra != null && isValueStructDecl(unwrapRefBase(t.typeExtra))) return null;
+	return unwrapRefBase(body).kind == TypeKind.Struct ? body : null;
 }
 
 function differentGenericsFit(source: Type, target: Type): boolean {
