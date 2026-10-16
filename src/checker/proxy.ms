@@ -33,7 +33,26 @@ export function checkNewProxy(ctx: CheckerContext, node: Node, expected: Type | 
 	node.flags = node.flags.excl(NodeFlag.Sem);
 	node.nodeType = null;
 	callCheckExpr(ctx, node, expected);
+	const parts = proxyPartsOf(ctx, node.nodeType);
+	if (parts != null) refuseObjectModelTraps(ctx, parts[1], node.location);
 	return true;
+}
+
+const OBJECT_MODEL_TRAPS = ["defineProperty", "getOwnPropertyDescriptor", "getPrototypeOf", "setPrototypeOf", "isExtensible", "preventExtensions", "apply", "construct"];
+
+function refuseObjectModelTraps(ctx: CheckerContext, handler: Type, loc: SourceLocation): void {
+	for (const trap of OBJECT_MODEL_TRAPS) {
+		if (!classDeclares(handler, trap)) continue;
+		addError(ctx, `'${typeDisplayName(handler)}' declares the '${trap}' trap: it belongs to JavaScript's object model of property descriptors, prototypes and callable objects, which MetaScript objects do not have`, loc.line, loc.column);
+	}
+}
+
+// The position of the first parameter or the return of an extern that holds a Proxy, "" when none.
+export function proxyAtExtern(ctx: CheckerContext, paramTypes: Type[], returnType: Type): string {
+	for (let i = 0; i < paramTypes.length; i += 1) {
+		if (proxyPartsOf(ctx, paramTypes[i]) != null) return "parameter " + (i + 1).toString();
+	}
+	return proxyPartsOf(ctx, returnType) != null ? "return type" : "";
 }
 
 // Whether the handler's class declares the trap as an instance method, read from its declaration.

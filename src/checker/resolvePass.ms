@@ -14,6 +14,7 @@ import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
+import { proxyAtExtern } from "./proxy";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -1726,6 +1727,8 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnFlags.indexOf("extern", 0) >= 0 && !ctx.modulePath.endsWith(".jms")) {
 		refuseUnknownAtCBoundary(ctx, d.fnName, paramTypes, returnType, node);
 	}
+	const proxySpot = d.fnFlags.indexOf("extern", 0) >= 0 ? proxyAtExtern(ctx, paramTypes, returnType) : "";
+	if (proxySpot != "") addError(ctx, "extern '" + d.fnName + "' " + proxySpot + ": a Proxy crosses into foreign code, which reads it without its traps — " + (proxySpot == "return type" ? "return the target and wrap it here" : "pass proxyTarget(p)"), node.location.line, node.location.column);
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;
