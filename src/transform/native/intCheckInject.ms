@@ -90,7 +90,7 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 	const arith = overflowPrefix(d.operator);
 	if (arith != "") {
 		const t = signedRepr(node.nodeType);
-		if (t == null) return node;
+		if (t == null || isPointerRepr(d.left.nodeType) || isPointerRepr(d.right.nodeType)) return node;
 		return typedCall(ownWidthName(arith, t), [d.left, d.right], node);
 	}
 	const assign = overflowAssign(d.operator);
@@ -192,6 +192,11 @@ function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): N
 function isFloatRepr(t: Type | null): boolean {
 	const r = peelToRepr(t);
 	return r != null && (r.kind == TypeKind.Number || r.kind == TypeKind.Float64 || r.kind == TypeKind.Float32);
+}
+
+function isPointerRepr(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	return r != null && r.kind == TypeKind.Ptr;
 }
 
 function integerRepr(t: Type | null): Type | null {
