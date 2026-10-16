@@ -177,6 +177,10 @@ function isVmPreludeSym(sym: Symbol): boolean {
 			own.add(s);
 			for (const o of s.overloads) own.add(o);
 		}
+		const exts = raiserPreludeCtx().extensionRegistry;
+		if (exts != null) {
+			for (const e of exts.methods) if (e.sym != null) own.add(e.sym);
+		}
 		_vmPreludeSyms = own;
 	}
 	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
