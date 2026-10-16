@@ -362,6 +362,12 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
 	}
 
+	if (token.kind == TokenKind.Import && peek(state, 1).kind == TokenKind.LParen) {
+		advance(state);
+		state.sawImportCall = true;
+		return Result.ok(createNode(NodeKind.Identifier, { name: "import" }, token));
+	}
+
 	if (token.kind == TokenKind.Ident ||
 		token.kind == TokenKind.This ||
 		token.kind == TokenKind.Super) {

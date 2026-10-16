@@ -108,7 +108,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		TokenKind.Continue => parseContinueStmt(state),
 		TokenKind.Function => parseFunctionDecl(state),
 		TokenKind.LBrace => parseBlockStmt(state),
-		TokenKind.Import => parseImportDecl(state),
+		TokenKind.Import when peek(state, 1).kind != TokenKind.LParen => parseImportDecl(state),
 		TokenKind.Export => parseExportDecl(state),
 		TokenKind.Type when isIdentLike(peek(state, 1)) && peek(state, 1).line == token.line => parseTypeAliasDecl(state),
 		TokenKind.Enum => parseEnumDecl(state),
