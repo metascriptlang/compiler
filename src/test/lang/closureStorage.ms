@@ -199,3 +199,20 @@ test "closureStorage: a for-of generator still steps through its iterator" {
 	}
 	assert total == 6;
 }
+
+interface StaticComponentProps { child: () => int32; }
+function staticComponentLeaf(): () => int32 { return (): int32 => 2; }
+function staticComponentView(props: StaticComponentProps): int32 { return props.child() + 1; }
+class StaticComponents { static View: (props: StaticComponentProps) => int32 = staticComponentView; }
+function staticComponentMount(comp: (props: StaticComponentProps) => int32, props: StaticComponentProps): int32 {
+	return comp(props);
+}
+
+test "closureStorage: a static closure passed beside a call argument stays in the static" {
+	assert staticComponentMount(StaticComponents.View, { child: staticComponentLeaf() }) == 3;
+}
+
+test "closureStorage: a static closure passed again in a later test still calls" {
+	assert staticComponentMount(StaticComponents.View, { child: staticComponentLeaf() }) == 3;
+	assert StaticComponents.View({ child: staticComponentLeaf() }) == 3;
+}
