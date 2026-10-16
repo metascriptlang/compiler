@@ -510,6 +510,28 @@ function constArrayDimension(text: string, ctx: CheckerContext, line: int32, col
 	return fd.intVal as int32;
 }
 
+function refuseVoidMember(ctx: CheckerContext, parts: string[], members: Type[], text: string, line: int32, col: int32): void {
+	let hasVoid = false;
+	for (const m of members) {
+		if (m.kind == TypeKind.Void) hasVoid = true;
+	}
+	if (!hasVoid) return;
+	const kept: string[] = [];
+	let i = 0;
+	for (const up of parts) {
+		const part = up.trim();
+		if (part.length == 0) continue;
+		const shown = members[i].kind == TypeKind.Void ? "null" : part;
+		if (!kept.includes(shown)) kept.push(shown);
+		i += 1;
+	}
+	const msg = "'" + text + "' puts void in a union, and void is no value — write '" + kept.join(" | ") + "'";
+	for (const e of ctx.errors) {
+		if (e.message == msg) return;
+	}
+	addError(ctx, msg, line, col);
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -659,6 +681,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				members.push(resolveAnnotation(part, ctx, line, col));
 			}
 		}
+		if (line > 0) refuseVoidMember(ctx, unionParts, members, trimmed, line, col);
 		if (members.length > 0 && isNullableShape(members) && !anyHasGenericParams(members)) {
 			for (const m of members) {
 				if (isForwardAlias(m)) return deferNullableUnion(members);
