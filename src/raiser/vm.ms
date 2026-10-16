@@ -1097,7 +1097,8 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.NarrowS) {
 			const val = getReg(vm, base + inst.a);
 			const half = (1 as int64) << ((inst.b as int64) - 1);
-			if (val.intVal < -half || val.intVal >= half) vmError(vm, "over- or underflow");
+			const low = inst.c == 1 ? 0 : -half;
+			if (val.intVal < low || val.intVal >= low + 2 * half) vmError(vm, "over- or underflow");
 		} else if (op == RaiserOpcode.SignExtend) {
 			const val = getReg(vm, base + inst.a);
 			const imm = 64 - (inst.b as int64);
@@ -2254,11 +2255,11 @@ function execBinOpI64(op: RaiserOpcode, a: int64, b: int64): RaiserVM {
 	));
 }
 
-function execUnary(op: RaiserOpcode, a: int64, b: int32): RaiserVM {
+function execUnary(op: RaiserOpcode, a: int64, b: int32, c: int32 = 0): RaiserVM {
 	return execModule(makeTestModule(
 		[
 			raiserABx(RaiserOpcode.LoadConst, 0, 0),
-			raiserABC(op, op == RaiserOpcode.NarrowS ? 0 : 1, op == RaiserOpcode.NarrowS ? b : 0, 0),
+			raiserABC(op, op == RaiserOpcode.NarrowS ? 0 : 1, op == RaiserOpcode.NarrowS ? b : 0, c),
 			raiserABC(RaiserOpcode.Halt, op == RaiserOpcode.NarrowS ? 0 : 1, 0, 0),
 		],
 		[raiserInt(a)]
@@ -2292,6 +2293,13 @@ test "NarrowS stops on a value outside the signed width and keeps one inside" {
 	assert execUnary(RaiserOpcode.NarrowS, 32767, 16).exitValue.intVal == 32767;
 	assert execUnary(RaiserOpcode.NarrowS, 2147483648, 32).error == "over- or underflow";
 	assert execUnary(RaiserOpcode.NarrowS, -2147483648, 32).exitValue.intVal == -2147483648;
+}
+
+test "NarrowS with C = 1 stops on a value outside the unsigned width and keeps one inside" {
+	assert execUnary(RaiserOpcode.NarrowS, 256, 8, 1).error == "over- or underflow";
+	assert execUnary(RaiserOpcode.NarrowS, -1, 8, 1).error == "over- or underflow";
+	assert execUnary(RaiserOpcode.NarrowS, 255, 8, 1).exitValue.intVal == 255;
+	assert execUnary(RaiserOpcode.NarrowS, 0, 8, 1).exitValue.intVal == 0;
 }
 
 function execIsKind(value: RaiserValue, kind: RaiserValueKind): RaiserValue {

@@ -1673,6 +1673,7 @@ function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: str
 	const oneReg = allocReg(s);
 	emitLoadConst(s, oneReg, isFloatExpr(target) ? raiserFloat(1.0) : raiserInt(1));
 	emitCompoundArith(s, updateOp == "++" ? "+=" : "-=", dest, fromReg, oneReg, target);
+	if (target.nodeType != null && peelDistinct(target.nodeType).kind == TypeKind.Char) emitInst(s, raiserABC(RaiserOpcode.NarrowS, dest, 8, 1));
 }
 
 function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, target: Node): int32 {
