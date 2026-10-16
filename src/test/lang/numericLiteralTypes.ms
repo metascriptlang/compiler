@@ -91,3 +91,49 @@ test "number literal types: arrays and fields keep the literal element type" {
 	const small: Small = { v: 2, t: 7 };
 	assert small.v + small.t == 9;
 }
+
+function plusOne(v: 1 | 2 | string): int32 {
+	if (typeof v === "number") return v + 1;
+	return -1;
+}
+function bang(v: "a" | "b" | int32): string {
+	if (typeof v === "string") return v + "!";
+	return "-";
+}
+function asNumber(v: 1 | 2 | string): number {
+	if (typeof v === "number") { const n: number = v; return n; }
+	return -1;
+}
+function asString(v: "a" | "b" | int32): string {
+	if (typeof v === "string") { const s: string = v; return s; }
+	return "-";
+}
+function wrapNumbers(k: 1 | 2): 1 | 2 | string { return k; }
+function wrapStrings(k: "a" | "b"): "a" | "b" | int32 { return k; }
+function wrapNumbersOrNull(k: 1 | 2): 1 | 2 | string | null { return k; }
+function wrapStringsOrNull(k: "a" | "b"): "a" | "b" | int32 | null { return k; }
+
+test "number literal set narrowed by typeof reads as its number, as a string set reads as its string" {
+	assert plusOne(2) == 3;
+	assert plusOne("s") == -1;
+	assert bang("b") == "b!";
+	assert bang(3) == "-";
+	assert asNumber(2) == 2;
+	assert asString("a") == "a";
+	const a = pick(1);
+	if (typeof a === "number") assert a == 2;
+	else assert false;
+}
+
+test "number literal set widens into a wider union as a string set does" {
+	const a = wrapNumbers(2);
+	assert typeof a == "number";
+	assert a == 2;
+	const b = wrapStrings("b");
+	assert typeof b == "string";
+	assert b == "b";
+	const c = wrapNumbersOrNull(1);
+	assert c != null && typeof c == "number";
+	const d = wrapStringsOrNull("a");
+	assert d != null && typeof d == "string";
+}

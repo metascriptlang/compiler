@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, UnionRead, readUnionOperand, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
+import { widenNumberLiteral, adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isLiteralSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, UnionRead, readUnionOperand, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -637,20 +637,6 @@ function expectsNumberLiteral(expectedType: Type | null): boolean {
 
 function isNumberLiteralTyped(t: Type | null): boolean {
 	return t != null && widenNumberLiteralType(t) != t;
-}
-
-export function widenNumberLiteral(node: Node): Node {
-	const held = node.nodeType;
-	if (held == null) return node;
-	const widened = widenNumberLiteralType(held);
-	if (widened == held) return node;
-	let read = node;
-	if (declaredTagUnionOf(node) != null) {
-		const projected = narrowUnionToVariant(node, held);
-		if (projected != null as unknown as Node) read = projected;
-	}
-	read.nodeType = widened;
-	return read;
 }
 
 function checkNumberLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -2045,7 +2031,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	const nullableMember = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : null;
 	const projectedMember = nullableMember != null ? nullableMember : targetType;
-	if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isStrLitSet(targetType) || nullableMember != null)
+	if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isLiteralSet(targetType) || nullableMember != null)
 		&& !isUnresolvedType(targetType) && (tagUnionMemberSlot(srcType, projectedMember) >= 0 || objectPathHolders(srcType, projectedMember).length > 0)) {
 		const projected = checkedProjection(d.asExpr, srcType, projectedMember);
 		if (projected.kind == NodeKind.TypeAssertion) {
@@ -2135,7 +2121,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	} else {
 		node.nodeType = targetType;
 	}
-	if (srcType != null && (srcType.kind != TypeKind.Union || isStrLitSet(srcType)) && targetType.kind == TypeKind.Union) {
+	if (srcType != null && (srcType.kind != TypeKind.Union || isLiteralSet(srcType)) && targetType.kind == TypeKind.Union) {
 		const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
 		if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
 	}

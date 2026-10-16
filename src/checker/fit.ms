@@ -459,7 +459,7 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 	if (formal.typeReturn != null) {
 		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType);
 		if (thunk != null as unknown as Node) payload = thunk;
-		if (formal.typeReturn.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isStringLike(exprType)) && isTagCarriedUnion(formal.typeReturn)) {
+		if (formal.typeReturn.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType)) && isTagCarriedUnion(formal.typeReturn)) {
 			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType);
 			if (injected != null as unknown as Node) payload = injected;
 		}
@@ -2116,7 +2116,7 @@ function flatUnionTakesNull(t: Type): boolean {
 // directions apart by convType: union = inject, member = project.
 export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
 	const exprType = matchUnionBehindInstance(peelTransparentInstance(exprTypeRaw));
-	if (exprType.kind == TypeKind.Union && !isStrLitSet(exprType)) return null as unknown as Node;
+	if (exprType.kind == TypeKind.Union && !isLiteralSet(exprType)) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
 	const projected = projectTagUnionMember(expr, declared, exprType);
@@ -2124,9 +2124,23 @@ export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
 	return projected;
 }
 
+export function widenNumberLiteral(node: Node): Node {
+	const held = node.nodeType;
+	if (held == null) return node;
+	const widened = widenNumberLiteralType(held);
+	if (widened == held) return node;
+	let read = node;
+	if (declaredTagUnionOf(node) != null) {
+		const projected = narrowUnionToVariant(node, held);
+		if (projected != null as unknown as Node) read = projected;
+	}
+	read.nodeType = widened;
+	return read;
+}
+
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
-	if (exprType.kind == TypeKind.Union && !isStringLike(exprType)) return -1;
-	if (isStringLike(exprType) || exprType.kind == TypeKind.NumberLiteral) return unionSlotOf(declared, exprType);
+	if (exprType.kind == TypeKind.Union && literalUnionBase(exprType) == null) return -1;
+	if (isStringLike(exprType) || isLiteralSet(exprType)) return unionSlotOf(declared, exprType);
 	let ci: int32 = 0;
 	for (const child of declared.typeChildren) {
 		if (child == exprType) return ci;
@@ -2145,7 +2159,7 @@ export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type
 	}
 	if (vi < 0) return null as unknown as Node;
 	expr.nodeType = declared;
-	return hiddenSlotConv(expr, isStringLike(exprType) || exprType.kind == TypeKind.NumberLiteral ? exprType : declared.typeChildren[vi], vi);
+	return hiddenSlotConv(expr, isStringLike(exprType) || isLiteralSet(exprType) ? exprType : declared.typeChildren[vi], vi);
 }
 
 export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type, convert: boolean = false): Node {
@@ -2200,8 +2214,8 @@ function objectMemberConversion(read: Node, declared: Type, target: Type, holder
 	return conv;
 }
 
-export function isStrLitSet(t: Type | null): boolean {
-	return t != null && t.kind != TypeKind.String && isStringLike(t);
+export function isLiteralSet(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.NumberLiteral || literalUnionBase(t) != null);
 }
 
 function assertionPayload(t: Type): Type {
@@ -2214,7 +2228,7 @@ export function assertionNarrows(srcType: Type, target: Type): boolean {
 	const from = assertionPayload(srcType);
 	const to = assertionPayload(target);
 	if (isSlotUnion(from) && tagUnionMemberSlot(from, to) >= 0) return true;
-	return from.kind == TypeKind.String && isStrLitSet(to);
+	return from.kind == TypeKind.String && isLiteralSet(to);
 }
 
 export function checkedAssertion(expr: Node, target: Type): Node {
@@ -2238,7 +2252,7 @@ export function assertIntoNullable(expr: Node, srcType: Type, target: Type): Nod
 	if (isSlotUnion(srcType) && tagUnionMemberSlot(srcType, payload) >= 0) {
 		return synthMaybeWrap(checkedAssertion(checkedProjection(expr, srcType, payload), payload), target, payload);
 	}
-	if (srcType.kind == TypeKind.String && isStrLitSet(payload)) {
+	if (srcType.kind == TypeKind.String && isLiteralSet(payload)) {
 		return synthMaybeWrap(checkedAssertion(expr, payload), target, payload);
 	}
 	if (slotRefuses(srcType, payload)) return null as unknown as Node;
@@ -2371,8 +2385,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	const peeledExpr = peelTransparentInstance(exprType);
 	if (peeledFormal != formal || peeledExpr != exprType) return fitSlot(ctx, expr, peeledFormal, peeledExpr);
 	if (!holdsNumberLiteral(formal) && widenNumberLiteralType(exprType) != exprType) {
-		expr.nodeType = widenNumberLiteralType(exprType);
-		return fitSlot(ctx, expr, formal, expr.nodeType);
+		const read = widenNumberLiteral(expr);
+		return fitSlot(ctx, read, formal, read.nodeType);
 	}
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
 	const viewed = viewRefusal(expr, formal);
@@ -2457,7 +2471,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	// position (var init, assign, return, ternary, call arg) shares the one
 	// wrap — no position can forget it. Nilable pointer unions collapse to a
 	// bare pointer and take no tag.
-	if (formal.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isStringLike(exprType))
+	if (formal.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType))
 		&& unwrapRefNullUnion(formal) == null) {
 		const widened = widenVariantToUnion(expr, formal, exprType);
 		if (widened != null as unknown as Node) return widened;
@@ -2471,7 +2485,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			return expr;
 		}
 	}
-	if ((formal.kind != TypeKind.Union || isStrLitSet(formal)) && (exprType.kind != TypeKind.Union || isStrLitSet(exprType))) {
+	if ((formal.kind != TypeKind.Union || isLiteralSet(formal)) && (exprType.kind != TypeKind.Union || isLiteralSet(exprType))) {
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
 	}
