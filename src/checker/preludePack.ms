@@ -727,7 +727,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const ps of n.paramSyms) psi.push(idxSym(ps));
 			pss = psi.length == 0 ? "" : intsCsv(psi);
 		}
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint32}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${emitNodePayloadViaSink(n)}`);
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${emitNodePayloadViaSink(n)}`);
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {
@@ -1155,7 +1155,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			loc.endLine = f[6].parseInt() as int32;
 			loc.endColumn = f[7].parseInt() as int32;
 			const n = createNodeAt(kind, { nullPlaceholder: true } as NodeData, loc);
-			n.flags = f[3].parseInt() as uint32 as BitSet<NodeFlag>;
+			n.flags = f[3].parseInt() as uint64 as BitSet<NodeFlag>;
 			n.typeArg = unescapeP(f[13]);
 			n.variantSlot = f[14].parseInt() as int32;
 			nodes.push(n);
@@ -1440,6 +1440,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		const ret = createNodeAt(NodeKind.ReturnStmt, { argument: add } as NodeData, makeLoc(9, 2));
 		const body = createNodeAt(NodeKind.BlockStmt, { statements: [ret] } as NodeData, makeLoc(8, 30));
 		const decl = createNodeAt(NodeKind.FunctionDecl, { fnName: "pkTestFn", params: ["start"], fnParamTypes: ["int32"], fnBody: body, fnFlags: "", fnReturnType: "int32", fnDefaults: [zero], nativeName: "", nameLocation: makeLoc(7, 9) } as NodeData, makeLoc(7, 1));
+		decl.flags = decl.flags.incl(NodeFlag.OptionalChainEnd);
 		sym.declNode = decl;
 		sym.defaultParams = [zero];
 		const cache = ctx.table.identCache;
@@ -1472,6 +1473,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert got.declNode != null;
 		assert got.declNode.kind == NodeKind.FunctionDecl;
 		const gd = got.declNode.data as FunctionDeclData;
+		assert got.declNode.flags.has(NodeFlag.OptionalChainEnd), "a node flag past bit 31 did not survive the pack";
 		assert gd.fnName == "pkTestFn";
 		assert gd.params[0] == "start";
 		const gbody = gd.fnBody.data as BlockStmtData;
