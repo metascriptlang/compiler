@@ -1,6 +1,6 @@
 import { strictErrorCount, hasError } from "./helpers";
 
-const pairDecl = "type Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };\n"
+const pairDecl = "struct Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };\n"
 	+ "function mkPair(g: boolean): Pair { if (g) return { ok: true, value: \"lib\" }; return { ok: false, error: \"no\" }; }\n"
 	+ "const p = mkPair(true);\n";
 const pairRefusal = "'p' is a value of 'Pair' (ok: true); '{ ok: true; value: string }' takes an object (a reference). "
@@ -33,7 +33,7 @@ test "a narrowed match variant is refused where the discriminant is written wide
 }
 
 test "a narrowed enum match variant is refused where an object parameter is expected" {
-	const src = "enum K { A, B }\ntype S = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };\n"
+	const src = "enum K { A, B }\nstruct S = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };\n"
 		+ "function mkS(g: boolean): S { if (g) return { kind: K.A, r: \"lib\" }; return { kind: K.B, n: 3 }; }\n"
 		+ "const s = mkS(true);\nfunction f(x: { kind: K.A; r: string }): string { return x.r; }\nif (s.kind == K.A) f(s);";
 	assert hasError(src, "'s' is a value of 'S' (kind: K.A); '{ kind: K.A; r: string }' takes an object (a reference). "
@@ -46,6 +46,12 @@ test "a narrowed Result is refused where an object is expected and is not told t
 		+ "Copy it with '{ ...r }', take the parameter as 'Result<int32, string>'.";
 	assert hasError(decl + "function f(x: { ok: true; value: int32 }): int32 { return x.value; }\nif (r.ok) f(r);", refusal);
 	assert hasError(decl + "if (r.ok) { const q: { ok: true; value: int32 } = r; }", refusal);
+}
+
+test "a narrowed variant of a type union is refused without the hint to declare it with type" {
+	const src = pairDecl.replace("struct Pair", "type Pair") + takeOk + "if (p.ok) f(p);";
+	assert hasError(src, "takes an object (a reference). Copy it with '{ ...p }', take the parameter as 'Pair'.");
+	assert !hasError(src, "to share it");
 }
 
 test "a narrowed variant is copied into an object, kept as its union or serialized without a refusal" {

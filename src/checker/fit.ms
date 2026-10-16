@@ -3,7 +3,7 @@
 // through the checkerCallbacks door.
 
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
-import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, ConditionalExprData, StringLiteralData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, ConditionalExprData, StringLiteralData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeFlag, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
@@ -2603,7 +2603,7 @@ export function variantIntoObjectRefusal(expr: Node, exprType: Type | null, form
 	if (exprType.typeNames.length > 0) tag = " (" + exprType.typeNames[0] + ": " + typeDisplayName(exprType.typeChildren[0]) + ")";
 	let shape = typeDisplayName(formal);
 	if (shape.endsWith("; }")) shape = shape.slice(0, shape.length - 3) + " }";
-	const share = isResult(union) ? "" : ", or declare '" + unionName + "' with 'type' to share it";
+	const share = isResult(union) || !union.typeFlags.has(TypeFlag.ValueUnion) ? "" : ", or declare '" + unionName + "' with 'type' to share it";
 	return (named ? "'" + name + "'" : "the value") + " is a value of '" + unionName + "'" + tag + "; '" + shape + "' takes an object (a reference). Copy it with '{ ..."
 		+ name + " }', take the parameter as '" + unionName + "'" + share + ".";
 }
