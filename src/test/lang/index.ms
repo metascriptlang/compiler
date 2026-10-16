@@ -92,3 +92,4 @@ import "./inheritance";
 import "./nullableFunction";
 import "./nullable";
 import "./keyedAccess";
+import "./proxyTraps";

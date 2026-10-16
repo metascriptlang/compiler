@@ -180,3 +180,4 @@ import "./asPrecedence";
 import "./unclosedDelimiter";
 import "./keyedAccess";
 import "./literalTypeAssign";
+import "./proxyRefusals";
