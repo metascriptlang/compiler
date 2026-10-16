@@ -858,6 +858,23 @@ test "engine: signed overflow stops at every width" {
 	}
 }
 
+test "engine: a char step past 0 or 255 stops and one onto a bound is kept" {
+	const programs = [
+		"let c = 255 as char; c++; console.log(`${c as int32}`);",
+		"let c = 255 as char; ++c; console.log(`${c as int32}`);",
+		"let c = 0 as char; c--; console.log(`${c as int32}`);",
+		"let c = 0 as char; --c; console.log(`${c as int32}`);",
+	];
+	for (const program of programs) {
+		const ctx = evalOrcVM(program);
+		assert ctx.error.indexOf("over- or underflow") >= 0, program;
+		assert ctx.output == "", program;
+	}
+	const kept = evalOrcVM("let a = 254 as char; a++; let b = 1 as char; b--; console.log(`${a as int32} ${b as int32}`);");
+	assert kept.error == "";
+	assert kept.output == "255 0\n";
+}
+
 test "engine: unsigned arithmetic wraps at the type width" {
 	const ctx = evalOrcVM("function mul(left: uint16, right: uint16): uint16 { return left * right; }"
 		+ " function add(left: uint32, right: uint32): uint32 { return left + right; } let u: uint8 = 0; u -= 1;"

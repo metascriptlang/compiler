@@ -192,3 +192,12 @@ test "E2E C: a counter the compiler keeps below a length steps at int64 without 
 	assert author.ok;
 	assert author.value.contains("msAddAssign(i_") && author.value.contains("msAddI32(n_");
 }
+
+test "E2E C: a char step stops past its range, prefix and postfix" {
+	const cases: string[][] = [["return c++;", "msAddAssign("], ["return c--;", "msSubAssign("], ["return ++c;", "msAddAssign("], ["return --c;", "msSubAssign("], ["c++; return c;", "msAddAssign("], ["c--; return c;", "msSubAssign("]];
+	for (const c of cases) {
+		const out = compileToC(`function f(c: char): char { ${c[0]} }`);
+		assert out.ok, c[0];
+		assert out.value.contains(c[1]), c[0];
+	}
+}

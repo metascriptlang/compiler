@@ -306,6 +306,14 @@ test "the counter of a for-of over an array or a string steps without an overflo
 	}
 }
 
+test "a char step stores the checked step, prefix and postfix" {
+	for (const step of ["c++", "++c", "c--", "--c"]) {
+		const result = compileToJS(`function f(c: char): char { ${step}; return c; }`);
+		assert result.ok, step;
+		assert result.value.contains("msOverflowChar"), step;
+	}
+}
+
 test "int32 step on a call-indexed element hoists the index and stops on overflow" {
 	const result = compileToJS("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: int32[]): void { a[at()]++; a[at()] *= 2; }");
 	assert result.ok;
