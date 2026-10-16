@@ -702,7 +702,7 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const guardedWrite = bd.operator == "=" && tdzFlagOf(bd.left) != null;
 	if (!guardedWrite) bd.left = hoistTargetCalls(bd.left, pre, ctx);
 	const rhsPre: Node[] = [];
-	bd.right = hoistNestedRaisingCalls(bd.right, rhsPre, ctx);
+	bd.right = bd.operator == "=" || ctx.jsBackend ? hoistNestedRaisingCalls(bd.right, rhsPre, ctx) : hoistRaisingCalls(bd.right, rhsPre, ctx);
 	if (rhsPre.length > 0) {
 		const writes: Symbol[] = [];
 		for (const s of rhsPre) { collectWrites(s, writes); }
