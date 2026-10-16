@@ -498,7 +498,8 @@ function failedAccount<T>(code: uint64): Result<T, ProgramError> {
 macro singleAccountBody(index: Node): Node {
 	const shape = getTypeArg();
 	const field = shape.typExprFieldTypes[0];
-	const base = field.kind === NodeKind.TypeGeneric ? field.typExprBase.name : field.typExprTypeName;
+	const base = field.kind === NodeKind.TypeGeneric ? field.typExprBase.name
+		: field.kind === NodeKind.TypeObject ? field.typExprTypeName : field.name;
 	let kernel: Node | null = null;
 	if (base == "Signer") { kernel = bindSym("signerProof"); }
 	if (base == "WritableSigner") { kernel = bindSym("writableSignerProof"); }
@@ -515,6 +516,7 @@ macro singleAccountBody(index: Node): Node {
 	if (kernel == null) { error("single account has no proof kernel", field); }
 	function typeText(written: Node): string {
 		if (written.kind === NodeKind.TypeObject) { return written.typExprTypeName; }
+		if (written.kind === NodeKind.Identifier) { return written.name; }
 		if (written.kind !== NodeKind.TypeGeneric) { error("single account: the type argument is not a named type", written); }
 		const inner: string[] = [];
 		for (const arg of written.typExprArgs) { inner.push(typeText(arg)); }
@@ -1127,8 +1129,10 @@ export macro accounts(): Node {
 		const written = writtenTypes[field];
 		let canonical = written;
 		const reflected = shape.typExprFieldTypes[field];
-		if (written.indexOf("<") < 0 && reflected.kind === NodeKind.TypeObject && reflected.typExprTypeName != "") {
-			canonical = reflected.typExprTypeName;
+		const reflectedName = reflected.kind === NodeKind.TypeObject ? reflected.typExprTypeName
+			: reflected.kind === NodeKind.Identifier ? reflected.name : "";
+		if (written.indexOf("<") < 0 && reflectedName != "") {
+			canonical = reflectedName;
 		}
 		const open = canonical.indexOf("<");
 		const base = open < 0 ? canonical : canonical.slice(0, open);
