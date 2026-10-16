@@ -6,7 +6,9 @@ const DECLS = "function twice<T>(f: (v: T) => T, x: T): T { return f(f(x)); }\n"
 	+ "function effect<T>(compute: (prev: T | null) => T, run: (v: T) => void): void { run(compute(null)); }\n"
 	+ "function seed<T>(f: (n: int32, prev: T | null) => T): T { return f(0, null); }\n"
 	+ "function needsStr(s: string): string { return s; }\n"
-	+ "function none<T>(f: (p: T | null) => void): void { f(null); }\n";
+	+ "function none<T>(f: (p: T | null) => void): void { f(null); }\n"
+	+ "type Accessor<T> = distinct (() => T | null);\n"
+	+ "function watch<T>(f: (p: T | null) => void): Accessor<T> { f(null); return ((): T | null => null) as Accessor<T>; }\n";
 
 test "an unannotated parameter ahead of the binding argument takes the bound type" {
 	assert strictErrorCount(DECLS + "const a = twice(s => needsStr(s), \"x\");\nconst b: string = a;") == 0;
@@ -27,4 +29,6 @@ test "a parameter whose type parameter no argument binds is refused" {
 
 test "a type parameter that no argument binds is refused by name" {
 	assert hasError(DECLS + "none(() => { needsStr(\"x\"); });", "cannot instantiate: 'T' — annotate the destination type or pass an explicit type argument");
+	assert hasError(DECLS + "const w = watch(() => { needsStr(\"x\"); });", "cannot instantiate: 'T' — annotate the destination type or pass an explicit type argument");
+	assert strictErrorCount(DECLS + "const w = watch<string>(() => { needsStr(\"x\"); });") == 0;
 }
