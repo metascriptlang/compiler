@@ -19,6 +19,7 @@ import {
 } from "../ast/node";
 import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
+	createStringLiteral, createNumberLiteral, integerLiteralName, fractionLiteralName, numberLiteralBase, isFloatType, float64Type, int32Type,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
@@ -26,6 +27,7 @@ import {
 	isAtomicRef, peelToStructOrUnion, matchUnionBehindInstance, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
+import { parseNumberLiteral } from "../utils/string";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 // ===== FlowType =====
@@ -1710,9 +1712,10 @@ function unionPreservingDiscriminant(parent: Type, remaining: Type[]): Type {
 	return u;
 }
 
-// Narrow a union type by equality to a literal. Handles:
-//   - null literal: remove/keep Null member
-//   - future: string, number, boolean literals
+// Narrow by equality to a literal. `=== null` keeps or drops the null member;
+// `=== "a"` and `=== 2` filter a union's members: the true branch drops every
+// scalar member of another base and every literal of the same base with
+// another value, the false branch drops the literal itself.
 function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: boolean): Type | null {
 	if (t == null) return t;
 	if (isNullLiteral(literal)) {
@@ -1722,6 +1725,49 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 		// !assumeTrue (!== null) removes it via removeNullFromType.
 		return assumeTrue ? extractNullFromType(t) : removeNullFromType(t);
 	}
-	// Other literal kinds: no narrowing in Phase 2 (Phase 6 adds string/number literal narrowing)
-	return t;
+	const value = equalityLiteralType(skipHiddenConv(literal));
+	if (value == null || t.kind != TypeKind.Union || t.typeChildren == null || isMaybeType(t)) return t;
+	const kept: Type[] = [];
+	for (const member of t.typeChildren) {
+		if (member == null) return t;
+		if (assumeTrue ? excludedByEquality(member, value) : sameLiteralType(member, value)) continue;
+		kept.push(member);
+	}
+	if (kept.length == 0 || kept.length == t.typeChildren.length) return t;
+	return unionPreservingDiscriminant(t, kept);
+}
+
+function equalityLiteralType(node: Node): Type | null {
+	if (node.kind == NodeKind.StringLiteral) return createStringLiteral((node.data as StringLiteralData).value);
+	let negated = false;
+	let operand = node;
+	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "-") {
+		negated = true;
+		operand = (node.data as UnaryExprData).operand;
+	}
+	if (operand.kind != NodeKind.NumberLiteral) return null;
+	const d = operand.data as NumberLiteralData;
+	if (d.isFloat) return createNumberLiteral(fractionLiteralName(negated ? 0 - d.value : d.value), float64Type());
+	return createNumberLiteral(integerLiteralName(negated ? 0 - d.intVal : d.intVal), int32Type());
+}
+
+function scalarBaseOf(t: Type): TypeKind {
+	if (t.kind == TypeKind.String || t.kind == TypeKind.StringLiteral) return TypeKind.String;
+	if (t.kind == TypeKind.NumberLiteral || isNumeric(t)) return TypeKind.Number;
+	if (t.kind == TypeKind.Boolean || t.kind == TypeKind.BooleanLiteral) return TypeKind.Boolean;
+	return TypeKind.Error;
+}
+
+function sameLiteralType(member: Type, value: Type): boolean {
+	if (member.kind != value.kind) return false;
+	if (member.typeName == value.typeName) return true;
+	return member.kind == TypeKind.NumberLiteral && (isFloatType(numberLiteralBase(member)) || isFloatType(numberLiteralBase(value)))
+		&& parseNumberLiteral(member.typeName) == parseNumberLiteral(value.typeName);
+}
+
+function excludedByEquality(member: Type, value: Type): boolean {
+	const base = scalarBaseOf(member);
+	if (base == TypeKind.Error) return false;
+	if (base != scalarBaseOf(value)) return true;
+	return member.kind == value.kind && !sameLiteralType(member, value);
 }

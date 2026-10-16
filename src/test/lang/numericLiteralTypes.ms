@@ -112,6 +112,26 @@ function wrapNumbers(k: 1 | 2): 1 | 2 | string { return k; }
 function wrapStrings(k: "a" | "b"): "a" | "b" | int32 { return k; }
 function wrapNumbersOrNull(k: 1 | 2): 1 | 2 | string | null { return k; }
 function wrapStringsOrNull(k: "a" | "b"): "a" | "b" | int32 | null { return k; }
+function byEqualityNumber(v: 1 | 2 | string): int32 {
+	if (v === 2) return v + 10;
+	if (typeof v === "string") return 0;
+	return v + 100;
+}
+function byEqualityString(v: "a" | "b" | int32): string {
+	if (v === "b") return v + "!";
+	if (typeof v === "number") return "n";
+	return v + "?";
+}
+function bySet(p: 1 | 2): int32 {
+	if (p === 2) { const q: 2 = p; return q * 10; }
+	const r: 1 = p;
+	return r;
+}
+function bySetString(p: "a" | "b"): string {
+	if (p === "b") { const q: "b" = p; return q + "!"; }
+	const r: "a" = p;
+	return r;
+}
 
 test "number literal set narrowed by typeof reads as its number, as a string set reads as its string" {
 	assert plusOne(2) == 3;
@@ -136,4 +156,17 @@ test "number literal set widens into a wider union as a string set does" {
 	assert c != null && typeof c == "number";
 	const d = wrapStringsOrNull("a");
 	assert d != null && typeof d == "string";
+}
+
+test "equality against a literal narrows a literal union as it narrows a string union" {
+	assert byEqualityNumber(2) == 12;
+	assert byEqualityNumber(1) == 101;
+	assert byEqualityNumber("x") == 0;
+	assert byEqualityString("b") == "b!";
+	assert byEqualityString("a") == "a?";
+	assert byEqualityString(4) == "n";
+	assert bySet(2) == 20;
+	assert bySet(1) == 1;
+	assert bySetString("b") == "b!";
+	assert bySetString("a") == "a";
 }
