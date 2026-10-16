@@ -201,7 +201,7 @@ function collectFieldDecorators(t: Type): Node[][] {
 // a type without one (interface, anon struct) gets empty arrays.
 function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
-	return createNodeAt(NodeKind.TypeObject, {
+	const node = createNodeAt(NodeKind.TypeObject, {
 		typExprFieldNames: t.typeNames,
 		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited, impl),
 		typExprIndexKey: null as unknown as Node,
@@ -209,6 +209,11 @@ function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolea
 		typExprFieldDecorators: collectFieldDecorators(t),
 		typExprTypeName: t.typeName,
 	}, loc);
+	if (t.sym != null) {
+		node.resolvedSym = t.sym;
+		node.flags = node.flags.incl(NodeFlag.BoundSym);
+	}
+	return node;
 }
 
 // Build a TypeArray node for Array<T> / SizedArray<T,N> / Span<T>.
@@ -396,7 +401,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 		if (impl && (t.kind == TypeKind.Alias || t.typeName == "")) {
 			throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
 		}
-		const result = atomicTypeNode(nameOrDefault(t, "<cycle>"), loc);
+		const result = namedTypeNode(nameOrDefault(t, "<cycle>"), t.typeName != "" ? t.sym : null, loc);
 		result.nodeType = t;
 		return result;
 	}
