@@ -625,7 +625,8 @@ static msTimer msTimerPop(msTimerHeap* h) {
  * Pop expired timers, complete their futures.
  * Returns ms until next timer (+1 margin like standard reference), or -1 if no timers. */
 int msProcessTimers(msDispatcher* d, bool* didWork) {
-	(void)d; /* timers are process-global here — see gTimers */
+	/* timers are process-global here — see gTimers; `d` is the caller's
+	 * callback queue, drained after every fired timer */
 	int64_t now = msMonoTimeMs();
 	for (;;) {
 		msTimerLock();
@@ -647,14 +648,17 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 		*didWork = true;
 		/* Everything below runs WITHOUT the lock: a timer callback may arm or
 		 * cancel timers, and the spinlock is not reentrant. */
-		if (t.fut != NULL) { msFutureCompleteVoid(t.fut); continue; }
-		if (t.cancelled || t.cb.fn == NULL) {
+		if (t.fut != NULL) {
+			msFutureCompleteVoid(t.fut);
+		} else if (t.cancelled || t.cb.fn == NULL) {
 			if (t.cb.env != NULL) msPostEnvRelease(t.cb.env);
 			continue;
+		} else {
+			((void(*)(void*))t.cb.fn)(t.cb.env);
+			/* An interval's env rides its re-armed entry; only a one-shot releases. */
+			if (t.periodMs == 0 && t.cb.env != NULL) msPostEnvRelease(t.cb.env);
 		}
-		((void(*)(void*))t.cb.fn)(t.cb.env);
-		/* An interval's env rides its re-armed entry; only a one-shot releases. */
-		if (t.periodMs == 0 && t.cb.env != NULL) msPostEnvRelease(t.cb.env);
+		msProcessCallbacks(d, didWork);
 	}
 	msTimerLock();
 	int64_t nextAt = gTimers.len > 0 ? gTimers.data[0].finishAtMs : -1;
@@ -696,8 +700,9 @@ bool msRunOnce(int timeoutMs) {
 	msDispatcher* d = msGetDispatcher();
 	bool didWork = false;
 
-	/* Step 1: Process expired timers */
-	int nextTimer = msProcessTimers(d, &didWork);
+	/* Step 1: Process expired timers unless callbacks are pending (Step 2's
+	 * timeout is then 0 and Step 3 runs them ahead of the timers) */
+	int nextTimer = msDequeLen(&d->callbacks) == 0 ? msProcessTimers(d, &didWork) : -1;
 
 	/* Step 1b: Drain actor mailboxes FIRST — actors may re-enqueue and write
 	 * to the wake pipe. Processing them before the selector ensures the
@@ -805,10 +810,10 @@ bool msRunOnce(int timeoutMs) {
 	}
 #endif
 
-	/* Step 3: Process timers again (may have expired during sleep) */
+	/* Step 3: Drain callbacks, then timers (may have expired during sleep),
+	 * then the callbacks those timers queued */
+	msProcessCallbacks(d, &didWork);
 	msProcessTimers(d, &didWork);
-
-	/* Step 4: Drain callback deque */
 	msProcessCallbacks(d, &didWork);
 
 	/* Step 5: I/O engine poll is driven by std/net event loops, not here.

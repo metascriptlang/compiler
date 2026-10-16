@@ -100,6 +100,7 @@ void msDrainUntilIdle(void) {
 	int idleSweeps = 0;
 	while (idleSweeps < 2) {
 		bool didWork = false;
+		msProcessCallbacks(d, &didWork);
 		int nextTimer = msProcessTimers(d, &didWork);
 		msProcessCallbacks(d, &didWork);
 		if (didWork) { idleSweeps = 0; continue; }
