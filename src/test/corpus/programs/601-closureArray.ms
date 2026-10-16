@@ -1,5 +1,5 @@
 // @maxrss: 30
-// @stdout: closure-array acc=
+// @stdout: closure-array acc=0
 // note: bug033 native repro: array of closures freed at scope exit. Was a misaligned-access crash; runs through C DRC here (the inline-test tier never touched the crash path).
 
 // bug033 native repro — array of closures freed at scope exit.

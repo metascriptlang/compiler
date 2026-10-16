@@ -3,7 +3,6 @@
 
 import { compileToC } from "../helpers";
 import { hasError, strictErrorCount } from "./helpers";
-import { writeFile } from "std/fs";
 
 test "self-ref field passed to ccgIntroducedPtr function" {
 	const src = `
@@ -24,12 +23,8 @@ function testFn(source: MyType): boolean {
 }
 `;
 	const r = compileToC(src);
-	// Checker emits warning about self-ref auto-promotion — this is expected
-	// The real verification is: 70 Type→Type* errors eliminated in full build
-	if (r.ok) {
-		// Verify the fix: should NOT dereference self-ref field when passing to ccgIntroducedPtr func
-		assert r.value.indexOf("*((*source).inner)") < 0;
-	}
+	assert r.ok, r.error;
+	assert r.value.indexOf("*((*source).inner)") < 0;
 }
 
 test "a value struct that holds itself on any by-value path is refused at its declaration" {

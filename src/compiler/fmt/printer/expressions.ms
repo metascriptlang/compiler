@@ -433,9 +433,13 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	return docGroup(newParts);
 }
 
+function isUnaryLevel(node: Node): boolean {
+	return node.kind == NodeKind.UnaryExpr || node.kind == NodeKind.UpdateExpr || node.kind == NodeKind.AwaitExpr;
+}
+
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAssertionData;
-	const inner = d.asExpr.kind == NodeKind.TypeAssertion ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
+	const inner = d.asExpr.kind == NodeKind.TypeAssertion || (d.asType != "!" && isUnaryLevel(d.asExpr)) ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
 	if (d.asType == "!") return docGroup([inner, docText("!")]);
 	return docGroup([
 		inner,

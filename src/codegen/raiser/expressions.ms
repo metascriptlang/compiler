@@ -192,6 +192,8 @@ function convClassOf(t: Type | null): int32 {
 		TypeKind.Uint32 => RaiserConvClass.U32 as int32,
 		TypeKind.Uint16 => RaiserConvClass.U16 as int32,
 		TypeKind.Uint8 => RaiserConvClass.U8 as int32,
+		TypeKind.Char => RaiserConvClass.Char as int32,
+		TypeKind.Enum => RaiserConvClass.I64 as int32,
 		_ => -1,
 	};
 }

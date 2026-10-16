@@ -1,5 +1,5 @@
 // @maxrss: 40
-// @stdout: leak-switch-arm-temp acc=
+// @stdout: leak-switch-arm-temp acc=0
 // The DRC half of this guard is C-only (js has no refcounting), but the js lane
 // still earns its place: it re-derives `acc` through an independent backend, so
 // a lowering bug that changed which arms run breaks parity even where the

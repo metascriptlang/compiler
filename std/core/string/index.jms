@@ -37,8 +37,8 @@ export extern function String<T>(val: T): string;
 
 // ===== Character Construction =====
 
-export function fromCharCode(this typeof String, code: int32): string {
-	@emit(`return globalThis.String.fromCharCode(Number(${code}) & 0xFFFF);`);
+export function fromCharCode(this typeof String, ...codes: int32[]): string {
+	@emit(`return globalThis.String.fromCharCode(...${codes}.map((code) => Number(code) & 0xFFFF));`);
 	unreachable;
 }
 
@@ -89,22 +89,29 @@ export function padEnd(this s: string, targetLen: int32, pad: string): string {
 	unreachable;
 }
 
-// strtod/strtoll parity: unparseable input is 0, never NaN.
-export function parseFloat(this s: string): number {
-	@emit(`var v = Number.parseFloat(${s}); return Number.isNaN(v) ? 0 : v;`);
+export extern function parseFloat(this s: string): number from "Number.parseFloat(#)";
+
+function intPrefix(s: string): string {
+	@emit(`var m = /^[+-]?(?:0[xX][0-9a-fA-F]+|[0-9]+)/.exec(${s}.trimStart());
+return m === null ? "" : m[0];`);
 	unreachable;
 }
 
-// int64 is a BigInt on this backend, so the decimal text is parsed exactly by
-// BigInt() — Number.parseInt would round the value before it ever gets here.
-// The regex keeps parseInt's own tolerance (leading sign, surrounding space)
-// and its 0-for-garbage answer.
-export function parseInt(this s: string): int64 {
-	@emit(`var m = /^([+-]?\\d+)$/.exec(${s}.trim());
-if (m !== null) return BigInt(m[1]);
-var v = Number.parseInt(${s}, 10);
-return Number.isNaN(v) ? 0n : BigInt(v);`);
+function intPrefixValue(t: string): bigint {
+	@emit(`var neg = ${t}[0] === "-";
+var v = globalThis.BigInt(neg || ${t}[0] === "+" ? ${t}.slice(1) : ${t});
+return neg ? -v : v;`);
 	unreachable;
+}
+
+export function parseInt(this s: string): int64 {
+	const text = intPrefix(s);
+	if (text == "") return 0;
+	const v = intPrefixValue(text);
+	if (v < -9223372036854775808n || v > 9223372036854775807n) {
+		throw new Error(`value ${text} not in range -9223372036854775808 .. 9223372036854775807`);
+	}
+	return v as int64;
 }
 
 // Native strings carry no separate allocation — capacity is the byte length.
@@ -151,7 +158,21 @@ export function msNumberToString(n: number): string {
 	unreachable;
 }
 
+function checkRadix(radix: number): void {
+	@emit(`if (!(${radix} >= 2 && ${radix} < 37)) {
+		const m = "toString() radix argument must be between 2 and 36";
+		if (typeof process === "object" && process !== null && typeof process.exit === "function") {
+			process.stderr.write("Error: " + m + "\\n");
+			process.exit(1);
+		}
+		const e = new Error(m);
+		e.msDefect = true;
+		throw e;
+	}`);
+}
+
 export function msNumberToStringRadix(n: number, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
@@ -172,11 +193,13 @@ export function msUint64ToString(n: uint64): string {
 }
 
 export function msIntToStringRadix(n: int64, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
 
 export function msUint64ToStringRadix(n: uint64, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }

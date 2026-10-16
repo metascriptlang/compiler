@@ -61,3 +61,7 @@ import "./noinlinePragma";
 import "./copiedBodyHeader";
 import "./solanaVaultHost";
 import "./externPattern";
+import "./notCallable";
+import "./callResultInPlace";
+import "./websocket";
+import "./websocketServer";

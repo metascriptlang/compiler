@@ -1,5 +1,5 @@
 // @maxrss: 40
-// @stdout: leak-vardecl-sc hits=
+// @stdout: leak-vardecl-sc hits=1500000
 // note: FIXED by callHoist: a fresh RC call in a short-circuit operand of a VARDECL initializer (`const x = a && provide(i).ok`) leaked — the vardecl path used to skip conditional-eval initializers. Fix routes vardecl/assign initializers through lowerBoolCond (same flag/nested-if as if-cond). Permanent regression guard — was 277MB leaking, now flat.
 
 // FIXED (callHoist b/vardecl short-circuit) — a fresh RC call in a short-circuit

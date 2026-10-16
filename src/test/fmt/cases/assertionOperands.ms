@@ -15,3 +15,16 @@ test "fmt: a unary inside another unary gains no parentheses" {
 test "fmt: minus over minus keeps what the source wrote" {
 	assert assertFmtPreservesAst("const x: int32 = 1; const a = -(-x);");
 }
+
+test "fmt: a prefix or update operand of as gains no parentheses" {
+	assert assertFmtLossless("const a = typeof x as string;\nconst b = ++i as int32;\nconst c = i++ as int32;\n");
+}
+
+test "fmt: an await operand of as gains no parentheses" {
+	assert assertFmtLossless("const d = await p as int32;\n");
+}
+
+test "fmt: parentheses around an as under a prefix operator stay" {
+	assert assertFmtLossless("const a = -(x as int8);\nconst b = typeof (x as T);\n");
+	assert assertFmtPreservesAst("const a = -(x as int8) as int16;");
+}

@@ -15,7 +15,6 @@ import { inferredType, noneType, isUnknownType, isPointerShapedForUnknown, typeD
 import { isAssignable, typeRelation, TypeRelation } from "../../checker/compat";
 import { isPointerType, getTypeDesc } from "../../codegen/c/types";
 import { createCGen } from "../../codegen/c/context";
-import { hasErrors } from "../../checker/context";
 import { checkSource } from "./helpers";
 import { resolveSimpleTypeStr } from "../../transform/util";
 import { createTransformContext, freshTempSym } from "../../transform/context";
@@ -67,5 +66,5 @@ test "Inferred at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	assert ctx != null;
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, inferredType());
-	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";
+	assert g.errors.length > 0 && g.errors[0].message.contains("internal: unresolved type"), "seam went silent again — gateFlaglessUnknown must addCGenError (codegen/c/types.ms)";
 }

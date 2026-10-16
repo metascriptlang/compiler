@@ -12,7 +12,7 @@ import { peelTransparentInstance, literalBase, classAncestorInstance, errorType,
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
+import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue, floatTruncatesInto } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
@@ -1182,14 +1182,32 @@ function overflowsInt64Here(expr: Node): boolean {
 
 export function fitIntegerConstant(ctx: CheckerContext, expr: Node, exprType: Type | null, formal: Type | null): Node {
 	const none = null as unknown as Node;
-	if (formal == null || exprType == null || !isIntegerType(exprType)) return none;
+	if (formal == null || exprType == null) return none;
 	const slot = isMaybeType(formal) && formal.typeReturn != null ? formal.typeReturn : formal;
-	if (!isIntegerType(slot) || !isFoldedIntegerConstant(expr)) return none;
+	if (slot.kind == TypeKind.Char) return fitCharConstant(ctx, expr, exprType, slot);
+	if (!isIntegerType(exprType) || !isIntegerType(slot) || !isFoldedIntegerConstant(expr)) return none;
 	const exact = exactUntypedInteger(expr, 0);
 	if (exact == null) return none;
 	const value = integerValueOf(exact);
 	if (integerValueFits(value, slot)) return typedIntegerLiteral(value, slot, expr.location);
 	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(slot), expr.location.line, expr.location.column);
+	return wrapInConv(expr, slot);
+}
+
+function fitCharConstant(ctx: CheckerContext, expr: Node, exprType: Type, slot: Type): Node {
+	const folded = foldedNumber(expr);
+	if (folded == null || exprType.kind == TypeKind.Char) return null as unknown as Node;
+	const value = (folded.data as NumberLiteralData).intVal;
+	if (constHoldsFloat(folded)) {
+		addError(ctx, "implicit " + typeDisplayName(exprType) + " → char conversion takes the float " + floatValueText(constFloatValue(folded))
+			+ ", and a float never becomes an integer implicitly — write an explicit 'as char'", expr.location.line, expr.location.column);
+	} else if (constIsUnsignedHigh(folded)) {
+		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to char", expr.location.line, expr.location.column);
+	} else if (!foldedIntFits(value, slot)) {
+		addError(ctx, "cannot convert " + int64ToDecimal(value) + " to char", expr.location.line, expr.location.column);
+	} else {
+		return null as unknown as Node;
+	}
 	return wrapInConv(expr, slot);
 }
 
@@ -1214,6 +1232,7 @@ function foldedIntFits(value: int64, target: Type): boolean {
 		TypeKind.Uint16 => value >= 0 && value <= 65535,
 		TypeKind.Uint32 => value >= 0 && value <= 4294967295,
 		TypeKind.Uint64 => value >= 0,
+		TypeKind.Char   => value >= 0 && value <= 255,
 		_ => false,
 	};
 }
@@ -1297,9 +1316,15 @@ export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): 
 		reportConstEnumCast(ctx, expr, target);
 		return;
 	}
-	if (!isIntegerType(target) || isUnsignedIntegerType(target)) return;
+	if (!isIntegerType(target) && target.kind != TypeKind.Char) return;
 	const folded = constantLiteralOf(expr, 0);
-	if (folded == null || !isNodeIntLit(folded)) return;
+	if (folded == null || folded.kind != NodeKind.NumberLiteral) return;
+	if (constHoldsFloat(folded)) {
+		const v = constFloatValue(folded);
+		if (!floatTruncatesInto(v, target)) addError(ctx, "cannot convert " + floatValueText(v) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+		return;
+	}
+	if (isUnsignedIntegerType(target) || !isNodeIntLit(folded)) return;
 	const value = (folded.data as NumberLiteralData).intVal;
 	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) {
 		addError(ctx, "cannot convert " + uint64ToDecimal(value as uint64) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
@@ -2578,12 +2603,6 @@ function doubleFitsInt(v: number, target: Type): boolean {
 	return back == v;
 }
 
-function roundedToFloat32(v: number): number {
-	const narrowed = v as float32;
-	const widened = narrowed as float64;
-	return widened;
-}
-
 function float32Overflows(v: number): boolean {
 	return (v >= FLOAT32_ROUNDS_TO_INFINITY || v <= -FLOAT32_ROUNDS_TO_INFINITY) && v != Infinity && v != -Infinity;
 }
@@ -2600,18 +2619,6 @@ function intExactInMantissa(magnitude: uint64, mantissaBits: int32): boolean {
 	if (rest == 0) return true;
 	while ((rest & 1) == 0) rest = rest >> 1;
 	return (rest >> (mantissaBits as uint64)) == 0;
-}
-
-function constHoldsFloat(folded: Node): boolean {
-	const t = folded.nodeType;
-	if (t != null && isIntegerType(t)) return false;
-	if (t != null && isFloatSlot(t)) return true;
-	return (folded.data as NumberLiteralData).isFloat;
-}
-
-function constFloatValue(folded: Node): number {
-	const v = (folded.data as NumberLiteralData).value;
-	return folded.nodeType != null && folded.nodeType.kind == TypeKind.Float32 ? roundedToFloat32(v) : v;
 }
 
 function constIsUnsignedHigh(folded: Node): boolean {

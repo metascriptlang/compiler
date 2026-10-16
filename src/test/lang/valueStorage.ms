@@ -479,7 +479,36 @@ enum AggregateVectorFlag {
 	F64,
 }
 
+function returnedAggregateSetVector(): Vec<BitSet<AggregateVectorFlag>> {
+	const value = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	let values: Vec<BitSet<AggregateVectorFlag>> = [];
+	values.push(value);
+	return values;
+}
 
+test "valueStorage: returned aggregate-bitset vectors preserve independent value copies" {
+	const original = returnedAggregateSetVector();
+	let copied = original;
+	copied[0] = copied[0].excl(AggregateVectorFlag.F0);
+	assert original[0].has(AggregateVectorFlag.F0);
+	assert original[0].has(AggregateVectorFlag.F64);
+	assert !copied[0].has(AggregateVectorFlag.F0);
+	assert copied[0].has(AggregateVectorFlag.F64);
+	copied = new Array(0);
+	assert original[0].has(AggregateVectorFlag.F0);
+}
+
+test "valueStorage: nested aggregate-bitset vector copies retain independent inner buffers" {
+	const inner = returnedAggregateSetVector();
+	const original: Vec<Vec<BitSet<AggregateVectorFlag>>> = [inner];
+	let copied = original;
+	copied[0][0] = copied[0][0].excl(AggregateVectorFlag.F64);
+	assert original[0][0].has(AggregateVectorFlag.F64);
+	assert !copied[0][0].has(AggregateVectorFlag.F64);
+	assert copied[0][0].has(AggregateVectorFlag.F0);
+	copied = new Array(0);
+	assert original[0][0].has(AggregateVectorFlag.F64);
+}
 
 struct AggregateBitSetKey { bits: BitSet<AggregateVectorFlag>; id: int32; }
 

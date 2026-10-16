@@ -3,7 +3,7 @@
 // Verifies that Result.ok/err static factory methods are properly parsed,
 // type-checked, and lowered to ObjectLiteral construction in C codegen.
 
-import { compileToC, contains } from "../helpers";
+import { compileToC } from "../helpers";
 import { fullPipeline, findFnDecl } from "./helpers";
 import {
 	Node, NodeKind, ProgramData, ExportDeclData,
@@ -33,33 +33,20 @@ test "parse: extern without static is instance method" {
 test "E2E: Result.ok lowers to ObjectLiteral" {
 	const src = "export function wrap(x: number): Result<number, string> { return Result.ok(x); }";
 	const c = compileToC(src);
-	console.log("=== RESULT OK ===");
-	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
-	// Should NOT contain (*Result) — that means it's still treating Result as a variable
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E: Result.err lowers to ObjectLiteral" {
 	const src = "export function fail(msg: string): Result<number, string> { return Result.err(msg); }";
 	const c = compileToC(src);
-	console.log("=== RESULT ERR ===");
-	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
-	assert c.ok;
+	assert c.ok, c.error;
 }
 
 test "E2E: Result.ok no (*Result) in C output" {
 	const src = "export function wrap(x: number): Result<number, string> { return Result.ok(x); }";
 	const c = compileToC(src);
-	if (c.ok) {
-		// The C output should NOT contain "(*Result)" — static call, not instance deref
-		let hasDeref = false;
-		let i = 0;
-		while (i < c.value.length - 9) {
-			if (c.value.slice(i, i + 10) == "(*Result).") { hasDeref = true; }
-			i = i + 1;
-		}
-		assert !hasDeref;
-	}
+	assert c.ok, c.error;
+	assert !c.value.contains("(*Result).");
 }
 
 // ===== AST shape after transform =====

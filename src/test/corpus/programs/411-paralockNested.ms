@@ -1,7 +1,7 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 20
-// @stdout: paralock-nested check=
+// @stdout: paralock-nested check=99990 total=100000
 // @serial
 // note: PARALOCK guard: spawn + actor + async crossed, 100k-iteration massive interleave on the shared worker pool. Standing answer to 'did my change break PARALOCK seamlessly?'. The final marker only prints if the actor tag round-trips. Bound 80-to-20 + iters 20000-to-100000 (2026-09-04 RSS audit): the concurrency runtime steady-state is ~8.6MB (Linux drc) - the old 80 bound left 71MB slack, blind under 3.9KB/iter; 20 keeps 2.3x platform headroom while a per-iter leak of the churned population (2 spawn futures + actor reply + async chain ~ 570B/iter ~ 34MB) now trips.
 

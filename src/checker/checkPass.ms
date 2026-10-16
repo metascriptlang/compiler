@@ -20,13 +20,13 @@ import { join, normalize, isAbsolute } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
-import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
+import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf, getProperty } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx } from "./instantiate";
+import { lookupModuleCtx, lookupModuleProgram, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
 import { isOutParam, declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
@@ -37,15 +37,15 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
+import { checkExpr, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, usedBeforeDeclaration } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, refuseUnwrittenOut, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
-import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
+import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
+import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -693,6 +693,14 @@ function signatureTypeOf(fn: Node, ctx: CheckerContext, loc: SourceLocation): Ty
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
+	const hoistedOnDemand = _bindingsCheckedOnDemand.get(node);
+	if (hoistedOnDemand != null) {
+		_bindingsCheckedOnDemand.delete(node);
+		for (const h of hoistedOnDemand) ctx.pendingHoisted.push(h);
+		varDecl(ctx.initTracker, d.declName);
+		markInitialized(ctx.initTracker, d.declName);
+		return;
+	}
 	if (isComptimeNodeAliasDecl(d)) {
 		ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
 		checkExpr(ctx, d.initializer, null);
@@ -731,6 +739,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// semProcAux sets s.typ from semParamList before the body is analysed).
 	// Restricted to ArrowFunction/FunctionExpr so `const x = x + 1` keeps TDZ.
 	let preRegisteredSelfRefSym: Symbol | null = null;
+	let typedBySignature = false;
 	if (d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrowFunction
 				|| d.initializer.kind == NodeKind.FunctionExpr)) {
@@ -741,16 +750,19 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			defineOrError(ctx, preRegisteredSelfRefSym, node);
 		} else if (selfRefType != null && isUnresolvedType(hoisted.symbolType)) {
 			hoisted.symbolType = selfRefType;
+			typedBySignature = true;
 		}
 	}
 	const forward = lookupLocal(ctx.table, d.declName);
 	const forwardLocal = forward != null && forward.declNode == node && _forwardLocals.has(forward) ? forward : null;
-	if (forwardLocal != null) _routinesInFlight.push(forwardLocal);
+	const binding = forward != null && forward.declNode == node && hasFlag(forward, SymbolFlag.Global) ? forward : null;
+	if (binding != null) binding.state = SymbolState.Checking;
+	const typing = forwardLocal != null ? forwardLocal
+		: binding != null && d.declType == "" && !typedBySignature ? binding : null;
+	if (typing != null) _routinesInFlight.push(typing);
 	checkExpr(ctx, d.initializer, declType);
-	if (forwardLocal != null) {
-		_routinesInFlight.pop();
-		_forwardLocals.delete(forwardLocal);
-	}
+	if (typing != null) _routinesInFlight.pop();
+	if (forwardLocal != null) _forwardLocals.delete(forwardLocal);
 	if (ctx.targetOs == "solana" && d.declKind == DeclKind.Const && d.initializer != null
 			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
 		foldUserOperatorConstant(ctx, d.initializer, declType);
@@ -830,6 +842,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		checkStaticStorageDecl(ctx, node, d);
 	}
 	refuseStoredView(ctx, node, d, varType);
+	if (binding != null) binding.state = SymbolState.Checked;
 	// `let x;` with no initializer → NOT marked → will warn on use
 }
 
@@ -1116,6 +1129,7 @@ function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, f
 
 let _routinesInFlight: Symbol[] = [];
 let _methodsCheckedOnDemand: HashSet<Node> = new HashSet<Node>();
+let _bindingsCheckedOnDemand: HashMap<Node, Node[]> = new HashMap<Node, Node[]>();
 let _discardedInFlightCalls: DiscardedCall[] = [];
 
 interface DiscardedCall {
@@ -1179,7 +1193,7 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	if (at >= 0) {
 		const discarded = discardedCall(ctx, read);
 		if (discarded != null) _discardedInFlightCalls.push({ call: discarded, sym });
-		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read);
+		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read, "the return type of");
 		else if (!local && ctx.currentFunction == sym) readOwnReturn(ctx, sym, read);
 		return;
 	}
@@ -1188,10 +1202,48 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 		return;
 	}
 	if (ctx.decoratorsPending) return;
-	const bodyCtx = pickBodyCtx(sym.modulePath, ctx, sym);
-	if (sym.modulePath != "" && bodyCtx.modulePath != sym.modulePath) return;
-	if (decl.kind == NodeKind.FunctionDecl) demandFunctionBody(bodyCtx, decl, sym);
-	else demandMethodBody(bodyCtx, decl, sym);
+	const outer = keptComptimeOuter(ctx, sym);
+	const bodyCtx = enterOwnerModule(ctx, sym);
+	const owned = sym.declNode;
+	const fnAfter = sym.symbolType;
+	if (bodyCtx != null && owned != null && fnAfter != null && fnAfter.kind == TypeKind.Function && isUnresolvedType(fnAfter.typeReturn)) {
+		if (owned.kind == NodeKind.FunctionDecl) demandFunctionBody(bodyCtx, owned, sym);
+		else if (owned.kind == NodeKind.MethodDecl) demandMethodBody(bodyCtx, owned, sym);
+	}
+	restoreComptimeOuter(outer);
+}
+
+let _boundModuleFn: (modulePath: string) => CheckerContext | null = (modulePath: string): CheckerContext | null => null;
+
+export function registerBoundModuleFn(fn: (modulePath: string) => CheckerContext | null): void {
+	_boundModuleFn = fn;
+}
+
+function enterOwnerModule(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
+	if (!isForeign(ctx, sym)) return ctx;
+	const owner = pickBodyCtx(sym.modulePath, ctx, sym);
+	if (owner.modulePath == sym.modulePath) return owner;
+	const bound = isEngineCheckMode() ? null : _boundModuleFn(sym.modulePath);
+	if (bound == null || bound.modulePath != sym.modulePath) return null;
+	const program = lookupModuleProgram(bound.modulePath);
+	if (program != null) enterComptimeOuter(bound, program);
+	return bound;
+}
+
+function isForeign(ctx: CheckerContext, sym: Symbol): boolean {
+	return sym.modulePath != "" && sym.modulePath != ctx.modulePath;
+}
+
+function keptComptimeOuter(ctx: CheckerContext, sym: Symbol): ComptimeOuterCtx | null {
+	const o = getComptimeOuterCtx();
+	if (o == null || !isForeign(ctx, sym) || isEngineCheckMode()) return null;
+	return { program: o.program, registry: o.registry, graph: o.graph, module: o.module, preludeCtx: o.preludeCtx };
+}
+
+function restoreComptimeOuter(kept: ComptimeOuterCtx | null): void {
+	if (kept == null) return;
+	setOuterProgramForComptime(kept.program as Node);
+	setOuterCheckContext(kept.registry, kept.graph, kept.module, kept.preludeCtx);
 }
 
 function demandFunctionBody(ctx: CheckerContext, decl: Node, sym: Symbol): void {
@@ -1257,14 +1309,48 @@ function settleDiscardedCalls(sym: Symbol): void {
 	_discardedInFlightCalls.shrink(kept);
 }
 
-function refuseInferenceCycle(ctx: CheckerContext, at: number, read: Node): void {
+function refuseInferenceCycle(ctx: CheckerContext, at: number, read: Node, what: string): void {
 	const head = routineDisplayName(ctx, _routinesInFlight[at]);
 	const chain: string[] = [];
 	for (let i = at; i < _routinesInFlight.length; i += 1) chain.push(routineDisplayName(ctx, _routinesInFlight[i]));
 	chain.push(head);
 	const through = chain.slice(1, chain.length - 1).map((n: string): string => "'" + n + "'").join(", ");
-	addError(ctx, `cannot infer the return type of '${head}': ${through} ${chain.length > 3 ? "read" : "reads"} it while '${head}' is still being checked (${chain.join(" -> ")}); annotate the return type of '${head}'`,
+	addError(ctx, `cannot infer ${what} '${head}': ${through} ${chain.length > 3 ? "read" : "reads"} it while '${head}' is still being checked (${chain.join(" -> ")}); annotate ${what} '${head}'`,
 		read.location.line, read.location.column);
+}
+
+function demandBindingType(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl || decl.resolvedSym != sym) return;
+	const d = decl.data as VariableDeclData;
+	if (d.declType != "" || d.initializer == null) return;
+	if (sym.state == SymbolState.Checking) {
+		const at = _routinesInFlight.indexOf(sym);
+		if (at < 0) return;
+		if (at == _routinesInFlight.length - 1) {
+			addError(ctx, `cannot infer the type of '${sym.name}': its own initializer reads it; annotate the type of '${sym.name}'`, read.location.line, read.location.column);
+		} else {
+			refuseInferenceCycle(ctx, at, read, "the type of");
+		}
+		return;
+	}
+	if (ctx.decoratorsPending) return;
+	const outer = keptComptimeOuter(ctx, sym);
+	const bodyCtx = enterOwnerModule(ctx, sym);
+	if (bodyCtx != null) checkBindingOnDemand(bodyCtx, sym);
+	restoreComptimeOuter(outer);
+}
+
+function checkBindingOnDemand(ctx: CheckerContext, sym: Symbol): void {
+	const decl = sym.declNode;
+	const top = moduleScopeOf(ctx);
+	if (decl == null || top.symbols.get(sym.nameId) != sym) return;
+	const saved = enterDeclarationState(ctx, top);
+	const hoistMark = ctx.pendingHoisted.length;
+	checkStmt(ctx, decl);
+	_bindingsCheckedOnDemand.set(decl, ctx.pendingHoisted.slice(hoistMark, ctx.pendingHoisted.length));
+	ctx.pendingHoisted.shrink(hoistMark);
+	leaveDeclarationState(ctx, saved);
 }
 
 function routineDisplayName(ctx: CheckerContext, sym: Symbol): string {
@@ -2219,6 +2305,7 @@ function spliceStatementsAt(stmts: Node[], at: int32, picked: Node[]): void {
 interface BlockPosition {
 	stmts: Node[];
 	at: int32;
+	scope: Cursor<Scope>;
 }
 
 let _blocksInFlight: BlockPosition[] = [];
@@ -2254,20 +2341,24 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 	_forwardLocals.add(sym);
 }
 
-function laterDeclarationNote(name: string): string {
+function undefinedVariableMessage(ctx: CheckerContext, name: string): string {
+	const undefinedName = "Undefined variable '" + name + "'";
 	for (let b = _blocksInFlight.length - 1; b >= 0; b -= 1) {
 		const pos = _blocksInFlight[b];
-		for (let i = pos.at + 1; i < pos.stmts.length; i += 1) {
+		for (let i = pos.at; i < pos.stmts.length; i += 1) {
 			const s = pos.stmts[i];
-			if (s.kind == NodeKind.FunctionDecl && (s.data as FunctionDeclData).fnName == name) {
-				return ": '" + name + "' is declared later in this block, after a statement that runs first; a local function declaration is visible only from the run of function declarations it belongs to, so move '" + name + "' up next to them";
+			if (i > pos.at && s.kind == NodeKind.FunctionDecl && (s.data as FunctionDeclData).fnName == name) {
+				return undefinedName + ": '" + name + "' is declared later in this block, after a statement that runs first; a local function declaration is visible only from the run of function declarations it belongs to, so move '" + name + "' up next to them";
 			}
-			if (s.kind == NodeKind.VariableDecl && (s.data as VariableDeclData).declName == name) {
-				return ": '" + name + "' is declared later in this block, and a const or let is not visible before its declaration; declare it first, or write the functions as adjacent function declarations";
-			}
+			if (s.kind != NodeKind.VariableDecl || (s.data as VariableDeclData).declName != name) continue;
+			const d = s.data as VariableDeclData;
+			const blockScoped = d.declKind != DeclKind.Var && (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr);
+			if (blockScoped && !readIsDeferred(ctx, pos.scope)) return usedBeforeDeclaration(name);
+			if (i == pos.at) return undefinedName;
+			return undefinedName + ": '" + name + "' is declared later in this block, and a const or let is not visible before its declaration; declare it first, or write the functions as adjacent function declarations";
 		}
 	}
-	return "";
+	return undefinedName;
 }
 
 function checkBlock(ctx: CheckerContext, node: Node): void {
@@ -2291,7 +2382,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 			continue;
 		}
 		if (ctx.currentFunction != null && isLocalFunctionStmt(d.statements[i])) forwardDeclareLocalRun(ctx, d.statements, i);
-		_blocksInFlight.push({ stmts: d.statements, at: i });
+		_blocksInFlight.push({ stmts: d.statements, at: i, scope: ctx.table.current });
 		const _cs0 = performance.now();
 		checkStmt(ctx, d.statements[i]);
 		const _cs1 = performance.now();
@@ -2897,16 +2988,25 @@ export function threePassTimings(): float64[] {
 }
 
 export function runThreePasses(ctx: CheckerContext, program: Node): void {
+	bindProgram(ctx, program);
+	checkBoundProgram(ctx, program);
+}
+
+function enterComptimeOuter(ctx: CheckerContext, program: Node): void {
+	setOuterProgramForComptime(program);
+	if (ctx.exportRegistry != null && ctx.moduleGraph != null && ctx.currentModule != null && ctx.preludeCtx != null) {
+		setOuterCheckContext(ctx.exportRegistry, ctx.moduleGraph, ctx.currentModule, ctx.preludeCtx);
+	}
+}
+
+function bindProgram(ctx: CheckerContext, program: Node): void {
 	// Phase 8b: expose this module's outer state to the @comptime evaluator
 	// so eager-fold (fired inside checkProgramBody) can resolve names and
 	// inject cross-module decls into the synthetic Program. Orchestrator
 	// Phase 2 enters here directly (not via checkProgramWithRegistry), so
 	// this is the entry point that production compile actually hits when
 	// processing module @comptime blocks.
-	setOuterProgramForComptime(program);
-	if (ctx.exportRegistry != null && ctx.moduleGraph != null && ctx.currentModule != null && ctx.preludeCtx != null) {
-		setOuterCheckContext(ctx.exportRegistry, ctx.moduleGraph, ctx.currentModule, ctx.preludeCtx);
-	}
+	enterComptimeOuter(ctx, program);
 	const _c0 = performance.now();
 	collectTopLevel(ctx, program);
 	ctx.decoratorsPending = true;
@@ -2918,14 +3018,19 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	const _c2 = performance.now();
 	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
 	const _c3 = performance.now();
+	_tCollect = _tCollect + (_c1 - _c0);
+	_tResolve = _tResolve + (_c2 - _c1);
+	_tFlow = _tFlow + (_c3 - _c2);
+}
+
+function checkBoundProgram(ctx: CheckerContext, program: Node): void {
+	enterComptimeOuter(ctx, program);
+	const _c3 = performance.now();
 	checkProgramBody(ctx, program);
 	reportConverterCycles(ctx);
 	const _c4 = performance.now();
 	if (ctx.modulePath != "") reportUnusedSymbols(ctx, program);
 	const _c5 = performance.now();
-	_tCollect = _tCollect + (_c1 - _c0);
-	_tResolve = _tResolve + (_c2 - _c1);
-	_tFlow = _tFlow + (_c3 - _c2);
 	_tBody = _tBody + (_c4 - _c3);
 	_tUnused = _tUnused + (_c5 - _c4);
 }
@@ -3757,6 +3862,26 @@ function checkProgramCore(
 	adoptedDecls: HashMap<Node, Symbol> | null,
 	applyModulePasses: boolean = false,
 ): CheckerContext {
+	return finishModuleCheck(bindModuleForCheck(program, registry, graph, mod, preludeCtx, cancelCtx, cancelVersion, adoptedDecls, applyModulePasses));
+}
+
+export interface BoundModule {
+	ctx: CheckerContext;
+	program: Node;
+	gensymMark: int32;
+}
+
+export function bindModuleForCheck(
+	program: Node,
+	registry: ExportRegistry | null,
+	graph: ModuleGraph | null,
+	mod: Module | null,
+	preludeCtx: CheckerContext,
+	cancelCtx: CancelCtx | null,
+	cancelVersion: int32,
+	adoptedDecls: HashMap<Node, Symbol> | null,
+	applyModulePasses: boolean,
+): BoundModule {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
 	const ctx = graph != null && mod != null ? createModuleContextWithCache(graph, mod, sharedCache) : createContextWithCache(sharedCache);
@@ -3783,7 +3908,18 @@ function checkProgramCore(
 	drainSeedSymbols(ctx);
 	const outerGensym = beginGensymUnit();
 	if (applyModulePasses) callApplyModulePasses(ctx, program);
-	runThreePasses(ctx, program);
+	bindProgram(ctx, program);
+	const gensymMark = templateGensymMark();
+	rewindTemplateGensym(outerGensym);
+	return { ctx, program, gensymMark };
+}
+
+export function finishModuleCheck(bound: BoundModule): CheckerContext {
+	const ctx = bound.ctx;
+	const program = bound.program;
+	const outerGensym = beginGensymUnit();
+	rewindTemplateGensym(bound.gensymMark);
+	checkBoundProgram(ctx, program);
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
@@ -3916,8 +4052,9 @@ export function checkProgramWithRegistryCancellable(
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
+registerDemandBinding(demandBindingType);
 registerSelfReadType(selfReadType);
-registerLaterDeclarationNote(laterDeclarationNote);
+registerUndefinedVariableMessage(undefinedVariableMessage);
 
 // ===== Tests =====
 

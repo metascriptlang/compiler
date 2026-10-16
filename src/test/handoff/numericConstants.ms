@@ -106,3 +106,48 @@ test "numeric constants: a runtime value keeps the general wording" {
 	assert hasError("function f(v: number): int32 { return v; }\nconst r = f(3.5);\n", "may drop a fractional part or fall outside its range");
 	assert errorCount("const K = 3;\nconst i: int32 = K;\n") == 0;
 }
+
+test "numeric constants: a float constant outside an integer type is refused at its 'as', signed and unsigned alike" {
+	assert hasError("const a = 128.0 as int8;\n", "cannot convert 128.0 to int8");
+	assert hasError("const a = 128.9 as int8;\n", "cannot convert 128.9 to int8");
+	assert hasError("const a = (-129.0) as int8;\n", "cannot convert -129.0 to int8");
+	assert hasError("const a = 2147483648.0 as int32;\n", "cannot convert 2147483648.0 to int32");
+	assert hasError("const a = 9223372036854775808.0 as int64;\n", "cannot convert 9223372036854776000.0 to int64");
+	assert hasError("const a = 256.0 as uint8;\n", "cannot convert 256.0 to uint8");
+	assert hasError("const a = (-1.0) as uint32;\n", "cannot convert -1.0 to uint32");
+	assert hasError("const a = 18446744073709551616.0 as uint64;\n", "cannot convert 18446744073709552000.0 to uint64");
+	assert hasError("const K: float64 = 65536.0;\nconst a = K as uint16;\n", "cannot convert 65536.0 to uint16");
+	assert hasError("const K: number = 300;\nconst a = K as uint8;\n", "cannot convert 300.0 to uint8");
+	assert hasError("const K: number = -300;\nfunction f(): int8 { return K as int8; }\n", "cannot convert -300.0 to int8");
+	assert hasError("const F: float32 = 2147483647.5 as float32;\nconst a = F as int32;\n", "cannot convert 2147483648.0 to int32");
+}
+
+test "numeric constants: NaN and the infinities convert to no integer type" {
+	assert hasError("const K: float64 = 1e308 * 10.0;\nconst a = K as int32;\n", "cannot convert Infinity to int32");
+	assert hasError("const K: float64 = -1e308 * 10.0;\nconst a = K as uint8;\n", "cannot convert -Infinity to uint8");
+	assert hasError("const K: float64 = 1e308 * 10.0 - 1e308 * 10.0;\nconst a = K as uint64;\n", "cannot convert NaN to uint64");
+}
+
+test "numeric constants: a float constant inside an integer type truncates toward zero" {
+	assert ok("const a = 127.9 as int8;\nconst b = (-128.9) as int8;\nconst c = 255.9 as uint8;\nconst d = (-0.9) as uint32;\nconst e = 18446744073709549568.0 as uint64;\nconst f = (-9223372036854775808.0) as int64;\nconsole.log(a, b, c, d, e, f);\n");
+	assert errorCount("const K: number = 255;\nconst a = K as uint8;\n") == 0;
+}
+
+test "numeric constants: a constant into char must fit 0..255, at a slot and at its 'as'" {
+	assert hasError("const b: char = 300;\n", "cannot convert 300 to char");
+	assert hasError("const b: char = -1;\n", "cannot convert -1 to char");
+	assert hasError("const K = 1000;\nconst b: char = K;\n", "cannot convert 1000 to char");
+	assert hasError("function f(c: char): char { return c; }\nf(256);\n", "cannot convert 256 to char");
+	assert hasError("const b: char = 65.0;\n", "takes the float 65.0, and a float never becomes an integer implicitly");
+	assert hasError("const a = 300 as char;\n", "cannot convert 300 to char");
+	assert hasError("const a = (-1) as char;\n", "cannot convert -1 to char");
+	assert hasError("const K = 1000;\nconst a = K as char;\n", "cannot convert 1000 to char");
+	assert hasError("const a = 256.0 as char;\n", "cannot convert 256.0 to char");
+	assert hasError("const a = (-1.0) as char;\n", "cannot convert -1.0 to char");
+	assert hasError("const K: float64 = 1e308 * 10.0 - 1e308 * 10.0;\nconst a = K as char;\n", "cannot convert NaN to char");
+	assert hasError("const a = (200 as char) as int8;\n", "cannot convert 200 to int8");
+}
+
+test "numeric constants: a char constant inside 0..255 still fits" {
+	assert ok("const a: char = 65;\nconst b: char = \"A\".code;\nconst c = 255 as char;\nconst d = 200.9 as char;\nconst e = (200 as char) as int16;\nconst K = 97;\nconst f: char = K;\nconsole.log(a, b, c, d, e, f);\n");
+}

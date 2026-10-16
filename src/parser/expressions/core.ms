@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData } from "../../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen } from "../context";
 import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
@@ -276,16 +276,20 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 //                 | ('-' | '!' | '~') expr | 'async' (funcExpr | arrow) | '...' expr
 
 // The postfix pass consumes `as` unconditionally, but TS binds it outside a
-// prefix op: `typeof x as T` = `(typeof x) as T`, `++x as T` = `(++x) as T`.
-// Rewraps the innermost assertion's expression with the prefix op.
-function rewrapUnderAssertion(operand: Node, wrap: (inner: Node) => Node): Node {
+// prefix op: `-x as T` = `(-x) as T`, `typeof x as T` = `(typeof x) as T`.
+// Wraps the operand of the innermost unparenthesized `as`; a `!` below it stays
+// in the operand, one above it stays outside.
+function prefixed(operand: Node, wrap: (inner: Node) => Node): Node {
+	let target: Node | null = null;
 	let cur = operand;
-	while (true) {
+	while (cur.kind == NodeKind.TypeAssertion && !cur.flags.has(NodeFlag.Parenthesized)) {
 		const ad = cur.data as TypeAssertionData;
-		if (ad.asExpr != null && ad.asExpr.kind == NodeKind.TypeAssertion) { cur = ad.asExpr; continue; }
-		ad.asExpr = wrap(ad.asExpr);
-		break;
+		if (ad.asType != "!") target = cur;
+		cur = ad.asExpr;
 	}
+	if (target == null) return wrap(operand);
+	const td = target.data as TypeAssertionData;
+	td.asExpr = wrap(td.asExpr);
 	return operand;
 }
 
@@ -406,15 +410,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.Typeof || token.kind == TokenKind.Void || token.kind == TokenKind.Delete) {
 		advance(state);
 		const operand = try parseExprWithPrec(state, 99);
-		// The postfix pass consumes `as` unconditionally, but TS binds it outside
-		// the prefix op: `typeof x as T` = `(typeof x) as T`. Rewrap the innermost
-		// assertion's expression with the prefix op.
-		if (operand.kind == NodeKind.TypeAssertion) {
-			return Result.ok(rewrapUnderAssertion(operand, (inner: Node): Node => {
-				return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
-			}));
-		}
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
+		return Result.ok(prefixed(operand, (inner: Node): Node => {
+			return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
+		}));
 	}
 
 	// new expression: new Callee(args)
@@ -461,7 +459,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.Await) {
 		advance(state);
 		const awaitOperand = try parseExprWithPrec(state, 70);
-		return Result.ok(createNode(NodeKind.AwaitExpr, { awaitArg: awaitOperand }, token));
+		return Result.ok(prefixed(awaitOperand, (inner: Node): Node => {
+			return createNode(NodeKind.AwaitExpr, { awaitArg: inner }, token);
+		}));
 	}
 
 	// Yield expression: yield expr, yield* expr
@@ -512,10 +512,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		const wrapUpdate = (inner: Node): Node => {
 			return createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: inner, isPrefix: true }, token);
 		};
-		if (updateTarget.kind == NodeKind.TypeAssertion) {
-			return Result.ok(rewrapUnderAssertion(updateTarget, wrapUpdate));
-		}
-		return Result.ok(wrapUpdate(updateTarget));
+		return Result.ok(prefixed(updateTarget, wrapUpdate));
 	}
 
 	// Async: async function expr or async arrow
@@ -620,7 +617,9 @@ function parsePrimary(state: ParserState): ExprResult {
 		// Parse operand with high precedence to capture postfix (., (), []) but not binary ops.
 		// This ensures !result.ok → !(result.ok), not (!result).ok
 		const operand = try parseExprWithPrec(state, 70);
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
+		return Result.ok(prefixed(operand, (inner: Node): Node => {
+			return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
+		}));
 	}
 
 	// Array literal: [expr, expr, ...]
@@ -777,6 +776,61 @@ test "typeof x as T binds as outside" {
 	assert n.kind == NodeKind.TypeAssertion;
 	const d = n.data as TypeAssertionData;
 	assert d.asExpr.kind == NodeKind.UnaryExpr;
+}
+
+function shapeOf(n: Node): string {
+	const mark = n.flags.has(NodeFlag.Parenthesized) ? "p:" : "";
+	if (n.kind == NodeKind.TypeAssertion) {
+		const d = n.data as TypeAssertionData;
+		return mark + (d.asType == "!" ? "nn(" : "as[" + d.asType + "](") + shapeOf(d.asExpr) + ")";
+	}
+	if (n.kind == NodeKind.UnaryExpr) {
+		const d = n.data as UnaryExprData;
+		return mark + d.unaryOp + "(" + shapeOf(d.operand) + ")";
+	}
+	if (n.kind == NodeKind.UpdateExpr) {
+		const d = n.data as UpdateExprData;
+		return mark + d.updateOp + "(" + shapeOf(d.updateArg) + ")";
+	}
+	if (n.kind == NodeKind.AwaitExpr) return mark + "await(" + shapeOf((n.data as AwaitExprData).awaitArg) + ")";
+	if (n.kind == NodeKind.MemberExpr) {
+		const d = n.data as MemberExprData;
+		return mark + shapeOf(d.object) + "." + d.property;
+	}
+	if (n.kind == NodeKind.Identifier) return mark + (n.data as IdentifierData).name;
+	if (n.kind == NodeKind.NumberLiteral) return mark + `${(n.data as NumberLiteralData).value}`;
+	return mark + "?";
+}
+
+function shape(input: string): string { return shapeOf(exprNode(input)); }
+
+test "every prefix operator binds inside as, as in TS" {
+	assert shape("-128 as int8") == "as[int8](-(128))";
+	assert shape("-x as uint8") == "as[uint8](-(x))";
+	assert shape("!b as boolean") == "as[boolean](!(b))";
+	assert shape("~x as uint32") == "as[uint32](~(x))";
+	assert shape("await p as T") == "as[T](await(p))";
+	assert shape("void x as T") == "as[T](void(x))";
+	assert shape("--x as int32") == "as[int32](--(x))";
+}
+
+test "a prefix operator reaches the innermost as of a chain" {
+	assert shape("-x as T as U") == "as[U](as[T](-(x)))";
+	assert shape("-a.b as T") == "as[T](-(a.b))";
+	assert shape("-(x) as T") == "as[T](-(p:x))";
+}
+
+test "parentheses keep an as inside the prefix operator" {
+	assert shape("-(x as T)") == "-(p:as[T](x))";
+	assert shape("typeof (x as T)") == "typeof(p:as[T](x))";
+	assert shape("-(x as T) as U") == "as[U](-(p:as[T](x)))";
+}
+
+test "a non-null assertion binds tighter than a prefix operator" {
+	assert shape("-a!") == "-(nn(a))";
+	assert shape("-a! as T") == "as[T](-(nn(a)))";
+	assert shape("typeof a! as T") == "as[T](typeof(nn(a)))";
+	assert shape("-a as T!") == "nn(as[T](-(a)))";
 }
 // Precedence tree shape
 test "* tighter than +" { assert binLeftKind("a + b * c") == NodeKind.Identifier; }

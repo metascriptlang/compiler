@@ -59,5 +59,5 @@ test "None at getTypeDesc raises the internal error (B4, Nim else-branch)" {
 	assert ctx != null;
 	const g = createCGen(ctx, "gate.ms");
 	getTypeDesc(g, noneType());
-	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";
+	assert g.errors.length > 0 && g.errors[0].message.contains("internal: unresolved type"), "seam went silent again — gateFlaglessUnknown must addCGenError (codegen/c/types.ms)";
 }
