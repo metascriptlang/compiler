@@ -422,7 +422,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks, opts.appMode);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before

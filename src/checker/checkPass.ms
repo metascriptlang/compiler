@@ -3774,6 +3774,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// the checker API.
 	ctx.targetOs = preludeCtx.targetOs;
 	ctx.targetInfo = preludeCtx.targetInfo;
+	ctx.appMode = preludeCtx.appMode;
 	ctx.strictNullChecks = preludeCtx.strictNullChecks;
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }

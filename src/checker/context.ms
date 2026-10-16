@@ -1272,6 +1272,7 @@ export class CheckerContext {
 	                               // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
 	                               // Cross-compile detected via `targetOs !== platform`.
 	targetInfo: TargetInfo;
+	appMode: string;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
 	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
 	staticBlockClass: Symbol | null;
@@ -1358,6 +1359,7 @@ export function createContext(): CheckerContext {
 		gcMode: GcMode.Orc,
 		targetOs: platform,
 		targetInfo: hostTargetInfo(),
+		appMode: "console",
 		currentFunction: null,
 		currentActorName: "",
 		staticBlockClass: null,
