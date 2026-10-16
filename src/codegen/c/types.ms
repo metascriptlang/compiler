@@ -2019,7 +2019,7 @@ export function ensureFutureThenBoxedInstance(g: CGen, innerType: Type, byRef: b
 		const attached = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
 		const hook = attached != null ? attached : getOpByKey(innerType, AttachedOp.AttachedDestructor);
 		if (hook != null) {
-			drop = mangle(hook.name);
+			drop = opCName(hook);
 			ensureDrcProto(g, drop, hook);
 		}
 	}
