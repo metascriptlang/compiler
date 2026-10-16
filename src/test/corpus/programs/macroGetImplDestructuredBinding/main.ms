@@ -1,6 +1,7 @@
 // @stdout: owned=true | owned=true | owned=false | owned=false 7 | destructure | null3
 // @stdout: 14
 // @exit: 0
+// @xfail(raiser): the Raiser has no host bridge for msGenericArrayPush, the rest accumulator of `const [x, setX, ...rest]` (inbox 2026-10-17-raiser-has-no-host-bridge-for-msgenericarraypush)
 // note: `getImpl` of a name bound by destructuring answers the declaration that bound it, so a macro reads the call that created the value and its options: an array pattern and its rest element at module level, an object pattern, a local of a function body, and a name read inside a body that `getImpl` returned. These used to answer null. A for-of binding has no declaration of its own and still answers null.
 
 import { creator, bodyRead, implKind } from "./meta";
