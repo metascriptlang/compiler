@@ -1,4 +1,4 @@
-// @stdout: Own@main.ms LibS@lib.ms Own@main.ms Own@main.ms Tree@main.ms Tree@main.ms|Own@main.ms LibS@lib.ms
+// @stdout: Own@main.ms LibS@lib.ms Own@main.ms Own@main.ms Tree@main.ms Tree@main.ms|Own@main.ms LibS@lib.ms|Holder@main.ms Own@main.ms LibS@lib.ms
 import { Node, NodeKind, getType, getTypeImpl } from "std/meta";
 import { LibS } from "./lib";
 
@@ -30,7 +30,8 @@ macro probe(e: Node): Node {
 	const text = [
 		named(ps[0]), named(ps[1]), named(ps[2].typExprFieldTypes[0]), named(ps[3].typExprArgs[0].typExprElement),
 		named(ps[4]), named(ps[4].typExprFieldTypes[0].typExprArgs[0].typExprElement),
-	].join(" ") + "|" + named(getTypeImpl(ps[0])) + " " + named(getTypeImpl(ps[1]));
+	].join(" ") + "|" + named(getTypeImpl(ps[0])) + " " + named(getTypeImpl(ps[1]))
+		+ "|" + named(getTypeImpl(Holder)) + " " + named(getTypeImpl(Holder).typExprFieldTypes[0]) + " " + named(getTypeImpl(Holder).typExprFieldTypes[1]);
 	return { kind: NodeKind.StringLiteral, line: e.line, column: e.column, value: text };
 }
 
