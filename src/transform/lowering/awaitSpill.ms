@@ -15,7 +15,7 @@ import {
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { Spiller, bindTemp, tempRef, isVoidType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
+import { Spiller, bindTemp, tempRef, isVoidType, isNeverType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
 import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
 import { foldedNullOperand, isNullExpr } from "./operatorLower";
 import { walkExpandBlocks, isFuncBoundary } from "../walker";
@@ -206,10 +206,11 @@ function lowerAwaitStmt(s: Node): Node[] {
 	} else if (k == NodeKind.ReturnStmt) {
 		const d = s.data as ReturnStmtData;
 		const arg = d.argument!;
-		if (arg.kind == NodeKind.AwaitExpr && isVoidType(arg.nodeType)) {
+		if (arg.kind == NodeKind.AwaitExpr && (isVoidType(arg.nodeType) || isNeverType(arg.nodeType))) {
 			const ad = arg.data as AwaitExprData;
 			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
 			pre.push(makeExprStmt(arg, loc));
+			if (isNeverType(arg.nodeType)) return pre;
 			d.argument = null;
 		} else {
 			d.argument = lowerAwaitExpr(arg, pre);
