@@ -29,12 +29,18 @@ let next = c;
 next += 1;
 `;
 
+const SRC_NEGATED = `
+const c = 65 as char;
+const n = -c;
+`;
+
 const SRC_VALID = `
 const c = 65 as char;
 const d = 66 as char;
 const i32: int32 = 2;
 const sum = (c as int32) + i32;
 const back = ((c as int32) + 1) as char;
+const negated = -(c as int32);
 const literal = c == 65;
 const ordered = c < d;
 const same = c != d;
@@ -63,6 +69,11 @@ test "compound arithmetic with a char on either side needs as" {
 	assert text.contains("operator '+=' cannot be applied to 'int32' and 'char'"), "total += c must fail the checker: " + text;
 	assert text.contains("operator '*=' cannot be applied to 'float64' and 'char'"), "wide *= c must fail the checker: " + text;
 	assert text.contains("operator '+=' cannot be applied to 'char' and 'int32'"), "next += 1 must fail the checker: " + text;
+}
+
+test "unary minus on a char needs as" {
+	const text = errorsOf(SRC_NEGATED);
+	assert text.contains("unary '-' cannot be applied to 'char': a char is not a number — convert it with an explicit 'as int32'"), "-c must fail the checker: " + text;
 }
 
 test "a converted char computes and a char compares with a literal or a char" {
