@@ -3,7 +3,7 @@ import { CheckerContext, addError } from "./context";
 import { createPromise, createModuleNamespace, createFunction, errorType } from "./types";
 import { makeSymbol } from "./symbol";
 import { callCheckExpr } from "./checkerCallbacks";
-import { resolveImportSourcePath } from "./collectPass";
+import { resolveImportSourcePath, autoPropagateModuleExtensions } from "./collectPass";
 
 export const DYNAMIC_IMPORT = "DynamicImport";
 
@@ -34,6 +34,7 @@ export function checkImportCall(ctx: CheckerContext, node: Node): Type {
 	const text = (specifier.data as StringLiteralData).value;
 	const modulePath = resolveImportSourcePath(ctx, text);
 	if (modulePath == "") return refuse(ctx, specifier, `Cannot resolve module '${text}'`);
+	autoPropagateModuleExtensions(ctx, modulePath, false);
 	const promise = createPromise(createModuleNamespace(modulePath));
 	const sym = makeSymbol("import", SymbolKind.Function, createFunction([], [], promise), false);
 	sym.builtinKind = DYNAMIC_IMPORT;

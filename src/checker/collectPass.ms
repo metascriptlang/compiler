@@ -1417,7 +1417,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 // from "./inner"` would re-export the class symbol cleanly but consumers
 // would see `Property '<method>' does not exist on type 'ClassName'` because
 // the per-method extension entries never reach the consumer's registry.
-function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, markExported: boolean): void {
+export function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, markExported: boolean): void {
 	if (ctx.extensionRegistry == null || sourcePath == "") return;
 	const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
 	if (modExports == null) return;
