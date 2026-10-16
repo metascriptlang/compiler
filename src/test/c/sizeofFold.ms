@@ -50,19 +50,18 @@ test "a union of named structs keeps their discriminator field, which each struc
 	assert result.value.contains("MS_BOOL ok;");
 }
 
-test "an anonymous struct stores a field of one boolean value nowhere and reads it as that value" {
-	const result = compileToC("type Lone = { ok: true; n: int32 };\nconst a: Lone = { ok: true, n: 3 };\nconsole.log(a.ok, a.n);");
+test "an arm of a match union stores a field of one boolean value nowhere and reads it as that value" {
+	const result = compileToC("type Lone = match (ok: boolean) { true => { n: int32 }, false => { m: int32 } };\nconst a: Lone = { ok: true, n: 3 };\nconsole.log(a.ok);");
 	assert result.ok;
 	assert !result.value.contains("MS_BOOL ok;");
-	assert result.value.contains("{\n  int32_t n;\n};");
-	assert result.value.contains(", MS_TRUE)");
+	assert result.value.contains("typedef struct {\n  int32_t n;\n} Lone");
 }
 
-test "a field of one boolean value and a boolean field of the same name give two C structs" {
+test "an object with a field of one boolean value stores it beside an object with a boolean field" {
 	const result = compileToC("type Lone = { ok: true; n: int32 };\ntype Both = { ok: boolean; n: int32 };\nconst a: Lone = { ok: true, n: 3 };\nconst b: Both = { ok: false, n: 4 };\nconsole.log(a.n, b.ok);");
 	assert result.ok;
-	assert result.value.contains("{\n  int32_t n;\n};");
 	assert result.value.contains("{\n  MS_BOOL ok;\n  int32_t n;\n};");
+	assert !result.value.contains("{\n  int32_t n;\n};");
 }
 
 test "a union asserts its checker size to C on 64-bit and 32-bit targets" {

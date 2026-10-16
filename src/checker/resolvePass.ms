@@ -14,7 +14,7 @@ import { getIdentId } from "./idents";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { forEachChild } from "../ast/visitor";
-import { nestedViewType, ownedAlternativeOf, findViewType, createOutVar } from "./types";
+import { nestedViewType, ownedAlternativeOf, findViewType, createOutVar, markDuVariant } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -2337,7 +2337,10 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 			for (const c of resolved.typeChildren) newChildren.push(c);
 			resolved.typeNames = newNames;
 			resolved.typeChildren = newChildren;
-			if (!isBooleanDisc) resolved.typeName = d.aliasName + "." + bareKey;
+			if (!isBooleanDisc) {
+				resolved.typeName = d.aliasName + "." + bareKey;
+				markDuVariant(resolved);
+			}
 		}
 		variantTypes.push(resolved);
 	}

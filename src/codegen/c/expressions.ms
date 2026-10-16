@@ -147,11 +147,37 @@ function literalDiscriminantOf(u: Type): string {
 	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(u);
 }
 
-function unstoredLiteral(object: Readonly<Node>, property: string): string {
+function unstoredLiteral(g: CGen, object: Readonly<Node>, property: string): string {
 	const owner = object.nodeType != null ? peelToStructOrUnion(object.nodeType) : null;
 	if (owner == null || owner.kind != TypeKind.Struct) return "";
 	const ft = getProperty(owner, property);
-	return ft.kind == TypeKind.BooleanLiteral && storesNothing(owner, ft) ? cBoolLiteral(booleanLiteralValue(ft)) : "";
+	if (!storesNothing(owner, ft)) return "";
+	if (ft.kind == TypeKind.BooleanLiteral) return cBoolLiteral(booleanLiteralValue(ft));
+	if (ft.kind != TypeKind.EnumLiteral) return "";
+	const enumT = ft.typeReturn;
+	const member = enumT != null && ft.typeNames.length > 0 ? enumMemberOfKey(enumT, ft.typeNames[0]) : -1;
+	if (enumT == null || member < 0) throw new Error(`internal: unstored enum literal '${property}' of '${typeDisplayName(owner)}' names no member of its enum`);
+	return `${getTypeDesc(g, enumT)}_${mangle(enumT.typeNames[member])}`;
+}
+
+// An object that is not the arm's own struct fills the arm's stored fields by name: the arm
+// stores no one-value discriminator, the object does, so the two C structs differ.
+function armFromObject(g: CGen, p: CProc, inner: string, srcType: Type | null, slot: Type): string {
+	const arm = inlineVariantStruct(slot);
+	const src = srcType != null ? peelToStructOrUnion(srcType) : null;
+	if (arm == null || src == null || src.kind != TypeKind.Struct || getTypeDesc(g, src) == getTypeDesc(g, arm)) return inner;
+	g.labels += 1;
+	const tmp = `_arm${g.labels}_`;
+	emitProcLocalsLine(p, `${getTypeDesc(g, src)} ${tmp};`);
+	emitStmtsLine(p, `${tmp} = ${inner};`);
+	let fields = "";
+	for (let i = 0; i < arm.typeNames.length; i += 1) {
+		if (storesNothing(arm, arm.typeChildren[i])) continue;
+		if (!src.typeNames.includes(arm.typeNames[i])) throw new Error(`internal: object '${typeDisplayName(src)}' has no field '${arm.typeNames[i]}' of the union arm it converts into`);
+		const f = mangleFieldName(arm.typeNames[i]);
+		fields = `${fields}${fields == "" ? "" : ", "}.${f} = ${tmp}.${f}`;
+	}
+	return `((${getTypeDesc(g, arm)}){ ${fields} })`;
 }
 
 function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
@@ -1623,7 +1649,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
 			const md = d.left.data as MemberExprData;
-			if (unstoredLiteral(md.object, md.property) != "") {
+			if (unstoredLiteral(g, md.object, md.property) != "") {
 				ctx.results.push(`((void)${left}, ${right})`);
 				return;
 			}
@@ -1839,7 +1865,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`${obj}.${d.property}`);
 			return;
 		}
-		const unstored = unstoredLiteral(d.object, d.property);
+		const unstored = unstoredLiteral(g, d.object, d.property);
 		if (unstored != "") {
 			ctx.results.push(`((void)(${obj}), ${unstored})`);
 			return;
@@ -2278,7 +2304,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				}
 			}
 			if (vi < convUnion.typeChildren.length) {
-				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
+				const payload = armFromObject(g, p, inner, srcType, convUnion.typeChildren[vi]);
+				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${payload}})`);
 				return;
 			}
 			ctx.results.push(inner);

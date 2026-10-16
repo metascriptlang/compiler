@@ -734,11 +734,13 @@ function unionMemberKey(t: Type): string {
 // loop into createUnion hangs the v0.2.24 analyzer on the enlarged var graph.
 function stampInlineDuVariants(seen: Type[]): void {
 	for (const v of seen) {
-		if (v.kind == TypeKind.Struct && v.typeName == "") {
-			v.typeFlags = v.typeFlags.incl(TypeFlag.DuVariant);
-			duRegAdd(_duVariantRegistry, v);
-		}
+		if (v.kind == TypeKind.Struct && v.typeName == "") markDuVariant(v);
 	}
+}
+
+export function markDuVariant(v: Type): void {
+	v.typeFlags = v.typeFlags.incl(TypeFlag.DuVariant);
+	duRegAdd(_duVariantRegistry, v);
 }
 
 // Registered inline-variant payload types, in registration order. The flag on the
@@ -1290,8 +1292,8 @@ export function inlineVariantStruct(member: Type | null): Type | null {
 export function storesNothing(owner: Type, field: Type | null): boolean {
 	if (field == null) return false;
 	if (field.kind == TypeKind.Void) return true;
-	const n = owner.typeName;
-	return field.kind == TypeKind.BooleanLiteral && owner.kind == TypeKind.Struct && (n == "" || n.startsWith("{") || n.startsWith("__anon"));
+	return (field.kind == TypeKind.BooleanLiteral || field.kind == TypeKind.EnumLiteral)
+		&& owner.kind == TypeKind.Struct && owner.typeFlags.has(TypeFlag.DuVariant);
 }
 
 // Peel Ref/Ptr/GenericInstance wrappers until reaching a Struct or Union body.

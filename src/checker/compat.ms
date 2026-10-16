@@ -1,8 +1,8 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, literalUnionBase, numberLiteralBase, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, matchUnionBehindInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, literalUnionBase, numberLiteralBase, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -135,7 +135,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	}
 	if (source.kind == TypeKind.Struct) {
 		if (source == target) return false;
-		if (source.typeName != "" && source.typeName == target.typeName) return false;
+		if (source.typeName != "" && source.typeName == target.typeName && !source.typeFlags.has(TypeFlag.DuVariant)) return false;
 		const sNames = source.typeNames;
 		const sChildren = source.typeChildren;
 		const tChildren = target.typeChildren;
@@ -144,6 +144,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 			let si = 0;
 			for (const sProp of sNames) {
 				if (sProp == tProp && si < sChildren.length && ti < tChildren.length) {
+					if (storesNothing(source, sChildren[si]) != storesNothing(target, tChildren[ti])) return true;
 					if (fieldReprMismatch(sChildren[si], tChildren[ti])) return true;
 					if (isReinterpretUnsafe(sChildren[si], tChildren[ti])) return true;
 				}
@@ -2301,4 +2302,22 @@ test "two sets relate as their element types do, and below a generic match they 
 	assert typeRelation(createBitSet(createGenericParam("E")), createBitSet(color)) == TypeRelation.Generic;
 	assert typeRelation(createBitSet(shade), createBitSet(color)) == TypeRelation.None;
 	assert typeRelation(createBitSet(numberType()), createBitSet(createPrimitive(TypeKind.Int32))) == TypeRelation.None;
+}
+
+function oneValueObject(n: Type, arm: boolean): Type {
+	const t = createStruct(arm ? "G.true" : "", ["ok", "n"], [createBooleanLiteral(true), n], false);
+	if (arm) t.typeFlags = t.typeFlags.incl(TypeFlag.DuVariant);
+	return t;
+}
+
+test "an arm that stores no discriminator is not read as an object that stores it" {
+	const wide = createStruct("", ["ok", "n"], [createPrimitive(TypeKind.Boolean), int32Type()], false);
+	assert isReinterpretUnsafe(oneValueObject(int32Type(), true), wide);
+	assert isReinterpretUnsafe(wide, oneValueObject(int32Type(), true));
+	assert !isReinterpretUnsafe(oneValueObject(int32Type(), false), wide);
+}
+
+test "the arms of two instances of one union keep their own layout" {
+	assert isReinterpretUnsafe(oneValueObject(int32Type(), true), oneValueObject(numberType(), true));
+	assert !isReinterpretUnsafe(oneValueObject(int32Type(), true), oneValueObject(int32Type(), true));
 }
