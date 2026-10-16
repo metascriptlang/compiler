@@ -202,6 +202,8 @@ static inline double msPowF64(double x, double y) {
 #define msPowI16(a, b) msOverflowChk_(int16_t, __builtin_add_overflow, msPowI32(a, b), 0)
 #define msDivAssignI8(lv, b) msDivAssign_(lv, b, msDivI8)
 #define msDivAssignI16(lv, b) msDivAssign_(lv, b, msDivI16)
+#define msPowAssignI8(lv, b) msDivAssign_(lv, b, msPowI8)
+#define msPowAssignI16(lv, b) msDivAssign_(lv, b, msPowI16)
 
 #define msArithAssign_(lv, b, builtin) (*({ \
 	__typeof__(lv)* __aap = &(lv); \

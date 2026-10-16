@@ -124,6 +124,23 @@ test "signed compound assignment and steps reach the checked in-place helpers on
 	}
 }
 
+test "signed power assignment reaches the own-width checked helper on a local, a field and an element" {
+	const sites: OverflowSite[] = [
+		{ declare: "let x = a;", place: "x" },
+		{ declare: "const b = new Box(); b.v = a;", place: "b.v" },
+		{ declare: "const xs = [a];", place: "xs[0]" },
+	];
+	const widths = ["int8", "int16", "int32", "int64"];
+	const suffixes = ["I8", "I16", "I32", "I64"];
+	for (let w = 0; w < widths.length; w += 1) {
+		const head = `class Box { v: ${widths[w]} = 0; } function probe(a: ${widths[w]}, k: ${widths[w]}): void { `;
+		for (const site of sites) {
+			const source = head + `${site.declare} ${site.place} **= k; }`;
+			assert runtimeCallee(lastStatementValue(source)) == "msPowAssign" + suffixes[w], source;
+		}
+	}
+}
+
 test "unsigned arithmetic and a negated literal keep their operators" {
 	assert runtimeCallee(returnValue("function probe(a: uint32, b: uint32): uint32 { return a + b; }")) == "";
 	assert runtimeCallee(lastStatementValue("function probe(a: uint8): void { let x = a; x++; }")) == "";

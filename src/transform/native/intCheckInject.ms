@@ -181,7 +181,8 @@ function lowerPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 	const t = integerRepr(d.left.nodeType);
 	let helper = "msPowAssignF64";
-	if (t != null) helper = helperName(ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign", t);
+	if (t != null && ctx.rangeChecks && isSubIntSigned(t.kind)) helper = ownWidthName("msPowAssign", t);
+	else if (t != null) helper = helperName(ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign", t);
 	else if (!isFloatRepr(d.left.nodeType)) return node;
 	const call = makeCall(runtimeRef(helper, node.location), [d.left, d.right], node.location);
 	call.nodeType = d.left.nodeType;
