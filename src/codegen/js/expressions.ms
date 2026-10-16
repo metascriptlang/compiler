@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, isAwaitable } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -724,6 +724,12 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 			emit(gen, " }, () => (" + zero + "))");
 			return;
 		}
+	}
+	if (isAwaitable(node.nodeType)) {
+		emit(gen, "new Promise(");
+		emitJoinedNodes(gen, d.newArguments, ", ");
+		emit(gen, ")");
+		return;
 	}
 	emit(gen, "new ");
 	emitNode(gen, d.newCallee);
