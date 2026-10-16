@@ -61,10 +61,8 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 			NodeKind.Identifier => {
 				const sym = n.resolvedSym;
 				if (sym == null) return false;
-				// Not global (module-level)
+				if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp) return false;
 				if (hasFlag(sym, SymbolFlag.Global)) return false;
-				// Params are borrows — not movable
-				if (sym.symbolKind == SymbolKind.Parameter) return false;
 				if (isCursorSym(sym)) return false;
 				return true;
 			},
@@ -310,6 +308,15 @@ test "isAnalysableFieldAccess: field of a parameter = false" {
 	const n = getExpr("x.f;");
 	attachSymToNodeAlias(n, "x", makeSymbol("x", SymbolKind.Parameter, noneType(), false));
 	assert !isAnalysableFieldAccess(n);
+}
+
+test "isAnalysableFieldAccess: static field of a class or module = false" {
+	const n = getExpr("x.f;");
+	attachSymToNodeAlias(n, "x", makeSymbol("x", SymbolKind.Class, noneType(), false));
+	assert !isAnalysableFieldAccess(n);
+	const m = getExpr("x.f;");
+	attachSymToNodeAlias(m, "x", makeSymbol("x", SymbolKind.Module, noneType(), false));
+	assert !isAnalysableFieldAccess(m);
 }
 
 test "isAnalysableFieldAccess: field of a global = false" {
