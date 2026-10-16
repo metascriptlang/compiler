@@ -320,6 +320,9 @@ when (mscDeclaresRuntime) {
 	extern function msStringToCString(s: string): cstring;
 
 	@compilerFunc
+	extern function msStringFromCStr(s: cstring): string;
+
+	@compilerFunc
 	extern function msBoolToString(value: int32): string;
 
 	@compilerFunc
@@ -426,6 +429,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 	@compilerFunc
 	extern function msNumberArraySetLen(arr: Ptr<void>, newLen: int64): void;

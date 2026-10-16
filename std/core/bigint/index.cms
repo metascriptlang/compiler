@@ -71,6 +71,10 @@ when (!bare && !solana) {
 	extern function msBigIntFromFloat64(v: float64): bigint;
 	@compilerFunc
 	extern function msBigIntFromLit(s: string): bigint;
+	@compilerFunc
+	extern function msBigIntFromInt64(v: int64): bigint;
+	@compilerFunc
+	extern function msBigIntFromUint64(v: uint64): bigint;
 	extern function msBigIntAsIntN(bits: int64, b: bigint): bigint;
 	extern function msBigIntAsUintN(bits: int64, b: bigint): bigint;
 	extern function msBigIntParses(s: string): boolean;
