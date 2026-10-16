@@ -503,6 +503,20 @@ export function makeExprStmt(exprNode: Node, loc: SourceLocation): Node {
 	return createNode(NodeKind.ExprStmt, { expr: exprNode }, syntheticToken(loc));
 }
 
+export function counterType(ctx: TransformContext): Type {
+	return ctx.jsBackend || ctx.raiserBackend ? int32Type() : getSysType(TypeKind.Int64);
+}
+
+export function makeCounterStep(counter: Symbol, t: Type, loc: SourceLocation): Node {
+	const target = makeIdentResolved(counter, loc);
+	target.nodeType = t;
+	const current = makeIdentResolved(counter, loc);
+	current.nodeType = t;
+	const next = makeBinary(current, "+", makeNumber(1, loc), loc);
+	next.flags = next.flags.incl(NodeFlag.NoOverflowCheck);
+	return makeExprStmt(makeAssign(target, next, loc), loc);
+}
+
 export function makeReturn(arg: Node | null, loc: SourceLocation): Node {
 	return createNode(NodeKind.ReturnStmt, { argument: arg }, syntheticToken(loc));
 }

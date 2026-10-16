@@ -25,7 +25,7 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
@@ -48,7 +48,7 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	if (d.operator == "/" || d.operator == "%" || d.operator == "**") return divideAsInteger(node, d);
 	if (isShiftOp(d.operator) && subIntKind(d.left.nodeType) != TypeKind.Unknown) return shiftAtLeftWidth(node, d);
 	const signed = signedType(node.nodeType);
-	if (signed != null && wrapsAtWidth(d.operator)) return overflowChecked(node, signed, node.location);
+	if (signed != null && wrapsAtWidth(d.operator) && !node.flags.has(NodeFlag.NoOverflowCheck)) return overflowChecked(node, signed, node.location);
 	const narrow = subIntKind(node.nodeType);
 	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);

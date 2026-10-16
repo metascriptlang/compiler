@@ -13,7 +13,7 @@
 // as do all divisions under --danger. An 8- or 16-bit operation runs at 32 bits
 // and its result is converted back, so it wraps at its own width.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
@@ -87,7 +87,7 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 		call.nodeType = d.left.nodeType;
 		return call;
 	}
-	const arith = overflowPrefix(d.operator);
+	const arith = node.flags.has(NodeFlag.NoOverflowCheck) ? "" : overflowPrefix(d.operator);
 	if (arith != "") {
 		const t = signedRepr(node.nodeType);
 		if (t == null || isPointerRepr(d.left.nodeType) || isPointerRepr(d.right.nodeType)) return node;
