@@ -4323,6 +4323,167 @@ take ownership of an argument`. The callee-owns half (destroy at scope exit unle
 moved on) is not implemented, so accepting it there would leak every argument.
 NOT verified: `sink` on class methods and constructors, and the JS backend.
 
+## Proxy
+
+`new Proxy(target, handler)` intercepts every member read and write of `target` through
+the handler's traps, as in TypeScript, with one meaning on C and JS. Where TypeScript types
+a trap's key as `string | symbol` and its value as `any`, MetaScript types each trap by the
+key it is called with, and decides at compile time which trap runs for which key. This is
+how Proxy fits a language with no `any` and no dynamic member lookup on native targets
+(Primitive Types): nothing about a key is looked up at run time when the key is written
+in the source.
+
+```ms
+interface Todo { title: string; done: boolean; }
+
+class Traps {
+    get<K extends keyof Todo>(target: Todo, key: K): Todo[K] {
+        track(target, key);
+        return target[key];
+    }
+    set<K extends keyof Todo>(target: Todo, key: K, value: Todo[K]): boolean {
+        target[key] = value;
+        notify(target, key);
+        return true;
+    }
+}
+
+const p = new Proxy(todo, new Traps());   // Proxy<Todo, Traps>
+const t: string = p.title;                // traps.get(todo, "title")
+p.done = true;                            // traps.set(todo, "done", true)
+p.done = "yes";                           // error: string is not boolean, as in TypeScript
+p.owner;                                  // error: 'owner' is not a key of Todo
+```
+
+### A `Proxy<T, H>` is not a `T`
+
+`new Proxy(target, handler)` has the type `Proxy<T, H>`, where TypeScript gives it `T`.
+It holds the target and the handler, and it converts to nothing else:
+
+```ms
+function show(t: Todo): void { console.log(t.title); }
+show(p);            // error: a Proxy<Todo, Traps> is not a Todo: its reads go through the handler, and a Todo parameter would skip it
+p === todo;         // error: a Proxy<Todo, Traps> and a Todo are different types
+```
+
+A function that reads a `Todo` reads its fields directly, so letting a proxy in would either
+skip the traps (a store that stops tracking, silently) or make every `Todo` read in the
+program able to dispatch (a cost on all code that never sees a proxy). A function meant to
+take the proxy names `Proxy<Todo, Traps>`, or an alias the library exports
+(`type Store<T> = Proxy<T, StoreTraps<T>>`).
+
+A `Proxy` has no members of its own: every `p.name` is a key of `T`, so no proxy member can
+shadow a field of the target. `proxyTarget(p)` returns the target, without the traps.
+
+JavaScript libraries built on Proxy meet the same split at run time: the proxy and the
+object it wraps are two identities, and Vue (`toRaw`) and Svelte
+(`state_proxy_equality_mismatch`) warn about comparing or mixing them. MetaScript reports
+it where the code is written.
+
+### Traps
+
+| trap | answers | typed as |
+|---|---|---|
+| `get` | `p.key`, `p[key]` | `get<K extends keyof T>(target: T, key: K, receiver?: Proxy<T, H>): T[K]` |
+| `set` | `p.key = v`, `p[key] = v` | `set<K extends keyof T>(target: T, key: K, value: T[K], receiver?: Proxy<T, H>): boolean` |
+| `has` | `key in p` | `has<K extends keyof T>(target: T, key: K): boolean` |
+| `ownKeys` | the key list of `p` | `ownKeys(target: T): (keyof T)[]` |
+| `deleteProperty` | `delete p[key]` on a target whose keys are known only at run time (`Map`, `Record`) | `deleteProperty(target: T, key: keyof T): boolean` |
+
+A trap the handler leaves out does what the plain operation on the target does. The other
+eight traps of TypeScript's `ProxyHandler` (`defineProperty`, `getOwnPropertyDescriptor`,
+`getPrototypeOf`, `setPrototypeOf`, `isExtensible`, `preventExtensions`, `apply`,
+`construct`) are refused with an error naming the trap: they belong to JavaScript's object
+model of property descriptors, prototypes and callable objects, which MetaScript objects do
+not have.
+
+### A key written in the source costs no lookup
+
+Each trap is instantiated once per key it is called with, the key a constant of that
+instance. `target[key]` with a constant key is the field itself, so on C `p.title` through
+the `get` above costs the read of `todo.title` plus the trap body: no string compare, no
+hash. A key held in a variable must have a key type: `p[k]` with `k: keyof Todo` chooses
+among the instances by `k`; `k: string` on a `Todo` is refused, as `todo[k]` is. A target
+whose keys are run-time values (`Map<string, V>`, `Record<string, V>`) has one instance,
+with the key as an ordinary argument.
+
+A compound write is a read then a write: `p.n += 2` is `set(t, "n", get(t, "n") + 2)`, and
+`p.n++` the same with `+ 1`.
+
+### Arrays
+
+On a `Proxy<E[], H>` an index read or write goes to `get` / `set` with the index as key,
+typed `key: number` with the element `E` as value, and `length` is the key `"length"`, typed
+`number`. A method call runs the method as the language specification
+defines it for any object, with the proxy as `this`, so every step goes through a trap:
+`p.push(x)` is `get "length"`, `set` at that index, `set "length"`; `p.shift()` moves each
+element down one (`has`, `get`, `set` per element) and then deletes the last and sets
+`length`. A method with no such trap form in std is an error naming it, never a call on the
+raw array that would skip the traps.
+
+A handler may override a method by declaring it with the method's name; the compiler then
+calls the override instead of the trap chain:
+
+```ms
+class ListTraps<E> {
+    get(target: E[], key: number): E { track(target, key); return target[key]; }
+    set(target: E[], key: number, value: E): boolean { target[key] = value; notify(target, key); return true; }
+    push(target: E[], ...items: E[]): number {
+        for (const item of items) target.push(item);
+        notify(target, "length");
+        return target.length;
+    }
+}
+```
+
+The override works on the target directly and does its own tracking. It exists for the
+methods where the chain costs too much (`shift` on `n` elements is about `3n` trap calls) or
+where reading `length` inside a write would track it and re-run the reader that wrote it,
+the loop Vue's array instrumentation exists to break.
+
+One difference from JavaScript remains: there, `p.push(x)` first calls `get` with the key
+`"push"` and calls what it returns. MetaScript does not call `get` for a method key, because
+returning the method as a value would cost a closure per call.
+
+### Same meaning on C and JS
+
+The JavaScript backend emits the same trap calls as C: no JavaScript `Proxy` object is
+created, so both backends run the same std methods in the same order and give the same
+result. A `Proxy` therefore cannot cross an `extern` boundary into foreign JavaScript, which
+would see no interception; that is an error at the boundary.
+
+### Why this shape
+
+- **Interception at compile time, on a type with no fields of its own.** A `Proxy<T, H>`
+  shows no fields, so every member access falls through to the dynamic-field protocol
+  (`getDynamicField` / `setDynamicField`, Convention-based dispatch protocols), which calls
+  the trap. Design inspiration: Nim's `distinct` types with its dot operators, and Haxe's
+  `abstract` types with `@:op(a.b)`, which compile to C++ and JS from one source.
+- **A trap typed by its key.** `get<K extends keyof T>(…): T[K]` follows TypeScript's own
+  `keyof` and indexed access types; Swift's key-path member lookup types the member the
+  same way (`KeyPath<Root, Leaf>`, `Leaf` taken from the member).
+- **One instance per key.** Generic code instantiated per compile-time value, as Zig's
+  `@field` with a `comptime` name and Nim's `static` parameters do, makes a constant key a
+  field access.
+- **Not a `T`.** Every typed language with member interception keeps the wrapper apart
+  from the wrapped type: Nim's `distinct`, Haxe's `abstract` without a `to` conversion,
+  Swift's dynamic-member wrappers, Scala's `Dynamic`, dioxus's `Store<T>`.
+- **Arrays follow the specification, with overrides.** The trap chain is what JavaScript
+  does, so code ported from Solid, Vue or Svelte meets the traps it expects. The override
+  is Vue's array instrumentation, chosen statically.
+
+Rejected:
+
+- **A proxy is a `T`**, as TypeScript types it: every object of `T` would carry a dispatch
+  on every member access, paid by all code for the sake of the proxied values.
+- **A conversion from `Proxy<T, H>` to `T`**: the converted value reads a copy or the raw
+  target, so tracking and writes are lost without a word.
+- **Array methods only as handler-declared methods** (dioxus, Vue's collections): every
+  handler would restate each array method, and what `push` means would differ per handler.
+- **A call trap** for method calls (Nim's `.()`, Scala's `applyDynamic`): a trap
+  TypeScript's `ProxyHandler` does not have.
+- **`get` called for method keys**, as JavaScript does: one closure per method call.
+
 ## Memory Management
 
 ### ORC Mode (Default)
