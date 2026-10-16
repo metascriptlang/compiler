@@ -841,7 +841,7 @@ test "a non-null assertion binds tighter than a prefix operator" {
 	assert shape("-a!") == "-(nn(a))";
 	assert shape("-a! as T") == "as[T](-(nn(a)))";
 	assert shape("typeof a! as T") == "as[T](typeof(nn(a)))";
-	assert shape("-a as T!") == "nn(as[T](-(a)))";
+	assert shape("(-a as T)!") == "nn(p:as[T](-(a)))";
 }
 test "as binds at relational precedence, left to right" {
 	for (const src of ["a ** b as T", "a * b as T", "a + b as T", "a << b as T", "a < b as T", "a in b as T"]) {

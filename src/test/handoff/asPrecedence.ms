@@ -50,3 +50,8 @@ test "asPrecedence: a < after an as type that never closes is a syntax error, no
 	const reference = refusedOnEveryBackend("type T = int32;\nconst a: int32 = 1;\nconst b: int32 = 2;\nif (a as T < b) { console.log(\"lt\"); }", "Expected '>' to close the type arguments");
 	assert reference == "", reference;
 }
+
+test "asPrecedence: a ! after an as type is not a non-null assertion of the conversion" {
+	assert !parseSource("const a: int32 = 1;\nconst r = -a as int32!;").ok;
+	assert parseSource("const a: int32 = 1;\nconst r = (-a as int32)!;").ok;
+}
