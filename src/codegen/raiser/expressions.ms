@@ -1381,6 +1381,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	if (builtinKind == "Exit" && d.arguments.length <= 1) {
 		return compileExitCall(s, node);
 	}
+	if ((builtinKind == "UnionText" || builtinKind == "UnionDebug") && d.arguments.length >= 1) {
+		return compileTextOf(s, d.arguments[0]);
+	}
 	if (builtinKind == "MapFatal" && d.arguments.length == 1) {
 		return compileMapFatalCall(s, node);
 	}
@@ -1970,7 +1973,11 @@ function isToStringCall(node: Node): boolean {
 function compileToStringCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
-	const objReg = compileStringPart(s, md.object);
+	return compileTextOf(s, md.object);
+}
+
+function compileTextOf(s: RaiserCompState, obj: Node): int32 {
+	const objReg = compileStringPart(s, obj);
 	const emptyReg = allocReg(s);
 	emitLoadConst(s, emptyReg, raiserString(""));
 	const dest = allocReg(s);

@@ -360,8 +360,9 @@ export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean =
 	while (ctx.errors.length > errMark) { ctx.errors.pop(); }
 	const userBound = fits && synthCall.nodeType != null && isStringLike(synthCall.nodeType)
 		&& synthCall.resolvedSym != null && synthCall.resolvedSym.declNode != null;
-	if (userBound) return synthCall;
-	if (heldInSlotUnion(t)) return unionTextCall(ctx, expr, debug, loc);
+	const slotUnion = heldInSlotUnion(t);
+	if (userBound && (!slotUnion || receivesUnion(synthCall.resolvedSym!))) return synthCall;
+	if (slotUnion) return unionTextCall(ctx, expr, debug, loc);
 	if (!dumped) return null;
 	const dump = debug
 		? boundCall(ctx, "valueDebug", [expr], loc)
@@ -398,6 +399,12 @@ export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
 	node.flags = call.flags;
 	node.variantSlot = call.variantSlot;
 	node.resolvedSym = call.resolvedSym;
+}
+
+function receivesUnion(sym: Symbol): boolean {
+	const fn = sym.symbolType;
+	if (fn == null || fn.kind != TypeKind.Function || fn.typeChildren.length == 0) return false;
+	return valueShape(fn.typeChildren[0]).kind == TypeKind.Union;
 }
 
 function heldInSlotUnion(t: Type): boolean {

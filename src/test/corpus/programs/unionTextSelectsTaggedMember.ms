@@ -1,7 +1,8 @@
 // @skip-js
+// @skip-raiser
 // @stdout: {"x":1,"y":2} {"w":7} none $5 | $5 {"w":7} | Box(9) row 7 | {"x":1,"y":2}/$5 |
 // @stdout: $5 Box(9) none
-// note: a union of structs converts to text through the member its tag selects, by that member's own toString when it has one; JS stores no tag for these members, so the lane is skipped.
+// note: a union of structs converts to text through the member its tag selects, by that member's own toString when it has one; JS and the raiser store no tag for these members, so both lanes are skipped.
 struct TextPoint { x: int32; y: int32 }
 struct TextSize { w: int32 }
 struct TextPrice { cents: int32 }
