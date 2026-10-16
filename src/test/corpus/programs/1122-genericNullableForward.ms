@@ -1,4 +1,4 @@
-// @stdout: two=null,set,set three=null,set nested=null,set:7 hops=null,set method=null,set back=empty,y:2 value=set,set undef=undef,set closure=null null
+// @stdout: two=null,set,set three=null,set nested=null,set:7 hops=null,set method=null,set back=empty,y:2 value=set,set,set undef=undef,set closure=null null
 
 // A `T | null` handed from one generic to another, or from a `Note | null` local into a
 // generic's `T | null`, keeps the one carrier the instance declares: the argument converts
@@ -106,17 +106,23 @@ export function main(): void {
 
 	const backNone = backOuter<Wide>(null);
 	const backSome = backOuter<Wide>(wideSet);
-	const back = `${backNone === null ? "empty" : "full"},${backSome === null ? "none" : backSome.b}:${backSome === null ? 0 : backSome.c - 1}`;
+	const someText = backSome === null ? "none" : `${backSome.b}:${backSome.c - 1}`;
+	const back = `${backNone === null ? "empty" : "full"},${someText}`;
 
 	const plain: Note = { slug: "a", text: "b" };
-	const value = [outer<Note>(plain), inner<Note>(plain)].join(",");
+	const value = [
+		outer<Note>(plain),
+		inner<Note>(plain),
+		inner<Note>({ slug: "l", text: "m" }),
+	].join(",");
 
 	const missing: Note | undefined = undefined;
 	const undef = [outerUndef<Note>(missing), outerUndef<Note>(plain)].join(",");
 
 	const closure = captured<Note>(absent);
 
-	console.log(`two=${two} three=${three} nested=${nested} hops=${hops} method=${method} back=${back} value=${value} undef=${undef} closure=${closure}`);
+	console.log(`two=${two} three=${three} nested=${nested} hops=${hops} method=${method}`
+		+ ` back=${back} value=${value} undef=${undef} closure=${closure}`);
 }
 
 main();
