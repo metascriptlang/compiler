@@ -3030,7 +3030,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		// (checkExpr ObjectLiteral: a generic-containing formal is never stamped)
 		// now gets the instantiated formal: codegen must emit the same struct
 		// identity the instance's parameter uses, not the literal's own anon name.
-		const substitutedRef = substituted.kind == TypeKind.Ref && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+		const carried = isMaybeType(substituted) && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+		const substitutedRef = carried.kind == TypeKind.Ref && carried.typeReturn != null ? carried.typeReturn : carried;
 		const substitutedObject = substitutedRef.kind == TypeKind.GenericInstance ? peelToStructOrUnion(substitutedRef) : substitutedRef;
 		if (arg.kind == NodeKind.ObjectLiteral && substitutedObject != null && substitutedObject.kind == TypeKind.Struct
 				&& !hasGenericParams(substituted)) {
@@ -3039,9 +3040,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			if (!skipConstruct) {
 				rearmUnfitProperties(ctx, arg, substitutedObject);
 				rearmLiteralForRecheck(arg, calleeType.typeChildren[pi]);
-				callCheckExpr(ctx, arg, substituted);
+				callCheckExpr(ctx, arg, carried);
 			}
-			if (arg.nodeType == null) arg.nodeType = substituted;
+			if (arg.nodeType == null) arg.nodeType = carried;
+			if (carried != substituted && !isMaybeType(arg.nodeType)) {
+				cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+				if (pi < argTypes.length) argTypes[pi] = substituted;
+				continue;
+			}
 			if (pi < argTypes.length) argTypes[pi] = arg.nodeType;
 			continue;
 		}
