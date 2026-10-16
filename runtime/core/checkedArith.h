@@ -222,6 +222,125 @@ static inline double msPowF64(double x, double y) {
 #define msPostInc(lv) msPostStep_(lv, __builtin_add_overflow)
 #define msPostDec(lv) msPostStep_(lv, __builtin_sub_overflow)
 
+#define MS_REDUCE_BLOCK 1024
+
+static inline int64_t msBlockEnd(int64_t b, int64_t len) {
+	if (b < 0) return b + 1;
+	return len - b > MS_REDUCE_BLOCK ? b + MS_REDUCE_BLOCK : len;
+}
+
+static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t max) {
+	if (acc > max) return 0;
+	return term <= (max - acc) / (uint64_t)n;
+}
+
+#define msAbsOf_(U, v) ((v) < 0 ? (U)0 - (U)(v) : (U)(v))
+#define msArrayData_(a) ((a).len > 0 ? (a).p->data : NULL)
+
+#define MS_SUM_BLOCK_(A, AT, UA, AMAX, E, ET, UE) \
+static inline int msSumFits##A##E##_(AT acc, int64_t len, const ET* p, int64_t b, int64_t e) { \
+	if (b < 0 || e > len || e <= b) return 0; \
+	UE m = 0; \
+	for (int64_t i = b; i < e; i++) { UE v = msAbsOf_(UE, p[i]); m = v > m ? v : m; } \
+	return msBlockFits_(msAbsOf_(uint64_t, acc), m, e - b, AMAX); \
+} \
+static inline AT msSumAdd##A##E##_(AT acc, const ET* p, int64_t b, int64_t e) { \
+	UA s = (UA)acc; \
+	for (int64_t i = b; i < e; i++) s += (UA)(AT)p[i]; \
+	return (AT)s; \
+} \
+static inline AT msSumSub##A##E##_(AT acc, const ET* p, int64_t b, int64_t e) { \
+	UA s = (UA)acc; \
+	for (int64_t i = b; i < e; i++) s -= (UA)(AT)p[i]; \
+	return (AT)s; \
+}
+MS_SUM_BLOCK_(I8, int8_t, uint32_t, INT8_MAX, I8, int8_t, uint8_t)
+MS_SUM_BLOCK_(I16, int16_t, uint32_t, INT16_MAX, I8, int8_t, uint8_t)
+MS_SUM_BLOCK_(I16, int16_t, uint32_t, INT16_MAX, I16, int16_t, uint16_t)
+MS_SUM_BLOCK_(I32, int32_t, uint32_t, INT32_MAX, I8, int8_t, uint8_t)
+MS_SUM_BLOCK_(I32, int32_t, uint32_t, INT32_MAX, I16, int16_t, uint16_t)
+MS_SUM_BLOCK_(I32, int32_t, uint32_t, INT32_MAX, I32, int32_t, uint32_t)
+MS_SUM_BLOCK_(I64, int64_t, uint64_t, INT64_MAX, I8, int8_t, uint8_t)
+MS_SUM_BLOCK_(I64, int64_t, uint64_t, INT64_MAX, I16, int16_t, uint16_t)
+MS_SUM_BLOCK_(I64, int64_t, uint64_t, INT64_MAX, I32, int32_t, uint32_t)
+MS_SUM_BLOCK_(I64, int64_t, uint64_t, INT64_MAX, I64, int64_t, uint64_t)
+#define msSumFits_(fn, acc, a, b, e) fn((acc), (a).len, msArrayData_(a), (b), (e))
+#define msSumRun_(fn, acc, a, b, e) fn((acc), msArrayData_(a), (b), (e))
+#define msSumFitsI8I8(acc, a, b, e) msSumFits_(msSumFitsI8I8_, acc, a, b, e)
+#define msSumFitsI16I8(acc, a, b, e) msSumFits_(msSumFitsI16I8_, acc, a, b, e)
+#define msSumFitsI16I16(acc, a, b, e) msSumFits_(msSumFitsI16I16_, acc, a, b, e)
+#define msSumFitsI32I8(acc, a, b, e) msSumFits_(msSumFitsI32I8_, acc, a, b, e)
+#define msSumFitsI32I16(acc, a, b, e) msSumFits_(msSumFitsI32I16_, acc, a, b, e)
+#define msSumFitsI32I32(acc, a, b, e) msSumFits_(msSumFitsI32I32_, acc, a, b, e)
+#define msSumFitsI64I8(acc, a, b, e) msSumFits_(msSumFitsI64I8_, acc, a, b, e)
+#define msSumFitsI64I16(acc, a, b, e) msSumFits_(msSumFitsI64I16_, acc, a, b, e)
+#define msSumFitsI64I32(acc, a, b, e) msSumFits_(msSumFitsI64I32_, acc, a, b, e)
+#define msSumFitsI64I64(acc, a, b, e) msSumFits_(msSumFitsI64I64_, acc, a, b, e)
+#define msSumAddI8I8(acc, a, b, e) msSumRun_(msSumAddI8I8_, acc, a, b, e)
+#define msSumAddI16I8(acc, a, b, e) msSumRun_(msSumAddI16I8_, acc, a, b, e)
+#define msSumAddI16I16(acc, a, b, e) msSumRun_(msSumAddI16I16_, acc, a, b, e)
+#define msSumAddI32I8(acc, a, b, e) msSumRun_(msSumAddI32I8_, acc, a, b, e)
+#define msSumAddI32I16(acc, a, b, e) msSumRun_(msSumAddI32I16_, acc, a, b, e)
+#define msSumAddI32I32(acc, a, b, e) msSumRun_(msSumAddI32I32_, acc, a, b, e)
+#define msSumAddI64I8(acc, a, b, e) msSumRun_(msSumAddI64I8_, acc, a, b, e)
+#define msSumAddI64I16(acc, a, b, e) msSumRun_(msSumAddI64I16_, acc, a, b, e)
+#define msSumAddI64I32(acc, a, b, e) msSumRun_(msSumAddI64I32_, acc, a, b, e)
+#define msSumAddI64I64(acc, a, b, e) msSumRun_(msSumAddI64I64_, acc, a, b, e)
+#define msSumSubI8I8(acc, a, b, e) msSumRun_(msSumSubI8I8_, acc, a, b, e)
+#define msSumSubI16I8(acc, a, b, e) msSumRun_(msSumSubI16I8_, acc, a, b, e)
+#define msSumSubI16I16(acc, a, b, e) msSumRun_(msSumSubI16I16_, acc, a, b, e)
+#define msSumSubI32I8(acc, a, b, e) msSumRun_(msSumSubI32I8_, acc, a, b, e)
+#define msSumSubI32I16(acc, a, b, e) msSumRun_(msSumSubI32I16_, acc, a, b, e)
+#define msSumSubI32I32(acc, a, b, e) msSumRun_(msSumSubI32I32_, acc, a, b, e)
+#define msSumSubI64I8(acc, a, b, e) msSumRun_(msSumSubI64I8_, acc, a, b, e)
+#define msSumSubI64I16(acc, a, b, e) msSumRun_(msSumSubI64I16_, acc, a, b, e)
+#define msSumSubI64I32(acc, a, b, e) msSumRun_(msSumSubI64I32_, acc, a, b, e)
+#define msSumSubI64I64(acc, a, b, e) msSumRun_(msSumSubI64I64_, acc, a, b, e)
+
+/* Keep UW at 32 bits or more: two uint16_t operands promote to int, whose product overflows. */
+#define MS_DOT_BLOCK_(T, ET, UE, UW, MAX) \
+static inline int msDotFits##T##_(ET acc, int64_t alen, const ET* p, int64_t blen, const ET* q, int64_t s, int64_t e) { \
+	if (s < 0 || e > alen || e > blen || e <= s) return 0; \
+	UE ma = 0, mb = 0; \
+	for (int64_t i = s; i < e; i++) { \
+		UE x = msAbsOf_(UE, p[i]), y = msAbsOf_(UE, q[i]); \
+		ma = x > ma ? x : ma; \
+		mb = y > mb ? y : mb; \
+	} \
+	uint64_t a = msAbsOf_(uint64_t, acc); \
+	if (a > (uint64_t)(MAX)) return 0; \
+	uint64_t room = ((uint64_t)(MAX) - a) / (uint64_t)(e - s); \
+	return ma == 0 || (uint64_t)mb <= room / (uint64_t)ma; \
+} \
+static inline ET msDotAdd##T##_(ET acc, const ET* p, const ET* q, int64_t s, int64_t e) { \
+	UW r = (UW)acc; \
+	for (int64_t i = s; i < e; i++) r += (UW)p[i] * (UW)q[i]; \
+	return (ET)r; \
+} \
+static inline ET msDotSub##T##_(ET acc, const ET* p, const ET* q, int64_t s, int64_t e) { \
+	UW r = (UW)acc; \
+	for (int64_t i = s; i < e; i++) r -= (UW)p[i] * (UW)q[i]; \
+	return (ET)r; \
+}
+MS_DOT_BLOCK_(I8, int8_t, uint8_t, uint32_t, INT8_MAX)
+MS_DOT_BLOCK_(I16, int16_t, uint16_t, uint32_t, INT16_MAX)
+MS_DOT_BLOCK_(I32, int32_t, uint32_t, uint32_t, INT32_MAX)
+MS_DOT_BLOCK_(I64, int64_t, uint64_t, uint64_t, INT64_MAX)
+#define msDotFits_(fn, acc, a, b, s, e) fn((acc), (a).len, msArrayData_(a), (b).len, msArrayData_(b), (s), (e))
+#define msDotRun_(fn, acc, a, b, s, e) fn((acc), msArrayData_(a), msArrayData_(b), (s), (e))
+#define msDotFitsI8(acc, a, b, s, e) msDotFits_(msDotFitsI8_, acc, a, b, s, e)
+#define msDotFitsI16(acc, a, b, s, e) msDotFits_(msDotFitsI16_, acc, a, b, s, e)
+#define msDotFitsI32(acc, a, b, s, e) msDotFits_(msDotFitsI32_, acc, a, b, s, e)
+#define msDotFitsI64(acc, a, b, s, e) msDotFits_(msDotFitsI64_, acc, a, b, s, e)
+#define msDotAddI8(acc, a, b, s, e) msDotRun_(msDotAddI8_, acc, a, b, s, e)
+#define msDotAddI16(acc, a, b, s, e) msDotRun_(msDotAddI16_, acc, a, b, s, e)
+#define msDotAddI32(acc, a, b, s, e) msDotRun_(msDotAddI32_, acc, a, b, s, e)
+#define msDotAddI64(acc, a, b, s, e) msDotRun_(msDotAddI64_, acc, a, b, s, e)
+#define msDotSubI8(acc, a, b, s, e) msDotRun_(msDotSubI8_, acc, a, b, s, e)
+#define msDotSubI16(acc, a, b, s, e) msDotRun_(msDotSubI16_, acc, a, b, s, e)
+#define msDotSubI32(acc, a, b, s, e) msDotRun_(msDotSubI32_, acc, a, b, s, e)
+#define msDotSubI64(acc, a, b, s, e) msDotRun_(msDotSubI64_, acc, a, b, s, e)
+
 #define msModAssignF64(lv, b) msDivAssign_(lv, b, fmod)
 #define msAndAssignF64(lv, b) msDivAssign_(lv, b, msNumberAnd)
 #define msOrAssignF64(lv, b) msDivAssign_(lv, b, msNumberOr)
