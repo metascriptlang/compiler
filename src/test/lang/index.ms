@@ -91,3 +91,4 @@ import "./comptime";
 import "./inheritance";
 import "./nullableFunction";
 import "./nullable";
+import "./keyedAccess";
