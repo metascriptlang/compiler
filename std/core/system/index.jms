@@ -235,6 +235,13 @@ function msOverflowI8(v: float64): int8 {
 }
 
 @compilerFunc
+function msOverflowChar(v: float64): char {
+	@emit(`if ((${v} & 255) !== ${v}) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
 function msOverflowI16(v: float64): int16 {
 	@emit(`if (${v} > 32767 || ${v} < -32768) ${msDefect}("over- or underflow");
 	return ${v};`);
