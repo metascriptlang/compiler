@@ -19,3 +19,4 @@ import "./aliasNarrowingCast";
 import "./structFieldDecorators";
 import "./byteViews";
 import "./externPattern";
+import "./armFromObject";
