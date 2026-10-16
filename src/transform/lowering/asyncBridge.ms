@@ -278,7 +278,7 @@ function readFnForAwait(t: Type | null): string {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
 		TypeKind.Boolean => "msFutureReadBool",
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => "msFutureReadInt32",
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Module => "msFutureReadInt32",
 		TypeKind.String => "msFutureReadString",
 		_ => "",
 	};

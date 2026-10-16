@@ -228,7 +228,7 @@ export function unboxFnNameForType(t: Type | null): string {
 		TypeKind.Boolean => "msUnboxBool",
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Enum => "msUnboxInt32",
+			| TypeKind.Enum | TypeKind.Module => "msUnboxInt32",
 		TypeKind.String => "msUnboxString",
 		_ => "",
 	};
@@ -471,6 +471,11 @@ export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 		const n = makeNumber(0, loc);
 		n.nodeType = t;
 		return n;
+	}
+	if (k == TypeKind.Module) {
+		const unit = makeNumber(0, loc);
+		unit.nodeType = getSysType(TypeKind.Uint8);
+		return unit;
 	}
 	// Boolean → false
 	if (k == TypeKind.Boolean) {
