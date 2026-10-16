@@ -707,7 +707,10 @@ export function computeAliveSet(
 	_aliveSet = createAliveSet();
 	_aliveSet.computed = true;
 	_imageModules = new HashSet<string>();
-	for (const path of imageModules) _imageModules.add(path);
+	for (const path of imageModules) {
+		_imageModules.add(path);
+		aliveSetAddModule(_aliveSet, path);
+	}
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	nameIndexBuild(programs, paths);

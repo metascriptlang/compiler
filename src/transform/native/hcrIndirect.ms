@@ -106,9 +106,6 @@ export function lowerHcrIndirection(
 	}
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrModuleId000(void) { return ${cString(own.moduleId)}; }`, loc));
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* const* HcrFunctions000(void) { static const char* const symbols[] = { ${published}NULL }; return symbols; }`, loc));
-	let imports = "";
-	for (const id of own.imports) imports = imports + cString(id) + ", ";
-	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* const* HcrImports000(void) { static const char* const imports[] = { ${imports}NULL }; return imports; }`, loc));
 	emitted.push(makeEmitStmt(typeKeysFunction(own), loc));
 	if (own.beforeReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrBeforeReload000", own.beforeReload), loc));
 	if (own.afterReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrAfterReload000", own.afterReload), loc));
@@ -119,6 +116,7 @@ export function lowerHcrIndirection(
 	let bindSlot: int32 = 0;
 	const foreignOps: string[] = [];
 	const foreignOpKeys = new HashMap<string, string>();
+	const foreignOpSymbols = new HashMap<string, Symbol>();
 	for (const entry of aliveSet.foreignOps.data) {
 		if (entry.hcode == 0 || !entry.value.includes(own.modulePath)) continue;
 		const op = entry.key;
@@ -126,11 +124,13 @@ export function lowerHcrIndirection(
 		if (ownFunctions.has(symbol) || foreignOpKeys.has(symbol)) continue;
 		foreignOps.push(symbol);
 		foreignOpKeys.set(symbol, "f:" + hcrSignatureKey(op.symbolType));
+		foreignOpSymbols.set(symbol, op);
 	}
 	foreignOps.sort();
 	for (const symbol of foreignOps) {
 		const owner = owners.get(symbol);
 		if (owner == null || owner == own.moduleId) continue;
+		if (!own.imports.includes(owner)) own.imports.push(owner);
 		const key = foreignOpKeys.get(symbol)!;
 		const id = owner + "\n" + symbol + "\n" + key;
 		if (bound.has(id)) continue;
@@ -143,7 +143,19 @@ export function lowerHcrIndirection(
 			`/*DATINITSECTION*/  ${pointer} = msHcrBind(${cString(owner)}, ${cString(symbol)}, ${cString(key)});`,
 			loc,
 		));
-		emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${symbol} ((__typeof__(&${symbol}))${pointer}->current)`, loc));
+		const op = foreignOpSymbols.get(symbol)!;
+		const fnType = op.symbolType;
+		const arity = fnType.typeChildren != null ? fnType.typeChildren.length : 0;
+		if (fnType.typeReturn != null && fnType.typeReturn.kind == TypeKind.Void && (arity == 1 || arity == 2)) {
+			const wrapper = `${pointer}_entry`;
+			const params = arity == 1 ? "void* self" : "void* self, void* other";
+			const args = arity == 1 ? "self" : "self, other";
+			const proc = arity == 1 ? "void(*)(void*)" : "void(*)(void*, void*)";
+			emitted.push(makeEmitStmt(`/*VARSECTION*/static void ${wrapper}(${params}) { ((${proc})${pointer}->current)(${args}); }`, loc));
+			emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${symbol} ${wrapper}`, loc));
+		} else {
+			emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${symbol} ((__typeof__(&${symbol}))${pointer}->current)`, loc));
+		}
 	}
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const fn = exportedFunctionOf(pd.programStmts[i]);
@@ -200,6 +212,7 @@ export function lowerHcrIndirection(
 				if (owner == null || owner == own.moduleId) return n;
 				targetId = owner;
 			}
+			if (!own.imports.includes(targetId)) own.imports.push(targetId);
 			const key = (isVariable ? "v:" : "f:") + hcrSignatureKey(sym.symbolType);
 			const id = targetId + "\n" + symbol + "\n" + key;
 			const cachedPointer = bound.get(id);
@@ -238,6 +251,9 @@ export function lowerHcrIndirection(
 			return value;
 		});
 	}
+	let imports = "";
+	for (const id of own.imports) imports = imports + cString(id) + ", ";
+	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* const* HcrImports000(void) { static const char* const imports[] = { ${imports}NULL }; return imports; }`, loc));
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* const* HcrBindings000(void) { static const char* const bindings[] = { ${bindings}NULL }; return bindings; }`, loc));
 	for (const stmt of pd.programStmts) emitted.push(stmt);
 	for (const stmt of registrations) emitted.push(stmt);

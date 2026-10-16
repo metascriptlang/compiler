@@ -4,7 +4,7 @@ import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd,
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, ObjectLiteralData, StringLiteralData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
@@ -21,7 +21,7 @@ import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
+import { mangle, mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -902,6 +902,10 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	if (compilerRoot != "") {
 		includePaths.add(compilerRoot);
 		allFlags = appendFlag(allFlags, quoteCcArg(`-I${compilerRoot}`));
+		if (opts.isHcr) {
+			allFlags = appendFlag(allFlags, quoteCcArg(`-I${compilerRoot}/runtime/compress`));
+			allFlags = appendFlag(allFlags, quoteCcArg(`-I${compilerRoot}/vendor/monocypher/src`));
+		}
 	}
 	// Project root is NOT added to global flags — it varies per project and
 	// would invalidate ccache deduplication for stdlib compiles. Instead it is
@@ -1029,6 +1033,24 @@ function memoReplays(memo: DirectiveHit[]): boolean {
 	return true;
 }
 
+function resolveCompileSource(cPath: string, moduleDir: string, includePaths: HashSet<string>): string {
+	let fullPath = cPath;
+	if (cPath.slice(0, 2) == "./" || cPath.slice(0, 3) == "../") {
+		fullPath = `${moduleDir}/${cPath}`;
+	} else if (!exists(fullPath)) {
+		for (const dir of includePaths) {
+			const candidate = `${dir}/${cPath}`;
+			if (exists(candidate)) { fullPath = candidate; break; }
+		}
+	}
+	fullPath = normalize(fullPath);
+	if (!exists(fullPath)) {
+		printDiag(`${error("error")}: @compile cannot find: ${fullPath}`);
+		stopBuild();
+	}
+	return fullPath;
+}
+
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string[] {
 	if (emitOnlyMode) return [];
 	if (directives == "") return [];
@@ -1044,7 +1066,8 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			const replayed: string[] = [];
 			for (const hit of memo) {
 				markCppCompile(hit.source);
-				if (_compiledOFiles.has(hit.dependencyFile)) continue;
+				if (_compiledOFiles.has(hit.dependencyFile)
+					|| _compiledOFiles.has("hcr-native:" + canonicalModulePath(hit.source))) continue;
 				_compiledOFiles.add(hit.dependencyFile);
 				replayed.push(hit.oFile);
 			}
@@ -1077,20 +1100,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				}
 				// ./ or ../ prefix: resolve relative to the declaring module's directory.
 				// Bare paths: try CWD, then search registered include paths.
-				let fullPath = cPath;
-				if (cPath.slice(0, 2) == "./" || cPath.slice(0, 3) == "../") {
-					fullPath = `${moduleDir}/${cPath}`;
-				} else if (!exists(fullPath)) {
-					for (const dir of includePaths) {
-						const candidate = `${dir}/${cPath}`;
-						if (exists(candidate)) { fullPath = candidate; break; }
-					}
-				}
-				fullPath = normalize(fullPath);
-				if (!exists(fullPath)) {
-					printDiag(`${error("error")}: @compile cannot find: ${fullPath}`);
-					stopBuild();
-				}
+				const fullPath = resolveCompileSource(cPath, moduleDir, includePaths);
 				// Mark C++ at directive-resolution time (main thread, sequential)
 				// so the flag is set regardless of cache-hit / dedup / fresh-compile.
 				// See cc.ms `markCppCompile` for the why.
@@ -1103,7 +1113,8 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				const dependenciesKnown = nativeDependenciesKnown(fullPath, probeKey);
 				const probeFp = computeFingerprint(fullPath, probeKey);
 				const probeOFile = stableOFileFp(fullPath, probeFp);
-				if (!_compiledOFiles.has(dependencyFile)) {
+				if (!_compiledOFiles.has(dependencyFile)
+					&& !_compiledOFiles.has("hcr-native:" + canonicalModulePath(fullPath))) {
 					_compiledOFiles.add(dependencyFile);
 					const fileFlags = probeFlags;
 					const fp = probeFp;
@@ -1590,8 +1601,73 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	printDiag(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
 
+const HCR_SHARED_NATIVE_SOURCES: string[] = [
+	"runtime/crypto/hash.c",
+	"runtime/crypto/psaMdStubs.c",
+	"runtime/io/engineSelect.c",
+	"vendor/mbedtls/tf-psa-crypto/core/psa_crypto.c",
+	"vendor/mbedtls/tf-psa-crypto/core/psa_crypto_slot_management.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1parse.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1write.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/base64.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdh.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdsa.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp_curves.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/oid.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pem.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_wrap.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_hash.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa.c",
+	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c",
+	"vendor/miniz/miniz.c",
+	"vendor/miniz/miniz_tdef.c",
+	"vendor/miniz/miniz_tinfl.c",
+	"vendor/monocypher/src/monocypher.c",
+];
+
 // Platform-specific runtime compile — dispatch + selectors + pool + fs.
-function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string[] {
+function hcrSharedNativeDirectives(modules: ProcessedModule[], includePaths: HashSet<string>, opts: CliOptions): string {
+	const flags: HashMap<string, string> = new HashMap<string, string>();
+	const root = resolveRuntimeDir();
+	for (const module of modules) {
+		for (const entry of module.ctx.compileDirectives.split("\n")) {
+			const tab = entry.indexOf("\t");
+			if (tab < 0) continue;
+			const dir = dirname(module.modPath);
+			const source = canonicalModulePath(resolveCompileSource(entry.slice(0, tab), dir, includePaths));
+			for (const shared of HCR_SHARED_NATIVE_SOURCES) {
+				if (source != canonicalModulePath(join(root, shared))) continue;
+				const config = appendFlag(entry.slice(tab + 1, entry.length), userProjectFlag(dir, opts.projectRoot, root));
+				const previous = flags.get(shared);
+				if (previous != null && previous != config) {
+					printDiag(`${error("error")}: HCR shared native source '${shared}' has conflicting @compile flags`);
+					stopBuild();
+				}
+				flags.set(shared, config);
+			}
+		}
+	}
+	let directives = "";
+	for (const shared of HCR_SHARED_NATIVE_SOURCES) {
+		if (directives != "") directives = directives + "\n";
+		directives = directives + shared;
+		const config = flags.get(shared);
+		if (config != null) directives = directives + "\t" + config;
+	}
+	return directives;
+}
+
+function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions, sharedDirectives: string = ""): string[] {
 	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
 		return processCompileDirectives(
 			"runtime/freestanding/libc.c", ".", includePaths, allFlags,
@@ -1611,7 +1687,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		// Desktop: full dispatcher + thread pool + selectors
 		rtFiles = "runtime/promise/dispatchFull.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/pool.c";
-		rtFiles = rtFiles + "\n" + "runtime/io/engineSelect.c";
+		if (sharedDirectives == "") rtFiles = rtFiles + "\n" + "runtime/io/engineSelect.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/awaitGroup.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorKqueue.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
@@ -1625,10 +1701,19 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	}
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
-	if (opts.isHcr) rtFiles = rtFiles + "\n" + "runtime/hcr.c";
+	if (opts.isHcr) {
+		rtFiles = rtFiles + "\n" + "runtime/hcr.c";
+		rtFiles = rtFiles + "\n" + sharedDirectives;
+	}
 
 	if (rtFiles == "") return [];
-	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+	const objects = processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+	if (opts.isHcr) {
+		for (const source of HCR_SHARED_NATIVE_SOURCES) {
+			_compiledOFiles.add("hcr-native:" + canonicalModulePath(join(resolveRuntimeDir(), source)));
+		}
+	}
+	return objects;
 }
 
 // ===== Check =====
@@ -1663,8 +1748,20 @@ function hcrBuildRoot(entryPath: string, projectRoot: string): string {
 	return root;
 }
 
-function hcrModuleId(modPath: string, root: string, stdPath: string, deps: DepsSection): string {
-	if (stdPath != "" && isUnder(modPath, stdPath)) return "";
+function hcrModuleId(
+	modPath: string,
+	root: string,
+	stdPath: string,
+	deps: DepsSection,
+	coreModules: string[],
+): string {
+	if (stdPath != "" && isUnder(modPath, stdPath)) {
+		if (coreModules.includes(modPath)) return "";
+		for (const dir of RAISER_ONLY_STD_DIRS) {
+			if (isUnder(modPath, join(stdPath, dir))) return "";
+		}
+		return `std/${replaceExt(relative(stdPath, modPath), "")}`;
+	}
 	if (isUnder(modPath, root)) return replaceExt(relative(root, modPath), "");
 	for (let i = 0; i < deps.keys.length; i += 1) {
 		if (isUnder(modPath, deps.values[i])) return `${deps.keys[i]}/${replaceExt(relative(deps.values[i], modPath), "")}`;
@@ -1689,7 +1786,11 @@ function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 
 
 function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
-	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
+	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)
+		|| hasFlag(fn, SymbolFlag.ImportC)) return Result.ok(null);
+	if (fn.declNode == null || fn.declNode.kind != NodeKind.FunctionDecl) return Result.ok(null);
+	const decl = fn.declNode.data as FunctionDeclData;
+	if (decl.fnBody == null || decl.fnFlags.includes("extern")) return Result.ok(null);
 	if (hasGenericParams(fn.symbolType) || hasFlag(fn, SymbolFlag.CompileTime)) return Result.ok(null);
 	if (fn.declNode != null && fn.declNode.kind == NodeKind.FunctionDecl && isGenericFn((fn.declNode.data as FunctionDeclData).fnFlags)) return Result.ok(null);
 	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
@@ -1719,6 +1820,7 @@ function prepareHcrBuildAbi(
 	opts: CliOptions,
 	compileFlags: string,
 	stdPath: string,
+	coreModules: string[],
 ): Result<HcrBuildAbi, string> {
 	const bundlePath = outBinary + ".hcrabi";
 	const hadCurrent = exists(bundlePath);
@@ -1730,7 +1832,7 @@ function prepareHcrBuildAbi(
 		if (!parsed.ok) return Result.err(`invalid current HCR ABI bundle '${bundlePath}': ${parsed.error}`);
 		current = parsed.value;
 	}
-	const built = buildHcrCandidateAbi(graph, entryPath, opts, compileFlags, stdPath);
+	const built = buildHcrCandidateAbi(graph, entryPath, opts, compileFlags, stdPath, coreModules);
 	if (!built.ok) return Result.err(built.error);
 	return Result.ok({
 		bundlePath,
@@ -1752,6 +1854,7 @@ function buildHcrCandidateAbi(
 	opts: CliOptions,
 	compileFlags: string,
 	stdPath: string,
+	coreModules: string[],
 ): Result<HcrCandidateAbi, string> {
 	const root = hcrBuildRoot(entryPath, opts.projectRoot);
 	const deps = depRoots(opts.projectRoot != "" ? opts.projectRoot : root);
@@ -1765,11 +1868,11 @@ function buildHcrCandidateAbi(
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null || !mod.extraPrelude) continue;
-		const moduleId = hcrModuleId(modPath, root, stdPath, deps);
+		const moduleId = hcrModuleId(modPath, root, stdPath, deps, coreModules);
 		if (moduleId != "") globalImportIds.push(moduleId);
 	}
 	for (const modPath of graph.loadOrder) {
-		const moduleId = hcrModuleId(modPath, root, stdPath, deps);
+		const moduleId = hcrModuleId(modPath, root, stdPath, deps, coreModules);
 		if (moduleId == "") continue;
 		const imageName = moduleId.replaceAll("/", ".");
 		const owner = imageOwners.get(imageName);
@@ -1781,7 +1884,7 @@ function buildHcrCandidateAbi(
 		if (mod == null) return Result.err(`HCR ABI module '${modPath}' is missing from the graph`);
 		const dependencies: string[] = [];
 		for (const imported of mod.imports) {
-			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath, deps);
+			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath, deps, coreModules);
 			if (dependencyId == "") continue;
 			dependencies.push(dependencyId);
 		}
@@ -1883,6 +1986,7 @@ function linkHcrImages(
 	entryPath: string,
 	outBinary: string,
 	allFlags: string,
+	coreBaseFlags: string,
 	opts: CliOptions,
 ): void {
 	let linkFlags = cliLinkFlags(allFlags, opts);
@@ -1891,7 +1995,8 @@ function linkHcrImages(
 	for (const obj of globalLinkObjects()) externalInputs.push(obj);
 
 	const core = hcrCoreImagePath(outBinary, opts.targetOs);
-	let coreFlags = linkFlags;
+	let coreFlags = cliLinkFlags(coreBaseFlags, opts);
+	for (const flag of globalLinkFlags()) coreFlags = appendFlag(coreFlags, flag);
 	let imageFlags = linkFlags;
 	let coreInput = core;
 	if (opts.targetOs == "windows") {
@@ -1997,7 +2102,7 @@ function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 	return names;
 }
 
-const RAISER_ONLY_STD_DIRS = ["meta"];
+const RAISER_ONLY_STD_DIRS: string[] = ["meta"];
 
 function hcrCoreModules(
 	graph: ModuleGraph,
@@ -2077,6 +2182,27 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	for (const module of modules) {
 		imagePaths.push(module.modulePath);
 		facts.hcrModules.set(module.modulePath, module.moduleId);
+	}
+	for (const module of modules) {
+		for (const unit of processed) {
+			if (unit.modPath != module.modulePath) continue;
+			for (const stmt of (unit.program.data as ProgramData).programStmts) {
+				if (stmt.kind != NodeKind.VariableDecl) continue;
+				const decl = stmt.data as VariableDeclData;
+				if (!decl.declName.endsWith("TypeInfo")
+					|| !aliveSetHasDecl(aliveSet, unit.modPath, decl.declName, stmt.resolvedSym)
+					|| decl.initializer == null
+					|| decl.initializer.kind != NodeKind.ObjectLiteral) continue;
+				const value = decl.initializer.data as ObjectLiteralData;
+				for (let i = 0; i < value.keys.length; i += 1) {
+					if (value.keys[i] != "cname" || value.properties[i].kind != NodeKind.StringLiteral) {
+						continue;
+					}
+					const name = mangle((value.properties[i].data as StringLiteralData).value);
+					if (!module.typeInfos.includes(name)) module.typeInfos.push(name);
+				}
+			}
+		}
 	}
 	for (const info of facts.typeInfoOrder) {
 		for (const module of modules) {
@@ -2620,7 +2746,7 @@ setGlobalHookOwners(sharedHookOwners);
 	}
 	let hcrBuildAbi: HcrBuildAbi = null as unknown as HcrBuildAbi;
 	if (opts.isHcr && !opts.emitC) {
-		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
+		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath, hcrCore);
 		if (!prepared.ok) {
 			printDiag(`${error("error")}: ${prepared.error}`);
 			throw new Error(BUILD_STOPPED);
@@ -2632,7 +2758,7 @@ setGlobalHookOwners(sharedHookOwners);
 	if (opts.isHcr) {
 		const abi: Result<HcrCandidateAbi, string> = hcrBuildAbi != null
 			? Result.ok({ candidate: hcrBuildAbi.candidate, modulePaths: hcrBuildAbi.modulePaths })
-			: buildHcrCandidateAbi(graph, entryPath, opts, allFlags0, config.stdPath);
+			: buildHcrCandidateAbi(graph, entryPath, opts, allFlags0, config.stdPath, hcrCore);
 		if (!abi.ok) {
 			printDiag(`${error("error")}: ${abi.error}`);
 			throw new Error(BUILD_STOPPED);
@@ -2669,6 +2795,7 @@ setGlobalHookOwners(sharedHookOwners);
 	let transformedPaths: string[] = [];
 	const bs = initCBuildState(opts);
 	let allFlags = bs.allFlags;
+	let coreBaseFlags = bs.allFlags;
 	const includePaths = bs.includePaths;
 	let oFiles: string[] = [];
 	let totalCheckerErrors = 0;
@@ -2769,7 +2896,16 @@ setGlobalHookOwners(sharedHookOwners);
 			for (const path of hcrModulePaths) {
 				if (!session.check.rechecked.has(path)) greenHcrModule = true;
 			}
-			if (session.hcrTypeRegistryFingerprint != "" && session.hcrTypeRegistryFingerprint != typesNow && greenHcrModule) {
+			const retainedModules: HcrIndirectModule[] = [];
+			const retainedPaths: string[] = [];
+			for (const module of hcrModules) {
+				if (!session.lowerFingerprints.has(module.modulePath)) continue;
+				retainedModules.push(module);
+				retainedPaths.push(module.modulePath);
+			}
+			const retainedTypes = hcrTypeRegistryFingerprint(retainedModules)
+				+ projectTypesFingerprint(session, retainedPaths);
+			if (session.hcrTypeRegistryFingerprint != "" && session.hcrTypeRegistryFingerprint != retainedTypes && greenHcrModule) {
 				session.staleReason = "the project type layouts changed";
 				return BuildStatus.Stale;
 			}
@@ -2863,6 +2999,11 @@ setGlobalHookOwners(sharedHookOwners);
 		// rule as @compile (try CWD, then search includePaths which contains compilerRoot).
 		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
 		allFlags = mergeFlagsDeduped(allFlags, resolved);
+		const sourceModule = findModule(graph, modPath);
+		if (!isUnder(modPath, config.stdPath) || hcrCore.includes(modPath)
+			|| (sourceModule != null && sourceModule.stdPrelude)) {
+			coreBaseFlags = mergeFlagsDeduped(coreBaseFlags, resolved);
+		}
 		// @passL/@link go directly to global linkState — no per-module merge
 		registerIncludePaths(resolved, includePaths);
 
@@ -2937,15 +3078,21 @@ setGlobalHookOwners(sharedHookOwners);
 	// Compile prelude @compile directives — unconditional.
 	// These are C runtime files, not application code. The linker strips unused sections.
 	const hcrImages = opts.isHcr && !opts.emitC;
-	const coreFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_CORE") : allFlags;
+	const coreFlags = hcrImages ? appendFlag(coreBaseFlags, "-DMS_HCR_CORE") : allFlags;
 	const imageFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_MODULE") : allFlags;
+	const sharedDirectives = hcrImages ? hcrSharedNativeDirectives(processed, includePaths, opts) : "";
+	if (hcrImages) {
+		const rtObjs = compilePlatformRuntime(includePaths, coreFlags, opts, sharedDirectives);
+		for (const oFile of rtObjs) oFiles.push(oFile);
+	}
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
 		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, coreFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		for (const oFile of preludeObjs) oFiles.push(oFile);
 	}
-
-	const rtObjs = compilePlatformRuntime(includePaths, coreFlags, opts);
-	for (const oFile of rtObjs) oFiles.push(oFile);
+	if (!hcrImages) {
+		const rtObjs = compilePlatformRuntime(includePaths, coreFlags, opts);
+		for (const oFile of rtObjs) oFiles.push(oFile);
+	}
 
 	// Phase C: Codegen + compile each module
 	setConcurrentTypeQueries(true);
@@ -3067,9 +3214,20 @@ setGlobalHookOwners(sharedHookOwners);
 
 		const sideFlags = !hcrImages ? allFlags : hcrModulePaths.includes(p.modPath) ? imageFlags : coreFlags;
 		// Process @compile("foo.c") directives
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, sideFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+		const nativeStd = hcrImages && isUnder(p.modPath, config.stdPath);
+		const sourceModule = findModule(graph, p.modPath);
+		const nativeCore = nativeStd && (hcrCore.includes(p.modPath)
+			|| (sourceModule != null && sourceModule.stdPrelude));
+		const nativeFlags = nativeCore ? coreFlags
+			: nativeStd ? appendFlag(allFlags, "-DMS_HCR_CORE") : sideFlags;
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirname(p.modPath), includePaths, nativeFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		moduleSlots.push(oSlots.length);
-		oSlots.push(compileObjs);
+		if (nativeCore) {
+			for (const object of compileObjs) oSlots[0].push(object);
+			oSlots.push([]);
+		} else {
+			oSlots.push(compileObjs);
+		}
 
 		if (opts.emitC) {
 			// Flat, mangled filename keeps every module's C inside out/ — a
@@ -3258,7 +3416,7 @@ setGlobalHookOwners(sharedHookOwners);
 		const jobPaths: string[] = [];
 		for (const job of emissionJobs) jobPaths.push(job.modPath);
 		const tLink = performance.now();
-		linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, opts);
+		linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, coreBaseFlags, opts);
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
