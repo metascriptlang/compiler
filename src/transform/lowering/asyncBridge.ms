@@ -31,7 +31,7 @@ import {
 	isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
-import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
+import { createPromise, createClosureType, createPtr, createPrimitive, voidType, numberType, isAwaitable, awaitedType } from "../../checker/types";
 import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { routineSyms } from "./lambdaLiftingDetect";
 import { stmtCountAfter } from "../testUtil";
@@ -72,7 +72,7 @@ function promiseTypeFor(inner: Type | null): Type {
 	return inner != null ? createPromise(inner) : createPromise(voidType());
 }
 
-import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture } from "../util";
+import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture, makeValueDropStmts } from "../util";
 
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
@@ -88,47 +88,21 @@ function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	return call;
 }
 
-// The routine a future runs on its value when the future is destroyed: it takes
-// whatever the slot still holds into a local, and the local's scope exit runs the
-// value's own destructor. A reader that took the value left the slot empty.
+// The routine a future runs on its value when the future is destroyed: the body
+// is shared with the drop closures of the builtin pass (makeValueDropStmts in ../util).
 function makeValueDropFn(t: Type, ctx: TransformContext, loc: SourceLocation): Node {
 	const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
-	const stmts: Node[] = [];
-	if (boxedInFuture(t)) {
-		const rawSym = mintSym(ctx, SymbolKind.Variable, "$raw", voidPtrType);
-		const take = makeCall(runtimeRef("msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
-		take.nodeType = voidPtrType;
-		stmts.push(makeLocalDecl(rawSym, take, voidPtrType, loc));
-		const unbox = makeCall(runtimeRef("msUnboxStruct", loc), [makeTypedIdentResolved(rawSym, voidPtrType, loc)], loc);
-		unbox.nodeType = t;
-		const held = makeBinary(makeTypedIdentResolved(rawSym, voidPtrType, loc), "!=", makeNull(loc), loc);
-		held.nodeType = booleanType();
-		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
-		stmts.push(makeIf(held, makeBlock([makeLocalDecl(droppedSym, unbox, t, loc)], loc), null, loc));
-	} else {
-		const take = makeCall(runtimeRef(inlineInFuture(t) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
-		take.nodeType = t;
-		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
-		stmts.push(makeLocalDecl(droppedSym, take, t, loc));
-	}
 	const fnExpr = createNode(NodeKind.FunctionExpr, {
 		funcExprParams: ["fut"],
 		funcExprParamTypes: ["Ptr<void>"],
-		funcExprBody: makeBlock(stmts, loc),
+		funcExprBody: makeBlock(makeValueDropStmts(t, futSym, ctx, loc), loc),
 		funcExprFlags: "",
 		funcExprReturnType: "void",
 	}, syntheticToken(loc));
 	fnExpr.nodeType = createClosureType([voidPtrType], ["fut"], voidType());
 	fnExpr.paramSyms = [futSym];
 	return fnExpr;
-}
-
-function makeLocalDecl(sym: Symbol, init: Node, t: Type, loc: SourceLocation): Node {
-	const decl = makeVarDecl(sym.name, init, DeclKind.Const, loc);
-	decl.nodeType = t;
-	decl.resolvedSym = sym;
-	return decl;
 }
 
 // msFutureSetValueDrop($retFut, drop): the async function's future owns its value.
