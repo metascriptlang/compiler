@@ -1584,6 +1584,89 @@ function instanceofReload(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function dynamicImportReload(): void {
+	const tag = "hcrDynamicImportReload";
+	const fixture = "dynamicImport";
+	const dir = freshDir(`${TMP}/${fixture}`);
+	for (const name of ["app.ms", "note.ms", "dep.ms", "failing.ms"]) copy(`${FIXTURES}/${fixture}/${name}`, `${dir}/${name}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["lazy.ms", "lazyEdit.ms", "lazyAgain.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/${fixture}/${edits[i]}`, `${dir}/lazy.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["lazy", "dep", "failing", "note", "support"], "DYN", [
+		"DYN start app",
+		"DYN g2: reloaded lazy",
+		"DYN sync end",
+		"DYN dep body",
+		"DYN lazy body g2",
+		"DYN lazy g2 g2 dep g2 dep",
+		"DYN resumed lazy g3",
+		"DYN g3: reloaded lazy",
+		"DYN after g3 g3 g2 dep",
+		"DYN failing body",
+		"DYN first boom",
+		"DYN second boom same",
+		"DYN destroy lazy",
+		"DYN destroy dep",
+		"DYN destroy app",
+	]);
+}
+
+const DYNAMIC_IMPORT_PINS = [
+	"dynamicImportOrder", "dynamicImportConcurrent", "dynamicImportInitThrows", "dynamicImportCycle",
+	"dynamicImportStaticDep", "dynamicImportDeinitOrder", "dynamicImportSpawn",
+];
+
+function stdoutPins(source: string): string[] {
+	const want: string[] = [];
+	for (const line of lines(source)) {
+		if (line.startsWith("// @stdout: ")) want.push(line.slice(12, line.length));
+	}
+	return want;
+}
+
+function runPinOnHost(tag: string, host: string, dir: string, entry: string, label: string): void {
+	const main = read(`${dir}/${entry}`);
+	const want = stdoutPins(main);
+	put(`${dir}/${entry}`, "import { reload } from \"std/hcr\";\n" + main);
+	const entryDir = entry.includes("/") ? `${dir}/${entry.slice(0, entry.lastIndexOf("/"))}` : dir;
+	const entryFile = entry.includes("/") ? entry.slice(entry.lastIndexOf("/") + 1, entry.length) : entry;
+	mustBuild(tag, entryDir, ["build", entryFile, "--hcr", `--output=run/module${sharedLibraryExt()}`], `${label}: the --hcr build failed`);
+	const ran = execFileResult(host, ["run", "module"], entryDir);
+	const seen: string[] = [];
+	for (const line of lines(ran.output)) {
+		if (line != "") seen.push(line);
+	}
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, `${label}: the --hcr images did not print the pinned stdout`);
+	}
+}
+
+function dynamicImportParity(): void {
+	const tag = "hcrDynamicImportParity";
+	const hostDir = freshDir(`${TMP}/dynamicImportHost`);
+	const host = `${hostDir}/${platform == "windows" ? "host.exe" : "host"}`;
+	copy(STD_HOST, `${hostDir}/host.cms`);
+	mustBuild(tag, hostDir, ["build", "host.cms", `--output=${host}`], "thin host build failed");
+	for (const pin of DYNAMIC_IMPORT_PINS) {
+		const source = `${ROOT}/src/test/corpus/programs/${pin}`;
+		const dir = freshDir(`${TMP}/${pin}`);
+		for (const f of readDir(source)) copy(`${source}/${f}`, `${dir}/${f}`);
+		runPinOnHost(tag, host, dir, "main.ms", pin);
+	}
+	const outside = freshDir(`${TMP}/dynamicImportOutside`);
+	for (const sub of ["app", "shared"]) {
+		ensureDir(`${outside}/${sub}`);
+		for (const f of readDir(`${FIXTURES}/dynamicImportOutside/${sub}`)) copy(`${FIXTURES}/dynamicImportOutside/${sub}/${f}`, `${outside}/${sub}/${f}`);
+	}
+	runPinOnHost(tag, host, outside, "app/main.ms", "a module outside the project, so linked into the core");
+	console.log(`ok   ${tag}`);
+}
+
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
@@ -1631,6 +1714,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrAddedModule", run: addedModule },
 	{ name: "hcrSameSecondEdit", run: sameSecondEdit },
 	{ name: "hcrAndroidImages", run: androidImages },
+	{ name: "hcrDynamicImportReload", run: dynamicImportReload },
+	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
