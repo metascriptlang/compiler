@@ -69,6 +69,7 @@ import { lowerJsVarParam } from "./lowering/jsVarParamLower";
 import { lowerJsPointers } from "./lowering/jsPointerLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
+import { lowerAsyncModuleBody } from "./lowering/asyncModuleBody";
 import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
@@ -120,7 +121,7 @@ function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
 	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
 }
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false, asyncModuleBody: boolean = false): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
 	ctx.preserveModuleConstants = preserveModuleConstants;
@@ -159,6 +160,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
+	if (asyncModuleBody) { result = lowerAsyncModuleBody(result, ctx); }
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
 	if (!jsBackend) { result = lowerNamespaceValues(result); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }

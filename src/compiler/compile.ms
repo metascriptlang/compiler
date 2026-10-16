@@ -593,6 +593,7 @@ interface A2Job {
 	cloneInput: boolean;
 	ran: boolean;
 	claims: LowerClaims;
+	asyncModuleBody: boolean;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -674,7 +675,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const hcrSlot = job.hcrSlot;
 	const _tx0 = performance.now();
-	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0);
+	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0, job.asyncModuleBody);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
@@ -2716,6 +2717,9 @@ setGlobalHookOwners(sharedHookOwners);
 	}
 	typeRowsOf.set(firstModule, sharedRows);
 	const noTypeRows: GenericTypeInstRow[] = [];
+	const lazyPlan = planDynamicModules(graph, entryPath, checkedPaths, config.stdPath);
+	const asyncBodies = new HashSet<string>();
+	for (const cm of checkedMods) if (lazyPlan.lazy.has(cm.modPath) && hasTopLevelAwait(cm.program)) asyncBodies.add(cm.modPath);
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
@@ -2734,6 +2738,7 @@ setGlobalHookOwners(sharedHookOwners);
 			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
 			const rows = typeRowsOf.get(cm.modPath);
 			if (rows != null && rows.length > 0) fingerprint = fingerprint + "#types:" + typeInstanceRowsFingerprint(rows);
+			if (asyncBodies.has(cm.modPath)) fingerprint = fingerprint + "#asyncBody";
 			ownerFingerprints.set(cm.modPath, fingerprint);
 			if (session.check.rechecked.has(cm.modPath) || !session.lowerFingerprints.has(cm.modPath)) continue;
 			if (session.lowerFingerprints.get(cm.modPath) != fingerprint) {
@@ -2765,6 +2770,7 @@ setGlobalHookOwners(sharedHookOwners);
 			cloneInput: session.keep,
 			ran: false,
 			claims: { typeInfos: [], owners: [], hooks: [], ops: [] },
+			asyncModuleBody: asyncBodies.has(modPath),
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -3106,6 +3112,7 @@ setGlobalHookOwners(sharedHookOwners);
 		}
 	}
 	const dynamicPlan = planDynamicModules(graph, entryPath, aliveModules, config.stdPath);
+	for (const mp of asyncBodies) dynamicPlan.topLevelAwait.add(mp);
 
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC && opts.isHcr) {

@@ -195,6 +195,7 @@ export class DynamicModulePlan {
 	records: string[] = [];
 	lazy: HashSet<string> = new HashSet<string>();
 	requested: int32[][] = [];
+	topLevelAwait: HashSet<string> = new HashSet<string>();
 }
 
 export function planDynamicModules(graph: ModuleGraph, entryPath: string, order: string[], stdPath: string): DynamicModulePlan {

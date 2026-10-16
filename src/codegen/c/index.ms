@@ -456,7 +456,8 @@ function emitModuleRecords(b: Builder, plan: DynamicModulePlan, emptyInits: Hash
 		const init = emptyInits.has(mp) ? "NULL" : `${modName}__Init000`;
 		const deinit = deinits.has(mp) ? `${modName}__Deinit000` : "NULL";
 		const requested = plan.requested[i].length > 0 ? `msModuleRequested${i}` : "NULL";
-		addLine(b, `{ .name = "${modName}", .init = ${init}, .deinit = ${deinit}, .requested = ${requested}, .requestedCount = ${plan.requested[i].length}, .status = MS_MODULE_PENDING },`);
+		const tla = plan.topLevelAwait.has(mp) ? ", .hasTLA = true" : "";
+		addLine(b, `{ .name = "${modName}", .init = ${init}, .deinit = ${deinit}, .requested = ${requested}, .requestedCount = ${plan.requested[i].length}, .status = MS_MODULE_PENDING${tla} },`);
 	}
 	b.indent -= 1;
 	addLine(b, "};");
