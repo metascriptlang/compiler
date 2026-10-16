@@ -4165,6 +4165,10 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 	return movedKeys;
 }
 
+function refuseReadonlyViewCall(ctx: CheckerContext, node: Node, property: string, objType: Type, receiverName: string): void {
+	addError(ctx, "cannot call '" + property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + property + "(this: Readonly<" + receiverName + ">)' on the class, or 'function " + property + "(this x: Readonly<" + receiverName + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
@@ -4616,10 +4620,10 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// Generic class method substitution: unify receiver (e.g. Promise<T>) with
 				// actual object type (e.g. Promise<string>) to discover T → string,
 				// then substitute in parameter/return types.
-				if (isReadonlyView(objType) || isReadonlyView(resolvedObjType)) {
-					addError(ctx, "cannot call method '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; class methods need a mutable receiver (PARALOCK E24)", node.location.line, node.location.column);
-				}
 				const receiverType = methType.typeChildren[0];
+				if ((isReadonlyView(objType) || isReadonlyView(resolvedObjType)) && !isReadonlyView(receiverType)) {
+					refuseReadonlyViewCall(ctx, node, d.property, objType, typeNameOf(receiverType));
+				}
 				const eb = createUnifyBindings();
 				if (hasGenericParams(receiverType)) {
 					unifyType(receiverType, objType, eb);
@@ -4699,7 +4703,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 			if (!ext.isStatic && isReadonlyView(objType) && !arrayView
 					&& !(extFnT.typeChildren.length > 0 && isReadonlyView(extFnT.typeChildren[0]))) {
-				addError(ctx, "cannot call '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + d.property + "(this: Readonly<" + extReceiverDisplay(ext) + ">)' on the class, or 'function " + d.property + "(this x: Readonly<" + extReceiverDisplay(ext) + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
+				refuseReadonlyViewCall(ctx, node, d.property, objType, extReceiverDisplay(ext));
 			}
 			if (!ext.isStatic && extFnT.typeChildren.length > 0) {
 				let srcType = extFnT;
