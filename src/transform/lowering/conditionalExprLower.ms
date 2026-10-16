@@ -51,6 +51,7 @@ import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs } from "./operandOrder";
 import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
+import { tdzBindingOf } from "./moduleTdz";
 
 // ===== Hoist (top-down) =====
 
@@ -830,7 +831,7 @@ let tdzGuards = new HashSet<Node>();
 
 function tdzFlagOf(n: Node): Symbol | null {
 	if (functionDepth == 0 || n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
-	return tdzFlags.get(n.resolvedSym);
+	return tdzFlags.get(tdzBindingOf(n.resolvedSym));
 }
 
 function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: TransformContext): void {
@@ -840,7 +841,7 @@ function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: Transfo
 		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", loc);
 		return;
 	}
-	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(binding.resolvedSym!.name, loc)], fail, loc);
+	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(tdzBindingOf(binding.resolvedSym!).name, loc)], fail, loc);
 	const guard = makeIf(makeUnary("!", makeIdentResolved(flag, loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
 	tdzGuards.add(guard);
 	hoisted.push(guard);

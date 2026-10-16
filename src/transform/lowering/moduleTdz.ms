@@ -138,7 +138,7 @@ function isAssignOperator(op: string): boolean {
 
 function flagOf(n: Node, ctx: TransformContext): Symbol | null {
 	if (n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
-	return ctx.tdzFlags.get(n.resolvedSym);
+	return ctx.tdzFlags.get(tdzBindingOf(n.resolvedSym));
 }
 
 function failCall(binding: Node, ctx: TransformContext): Node | null {
@@ -147,7 +147,7 @@ function failCall(binding: Node, ctx: TransformContext): Node | null {
 		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", binding.location);
 		return null;
 	}
-	return makeCallResolved(makeIdentResolved(fail, binding.location), [makeString(binding.resolvedSym!.name, binding.location)], fail, binding.location);
+	return makeCallResolved(makeIdentResolved(fail, binding.location), [makeString(tdzBindingOf(binding.resolvedSym!).name, binding.location)], fail, binding.location);
 }
 
 function guarded(use: Node, binding: Node, ctx: TransformContext): Node {
@@ -194,9 +194,13 @@ function unwrapDecl(stmt: Node): Node {
 	return stmt;
 }
 
+export function tdzBindingOf(sym: Symbol): Symbol {
+	return sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+}
+
 function lexicalBindingOf(decl: Node): Symbol | null {
 	if (decl == null || decl.resolvedSym == null) return null;
-	if (decl.kind == NodeKind.ClassDecl) return decl.resolvedSym;
+	if (decl.kind == NodeKind.ClassDecl) return decl.resolvedSym.instantiatedFrom == null ? decl.resolvedSym : null;
 	if (decl.kind != NodeKind.VariableDecl || decl.flags.has(NodeFlag.StaticStorage)) return null;
 	const kind = (decl.data as VariableDeclData).declKind;
 	return kind == DeclKind.Let || kind == DeclKind.Const ? decl.resolvedSym : null;
@@ -215,9 +219,9 @@ function isFunctionLike(n: Node): boolean {
 
 function collectDeferredUses(n: Node, inFunction: boolean, uses: HashSet<Symbol>, order: Symbol[]): void {
 	if (n == null) return;
-	if (inFunction && n.kind == NodeKind.Identifier && n.resolvedSym != null && !uses.has(n.resolvedSym)) {
-		uses.add(n.resolvedSym);
-		order.push(n.resolvedSym);
+	if (inFunction && n.kind == NodeKind.Identifier && n.resolvedSym != null && !uses.has(tdzBindingOf(n.resolvedSym))) {
+		uses.add(tdzBindingOf(n.resolvedSym));
+		order.push(tdzBindingOf(n.resolvedSym));
 	}
 	const deferred = inFunction || isFunctionLike(n)
 		|| (n.kind == NodeKind.PropertyDecl && !(n.data as PropertyDeclData).propIsStatic);
