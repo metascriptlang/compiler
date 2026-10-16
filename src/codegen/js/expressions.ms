@@ -270,6 +270,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 export function emitIdentifier(gen: JSGenerator, node: Node): void {
 	const d = node.data as IdentifierData;
 	if (d.name == "this") { emit(gen, gen.thisName); return; }
+	if (gen.bundleMode && node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Module) { emit(gen, "1"); return; }
 	// The name recorded at a call site is what a debugger shows as the name of
 	// the frame it enters, so a renamed callee has to carry its .ms name here.
 	const emitted = jsReferenceName(gen, node.resolvedSym, d.name);
@@ -558,6 +559,14 @@ export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 	const ns = d.object.resolvedSym;
 	if (ns != null && ns.symbolKind == SymbolKind.Module && node.resolvedSym != null && (gen.bundleMode || node.resolvedSym.instantiatedFrom != null)) {
 		emit(gen, jsReferenceName(gen, node.resolvedSym, d.property));
+		return;
+	}
+	if (gen.bundleMode && node.resolvedSym != null && d.object.nodeType != null && d.object.nodeType.kind == TypeKind.Module) {
+		emit(gen, "(");
+		emitNode(gen, d.object);
+		emit(gen, ", ");
+		emit(gen, jsReferenceName(gen, node.resolvedSym, d.property));
+		emit(gen, ")");
 		return;
 	}
 	emitPostfixBase(gen, d.object);
