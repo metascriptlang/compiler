@@ -5,7 +5,7 @@ import {
 	FunctionDeclData, BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData,
 	ConditionalExprData, TypeAssertionData,
 	SpreadExprData, MoveExprData, OutExprData, HiddenStdConvData, HiddenDerefData,
-	AwaitExprData,
+	AwaitExprData, CallExprData,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { booleanType } from "../../checker/types";
@@ -15,6 +15,7 @@ import {
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
+import { isNamespaceTyped } from "./namespaceValueLower";
 import { Spiller, bindTemp, tempRef, isVoidType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
 import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
 import { truthinessTest } from "../coercion/stringTruthiness";
@@ -42,8 +43,14 @@ function dropsOperandEffects(node: Node): boolean {
 	return operand != null && cloneIfPure(operand) == null;
 }
 
+function dropsNamespaceObject(node: Node): boolean {
+	if (node.kind != NodeKind.MemberExpr) return false;
+	const object = (node.data as MemberExprData).object;
+	return isNamespaceTyped(object.nodeType) && object.kind != NodeKind.Identifier;
+}
+
 function isSpillPoint(node: Node): boolean {
-	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node);
+	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node) || dropsNamespaceObject(node);
 }
 
 function needsSpill(node: Node | null): boolean {
@@ -126,6 +133,9 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	} else if (k == NodeKind.ConditionalExpr) {
 		if (isVoidType(e.nodeType)) return e;
 		return lowerConditional(e, pre);
+	} else if (k == NodeKind.CallExpr && dropsNamespaceObject((e.data as CallExprData).callee)) {
+		lowerAwaitExpr((e.data as CallExprData).callee, pre);
+		lowerOperandList(_sp, e, pre);
 	} else if (k == NodeKind.CallExpr || k == NodeKind.NewExpr || k == NodeKind.ArrayAccess
 		|| k == NodeKind.ArrayLiteral || k == NodeKind.ObjectLiteral) {
 		lowerOperandList(_sp, e, pre);
@@ -138,6 +148,7 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	} else if (k == NodeKind.MemberExpr) {
 		const d = e.data as MemberExprData;
 		d.object = lowerAwaitExpr(d.object, pre);
+		if (dropsNamespaceObject(e)) d.object = tempRef(bindTemp(_sp, d.object, DeclKind.Const, d.object.nodeType, pre, d.object.location), d.object.location);
 	} else if (k == NodeKind.TypeAssertion) {
 		const d = e.data as TypeAssertionData;
 		d.asExpr = lowerAwaitExpr(d.asExpr, pre);

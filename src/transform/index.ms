@@ -69,6 +69,7 @@ import { lowerJsVarParam } from "./lowering/jsVarParamLower";
 import { lowerJsPointers } from "./lowering/jsPointerLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
+import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
@@ -159,6 +160,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerTailCall(result, ctx);
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
+	if (!jsBackend) { result = lowerNamespaceValues(result); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
 	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); }
 	result = lowerPointerAddresses(result, ctx, !jsBackend);
