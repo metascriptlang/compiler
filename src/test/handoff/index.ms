@@ -140,6 +140,7 @@ import "./outParameterWrites";
 import "./arrayLengthGrowth";
 import "./relationalOperands";
 import "./typeNameValue";
+import "./dynamicImport";
 import "./routineInterface";
 import "./enumConversionRange";
 import "./distinctConversionRange";
