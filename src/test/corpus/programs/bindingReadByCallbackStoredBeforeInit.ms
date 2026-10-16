@@ -5,7 +5,7 @@
 class Conf { name: string = "conf"; }
 const hooks: (() => string)[] = [];
 hooks.push(() => conf.name);
-function fire(): string { return hooks[0](); }
+function fire(): string { const hook = hooks[0]; return hook(); }
 try { console.log(`early: ${fire()}`); } catch (e) { console.log(`early: caught ${(e as Error).message}`); }
 export const conf: Conf = new Conf();
 console.log(`late: ${fire()}`);
