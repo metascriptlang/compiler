@@ -173,3 +173,22 @@ console.log(sumSkip());
 	];
 	for (const c of cases) assert !emittedBody(c[1], c[0]).contains("msIncref"), c[0];
 }
+
+test "E2E C: a counter the compiler keeps below a length steps at int64 without an overflow check" {
+	const cases: string[][] = [
+		["forOf", "function forOf(xs: int32[]): void { for (const x of xs) console.log(x); }"],
+		["forOfString", "function forOfString(s: string): void { for (const c of s) console.log(c); }"],
+		["spread", "function spread(xs: int32[]): int32[] { return [...xs]; }"],
+		["rest", "function rest(xs: int32[]): void { const [a, ...r] = xs; console.log(r.length); }"],
+	];
+	for (const c of cases) {
+		const out = compileToC(c[1]);
+		assert out.ok, c[0];
+		assert !out.value.contains("msAddI32") && !out.value.contains("msAddI64"), c[0];
+		assert out.value.contains("_ + 1))"), c[0];
+		assert out.value.contains("int64_t dollar"), c[0];
+	}
+	const author = compileToC("function count(xs: int32[]): int32 { let n: int32 = 0; for (let i = 0; i < xs.length; i++) n = n + 1; return n; }");
+	assert author.ok;
+	assert author.value.contains("msAddAssign(i_") && author.value.contains("msAddI32(n_");
+}

@@ -297,6 +297,15 @@ test "int32 increment stores the checked step" {
 	assert !result.value.contains("x++");
 }
 
+test "the counter of a for-of over an array or a string steps without an overflow check" {
+	for (const src of ["function f(xs: int32[]): void { for (const x of xs) console.log(x); }", "function f(s: string): void { for (const c of s) console.log(c); }"]) {
+		const result = compileToJS(src);
+		assert result.ok, src;
+		assert !result.value.contains("msOverflowI32"), src;
+		assert result.value.contains(" + 1)"), src;
+	}
+}
+
 test "int32 step on a call-indexed element hoists the index and stops on overflow" {
 	const result = compileToJS("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: int32[]): void { a[at()]++; a[at()] *= 2; }");
 	assert result.ok;
