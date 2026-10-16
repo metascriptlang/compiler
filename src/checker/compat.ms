@@ -816,7 +816,7 @@ export function unknownReturnRefusal(source: Type | null, target: Type | null): 
 	return " — a function returning " + typeDisplayName(held) + " cannot stand in for one returning unknown, which holds only class or interface instances";
 }
 
-export function returnReprRefusal(source: Type | null, target: Type | null, fnText: string, wrapAt: string): string {
+export function returnReprRefusal(source: Type | null, target: Type | null, fnText: string): string {
 	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
 	if (source.typeChildren.length != target.typeChildren.length || unknownReturnRefusal(source, target) != "") return "";
 	for (let i = 0; i < source.typeChildren.length; i += 1) {
@@ -832,13 +832,16 @@ export function returnReprRefusal(source: Type | null, target: Type | null, fnTe
 		|| (isMaybeType(slot) && slot.typeReturn != null && isAssignable(held, slot.typeReturn))
 		|| (reprOnly && isAssignable(held, slot));
 	if (!wraps) return "";
-	const why = " — a function returning " + typeDisplayName(held) + " cannot stand in for one returning " + typeDisplayName(slot)
-		+ ", because the two results are held differently; ";
-	if (fnText == "") return why + "call it from a lambda of the slot's type";
+	const dropped = slot.kind == TypeKind.Void;
+	const why = " — a function returning '" + typeDisplayName(held) + "' cannot fill a slot returning '" + typeDisplayName(slot)
+		+ (dropped ? "': its result would have to be dropped. " : "': the result would need a conversion. ");
+	if (fnText == "=>") return why + (dropped ? "Declare the lambda's return type as 'void'" : "Leave out the lambda's return type, or declare it as the union");
+	if (fnText == "") return why + "Pass a lambda that calls it";
 	const names: string[] = [];
 	for (let i = 0; i < source.typeChildren.length; i += 1) names.push("a" + String(i));
 	const params = names.join(", ");
-	return why + "wrap it in a lambda: " + wrapAt.replace("$", "(" + params + ") => " + fnText + "(" + params + ")");
+	const lambda = "Pass a lambda ((" + params + ") => " + fnText + "(" + params + "))";
+	return why + lambda + (dropped ? "" : " or declare " + fnText + "'s return type as the union");
 }
 
 function leavesInlineConv(source: Type, target: Type): boolean {

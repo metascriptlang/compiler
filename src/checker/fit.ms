@@ -2709,7 +2709,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + order, expr.location.line, expr.location.column);
 			return expr;
 		}
-		const wrap = returnReprRefusal(exprType, formal, wrappedFnText(expr), "$");
+		const wrap = returnReprRefusal(exprType, formal, wrappedFnText(expr));
 		if (wrap != "") {
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + wrap, expr.location.line, expr.location.column);
 			return expr;
@@ -2750,10 +2750,11 @@ export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, forma
 }
 
 function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): void {
-	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + returnReprRefusal(exprType, formal, wrappedFnText(expr), "$") + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal), expr.location.line, expr.location.column);
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + returnReprRefusal(exprType, formal, wrappedFnText(expr)) + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal), expr.location.line, expr.location.column);
 }
 
 export function wrappedFnText(fn: Node): string {
+	if (fn.kind == NodeKind.ArrowFunction || fn.kind == NodeKind.FunctionExpr) return "=>";
 	return fn.kind == NodeKind.Identifier ? (fn.data as IdentifierData).name : "";
 }
 
