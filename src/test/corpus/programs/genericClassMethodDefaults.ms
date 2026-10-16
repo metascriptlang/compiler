@@ -1,4 +1,6 @@
-// @stdout: 111|3 8|on off
+// @stdout: 111
+// @stdout: 3 8
+// @stdout: on off
 // note: an omitted argument of a generic class's method takes the parameter's default, whether
 // the default is typed by the class's type parameter, by a plain type or by a generic interface.
 interface Opts<C> {

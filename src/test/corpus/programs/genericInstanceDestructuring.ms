@@ -1,4 +1,5 @@
-// @stdout: 4|3 5 502 a s 3
+// @stdout: 4
+// @stdout: 3 5 502 a s 3
 // note: destructuring an instance of a generic interface binds each name at the field type of that instance.
 interface Box<S> {
 	items: S[];

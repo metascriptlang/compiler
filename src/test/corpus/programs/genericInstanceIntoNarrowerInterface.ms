@@ -1,4 +1,6 @@
-// @stdout: 1 4|4 2 42 13|7 8
+// @stdout: 1 4
+// @stdout: 4 2 42 13
+// @stdout: 7 8
 // note: an instance of a generic interface or class passes where a plain interface whose fields
 // lead its layout is expected, and the narrow view reads the instance's own fields.
 interface Wide<P> { x: int32; make: (n: int32) => P; }

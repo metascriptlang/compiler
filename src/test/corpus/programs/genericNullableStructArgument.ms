@@ -1,4 +1,7 @@
-// @stdout: 1111|110110|y q d inner|10
+// @stdout: 1111
+// @stdout: 110110
+// @stdout: y q d inner
+// @stdout: 10
 // note: a struct that travels by pointer reaches a generic `C | null` parameter as the instance's own nullable carrier.
 struct Box { name: string; title: string; }
 struct Triple { a: string; b: string; c: string; }
