@@ -23,8 +23,10 @@ typedef struct msModuleRecord {
 } msModuleRecord;
 
 extern int32_t msModuleEvalDepth;
+extern void (*msModuleGuard)(msModuleRecord* record, void (*fn)(void));
 
 void msModuleTableRegister(msModuleRecord* records, int32_t count);
+msModuleRecord* msModuleBind(const char* name, void (*init)(void), void (*deinit)(void));
 void* msModuleImport(msString name);
 void msModuleDeinitLazy(void);
 

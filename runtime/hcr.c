@@ -49,6 +49,7 @@ struct MsHcrModule {
 	int phase;
 	int previousActive;
 	int revertible;
+	msModuleRecord* deferred;
 };
 
 typedef struct MsHcrTypeEntry {
@@ -170,12 +171,16 @@ MsHcrCell* msHcrBind(const char* moduleId, const char* symbol, const char* key) 
 	return &msHcrEntry(moduleId, symbol, key)->cell;
 }
 
+static int msHcrPending(const MsHcrModule* module) {
+	return module->deferred != NULL && module->deferred->status == MS_MODULE_PENDING;
+}
+
 int32_t msHcrModuleBegin(const char* moduleId) {
 	MsHcrModule* module = msHcrModule(moduleId);
 	if (module->phase != 0) msHcrFail(moduleId, "module registration already pending");
 	if (msHcrStaging) {
 		module->phase = 1;
-		return module->active ? 0 : 1;
+		return module->active && !msHcrPending(module) ? 0 : 1;
 	}
 	if (module->active) msHcrFail(moduleId, "accepted module registration requires staging");
 	module->active = 1;
@@ -218,7 +223,7 @@ int32_t msHcrRegisterVariable(const char* moduleId, const char* symbol, const ch
 	msHcrRegistration(entry, 'v');
 	if (entry->size != 0 && entry->size != size) msHcrFail(moduleId, "variable size changed without a changed contract key");
 	entry->size = size;
-	int fresh = !entry->active;
+	int fresh = !entry->active || msHcrPending(entry->module);
 	MsHcrStorage* storage = entry->storage;
 	if (fresh) storage = (MsHcrStorage*)msHcrAllocate(offsetof(MsHcrStorage, data) + size);
 	*out = (void*)storage->data;
@@ -676,6 +681,7 @@ typedef struct MsHcrGuardCall {
 	void* env;
 	int32_t status;
 	int kind;
+	int keepThrow;
 } MsHcrGuardCall;
 
 static void msHcrGuardInvoke(MsHcrGuardCall* call) {
@@ -705,6 +711,7 @@ static int32_t msHcrGuarded(MsHcrGuardCall* call) {
 		msHcrGuardActive = outer;
 		msHcrGuardOwner = outerOwner;
 		if (!msErr) return MS_HCR_GUARD_OK;
+		if (call->keepThrow) return MS_HCR_GUARD_THREW;
 		guard.kind = MS_HCR_GUARD_THREW;
 	}
 	msHcrGuardActive = outer;
@@ -746,3 +753,29 @@ int32_t msHcrGuardProbe(void* raw) {
 }
 
 msString msHcrGuardText(void) { return msStringFromCStr(msHcrGuardReason); }
+
+static const char* msHcrDeferredId(const msModuleRecord* record) {
+	for (size_t i = 0; i < 256; ++i) {
+		for (MsHcrModule* module = msHcrModules[i]; module != NULL; module = module->next) {
+			if (module->deferred == record) return module->id;
+		}
+	}
+	return record->name;
+}
+
+static void msHcrGuardModule(msModuleRecord* record, void (*fn)(void)) {
+	const int initializing = fn == record->init;
+	MsHcrGuardCall call = { (void*)fn, NULL, 0, 1, initializing };
+	const int32_t kind = msHcrGuarded(&call);
+	if (kind == MS_HCR_GUARD_OK || (kind == MS_HCR_GUARD_THREW && initializing)) return;
+	fprintf(stderr, "HCR: module '%s' failed while %s with %s\n", msHcrDeferredId(record),
+	        initializing ? "initializing on its first import" : "destroying its globals", msHcrGuardReason);
+	exit(1);
+}
+
+void msHcrDefer(const char* moduleId, const char* name, void* init, void* deinit) {
+	msHcrModule(moduleId)->deferred = msModuleBind(name, (void (*)(void))init, (void (*)(void))deinit);
+	msModuleGuard = msHcrGuardModule;
+}
+
+int32_t msHcrDeferredPending(const char* moduleId) { return msHcrPending(msHcrModule(moduleId)); }

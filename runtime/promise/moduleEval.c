@@ -17,6 +17,7 @@ static msModuleWaiter* gPendingHead = NULL;
 static msModuleWaiter* gPendingTail = NULL;
 static bool gTaskArmed = false;
 static _Atomic(int) gPendingLock = 0;
+void (*msModuleGuard)(msModuleRecord* record, void (*fn)(void)) = NULL;
 
 static void msModuleLock(void) {
 	while (atomic_exchange_explicit(&gPendingLock, 1, memory_order_acquire))
@@ -33,14 +34,25 @@ void msModuleTableRegister(msModuleRecord* records, int32_t count) {
 	gRanOrder = (int32_t*)calloc((size_t)count, sizeof(int32_t));
 }
 
-static msModuleRecord* msModuleFind(msString name) {
-	const char* text = name.p != NULL ? name.p->data : "";
+static msModuleRecord* msModuleFind(const char* text, int64_t len) {
 	for (int32_t i = 0; i < gRecordCount; i++) {
 		const char* candidate = gRecords[i].name;
-		if ((int64_t)strlen(candidate) == name.len && memcmp(candidate, text, (size_t)name.len) == 0) return &gRecords[i];
+		if ((int64_t)strlen(candidate) == len && memcmp(candidate, text, (size_t)len) == 0) return &gRecords[i];
 	}
-	fprintf(stderr, "internal: import() of module '%.*s', which has no module record\n", (int)name.len, text);
+	fprintf(stderr, "internal: import() of module '%.*s', which has no module record\n", (int)len, text);
 	abort();
+}
+
+msModuleRecord* msModuleBind(const char* name, void (*init)(void), void (*deinit)(void)) {
+	msModuleRecord* r = msModuleFind(name, (int64_t)strlen(name));
+	r->init = init;
+	r->deinit = deinit;
+	return r;
+}
+
+static void msModuleCall(msModuleRecord* m, void (*fn)(void)) {
+	if (msModuleGuard != NULL) msModuleGuard(m, fn);
+	else fn();
 }
 
 static int32_t msModuleInnerEvaluate(int32_t at, int32_t* stack, int32_t* depth, int32_t index, void** error, bool* thrown) {
@@ -65,7 +77,7 @@ static int32_t msModuleInnerEvaluate(int32_t at, int32_t* stack, int32_t* depth,
 	gRanOrder[gRanCount++] = at;
 	if (m->init != NULL) {
 		msModuleEvalDepth++;
-		m->init();
+		msModuleCall(m, m->init);
 		msModuleEvalDepth--;
 		if (msErr) {
 			*error = msCurrException != NULL ? (void*)msCurrException : (void*)msMakeError(msStringFromCStr("noproc"));
@@ -156,7 +168,7 @@ static void msModuleArmTask(void) {
 }
 
 void* msModuleImport(msString name) {
-	msModuleRecord* r = msModuleFind(name);
+	msModuleRecord* r = msModuleFind(name.p != NULL ? name.p->data : "", name.len);
 	void* fut = msFutureCreate();
 	msIncRef(fut);
 #if MS_FUTURE_SUBMIT_REF
@@ -184,7 +196,7 @@ void* msModuleImport(msString name) {
 void msModuleDeinitLazy(void) {
 	for (int32_t k = gRanCount - 1; k >= 0; k--) {
 		msModuleRecord* r = &gRecords[gRanOrder[k]];
-		if (r->deinit != NULL) r->deinit();
+		if (r->deinit != NULL) msModuleCall(r, r->deinit);
 	}
 	for (int32_t i = 0; i < gRecordCount; i++) {
 		if (gRecords[i].error != NULL) msDecref(gRecords[i].error);

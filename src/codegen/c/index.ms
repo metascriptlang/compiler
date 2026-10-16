@@ -463,7 +463,7 @@ function emitModuleRecords(b: Builder, plan: DynamicModulePlan, emptyInits: Hash
 	addNewline(b);
 }
 
-export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutput[]): string {
+export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutput[], plan: DynamicModulePlan): string {
 	const b = createBuilder();
 	const datInits = new HashSet<string>();
 	const inits = new HashSet<string>();
@@ -489,16 +489,26 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	addLine(b, "char** gEnv;");
 	addLine(b, "int msProgramResult;");
 	addNewline(b);
+	const core = new HashSet<string>();
+	for (const mp of modulePaths) core.add(mp);
+	const noInit = new HashSet<string>();
+	const coreDeinits = new HashSet<string>();
+	for (const mp of plan.records) {
+		if (!core.has(mp) || !inits.has(mp)) noInit.add(mp);
+		if (core.has(mp) && deinits.has(mp)) coreDeinits.add(mp);
+	}
+	emitModuleRecords(b, plan, noInit, coreDeinits);
 	addLine(b, "void msHcrCoreInit(void) {");
 	b.indent += 1;
 	addLine(b, "static int done = 0;");
 	addLine(b, "if (done) return;");
 	addLine(b, "done = 1;");
+	if (plan.records.length > 0) addLine(b, `msModuleTableRegister(msModuleRecords, ${plan.records.length});`);
 	for (const mp of modulePaths) {
 		if (datInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
 	}
 	for (const mp of modulePaths) {
-		if (inits.has(mp)) addLine(b, `${mangleModuleName(mp)}__Init000();`);
+		if (inits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(mp)}__Init000();`);
 	}
 	b.indent -= 1;
 	addLine(b, "}");
@@ -511,7 +521,7 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	let di = modulePaths.length;
 	while (di > 0) {
 		di -= 1;
-		if (deinits.has(modulePaths[di])) addLine(b, `${mangleModuleName(modulePaths[di])}__Deinit000();`);
+		if (deinits.has(modulePaths[di]) && !plan.lazy.has(modulePaths[di])) addLine(b, `${mangleModuleName(modulePaths[di])}__Deinit000();`);
 	}
 	addLine(b, "msOrcCollect();");
 	b.indent -= 1;
@@ -519,7 +529,7 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	return extract(b);
 }
 
-export function genHcrImageDispatcher(output: CModuleOutput, isEntry: boolean): string {
+export function genHcrImageDispatcher(output: CModuleOutput, isEntry: boolean, deferred: boolean): string {
 	const b = createBuilder();
 	const modName = mangleModuleName(output.modulePath);
 	addLine(b, "#include \"runtime/hcr.h\"");
@@ -540,6 +550,7 @@ export function genHcrImageDispatcher(output: CModuleOutput, isEntry: boolean): 
 		addLine(b, `  ${modName}__Deinit000();`);
 		addLine(b, "}");
 	}
+	if (deferred) addLine(b, `MS_HCR_EXPORT const char* HcrDeferred000(void) { return "${modName}"; }`);
 	return extract(b);
 }
 

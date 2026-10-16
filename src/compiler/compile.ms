@@ -3114,13 +3114,13 @@ setGlobalHookOwners(sharedHookOwners);
 		for (const mp of aliveModules) {
 			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
 		}
-		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs));
+		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs, dynamicPlan));
 		printDiag(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) continue;
 			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(mp)}.c`;
-			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath));
+			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)));
 			printDiag(`${green("  Wrote")} ${bold(imagePath)}`);
 		}
 		printDiag(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
@@ -3165,7 +3165,7 @@ setGlobalHookOwners(sharedHookOwners);
 		for (const mp of aliveModules) {
 			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
 		}
-		pushDispatcherJob(cJobs, oSlots, "_hcrcore", genHcrCoreDispatcher(coreModules, moduleOutputs), coreFlags, opts);
+		pushDispatcherJob(cJobs, oSlots, "_hcrcore", genHcrCoreDispatcher(coreModules, moduleOutputs, dynamicPlan), coreFlags, opts);
 		hcrCoreSlot = oSlots.length - 1;
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
@@ -3173,7 +3173,7 @@ setGlobalHookOwners(sharedHookOwners);
 				console.log(`${error("error")}: internal: HCR module '${mp}' produced no C output`);
 				throw new Error(BUILD_STOPPED);
 			}
-			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(mp)}`, genHcrImageDispatcher(output, mp == entryPath), imageFlags, opts);
+			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(mp)}`, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)), imageFlags, opts);
 			hcrImageSlots.push(oSlots.length - 1);
 		}
 	} else {
