@@ -1,4 +1,5 @@
-// @stdout: true true true 42|true 42 st 10
+// @stdout: true true true 42
+// @stdout: true 42 st 10
 // note: an arrow with fewer parameters than its function slot binds the type parameter from its
 // return type alone, through a function and through generic class methods.
 class Cell<T> {
