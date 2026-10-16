@@ -1,4 +1,4 @@
-// @stdout: slot=3,"t" tagged={"kind":"a","x":1},{"kind":"b","y":"q"} field={"u":"t","d":{"kind":"b","y":"q"}}
+// @stdout: slot=3,t tagged={"kind":"a","x":1},{"kind":"b","y":"q"} field={"u":"t","d":{"kind":"b","y":"q"}}
 // @exit: 0
 // Parity program: the text of a slot union of primitives and of a string-tagged union is its
 // active variant on every backend, as a value and as a struct field.

@@ -363,6 +363,7 @@ export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean =
 	const userBound = fits && synthCall.nodeType != null && isStringLike(synthCall.nodeType)
 		&& synthCall.resolvedSym != null && synthCall.resolvedSym.declNode != null;
 	if (userBound) return synthCall;
+	if (heldInSlotUnion(t)) return unionTextCall(ctx, expr, debug, loc);
 	if (!dumped) return null;
 	const dump = debug
 		? boundCall(ctx, "valueDebug", [expr], loc)
@@ -384,9 +385,16 @@ export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
 	if (sym == null || sym.builtinKind != "ToStringMethod" || sym.declNode != null) return;
 	const receiver = me.object;
 	const t = receiver.nodeType;
-	if (t == null || !dumpedShape(t, valueShape(t))) return;
-	const call = boundCall(ctx, "valueDump", [receiver, createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, node.location)], node.location);
-	callCheckExpr(ctx, call, null);
+	if (t == null) return;
+	let call: Node;
+	if (heldInSlotUnion(t)) {
+		call = unionTextCall(ctx, receiver, false, node.location);
+	} else if (dumpedShape(t, valueShape(t))) {
+		call = boundCall(ctx, "valueDump", [receiver, createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, node.location)], node.location);
+		callCheckExpr(ctx, call, null);
+	} else {
+		return;
+	}
 	node.data = call.data;
 	node.nodeType = call.nodeType;
 	node.flags = call.flags;
@@ -394,18 +402,60 @@ export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
 	node.resolvedSym = call.resolvedSym;
 }
 
+function heldInSlotUnion(t: Type): boolean {
+	const shape = valueShape(t);
+	return shape.kind == TypeKind.Union && isSlotUnion(shape) && !isResult(shape) && !taggedByLiteral(shape);
+}
+
+function unionTextCall(ctx: CheckerContext, expr: Node, debug: boolean, loc: SourceLocation): Node {
+	const ut = valueShape(expr.nodeType!);
+	const holder = makeSymbol("u", SymbolKind.Parameter, ut, false);
+	const args: Node[] = [expr, holderRead(holder, ut, loc)];
+	for (const member of ut.typeChildren) {
+		const value = projectTagUnionMember(holderRead(holder, ut, loc), ut, member);
+		const bound = synthStringify(ctx, value, debug);
+		args.push(bound != null ? bound : builtinText(ctx, value));
+	}
+	const call = boundCall(ctx, debug ? "unionMemberDebug" : "unionMemberText", args, loc);
+	callCheckExpr(ctx, call, null);
+	return call;
+}
+
+function holderRead(holder: Symbol, ut: Type, loc: SourceLocation): Node {
+	const read = createNodeAt(NodeKind.Identifier, { name: holder.name }, loc);
+	read.resolvedSym = holder;
+	read.nodeType = ut;
+	read.flags = read.flags.incl(NodeFlag.Sem).incl(NodeFlag.BoundSym);
+	return read;
+}
+
+function builtinText(ctx: CheckerContext, value: Node): Node {
+	const loc = value.location;
+	const call = createNodeAt(NodeKind.CallExpr, {
+		callee: createNodeAt(NodeKind.MemberExpr, { object: value, property: "toString", isOptional: false }, loc),
+		arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	callCheckExpr(ctx, call, null);
+	return call;
+}
+
 // A union the std dump can read: one whose variants lead with a string-literal field, or one holding only primitives.
 function foldableUnion(u: Type): boolean {
 	if (isStringLike(u) || unwrapRefNullUnion(u) != null || u.typeChildren.length == 0) return false;
-	let tagged = true;
 	let primitive = true;
 	for (const m of u.typeChildren) {
 		if (m == null || m.kind == TypeKind.Null) return false;
-		const body = unwrapRef(m);
-		if (body.kind != TypeKind.Struct || body.typeChildren.length == 0 || body.typeChildren[0] == null || body.typeChildren[0].kind != TypeKind.StringLiteral) tagged = false;
 		if (!isPrimitiveUnionMember(m)) primitive = false;
 	}
-	return tagged || primitive;
+	return primitive || taggedByLiteral(u);
+}
+
+function taggedByLiteral(u: Type): boolean {
+	if (u.typeChildren.length == 0) return false;
+	for (const m of u.typeChildren) {
+		const body = m == null ? null : unwrapRef(m);
+		if (body == null || body.kind != TypeKind.Struct || body.typeChildren.length == 0 || body.typeChildren[0] == null || body.typeChildren[0].kind != TypeKind.StringLiteral) return false;
+	}
+	return true;
 }
 
 function dumpedShape(t: Type, shape: Type): boolean {

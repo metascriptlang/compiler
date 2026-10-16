@@ -13,13 +13,13 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike } from "../../checker/types";
-import { TransformContext } from "../context";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike } from "../../checker/types";
+import { TransformContext, mintSym } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember, makeConditional,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
-	makeHiddenAddr, runtimeRef, takeValueShareFns,
+	makeHiddenAddr, runtimeRef, takeValueShareFns, makeBinary, makeReturn, makeIf, makeBlock, makeFnDecl,
 } from "../util";
 import { rewriteEcho } from "./debugLower";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
@@ -49,9 +49,12 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		return node;
 	});
 	const shareFns = takeValueShareFns();
-	if (shareFns.length > 0 && result.kind == NodeKind.Program) {
+	const unionTextFns = _unionTextFns;
+	_unionTextFns = [];
+	if (result.kind == NodeKind.Program) {
 		const pd = result.data as ProgramData;
 		for (const decl of shareFns) { pd.programStmts.push(decl); }
+		for (const decl of unionTextFns) { pd.programStmts.push(decl); }
 	}
 	return result;
 }
@@ -243,6 +246,10 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return rewriteEcho(node, ctx);
 	}
 
+	if (builtinKind == "UnionText" || builtinKind == "UnionDebug") {
+		return selectUnionText(node, ctx);
+	}
+
 	if (builtinKind == "ToStringMethod" && cd.callee.kind == NodeKind.MemberExpr) {
 		const member = cd.callee.data as MemberExprData;
 		if (member.object.nodeType != null) {
@@ -266,6 +273,39 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 
 	return node;
+}
+
+let _unionTextFns: Node[] = [];
+
+function selectUnionText(node: Node, ctx: TransformContext): Node {
+	const args = (node.data as CallExprData).arguments;
+	const loc = node.location;
+	if (ctx.jsBackend) {
+		const call = makeCall(makeMember(args[0], "toString", loc), [], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	const holder = args[1].resolvedSym!;
+	const ut = args[1].nodeType!;
+	const stmts: Node[] = [];
+	for (let ai = 2; ai < args.length; ai += 1) {
+		const ret = makeReturn(args[ai], loc);
+		if (ai == args.length - 1) { stmts.push(ret); continue; }
+		const tag = makeMember(makeTypedIdentResolved(holder, ut, loc), "_tag", loc);
+		tag.nodeType = int32Type();
+		const isSlot = makeBinary(tag, "==", makeNumber(ai - 2, loc), loc);
+		isSlot.nodeType = booleanType();
+		stmts.push(makeIf(isSlot, makeBlock([ret], loc), null, loc));
+	}
+	const sym = mintSym(ctx, SymbolKind.Function, "$unionText" + _unionTextFns.length.toString(), null);
+	const fnNode = makeFnDecl(sym.name, [holder], ["unknown"], makeBlock(stmts, loc), "", "string", loc);
+	fnNode.nodeType = createFunction([ut], [holder.name], stringType());
+	sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_unionTextFns.push(fnNode);
+	const call = makeCall(makeTypedIdentResolved(sym, fnNode.nodeType, loc), [args[0]], loc);
+	call.nodeType = stringType();
+	return call;
 }
 
 // The reverse direction (AsString) is NOT intercepted: a borrow escaping the

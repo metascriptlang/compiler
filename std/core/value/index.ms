@@ -101,6 +101,14 @@ function resultDump<T, E>(r: Result<T, E>, color: boolean): string {
 }
 
 @compilerFunc
+@builtin("UnionText")
+extern function unionMemberText<T, H>(x: T, holder: H, ...texts: string[]): string;
+
+@compilerFunc
+@builtin("UnionDebug")
+extern function unionMemberDebug<T, H>(x: T, holder: H, ...texts: string[]): string;
+
+@compilerFunc
 export function valueDebug<T>(x: T): string {
 	return debugLabel(x) + valueDump(x, true);
 }
