@@ -12,7 +12,7 @@ import { getProperty } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { CheckerContext, CheckerError, GcMode, findExportedSymbol } from "../../checker/context";
 import {
-	CGen, CSection, AliveSet, CEmissionFacts,
+	CGen, CSection, AliveSet, CEmissionFacts, Builder,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
 	replayFactWrites,
 } from "./context";
@@ -23,6 +23,7 @@ import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
 import { defineDeferredElements, emitOwnedTypeInfos, refArrayCellName, isHcrImageModule } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
+import { DynamicModulePlan } from "../../module/graph";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
 //
@@ -295,6 +296,7 @@ export function genProjectDispatcher(
 	targetOs: string,
 	noMain: boolean,
 	outputs: CModuleOutput[],
+	plan: DynamicModulePlan = new DynamicModulePlan(),
 ): string {
 	const b = createBuilder();
 	const emptyDatInits = new HashSet<string>();
@@ -332,9 +334,12 @@ export function genProjectDispatcher(
 		addNewline(b);
 	}
 
+	emitModuleRecords(b, plan, emptyInits, deinits);
+
 	// MsPreMainInner — calls DatInit000 for all modules in topological order
 	addLine(b, "static void MsPreMainInner(void) {");
 	b.indent += 1;
+	if (plan.records.length > 0) addLine(b, `msModuleTableRegister(msModuleRecords, ${plan.records.length});`);
 	for (const mp of modulePaths) {
 		if (!emptyDatInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
 	}
@@ -346,7 +351,7 @@ export function genProjectDispatcher(
 	addLine(b, "static void MsMainInner(void) {");
 	b.indent += 1;
 	for (const mp of modulePaths) {
-		if (mp != entryPath && !emptyInits.has(mp)) {
+		if (mp != entryPath && !emptyInits.has(mp) && !plan.lazy.has(mp)) {
 			addLine(b, `${mangleModuleName(mp)}__Init000();`);
 		}
 	}
@@ -367,12 +372,13 @@ export function genProjectDispatcher(
 
 	addLine(b, "void MsDestroyGlobals(void) {");
 	b.indent += 1;
+	if (plan.records.length > 0) addLine(b, "msModuleDeinitLazy();");
 	if (deinits.has(entryPath)) addLine(b, `${mangleModuleName(entryPath)}__Deinit000();`);
 	let di = modulePaths.length;
 	while (di > 0) {
 		di -= 1;
 		const mp = modulePaths[di];
-		if (mp != entryPath && deinits.has(mp)) addLine(b, `${mangleModuleName(mp)}__Deinit000();`);
+		if (mp != entryPath && deinits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(mp)}__Deinit000();`);
 	}
 	addLine(b, "msOrcCollect();");
 	b.indent -= 1;
@@ -428,6 +434,33 @@ export function genProjectDispatcher(
 	};
 
 	return extract(b);
+}
+
+function emitModuleRecords(b: Builder, plan: DynamicModulePlan, emptyInits: HashSet<string>, deinits: HashSet<string>): void {
+	if (plan.records.length == 0) return;
+	for (let i = 0; i < plan.records.length; i += 1) {
+		if (plan.requested[i].length == 0) continue;
+		let list = "";
+		for (const at of plan.requested[i]) list = list == "" ? `${at}` : `${list}, ${at}`;
+		addLine(b, `static const int32_t msModuleRequested${i}[] = { ${list} };`);
+	}
+	addLine(b, `static msModuleRecord msModuleRecords[${plan.records.length}] = {`);
+	b.indent += 1;
+	for (let i = 0; i < plan.records.length; i += 1) {
+		const mp = plan.records[i];
+		const modName = mangleModuleName(mp);
+		if (!plan.lazy.has(mp)) {
+			addLine(b, `{ .name = "${modName}", .status = MS_MODULE_EVALUATED },`);
+			continue;
+		}
+		const init = emptyInits.has(mp) ? "NULL" : `${modName}__Init000`;
+		const deinit = deinits.has(mp) ? `${modName}__Deinit000` : "NULL";
+		const requested = plan.requested[i].length > 0 ? `msModuleRequested${i}` : "NULL";
+		addLine(b, `{ .name = "${modName}", .init = ${init}, .deinit = ${deinit}, .requested = ${requested}, .requestedCount = ${plan.requested[i].length}, .status = MS_MODULE_PENDING },`);
+	}
+	b.indent -= 1;
+	addLine(b, "};");
+	addNewline(b);
 }
 
 export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutput[]): string {

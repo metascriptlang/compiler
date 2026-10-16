@@ -47,7 +47,7 @@ import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
 import { setGlobalHookOwners, setJsProgramScope, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
-import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
+import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { modulePassIdentity } from "../checker/prelude";
@@ -3103,6 +3103,7 @@ setGlobalHookOwners(sharedHookOwners);
 			aliveModules.push(mp);
 		}
 	}
+	const dynamicPlan = planDynamicModules(graph, entryPath, aliveModules, config.stdPath);
 
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC && opts.isHcr) {
@@ -3133,6 +3134,7 @@ setGlobalHookOwners(sharedHookOwners);
 			opts.targetOs,
 			opts.appMode == "lib" || opts.appMode == "staticlib",
 			moduleOutputs,
+			dynamicPlan,
 		);
 		const emitDir = emitDirOf(opts);
 		const dispPath = `${emitDir}/_dispatch.c`;
@@ -3180,6 +3182,7 @@ setGlobalHookOwners(sharedHookOwners);
 			opts.targetOs,
 			opts.appMode == "lib" || opts.appMode == "staticlib",
 			moduleOutputs,
+			dynamicPlan,
 		);
 		dispatcherSlot = oSlots.length;
 		pushDispatcherJob(cJobs, oSlots, "_dispatch", dispatcherSource, allFlags, opts);
