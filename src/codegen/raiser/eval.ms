@@ -19,13 +19,13 @@ import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecod
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
-import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
+import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler } from "../../compiler/meta/callbacks";
+import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
@@ -216,6 +216,8 @@ registerEngineBodyCtxFn(engineBodyCtx);
 function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
+	enterEngineCompile();
+	defer leaveEngineCompile();
 	registerSeedSymbols(seeds, exts);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
@@ -249,7 +251,8 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 }
 
 function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
-	if (_engineToken != token) {
+	const nested = engineCompiling();
+	if (_engineToken != token && !nested) {
 		_engine = freshEngine();
 		_engineToken = token;
 	}
@@ -258,14 +261,16 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 	for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
 	const exts = seedExtensionsOf(declCtx, null);
 	seedWireEnums(seeds);
+	const outerHelperErrors = _pendingHelperErrors;
 	_pendingHelperErrors = [];
-	takeRaiserCompileErrors(); // reset: stale entries from an earlier compile must not leak in
+	const outerCompileErrors = takeRaiserCompileErrors();
 	const funcIdx = compileProgramIntoEngine(program, seeds, exts, macroFnName);
 	const errors: CheckerError[] = [];
 	for (const e of _lastEngineCheckErrors) errors.push(e);
 	for (const e of _pendingHelperErrors) errors.push(e);
 	for (const e of takeRaiserCompileErrors()) errors.push(e);
-	_pendingHelperErrors = [];
+	_pendingHelperErrors = nested ? outerHelperErrors : [];
+	if (nested) restoreRaiserCompileErrors(outerCompileErrors);
 	return { vm: _engine.vm, funcIdx, errors };
 }
 

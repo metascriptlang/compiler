@@ -59,6 +59,20 @@ export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
 	macroEngineCompilerFn = fn;
 }
 
+let _engineCompileDepth: int32 = 0;
+
+export function enterEngineCompile(): void {
+	_engineCompileDepth += 1;
+}
+
+export function leaveEngineCompile(): void {
+	_engineCompileDepth -= 1;
+}
+
+export function engineCompiling(): boolean {
+	return _engineCompileDepth > 0;
+}
+
 type MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string) => Node;
 let macroBodyPreparerFn: MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string): Node => {
 	return body;

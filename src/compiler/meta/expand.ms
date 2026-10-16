@@ -62,7 +62,7 @@ import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
-import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -1682,6 +1682,7 @@ let _macroBuildsGraph: ModuleGraph = null as unknown as ModuleGraph;
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
 
 function inMacroBuildsCompilation(ctx: CheckerContext): boolean {
+	if (engineCompiling()) return true;
 	if (ctx.moduleGraph != null) return ctx.moduleGraph == _macroBuildsGraph;
 	return _macroBuildsGraph == null && ctx == _macroBuildsCtx;
 }

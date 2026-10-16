@@ -50,6 +50,10 @@ export function takeRaiserCompileErrors(): CheckerError[] {
 	return out;
 }
 
+export function restoreRaiserCompileErrors(errors: CheckerError[]): void {
+	_raiserCompileErrors = errors;
+}
+
 // --- Locals ---
 
 export interface RaiserLocal {
