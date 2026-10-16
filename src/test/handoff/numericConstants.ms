@@ -148,6 +148,6 @@ test "numeric constants: a constant into char must fit 0..255, at a slot and at 
 	assert hasError("const a = (200 as char) as int8;\n", "cannot convert 200 to int8");
 }
 
-test "numeric constants: a char constant inside 0..255 still fits" {
-	assert ok("const a: char = 65;\nconst b: char = \"A\".code;\nconst c = 255 as char;\nconst d = 200.9 as char;\nconst e = (200 as char) as int16;\nconst K = 97;\nconst f: char = K;\nconsole.log(a, b, c, d, e, f);\n");
+test "numeric constants: a constant inside 0..255 becomes a char with as char" {
+	assert ok("const a: char = 65 as char;\nconst b: char = \"A\".code as char;\nconst c = 255 as char;\nconst d = 200.9 as char;\nconst e = (200 as char) as int16;\nconst K = 97;\nconst f: char = K as char;\nconsole.log(a, b, c, d, e, f);\n");
 }

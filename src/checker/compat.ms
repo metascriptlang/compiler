@@ -673,6 +673,10 @@ export function takesAddressAtCArg(source: Type | null, target: Type | null): bo
 	return isCValue && (ptr.typeReturn.kind == TypeKind.Void || sameType(source, ptr.typeReturn));
 }
 
+export function crossesCharBoundary(source: Type, target: Type): boolean {
+	return (source.kind == TypeKind.Char) != (target.kind == TypeKind.Char) && isNumeric(source) && isNumeric(target);
+}
+
 export function needsStdConv(source: Type, target: Type): boolean {
 	if (source == null || target == null) return false;
 	// Var (out param): unwrap to inner type for conversion check
@@ -745,7 +749,7 @@ export function intExactInFloat(source: Type, target: Type): boolean {
 
 export function numericConvRefuses(source: Type, target: Type): boolean {
 	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) return numericConvRefuses(source, target.typeReturn);
-	if (refusesIntConv(source, target)) return true;
+	if (refusesIntConv(source, target) || crossesCharBoundary(source, target)) return true;
 	if (isIntegerType(source) && !isIntegerType(target)
 		&& (isFloatType(target) || target.kind == TypeKind.Number)) {
 		return !intExactInFloat(source, target);
@@ -760,6 +764,7 @@ export function numericConvRefuses(source: Type, target: Type): boolean {
 
 export function numericRefusalReason(from: Type, to: Type): string {
 	if ((to.kind == TypeKind.Sink || to.kind == TypeKind.Lent) && to.typeReturn != null) return numericRefusalReason(from, to.typeReturn);
+	if (crossesCharBoundary(from, to)) return "crosses between char and a number";
 	if (isIntegerType(from) && isIntegerType(to)) {
 		if (isUnsignedIntegerType(from) == isUnsignedIntegerType(to)) return "narrows";
 		if (isUnsignedIntegerType(from)) return "may exceed the target's maximum";
@@ -1310,6 +1315,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (formal.kind == TypeKind.Error || actual.kind == TypeKind.Error) {
 		return TypeRelation.Exact;
 	}
+	if (crossesCharBoundary(actual, formal)) return TypeRelation.None;
 	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
 	// Must check before int-to-int widening since Number and Float64 share rank with sized types
 	if (isIntegerType(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
