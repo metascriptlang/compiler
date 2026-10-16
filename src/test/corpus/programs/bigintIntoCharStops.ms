@@ -1,6 +1,7 @@
 // @exit: 1
 // @stdout: value 300 not in range 0 .. 255
 // @xfail(danger): --danger drops the range check, so C keeps the low byte instead of stopping
+// @ledger-slack(bigint) 3
 // @xfail(raiser): bigint is not supported on the Raiser VM
 // note: a bigint converted into char stops outside 0 .. 255 as an integer does; JS used to store 300 in the char.
 
