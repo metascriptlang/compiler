@@ -6,9 +6,8 @@ import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
-import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity } from "../checker/context";
+import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
-import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
@@ -33,7 +32,7 @@ import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
-import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
+import { getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -42,7 +41,7 @@ import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
-import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
+import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
@@ -53,9 +52,7 @@ import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
-import { opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
@@ -68,7 +65,7 @@ import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, i
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -611,6 +608,13 @@ function exitOnCheckerErrorsFrom(ctx: CheckerContext, base: int32, modPath: stri
 	throw new Error(BUILD_STOPPED);
 }
 
+function coreBeforeImages(paths: string[], imagePaths: string[]): int32[] {
+	const order: int32[] = [];
+	for (let at: int32 = 0; at < paths.length; at += 1) if (!imagePaths.includes(paths[at])) order.push(at);
+	for (let at: int32 = 0; at < paths.length; at += 1) if (imagePaths.includes(paths[at])) order.push(at);
+	return order;
+}
+
 function programWithInstances(program: Node, instances: Node[] | null): Node {
 	if (instances == null || instances.length == 0) return program;
 	const stmts: Node[] = [];
@@ -993,9 +997,8 @@ interface CompileJob {
 	fileFlags: string;
 	fp: string;            // precomputed fingerprint; written post-compile
 	dependencyFile: string;
-	dependenciesKnown: boolean;
 	storeKey: string;
-	linkSlot: int32;
+	slot: number;
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
@@ -1069,7 +1072,6 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
 				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary, isCppFile(fullPath));
 				const dependencyFile = nativeDepFile(fullPath, probeKey);
-				const dependenciesKnown = nativeDependenciesKnown(fullPath, probeKey);
 				const probeFp = computeFingerprint(fullPath, probeKey);
 				const probeOFile = stableOFileFp(fullPath, probeFp);
 				if (!_compiledOFiles.has(dependencyFile)) {
@@ -1087,7 +1089,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
 							oFiles.push(stored);
 						} else {
-							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey, linkSlot: oFiles.length as int32 });
+							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, storeKey, slot: oFiles.length });
 							oFiles.push("");
 						}
 					}
@@ -1145,19 +1147,13 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
 		const dirs = objectSearchDirs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
-		if (j.dependenciesKnown) {
-			writeCompileCache(j.oFile, j.fp);
-			publishToStore(j.storeKey, j.oFile, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-			oFiles[j.linkSlot] = j.oFile;
+		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
+		if (published.ok) {
+			publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
+			oFiles[j.slot] = published.value;
 		} else {
-			const published = publishFirstCompile(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
-			if (published.ok) {
-				publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
-				oFiles[j.linkSlot] = published.value;
-			} else {
-				printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
-				stopBuild();
-			}
+			printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
+			stopBuild();
 		}
 		ci = ci + 1;
 	}
@@ -1816,6 +1812,15 @@ function linkHcrImage(objects: string[], externalInputs: string[], image: string
 	writeLinkCache(objects, externalInputs, flags, image, image);
 }
 
+function linkInputs(opts: CliOptions): string[] {
+	const inputs: string[] = [];
+	for (const obj of globalLinkObjects()) inputs.push(obj);
+	for (const obj of opts.link) {
+		if (!inputs.includes(obj)) inputs.push(obj);
+	}
+	return inputs;
+}
+
 function linkHcrImages(
 	oSlots: string[][],
 	moduleSlots: int32[],
@@ -1831,8 +1836,7 @@ function linkHcrImages(
 ): void {
 	let linkFlags = cliLinkFlags(allFlags, opts);
 	for (const flag of globalLinkFlags()) linkFlags = appendFlag(linkFlags, flag);
-	const externalInputs: string[] = [];
-	for (const obj of globalLinkObjects()) externalInputs.push(obj);
+	const externalInputs = linkInputs(opts);
 
 	const core = hcrCoreImagePath(outBinary, opts.targetOs);
 	let coreFlags = linkFlags;
@@ -2476,7 +2480,7 @@ resetLiftedOps();
 	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines) + modulePassIdentity();
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
-	for (const path of globalLinkObjects()) projectDeps.push(path);
+	for (const path of linkInputs(opts)) projectDeps.push(path);
 	let hcrBuildAbi: HcrBuildAbi = null as unknown as HcrBuildAbi;
 	if (opts.isHcr && !opts.emitC) {
 		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
@@ -2593,7 +2597,9 @@ resetLiftedOps();
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}
-
+	const checkedPaths: string[] = [];
+	for (const cm of checkedMods) checkedPaths.push(cm.modPath);
+	const lowerOrder = coreBeforeImages(checkedPaths, reloadable);
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
@@ -2618,7 +2624,9 @@ resetLiftedOps();
 			}
 		}
 	}
-	for (const cm of checkedMods) {
+	const loweredByPath = new HashMap<string, Node>();
+	for (const at of lowerOrder) {
+		const cm = checkedMods[at];
 		const program = cm.program;
 		const ctx = cm.ctx;
 		const modPath = cm.modPath;
@@ -2668,7 +2676,12 @@ resetLiftedOps();
 		if (opts.showTime && (modT1 - modT0) > 50) {
 			printTiming(modPath, modT0);
 		}
-
+		loweredByPath.set(modPath, nativeLowered);
+	}
+	for (const cm of checkedMods) {
+		const ctx = cm.ctx;
+		const modPath = cm.modPath;
+		const nativeLowered = loweredByPath.get(modPath)!;
 		if (opts.targetOs == "solana" && !(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
 			for (const hitNode of collectWritableModuleBindings(nativeLowered)) {
 				const d = hitNode.data as VariableDeclData;
@@ -3084,6 +3097,10 @@ resetLiftedOps();
 		cji = cji + 1;
 	}
 	if (moduleCompileFailed) throw new Error(BUILD_STOPPED);
+	if (opts.showTime) {
+		printTiming("phase C (codegen+compile)", tC);
+		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
+	}
 	if (hcrImages) {
 		const jobPaths: string[] = [];
 		for (const job of emissionJobs) jobPaths.push(job.modPath);
@@ -3105,11 +3122,8 @@ resetLiftedOps();
 	// Link all .o files into final binary (or shared library for HCR)
 	// Build link flags from global linkState (Set = deduplicated)
 	let allLink = cliLinkFlags(allFlags, opts);
-	const externalLinkInputs: string[] = [];
-	for (const obj of globalLinkObjects()) {
-		oFiles.push(obj);
-		externalLinkInputs.push(obj);
-	}
+	const externalLinkInputs = linkInputs(opts);
+	for (const obj of externalLinkInputs) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { allLink = appendFlag(allLink, flag); }
 	let linkFlags = allLink;
 
@@ -3128,10 +3142,6 @@ resetLiftedOps();
 		return BuildStatus.Built;
 	}
 
-	if (opts.showTime) {
-		printTiming("phase C (codegen+compile)", tC);
-		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
-	}
 	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
@@ -3458,7 +3468,7 @@ resetLiftedOps();
 	// went unnoticed. forceExe keeps --app=lib / --hcr from turning the test
 	// binary into a shared library: execFile below has to run it.
 	let testLink = cliLinkFlags(allFlags, opts, true);
-	for (const obj of globalLinkObjects()) oFiles.push(obj);
+	for (const obj of linkInputs(opts)) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linkRes.ok) {

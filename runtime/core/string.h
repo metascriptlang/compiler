@@ -355,7 +355,6 @@ msString msStringJoin(msStringArray arr, msString sep);
 /* ===== Parsing ===== */
 
 double msStringParseFloat(msString s);
-int64_t msStringParseInt(msString s);
 
 /* ===== Set Length ===== */
 

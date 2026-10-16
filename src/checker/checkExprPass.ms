@@ -2,24 +2,23 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
+import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, isIterator, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, isLockedRef, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, getIteratorYieldType, isNullableShape, isOutParam, distinctBody } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol } from "./symbol";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor } from "./context";
 import { isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch, scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates, CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
-import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callLaterDeclarationNote } from "./checkerCallbacks";
+import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
+import { checkArcPointeeSendable } from "./sendable";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
-import { checkArcPointeeSendable } from "./sendable";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
-import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
 import { findChar, splitTopLevel, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { basename } from "std/fs/path";
 import { checkPointerAddress } from "./pointerAddress";
@@ -27,15 +26,13 @@ import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
 import { markInitialized, isInitialized, getDeclBlock, saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState } from "./initTracker";
-import { callInstantiateGeneric } from "./checkerCallbacks";
 import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, textConversionRefusal, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, typeofComparisonHint } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, textConversionRefusal, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, typeofComparisonHint, UnionRead, readUnionOperand } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
-import { checkArcPointeeSendable } from "./sendable";
 
 function literalElemType(el: Node): Type | null {
 	if (el.kind != NodeKind.SpreadExpr) return el.nodeType;
@@ -1089,6 +1086,11 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		if (rightConverted != null) { d.right = rightConverted; rightType = rightConverted.nodeType; }
 		if (operandReadsValue(ctx, d.operator, leftType, rightType, true) && valueOfInPlace(ctx, d.left)) leftType = d.left.nodeType;
 		if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) rightType = d.right.nodeType;
+		const leftUnion = readUnionOperand(ctx, d.operator, node, d.left, d.right, true);
+		if (leftUnion == UnionRead.Read) leftType = d.left.nodeType;
+		const rightUnion = leftUnion == UnionRead.Refused ? UnionRead.Untouched : readUnionOperand(ctx, d.operator, node, d.right, d.left, false);
+		if (rightUnion == UnionRead.Read) rightType = d.right.nodeType;
+		if (leftUnion == UnionRead.Refused || rightUnion == UnionRead.Refused) { node.nodeType = booleanType(); return; }
 	} else if (isAsgn) {
 		const rightConverted = operandConverter(ctx, d.operator, d.right, leftType, rightType, false);
 		if (rightConverted != null) {
@@ -1504,6 +1506,20 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	}
 }
 
+// The type an object literal is stamped with: the expected type without ownership modifiers,
+// Maybe<T> reduced to T so fitNode sees the T -> Maybe<T> gap and inserts the wrap (otherwise
+// codegen writes the literal's fields into the Maybe slot), Ref|null reduced to Ref so a class
+// literal still heap-allocates.
+function literalStampType(expectedType: Type | null, fallback: Type): Type {
+	let stampType = skipModifier(expectedType);
+	if (stampType != null && isMaybeType(stampType)) {
+		stampType = stampType.typeReturn != null ? stampType.typeReturn : fallback;
+	}
+	const stampRef = stampType != null ? unwrapRefNullUnion(stampType) : null;
+	if (stampRef != null) stampType = stampRef;
+	return stampType != null ? stampType : fallback;
+}
+
 function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as ObjectLiteralData;
 	// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
@@ -1628,19 +1644,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Reference parity: stamp literal with expected type, propagate field types
 		// For class types, keep Ref wrapper so codegen knows to heap-allocate.
 		// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
-		let stampType = skipModifier(expectedType);
-		// Maybe<T> override: when expected is Maybe<T>, the literal's natural
-		// shape is the inner T (matched against T's fields above via the peel).
-		// Stamp the inner T so fitNode at the call site detects the T → Maybe<T>
-		// gap and inserts the wrap. Without this, node.nodeType = Maybe<T>
-		// short-circuits fitNode's same-kind check and no wrap is emitted —
-		// codegen then writes the literal's T-shape fields into Maybe<T>'s slot.
-		if (stampType != null && isMaybeType(stampType)) {
-			stampType = stampType.typeReturn != null ? stampType.typeReturn : objExpected;
-		}
-		const stampRef = stampType != null ? unwrapRefNullUnion(stampType) : null;
-		if (stampRef != null) stampType = stampRef;
-		node.nodeType = (stampType != null) ? stampType : objExpected;
+		const stampType = literalStampType(expectedType, objExpected);
+		node.nodeType = stampType;
 		// Pin to consts so the inner while-loop body sees non-null typeNames/
 		// typeChildren — flow narrowing on `let objExpected` doesn't reach
 		// inside nested loops via the binder's current narrowing rules.
@@ -1784,8 +1789,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	} else if (objExpected != null && objExpected.kind == TypeKind.Union
 		&& isDiscriminatedUnion(objExpected)) {
 		// Discriminated union construction validation
-		// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
-		const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
+		const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, literalStampType(expectedType, objExpected));
 		node.nodeType = constructed; return;
 	} else if (objExpected != null && objExpected.kind == TypeKind.Union) {
 		// Non-discriminated union: resolve variant, propagate field types.
@@ -2499,6 +2503,34 @@ function isSliceSource(t: Type): boolean {
 		|| k == TypeKind.GenericParam || k == TypeKind.Error || isUnresolvedType(base) || hasGenericParams(base);
 }
 
+let _invokedScopes: Cursor<Scope>[] = [];
+
+export function readIsDeferred(ctx: CheckerContext, declScope: Cursor<Scope>): boolean {
+	let scope = ctx.table.current;
+	while (scope != null && scope != declScope && scope.scopeKind != ScopeKind.Module) {
+		if (scope.scopeKind == ScopeKind.Function && _invokedScopes.indexOf(scope) < 0) return true;
+		if (scope.scopeKind == ScopeKind.Class && scope != ctx.staticInitBoundary) return true;
+		scope = scope.parent;
+	}
+	return false;
+}
+
+export function usedBeforeDeclaration(name: string): string {
+	return `Block-scoped variable '${name}' used before its declaration`;
+}
+
+function refuseModuleReadBeforeDeclaration(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl || sym.modulePath != ctx.modulePath || hasFlag(sym, SymbolFlag.StaticLocal)) return;
+	if ((decl.data as VariableDeclData).declKind == DeclKind.Var || read.location.line <= 0
+		|| read.flags.has(NodeFlag.FromTemplate) || read.flags.has(NodeFlag.BoundSym)) return;
+	const before = read.location.line < decl.location.line
+		|| (read.location.line == decl.location.line && read.location.column < decl.location.column);
+	if (!before && sym.state != SymbolState.Checking) return;
+	if (ctx.inTestBlock || readIsDeferred(ctx, null as unknown as Cursor<Scope>)) return;
+	addError(ctx, usedBeforeDeclaration(sym.name), read.location.line, read.location.column);
+}
+
 function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as IdentifierData;
 	// Phase 5: `super` resolves to parent class via enclosing `this`'s
@@ -2524,7 +2556,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 		if (builtin != null) { node.nodeType = builtin; return; }
 	}
 	if (sym == null) {
-			addError(ctx, `Undefined variable '${d.name}'` + callLaterDeclarationNote(d.name), node.location.line, node.location.column);
+			addError(ctx, callUndefinedVariableMessage(ctx, d.name), node.location.line, node.location.column);
 		node.nodeType = errorType(); return;
 	}
 	if (node.flags.has(NodeFlag.BoundSym) && isFrameValue(sym) && !isVisibleSymbol(ctx.table, sym)) {
@@ -2541,6 +2573,8 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	markUsedIn(ctx, sym);
 	if (sym.symbolKind == SymbolKind.Function || (sym.symbolKind == SymbolKind.Variable && sym.symbolType != null
 			&& sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn))) callDemandReturn(ctx, sym, node);
+	if (sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Global)) refuseModuleReadBeforeDeclaration(ctx, sym, node);
+	if (sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Global) && sym.state != SymbolState.Checked) callDemandBinding(ctx, sym, node);
 	if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
 	if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 	if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr
@@ -3109,7 +3143,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	const boundNames = bindContainerNames(ctx, params, body);
 	const savedCtorExits = ctx.ctorExits;
 	ctx.ctorExits = null;
+	const invoked = ctx.calleeExpr == fnNode;
 	openScope(ctx.table, ScopeKind.Function);
+	if (invoked) _invokedScopes.push(ctx.table.current);
 	const savedBoundary = ctx.readonlyBoundary;
 	if (ctx.pendingSpawnThunk) {
 		ctx.pendingSpawnThunk = false;
@@ -3163,6 +3199,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		if (temps.length > 0) bodyIntoBlock(body, temps);
 	}
 	if (suspends) refuseUsedSuspendingViewParams(ctx, paramSyms, paramValueTypes, paramLocs, fnNode.location);
+	if (invoked) _invokedScopes.pop();
 	closeScope(ctx.table);
 	releaseNames(ctx, boundNames);
 	ctx.readonlyBoundary = savedBoundary;

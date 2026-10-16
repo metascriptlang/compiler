@@ -1,4 +1,3 @@
-// @xfail(san): alias analysis lost the `copy = new Array(0)` field-path root's resolvedSym under a cold cache; c/orc/danger keep it now, san not re-run yet.
 // @stdout: byte 8 8 true false 0 1 true | word 8 8 true false 0 1 true | aggregate65 3 3 true false 0 1 true | aggregate100 3 3 true false 0 1 true
 // @exit: 0
 enum ByteFlag { Changed, Paint }

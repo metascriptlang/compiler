@@ -4,16 +4,15 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
-import { AttachedOp } from "../../ast/node";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, isStringLiteralUnion, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct } from "../../checker/types";
+import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet } from "./context";
+import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner, mangleQualified, mangleModuleName } from "./names";
-import { CheckerContext, newSym } from "../../checker/context";
+import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
@@ -55,7 +54,6 @@ function structIdentityName(g: CGen, t: Type): string {
 	if (isAnonTypeName(t.typeName)) return anonTypeName(t);
 	return typeIdentityName(g, t);
 }
-import { useHeader } from "./context";
 
 // ===== Generated lifecycle hook symbols (attachedOps analog) =====
 // destructorLifting sets AttachedDestructor on a per-Type-object instance (a throwaway built by
@@ -413,7 +411,9 @@ function anonFieldsKey(t: Type, open: Type[]): string {
 	while (i < t.typeNames.length) {
 		if (i > 0) key = key + ",";
 		key = key + t.typeNames[i] + ":";
-		if (i < t.typeChildren.length && t.typeChildren[i] != null) {
+		if (i < t.typeChildren.length && storesNothing(t, t.typeChildren[i])) {
+			key = key + "none";
+		} else if (i < t.typeChildren.length && t.typeChildren[i] != null) {
 			key = key + anonFieldKey(t.typeChildren[i], open);
 		} else {
 			key = key + "void";
@@ -507,8 +507,7 @@ export function typeKey(t: Type | null): string {
 	if (t == null) return "null";
 	return match (t.kind) {
 		TypeKind.Alias => typeKey(t.typeReturn),
-		TypeKind.Number => "number",
-		TypeKind.Float64 => "float64",
+		TypeKind.Number | TypeKind.Float64 => "float64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
@@ -1440,9 +1439,10 @@ function genObjectType(g: CGen, t: Type): string {
 
 	let structDef = `#ifndef ${name}_DEFINED\n#define ${name}_DEFINED\nstruct ${name} {\n`;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
+		if (i < t.typeChildren.length && storesNothing(t, t.typeChildren[i])) continue;
 		structDef = structDef + `  ${fieldTypes[i]} ${mangleFieldName(t.typeNames[i])};\n`;
 	}
-	structDef = structDef + "};\n#endif\n";
+	structDef = structDef + "};\n" + layoutAssert(g, t, `struct ${name}`) + "#endif\n";
 
 	// Emit struct body directly (reference parity: natural recursion gives correct order).
 	// By-value dependency on a union still mid-generation defers to the queue
@@ -1465,6 +1465,11 @@ function genObjectType(g: CGen, t: Type): string {
 	return cTypeName;
 }
 
+function layoutAssert(g: CGen, t: Type, cType: string): string {
+	const size = sizeOfType(g.target, t);
+	return size < 0 ? "" : `_Static_assert(sizeof(${cType}) == ${size}, "${cType} layout");\n`;
+}
+
 // ===== Union Type Generation =====
 // Standard reference pattern: union variant structs + wrapper struct with anonymous union.
 // Each variant Object type in typeChildren gets its own named struct.
@@ -1474,11 +1479,7 @@ function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
 	// Pure string literal union → msString (TypeScript: string at runtime)
-	let allStrLit = true;
-	for (const child of t.typeChildren) {
-		if (child == null || child.kind != TypeKind.StringLiteral) allStrLit = false;
-	}
-	if (allStrLit && t.typeChildren.length > 0) {
+	if (isStringLiteralUnion(t)) {
 		typeCacheSet(g.typeCache, typeKey(t), "msString");
 		return "msString";
 	}
@@ -1596,9 +1597,8 @@ function genUnionType(g: CGen, t: Type): string {
 		if (variant != null && variant.typeNames != null) {
 			let fi = 0;
 			while (fi < variant.typeNames.length) {
-				// Skip void-typed fields (e.g. `Result<void, E>` v0 has `void value`)
-				// — emitting `void value;` is invalid C.
-				if (fieldTypes[fi] != "void") {
+				const stored = fi >= variant.typeChildren.length || !storesNothing(variant, variant.typeChildren[fi]);
+				if (stored && fieldTypes[fi] != "void") {
 					addLine(b, `${fieldTypes[fi]} ${mangleFieldName(variant.typeNames[fi])};`);
 				}
 				fi += 1;
@@ -1606,6 +1606,7 @@ function genUnionType(g: CGen, t: Type): string {
 		}
 		b.indent -= 1;
 		addLine(b, "} " + varName + ";");
+		if (variant != null) add(b, layoutAssert(g, variant, varName));
 
 		vi += 1;
 	}
@@ -1636,6 +1637,7 @@ function genUnionType(g: CGen, t: Type): string {
 	addLine(b, "};");
 	b.indent -= 1;
 	addLine(b, "};");
+	add(b, layoutAssert(g, t, `struct ${name}`));
 	addLine(b, "#endif");
 	addNewline(b);
 
@@ -2112,9 +2114,6 @@ function genTupleType(g: CGen, t: Type): string {
 
 // ===== Tests =====
 
-import { createPrimitive, createStruct, createArray, createEnum, createRef , createTuple, createFunction, createDistinct } from "../../checker/types";
-import { createCGen } from "./context";
-import { GcMode, addError, createContext } from "../../checker/context";
 test "the pointer threshold follows the target float width" {
 	const pair = createStruct("Pair", ["a", "b"], [createPrimitive(TypeKind.Float64), createPrimitive(TypeKind.Float64)], true);
 	const wide: TargetInfo = { ptrSize: 8, floatSize: 8 };
@@ -2125,7 +2124,7 @@ test "the pointer threshold follows the target float width" {
 }
 
 test "primitive keys" {
-	assert typeKey(createPrimitive(TypeKind.Number)) == "number";
+	assert typeKey(createPrimitive(TypeKind.Number)) == "float64";
 	assert typeKey(createPrimitive(TypeKind.String)) == "string";
 	assert typeKey(createPrimitive(TypeKind.Boolean)) == "boolean";
 	assert typeKey(createPrimitive(TypeKind.Void)) == "void";
@@ -2253,7 +2252,7 @@ test "interface emits struct" {
 	const result = getTypeDesc(g, declaredHere(createStruct("Point", propNames, propTypes, true)));
 	assert result == "Point";
 	const types = extract(sec(g, CSection.Types));
-	assert types == "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n#endif\n\n";
+	assert types == "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n_Static_assert(sizeof(struct Point) == 8, \"struct Point layout\");\n#endif\n\n";
 }
 
 test "class (Ref<Object>) emits struct with pointer" {
@@ -2265,7 +2264,7 @@ test "class (Ref<Object>) emits struct with pointer" {
 	const result = getTypeDesc(g, createRef(declaredHere(createStruct("Person", propNames, propTypes, true))));
 	assert result == "Person*";
 	const types = extract(sec(g, CSection.Types));
-	assert types == "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n#endif\n\n";
+	assert types == "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n_Static_assert(sizeof(struct Person) == 16, \"struct Person layout\");\n#endif\n\n";
 }
 
 test "array type" {
@@ -2357,7 +2356,7 @@ test "anonymous type cache key distinguishes" {
 
 test "tuple type key" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
-	assert typeKey(t) == "tuple:number,string";
+	assert typeKey(t) == "tuple:float64,string";
 }
 
 test "tuple type desc emits struct" {

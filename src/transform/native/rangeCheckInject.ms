@@ -6,13 +6,12 @@
 // TypeAssertion nodes (`expr as Type`) where the target type is a narrow integer
 // get wrapped with a runtime range check call.
 
-import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind, ExprStmtData, VariableDeclData, CallExprData } from "../../ast/node";
 import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx } from "../testUtil";
-import { ExprStmtData, VariableDeclData } from "../../ast/node";
 import { checkProgram } from "../../checker/checkPass";
 
 // ===== Helpers =====
@@ -44,7 +43,7 @@ export function injectEnumRangeChecks(program: Node, ctx: TransformContext): Nod
 function getRangeCheckForTypeKind(kind: TypeKind): string {
 	return match (kind) {
 		TypeKind.Int8   => "msCheckRangeI8",
-		TypeKind.Uint8  => "msCheckRangeU8",
+		TypeKind.Uint8 | TypeKind.Char => "msCheckRangeU8",
 		TypeKind.Int16  => "msCheckRangeI16",
 		TypeKind.Uint16 => "msCheckRangeU16",
 		TypeKind.Int32  => "msCheckRangeI32",
@@ -58,7 +57,6 @@ function getRangeMinForKind(kind: TypeKind): number {
 		TypeKind.Int8   => -128,
 		TypeKind.Int16  => -32768,
 		TypeKind.Int32  => -2147483648,
-		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => 0,
 		_ => 0,
 	};
 }
@@ -66,7 +64,7 @@ function getRangeMinForKind(kind: TypeKind): number {
 function getRangeMaxForKind(kind: TypeKind): number {
 	return match (kind) {
 		TypeKind.Int8   => 127,
-		TypeKind.Uint8  => 255,
+		TypeKind.Uint8 | TypeKind.Char => 255,
 		TypeKind.Int16  => 32767,
 		TypeKind.Uint16 => 65535,
 		TypeKind.Int32  => 2147483647,
@@ -80,8 +78,9 @@ function isUnsignedKind(kind: TypeKind): boolean {
 }
 
 function destCovers(src: Type | null, dest: Type): boolean {
-	const s = peelToRepr(src);
-	if (s == null) return false;
+	const r = peelToRepr(src);
+	if (r == null) return false;
+	const s = r.kind == TypeKind.Char ? createPrimitive(TypeKind.Uint8) : r;
 	if (s.kind == TypeKind.Enum) {
 		const lo = getRangeMinForKind(dest.kind);
 		const hi = getRangeMaxForKind(dest.kind);
@@ -93,7 +92,13 @@ function destCovers(src: Type | null, dest: Type): boolean {
 		return true;
 	}
 	if (!isIntegerType(s)) return false;
+	if (dest.kind == TypeKind.Char) return s.kind == TypeKind.Uint8;
 	return integerRank(s) <= integerRank(dest);
+}
+
+function isNumericSource(src: Type | null): boolean {
+	const s = peelToRepr(src);
+	return s != null && (isIntegerType(s) || s.kind == TypeKind.Char || s.kind == TypeKind.Enum || isFloatSource(s));
 }
 
 function isFloatSource(src: Type | null): boolean {
@@ -110,7 +115,7 @@ function int64CheckFor(src: Type | null): string {
 }
 
 function isInt64Check(fnName: string): boolean {
-	return fnName == "msCheckRangeI64" || fnName == "msCheckRangeI64FromU64";
+	return fnName == "msCheckRangeI64" || fnName == "msCheckRangeI64FromU64" || fnName == "msCheckRangeU64";
 }
 
 function enumCovers(src: Type | null, dest: Type): boolean {
@@ -129,9 +134,12 @@ export function rangeCheckHelper(src: Type | null, dest: Type, rangeChecks: bool
 	if (!rangeChecks) return "";
 	if (dest.kind == TypeKind.Enum) return dest.typeNames.length == 0 || enumCovers(src, dest) ? "" : "msCheckRangeI32";
 	if (dest.kind == TypeKind.Int64) return int64CheckFor(src);
+	if (dest.kind == TypeKind.Uint64) return isFloatSource(src) ? "msCheckRangeU64" : "";
+	if (dest.kind == TypeKind.Char) return isNumericSource(src) && !destCovers(src, dest) ? "msCheckRangeU8" : "";
 	const fnName = getRangeCheckForTypeKind(dest.kind);
-	if (fnName == "" || isUnsignedKind(dest.kind) || destCovers(src, dest)) return "";
-	return fnName;
+	if (fnName == "") return "";
+	if (isUnsignedKind(dest.kind)) return isFloatSource(src) ? fnName : "";
+	return destCovers(src, dest) ? "" : fnName;
 }
 
 export function makeRangeCheckFor(
@@ -219,6 +227,23 @@ function castExprKind(input: string, rangeChecks: boolean = true): NodeKind {
 	return found.length > 0 ? found[0] : NodeKind.Program;
 }
 
+function rangeHelperOf(input: string): string {
+	const result = parseInput(input);
+	if (!result.ok) return "";
+	const ctx = checkedCtx(checkProgram(result.value));
+	injectRangeChecks(result.value, ctx);
+	let name = "";
+	walkNode(result.value, (n: Node): Node => {
+		if (n.kind == NodeKind.VariableDecl && (n.data as VariableDeclData).declName == "r") {
+			const init = (n.data as VariableDeclData).initializer;
+			const callee = init.kind == NodeKind.CallExpr ? (init.data as CallExprData).callee : null;
+			if (callee != null && callee.resolvedSym != null) name = callee.resolvedSym.name;
+		}
+		return n;
+	});
+	return name;
+}
+
 function castOf(target: string): string {
 	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
@@ -254,11 +279,41 @@ test "parser stores asType union" { assert parsedAsType("x as string | null;") =
 
 test "cast to int8 becomes range check" { assert castExprKind(castOf("int8")) == NodeKind.CallExpr; }
 
-test "cast to uint16 stays a plain cast" { assert castExprKind(castOf("uint16")) == NodeKind.TypeAssertion; }
+test "a float converted to an unsigned type is range checked at every width" {
+	assert rangeHelperOf(castOf("uint8")) == "msCheckRangeU8";
+	assert rangeHelperOf(castOf("uint16")) == "msCheckRangeU16";
+	assert rangeHelperOf(castOf("uint32")) == "msCheckRangeU32";
+	assert rangeHelperOf(castOf("uint64")) == "msCheckRangeU64";
+	assert rangeHelperOf("function f(v: float32): void { const r = v as uint8; }") == "msCheckRangeU8";
+	assert rangeHelperOf("function f(v: number): void { const r = v as uint64; }") == "msCheckRangeU64";
+}
 
-test "cast to uint8 stays a plain cast" { assert castExprKind(castOf("uint8")) == NodeKind.TypeAssertion; }
+test "an integer converted to an unsigned type wraps unchecked" {
+	assert castExprKind("function f(v: int32): void { const r = v as uint8; }") == NodeKind.TypeAssertion;
+	assert castExprKind("function f(v: int64): void { const r = v as uint32; }") == NodeKind.TypeAssertion;
+	assert castExprKind("function f(v: int64): void { const r = v as uint64; }") == NodeKind.TypeAssertion;
+	assert castExprKind("function f(v: uint64): void { const r = v as uint16; }") == NodeKind.TypeAssertion;
+}
 
-test "cast to uint32 stays a plain cast" { assert castExprKind(castOf("uint32")) == NodeKind.TypeAssertion; }
+test "an integer or a float converted to char is range checked, as an unsigned byte that stops" {
+	assert rangeHelperOf("function f(v: int32): void { const r = v as char; }") == "msCheckRangeU8";
+	assert rangeHelperOf("function f(v: uint16): void { const r = v as char; }") == "msCheckRangeU8";
+	assert rangeHelperOf("function f(v: int8): void { const r = v as char; }") == "msCheckRangeU8";
+	assert rangeHelperOf(castOf("char")) == "msCheckRangeU8";
+	assert castExprKind("function f(v: uint8): void { const r = v as char; }") == NodeKind.TypeAssertion;
+}
+
+test "a char converted to a signed type is checked only where the type cannot hold 255" {
+	assert rangeHelperOf("function f(v: char): void { const r = v as int8; }") == "msCheckRangeI8";
+	assert castExprKind("function f(v: char): void { const r = v as int16; }") == NodeKind.TypeAssertion;
+	assert castExprKind("function f(v: char): void { const r = v as int32; }") == NodeKind.TypeAssertion;
+	assert castExprKind("function f(v: char): void { const r = v as uint8; }") == NodeKind.TypeAssertion;
+}
+
+test "a float converted to an unsigned type stays a plain cast when range checks are off" {
+	assert castExprKind(castOf("uint8"), false) == NodeKind.TypeAssertion;
+	assert castExprKind(castOf("uint64"), false) == NodeKind.TypeAssertion;
+}
 
 test "cast to int8 stays a plain cast when range checks are off" { assert castExprKind(castOf("int8"), false) == NodeKind.TypeAssertion; }
 

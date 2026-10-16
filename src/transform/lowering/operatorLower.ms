@@ -23,7 +23,7 @@ import { walkNode, hasEffect } from "../walker";
 import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { resolveOperatorCall, ExtensionMethod } from "../../checker/context";
+import { resolveOperatorCall, ExtensionMethod, getExtFnType } from "../../checker/context";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
 // lowering unbound calls a prelude or extension operator, the same one in every scope.
@@ -291,7 +291,10 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (ext.sym == null) {
 		throw new Error(`internal: operator '${op}' resolved to an extension without a symbol`);
 	}
-	return makeCall(makeTypedIdentResolved(ext.sym, null, node.location), [d.operand], node.location);
+	const call = makeCall(makeTypedIdentResolved(ext.sym, null, node.location), [d.operand], node.location);
+	const fnType = getExtFnType(ext);
+	if (fnType != null && fnType.typeReturn != null) call.nodeType = fnType.typeReturn;
+	return call;
 }
 
 function lowerOperatorNode(node: Node, ctx: TransformContext): Node {

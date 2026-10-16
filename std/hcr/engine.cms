@@ -255,6 +255,7 @@ function sweepEndedRuns(root: string): void {
 	for (const entry of readDir(root)) {
 		if (!entry.endsWith("/")) continue;
 		const name = entry.slice(0, entry.length - 1);
+		if (name.length > 10) continue;
 		const pid = name.parseInt();
 		if (name == own || `${pid}` != name || pid <= 0 || pid > 4294967295) continue;
 		if (msHcrProcessAlive(pid as uint32) != 0) continue;

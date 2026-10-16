@@ -10,31 +10,31 @@
 import { compileToJS } from "../helpers";
 
 test "explicit int32 cast truncates" {
-	const result = compileToJS("const f = 3.9; const a = f as int32;");
+	const result = compileToJS("let f = 3.9; const a = f as int32;");
 	assert result.ok;
 	assert result.value.contains("| 0");
 }
 
 test "uint8 conversion masks to a byte" {
-	const result = compileToJS("const f = 3.9; const a = f as uint8;");
+	const result = compileToJS("let f = 3.9; const a = f as uint8;");
 	assert result.ok;
 	assert result.value.contains("& 255");
 }
 
 test "uint16 conversion masks to a half word" {
-	const result = compileToJS("const f = 3.9; const a = f as uint16;");
+	const result = compileToJS("let f = 3.9; const a = f as uint16;");
 	assert result.ok;
 	assert result.value.contains("& 65535");
 }
 
 test "uint32 conversion shifts unsigned" {
-	const result = compileToJS("const f = 3.9; const a = f as uint32;");
+	const result = compileToJS("let f = 3.9; const a = f as uint32;");
 	assert result.ok;
 	assert result.value.contains(">>> 0");
 }
 
 test "int64 conversion truncates through the global Math" {
-	const result = compileToJS("const f = 3.9; const a = f as int64;");
+	const result = compileToJS("let f = 3.9; const a = f as int64;");
 	assert result.ok;
 	assert result.value.contains("Math.trunc");
 }
@@ -43,7 +43,7 @@ test "int64 conversion truncates through the global Math" {
 // module global. The receiver this pass synthesizes has to stay unbound so it
 // reaches the engine's Math — hence the pass trailing resolveRuntimeIdents.
 test "synthesized Math receiver is not mangled to the prelude class" {
-	const result = compileToJS("const f = 3.9; const a = f as int64;");
+	const result = compileToJS("let f = 3.9; const a = f as int64;");
 	assert result.ok;
 	assert !result.value.contains("_Math");
 }
@@ -74,11 +74,18 @@ function toInt32(v: int64): int32 { return v as int32; }
 function fromFloat(v: float64): int64 { return v as int64; }
 function toUnsigned(v: int32): uint8 { return v as uint8; }
 function widen(v: int8): int32 { return v as int32; }
+function floatToByte(v: float64): uint8 { return v as uint8; }
+function floatToWord(v: float32): uint32 { return v as uint32; }
+function floatToU64(v: float64): uint64 { return v as uint64; }
+function toChar(v: int32): char { return v as char; }
+function floatToChar(v: float64): char { return v as char; }
 console.log(toInt8(1), toInt16(1), fromUnsigned(1), toInt32(1 as int64));
 console.log(fromFloat(1.5), toUnsigned(1), widen(1));
+console.log(floatToByte(1.5), floatToWord(1.5 as float32), floatToU64(1.5));
+console.log(toChar(65) as int32, floatToChar(65.5) as int32);
 `;
 
-test "a signed narrowing conversion is range checked on JS" {
+test "a signed narrowing conversion and a float into an unsigned type are range checked on JS" {
 	const result = compileToJS(CONVERSIONS);
 	assert result.ok;
 	const emitted = result.value;
@@ -88,6 +95,11 @@ test "a signed narrowing conversion is range checked on JS" {
 		{ name: "fromUnsigned", helper: "msCheckRangeI8" },
 		{ name: "toInt32", helper: "msCheckRangeI32" },
 		{ name: "fromFloat", helper: "msCheckRangeI64" },
+		{ name: "floatToByte", helper: "msCheckRangeU8" },
+		{ name: "floatToWord", helper: "msCheckRangeU32" },
+		{ name: "floatToU64", helper: "msCheckRangeU64" },
+		{ name: "toChar", helper: "msCheckRangeU8" },
+		{ name: "floatToChar", helper: "msCheckRangeU8" },
 	];
 	for (const row of checked) {
 		assert bodyOf(emitted, row.name).contains(row.helper), row.name + " lacks " + row.helper;

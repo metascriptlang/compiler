@@ -1,7 +1,7 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 40
-// @stdout: leak-moved-arg done
+// @stdout: leak-moved-arg done r=8488890
 // @serial
 // note: FIXED (analyzer inject.ms processMove honored the consuming position's
 // DrcMode). MS callee convention is "params are borrows, caller owns" (ea38c2a —

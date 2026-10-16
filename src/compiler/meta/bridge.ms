@@ -947,6 +947,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as ArrayPatternData;
 			setNodes(objHeap, arrHeap, handle, "patternElements", d.patternElements);
 			setBool(objHeap, handle, "hasRestElement", d.hasRestElement);
+			setDefaults(objHeap, arrHeap, handle, "patternDefaults", d.patternDefaults, includeTypeAst);
 		},
 		NodeKind.ObjectPattern => {
 			const d = node.data as ObjectPatternData;
@@ -1025,6 +1026,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setBool(objHeap, handle, "forOfIsConst", d.forOfIsConst);
 			setNode(objHeap, arrHeap, handle, "forOfIterable", d.forOfIterable);
 			setNode(objHeap, arrHeap, handle, "forOfBody", d.forOfBody);
+			setNode(objHeap, arrHeap, handle, "forOfPattern", d.forOfPattern);
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
@@ -1080,6 +1082,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "fnFlags", d.fnFlags);
 			setStr(objHeap, handle, "fnReturnType", d.fnReturnType);
 			setDefaults(objHeap, arrHeap, handle, "fnDefaults", d.fnDefaults, includeTypeAst);
+			setStr(objHeap, handle, "nativeName", d.nativeName);
 		},
 		NodeKind.ImportDecl => {
 			const d = node.data as ImportDeclData;
@@ -1146,6 +1149,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "methodFlags", d.methodFlags);
 			setStr(objHeap, handle, "methodReturnType", d.methodReturnType);
 			setDefaults(objHeap, arrHeap, handle, "methodDefaults", d.methodDefaults, includeTypeAst);
+			setStr(objHeap, handle, "nativeName", d.nativeName);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -1547,7 +1551,12 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					}
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
-					const rawFlags = (readInt(objHeap, handle, "flags") as uint32) as BitSet<NodeFlag>;
+					const flagsValue = readInt(objHeap, handle, "flags");
+					const flagsFit = flagsValue >= 0 && flagsValue <= 4294967295 && Math.floor(flagsValue) == flagsValue;
+					if (!flagsFit) {
+						_wireRefusals.push({ message: `flags must be a NodeFlag set, an integer in 0 .. 4294967295, not ${flagsValue}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
+					}
+					const rawFlags = ((flagsFit ? flagsValue : 0) as uint32) as BitSet<NodeFlag>;
 					const pipeline = rawFlags.difference(PARSER_NODE_FLAGS);
 					if (!pipeline.isEmpty()) {
 						_wireRefusals.push({ message: `flags may hold only what the parser writes (${PARSER_NODE_FLAGS.toString()}), not ${pipeline.toString()}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
@@ -1841,7 +1850,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.ArrayPattern => {
 			const patternElements = readNodes(objHeap, arrHeap, h, "patternElements", loc);
 			const hasRestElement = readBool(objHeap, h, "hasRestElement");
-			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement, patternDefaults: [] }, loc);
+			const patternDefaults = readDefaults(objHeap, arrHeap, h, "patternDefaults", loc);
+			return createNodeAt(NodeKind.ArrayPattern, { patternElements, hasRestElement, patternDefaults }, loc);
 		},
 		NodeKind.ObjectPattern => {
 			const patternProps = readNodes(objHeap, arrHeap, h, "patternProps", loc);
@@ -1922,9 +1932,10 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const forOfIsConst = readBool(objHeap, h, "forOfIsConst");
 			const forOfIterable = readNode(objHeap, arrHeap, h, "forOfIterable", loc);
 			const forOfBody = readNode(objHeap, arrHeap, h, "forOfBody", loc);
+			const forOfPattern = readNode(objHeap, arrHeap, h, "forOfPattern", loc);
 			return createNodeAt(NodeKind.ForOfStmt, {
 				forOfBinding, forOfIsConst, forOfIterable, forOfBody,
-				forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
+				forOfPattern, bindingLocation: loc, forOfLabel: "",
 			}, loc);
 		},
 		NodeKind.ForInStmt => {
@@ -1983,7 +1994,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const fnDefaults = readDefaults(objHeap, arrHeap, h, "fnDefaults", loc);
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
-				fnDefaults, nativeName: "", nameLocation: loc,
+				fnDefaults, nativeName: readStr(objHeap, h, "nativeName"), nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ImportDecl => {
@@ -2084,7 +2095,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.MethodDecl, {
 				methodName, methodParams, methodParamTypes, methodBody,
 				methodIsStatic, methodFlags, methodVisibility, methodReturnType,
-				methodDefaults: readDefaults(objHeap, arrHeap, h, "methodDefaults", loc), nativeName: "", nameLocation: loc,
+				methodDefaults: readDefaults(objHeap, arrHeap, h, "methodDefaults", loc), nativeName: readStr(objHeap, h, "nativeName"), nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ConstructorDecl => {
@@ -2672,6 +2683,22 @@ test "an enum ordinal written as flags is refused, not read as a set" {
 	assert takeWireRefusals().length == 1;
 }
 
+test "flags that are no 32-bit set are refused, not converted" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const forged: RaiserValue[] = [raiserInt(4294967296), raiserInt(-1), raiserFloat(1.5), raiserFloat(0.0 / 0.0), raiserFloat(1.0 / 0.0)];
+	for (const flags of forged) {
+		const val = nodeToValue(mkNumber(1, loc), objH, arrH);
+		heapObjectSetField(objH, val.intVal, "flags", flags);
+		const back = valueToNode(val, objH, arrH, loc);
+		assert back.flags == (0 as BitSet<NodeFlag>);
+		const refused = takeWireRefusals();
+		assert refused.length == 1, `${refused.length}`;
+		assert refused[0].message.contains("an integer in 0 .. 4294967295"), refused[0].message;
+	}
+}
+
 test "a node that crossed the wire with only parser flags is not refused" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
@@ -2701,6 +2728,27 @@ test "round-trip FunctionDecl" {
 	assert d.params[0] == "a";
 	assert d.params[1] == "b";
 	assert d.fnReturnType == "number";
+}
+
+test "round-trip keeps the from template of an extern function and an extern method" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const body = createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc));
+	const fn = createNode(NodeKind.FunctionDecl, {
+		fnName: "bump", params: ["n"], fnParamTypes: ["number"],
+		fnBody: body, fnFlags: "", fnReturnType: "number",
+		fnDefaults: [], nativeName: "(n => n + 1)(#)", nameLocation: loc,
+	}, synthToken(loc));
+	const fnBack = valueToNode(nodeToValue(fn, objH, arrH), objH, arrH, loc).data as FunctionDeclData;
+	assert fnBack.nativeName == "(n => n + 1)(#)";
+	const method = createNode(NodeKind.MethodDecl, {
+		methodName: "size", methodParams: [], methodParamTypes: [], methodBody: body,
+		methodIsStatic: false, methodFlags: "", methodVisibility: "", methodReturnType: "number",
+		methodDefaults: [], nativeName: "#.length", nameLocation: loc,
+	}, synthToken(loc));
+	const methodBack = valueToNode(nodeToValue(method, objH, arrH), objH, arrH, loc).data as MethodDeclData;
+	assert methodBack.nativeName == "#.length";
 }
 
 test "round-trip ImportDecl" {
@@ -2840,6 +2888,53 @@ test "round-trip MatchCase without guard (null)" {
 	assert back.kind == NodeKind.MatchCase;
 	const d = back.data as MatchCaseData;
 	assert d.caseGuard == null;
+}
+
+test "round-trip ForOfStmt keeps a nested pattern and its defaults" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const ident = (name: string): Node => createNode(NodeKind.Identifier, { name }, synthToken(loc));
+	const inner = createNode(NodeKind.ObjectPattern, {
+		patternProps: [createNode(NodeKind.ObjectPatternProp, { propKey: "a", propAlias: ident("a"), propDefault: mkNumber(4, loc) }, synthToken(loc))],
+		hasRestProp: false,
+	}, synthToken(loc));
+	const pattern = createNode(NodeKind.ArrayPattern, {
+		patternElements: [ident("k"), inner, ident("v")],
+		hasRestElement: false,
+		patternDefaults: [null as unknown as Node, null as unknown as Node, mkNumber(9, loc)],
+	}, synthToken(loc));
+	const orig = createNode(NodeKind.ForOfStmt, {
+		forOfBinding: "_destructure", forOfIsConst: true, forOfIterable: ident("rows"),
+		forOfBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+		forOfPattern: pattern, bindingLocation: loc, forOfLabel: "",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const p = (back.data as ForOfStmtData).forOfPattern;
+	assert p != null && p.kind == NodeKind.ArrayPattern;
+	const pd = p.data as ArrayPatternData;
+	assert pd.patternElements.length == 3;
+	assert pd.patternElements[1].kind == NodeKind.ObjectPattern;
+	assert ((pd.patternElements[1].data as ObjectPatternData).patternProps[0].data as ObjectPatternPropData).propDefault != null;
+	assert pd.patternDefaults.length == 3;
+	assert pd.patternDefaults[0] == null && pd.patternDefaults[1] == null;
+	assert pd.patternDefaults[2].kind == NodeKind.NumberLiteral;
+}
+
+test "round-trip ForOfStmt over a single name keeps no pattern" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const orig = createNode(NodeKind.ForOfStmt, {
+		forOfBinding: "x", forOfIsConst: true,
+		forOfIterable: createNode(NodeKind.Identifier, { name: "rows" }, synthToken(loc)),
+		forOfBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+		forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as ForOfStmtData;
+	assert d.forOfBinding == "x";
+	assert d.forOfPattern == null;
 }
 
 // ===== mapTypeToAst tests — Day 1 (atomic types) =====

@@ -1,4 +1,9 @@
 // std/core/date — prelude (JS backend).
 // Delegates to the native JS Date global.
 
-export extern class Date from "Date";
+export extern class Date {
+	constructor(ms: number = Date.now()) {}
+	static extern now(): number;
+	extern getTime(): number;
+	extern valueOf(): number;
+}

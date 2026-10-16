@@ -49,7 +49,7 @@ export function tempRef(sym: Symbol, loc: SourceLocation): Node {
 
 // A value aggregate stays in place: a temp copy would take the writes a call
 // or a store makes through it. JS reads before an await: NIM-REF TR-24.
-function snapshotsLikeJs(t: Type | null): boolean {
+export function snapshotsLikeJs(t: Type | null): boolean {
 	if (t == null) return false;
 	const k = t.kind;
 	if (k == TypeKind.Void || k == TypeKind.Array || k == TypeKind.SizedArray || k == TypeKind.Span
@@ -72,7 +72,7 @@ function isStorageRead(e: Node): boolean {
 	return e.kind == NodeKind.ArrayAccess;
 }
 
-function readsBeforeHoist(e: Node): boolean {
+export function readsBeforeHoist(e: Node): boolean {
 	if (e.kind == NodeKind.TypeAssertion) return readsBeforeHoist((e.data as TypeAssertionData).asExpr);
 	if (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.HiddenSubConv) return readsBeforeHoist((e.data as HiddenStdConvData).convExpr);
 	return (isStorageRead(e) || e.kind == NodeKind.ConditionalExpr) && snapshotsLikeJs(e.nodeType);

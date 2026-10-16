@@ -27,7 +27,7 @@ import {
 	addPre,
 	testStringRc, classifyRc,
 } from "./scope";
-import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
+import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
 import { inferCursors } from "./cursors";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
@@ -1855,7 +1855,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// In C, codegen emits a pointer into the union — DRC must not destroy the alias.
 	if (d.initializer != null && d.initializer.kind == NodeKind.TypeAssertion) {
 		const tad = d.initializer.data as TypeAssertionData;
-		if (tad.asExpr != null && tad.asExpr.nodeType != null && tad.asExpr.nodeType.kind == TypeKind.Union) {
+		if (tad.asExpr != null && tad.asExpr.nodeType != null && tad.asExpr.nodeType.kind == TypeKind.Union && !isFreshExpr(skipConvDfa(tad.asExpr).kind)) {
 			isCursor = true;
 		}
 	}

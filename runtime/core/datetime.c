@@ -3,6 +3,7 @@
  */
 
 #include "runtime/core/datetime.h"
+#include <math.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -25,6 +26,11 @@ double msTimeNow(void) {
 #else
 	return 0.0;
 #endif
+}
+
+double msTimeClip(double t) {
+	if (!isfinite(t) || fabs(t) > 8.64e15) return NAN;
+	return trunc(t) + 0.0;
 }
 
 double msTimeMonotonic(void) {

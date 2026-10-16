@@ -60,10 +60,28 @@ test "uint64 to int64 keeps the range check" {
 	assert c.contains("msCheckRangeI64FromU64(");
 }
 
-test "float64 to uint32 has no range check" {
-	const c = cFor("function f(): uint32 { return opaqueF64(3.9) as uint32; }");
+test "a float to an unsigned type keeps the range check at every width" {
+	const c32 = cFor("function f(): uint32 { return opaqueF64(3.9) as uint32; }");
+	assert c32.contains("msCheckRangeU32"), c32;
+	const c8 = cFor("function f(x: float32): uint8 { return x as uint8; }");
+	assert c8.contains("msCheckRangeU8"), c8;
+	const c64 = cFor("function f(): uint64 { return opaqueF64(3.9) as uint64; }");
+	assert c64.contains("msCheckRangeU64"), c64;
+}
+
+test "an integer to an unsigned type wraps without a range check" {
+	const c = cFor("function f(): uint8 { return opaqueI64(300 as int64) as uint8; }");
 	assert c != "";
-	assert !c.contains("msCheckRangeU32");
+	assert !c.contains("msCheckRange");
+}
+
+test "an integer or a float to char keeps an unsigned byte range check" {
+	const ci = cFor("function f(): char { return opaqueI32(300) as char; }");
+	assert ci.contains("msCheckRangeU8") && ci.contains("255"), ci;
+	const cf = cFor("function f(): char { return opaqueF64(65.9) as char; }");
+	assert cf.contains("msCheckRangeU8"), cf;
+	const cu = cFor("function f(): char { return opaqueU8(65 as uint8) as char; }");
+	assert cu != "" && !cu.contains("msCheckRange"), cu;
 }
 
 test "int32 to an enum is checked against the enum's ordinals" {

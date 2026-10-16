@@ -140,6 +140,8 @@ export extern function indexOf(this arr: Vec<string>, value: string): number fro
  */
 export extern function includes(this arr: Vec<string>, value: string): boolean from "&msStringArrayIncludes";
 
+export extern function lastIndexOf(this arr: Vec<string>, value: string, fromIndex: int32 = -1): number from "&msStringArrayLastIndexOf";
+
 /**
  * Returns a copy of a section of an array.
  * @param start The beginning index of the specified portion of the array.
@@ -366,6 +368,8 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	}
 	return false;
 }
+
+export { lastIndexOf, findIndex, findLastIndex } from "./shared";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	const n = view.length;

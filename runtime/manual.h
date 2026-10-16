@@ -607,17 +607,23 @@ static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
 })
 
 /* ===== Range-Checked Integer Casts ===== */
-static inline int8_t   msCheckRangeI8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int8_t)v; }
-static inline uint8_t  msCheckRangeU8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint8_t)v; }
-static inline int16_t  msCheckRangeI16(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int16_t)v; }
-static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint16_t)v; }
-static inline int32_t  msCheckRangeI32(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int32_t)v; }
-static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint32_t)v; }
+static inline double   msCheckRangeF(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return v; }
+static inline int64_t  msCheckRangeS(int64_t v, int64_t lo, int64_t hi) { if(v<lo||v>hi) msRaiseRangeError(v,lo,hi); return v; }
+static inline uint64_t msCheckRangeU(uint64_t v, int64_t lo, int64_t hi) { if(hi<0||v>(uint64_t)hi||(lo>0&&v<(uint64_t)lo)) msRaiseRangeError((int64_t)v,lo,hi); return v; }
+#define msCheckRangeOf(v, lo, hi) _Generic((v), double: msCheckRangeF, float: msCheckRangeF, unsigned long: msCheckRangeU, unsigned long long: msCheckRangeU, default: msCheckRangeS)((v), (lo), (hi))
+#define msCheckRangeI8(v, lo, hi)  ((int8_t)msCheckRangeOf((v), (lo), (hi)))
+#define msCheckRangeU8(v, lo, hi)  ((uint8_t)msCheckRangeOf((v), (lo), (hi)))
+#define msCheckRangeI16(v, lo, hi) ((int16_t)msCheckRangeOf((v), (lo), (hi)))
+#define msCheckRangeU16(v, lo, hi) ((uint16_t)msCheckRangeOf((v), (lo), (hi)))
+#define msCheckRangeI32(v, lo, hi) ((int32_t)msCheckRangeOf((v), (lo), (hi)))
+#define msCheckRangeU32(v, lo, hi) ((uint32_t)msCheckRangeOf((v), (lo), (hi)))
 static inline int64_t  msCheckRangeI64(double v) { if(!(v>=-9223372036854775808.0&&v<9223372036854775808.0)) msRaiseRangeErrorF(v,INT64_MIN,INT64_MAX); return (int64_t)v; }
+static inline uint64_t msCheckRangeU64(double v) { if(!(v>-1.0&&v<18446744073709551616.0)) msRaiseRangeErrorF(v,0,INT64_MAX); return (uint64_t)v; }
 static inline int64_t  msCheckRangeI64FromU64(uint64_t v) { if(v>(uint64_t)INT64_MAX) msRaiseRangeError((int64_t)v,INT64_MIN,INT64_MAX); return (int64_t)v; }
 
 _Noreturn static inline void msRaiseDivByZero(void) { __builtin_trap(); }
 _Noreturn static inline void msRaiseOverflow(void) { __builtin_trap(); }
+_Noreturn static inline void msRaiseRadixError(void) { __builtin_trap(); }
 _Noreturn static inline void msMapFatal(msString msg) { (void)msg; __builtin_trap(); }
 #include "runtime/core/checkedArith.h"
 

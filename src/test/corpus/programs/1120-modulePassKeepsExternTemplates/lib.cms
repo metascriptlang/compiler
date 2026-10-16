@@ -1,0 +1,8 @@
+@include("./ffi.h");
+
+extern function bump(n: number): number from "corpusBump";
+export extern function mix(a: number, b: number): number from "corpusMix";
+
+export function twice(n: number): number {
+	return bump(bump(n));
+}

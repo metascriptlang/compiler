@@ -169,6 +169,27 @@ function msCheckRangeI32(v: float64, lo: float64, hi: float64): float64 {
 }
 
 @compilerFunc
+function msCheckRangeU8(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeU16(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeU32(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
 function msToInt32(v: float64): int32 {
 	@emit(`return ${v} | 0;`);
 	unreachable;
@@ -177,6 +198,13 @@ function msToInt32(v: float64): int32 {
 @compilerFunc
 function msCheckRangeI64(v: float64): float64 {
 	@emit(`if (!(${v} >= -9223372036854775808 && ${v} < 9223372036854775808)) ${msDefect}("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeU64(v: float64): float64 {
+	@emit(`if (!(${v} > -1 && ${v} < 18446744073709551616)) ${msDefect}("value " + ${v} + " not in range 0 .. 18446744073709551615");
 	return ${v};`);
 	unreachable;
 }

@@ -14,6 +14,8 @@ extern const msTypeInfo msBigIntTypeInfo;
 
 msBigInt* msBigIntFromString(const char* s, size_t len);
 msBigInt* msBigIntFromLit(msString s);
+bool msBigIntParses(msString s);
+msBigInt* msBigIntParse(msString s);
 msString msBigIntToString(const msBigInt* a, int32_t radix);
 msString msBigIntToDebugString(const msBigInt* a);
 msBigInt* msBigIntFromInt64(int64_t v);
@@ -21,6 +23,8 @@ msBigInt* msBigIntFromUint64(uint64_t v);
 msBigInt* msBigIntFromFloat64(double v);
 
 int64_t msBigIntToInt64(const msBigInt* a);
+int64_t msBigIntToSigned(const msBigInt* a, int32_t bits);
+float msBigIntToFloat32(const msBigInt* a);
 double msBigIntToFloat64(const msBigInt* a);
 char* msBigIntToCString(const msBigInt* a, int32_t radix);
 

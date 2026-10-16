@@ -44,6 +44,7 @@ backend and DRC/ORC runtime.
 | Generic construction across images | Windows x64 candidate `02d3615a`, `hcrGenericCtor`: two image users share `Box<int32>`, another uses `Box<string>`, and an implicit generic constructor runs its field initializer. Editing constructor/initializer bodies reloads from `41:1 42:1 kept:1 stamp=3` to `41:2 42:2 kept:2 stamp=4`. JavaScript plain control matches; generic `super` and POSIX were not checked in this extension |
 | Generic TypeInfo lifecycle bindings | Windows x64 candidate `02d3615a`, `hcrGenericOps`: captured getter/setter environments and a self-referential generic cell use foreign destroy/trace hooks. DRC and ORC produce `OPS 9 10 kept` and three `onDestroy` calls; the targeted environment/cell ledger rows balance. A real Neon signal/owner/effect consumer now builds and reloads; this is not a full Neon UI refresh proof |
 | Generic instance TypeInfo identity | Windows x64 candidate `cdad9044`, `hcrGenericIdentity`: a generic class instance used by image modules has one TypeInfo across images and generations, so `as Box<T>` accepts an object another image or an older generation built; a field added to the generic class still answers restart required. Instances a core module also demands, Linux and macOS were not checked |
+| Lifted operations shared with core | Windows x64 candidate `2709c996`, `hcrCoreOp`: a project module earlier in load order and a module outside the project both assign a `"row" \| "column" \| null` field and a `[string, int32]` field; the core module defines the destroy, copy, sink and moved operations, the image calls them, and an edit of the project module reloads (`start row s+ 2 column wide 7`, `cleared none none 0`, `reloaded logic column s++ 12`). `e8c024c8` stops the build with an internal error. Linux and macOS were not checked |
 | Module globals at exit | Windows x64, Linux x64 and macOS arm64, `hcrExitDestroy`: `msc run --hcr` destroys each module global once at exit, entry module first, and prints what `msc run` prints. The engine calls each current image's `Deinit000`, then the core's `msHcrCoreDeinit`; a retired cell (type reset) is never destroyed. The installed compiler printed no destroy line |
 | Dependency reload | Windows x64, Linux x64 and macOS arm64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
 | `msc run --hcr app.ms` | Windows x64, Linux x64 and macOS arm64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
@@ -481,6 +482,45 @@ core instead of reloading per module, so a change that alters core is a restart.
 core is locked on Windows, so every image keeps its own link cache and an unchanged core
 is not relinked.
 
+The core's link key is the ordered list of its object paths (`cache.ms` `objectListKey`), so
+the same sources have to give the same list on every build. Two things moved it between the
+first build of a session and the next one whenever that first build compiled only some of the
+`@compile` files and took the rest from the object cache or the store, the state a toolchain
+update leaves behind when it edits a `runtime/` or `vendor/` header: `processCompileDirectives`
+returned the cached objects before the compiled ones, so one build later the same objects came
+back in directive order; and a file recompiled with a dependency list already on disk kept the
+name that list gave, while its compile rewrote the list. Either one relinked core, and the
+running app answered `RestartRequired` to every edit of that session; a second session
+reloaded. The objects keep directive order now, as the reference links its compile list in
+registration order whether or not an entry was cached (`compiler/extccomp.nim`
+`addExternalFileToCompile`, `toCompile`), and a recompiled object is published under the name
+the next build computes (`cache.ms` `publishNativeObject`).
+
+Measured 2026-10-12, Windows x64, tree `e4ec2c416eb0`, the `coreCell` fixture under
+`msc run --hcr` with a private copy of the toolchain root (`std`, `runtime`, `vendor`, `msc`)
+so its headers could be edited between sessions; the old compiler is `e8c024c8` with temporary
+prints around the link-cache check, and build 0 of this tree's edited sessions compiled 14
+runtime objects and took 10 from the cache:
+
+| Edit of the toolchain copy before the session | compiler of `e8c024c8` | this tree |
+|---|---|---|
+| none, every `@compile` object compiled (fresh copy) | reloaded | not measured |
+| none, every object cached (second session) | reloaded | not measured |
+| the content of a header `runtime/core/system.h` includes | restart required | reloaded |
+| `system.h` gains an `#include` | restart required | not measured |
+| `system.h` loses that `#include` | not measured | reloaded |
+
+The prints showed what moved: after the content edit, two `msc build --hcr` runs of unchanged
+sources gave the core the same 41 objects in another order, and after the added include build 1
+named the 14 recompiled objects differently from build 0. `hcrCoreNative` holds both, and the
+opposite direction too: an edit of a core native's header during the session still answers
+`RestartRequired`. It fails at its first reload on the compiler of `e8c024c8`, and at `its
+header gained an include` on a compiler with the ordering fix alone. `hcrFirstWarmBuild` failed
+here for another reason, once on each compiler: it compared the whole link record, whose output
+line moves from `content:` to `settled:` without a relink once the image is two seconds old; it
+compares the link inputs now. Not verified: a real `tools/syncLocalBinary.ms` swap, Neon's
+`examples/refreshNative/drive.sh`, Linux, macOS and Android.
+
 Three edges that a single image resolved by the linker needed a mechanism across images:
 
 - **Runtime thread-locals.** A DLL cannot import a `_Thread_local` from another DLL on this
@@ -520,6 +560,24 @@ Three edges that a single image resolved by the linker needed a mechanism across
   through `createSignal`). Nim picks the owner by the type's module and lets the demander keep
   the definition when that module is closed for codegen (`ccgtypes.nim` `genTypeInfoV2`,
   `myModuleOpenForCodegen`); an image is closed to core in the same way.
+  The operation itself follows the same rule through the order of lowering: under `--hcr`
+  the modules outside the project are lowered before the project's (`compile.ms`
+  `coreBeforeImages`), so the first module to need an operation, its owner, is a core module
+  whenever one needs it, and an image calls it as a core symbol. Lowering used to follow load
+  order, where a project module that assigned a `"row" | "column" | null` field or a
+  `[string, int32]` field before a module outside the project did stopped the build with
+  `internal: HCR core module '…' calls '…Destroy', which module '…' generates in its
+  reloadable image` (`hcrCoreOp`, Windows x64, tree `cda1b8930eba`: red on `e8c024c8`, on the
+  candidate the edited image reloads; Neon inside the project hit it through Yoga's
+  `flexDirection`). The reference emits a lifted operation in its owner's module and lets
+  every other module fetch it from the registry (`cgen.nim` `genProcLvl2`,
+  `findPendingModule`), which needs no order because every module there is an image. Moving
+  the definition into core after dead-code elimination, as the cell does, was not tried: the
+  lowered program of a module is kept across watch builds, and the operation is a statement
+  of it. A core module with a type-only import of a project module still builds and runs in
+  that order (probe: the core module assigns fields typed by the project's alias). Not
+  verified: Linux and macOS, and a generic class instance constructed in a core module and in
+  an image, which still fails the core link (`undefined symbol: Box…__int32_init`).
 
 Methods of exported classes were missing from the S3a DCE roots although their table slots
 referenced them (`use of undeclared identifier 'Shape_area__…'`); every manifest function is

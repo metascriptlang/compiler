@@ -265,8 +265,27 @@ export function writtenTypeAfterOptional(source: string, line: int32, column: in
 	if (pos >= source.byteLength || source.byteAt(pos) != "?".code) return false;
 	pos = skipBlanks(source, pos + 1);
 	if (pos >= source.byteLength || source.byteAt(pos) != ":".code) return false;
-	pos = skipBlanks(source, pos + 1);
-	return source.byteSlice(pos, pos + type.byteLength) == type;
+	return writtenSpacingAside(source, pos + 1, type);
+}
+
+function isSpacing(ch: int32): boolean {
+	return ch == " ".code || ch == "\t".code || ch == "\n".code || ch == "\r".code;
+}
+
+function writtenSpacingAside(source: string, from: int32, text: string): boolean {
+	let pos = from;
+	let i = 0;
+	while (i < text.byteLength) {
+		if (isSpacing(text.byteAt(i))) {
+			i = i + 1;
+			continue;
+		}
+		while (pos < source.byteLength && isSpacing(source.byteAt(pos))) pos = pos + 1;
+		if (pos >= source.byteLength || source.byteAt(pos) != text.byteAt(i)) return false;
+		pos = pos + 1;
+		i = i + 1;
+	}
+	return true;
 }
 
 export function rawObjectKeyAt(source: string, line: int32, column: int32): string {

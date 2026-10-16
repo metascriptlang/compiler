@@ -392,6 +392,16 @@ int64_t msStringArrayIndexOf(msStringArray* arr, msString value) {
 	return -1;
 }
 
+int64_t msStringArrayLastIndexOf(msStringArray* arr, msString value, int64_t fromIndex) {
+	if (arr->p == NULL) return -1;
+	int64_t i = fromIndex < 0 ? arr->len + fromIndex : fromIndex;
+	if (i >= arr->len) i = arr->len - 1;
+	for (; i >= 0; i--) {
+		if (msStringEquals(arr->p->data[i], value)) return i;
+	}
+	return -1;
+}
+
 msStringArray msStringArraySlice(msStringArray* arr, int64_t start, int64_t end) {
 	if (start < 0) start = arr->len + start;
 	if (end < 0) end = arr->len + end;

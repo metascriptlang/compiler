@@ -21,3 +21,36 @@ export function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint {
 	@emit(`return globalThis.BigInt.asUintN(Number(${bits}), ${b});`);
 	unreachable;
 }
+
+@compilerFunc
+function msBigIntToSigned(b: bigint, bits: int32): bigint {
+	@emit(`const hi = (1n << BigInt(${bits} - 1)) - 1n;
+	if (${b} > hi || ${b} < -hi - 1n) {
+		const m = "value " + ${b} + " not in range " + (-hi - 1n) + " .. " + hi;
+		if (typeof process === "object" && process !== null && typeof process.exit === "function") {
+			process.stderr.write("Error: " + m + "\\n");
+			process.exit(1);
+		}
+		const e = new Error(m);
+		e.msDefect = true;
+		throw e;
+	}
+	return ${b};`);
+	unreachable;
+}
+
+@compilerFunc
+function msBigIntToFloat32(b: bigint): float32 {
+	@emit(`const neg = ${b} < 0n;
+	const m = neg ? -${b} : ${b};
+	const n = m.toString(2).length;
+	if (n <= 24) return Number(${b});
+	const shift = BigInt(n - 24);
+	let q = m >> shift;
+	const rest = m - (q << shift);
+	const half = 1n << (shift - 1n);
+	if (rest > half || (rest === half && (q & 1n) === 1n)) q = q + 1n;
+	const r = Math.fround(Number(q) * 2 ** Number(shift));
+	return neg ? -r : r;`);
+	unreachable;
+}

@@ -12,6 +12,7 @@ import {
 	execFileCapture,
 	execFileResult,
 	nonZeroExit,
+	notFound,
 	pipeError,
 	processError,
 	signalTerminated,
@@ -23,7 +24,7 @@ import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, MODE_DANGER, MODE_RELEASE, buildCpu, newCliOptions, applyArgs } from "./options";
-import { renameReplace, atomicWriteFile, stopBuild } from "./io";
+import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
@@ -85,20 +86,23 @@ function homeDir(): string {
 	return env.get("USERPROFILE");
 }
 
-// True when this clang has the Solana `sbf` backend registered. Reads the
+// Why this clang cannot compile for SBF; "" when it has the Solana `sbf` backend registered. Reads the
 // --print-targets table in-process rather than shelling out to a pipeline:
 // `grep` does not exist on Windows and `2>/dev/null` is not cmd.exe syntax, so
 // the old probe returned false on every Windows host.
-function hasSbfTarget(binary: string): boolean {
-	const r = exec(`"${binary}" --print-targets`);
-	if (!r.ok) return false;
-	for (const line of r.value.split("\n")) {
+function sbfRefusal(binary: string): string {
+	return printedTargetsRefusal(exec(`"${binary}" --print-targets`));
+}
+
+function printedTargetsRefusal(printed: Result<string, ProcessError>): string {
+	if (!printed.ok) return printed.error.kind == ProcessErrorKind.NotFound ? "was not found" : `could not list its targets: ${printed.error.message}`;
+	for (const line of printed.value.split("\n")) {
 		// Rows read "    sbf        - SBF new (little endian)". Match the name
 		// column exactly so `bpf` and `bpfel` are not mistaken for a hit.
 		const name = line.trim().split(" ")[0];
-		if (name == "sbf") return true;
+		if (name == "sbf") return "";
 	}
-	return false;
+	return "has no sbf target";
 }
 
 // Ordering for the version dirs below. Plain string comparison ranks "v1.9"
@@ -119,7 +123,7 @@ function isNewerVersionDir(a: string, b: string): boolean {
 
 // Newest platform-tools under ~/.cache/solana. Entries are version dirs
 // ("v1.57"); readDir marks directories with a trailing "/". Any of them that
-// passes hasSbfTarget can build; the ordering only picks a recent one.
+// sbfRefusal does not refuse can build; the ordering only picks a recent one.
 function cachedPlatformToolsClang(): string {
 	const home = homeDir();
 	if (home == "") return "";
@@ -143,22 +147,29 @@ function cachedPlatformToolsClang(): string {
 
 export function resolveBpfClang(): string {
 	if (_sbfClangChecked) return _sbfClang;
-	_sbfClangChecked = true;
 
 	const override = env.get("MSC_SBF_CLANG");
-	if (override != "" && hasSbfTarget(override)) {
+	if (override != "") {
+		const refusal = sbfRefusal(override);
+		if (refusal != "") {
+			writeStderr(`error: MSC_SBF_CLANG=${override} ${refusal}.\n`);
+			writeStderr("  → point it at the clang in a platform-tools llvm/bin, or unset it to search ~/.cache/solana and PATH.\n");
+			stopBuild();
+		}
+		_sbfClangChecked = true;
 		_sbfClang = override;
 		return _sbfClang;
 	}
+	_sbfClangChecked = true;
 
 	const cached = cachedPlatformToolsClang();
-	if (cached != "" && hasSbfTarget(cached)) {
+	if (cached != "" && sbfRefusal(cached) == "") {
 		_sbfClang = cached;
 		return _sbfClang;
 	}
 
 	const onPath = findOnPath("clang");
-	if (onPath != "" && hasSbfTarget(onPath)) {
+	if (onPath != "" && sbfRefusal(onPath) == "") {
 		_sbfClang = onPath;
 		return _sbfClang;
 	}
@@ -1401,6 +1412,28 @@ test "an SBF build asks the code generator to keep a failing branch's constant o
 	assert applyArgs(host, ["--release"], 0).ok;
 	assert cliCompileFlags(host).indexOf("machine-sink", 0) < 0;
 	assert cliCompileFlags(host).indexOf("csuses", 0) < 0;
+}
+
+test "an MSC_SBF_CLANG that cannot run stops the build instead of falling through to another clang" {
+	const saved = env.get("MSC_SBF_CLANG");
+	env.set("MSC_SBF_CLANG", "/nonexistent/clang");
+	_sbfClangChecked = false;
+	setRecoverableBuild(true);
+	let stopped = false;
+	try {
+		resolveBpfClang();
+	} catch (e) {
+		stopped = e.message == BUILD_STOPPED;
+	}
+	setRecoverableBuild(false);
+	env.set("MSC_SBF_CLANG", saved);
+	assert stopped;
+}
+
+test "a clang is refused for SBF, with the reason, unless its target list names sbf" {
+	assert printedTargetsRefusal(Result.err(notFound("\"/nonexistent/clang\" --print-targets"))) == "was not found";
+	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    bpf        - BPF (host endian)\n    bpfel      - BPF (little endian)\n")) == "has no sbf target";
+	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    sbf        - SBF new (little endian)\n")) == "";
 }
 
 test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {

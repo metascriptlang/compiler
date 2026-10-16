@@ -7,7 +7,6 @@
     "762-bitSetMacro [js]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [orc]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "767-optionalRefTruthiness [raiser]": {"since":"629cd956","note":"red on main 39c2553d: the Raiser VM prints 'str none none' where C and JS print 'str x none' (an optional string field read as absent); the raiser lane never ran when 41a803c9 landed it; recorded 2026-09-27"},
-    "floatingZeroSign [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-loses-negative-zero.md; red on main 80207ca9c as well, the raiser lane first ran on it in the merge-train gate of a9f2914dd; recorded for release 0.3.2, 2026-10-12"},
     "genericDeclarationEmitsOnlyInstances [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-static-member-in-generic-constructor.md; red on main 80207ca9c as well, the raiser lane never ran when ae964f7b3 landed it; recorded for release 0.3.2, 2026-10-12"}
   },
   "flaky": {

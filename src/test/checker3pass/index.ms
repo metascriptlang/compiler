@@ -34,6 +34,7 @@ import "./scenarios/arcLiteralSafety";
 import "./scenarios/returnBeforeBody";
 import "./scenarios/generatorYields";
 import "./scenarios/localForwardReferences";
+import "./scenarios/moduleForwardReferences";
 import "./scenarios/genericOperands";
 import "./scenarios/unionMemberOrder";
 import "./scenarios/unionConversion";

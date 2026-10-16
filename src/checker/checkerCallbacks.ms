@@ -15,9 +15,9 @@ type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
 type ApplyModulePassesFn = (ctx: CheckerContext, program: Node) => void;
 type DecoratorDefersFn = (ctx: CheckerContext, stmt: Node) => boolean;
 type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
-type DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
+type DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
 type SelfReadTypeFn = (callee: Node) => Type | null;
-type LaterDeclarationNoteFn = (name: string) => string;
+type UndefinedVariableMessageFn = (ctx: CheckerContext, name: string) => string;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 };
@@ -50,13 +50,15 @@ let decoratorDefersFn: DecoratorDefersFn = (ctx: CheckerContext, stmt: Node): bo
 let applyDecoratedStmtFn: ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]): Node => {
 	return stmt;
 };
-let demandReturnFn: DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+let demandReturnFn: DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+};
+let demandBindingFn: DemandFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
 };
 let selfReadTypeFn: SelfReadTypeFn = (callee: Node): Type | null => {
 	return null;
 };
-let laterDeclarationNoteFn: LaterDeclarationNoteFn = (name: string): string => {
-	return "";
+let undefinedVariableMessageFn: UndefinedVariableMessageFn = (ctx: CheckerContext, name: string): string => {
+	return `Undefined variable '${name}'`;
 };
 
 
@@ -151,8 +153,16 @@ export function callDemandReturn(ctx: CheckerContext, sym: Symbol, read: Node): 
 	demandReturnFn(ctx, sym, read);
 }
 
-export function registerDemandReturn(fn: DemandReturnFn): void {
+export function registerDemandReturn(fn: DemandFn): void {
 	demandReturnFn = fn;
+}
+
+export function callDemandBinding(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	demandBindingFn(ctx, sym, read);
+}
+
+export function registerDemandBinding(fn: DemandFn): void {
+	demandBindingFn = fn;
 }
 
 export function callSelfReadType(callee: Node): Type | null {
@@ -163,10 +173,10 @@ export function registerSelfReadType(fn: SelfReadTypeFn): void {
 	selfReadTypeFn = fn;
 }
 
-export function callLaterDeclarationNote(name: string): string {
-	return laterDeclarationNoteFn(name);
+export function callUndefinedVariableMessage(ctx: CheckerContext, name: string): string {
+	return undefinedVariableMessageFn(ctx, name);
 }
 
-export function registerLaterDeclarationNote(fn: LaterDeclarationNoteFn): void {
-	laterDeclarationNoteFn = fn;
+export function registerUndefinedVariableMessage(fn: UndefinedVariableMessageFn): void {
+	undefinedVariableMessageFn = fn;
 }

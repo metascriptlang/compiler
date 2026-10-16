@@ -37,10 +37,10 @@ export extern function asinh(this typeof Math, x: float64): float64 from "asinh"
 export extern function acosh(this typeof Math, x: float64): float64 from "acosh";
 export extern function atanh(this typeof Math, x: float64): float64 from "atanh";
 
-// C rounds half away from zero, JS rounds half toward +Infinity: round(-2.5) is
-// -3 there and -2 here. Emitting floor(x + 0.5) keeps the two backends equal.
 export function round(this typeof Math, x: float64): float64 {
-	return Math.floor(x + 0.5);
+	const down = Math.floor(x);
+	const r = x - down >= 0.5 ? down + 1.0 : down;
+	return r == 0.0 && x < 0.0 ? -0.0 : r;
 }
 
 export function sign(this typeof Math, x: float64): float64 {

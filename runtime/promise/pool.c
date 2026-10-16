@@ -53,10 +53,6 @@ static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&id
 static _Atomic(int32_t) msPoolBusyCount = 0;
 static int32_t msPoolWorkerCount = 0;
 
-int32_t msPoolBusyPeek(void) {
-	return atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed);
-}
-
 /* Thread-local: true when current thread is a pool worker executing a task.
  * Used by shouldSend: only inline when caller is already a worker (recursive spawn).
  * Main thread always queues to ensure initial fan-out reaches workers.
@@ -249,6 +245,18 @@ void msPoolWakeWorkers(void) {
 /* ===== Singleton Init ===== */
 
 static msThreadPool* gPool = NULL;
+
+/* A submitted task is pending until a worker has dequeued it: the dequeue and
+ * the busy increment share one critical section, so queued-or-busy has no gap. */
+int32_t msPoolBusyPeek(void) {
+	if (gPool != NULL) {
+		MS_LOCK(gPool);
+		bool queued = gPool->head != gPool->tail;
+		MS_UNLOCK(gPool);
+		if (queued) return 1;
+	}
+	return atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed);
+}
 
 #ifdef _WIN32
 static LONG gPoolInitFlag = 0;

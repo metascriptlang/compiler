@@ -8,20 +8,20 @@
 //   main(argc, argv) → MsMain → MsPreMainInner (DatInit) → MsMainInner (Init)
 
 import { Node, NodeKind, ProgramData, SymbolKind, TypeKind, VariableDeclData, ObjectLiteralData } from "../../ast/node";
-import { getProperty } from "../../checker/types";
+import { getProperty, createFunction, voidType, createStruct, createPrimitive } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
-import { CheckerContext, CheckerError, GcMode, findExportedSymbol } from "../../checker/context";
+import { CheckerContext, CheckerError, GcMode, findExportedSymbol, createContext } from "../../checker/context";
 import {
 	CGen, CSection, AliveSet, CEmissionFacts, TypeInfoKind,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
 	replayFactWrites,
 } from "./context";
 import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
-import { mangleModuleName } from "./names";
+import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
-import { emitOwnedTypeInfos, refArrayCellName, arcCellName, promiseAllCellName, typeInfoCName, defineDeferredElements } from "./types";
+import { emitOwnedTypeInfos, refArrayCellName, arcCellName, promiseAllCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
@@ -267,6 +267,7 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 		addLine(procs, "  BeforeRet_: ;");
 		g.initProc.beforeRetNeeded = false;
 	}
+	if (output.hasInit && !isHcrImageModule(g, g.modulePath)) addLine(procs, "  msTestErrorFlag();");
 	addLine(procs, "}");
 	addNewline(procs);
 
@@ -673,13 +674,7 @@ test "generateCModule produces code without dispatcher" {
 
 
 
-import { SymbolKind } from "../../ast/node";
-import { createFunction, voidType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
-import { createContext } from "../../checker/context";
-import { mangledFunctionName, mangledTypeName } from "./names";
-import { objectTypeInfoKey, typeInfoCName } from "./types";
-import { createStruct, createPrimitive } from "../../checker/types";
 
 test "generic module emission preserves defining owner under permutations" {
 	const parsed = parseSource("function generic__i32(): void {}");
