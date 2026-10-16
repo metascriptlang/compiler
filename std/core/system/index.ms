@@ -75,6 +75,11 @@ export extern function compilerFunc(): void;
 @builtin("throws")
 export extern function throws(): void;
 
+@compilerFunc
+function msModuleBindingUninitialized(name: string): never {
+	throw new Error(`Cannot access '${name}' before initialization`);
+}
+
 @builtin("delegate")
 export extern function delegate(): void;
 

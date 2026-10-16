@@ -91,6 +91,7 @@ import { lowerOperators } from "./lowering/operatorLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { lowerStringOps } from "./native/stringOpLower";
 import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
+import { planModuleTdz } from "./lowering/moduleTdz";
 import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { spanLower } from "./lowering/spanLower";
 import { spanParamExpand } from "./native/spanParamExpand";
@@ -124,6 +125,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.preserveModuleConstants = preserveModuleConstants;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	let result = eraseBrandTypes(program);
+	if (!jsBackend) { result = planModuleTdz(result, ctx); }
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
