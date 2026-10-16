@@ -672,6 +672,13 @@ export function rejectCharArith(ctx: CheckerContext, op: string, leftType: Type 
 	return true;
 }
 
+export function textlessValue(t: Type | null): string {
+	if (t == null) return "";
+	if (t.kind == TypeKind.Void) return "a 'void' value has no text — a void call produces no value; call it on its own line";
+	if (t.kind == TypeKind.Never) return "a 'never' value has no text — the expression never produces a value";
+	return "";
+}
+
 function mixesNumericOperands(op: string): boolean {
 	return op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**"
 		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=" || op == "**="
