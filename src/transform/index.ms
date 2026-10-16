@@ -37,7 +37,6 @@ import { lowerDefer } from "./lowering/deferLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerVoidBind } from "./desugar/voidBindLower";
-import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
 import { lowerStringLengthJS } from "./coercion/stringLengthJS";
 import { lowerIntConvJS, injectRangeChecksJS } from "./coercion/intConvJS";
 import { lowerNumberBitwiseOperands } from "./native/intCheckInject";
@@ -131,9 +130,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerVoidBind(result, ctx);
 	result = lowerObjectSpread(result, ctx);
 	result = ctx.jsBackend ? result : lowerArraySpread(result, ctx);
-	if (ctx.jsBackend) {
-		result = lowerObjectLiteralComplete(result, ctx);
-	}
 	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); }
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
