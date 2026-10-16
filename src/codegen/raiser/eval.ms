@@ -694,6 +694,21 @@ test "engine: super runs the parent constructor and a call through the base runs
 	assert vm.output == "a.2 I a.1\nb!2 I b!1\nxc!2 I xc!1\n";
 }
 
+test "engine: the template of a method with its own type parameters is never compiled" {
+	takeRaiserCompileErrors();
+	const vm = evalOrcVM("class Owner { tag: string = \"o\";"
+		+ " wrap<T>(v: T): () => T { return (): T => v; }"
+		+ " unused<T>(v: T): int32 { const f = (): int32 => 1; const g = (): T => v; return f(); }"
+		+ " both<A, B>(a: A, b: B): () => () => string { return (): () => string => { const inner = (): string => String(a) + String(b); return inner; }; }"
+		+ " static count<T>(xs: T[]): () => int32 { return (): int32 => xs.length as int32; } }"
+		+ " const o = new Owner();"
+		+ " console.log(o.tag);");
+	const warnings = takeRaiserCompileErrors();
+	assert vm.error == "", vm.error;
+	assert warnings.length == 0, warnings.length > 0 ? warnings[0].message : "";
+	assert vm.output == "o\n", vm.output;
+}
+
 test "engine: new Array(n) holds n distinct zero elements" {
 	const vm = evalOrcVM("struct E { h: int64; key: string; }"
 		+ " let es: Vec<E> = new Array(3); es[2].h = 5;"

@@ -140,6 +140,7 @@ function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: stri
 	for (const member of classBody) {
 		if (member.kind != NodeKind.MethodDecl) continue;
 		const md = member.data as MethodDeclData;
+		if (md.methodFlags.indexOf("gen:") >= 0) continue;
 		const methodKey = `${className}_${md.methodName}`;
 		const viaSym = member.resolvedSym != null ? resolveRoutine(s, member.resolvedSym, methodKey) : -1;
 		const methodIdx = viaSym >= 0 ? viaSym : resolveFunc(s, methodKey);

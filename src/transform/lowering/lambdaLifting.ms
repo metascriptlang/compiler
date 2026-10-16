@@ -1913,6 +1913,7 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
+			if (d.methodFlags.indexOf("gen:") >= 0) return;
 			pushFuncBoundary(state.ss);
 			defineParams(state.ss, node.paramSyms, d.methodParams);
 			walkLiftBody(d.methodBody, state);
