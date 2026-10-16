@@ -650,6 +650,7 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 		 * cancel timers, and the spinlock is not reentrant. */
 		if (t.fut != NULL) {
 			msFutureCompleteVoid(t.fut);
+			msFutureDrcDestroy(t.fut);
 		} else if (t.cancelled || t.cb.fn == NULL) {
 			if (t.cb.env != NULL) msPostEnvRelease(t.cb.env);
 			continue;
@@ -1022,6 +1023,9 @@ static void msTimerArm(msTimer t) {
  * Create timer future, push to heap, return future */
 msFuture_void* msSleepAsync(int ms) {
 	msFuture_void* fut = msFutureCreateT(msFuture_void);
+	msIncRef(fut);
+	/* The loop thread completes and releases a worker-armed timer: PARALOCK I16/I17. */
+	if (msIsPoolWorker) fut->crossThreadPublished = true;
 	int64_t finishAt = msMonoTimeMs() + ms;
 	msTimer t = { .finishAtMs = finishAt, .fut = fut };
 	msTimerArm(t);
@@ -1173,8 +1177,10 @@ void msDestroyDispatcher(void) {
 	msTimerLock();
 	while (gTimers.len > 0) {
 		msTimer t = msTimerPop(&gTimers);
-		if (t.fut != NULL) msFutureCancel(t.fut);
-		else if (t.cb.env != NULL) msDecref(t.cb.env);
+		if (t.fut != NULL) {
+			msFutureCancel(t.fut);
+			msFutureDrcDestroy(t.fut);
+		} else if (t.cb.env != NULL) msDecref(t.cb.env);
 	}
 	free(gTimers.data);
 	gTimers.data = NULL;
