@@ -882,7 +882,6 @@ import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { spelled, createStruct, createRef, createUnion, nullType, stringType } from "./types";
 import { liftedOp, resetHookSyms, objectTypeInfoKey } from "../codegen/c/types";
-import {  } from "../codegen/c/context";
 import { makeSymbol, setFlag } from "./symbol";
 import { ExprStmtData } from "../ast/node";
 
