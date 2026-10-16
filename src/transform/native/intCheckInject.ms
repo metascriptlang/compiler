@@ -94,7 +94,7 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 		return typedCall(ownWidthName(arith, t), [d.left, d.right], node);
 	}
 	const assign = overflowAssign(d.operator);
-	if (assign != "" && signedRepr(d.left.nodeType) != null) {
+	if (assign != "" && (signedRepr(d.left.nodeType) != null || isChar(d.left.nodeType))) {
 		const call = makeCall(runtimeRef(assign, node.location), [d.left, d.right], node.location);
 		call.nodeType = d.left.nodeType;
 		return call;
@@ -130,7 +130,7 @@ function checkedNegate(node: Node): Node {
 
 function checkedStep(node: Node): Node {
 	const d = node.data as UpdateExprData;
-	if (signedRepr(d.updateArg.nodeType) == null) return node;
+	if (signedRepr(d.updateArg.nodeType) == null && !isChar(d.updateArg.nodeType)) return node;
 	const increment = d.updateOp == "++";
 	if (!d.isPrefix) return typedCall(increment ? "msPostInc" : "msPostDec", [d.updateArg], node);
 	return typedCall(increment ? "msAddAssign" : "msSubAssign", [d.updateArg, makeNumber(1, node.location)], node);
@@ -207,6 +207,11 @@ function integerRepr(t: Type | null): Type | null {
 		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => r,
 		_ => null,
 	};
+}
+
+function isChar(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	return r != null && r.kind == TypeKind.Char;
 }
 
 function signedRepr(t: Type | null): Type | null {
