@@ -24,7 +24,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, enumMemberName, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, callMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
+import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, callMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
@@ -2127,22 +2127,23 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			const argHeld = peelTransparentInstance(argTypes[pi]);
-			if (isMaybeType(paramType) && paramType.typeReturn != null
+			const maybeFormal = peelSink(paramType);
+			if (isMaybeType(maybeFormal) && maybeFormal.typeReturn != null
 					&& !isMaybeType(argHeld)
 					&& (args[pi].kind == NodeKind.NullLiteral
 						|| argTypes[pi].kind == TypeKind.Null
-						|| isAssignable(argTypes[pi], paramType.typeReturn))) {
-				args[pi] = synthMaybeWrap(args[pi], paramType, argTypes[pi]);
-				argTypes[pi] = paramType;
+						|| isAssignable(argTypes[pi], maybeFormal.typeReturn))) {
+				args[pi] = synthMaybeWrap(args[pi], maybeFormal, argTypes[pi]);
+				argTypes[pi] = maybeFormal;
 			}
 			// `A | null` meeting `A | B | null`. Same reason the wrap above
 			// lives here: an argument never reaches fitNode, so the carrier
 			// widening has to be applied at this site too.
-			if (isMaybeType(paramType) && isMaybeType(peelTransparentInstance(argTypes[pi]))) {
-				const widenedArg = widenMaybePayload(args[pi], paramType, argTypes[pi]);
+			if (isMaybeType(maybeFormal) && isMaybeType(peelTransparentInstance(argTypes[pi]))) {
+				const widenedArg = widenMaybePayload(args[pi], maybeFormal, argTypes[pi]);
 				if (widenedArg != null as unknown as Node) {
 					args[pi] = widenedArg;
-					argTypes[pi] = paramType;
+					argTypes[pi] = maybeFormal;
 				}
 			}
 			const adoptedArg = tryAdoptAnonStruct(ctx, args[pi], paramType, argTypes[pi]);
@@ -2979,14 +2980,15 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 			continue;
 		}
-		if (!isMaybeType(substituted) || substituted.typeReturn == null) continue;
+		const maybeSubstituted = peelSink(substituted);
+		if (!isMaybeType(maybeSubstituted) || maybeSubstituted.typeReturn == null) continue;
 		if (arg.kind == NodeKind.NullLiteral) {
-			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType!);
-			if (pi < argTypes.length) argTypes[pi] = substituted;
+			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType!);
+			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		} else if (arg.nodeType != null && !isMaybeType(arg.nodeType)
-				&& isAssignable(arg.nodeType, substituted.typeReturn)) {
-			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
-			if (pi < argTypes.length) argTypes[pi] = substituted;
+				&& isAssignable(arg.nodeType, maybeSubstituted.typeReturn)) {
+			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType);
+			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		}
 	}
 
