@@ -50,6 +50,7 @@ import "./macroSourceForms";
 import "./matchDispatch";
 import "./nominalInstantiation";
 import "./nullableInstantiation";
+import "./numericLiteralTypes";
 import "./numericRepresentation";
 import "./optionalParameters";
 import "./outArgumentBox";
