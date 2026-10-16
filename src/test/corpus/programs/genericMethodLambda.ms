@@ -1,4 +1,7 @@
-// @stdout: 7 true 9|ab 3|24 x5|start
+// @stdout: 7 true 9
+// @stdout: ab 3
+// @stdout: 24 x5
+// @stdout: start
 // note: a lambda inside a method that declares its own type parameters runs on every backend,
 // static or not, never called, with two type parameters and one nesting level deeper.
 class Owner {
