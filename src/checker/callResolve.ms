@@ -831,7 +831,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)
 		const newSym = lookupSymbol(ctx.table, id.name);
 		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)
-				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
+				&& expected.typeName == id.name && !isAwaitable(expected) && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
 			return expected;
