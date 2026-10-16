@@ -45,3 +45,4 @@ import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";
 import "./scenarios/charAcceptsOnlyChar";
+import "./scenarios/charArithmetic";
