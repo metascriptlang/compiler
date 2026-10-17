@@ -172,6 +172,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Priority 2: compiler defaults
 	const tk = objType.kind;
+	if (tk == TypeKind.Never) return obj;
 	if (tk == TypeKind.Char && (callNode.data as CallExprData).arguments.length == 0) return charToString(obj, loc);
 	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10.
 	// 64-bit integers take the int64-parameter variant: a double argument would
