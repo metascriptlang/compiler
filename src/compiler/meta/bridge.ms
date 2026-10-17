@@ -745,7 +745,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
 	}
 	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
-	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint32) as int64));
+	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint64) as int64));
 
 	match (node.kind) {
 		// === Literals ===
@@ -1546,11 +1546,11 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
 					const flagsValue = readInt(objHeap, handle, "flags");
-					const flagsFit = flagsValue >= 0 && flagsValue <= 4294967295 && Math.floor(flagsValue) == flagsValue;
+					const flagsFit = flagsValue >= 0 && flagsValue <= 9007199254740991 && Math.floor(flagsValue) == flagsValue;
 					if (!flagsFit) {
-						_wireRefusals.push({ message: `flags must be a NodeFlag set, an integer in 0 .. 4294967295, not ${flagsValue}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
+						_wireRefusals.push({ message: `flags must be a NodeFlag set, an integer in 0 .. 2^53 - 1, not ${flagsValue}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
 					}
-					const rawFlags = ((flagsFit ? flagsValue : 0) as uint32) as BitSet<NodeFlag>;
+					const rawFlags = ((flagsFit ? flagsValue : 0) as uint64) as BitSet<NodeFlag>;
 					const pipeline = rawFlags.difference(PARSER_NODE_FLAGS);
 					if (!pipeline.isEmpty()) {
 						_wireRefusals.push({ message: `flags may hold only what the parser writes (${PARSER_NODE_FLAGS.toString()}), not ${pipeline.toString()}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
@@ -2677,11 +2677,11 @@ test "an enum ordinal written as flags is refused, not read as a set" {
 	assert takeWireRefusals().length == 1;
 }
 
-test "flags that are no 32-bit set are refused, not converted" {
+test "flags that are no NodeFlag set are refused, not converted" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(3, 0);
-	const forged: RaiserValue[] = [raiserInt(4294967296), raiserInt(-1), raiserFloat(1.5), raiserFloat(0.0 / 0.0), raiserFloat(1.0 / 0.0)];
+	const forged: RaiserValue[] = [raiserInt(9007199254740992), raiserInt(-1), raiserFloat(1.5), raiserFloat(0.0 / 0.0), raiserFloat(1.0 / 0.0)];
 	for (const flags of forged) {
 		const val = nodeToValue(mkNumber(1, loc), objH, arrH);
 		heapObjectSetField(objH, val.intVal, "flags", flags);
@@ -2689,7 +2689,7 @@ test "flags that are no 32-bit set are refused, not converted" {
 		assert back.flags == (0 as BitSet<NodeFlag>);
 		const refused = takeWireRefusals();
 		assert refused.length == 1, `${refused.length}`;
-		assert refused[0].message.contains("an integer in 0 .. 4294967295"), refused[0].message;
+		assert refused[0].message.contains("an integer in 0 .. 2^53 - 1"), refused[0].message;
 	}
 }
 
@@ -2700,6 +2700,17 @@ test "a node that crossed the wire with only parser flags is not refused" {
 	const orig = mkNumber(1, loc);
 	orig.flags = orig.flags.incl(NodeFlag.StaticStorage).incl(NodeFlag.Parenthesized);
 	valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert takeWireRefusals().length == 0;
+}
+
+test "a parser flag past bit 31 crosses the wire" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const orig = mkNumber(1, loc);
+	orig.flags = orig.flags.incl(NodeFlag.Accessor).incl(NodeFlag.AutoAccessor);
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.flags == orig.flags;
 	assert takeWireRefusals().length == 0;
 }
 
