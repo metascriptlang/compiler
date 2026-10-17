@@ -1584,15 +1584,19 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 	const d = node.data as CallExprData;
 	let initName = superSym.name;
 	let funcIdx = -1;
+	let parent: Symbol | null = null;
 	if (superSym.symbolKind == SymbolKind.Function) {
 		funcIdx = resolveRoutine(s, superSym);
+		const fnType = superSym.symbolType;
+		const self = fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]) : null;
+		parent = self != null ? self.sym : null;
 	} else {
 		const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
-		const parent = body != null && body.sym != null ? body.sym : superSym;
+		parent = body != null && body.sym != null ? body.sym : superSym;
 		initName = parent.name + "_init";
 		funcIdx = resolveClassInit(s, parent);
-		if (funcIdx < 0 && callRaiserOnDemand(parent) >= 0) funcIdx = resolveClassInit(s, parent);
 	}
+	if (funcIdx < 0 && parent != null && callRaiserOnDemand(parent) >= 0) funcIdx = resolveClassInit(s, parent);
 	const thisReg = s.receiverReg;
 	if (funcIdx < 0 || thisReg < 0) {
 		const msg = `cannot compile 'super(...)': no '${initName}' in the Raiser function table`;
