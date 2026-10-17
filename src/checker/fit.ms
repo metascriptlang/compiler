@@ -1054,7 +1054,7 @@ export function wideOperandLiteralSlot(operand: Node): Type | null {
 }
 
 export function intLiteralExactInFloat(lit: Node, target: Type): boolean {
-	return intExactInMantissa((lit.data as NumberLiteralData).intVal as uint64, mantissaBitsOf(target));
+	return intExactInMantissa(constIntMagnitude(lit), mantissaBitsOf(target));
 }
 
 export function literalAdoptsFloat32(lit: Node): boolean {
