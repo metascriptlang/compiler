@@ -126,3 +126,25 @@ async function main(): Promise<void> {
 	assert text.contains("this call makes 'Promise<Thing>', a promise of a thenable, which is refused"), text;
 	assert text.contains("a '.then' callback returns 'Thing', a thenable the promise would adopt"), text;
 }
+
+test "a thenable returned inside a try with catch or finally is refused, return await is kept" {
+	const result = checkOnly(`
+class Thing {
+	then(onFulfilled: (v: int32) => void, onRejected: (e: Error) => void): void { onRejected(new Error("thing failed")); }
+}
+async function caught(): Promise<int32> { try { return new Thing(); } catch (e) { return 2; } }
+async function finalized(): Promise<int32> { try { return new Thing(); } finally { console.log("done"); } }
+async function inCatch(): Promise<int32> { try { return 1; } catch (e) { return new Thing(); } finally { console.log("done"); } }
+async function awaited(): Promise<int32> { try { return await new Thing(); } catch (e) { return 2; } }
+async function outside(): Promise<int32> { try { console.log("x"); } catch (e) {} return new Thing(); }
+async function nested(): Promise<int32> {
+	try {
+		const inner = async (): Promise<int32> => { return new Thing(); };
+		return await inner();
+	} catch (e) { return 2; }
+}
+`);
+	const text = result.errors.join("\n");
+	assert result.errors.length == 3, "caught, finalized and inCatch only: " + text;
+	assert text.contains("a returned thenable is not awaited inside try — write `return await …` so catch and finally see its result"), text;
+}
