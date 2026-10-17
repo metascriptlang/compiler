@@ -73,7 +73,7 @@ function promiseTypeFor(inner: Type | null): Type {
 	return inner != null ? createPromise(inner) : createPromise(voidType());
 }
 
-import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture } from "../util";
+import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture, typedFutureReadFn } from "../util";
 
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
@@ -354,19 +354,6 @@ function locateYieldArg(stmts: Node[], remove: boolean): Node {
 	return null as unknown as Node;
 }
 
-// Unbox function for msFutureRead result (same as builtinLower's unboxFnForType)
-// Per-type smart read function — handles both boxed (spawn) and typed (async) via isBoxed flag
-function readFnForAwait(t: Type | null): string {
-	if (t == null) return "";
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
-		TypeKind.Boolean => "msFutureReadBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "msFutureReadInt32",
-		TypeKind.String => "msFutureReadString",
-		_ => "",
-	};
-}
-
 // Build the async stepper dispatch: instead of generatorLower's iterator result pattern,
 // emit msFutureAddCallback at yield points and msFutureComplete at return points.
 interface YieldFuture { state: number; sym: Symbol; }
@@ -425,14 +412,14 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 			// Defensive: if yieldVarType is still a Promise wrapper, extract inner type
 			if (varType != null && isAwaitable(varType)) varType = awaitedType(varType);
 			const prevYfType = promiseTypeFor(varType);
-			const readFn = readFnForAwait(varType);
+			const readFn = typedFutureReadFn(varType);
 			let readExpr: Node | null = null;
 			if (readFn != "") {
 				readExpr = makeCall(runtimeRef(readFn, loc), [makeTypedIdentResolved(prevYfSym, prevYfType, loc)], loc);
 				readExpr.nodeType = varType;
 			} else {
 				// Boxed types (struct/tuple/GI/array) — read the void* then copy out via
-				// msUnboxStruct. String never reaches here (readFnForAwait handles it).
+				// msUnboxStruct. String never reaches here (typedFutureReadFn handles it).
 				const rawRead = makeCall(runtimeRef("msFutureRead", loc), [makeTypedIdentResolved(prevYfSym, prevYfType, loc)], loc);
 				if (boxedInFuture(varType)) {
 					readExpr = makeCall(runtimeRef("msUnboxStruct", loc), [rawRead], loc);

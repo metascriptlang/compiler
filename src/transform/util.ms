@@ -169,6 +169,21 @@ export function unboxFnNameForType(t: Type | null): string {
 	};
 }
 
+// Typed future readers — msFutureReadT reads the typed inline value from
+// the future struct (msFuture_T.value). All futures use typed inline
+// storage; no boxed path exists.
+export function typedFutureReadFn(t: Type | null): string {
+	if (t == null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
+		TypeKind.Boolean => "msFutureReadBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msFutureReadInt32",
+		TypeKind.String => "msFutureReadString",
+		_ => "",
+	};
+}
+
 // Shared classifier for ALL "void* -> typed value" call sites
 // (awaitLower.makeUnboxCall, asyncBridge's spawn-result reads). Centralizes the 4-tier dispatch so
 // adding a new TypeKind only requires editing one place — previously three

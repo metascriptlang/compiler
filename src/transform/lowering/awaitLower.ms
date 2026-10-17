@@ -36,9 +36,8 @@ import {
 import { TransformContext, freshTempSym, freshOwnedSym, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
-import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck } from "../util";
+import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
-import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
@@ -324,7 +323,7 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	// Typed path: msWaitForReady(handle) + msFutureReadT(handle) → typed value
 	// msWaitForReady blocks until the future finishes (without consuming the value),
 	// then msFutureReadT extracts the typed value from the future struct.
-	const readFn = innerType != null ? typedFutureReadFn(innerType) : "";
+	const readFn = typedFutureReadFn(innerType);
 	if (readFn != "") {
 		stmts.push(makeExprStmt(
 			makeCall(runtimeRef("msWaitForReady", loc), [futIdent], loc), loc));
