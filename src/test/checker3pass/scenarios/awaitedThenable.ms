@@ -71,3 +71,58 @@ async function main(): Promise<void> {
 	assert text.contains("the second parameter of 'StringReason.then' must be a callback taking an Error, not 'string'"), text;
 	assert text.contains("the second parameter of 'UnknownReason.then' must be a callback taking an Error, not 'unknown'"), text;
 }
+
+test "a generic extension then reaches no type, and a then extension counts only on the type it names" {
+	const result = checkOnly(`
+class Plain { n: int32 = 4; }
+class Handle { id: int32 = 7; }
+export function then(this h: Handle, onFulfilled: (v: int32) => void): void { onFulfilled(h.id); }
+export function then<T>(this x: T, onFulfilled: (v: string) => void): void { onFulfilled("captured"); }
+async function main(): Promise<void> {
+	const a: int32 = await new Handle();
+	const b: Plain = await Promise.resolve(new Plain());
+	const c: string = await Promise.resolve(new Plain());
+}
+`);
+	const text = result.errors.join("\n");
+	assert result.errors.length == 1, "only the Plain read as a string: " + text;
+	assert text.contains("Plain"), text;
+}
+
+test "an async return and Promise.resolve adopt a thenable, typed by what its then delivers" {
+	const result = checkOnly(`
+class Now {
+	then(onFulfilled: (v: int32) => void): void { onFulfilled(5); }
+}
+async function declared(): Promise<int32> { return new Now(); }
+async function inferred() { return new Now(); }
+const arrow = async () => new Now();
+async function main(): Promise<void> {
+	const a: int32 = await declared();
+	const b: int32 = await inferred();
+	const c: int32 = await arrow();
+	const d: int32 = await Promise.resolve(new Now());
+	const e: int32[] = await Promise.all([new Now(), Promise.resolve(6)]);
+	const wrong: string = await inferred();
+}
+`);
+	const text = result.errors.join("\n");
+	assert result.errors.length == 1, "only the int32 read as a string: " + text;
+	assert text.contains("int32"), text;
+}
+
+test "a promise of a thenable is refused where it is written or made" {
+	const text = checkOnly(`
+class Thing {
+	then(onFulfilled: (v: int32) => void): void { onFulfilled(1); }
+}
+async function written(): Promise<Thing> { return new Thing(); }
+async function main(): Promise<void> {
+	const made = new Promise<Thing>((resolve, reject) => { resolve(new Thing()); });
+	Promise.resolve(1).then((v: int32) => new Thing());
+}
+`).errors.join("\n");
+	assert text.contains("'Promise<Thing>' is a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so write 'Promise<int32>'"), text;
+	assert text.contains("this call makes 'Promise<Thing>', a promise of a thenable, which is refused"), text;
+	assert text.contains("a '.then' callback returns 'Thing', a thenable the promise would adopt"), text;
+}
