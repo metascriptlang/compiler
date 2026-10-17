@@ -146,6 +146,16 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 // repo root), so sources may `import { Node } from "std/meta"` etc. The plain
 // compileToC keeps stdPath empty — std imports resolve only via prelude there.
 export function compileToCWithStd(source: string): CompileResult {
+	return compileWithStd(source, false);
+}
+
+// compileToCWithStd with the std global imports checked as graph modules, as a build
+// loads them: a std macro body binds its own module's imports only there.
+export function compileToCWithStdModules(source: string): CompileResult {
+	return compileWithStd(source, true);
+}
+
+function compileWithStd(source: string, preludeInGraph: boolean): CompileResult {
 	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
@@ -157,7 +167,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.C, stdPath);
 	const graph = createModuleGraph();
-	loadStdGlobalImportModules(graph, provider, config);
+	if (preludeInGraph) loadStdGlobalImportModules(graph, provider, config);
 	loadModule(graph, modPath, provider, config, 1);
 
 	const mod = findModule(graph, modPath);

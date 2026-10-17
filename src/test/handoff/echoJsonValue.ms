@@ -1,7 +1,7 @@
 // An echoed JsonValue prints through the Json formatter; the formatter is chosen by the
 // declaration the value's type names, so a type that merely spells the same name is not one.
 
-import { compileToCWithStd } from "../helpers";
+import { compileToCWithStd, compileToCWithStdModules } from "../helpers";
 
 test "echoing a JsonValue prints it as Json" {
 	const src = `
@@ -29,7 +29,7 @@ function main(): void {
 }
 main();
 `;
-	const r = compileToCWithStd(src);
+	const r = compileToCWithStdModules(src);
 	assert r.ok, r.ok ? "" : r.error;
 	assert r.value.indexOf("\\033[35mJson ") < 0;
 }

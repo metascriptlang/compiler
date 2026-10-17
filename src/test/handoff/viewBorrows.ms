@@ -1,4 +1,4 @@
-import { compileToCWithStd, compileProjectToJSWithStd } from "../helpers";
+import { compileToCWithStd, compileToCWithStdModules, compileProjectToJSWithStd } from "../helpers";
 
 const HEAD = "struct S { n: int32; name: string; }\nstruct R { items: int32[]; k: int32; }\nclass Bag { items: S[] = []; count: int32 = 0; }\n"
 	+ "struct World { pets: S[]; k: int32; }\nstruct L { tags: Vec<int32>; n: int32; }\n"
@@ -7,9 +7,9 @@ const HEAD = "struct S { n: int32; name: string; }\nstruct R { items: int32[]; k
 	+ "function kOf(this w: World): int32 { return w.k; }\n"
 	+ "function bump(p: Ptr<S>): void { p[].n = p[].n + 1; }\n";
 
-function compiles(body: string): string {
+function compiles(body: string, stdModules: boolean = false): string {
 	const source = HEAD + `function run(): int32 { ${body} } run();`;
-	const c = compileToCWithStd(source);
+	const c = stdModules ? compileToCWithStdModules(source) : compileToCWithStd(source);
 	const js = compileProjectToJSWithStd([{ entryPath: "test/views.ms", entrySource: source }], "test/views.ms");
 	if (c.ok && !js.startsWith("ERROR:")) return "";
 	if (!c.ok && js.startsWith("ERROR:")) return c.error + "\n" + js;
@@ -47,7 +47,6 @@ test "a view stays legal when nothing can move the storage it reads" {
 	const legal = [
 		`${xs} const sp: Span<S> = xs; const first = sp[0].n; xs.push({ n: 2, name: "b" }); return first;`,
 		`${xs} let t: int32 = 0; for (let i = 0; i < 3; i++) { const sp: Span<S> = xs; t += sp[0].n; xs.push({ n: i, name: "c" }); } return t;`,
-		`${xs} const sp: Span<S> = xs; const k = xs.indexOf(xs[0]); return sp[0].n + (k as int32) + (xs.length as int32);`,
 		`${xs} const sp: Span<S> = xs; xs[0].n = 5; xs[0] = { n: 9, name: "z" }; xs[0].name = "y"; return sp[0].n;`,
 		"const b = new Bag(); b.items.push({ n: 1, name: \"a\" }); const sp: Span<S> = b.items; b.count = 3; return sp[0].n + b.count;",
 		"let rows: R[] = [{ items: [1, 2], k: 0 }]; const v: Span<R> = rows; rows[0].items.push(3); rows[0].k = 5; return v[0].k;",
@@ -61,6 +60,8 @@ test "a view stays legal when nothing can move the storage it reads" {
 	for (const body of legal) {
 		assert compiles(body) == "", body;
 	}
+	const equality = `${xs} const sp: Span<S> = xs; const k = xs.indexOf(xs[0]); return sp[0].n + (k as int32) + (xs.length as int32);`;
+	assert compiles(equality, true) == "", equality;
 }
 
 test "a generic routine is checked in each instance" {
