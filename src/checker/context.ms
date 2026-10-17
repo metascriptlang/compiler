@@ -758,6 +758,20 @@ export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): Ex
 	return null as unknown as ExtensionMethod;
 }
 
+export function findDeclaredExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
+	let cur: Type | null = objType;
+	let depth = 0;
+	while (cur != null && depth < 64) {
+		const name = typeNameOf(cur);
+		for (const ext of exts) {
+			if (name != "" && ext.receiverTypeName == name && isReceiverMatch(ext, cur)) return ext;
+		}
+		cur = classBaseStruct(cur);
+		depth += 1;
+	}
+	return null as unknown as ExtensionMethod;
+}
+
 function classBaseStruct(t: Type): Type | null {
 	const parent = classParentOf(t);
 	if (parent == null) return null;

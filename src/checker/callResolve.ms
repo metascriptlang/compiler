@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, unknownReturnRefusal, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, findDeclaredExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
 import { adoptLiteralArms, distinctText, distinctTextRefusal, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
@@ -772,7 +772,7 @@ function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
 	if (field != null) return field;
 	if (ctx.extensionRegistry == null) return null;
 	const receiver = withoutReadonlyView(t);
-	const ext = findFirstMatchingExt(findAllExtensionsByName(ctx.extensionRegistry, "then"), receiver);
+	const ext = findDeclaredExt(findAllExtensionsByName(ctx.extensionRegistry, "then"), receiver);
 	if (ext == null || ext.isStatic) return null;
 	if (ext.sym != null) ensureShaped(ext.sym, ctx);
 	const method = getExtFnType(ext);
