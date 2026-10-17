@@ -59,11 +59,28 @@ export class Error {
 	}
 }
 
+export class RangeError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
+export class SyntaxError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
 @builtin("throws")
 export extern function throws(): void;
+
+@compilerFunc
+function msModuleBindingUninitialized(name: string): never {
+	throw new Error(`Cannot access '${name}' before initialization`);
+}
 
 @builtin("delegate")
 export extern function delegate(): void;
@@ -118,6 +135,15 @@ extern function msFutureThenBoxed(input: Ptr<void>, onFulfilled: Ptr<void>): Ptr
 
 @compilerFunc @builtin("BoxStruct")
 extern function msBoxStruct(val: Ptr<void>): Ptr<void>;
+
+@compilerFunc @builtin("ModuleImport")
+extern function msModuleImport(name: string): Ptr<void>;
+
+@compilerFunc
+extern function msModuleAsyncBody(fut: Ptr<void>): void;
+
+@compilerFunc
+extern function msFutureOwnResult(fut: Ptr<void>, drop: Ptr<void>): void;
 
 @compilerFunc @builtin("SinkBoxStruct")
 extern function msSinkBoxStruct(val: Ptr<void>): Ptr<void>;
@@ -603,6 +629,172 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msShrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msArrDataAt(p: Ptr<void>, i: int64): Ptr<void>;
+	@compilerFunc
+	extern function msBlockEnd(b: int64, len: int64): int64;
+	@compilerFunc
+	extern function msPowF64(x: float64, y: float64): float64;
+	@compilerFunc
+	extern function msAddI8(a: int8, b: int8): int8;
+	@compilerFunc
+	extern function msAddI16(a: int16, b: int16): int16;
+	@compilerFunc
+	extern function msAddI32(a: int32, b: int32): int32;
+	@compilerFunc
+	extern function msAddI64(a: int64, b: int64): int64;
+	@compilerFunc
+	extern function msSubI8(a: int8, b: int8): int8;
+	@compilerFunc
+	extern function msSubI16(a: int16, b: int16): int16;
+	@compilerFunc
+	extern function msSubI32(a: int32, b: int32): int32;
+	@compilerFunc
+	extern function msSubI64(a: int64, b: int64): int64;
+	@compilerFunc
+	extern function msMulI8(a: int8, b: int8): int8;
+	@compilerFunc
+	extern function msMulI16(a: int16, b: int16): int16;
+	@compilerFunc
+	extern function msMulI32(a: int32, b: int32): int32;
+	@compilerFunc
+	extern function msMulI64(a: int64, b: int64): int64;
+	@compilerFunc
+	extern function msNegI8(a: int8): int8;
+	@compilerFunc
+	extern function msNegI16(a: int16): int16;
+	@compilerFunc
+	extern function msNegI32(a: int32): int32;
+	@compilerFunc
+	extern function msNegI64(a: int64): int64;
+	@compilerFunc
+	extern function msDivI8(a: int8, b: int8): int8;
+	@compilerFunc
+	extern function msPowI8(a: int8, b: int8): int8;
+	@compilerFunc
+	extern function msDivI16(a: int16, b: int16): int16;
+	@compilerFunc
+	extern function msPowI16(a: int16, b: int16): int16;
+	@compilerFunc
+	extern function msDivAssignI8(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowAssignI8(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msDivAssignI16(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowAssignI16(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowWrapAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowWrapAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowWrapAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowWrapAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPowAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msAddAssign(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msSubAssign(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msMulAssign(lv: Ptr<void>, b: Ptr<void>): void;
+	@compilerFunc
+	extern function msPostInc(lv: Ptr<void>): int64;
+	@compilerFunc
+	extern function msPostDec(lv: Ptr<void>): int64;
+	@compilerFunc
+	extern function msSumFitsI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumFitsI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msSumAddI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumAddI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msSumSubI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotFitsI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msDotFitsI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msDotFitsI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msDotFitsI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): boolean;
+	@compilerFunc
+	extern function msDotAddI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotAddI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotAddI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotAddI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotSubI8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotSubI16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotSubI32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
+	@compilerFunc
+	extern function msDotSubI64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, s: Ptr<void>, e: int64): void;
 
 	@compilerFunc
 	extern function msShrUAssignF64(lv: Ptr<void>, b: Ptr<void>): void;

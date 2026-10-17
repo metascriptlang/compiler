@@ -1,12 +1,10 @@
 // A failing assert borrows its message; the location that owns the string is destroyed once
 // INVARIANT: who owns an expression's value is decided by the analyzer, never by the codegen of the statement consuming it
-// Run as `./msc test src/test/guard/assertMessageBorrow.ms` from the recompiler root.
 
-import { execFileCapture, cwd } from "std/process";
+import { execFileCapture, cwd, env, exit } from "std/process";
 
-function fixtureVerdict(gc: string): string {
-	const root = cwd();
-	const r = execFileCapture(root + "/msc", ["test", root + "/src/test/guard/fixtures/assertMessageBorrow.test.ms", "--gc=" + gc, "--cc=clang", "--sanitize=address"]);
+function fixtureVerdict(msc: string, root: string, gc: string): string {
+	const r = execFileCapture(msc, ["test", root + "/src/test/guard/fixtures/assertMessageBorrow.test.ms", "--gc=" + gc, "--cc=clang", "--sanitize=address"]);
 	if (r.ok) return "the fixture's assert did not fail";
 	if (r.error.signal !== 0) return "msc itself died by signal " + r.error.signal.toString();
 	if (r.error.exitCode !== 1) return "msc test exited " + r.error.exitCode.toString() + "\n" + r.error.output + r.error.errorOutput;
@@ -15,12 +13,14 @@ function fixtureVerdict(gc: string): string {
 	return "";
 }
 
-test "drc: the failing assert reports its borrowed message once" {
-	const why = fixtureVerdict("drc");
-	assert why === "", "drc: " + why;
+const root = cwd();
+const mscEnv = env.get("MSC");
+const msc = mscEnv != "" ? mscEnv : root + "/msc";
+for (const gc of ["drc", "orc"]) {
+	const why = fixtureVerdict(msc, root, gc);
+	if (why != "") {
+		console.log("GUARD-FAIL " + gc + ": " + why);
+		exit(1);
+	}
 }
-
-test "orc: the failing assert reports its borrowed message once" {
-	const why = fixtureVerdict("orc");
-	assert why === "", "orc: " + why;
-}
+console.log("GUARD-OK");

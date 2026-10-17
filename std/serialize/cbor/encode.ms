@@ -21,7 +21,7 @@
 // std/serialize/discDetect.ms and is shared with JSON encode.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey, implementationOf } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, implementationOf } from "../discDetect";
 // bindSym targets — the macros bind every emitted name in THIS module's scope,
 // so the user imports nothing but the entry macro. encode lives in encoder.ms
 // (not the index hub) precisely so binding it cannot cycle. See SERIALIZE.md §11.
@@ -99,6 +99,7 @@ export macro cborValueOf(t: Node): Node {
 		}
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
+			elemIsStruct = namesStruct(elemType);
 		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemIsStruct = true;
 			en = elemType.typExprTypeName;
@@ -108,7 +109,10 @@ export macro cborValueOf(t: Node): Node {
 		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element.
 			const peeled: Node = elemType.typExprArgs[0];
-			if (peeled.kind == NodeKind.TypeObject) {
+			if (namesStruct(peeled)) {
+				elemIsStruct = true;
+				en = peeled.name;
+			} else if (peeled.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = peeled.typExprTypeName;
 				if (en == "") {

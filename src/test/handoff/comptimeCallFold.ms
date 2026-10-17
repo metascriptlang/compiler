@@ -115,6 +115,16 @@ test "comptimeCallFold: a @comptime function used as a run-time value is an erro
 		console.log(apply(digitSum));`).includes(refused);
 }
 
+test "comptimeCallFold: a result outside the slot's range is refused, as at run time" {
+	assert cOf(`const a: uint64 = @comptime { const v: int32 = -1; return v; };
+		console.log(a);`).includes("cannot convert -1 to uint64");
+	assert cOf(`@comptime function minusOne(): int64 { return -1; }
+		const a: uint64 = minusOne();
+		console.log(a);`).includes("implicit int64 → uint64 conversion -1 is outside");
+	assert cOf(`const a: int64 = @comptime { const v: uint64 = 18446744073709551615; return v; };
+		console.log(a);`).includes("cannot convert 18446744073709551615 to int64");
+}
+
 struct Key690 {
 	a: uint64;
 	b: uint64;

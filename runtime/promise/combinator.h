@@ -59,6 +59,7 @@ static inline msFuture* msPromiseResolve(void* val) {
 /* Create pre-failed future (Reference: newFuture[T]() + fail(err)) */
 static inline msFuture* msPromiseReject(void* err) {
 	msFuture* f = (msFuture*)msFutureCreate();
+	msIncref(err);
 	msFutureFail(f, err);
 	return f;
 }
@@ -100,14 +101,12 @@ typedef struct {
  * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
 void* msPromiseAny(msRefArray* futures);
 
-/* ===== new Promise(executor) ===== */
-
-typedef struct {
-	msFuture* future;
-	bool settled;         /* only first resolve/reject takes effect */
-} msPromiseNewEnv;
-
-msFuture* msPromiseNew(msClosure executor);
+/* A future completed by generated code owns its result when it completes on the owner
+ * thread (Amendment O): readers copy it and the future drops what is left. A pool
+ * worker completes across threads, where the one reader takes the value. */
+static inline void msFutureOwnResult(msFuture* out, msClosure drop) {
+    if (drop.fn != NULL && !msIsPoolWorker) msFutureSetValueDrop(out, drop);
+}
 
 /* ===== Promise.then / .catch / .finally ===== */
 

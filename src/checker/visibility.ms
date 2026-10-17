@@ -1,4 +1,4 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
 import { CheckerContext, addError, extReceiverSym } from "./context";
 import { skipModifier, isStructType, isMaybeType, typeDisplayName } from "./types";
@@ -278,7 +278,8 @@ export function isSuperReceiver(object: Node): boolean {
 
 function receiverClassOf(callee: Node): Symbol | null {
 	if (callee.kind != NodeKind.MemberExpr) return null;
-	const object = (callee.data as MemberExprData).object;
+	let object = (callee.data as MemberExprData).object;
+	while (object != null && object.kind == NodeKind.HiddenSubConv) object = (object.data as HiddenStdConvData).convExpr;
 	if (object == null || isSuperReceiver(object)) return null;
 	return declaringSymOf(object.nodeType);
 }

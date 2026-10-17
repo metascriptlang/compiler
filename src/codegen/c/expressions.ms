@@ -9,8 +9,8 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, duVariantIndexOfType, storesNothing } from "../../checker/types";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing } from "../../checker/types";
+import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
@@ -18,7 +18,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
@@ -1631,12 +1631,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(genShiftAssign(d.operator, d.left.nodeType, left, finalRight));
 			return;
 		}
-		if (d.operator == "**") {
-			const rt = node.nodeType;
-			if (rt != null && isIntegerType(rt)) {
-				addCGenError(g, `internal: integer '**' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
-			}
-			ctx.results.push(`pow(${left}, ${finalRight})`);
+		if (d.operator == "**" || d.operator == "**=") {
+			addCGenError(g, `internal: '${d.operator}' reached codegen at ${node.location.line}:${node.location.column}; injectIntChecks lowers it`, node.location.line, node.location.column);
+			ctx.results.push("0");
 			return;
 		}
 		if (d.operator == "instanceof") {
@@ -1718,6 +1715,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				const fnName = mangledFunctionName(nsSym, referenceName(nsSym, d.property), nsSym.overloadIdx);
 				ensureCrossModuleProto(g, fnName, nsSym.symbolType, nsSym);
 				ctx.results.push(fnName);
+			} else if (nsSym != null && isTypeSymbol(nsSym)) {
+				ctx.results.push(mangledGlobalName(nsSym, referenceName(nsSym, d.property)));
 			} else if (nsSym != null) {
 				// Constants/variables: module-qualified name so the extern matches
 				// the defining module's declaration. Property name is the original
@@ -2553,6 +2552,11 @@ function nrvoTempNeedsZero(cType: string): boolean {
 	return true;
 }
 
+function dropVoidArg(p: CProc, arg: string, node: Readonly<Node>): void {
+	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.NullLiteral) return;
+	emitStmtsLine(p, `(void)(${arg});`);
+}
+
 function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	// Reference implementation pattern: extract environment and function pointers from closure pair
 	const envExpr = callee + ".env";
@@ -2698,8 +2702,13 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		let argsStr = "";
 		let ai = 0;
 		while (ai < cc) {
-			if (ai > 0) argsStr = argsStr + ", ";
 			let arg = ctx.results[ctx.results.length - cc + ai];
+			if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length && hasNoRuntimeRepr(ovType.typeChildren[ai])) {
+				dropVoidArg(p, arg, cd.arguments[ai]);
+				ai += 1;
+				continue;
+			}
+			if (argsStr != "") argsStr = argsStr + ", ";
 			if (ovNeedsAddr && ai == 0) {
 				arg = nativeAddressReceiver(g, p, arg, cd.arguments[ai]);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
@@ -2769,8 +2778,13 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	const argList: string[] = [];
 	let i = 1;
 	while (i < cc) {
-		if (i > 1) argsStr = argsStr + ", ";
 		let arg = peekResult(ctx, cc, i);
+		if (hasParamTypes && i - 1 < calleeType.typeChildren.length && i - 1 < cd.arguments.length && hasNoRuntimeRepr(calleeType.typeChildren[i - 1])) {
+			dropVoidArg(p, arg, cd.arguments[i - 1]);
+			i += 1;
+			continue;
+		}
+		if (argsStr != "") argsStr = argsStr + ", ";
 		if (hasParamTypes && magic == CallMagic.None) {
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
@@ -2913,7 +2927,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const ptrTmp = getTemp(p, "void*");
 		const valTmp = getTemp(p, unboxType);
 		emitStmtsLine(p, `${ptrTmp.snippet} = ${argsStr};`);
-		emitStmtsLine(p, `${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
+		emitStmtsLine(p, `if (${ptrTmp.snippet} != NULL) ${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
 		emitStmtsLine(p, `free(${ptrTmp.snippet});`);
 		ctx.results.push(valTmp.snippet);
 		return;

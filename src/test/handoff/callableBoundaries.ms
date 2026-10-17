@@ -39,6 +39,21 @@ test "callableBoundaries: call position requires a callable value or a resolved 
 	}
 }
 
+test "callableBoundaries: a union is called only after narrowing it to a single function type" {
+	const SETTER = "type Fn = () => number;\nfunction apply<T>(cur: T, v: T | ((prev: T) => T)): T {\n\tif (typeof v === \"function\") { return v(cur); }\n\treturn v;\n}\n";
+	const cases = [
+		{ name: "an un-narrowed value-or-function union is not callable", source: "function f(v: number | (() => number)): number { return v(); }\nfunction main(): void { console.log(f(() => 3)); }\n", expected: -1 },
+		{ name: "a union of two function types is not callable after typeof", source: "type Fn = () => number;\nfunction g(v: Fn | ((p: number) => number)): number {\n\tif (typeof v === \"function\") { return v(1); }\n\treturn 0;\n}\nfunction main(): void { console.log(g((p: number): number => p + 1)); }\n", expected: -1 },
+		{ name: "a value-or-updater instantiated at a function type is refused", source: SETTER + "function main(): void { const two: Fn = (): number => 2; console.log(apply<Fn>(two, (p: Fn): Fn => two)()); }\n", expected: -1 },
+		{ name: "a value-or-updater instantiated at a value type calls the updater", source: SETTER + "function main(): void { console.log(apply<number>(1, (p: number): number => p + 1)); }\n", expected: 0 },
+		{ name: "a value-or-function union narrowed by typeof is callable", source: "function h(v: number | (() => number)): number {\n\tif (typeof v === \"function\") { return v(); }\n\treturn v;\n}\nfunction main(): void { console.log(h(() => 3) + h(4)); }\n", expected: 0 },
+	];
+	for (const item of cases) {
+		const result = compileToCWithStd(item.source);
+		assert result.ok == (item.expected == 0), item.name + (result.ok ? "" : ": " + result.error);
+	}
+}
+
 test "callableBoundaries: implicit conversion cannot recursively reapply itself" {
 	const cases = [
 		{ name: "a converter does not apply inside its own body", source: "\ninterface Box { n: int32; }\nconverter boxToText(b: Box): string {\n\tconst t: string = b;\n\treturn t;\n}\nfunction main(): void {\n\tconst b: Box = { n: 1 };\n\tconst s: string = b;\n\tconsole.log(s);\n}\nmain();\n", expected: -1 },

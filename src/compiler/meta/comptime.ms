@@ -20,13 +20,13 @@ import {
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
-import { evalASTFull, evalProgramViaEngine } from "../../codegen/raiser/eval";
+import { evalASTFull, evalProgramViaEngine, releaseEngineHeaps } from "../../codegen/raiser/eval";
 import {
 	clearObjectHeap, clearArrayHeap, RaiserValueKind,
 } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { unboxFloat } from "../../raiser/marshal";
-import { valueToNode, synthToken } from "./bridge";
+import { valueToTypedNode, synthToken } from "./bridge";
 import { ensureHostTableLoaded } from "./hostTable";
 import { CheckerContext, addError, isGenericFn } from "../../checker/context";
 import { pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
@@ -108,12 +108,16 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	}
 
 	// Convert VM result back to an AST literal
-	const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
+	const result = valueToTypedNode(ctx.lastResult, staticType, ctx.objectHeap, ctx.arrayHeap, loc);
 	result.nodeType = staticType as unknown as Type;
 
 	// Reclaim VM heaps — prevents monotonic growth during long builds
-	clearObjectHeap(ctx.objectHeap);
-	clearArrayHeap(ctx.arrayHeap);
+	if (checkerCtx != null) {
+		releaseEngineHeaps();
+	} else {
+		clearObjectHeap(ctx.objectHeap);
+		clearArrayHeap(ctx.arrayHeap);
+	}
 	ctx = null;
 
 	return result;

@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
 import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -35,7 +35,7 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
@@ -629,6 +629,7 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 			else checkExpr(ctx, d.deferExpr, null);
 		},
 		NodeKind.DecoratedDecl => checkDecoratedStmt(ctx, node),
+		NodeKind.ComptimeBlock => checkComptimeStmt(ctx, node),
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
@@ -902,6 +903,10 @@ function markBodyIdentifiersUsed(ctx: CheckerContext, body: Node): void {
 		const d = body.data as IdentifierData;
 		const sym = lookupSymbol(ctx.table, d.name);
 		if (sym != null) markUsedIn(ctx, sym);
+	}
+	if (body.kind == NodeKind.JSXElement) {
+		const tag = jsxComponentSym(ctx, body);
+		if (tag != null) markUsedIn(ctx, tag);
 	}
 	for (const text of writtenTypes(body)) markTypeNamesUsed(ctx, text);
 	forEachChild(body, (child: Node): void => { markBodyIdentifiersUsed(ctx, child); });
@@ -1381,6 +1386,7 @@ interface DeclarationState {
 	typeExprSlot: Node;
 	calleeExpr: Node;
 	conversionOperand: Node;
+	conversionTarget: Type;
 	pendingTrailing: Node[];
 	instantiatingCtx: CheckerContext;
 }
@@ -1409,6 +1415,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 		typeExprSlot: ctx.typeExprSlot,
 		calleeExpr: ctx.calleeExpr,
 		conversionOperand: ctx.conversionOperand,
+		conversionTarget: ctx.conversionTarget,
 		pendingTrailing: ctx.pendingTrailing,
 		instantiatingCtx: ctx.instantiatingCtx,
 	};
@@ -1434,6 +1441,7 @@ function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): Declara
 	ctx.typeExprSlot = null as unknown as Node;
 	ctx.calleeExpr = null as unknown as Node;
 	ctx.conversionOperand = null as unknown as Node;
+	ctx.conversionTarget = null as unknown as Type;
 	ctx.pendingTrailing = [];
 	ctx.instantiatingCtx = null as unknown as CheckerContext;
 	return saved;
@@ -1462,6 +1470,7 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.typeExprSlot = saved.typeExprSlot;
 	ctx.calleeExpr = saved.calleeExpr;
 	ctx.conversionOperand = saved.conversionOperand;
+	ctx.conversionTarget = saved.conversionTarget;
 	ctx.pendingTrailing = saved.pendingTrailing;
 	ctx.instantiatingCtx = saved.instantiatingCtx;
 }
@@ -2006,7 +2015,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 				d.forOfPattern.location.line, d.forOfPattern.location.column);
 		}
 		// Destructured for-of: define symbols for each pattern element
-		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, true);
+		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, null);
 	} else {
 		const forSym = declSymbol(ctx, node, d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
 		setFlag(forSym, SymbolFlag.ForVar);
@@ -2031,18 +2040,21 @@ function destructuresByPosition(t: Type): boolean {
 	return base.kind == TypeKind.Tuple || base.kind == TypeKind.Array || base.kind == TypeKind.SizedArray || base.kind == TypeKind.Span;
 }
 
-function definePatternBinding(ctx: CheckerContext, sym: Symbol, forVar: boolean): void {
-	if (forVar) {
+function definePatternBinding(ctx: CheckerContext, sym: Symbol, declaring: Node | null): void {
+	if (declaring == null) {
 		setFlag(sym, SymbolFlag.ForVar);
-	} else if (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global) {
-		setFlag(sym, SymbolFlag.Global);
-		stampOwner(ctx, sym);
-		sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+	} else {
+		sym.declNode = declaring;
+		if (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global) {
+			setFlag(sym, SymbolFlag.Global);
+			stampOwner(ctx, sym);
+			sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+		}
 	}
 	defineSymbol(ctx.table, sym);
 }
 
-function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, forVar: boolean): void {
+function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, declaring: Node | null): void {
 	if (pattern.kind == NodeKind.ArrayPattern) {
 		const apd = pattern.data as ArrayPatternData;
 		let i = 0;
@@ -2057,7 +2069,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
 					if (bound != null) elem.nodeType = bound;
 					const elemSym = declSymbol(ctx, elem, id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-					definePatternBinding(ctx, elemSym, forVar);
+					definePatternBinding(ctx, elemSym, declaring);
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
@@ -2072,7 +2084,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
 						}
 						const restSym = declSymbol(ctx, inner, id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
-						definePatternBinding(ctx, restSym, forVar);
+						definePatternBinding(ctx, restSym, declaring);
 						inner.resolvedSym = restSym;
 						markInitialized(ctx.initTracker, id.name);
 					}
@@ -2111,7 +2123,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `object rest '${restId.name}' requires a source with remaining named fields`, prop.location.line, prop.location.column);
 						}
 						const objRestSym = declSymbol(ctx, inner, restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
-						definePatternBinding(ctx, objRestSym, forVar);
+						definePatternBinding(ctx, objRestSym, declaring);
 						inner.resolvedSym = objRestSym;
 						markInitialized(ctx.initTracker, restId.name);
 					}
@@ -2128,7 +2140,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
 				const aliasSym = declSymbol(ctx, p.propAlias, id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-				definePatternBinding(ctx, aliasSym, forVar);
+				definePatternBinding(ctx, aliasSym, declaring);
 				p.propAlias.resolvedSym = aliasSym;
 				markInitialized(ctx.initTracker, id.name);
 			}
@@ -2371,7 +2383,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ReturnStmtData;
 	if (ctx.ctorExits != null) ctx.ctorExits.push(collectNewInits(ctx.initTracker, 0));
-	if (ctx.currentFunction == null) {
+	if (ctx.currentFunction == null && !isEngineCheckMode()) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
 	if (refuseGeneratorReturnValue(ctx, node)) return;
@@ -2912,7 +2924,7 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
 	checkExpr(ctx, d.destrInit, null);
 	const initType = d.destrInit.nodeType != null ? d.destrInit.nodeType : inferredType();
-	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst, false);
+	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst, node);
 }
 
 // ===== Check Program Body =====
@@ -3614,6 +3626,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		openScope(subCtx.table, ScopeKind.Module);
 		subCtx.modulePath = subResolved;
 		runThreePasses(subCtx, subPr.value);
+		ctx.preludeModuleScopes.set(subResolved, moduleScopeSymbols(subCtx.table));
 
 		// Stamp headerPath on .h-translated symbols so C codegen emits #include
 		const subScope = subCtx.table.current;
@@ -3744,6 +3757,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// the checker API.
 	ctx.targetOs = preludeCtx.targetOs;
 	ctx.targetInfo = preludeCtx.targetInfo;
+	ctx.appMode = preludeCtx.appMode;
 	ctx.strictNullChecks = preludeCtx.strictNullChecks;
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }
@@ -3981,6 +3995,7 @@ function packContentView(shared: CheckerContext): CheckerContext {
 	view.converterTargetTypes = shared.converterTargetTypes;
 	view.preludeInterf = shared.preludeInterf;
 	view.preludeExports = shared.preludeExports;
+	view.preludeModuleScopes = shared.preludeModuleScopes;
 	view.interf = shared.interf;
 	view.interfSet = shared.interfSet;
 	view.interfNames = shared.interfNames;

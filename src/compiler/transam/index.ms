@@ -63,7 +63,7 @@ import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../.
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
-import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph } from "../../module/loader";
+import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount } from "../../checker/context";
@@ -550,6 +550,7 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 
 		entries.push(createImportEntry(imp.importNames, imp.importAliases, resolvedPath, imp.importSource));
 	}
+	for (const specifier of collectImportCalls(program)) entries.push(createImportEntry([], [], dbResolveImport(db, filePath, specifier), specifier, true));
 	return entries;
 }
 

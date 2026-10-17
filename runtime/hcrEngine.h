@@ -59,6 +59,8 @@ int32_t msHcrGuardRun(msClosure body);
 int32_t msHcrGuardInit(void* raw);
 int32_t msHcrGuardProbe(void* raw);
 msString msHcrGuardText(void);
+void msHcrDefer(const char* moduleId, const char* name, void* init, void* deinit);
+int32_t msHcrDeferredPending(const char* moduleId);
 
 static inline int32_t msHcrCallInitStatus(void* raw) {
 	((void (*)(void))raw)();

@@ -3,14 +3,14 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, DeclKind, VariableDeclData,
+	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, DeclKind, VariableDeclData, Type, TypeKind,
 	ExportDeclData, DecoratedDeclData, EnumDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
-import { hasGenericParams } from "../../checker/types";
+import { hasGenericParams, classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
@@ -22,6 +22,9 @@ import {
 	RaiserModule, RaiserFunction,
 	createRaiserFunction, createRaiserModule
 } from "../../raiser/module";
+import { DynamicModulePlan } from "../../module/graph";
+import { mangleModuleName } from "../c/names";
+import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserEnumMap, RaiserFuncEntry, RaiserGlobalMap, createFuncMap,
@@ -32,7 +35,7 @@ import {
 	resolveRoutine, RaiserCompState,
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr } from "./expressions";
+import { compileExpr, classTargetKey } from "./expressions";
 import { emitZeroValue } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
@@ -111,6 +114,19 @@ function ctorArity(ctorSyms: Symbol[]): int32 {
 }
 
 // --- Compile a function body ---
+
+function runtimeParamSyms(decl: Node, name: string): Symbol[] {
+	const params = paramSymbolsOf(decl, name);
+	const fnType = decl.nodeType;
+	if (fnType == null || fnType.kind != TypeKind.Function) return params;
+	const kept: Symbol[] = [];
+	for (let i = 0; i < params.length; i += 1) {
+		const t = i < fnType.typeChildren.length ? fnType.typeChildren[i] : null;
+		if (t != null && t.kind == TypeKind.Void) continue;
+		kept.push(params[i]);
+	}
+	return kept;
+}
 
 export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserEnumMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null): RaiserFunction {
 	const s = createCompState();
@@ -208,11 +224,12 @@ function compileClassInit(
 
 function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
 	if (classSym == null) return 0;
-	const chain: string[] = [];
-	let cur: Symbol | null = classSym;
-	while (cur != null && chain.length < 64) {
-		chain.push(raiserClassKey(cur));
-		cur = parentClassSymOf(cur);
+	const chain: string[] = [raiserClassKey(classSym)];
+	let up = classParentOf(classSym.symbolType);
+	while (up != null && classTargetKey(up) != "") {
+		if (chain.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
+		chain.push(classTargetKey(up));
+		up = classParentOf(up);
 	}
 	s.classTypes.push({ name: className, chain });
 	return s.classTypes.length;
@@ -285,7 +302,7 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 				wantIdx = idx;
 				if (wantSym != null) funcMap.symbolIndices.set(wantSym, idx);
 			}
-			reserved.push({ idx, fnName: fd.fnName, paramSyms: paramSymbolsOf(fnNode, fd.fnName), body: fd.fnBody });
+			reserved.push({ idx, fnName: fd.fnName, paramSyms: runtimeParamSyms(fnNode, fd.fnName), body: fd.fnBody });
 		}
 		const classNode = unwrapToClassDecl(pd.programStmts[i]);
 		if (classNode != null) {
@@ -402,7 +419,18 @@ function collectRaiserGlobals(node: Node, globals: RaiserGlobalMap, nextSlot: in
 	return nextSlot;
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
+function hasTopLevelAwait(node: Node): boolean {
+	if (node.kind == NodeKind.AwaitExpr) return true;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction
+			|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ClassDecl) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found) found = hasTopLevelAwait(child);
+	});
+	return found;
+}
+
+export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan()): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
@@ -428,7 +456,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 			if (fnNode != null && emitsRoutine(fnNode, (fnNode.data as FunctionDeclData).fnFlags)) {
 				const fd = fnNode.data as FunctionDeclData;
 				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
-				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms: paramSymbolsOf(fnNode, fd.fnName), body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
+				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms: runtimeParamSyms(fnNode, fd.fnName), body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
 				funcIdx += 1;
 			}
 			const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
@@ -557,6 +585,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	const entryS = createCompState();
 	let lastResultReg = 0;
 	for (let ii = 0; ii < initIndices.length; ii += 1) {
+		if (plan.lazy.has(modules[ii].modulePath)) continue;
 		const destReg = allocReg(entryS);
 		emitInst(entryS, raiserABC(RaiserOpcode.Call, destReg, initIndices[ii], 0));
 		lastResultReg = destReg;
@@ -570,6 +599,20 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);
 	compiled.globalCount = globalCount;
+	for (let ri = 0; ri < plan.records.length; ri += 1) {
+		const path = plan.records[ri];
+		let init: number = -1;
+		let hasTLA = false;
+		if (plan.lazy.has(path)) {
+			for (let mi = 0; mi < modules.length; mi += 1) {
+				if (modules[mi].modulePath != path) continue;
+				init = initIndices[mi];
+				hasTLA = hasTopLevelAwait(modules[mi].program);
+			}
+			if (init < 0) throw new Error(`internal: module ${path}, reached only through import(), has no Raiser init function`);
+		}
+		compiled.records.push({ name: mangleModuleName(path), init, requested: plan.requested[ri], hasTLA });
+	}
 	return compiled;
 }
 

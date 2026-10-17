@@ -43,6 +43,18 @@ export class Error {
 	}
 }
 
+export class RangeError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
+export class SyntaxError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
@@ -212,6 +224,41 @@ function msCheckRangeU64(v: float64): float64 {
 @compilerFunc
 function msCheckRangeI64FromU64(v: uint64): uint64 {
 	@emit(`if (!(${v} < 9223372036854775808)) ${msDefect}("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI8(v: float64): int8 {
+	@emit(`if (${v} > 127 || ${v} < -128) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowChar(v: float64): char {
+	@emit(`if ((${v} & 255) !== ${v}) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI16(v: float64): int16 {
+	@emit(`if (${v} > 32767 || ${v} < -32768) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI32(v: float64): int32 {
+	@emit(`if ((${v} | 0) !== ${v}) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI64(v: int64): int64 {
+	@emit(`if (BigInt.asIntN(64, ${v}) !== ${v}) ${msDefect}("over- or underflow");
 	return ${v};`);
 	unreachable;
 }

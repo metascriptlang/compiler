@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -343,11 +343,28 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 	return result;
 }
 
+function takesUnknown(target: Type): boolean {
+	if (target.kind == TypeKind.Union) {
+		for (const member of target.typeChildren) {
+			if (member != null && takesUnknown(member)) return true;
+		}
+		return false;
+	}
+	return match (target.kind) {
+		TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Error => true,
+		_ => false,
+	};
+}
+
 function openNullableUnionPayload(union: Type, carrier: Type): Type | null {
 	if (union.kind != TypeKind.Union || !isMaybeType(carrier)) return null;
 	const payload = nonNullMemberOfNullable(union);
 	if (payload == null || !hasGenericParams(payload)) return null;
 	return payload;
+}
+
+function isOpenSlot(t: Type): boolean {
+	return t.kind == TypeKind.None || t.kind == TypeKind.Inferred || t.kind == TypeKind.GenericParam || t.kind == TypeKind.Error;
 }
 
 function isAssignableInner(source: Type | null, target: Type | null): boolean {
@@ -428,6 +445,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum => sameNominal(source, target),
 			TypeKind.Distinct => sameDistinct(source, target),
+			TypeKind.Module => source.typeName == target.typeName,
 			TypeKind.EnumLiteral => sameEnumMember(source, target),
 			TypeKind.GenericInstance => {
 				if (!sameGenericBase(source, target)) {
@@ -451,6 +469,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			|| (target.kind == TypeKind.Struct && source.kind == TypeKind.GenericInstance)) {
 		const ancestor = classAncestorInstance(source, target);
 		if (ancestor != null) return isAssignable(ancestor, target);
+		const sBody = structBodyOf(source);
+		const tBody = structBodyOf(target);
+		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody));
 	}
 
 	// Generic-alias instance carries its resolved body in typeReturn
@@ -495,6 +516,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		if (source.kind == TypeKind.Null) return false;
 		return isAssignable(source, target.typeReturn);
 	}
+
+	if (source.kind == TypeKind.Unknown && !takesUnknown(target)) return false;
+	if (source.kind == TypeKind.Module || target.kind == TypeKind.Module) return isOpenSlot(source) || isOpenSlot(target);
 
 	// Inference sentinels (Inferred = open signature, None = typeless node) and
 	// user unknown stay lenient — shape rules are enforced at fitNode.
@@ -702,6 +726,10 @@ export function takesAddressAtCArg(source: Type | null, target: Type | null): bo
 	return isCValue && (ptr.typeReturn.kind == TypeKind.Void || sameType(source, ptr.typeReturn));
 }
 
+export function crossesCharBoundary(source: Type, target: Type): boolean {
+	return (source.kind == TypeKind.Char) != (target.kind == TypeKind.Char) && isNumeric(source) && isNumeric(target);
+}
+
 export function needsStdConv(source: Type, target: Type): boolean {
 	if (source == null || target == null) return false;
 	// Var (out param): unwrap to inner type for conversion check
@@ -774,7 +802,7 @@ export function intExactInFloat(source: Type, target: Type): boolean {
 
 export function numericConvRefuses(source: Type, target: Type): boolean {
 	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) return numericConvRefuses(source, target.typeReturn);
-	if (refusesIntConv(source, target)) return true;
+	if (refusesIntConv(source, target) || crossesCharBoundary(source, target)) return true;
 	if (isIntegerType(source) && !isIntegerType(target)
 		&& (isFloatType(target) || target.kind == TypeKind.Number)) {
 		return !intExactInFloat(source, target);
@@ -789,6 +817,7 @@ export function numericConvRefuses(source: Type, target: Type): boolean {
 
 export function numericRefusalReason(from: Type, to: Type): string {
 	if ((to.kind == TypeKind.Sink || to.kind == TypeKind.Lent) && to.typeReturn != null) return numericRefusalReason(from, to.typeReturn);
+	if (crossesCharBoundary(from, to)) return "crosses between char and a number";
 	if (isIntegerType(from) && isIntegerType(to)) {
 		if (isUnsignedIntegerType(from) == isUnsignedIntegerType(to)) return "narrows";
 		if (isUnsignedIntegerType(from)) return "may exceed the target's maximum";
@@ -811,6 +840,7 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;
+	if (heldAsUnknown(a, b) || heldAsUnknown(b, a)) return true;
 	if (b.kind == TypeKind.Union && a.kind != TypeKind.Union && a.kind != TypeKind.Null) {
 		const bn = nonNullMemberOfNullable(b);
 		if (bn != null) return fnSlotReprMismatch(a, bn);
@@ -824,19 +854,69 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	return isReinterpretUnsafe(a, b);
 }
 
+function heldAsUnknown(held: Type, slot: Type): boolean {
+	return isUnknownType(slot) && !isUnknownType(held) && unknownRefusal(held) != UnknownRefusal.None;
+}
+
+export function unknownReturnRefusal(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	const held = skipModifier(source.typeReturn);
+	const slot = skipModifier(target.typeReturn);
+	if (held == null || slot == null || !heldAsUnknown(held, slot)) return "";
+	return " — a function returning " + typeDisplayName(held) + " cannot stand in for one returning unknown, which holds only class or interface instances";
+}
+
+export function returnReprRefusal(source: Type | null, target: Type | null, fnText: string): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	if (source.typeChildren.length != target.typeChildren.length || unknownReturnRefusal(source, target) != "") return "";
+	for (let i = 0; i < source.typeChildren.length; i += 1) {
+		if (fnSlotReprMismatch(source.typeChildren[i], target.typeChildren[i])) return "";
+		if (!isAssignable(target.typeChildren[i], source.typeChildren[i])) return "";
+	}
+	const held = skipModifier(source.typeReturn);
+	const slot = skipModifier(target.typeReturn);
+	if (held == null || slot == null) return "";
+	const reprOnly = fnSlotReprMismatch(held, slot);
+	if (isAssignable(held, slot) && !reprOnly) return "";
+	const wraps = slot.kind == TypeKind.Void
+		|| (isMaybeType(slot) && slot.typeReturn != null && isAssignable(held, slot.typeReturn))
+		|| (reprOnly && isAssignable(held, slot));
+	if (!wraps) return "";
+	const dropped = slot.kind == TypeKind.Void;
+	const why = " — a function returning '" + typeDisplayName(held) + "' cannot fill a slot returning '" + typeDisplayName(slot)
+		+ (dropped ? "': its result would have to be dropped. " : "': the result would need a conversion. ");
+	if (fnText == "=>") return why + (dropped ? "Declare the lambda's return type as 'void'" : "Leave out the lambda's return type, or declare it as the union");
+	if (fnText == "") return why + "Pass a lambda that calls it";
+	const names: string[] = [];
+	for (let i = 0; i < source.typeChildren.length; i += 1) names.push("a" + String(i));
+	const params = names.join(", ");
+	const lambda = "Pass a lambda ((" + params + ") => " + fnText + "(" + params + "))";
+	return why + lambda + (dropped ? "" : " or declare " + fnText + "'s return type as the union");
+}
+
 function leavesInlineConv(source: Type, target: Type): boolean {
 	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
+}
+
+function runtimeParams(fn: Type): Type[] {
+	const params: Type[] = [];
+	for (const param of fn.typeChildren) {
+		if (param == null || param.kind != TypeKind.Void) params.push(param);
+	}
+	return params;
 }
 
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
 	if (leavesInlineConv(source, target)) return false;
-	if (source.typeChildren.length != target.typeChildren.length) return false;
+	const sourceParams = runtimeParams(source);
+	const targetParams = runtimeParams(target);
+	if (sourceParams.length != targetParams.length) return false;
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
-	for (const sourceParam of source.typeChildren) {
-		if (!isAssignable(target.typeChildren[i], sourceParam)) return false;
+	for (const sourceParam of sourceParams) {
+		if (!isAssignable(targetParams[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Repr invariance (Nim tyProc: params AND return invariant via
@@ -845,8 +925,8 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	// signature, so a numeric-width change calls through the wrong ABI).
 	// Mirrors the sameElementRepr gate on Array/Span/Ptr elements above.
 	let ri = 0;
-	for (const sp of source.typeChildren) {
-		if (fnSlotReprMismatch(sp, target.typeChildren[ri])) return false;
+	for (const sp of sourceParams) {
+		if (fnSlotReprMismatch(sp, targetParams[ri])) return false;
 		ri += 1;
 	}
 	if (fnSlotReprMismatch(source.typeReturn, target.typeReturn)) return false;
@@ -855,6 +935,27 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 		return isAssignable(source.typeReturn, target.typeReturn);
 	}
 	return true;
+}
+
+function paramRefusal(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	const targetParams = runtimeParams(target);
+	let ri = 0;
+	let ni = 0;
+	for (const taken of source.typeChildren) {
+		if (taken != null && taken.kind == TypeKind.Void) { ni += 1; continue; }
+		if (ri >= targetParams.length) return "";
+		const passed = targetParams[ri];
+		if (!isAssignable(passed, taken)) {
+			if (taken == null || taken.kind == TypeKind.Function || passed.kind == TypeKind.Function) return "";
+			const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+			return " — parameter '" + name + "' takes " + typeDisplayName(taken) + ", but the expected function passes it "
+				+ typeDisplayName(passed) + "; declare the parameter " + typeDisplayName(passed) + " and narrow it inside";
+		}
+		ri += 1;
+		ni += 1;
+	}
+	return "";
 }
 
 // A literal bound without an annotation freezes as `__anonN__...` (anonStructName).
@@ -965,6 +1066,8 @@ function objectShapeTarget(source: Type | null, target: Type | null): Type | nul
 // the wrong slots, "got A, expected B" reads like a compiler bug. Name the field
 // that moved. Empty string when the plain message already explains the rejection.
 export function explainStructuralPrefix(source: Type | null, target: Type | null): string {
+	const param = paramRefusal(skipModifier(source), skipModifier(target));
+	if (param != "") return param;
 	if (dropsReadonlyView(source, target)) {
 		return " — a read-only view never converts back to the mutable type: declare the parameter "
 			+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
@@ -1123,6 +1226,13 @@ function isOwnGenericBase(base: Type, inst: Type): boolean {
 function sameGenericBase(a: Type, b: Type): boolean {
 	if (a.typeExtra != null && b.typeExtra != null) return sameNominal(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra));
 	return a.typeName == b.typeName;
+}
+
+function structBodyOf(t: Type): Type | null {
+	const body = t.kind == TypeKind.GenericInstance ? t.typeReturn : t;
+	if (body == null) return null;
+	if (t.kind == TypeKind.GenericInstance && t.typeExtra != null && isValueStructDecl(unwrapRefBase(t.typeExtra))) return null;
+	return unwrapRefBase(body).kind == TypeKind.Struct ? body : null;
 }
 
 function differentGenericsFit(source: Type, target: Type): boolean {
@@ -1367,6 +1477,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (formal.kind == TypeKind.Error || actual.kind == TypeKind.Error) {
 		return TypeRelation.Exact;
 	}
+	if (crossesCharBoundary(actual, formal)) return TypeRelation.None;
 	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
 	// Must check before int-to-int widening since Number and Float64 share rank with sized types
 	if (isIntegerType(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
@@ -1780,6 +1891,22 @@ test "different kind" {
 test "unknown compatible" {
 	assert isAssignable(inferredType(), numberType());
 	assert isAssignable(numberType(), inferredType());
+}
+
+test "unknown flows only into a slot that takes unknown" {
+	const cls = createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true));
+	assert !isAssignable(unknownType(), cls);
+	assert isAssignable(unknownType(), unknownType());
+	assert isAssignable(unknownType(), createUnion([unknownType(), nullType()]));
+	assert isAssignable(cls, unknownType());
+}
+
+test "a function taking a class does not stand in for one taking unknown" {
+	const cls = createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true));
+	const takesClass = createFunction([cls], ["e"], voidType());
+	const takesUnknown = createFunction([unknownType()], ["reason"], voidType());
+	assert !isAssignable(takesClass, takesUnknown);
+	assert isAssignable(takesUnknown, takesClass);
 }
 
 test "numeric widening" {

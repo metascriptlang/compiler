@@ -3,7 +3,7 @@ export const exactIntegerLimit: float64 = 9007199254740992.0;
 
 export function checkedRadix(radix: int32): int32 {
 	if (radix < 2 || radix > 36) {
-		throw new Error("toString() radix argument must be between 2 and 36");
+		throw new RangeError("toString() radix argument must be between 2 and 36");
 	}
 	return radix;
 }

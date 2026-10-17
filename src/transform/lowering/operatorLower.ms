@@ -102,7 +102,7 @@ function neverHoldsNull(t: Type): boolean {
 	if (hasValueEq(t)) return true;
 	if (isMaybeType(t)) return false;
 	const vk = t.kind;
-	if (vk == TypeKind.Array || vk == TypeKind.GenericInstance || vk == TypeKind.Tuple || vk == TypeKind.String) return true;
+	if (vk == TypeKind.Array || vk == TypeKind.GenericInstance || vk == TypeKind.Tuple || vk == TypeKind.String || vk == TypeKind.BigInt) return true;
 	return vk == TypeKind.Union && unwrapRefNullUnion(t) == null;
 }
 
@@ -322,6 +322,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		"*=" => "*",
 		"/=" => "/",
 		"%=" => "%",
+		"**=" => "**",
 		_ => "",
 	};
 	if (compoundBase != "" && leftType != null

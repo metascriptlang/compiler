@@ -1,7 +1,7 @@
 // Shared path resolution utilities for the MetaScript compiler.
 
 import { argv, cwd, env, platform } from "std/process";
-import { exists, realpath, ensureDir, writeFile, removeAll } from "std/fs";
+import { exists, realpath, ensureDir, writeFile, remove, removeAll, symlink } from "std/fs";
 import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
 // Find the project root by walking up looking for build.ms.
@@ -94,7 +94,12 @@ function canonicalRootDir(dir: string): string {
 // Find the compiler root directory (the one containing std/).
 // Walks up from argv[0] (resolved via $PATH if bare), then falls back to cwd().
 export function resolveRuntimeDir(): string {
-	let base = dirname(resolveArgv0(argv[0]));
+	return runtimeDirFrom(resolveArgv0(argv[0]));
+}
+
+function runtimeDirFrom(exe: string): string {
+	const physicalExe = realpath(exe);
+	let base = dirname(physicalExe != "" ? physicalExe : exe);
 	let i = 0;
 	while (i < 4) {
 		if (exists(join(base, "std/core/system/index.ms"))) {
@@ -107,6 +112,29 @@ export function resolveRuntimeDir(): string {
 	base = cwd();
 	if (exists(join(base, "std/core/system/index.ms"))) return base;
 	return "";
+}
+
+test "runtimeDirFrom finds the install behind a symlinked binary or a symlinked bin directory" {
+	if (platform == "windows") return;
+	const probe = join(cwd(), "out/runtimeDirProbe");
+	remove(join(probe, "path/msc"));
+	remove(join(probe, "linkedBin"));
+	removeAll(probe);
+	const root = join(probe, "install");
+	ensureDir(join(root, "std/core/system"));
+	ensureDir(join(root, "bin"));
+	ensureDir(join(probe, "path"));
+	writeFile(join(root, "std/core/system/index.ms"), "");
+	writeFile(join(root, "bin/msc"), "");
+	assert symlink(join(root, "bin/msc"), join(probe, "path/msc")).ok;
+	assert symlink(join(root, "bin"), join(probe, "linkedBin")).ok;
+	const physicalRoot = realpath(root);
+	assert runtimeDirFrom(join(probe, "path/msc")) == physicalRoot;
+	assert runtimeDirFrom(join(probe, "linkedBin/msc")) == physicalRoot;
+	assert runtimeDirFrom(join(root, "bin/msc")) == physicalRoot;
+	remove(join(probe, "path/msc"));
+	remove(join(probe, "linkedBin"));
+	removeAll(probe);
 }
 
 test "canonicalRootDir — a trailing dot segment is dropped" {

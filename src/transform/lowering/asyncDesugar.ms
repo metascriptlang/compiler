@@ -51,6 +51,7 @@ function walkAsync(node: Node | null): void {
 	const k = node.kind;
 	if (k == NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;
+		if (isGenericFn(d.fnFlags)) return;
 		walkAsync(d.fnBody);
 		if (isAsyncFlags(d.fnFlags)) {
 			desugarAsyncBody(node, d.fnBody);
@@ -58,6 +59,7 @@ function walkAsync(node: Node | null): void {
 		}
 	} else if (k == NodeKind.MethodDecl) {
 		const d = node.data as MethodDeclData;
+		if (isGenericFn(d.methodFlags)) return;
 		walkAsync(d.methodBody);
 		if (isAsyncFlags(d.methodFlags)) {
 			desugarAsyncBody(node, d.methodBody);

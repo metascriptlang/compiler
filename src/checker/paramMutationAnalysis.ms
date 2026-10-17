@@ -144,7 +144,7 @@ function findMutationLocation(node: Node | null, paramSym: Symbol): SourceLocati
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
-			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
+			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=" || d.operator == "**="
 			|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
 			|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
 			if (getRootSym(d.left) == paramSym) return node.location;
@@ -258,9 +258,9 @@ function scanForMutation(node: Node | null, paramSym: Symbol): boolean {
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
-				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
-			|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
-			|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
+				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=" || d.operator == "**="
+				|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
+				|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
 				if (getRootSym(d.left) == paramSym) return true;
 			}
 			return scanForMutation(d.left, paramSym) || scanForMutation(d.right, paramSym);

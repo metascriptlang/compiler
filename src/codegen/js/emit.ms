@@ -8,6 +8,7 @@ import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 import { mangleModuleName } from "../c/names";
+import { DynamicModulePlan } from "../../module/graph";
 
 
 // ===== JS Generator =====
@@ -53,6 +54,9 @@ export class JSGenerator {
 	neededModules: string[];    // cross-module references collected during emission
 	neededNames: string[][];
 	neededLocals: string[][];   // the binding each needed name takes in this module
+	moduleRequests: string;     // source imports and re-exports, in source order, hoisted in front of the body
+	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
+	namespaceNames: string[][];
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
@@ -71,16 +75,17 @@ export class JSGenerator {
 	// prologue stamps the synthetic pid and instance field defaults are
 	// emitted as JS class fields (the tier-1 actor surface).
 	inActorDecl: boolean;
+	dynamicPlan: DynamicModulePlan;
 }
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [],
+		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], moduleRequests: "", namespaceModules: [], namespaceNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
 		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32,
-		inActorDecl: false };
+		inActorDecl: false, dynamicPlan: new DynamicModulePlan() };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): string {
@@ -102,6 +107,16 @@ export function recordNeededImport(gen: JSGenerator, modulePath: string, name: s
 	gen.neededNames[at].push(name);
 	gen.neededLocals[at].push(local);
 	return local;
+}
+
+export function recordNamespaceExport(gen: JSGenerator, modulePath: string, name: string): void {
+	let at = gen.namespaceModules.indexOf(modulePath);
+	if (at < 0) {
+		gen.namespaceModules.push(modulePath);
+		gen.namespaceNames.push([]);
+		at = gen.namespaceModules.length - 1;
+	}
+	if (!gen.namespaceNames[at].includes(name)) gen.namespaceNames[at].push(name);
 }
 
 function importBindingTaken(gen: JSGenerator, local: string): boolean {

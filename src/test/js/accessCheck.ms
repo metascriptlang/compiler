@@ -45,7 +45,7 @@ test "an array slice is a checked view" {
 test "an inclusive slice passes the end past the last element" {
 	const result = compileToJSBare("function f(xs: Span<int32>): int32 { return xs.length; } function g(a: int32[], s: int32, e: int32): int32 { return f(a[s...e]); }");
 	assert result.ok;
-	assert result.value.contains("msSliceOf(a, s, (e + 1))");
+	assert result.value.contains("msSliceOf(a, s, msOverflowI32((e + 1)))");
 }
 
 test "a slice of a span rebases the view" {
@@ -63,7 +63,7 @@ test "an element write checks the index against the array it writes" {
 test "an element update checks the index" {
 	const result = compileToJSBare("function f(a: int32[], i: int32): void { a[i]++; }");
 	assert result.ok;
-	assert result.value.contains("a[msChkIndex(i, a.length)]++");
+	assert result.value.contains("a[msChkIndex(i, a.length)] = msOverflowI32((a[msChkIndex(i, a.length)] + 1))");
 }
 
 test "a write into a computed array checks through the array once" {
@@ -76,9 +76,11 @@ test "a write into a computed array checks through the array once" {
 test "a write with a computed array and a computed index holds the array in a temporary" {
 	const result = compileToJSBare("function g(): int32[] { return [1]; } function h(): int32 { return 0; } function f(): void { g()[h()] = 5; g()[h()] += 1; g()[h()]++; }");
 	assert result.ok;
-	assert result.value.contains("var $place_");
-	assert result.value.contains("($place_0 = g");
-	assert result.value.contains("$place_0.length)] = 5");
+	const at = result.value.indexOf("var $place_") + 4;
+	assert at >= 4;
+	const place = result.value.slice(at, result.value.indexOf(" ", at));
+	assert result.value.contains("(" + place + " = g");
+	assert result.value.contains(place + ".length)] = 5");
 	assert !result.value.contains("msArrayAt(");
 }
 

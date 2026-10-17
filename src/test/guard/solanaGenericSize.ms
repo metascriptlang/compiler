@@ -133,8 +133,8 @@ function run${i}(): Result<uint64, ProgramError> {
 	const seen = try owned<Pet${i}>(7);
 	const rolled = try delegated<Pet${i}>(8);
 	const _closed = try close(x.pet, x.payer.asWritable());
-	return Result.ok(made.asMutable().data().bump as uint64 + direct.data().bump as uint64 +
-		seen.data().bump as uint64 + rolled.data().bump as uint64);
+	return Result.ok((made.asMutable().data().bump as uint64) + (direct.data().bump as uint64) +
+		(seen.data().bump as uint64) + (rolled.data().bump as uint64));
 }
 `;
 }
@@ -186,7 +186,7 @@ function externals(): Result<uint64, ProgramError> {
 	const b = try held.read();
 	const c = try claimed.read();
 	const d = try spent.read();
-	return Result.ok(a.decimals as uint64 + b.amount + c.amount + d.decimals as uint64);
+	return Result.ok((a.decimals as uint64) + b.amount + c.amount + (d.decimals as uint64));
 }
 
 export function dispatch(): Result<uint64, ProgramError> {

@@ -246,3 +246,60 @@ test "a for-of loop in the catch of a generic routine runs per instance" {
 	const points = adoptAll<Point>([{ x: 1 }], 1);
 	assert points.length == 1 && !points[0].disposed && points[0].value.x == 1;
 }
+
+function lengthOnFailure(s: string | null, n: int32): int32 {
+	try {
+		raiseAbove(n, 1);
+	} catch (error) {
+		if (s !== null) { return s.length; }
+	}
+	return 0;
+}
+
+test "a catch reached only by a call's raise narrows its references" {
+	assert lengthOnFailure("abc", 1) == 0;
+	assert lengthOnFailure("abc", 2) == 3;
+	assert lengthOnFailure(null, 2) == 0;
+}
+
+function presentLengthsOnFailure(xs: (string | null)[], n: int32): int32 {
+	let total: int32 = 0;
+	try {
+		raiseAbove(n, 1);
+	} catch (error) {
+		for (const x of xs) {
+			if (x !== null) { total += x.length; }
+		}
+	}
+	return total;
+}
+
+test "a loop in such a catch narrows each element" {
+	assert presentLengthsOnFailure(["ab", null, "c"], 1) == 0;
+	assert presentLengthsOnFailure(["ab", null, "c"], 2) == 3;
+}
+
+class Gate {
+	closes: int32 = 0;
+	open(n: int32): void { raiseAbove(n, 1); }
+}
+
+function openThroughFinally(g: Gate, s: string | null, n: int32): int32 {
+	try {
+		try {
+			g.open(n);
+		} finally {
+			g.closes += 1;
+		}
+	} catch (error) {
+		if (s !== null) { return s.length; }
+	}
+	return 0;
+}
+
+test "a method call raising past an inner finally reaches the outer catch" {
+	const g = new Gate();
+	assert openThroughFinally(g, "abcd", 1) == 0;
+	assert openThroughFinally(g, "abcd", 2) == 4;
+	assert g.closes == 2;
+}

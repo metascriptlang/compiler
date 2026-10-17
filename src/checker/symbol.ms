@@ -73,6 +73,10 @@ export function hasFlag(sym: Readonly<Symbol>, flag: SymbolFlag): boolean {
 	return sym.symFlags.has(flag);
 }
 
+export function enumMemberName(enumSym: Readonly<Symbol> | null, enumName: string, member: string): string {
+	return enumSym != null && hasFlag(enumSym, SymbolFlag.ImportC) ? member : `${enumName}_${member}`;
+}
+
 export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 	sym.symFlags = sym.symFlags.incl(flag);
 }

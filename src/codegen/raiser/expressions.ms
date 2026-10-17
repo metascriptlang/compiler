@@ -22,6 +22,7 @@ import { nonNullMemberOfNullable } from "../../checker/compat";
 import { typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
+import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
@@ -198,9 +199,7 @@ function convClassOf(t: Type | null): int32 {
 	};
 }
 
-// Signed int32 stays unwrapped: C-debug traps on its overflow and JS keeps the
-// double (docs/JS-NUMERIC.md §5), so there is no wrapped value to match.
-function emitWrapToWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
+function emitAtWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
 	if (t != null && peelDistinct(t).kind == TypeKind.Float32) {
 		emitInst(s, raiserABC(RaiserOpcode.Conv, reg, reg, RaiserConvClass.F32 as int32));
 		return;
@@ -209,8 +208,8 @@ function emitWrapToWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
 	if (bits == 0) return;
 	if (isUnsignedBand(t)) {
 		emitInst(s, raiserABC(RaiserOpcode.NarrowU, reg, bits, 0));
-	} else if (bits < 32) {
-		emitInst(s, raiserABC(RaiserOpcode.SignExtend, reg, bits, 0));
+	} else {
+		emitInst(s, raiserABC(RaiserOpcode.NarrowS, reg, bits, 0));
 	}
 }
 
@@ -254,7 +253,7 @@ function bitwiseOpcode(op: string): RaiserOpcode {
 
 function isCompoundAssignOp(op: string): boolean {
 	return match (op) {
-		"+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
 		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
@@ -319,24 +318,34 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 		emitBitwise(s, base, dest, lhs, rhs, target.nodeType);
 		return;
 	}
+	if (base == "**") {
+		emitHostPair(s, "pow", dest, lhs, rhs);
+		const cls = convClassOf(target.nodeType);
+		if (cls >= 0 && cls != (RaiserConvClass.F64 as int32)) emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, cls, RaiserConvClass.F64 as int32), 0));
+		return;
+	}
 	if (!isFloatExpr(target)) {
 		emitInst(s, raiserABC(unsignedOpcode(compoundBaseOpcode(op), target.nodeType), dest, lhs, rhs));
-		emitWrapToWidth(s, dest, target.nodeType);
+		emitAtWidth(s, dest, target.nodeType);
 		return;
 	}
 	if (base != "%") {
 		emitInst(s, raiserABC(arithmeticOpcodeF64(base), dest, lhs, rhs));
-		emitWrapToWidth(s, dest, target.nodeType);
+		emitAtWidth(s, dest, target.nodeType);
 		return;
 	}
+	emitHostPair(s, "fmod", dest, lhs, rhs);
+	emitAtWidth(s, dest, target.nodeType);
+}
+
+function emitHostPair(s: RaiserCompState, name: string, dest: int32, lhs: int32, rhs: int32): void {
 	const out = allocReg(s);
 	const a1 = allocReg(s);
 	const a2 = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.Move, a1, lhs, 0));
 	emitInst(s, raiserABC(RaiserOpcode.Move, a2, rhs, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserString("fmod")), 2));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserString(name)), 2));
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest, out, 0));
-	emitWrapToWidth(s, dest, target.nodeType);
 }
 
 function unsignedOpcode(opc: RaiserOpcode, t: Type | null): RaiserOpcode {
@@ -389,6 +398,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 // Returns the register holding the result.
 
 export function compileExpr(s: RaiserCompState, node: Node): int32 {
+	if (carriesBigInt(node.nodeType)) return refuseBigInt(s, node);
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
@@ -756,6 +766,11 @@ function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, tar
 	return emitTrapNil(s, msg);
 }
 
+function refuseBigInt(s: RaiserCompState, node: Node): int32 {
+	queueRaiserCompileError(RAISER_NO_BIGINT_MSG, node.location.line, node.location.column);
+	return emitTrapNil(s, RAISER_NO_BIGINT_MSG);
+}
+
 function refusePointerOp(s: RaiserCompState, node: Node): int32 {
 	const refusal = pointerOpRefusal(node);
 	if (refusal == "") return -1;
@@ -764,7 +779,7 @@ function refusePointerOp(s: RaiserCompState, node: Node): int32 {
 	return emitTrapNil(s, msg);
 }
 
-function classTargetKey(t: Type | null): string {
+export function classTargetKey(t: Type | null): string {
 	let bare = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
 	if (bare != null && bare.kind == TypeKind.Ref && bare.typeReturn != null) bare = bare.typeReturn;
 	if (bare != null && bare.kind == TypeKind.GenericInstance) return monoInstanceName(bare);
@@ -998,7 +1013,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		} else {
 			emitInst(s, raiserABC(unsignedOpcode(arithmeticOpcode(op), node.nodeType), dest, lReg, rReg));
 		}
-		emitWrapToWidth(s, dest, node.nodeType);
+		emitAtWidth(s, dest, node.nodeType);
 		return dest;
 	}
 
@@ -1010,11 +1025,9 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 // --- Unary ---
 
 function emitLogicalNot(s: RaiserCompState, dest: int32, srcReg: int32): void {
-	const zeroReg = allocReg(s);
-	emitLoadConst(s, zeroReg, raiserInt(0));
-	emitLoadConst(s, dest, raiserBool(true));
-	emitInst(s, raiserABC(RaiserOpcode.BeqI64, srcReg, zeroReg, 1));
 	emitLoadConst(s, dest, raiserBool(false));
+	emitInst(s, raiserABC(RaiserOpcode.BTruthy, srcReg, 0, 1));
+	emitLoadConst(s, dest, raiserBool(true));
 }
 
 function typeofVariants(t: Type | null): Type[] {
@@ -1092,7 +1105,7 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 			emitInst(s, raiserABC(RaiserOpcode.NegF64, dest, srcReg, 0));
 		} else {
 			emitInst(s, raiserABC(RaiserOpcode.NegI64, dest, srcReg, 0));
-			emitWrapToWidth(s, dest, node.nodeType);
+			emitAtWidth(s, dest, node.nodeType);
 		}
 	} else if (d.unaryOp == "~") {
 		emitInst(s, raiserABC(RaiserOpcode.BitNot, dest, srcReg, 0));
@@ -1341,18 +1354,25 @@ function namespaceMemberIdent(node: Node): Node | null {
 	if (node.kind != NodeKind.MemberExpr || node.resolvedSym == null) return null;
 	const d = node.data as MemberExprData;
 	const ns = d.object.resolvedSym;
-	if (ns == null || ns.symbolKind != SymbolKind.Module) return null;
-	const ident = createNodeAt(NodeKind.Identifier, { name: `${ns.name}.${d.property}` }, node.location);
+	const nsIdent = ns != null && ns.symbolKind == SymbolKind.Module;
+	if (!nsIdent && (d.object.nodeType == null || d.object.nodeType.kind != TypeKind.Module)) return null;
+	const ident = createNodeAt(NodeKind.Identifier, { name: `${nsIdent ? ns.name : "$ns"}.${d.property}` }, node.location);
 	ident.resolvedSym = node.resolvedSym;
 	ident.nodeType = node.nodeType;
 	ident.flags = node.flags;
 	return ident;
 }
 
+function compileNamespaceObject(s: RaiserCompState, member: Node): void {
+	const object = (member.data as MemberExprData).object;
+	if (object.kind != NodeKind.Identifier) compileExpr(s, object);
+}
+
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const nsCallee = namespaceMemberIdent(d.callee);
 	if (nsCallee != null) {
+		compileNamespaceObject(s, d.callee);
 		const written = d.callee;
 		d.callee = nsCallee;
 		const result = compileCallExpr(s, node);
@@ -1416,6 +1436,36 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const dest = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
+	}
+	if (builtinKind == "ModuleImport" && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
+		const dest = allocReg(s);
+		const name = addConst(s, raiserString((d.arguments[0].data as StringLiteralData).value));
+		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
+		return dest;
+	}
+	if (asyncKind == "PromisePending") {
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
+		return dest;
+	}
+	if (asyncKind == "PromiseReject" && d.arguments.length == 1) {
+		const errorReg = compileExpr(s, d.arguments[0]);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
+		emitInst(s, raiserABC(RaiserOpcode.FutureFail, dest, errorReg, 0));
+		return dest;
+	}
+	if ((asyncKind == "PromiseSettle" || asyncKind == "PromiseFail") && d.arguments.length >= 1) {
+		const futReg = compileExpr(s, d.arguments[0]);
+		let valueReg = 0;
+		if (d.arguments.length > 1 && (d.arguments[1].nodeType == null || d.arguments[1].nodeType!.kind != TypeKind.Void)) {
+			valueReg = compileExpr(s, d.arguments[1]);
+		} else {
+			valueReg = allocReg(s);
+			emitLoadConst(s, valueReg, raiserNil());
+		}
+		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, 0));
+		return futReg;
 	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
@@ -1541,6 +1591,7 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 		const parent = body != null && body.sym != null ? body.sym : superSym;
 		initName = parent.name + "_init";
 		funcIdx = resolveClassInit(s, parent);
+		if (funcIdx < 0 && callRaiserOnDemand(parent) >= 0) funcIdx = resolveClassInit(s, parent);
 	}
 	const thisReg = s.receiverReg;
 	if (funcIdx < 0 || thisReg < 0) {
@@ -1585,7 +1636,6 @@ function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: strin
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const argCount = d.arguments.length;
 
 	// Compile callee expression → register holding the closure pair object
 	const closureReg = compileExpr(s, d.callee);
@@ -1601,9 +1651,14 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 
 	// Precompile all args into temp registers
 	const argRegs: number[] = [];
-	for (let i = 0; i < argCount; i = i + 1) {
+	for (let i = 0; i < d.arguments.length; i = i + 1) {
+		if (d.arguments[i].nodeType != null && d.arguments[i].nodeType!.kind == TypeKind.Void) {
+			if (d.arguments[i].kind != NodeKind.Identifier) compileExpr(s, d.arguments[i]);
+			continue;
+		}
 		argRegs.push(compileExpr(s, d.arguments[i]));
 	}
+	const argCount = argRegs.length;
 
 	// Allocate dest + (argCount+1) slots (worst case: env + args)
 	const totalArgs = argCount + 1;
@@ -1665,6 +1720,7 @@ function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: str
 	const oneReg = allocReg(s);
 	emitLoadConst(s, oneReg, isFloatExpr(target) ? raiserFloat(1.0) : raiserInt(1));
 	emitCompoundArith(s, updateOp == "++" ? "+=" : "-=", dest, fromReg, oneReg, target);
+	if (target.nodeType != null && peelDistinct(target.nodeType).kind == TypeKind.Char) emitInst(s, raiserABC(RaiserOpcode.NarrowS, dest, 8, 1));
 }
 
 function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, target: Node): int32 {
@@ -1903,7 +1959,10 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as MemberExprData;
 	const nsMember = namespaceMemberIdent(node);
-	if (nsMember != null) return compileExpr(s, nsMember);
+	if (nsMember != null) {
+		compileNamespaceObject(s, node);
+		return compileExpr(s, nsMember);
+	}
 
 	const sym = node.resolvedSym;
 	if (sym != null && sym.symFlags.has(SymbolFlag.Static) && !sym.symFlags.has(SymbolFlag.Mutable)

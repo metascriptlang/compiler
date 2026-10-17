@@ -32,15 +32,15 @@
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
 import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmtData, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData, NodeFlag, Type, ArrayLiteralData, ObjectLiteralData, ExportDeclData, MoveExprData, TypeAssertionData } from "../../ast/node";
-import { TransformContext, freshTempSym, freshOwnedSym, createTransformContextWithChecker } from "../context";
+import { TransformContext, freshTempSym, freshOwnedSym, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
-import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
+import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType } from "../../checker/types";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
@@ -50,6 +50,9 @@ import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } f
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs } from "./operandOrder";
+import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
+import { truthinessTest } from "../coercion/stringTruthiness";
+import { tdzBindingOf } from "./moduleTdz";
 
 // ===== Hoist (top-down) =====
 
@@ -70,6 +73,11 @@ function branchValueStmt(target: Node, branch: Node, loc: SourceLocation): Node 
 // is conditionally evaluated → never descended (LHS is).
 function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	if (expr == null) return expr;
+	if (expr.kind == NodeKind.Identifier) {
+		const flag = tdzFlagOf(expr);
+		if (flag != null) pushTdzGuard(expr, flag, hoisted, ctx);
+		return expr;
+	}
 	if (expr.kind == NodeKind.BinaryExpr) {
 		const bd = expr.data as BinaryExprData;
 		if (bd.operator == "&&" || bd.operator == "||") {
@@ -306,7 +314,7 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 			let w = ends[i];
 			while (w < hoisted.length) {
 				collectWrites(hoisted[w], writes);
-				calls = calls || holdsCall(hoisted[w]);
+				calls = calls || (!tdzGuards.has(hoisted[w]) && holdsCall(hoisted[w]));
 				w += 1;
 			}
 			const pre: Node[] = [];
@@ -423,7 +431,7 @@ function readsAnyOf(n: Node, writes: Symbol[]): boolean {
 
 // a && rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = rhs; } else { $scres = $sclhs; }
 // a || rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = $sclhs; } else { $scres = rhs; }
-function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+export function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	const bd = expr.data as BinaryExprData;
 	const loc = expr.location;
 	const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
@@ -439,13 +447,33 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
 	hoisted.push(resDecl);
 
-	const rhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), bd.right, loc), loc);
-	const lhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), makeIdentResolved(lhsSym, loc), loc), loc);
+	const lhsType = bd.left.nodeType;
+	const rhsAssign: Node[] = lhsType == null || shortCircuitRightRuns(bd.operator, lhsType)
+		? [branchValueStmt(makeIdentResolved(resSym, loc), fitShortCircuitArm(bd.right, expr.nodeType, ctx), loc)] : [];
+	const share = lhsType != null ? shortCircuitLeftShare(bd.operator, lhsType) : null;
+	const lhsAssign: Node[] = lhsType == null || share != null
+		? [makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), shortCircuitShareArm(makeIdentResolved(lhsSym, loc), share, expr.nodeType, ctx), loc), loc)] : [];
 	const isAnd = bd.operator == "&&";
-	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
-	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
-	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
+	const thenBlk = makeBlock(isAnd ? rhsAssign : lhsAssign, loc);
+	const elseBlk = makeBlock(isAnd ? lhsAssign : rhsAssign, loc);
+	hoisted.push(makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), thenBlk, elseBlk, loc));
 	return makeIdentResolved(resSym, loc);
+}
+
+export function shortCircuitShareArm(lhsRead: Node, share: Type | null, resultType: Type | null, ctx: TransformContext): Node {
+	const held = lhsRead.nodeType;
+	let read = lhsRead;
+	if (share != null && share.kind == TypeKind.Null) read = makeNull(lhsRead.location);
+	else if (share != null && held != null && isMaybeType(held) && !isMaybeType(share)) read = makeMember(lhsRead, "value", lhsRead.location);
+	if (share != null) read.nodeType = share;
+	return fitShortCircuitArm(read, resultType, ctx);
+}
+
+export function fitShortCircuitArm(arm: Node, resultType: Type | null, ctx: TransformContext): Node {
+	const t = arm.nodeType;
+	if (t == null || resultType == null || ctx.checkerCtx == null || isBoolType(resultType)) return arm;
+	const slot = isMaybeType(resultType) && !isMaybeType(t) && t.kind != TypeKind.Null ? unwrapMaybeType(resultType) : resultType;
+	return fitJoinedBranch(ctx.checkerCtx, arm, slot);
 }
 
 // JS evaluates in place and skips the hoist, except where a width step must
@@ -655,7 +683,7 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 
 function isAssignOperator(op: string): boolean {
 	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
 		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
@@ -668,9 +696,10 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as ExprStmtData;
 	const bd = d.expr.data as BinaryExprData;
 	const pre: Node[] = [];
-	bd.left = hoistTargetCalls(bd.left, pre, ctx);
+	const guardedWrite = bd.operator == "=" && tdzFlagOf(bd.left) != null;
+	if (!guardedWrite) bd.left = hoistTargetCalls(bd.left, pre, ctx);
 	const rhsPre: Node[] = [];
-	bd.right = hoistNestedRaisingCalls(bd.right, rhsPre, ctx);
+	bd.right = bd.operator == "=" || ctx.jsBackend ? hoistNestedRaisingCalls(bd.right, rhsPre, ctx) : hoistRaisingCalls(bd.right, rhsPre, ctx);
 	if (rhsPre.length > 0) {
 		const writes: Symbol[] = [];
 		for (const s of rhsPre) { collectWrites(s, writes); }
@@ -678,6 +707,7 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 		bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
 		for (const s of rhsPre) { pre.push(s); }
 	}
+	if (guardedWrite) guardWrite(bd, pre, ctx);
 	if (pre.length == 0) return [stmt];
 	pre.push(stmt);
 	return pre;
@@ -761,6 +791,7 @@ function expandSwitchDisc(stmt: Node, ctx: TransformContext): Node[] {
 
 function condLowersToStatements(n: Node): boolean {
 	if (n == null || isFunctionNode(n)) return false;
+	if (tdzFlagOf(n) != null) return true;
 	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.UpdateExpr || callCanRaise(n)
 		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return true;
 	if (n.kind == NodeKind.BinaryExpr) {
@@ -792,8 +823,39 @@ function bodyHasLoopContinue(node: Node): boolean {
 
 let functionDepth = 0;
 
+let tdzFlags = new HashMap<Symbol, Symbol>();
+let tdzGuards = new HashSet<Node>();
+
+function tdzFlagOf(n: Node): Symbol | null {
+	if (functionDepth == 0 || n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
+	return tdzFlags.get(tdzBindingOf(n.resolvedSym));
+}
+
+function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: TransformContext): void {
+	const loc = binding.location;
+	const fail = compilerFuncSym("msModuleBindingUninitialized");
+	if (fail == null) {
+		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", loc);
+		return;
+	}
+	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(tdzBindingOf(binding.resolvedSym!).name, loc)], fail, loc);
+	const guard = makeIf(makeUnary("!", makeIdentResolved(flag, loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
+	tdzGuards.add(guard);
+	hoisted.push(guard);
+}
+
+// A write to a module binding throws after its value is evaluated (ECMAScript PutValue).
+function guardWrite(bd: BinaryExprData, hoisted: Node[], ctx: TransformContext): void {
+	const flag = tdzFlagOf(bd.left);
+	if (flag == null) return;
+	if (hasEffect(bd.right)) bd.right = bindToStatement(bd.right, "tdz", hoisted, ctx);
+	pushTdzGuard(bd.left, flag, hoisted, ctx);
+}
+
 export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node {
 	functionDepth = 0;
+	tdzFlags = ctx.tdzFlags;
+	tdzGuards = new HashSet<Node>();
 	walkExpandBlocksHooked(
 		program,
 		expandConditionalStmt,

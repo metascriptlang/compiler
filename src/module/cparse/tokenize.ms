@@ -211,7 +211,7 @@ function readEscapedChar(s: ScanState): int32 {
 		let c: int32 = 0;
 		let h = fromHex(peek(s));
 		while (h >= 0) {
-			c = (c << 4) + h as int32;
+			c = (c << 4) + (h as int32);
 			advance(s);
 			h = fromHex(peek(s));
 		}

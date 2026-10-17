@@ -31,6 +31,7 @@ export class ParserState {
 	noArrowReturnType: int32;
 	trailingDecls: Node[];
 	splits: TokenSplit[];
+	sawImportCall: boolean;
 }
 
 export interface TokenSplit {
@@ -39,7 +40,7 @@ export interface TokenSplit {
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [] };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
 }
 
 export interface ParserMark {
@@ -263,6 +264,20 @@ export function consumeSemicolon(state: ParserState): void {
 	}
 }
 
+export function expectCloser(state: ParserState, open: Token, close: TokenKind): void {
+	if (current(state).kind == close) {
+		advance(state);
+		return;
+	}
+	const closeText = match (close) {
+		TokenKind.RParen => ")",
+		TokenKind.RBracket => "]",
+		TokenKind.RBrace => "}",
+		_ => `${close}`,
+	};
+	addError(state, `Expected '${closeText}' to close the '${open.value}' opened at line ${open.line}, column ${open.column}`);
+}
+
 // Skip balanced delimiter pairs: parens, braces, brackets.
 // Consumes the opening token and everything through the matching close.
 // Caller must ensure current token is `open` before calling.
@@ -282,14 +297,21 @@ export function skipBalanced(state: ParserState, open: TokenKind, close: TokenKi
 // Handles >> and >>> for nested generics like Result<Array<number>>
 export function skipGenericParams(state: ParserState): void {
 	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) { return; }
+	const open = current(state);
 	advance(state);
 	let depth = 1;
-	while (!isAtEnd(state) && depth > 0) {
+	let nest = 0;
+	while (depth > 0) {
 		splitAngleAssign(state);
-		if (current(state).kind == TokenKind.Lt) { depth += 1; }
-		if (current(state).kind == TokenKind.Gt) { depth -= 1; }
-		if (current(state).kind == TokenKind.GtGt) { depth -= 2; }
-		if (current(state).kind == TokenKind.GtGtGt) { depth -= 3; }
+		const k = current(state).kind;
+		if (isAtEnd(state) || (nest == 0 && (k == TokenKind.Semicolon || k == TokenKind.RParen || k == TokenKind.RBracket || k == TokenKind.RBrace))) {
+			addError(state, `Expected '>' to close the type arguments opened at line ${open.line}, column ${open.column}`);
+			return;
+		}
+		if (k == TokenKind.LParen || k == TokenKind.LBracket || k == TokenKind.LBrace) nest += 1;
+		if (k == TokenKind.RParen || k == TokenKind.RBracket || k == TokenKind.RBrace) nest -= 1;
+		if (k == TokenKind.Lt) { depth += 1; }
+		depth -= angleCloserWidth(k);
 		advance(state);
 	}
 }

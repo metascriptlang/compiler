@@ -11,7 +11,7 @@ import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
 
@@ -102,7 +102,7 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
-		emit(gen, `var ${safeJsName(d.enumName)}_${d.enumMembers[i]} = ${val};\n`);
+		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${val};\n`);
 	}
 }
 
@@ -149,7 +149,7 @@ export function classEmitsNoJs(node: Node): boolean {
 	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
 }
 
-function emitClassDeclInner(gen: JSGenerator, node: Node): void {
+function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = false): void {
 	const d = node.data as ClassDeclData;
 	if (classEmitsNoJs(node)) return;
 	if (!classEmitsShell(node)) {
@@ -159,8 +159,9 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	const generic = isGenericClass(node);
-	emit(gen, "class ");
-	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
+	const name = jsSymbolName(gen, node.resolvedSym, d.className);
+	emit(gen, assigned ? `${name} = class ` : "class ");
+	emit(gen, name);
 	if (d.classExtends != "") {
 		emit(gen, " extends ");
 		emit(gen, jsBaseClassName(gen, node, d.classExtends));
@@ -227,10 +228,34 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
-	emit(gen, "}\n");
+	emit(gen, assigned ? "};\n" : "}\n");
+	if (assigned) return;
 	for (const member of staticMethods) {
 		emitStaticMethodFn(gen, d.className, member);
 	}
+}
+
+export function classEvaluatesStatics(node: Node): boolean {
+	if (node.kind != NodeKind.ClassDecl || classEmitsNoJs(node) || !classEmitsShell(node)) return false;
+	for (const member of (node.data as ClassDeclData).classBody) {
+		if (member.kind == NodeKind.BlockStmt) return true;
+		if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic && (member.data as PropertyDeclData).propInitializer != null) return true;
+	}
+	return false;
+}
+
+export function emitDeferredClassBinding(gen: JSGenerator, node: Node): void {
+	const d = node.data as ClassDeclData;
+	emitIndent(gen);
+	emit(gen, `let ${jsSymbolName(gen, node.resolvedSym, d.className)};\n`);
+	for (const member of d.classBody) {
+		if (member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic) emitStaticMethodFn(gen, d.className, member);
+	}
+}
+
+export function emitDeferredClassValue(gen: JSGenerator, node: Node): void {
+	emitIndent(gen);
+	emitClassDeclInner(gen, node, true);
 }
 
 function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): void {
@@ -364,11 +389,10 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	if (gen.multiFile) {
 		const spec = lookupImportSpec(gen, d.importSource);
 		if (spec == "") return;
-		emitIndent(gen);
 		if (d.importNames.length == 1 && d.importNames[0] == "*") {
-			emit(gen, `import * as ${d.importAliases[0]} from "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `import * as ${d.importAliases[0]} from "${spec}";\n`;
 		} else {
-			emit(gen, `import "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `import "${spec}";\n`;
 		}
 		return;
 	}
@@ -410,6 +434,24 @@ function recordBundleExport(gen: JSGenerator, name: string, local: string): void
 	gen.bundleExportLocals.push(local);
 }
 
+function bundleDefaultLocal(gen: JSGenerator): string {
+	return mangleQualified("default", mangleModuleName(gen.sourceFile));
+}
+
+function emitBundleDefaultExport(gen: JSGenerator, exprStmt: Node, declaration: string): void {
+	const local = bundleDefaultLocal(gen);
+	emitIndent(gen);
+	emit(gen, `${declaration}${local} = `);
+	emitCopyOnRead(gen, (exprStmt.data as ExprStmtData).expr);
+	emit(gen, ";\n");
+	recordBundleExport(gen, "default", local);
+}
+
+export function emitDeferredDefaultExport(gen: JSGenerator, node: Node): void {
+	gen.staticSlots.push(`let ${bundleDefaultLocal(gen)};\n`);
+	emitBundleDefaultExport(gen, (node.data as ExportDeclData).exportedDecl, "");
+}
+
 export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ExportDeclData;
 	const inner = d.exportedDecl;
@@ -425,8 +467,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		if (gen.multiFile) {
 			const spec = lookupImportSpec(gen, imp.importSource);
 			if (spec == "") return;
-			emitIndent(gen);
-			emit(gen, `export * from "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `export * from "${spec}";\n`;
 			return;
 		}
 		if (imp.importNames.length == 1 && imp.importNames[0] == "*") {
@@ -452,12 +493,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const isDefault = node.flags.has(NodeFlag.ExportDefault);
 	if (gen.bundleMode) {
 		if (isDefault && inner.kind == NodeKind.ExprStmt) {
-			const local = mangleQualified("default", mangleModuleName(gen.sourceFile));
-			emitIndent(gen);
-			emit(gen, `const ${local} = `);
-			emitCopyOnRead(gen, (inner.data as ExprStmtData).expr);
-			emit(gen, ";\n");
-			recordBundleExport(gen, "default", local);
+			emitBundleDefaultExport(gen, inner, "const ");
 			return;
 		}
 		let declName = "";
@@ -502,7 +538,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		NodeKind.EnumDecl => {
 			if (gen.multiFile) {
 				const ed = inner.data as EnumDeclData;
-				for (const m of ed.enumMembers) { gen.exportedNames.push(`${safeJsName(ed.enumName)}_${m}`); }
+				for (const m of ed.enumMembers) { gen.exportedNames.push(enumMemberName(inner.resolvedSym, safeJsName(ed.enumName), m)); }
 			}
 			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
 		},

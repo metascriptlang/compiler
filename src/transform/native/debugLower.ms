@@ -4,10 +4,10 @@
 // Each arg is coerced to string here. Primitives use direct calls; a value type or class
 // arrives already converted by the checker's std dump call.
 
-import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol } from "../../ast/node";
-import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike } from "../../checker/types";
-import { TransformContext } from "../context";
-import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef } from "../util";
+import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, isNullableBigInt, createFunction } from "../../checker/types";
+import { TransformContext, mintSym } from "../context";
+import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn } from "../util";
 import { charToString } from "./stringOpLower";
 
 function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
@@ -32,6 +32,11 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	// Interpolation and concat drop the suffix; that split is TS behaviour, not ours.
 	if (t.kind == TypeKind.BigInt && !ctx.jsBackend) {
 		const call = makeCall(runtimeRef("msBigIntToDebugString", loc), [arg], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	if (t.kind == TypeKind.BigInt || isNullableBigInt(t)) {
+		const call = makeCall(runtimeRef("msBigIntDebugText", loc), [arg], loc);
 		call.nodeType = stringType();
 		return call;
 	}
@@ -71,15 +76,35 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		call.nodeType = stringType();
 		return call;
 	}
-	// Fallback: emit type name as placeholder string (safe — no C compile error)
-	// Use explicit local to avoid DRC ternary+member-access issue
-	let fallbackName = "object";
-	if (t.typeName != null && t.typeName != "") {
-		fallbackName = t.typeName;
+	return evaluatedPlaceholder(arg, t, "<" + (t.typeName != "" ? t.typeName : "object") + ">", loc, ctx);
+}
+
+let _placeholderFnDecls: Node[] = [];
+
+export function takePlaceholderFns(): Node[] {
+	const out = _placeholderFnDecls;
+	_placeholderFnDecls = [];
+	return out;
+}
+
+export function evaluatedPlaceholder(arg: Node, t: Type, text: string, loc: SourceLocation, ctx: TransformContext): Node {
+	if (t.kind == TypeKind.Void || t.kind == TypeKind.Never) {
+		const unevaluated = makeString(text, loc);
+		unevaluated.nodeType = stringType();
+		return unevaluated;
 	}
-	const placeholder = makeString("<" + fallbackName + ">", loc);
+	const sym = mintSym(ctx, SymbolKind.Function, "$placeholder" + _placeholderFnDecls.length.toString(), null);
+	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", t);
+	const placeholder = makeString(text, loc);
 	placeholder.nodeType = stringType();
-	return placeholder;
+	const fnNode = makeFnDecl(sym.name, [valueSym], ["unknown"], makeBlock([makeReturn(placeholder, loc)], loc), "", "string", loc);
+	fnNode.nodeType = createFunction([t], ["x"], stringType());
+	sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_placeholderFnDecls.push(fnNode);
+	const call = makeCall(makeTypedIdentResolved(sym, fnNode.nodeType, loc), [arg], loc);
+	call.nodeType = stringType();
+	return call;
 }
 
 

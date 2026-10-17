@@ -1,4 +1,4 @@
-import { strictErrorCount } from "./helpers";
+import { checkSource, strictErrorCount } from "./helpers";
 import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
 import { GcMode } from "../../checker/context";
 import { hostTargetInfo } from "../../checker/types";
@@ -112,4 +112,36 @@ test "flow invalidation: strict policies reach dependencies and do not leak into
 	assert strictWarnings(nullable, false) == relaxedNil;
 	const prelude = getPreludeContext();
 	assert prelude != null && !prelude.strictNullChecks;
+}
+
+function lacksEndingReturn(source: string): boolean {
+	const ctx = checkSource(source);
+	if (ctx == null) return false;
+	for (const error of ctx.errors) if (error.message.contains("lacks an ending return")) return true;
+	return false;
+}
+
+test "flowInvalidation: a catch is reached from the start of its try and from every mutation in it" {
+	const work = "function work(n: int32): int32 {\n\tif (n > 0) { throw new Error(\"boom\"); }\n\treturn 1;\n}\n";
+	const memo = "function log(): void {}\nfunction f(x: string | int32, n: int32, c: boolean): int32 {\n\tif (typeof x === \"number\") { return 0; }\n\ttry {\n\t\ttry { x = 5; work(n); x = \"a\"; } finally { if (c) { log(); } }\n\t} catch (e) {\n\t\tif (typeof x === \"number\") { return 1; }\n\t}\n\treturn x.length;\n}\n";
+	const conn = "class Conn {\n\topen(n: int32): void { if (n > 0) { throw new Error(\"down\"); } }\n}\n";
+	const accepted = [
+		{ name: "narrowing inside a catch reached only by a call's raise", source: work + "function f(s: string | null, n: int32): int32 {\n\ttry { work(n); } catch (e) {\n\t\tif (s !== null) { return s.length; }\n\t}\n\treturn 0;\n}\n" },
+		{ name: "narrowing inside a loop in such a catch", source: work + "function f(xs: (string | null)[], n: int32): int32 {\n\tlet total: int32 = 0;\n\ttry { work(n); } catch (e) {\n\t\tfor (const x of xs) { if (x !== null) { total += x.length; } }\n\t}\n\treturn total;\n}\n" },
+		{ name: "narrowing inside a nested try reached by a method call", source: conn + "function f(c: Conn, s: string | null, n: int32): int32 {\n\ttry {\n\t\ttry { c.open(n); } finally { console.log(\"closed\"); }\n\t} catch (e) {\n\t\tif (s !== null) { return s.length; }\n\t}\n\treturn 0;\n}\n" },
+		{ name: "a narrowing on every normal exit of a try still holds after its finally", source: "function log(): void {}\nfunction f(s: string | null): int32 {\n\ttry { if (s === null) { return 0; } } finally { log(); }\n\treturn s.length;\n}\n" },
+		{ name: "narrowing inside a catch reached through an inner try with an empty finally", source: work + "function f(s: string | null, n: int32): int32 {\n\ttry {\n\t\ttry { work(n); } finally { }\n\t} catch (e) {\n\t\tif (s !== null) { return s.length; }\n\t}\n\treturn 0;\n}\n" },
+		{ name: "a finally walked from a normal exit and from an exception keeps each path's type", source: work + memo },
+	];
+	for (const item of accepted) assert strictErrorCount(item.source) == 0, item.name;
+	assert strictErrorCount(work + "function f(s: string | null, n: int32): int32 {\n\ttry { work(n); if (s === null) { process.exit(1); } } finally { console.log(s.length); }\n\treturn 0;\n}\n") > 0, "a finally sees the state an exception left";
+	assert strictErrorCount(work + memo.replace("if (typeof x === \"number\") { return 1; }", "log();")) > 0, "a catch reached after an assignment in the inner try keeps that assignment's type";
+	const fallsOff = [
+		{ name: "a catch that falls off the end", source: work + "function f(n: int32): int32 {\n\ttry { return work(n); } catch (e) { console.log(\"caught\"); }\n}\n" },
+		{ name: "a catch whose loop falls off the end", source: work + "function f(n: int32, xs: string[]): int32 {\n\ttry { return work(n); } catch (e) {\n\t\tfor (const x of xs) { console.log(x); }\n\t}\n}\n" },
+		{ name: "a return in a try whose empty finally sits inside a catching try", source: work + "function f(n: int32): int32 {\n\ttry {\n\t\ttry { return work(n); } finally { }\n\t} catch (e) { console.log(\"caught\"); }\n}\n" },
+		{ name: "a nested try whose method call raises past an inner finally", source: conn + "function f(c: Conn, n: int32): int32 {\n\ttry {\n\t\ttry { c.open(n); return 1; } finally { console.log(\"closed\"); }\n\t} catch (e) { console.log(\"caught\"); }\n}\n" },
+	];
+	for (const item of fallsOff) assert lacksEndingReturn(item.source), item.name;
+	assert !lacksEndingReturn(work + "function f(n: int32): int32 {\n\ttry { return work(n); } catch (e) { return -1; }\n}\n"), "a catch that returns needs no ending return";
 }

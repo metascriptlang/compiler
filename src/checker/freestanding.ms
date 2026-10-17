@@ -19,7 +19,7 @@
 
 import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { makeSymbol } from "./symbol";
+import { makeSymbol, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { readonlyDataConstBinding } from "./constFold";
 
 // Single wording shared by both consumers — only the severity differs.
@@ -131,6 +131,7 @@ function moduleBindingOf(node: Node): Node | null {
 export function moduleBindingNeedsWritableStorage(node: Node): boolean {
 	const binding = moduleBindingOf(node);
 	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.declNode == null) return false;
+	if (!hasFlag(binding.resolvedSym, SymbolFlag.Global)) return false;
 	const d = binding.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const) return true;
 	if (d.initializer == null) return true;
@@ -258,6 +259,7 @@ function fsVariable(name: string, kind: DeclKind, initializer: Node): Node {
 	const sym = makeSymbol(name, SymbolKind.Variable, null, false);
 	sym.modulePath = "test.ms";
 	sym.declNode = node;
+	setFlag(sym, SymbolFlag.Global);
 	node.resolvedSym = sym;
 	return node;
 }
@@ -299,6 +301,12 @@ test "freestanding: scalar module const literals need no writable storage" {
 	const boolConst = fsVariable("enabled", DeclKind.Const,
 		createNodeAt(NodeKind.BooleanLiteral, { boolValue: true }, fsLoc()));
 	assert collectWritableModuleBindings(fsProgram([numberConst, boolConst])).length == 0;
+}
+
+test "freestanding: a binding a lowering declares at module scope needs no writable storage" {
+	const temp = fsVariable("__call_0", DeclKind.Const, fsCall());
+	temp.resolvedSym!.symFlags = temp.resolvedSym!.symFlags.excl(SymbolFlag.Global);
+	assert collectWritableModuleBindings(fsProgram([temp])).length == 0;
 }
 
 

@@ -22,7 +22,7 @@
 // codegen's emitNullLiteral, so construction needs no rewrite — only the reads above.
 
 import { Node, NodeKind, NodeFlag, MemberExprData, ObjectLiteralData, TypeAssertionData } from "../../ast/node";
-import { isMaybeType, peelTransparentInstance } from "../../checker/types";
+import { isMaybeType, peelTransparentInstance, isNullableBigInt } from "../../checker/types";
 import { nullAccessHead, unwrapRefusesNull } from "./nullableLower";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -48,9 +48,9 @@ function unwrapMaybeNode(node: Node): Node {
 	if (node.kind == NodeKind.TypeAssertion && node.nodeType != null && unwrapRefusesNull(node.nodeType)) {
 		const d = node.data as TypeAssertionData;
 		const carrier = d.asExpr != null && d.asExpr.nodeType != null ? peelTransparentInstance(d.asExpr.nodeType) : null;
-		if (carrier != null && isMaybeType(carrier)) {
+		if (carrier != null && (isMaybeType(carrier) || isNullableBigInt(carrier))) {
 			const call = makeCall(runtimeRef("msMaybeGet", loc), [d.asExpr, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
-			call.nodeType = carrier.typeReturn;
+			call.nodeType = isMaybeType(carrier) ? carrier.typeReturn : node.nodeType;
 			d.asExpr = call;
 			return node;
 		}

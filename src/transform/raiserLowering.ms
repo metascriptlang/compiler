@@ -3,6 +3,7 @@
 // Ordering matches the proven transformProgram pipeline (1000+ tests):
 //   lowerConstFold before lowerMatch (patterns resolved)
 
+import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
@@ -25,6 +26,7 @@ import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { planModuleTdz, guardModuleTdzRaiser } from "./lowering/moduleTdz";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
@@ -55,7 +57,8 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 }
 
 function lowerForRaiser(program: Node, ctx: TransformContext): Node {
-	let result = lowerPointerAddresses(program, ctx, false);
+	let result = planModuleTdz(program, ctx);
+	result = lowerPointerAddresses(result, ctx, false);
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
@@ -72,6 +75,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerForLoop(result, ctx);
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
+	result = lowerNamespaceValues(result);
 	// Result.ok/err are `static extern` (no body, no nativeName) — Raiser
 	// cannot dispatch via either funcMap or CallHost. Desugar to ObjectLiteral
 	// here, matching the JS-backend pattern (transform/index.ms:91). Without
@@ -87,6 +91,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);
+	result = guardModuleTdzRaiser(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);

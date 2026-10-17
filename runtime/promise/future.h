@@ -305,6 +305,12 @@ static inline bool msFutureFailed(void* fp) { return ((msFutureBase*)fp)->failed
 /* Check if future was cancelled */
 static inline bool msFutureCancelled(void* fp) { return ((msFutureBase*)fp)->cancelled; }
 
+/* The owner thread makes its dispatcher at the first callback registration, so a callback
+ * of a finished future is queued behind the code that registered it (Promise.resolve(1).then(f)
+ * runs f after the next statement) instead of running inline. A pool worker has no event loop
+ * and keeps running callbacks inline. Defined by each dispatcher variant. */
+void msEnsureOwnerDispatcher(void);
+
 /* Add callback — if already finished, defer via callSoon; else append to list.
  * The finished re-check under the list lock closes the add-vs-fire race: either
  * the append lands before a concurrent fire's grab (node is taken by that fire)
@@ -313,6 +319,7 @@ static inline bool msFutureCancelled(void* fp) { return ((msFutureBase*)fp)->can
  * the finished future — the lost wakeup behind the spawn-inside-actor hang. */
 static inline void msFutureAddCallback(void* fp, msClosure cb) {
 	msFutureBase* f = (msFutureBase*)fp;
+	if (msCallSoonProc == NULL) msEnsureOwnerDispatcher();
 	if (atomic_load_explicit(&f->finished, memory_order_acquire)) {
 		if (f->failed) {
 			atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
@@ -531,7 +538,7 @@ static inline void* msFutureRead(void* fp) {
 /* Owning futures (valueDrop set). The drop routine takes the slot without the
  * finished/failed checks: an unfinished or failed future holds an empty slot. */
 static inline bool msFutureOwnsValue(void* fp) {
-	return ((msFutureBase*)fp)->valueDrop != NULL;
+	return ((msFutureBase*)fp)->valueDrop != NULL && !((msFutureBase*)fp)->failed;
 }
 static inline void msFutureSetValueDrop(void* fp, msClosure drop) {
 	((msFutureBase*)fp)->valueDrop = (void (*)(void*))drop.fn;

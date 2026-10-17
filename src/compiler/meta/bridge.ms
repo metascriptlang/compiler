@@ -62,7 +62,8 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
+import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
+import { isUnsignedIntegerType } from "../../checker/compat";
 import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner, isFrameValue } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { collectDeclaredNames } from "../../checker/instantiate";
@@ -87,6 +88,32 @@ export function mkNumber(val: number, loc: SourceLocation): Node {
 
 function mkInt(val: int64, loc: SourceLocation): Node {
 	return createNode(NodeKind.NumberLiteral, { value: val as number, isFloat: false, intVal: val }, synthToken(loc));
+}
+
+function mkUnsigned(bits: int64, loc: SourceLocation): Node {
+	return createNode(NodeKind.NumberLiteral, { value: (bits as uint64) as number, isFloat: false, intVal: bits }, synthToken(loc));
+}
+
+function mkFloat(val: number, loc: SourceLocation): Node {
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: true, intVal: 0 }, synthToken(loc));
+}
+
+function materialType(t: Type | null): Type | null {
+	const bare = skipModifier(t);
+	if (bare == null) return null;
+	return peelToRepr(unwrapRefBase(isMaybeType(bare) ? unwrapMaybeType(bare) : bare));
+}
+
+function intValueToNode(bits: int64, t: Type | null, loc: SourceLocation): Node {
+	const slot = materialType(t);
+	if (slot == null) return mkInt(bits, loc);
+	if (isFloatType(slot) || slot.kind == TypeKind.Number) return mkFloat(bits as number, loc);
+	return isUnsignedIntegerType(slot) ? mkUnsigned(bits, loc) : mkInt(bits, loc);
+}
+
+function elementTypeOf(t: Type | null): Type | null {
+	const slot = materialType(t);
+	return slot != null && (slot.kind == TypeKind.Array || slot.kind == TypeKind.SizedArray) ? slot.typeReturn : null;
 }
 
 export function mkString(val: string, loc: SourceLocation): Node {
@@ -209,7 +236,7 @@ function collectFieldDecorators(t: Type): Node[][] {
 // a type without one (interface, anon struct) gets empty arrays.
 function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
-	return createNodeAt(NodeKind.TypeObject, {
+	const node = createNodeAt(NodeKind.TypeObject, {
 		typExprFieldNames: t.typeNames,
 		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited, impl),
 		typExprIndexKey: null as unknown as Node,
@@ -217,6 +244,11 @@ function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolea
 		typExprFieldDecorators: collectFieldDecorators(t),
 		typExprTypeName: t.typeName,
 	}, loc);
+	if (t.sym != null) {
+		node.resolvedSym = t.sym;
+		node.flags = node.flags.incl(NodeFlag.BoundSym);
+	}
+	return node;
 }
 
 // Build a TypeArray node for Array<T> / SizedArray<T,N> / Span<T>.
@@ -420,7 +452,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 		const placeholder = cyclePlaceholderName(t, impl);
 		if (placeholder != "" || !cycleBrokenByNamedType(visited, t, impl)) {
 			if (placeholder == "" && impl) throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
-			const result = atomicTypeNode(placeholder != "" ? placeholder : "<cycle>", loc);
+			const result = namedTypeNode(placeholder != "" ? placeholder : "<cycle>", placeholder != "" ? t.sym : null, loc);
 			result.nodeType = t;
 			return result;
 		}
@@ -680,6 +712,13 @@ export function boundTypeAt(index: int32): Type | null {
 	return _boundTypes[index];
 }
 
+export function boundSymOfObject(objHeap: RaiserObjectHeap, handle: int64): Symbol | null {
+	const sh = heapObjectGetField(objHeap, handle, "symHandle");
+	if (sh.kind == RaiserValueKind.Int) return boundSymAt(sh.intVal as int32);
+	if (sh.kind == RaiserValueKind.Float) return boundSymAt(sh.floatVal as int32);
+	return null;
+}
+
 export function boundTypeOfObject(objHeap: RaiserObjectHeap, handle: int64): Type | null {
 	const th = heapObjectGetField(objHeap, handle, "typeHandle");
 	if (th.kind == RaiserValueKind.Int) return boundTypeAt(th.intVal as int32);
@@ -757,9 +796,15 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === Literals ===
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
-			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(literalBits(d));
-			heapObjectSetField(objHeap, handle, "value", v);
-			if (!d.isFloat) heapObjectSetField(objHeap, handle, "intVal", v);
+			if (d.isFloat) {
+				heapObjectSetField(objHeap, handle, "value", raiserFloat(d.value));
+			} else {
+				const bits = literalBits(d);
+				const magnitudePast2p63 = bits < 0 && d.value > 0;
+				heapObjectSetField(objHeap, handle, "value", magnitudePast2p63 ? raiserFloat(d.value) : raiserInt(bits));
+				if (magnitudePast2p63) setBool(objHeap, handle, "isFloat", false);
+				heapObjectSetField(objHeap, handle, "intVal", raiserInt(bits));
+			}
 			setBool(objHeap, handle, "isBitPattern", d.isBitPattern);
 			setStr(objHeap, handle, "outOfRangeText", d.outOfRangeText);
 		},
@@ -1516,9 +1561,13 @@ function gensymNames(objHeap: RaiserObjectHeap, h: int64, names: string[]): stri
 }
 
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
+	return valueToTypedNode(val, null, objHeap, arrHeap, fallbackLoc);
+}
+
+export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
-		RaiserValueKind.Int => mkInt(val.intVal, fallbackLoc),
-		RaiserValueKind.Float => mkNumber(val.floatVal, fallbackLoc),
+		RaiserValueKind.Int => intValueToNode(val.intVal, t, fallbackLoc),
+		RaiserValueKind.Float => mkFloat(val.floatVal, fallbackLoc),
 		RaiserValueKind.Bool => mkBool(val.intVal != 0, fallbackLoc),
 		RaiserValueKind.String => mkString(val.strVal, fallbackLoc),
 		RaiserValueKind.Nil => mkNull(fallbackLoc),
@@ -1529,7 +1578,7 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 			let i = 0;
 			while (i < len) {
 				const elem = heapArrayGet(arrHeap, handle, i);
-				elements.push(valueToNode(elem, objHeap, arrHeap, fallbackLoc));
+				elements.push(valueToTypedNode(elem, elementTypeOf(t), objHeap, arrHeap, fallbackLoc));
 				i = i + 1;
 			}
 			return createNodeAt(NodeKind.ArrayLiteral, { elements }, fallbackLoc);
@@ -1571,19 +1620,20 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 				return out;
 			}
 			// No "kind" field — fall back to ObjectLiteral
-			return deserializeObjectLiteral(handle, objHeap, arrHeap, fallbackLoc);
+			return deserializeObjectLiteral(handle, t, objHeap, arrHeap, fallbackLoc);
 		},
 		_ => mkNull(fallbackLoc),
 	};
 }
 
-function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
+function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
 	const obj = objHeap.objects[handle];
+	const record = materialType(shape);
 	const keys: string[] = [];
 	const values: Node[] = [];
 	for (const field of obj.fields) {
 		keys.push(field.name);
-		values.push(valueToNode(field.value, objHeap, arrHeap, loc));
+		values.push(valueToTypedNode(field.value, record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, field.name) : null, objHeap, arrHeap, loc));
 	}
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
@@ -1623,6 +1673,23 @@ function contradictoryNumber(isFloat: boolean, raw: RaiserValue, exact: RaiserVa
 	return "";
 }
 
+export function wireLiteralIsFloat(objHeap: RaiserObjectHeap, h: int64): boolean {
+	const declared = heapObjectGetField(objHeap, h, "isFloat");
+	return declared.kind == RaiserValueKind.Nil ? heapObjectGetField(objHeap, h, "value").kind == RaiserValueKind.Float : readBool(objHeap, h, "isFloat");
+}
+
+export function wireLiteralIntegerRefusal(objHeap: RaiserObjectHeap, h: int64): string {
+	return contradictoryNumber(wireLiteralIsFloat(objHeap, h), heapObjectGetField(objHeap, h, "value"), heapObjectGetField(objHeap, h, "intVal"), readFloat(objHeap, h, "value"));
+}
+
+export function wireLiteralFloat(objHeap: RaiserObjectHeap, h: int64): number {
+	return readFloat(objHeap, h, "value");
+}
+
+export function wireLiteralInteger(objHeap: RaiserObjectHeap, h: int64): int64 {
+	return wireInteger(heapObjectGetField(objHeap, h, "value"), heapObjectGetField(objHeap, h, "intVal"), readFloat(objHeap, h, "value"));
+}
+
 function wireInteger(raw: RaiserValue, exact: RaiserValue, value: number): int64 {
 	if (exact.kind == RaiserValueKind.Int) return exact.intVal;
 	if (raw.kind == RaiserValueKind.Int) return raw.intVal;
@@ -1644,8 +1711,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.NumberLiteral => {
 			const raw = heapObjectGetField(objHeap, h, "value");
 			const value = readFloat(objHeap, h, "value");
-			const declared = heapObjectGetField(objHeap, h, "isFloat");
-			const isFloat = declared.kind == RaiserValueKind.Nil ? raw.kind == RaiserValueKind.Float : readBool(objHeap, h, "isFloat");
+			const isFloat = wireLiteralIsFloat(objHeap, h);
 			const exact = heapObjectGetField(objHeap, h, "intVal");
 			const contradiction = contradictoryNumber(isFloat, raw, exact, value);
 			if (contradiction != "") _wireRefusals.push({ message: contradiction, location: loc });
@@ -2370,6 +2436,18 @@ test "round-trip NumberLiteral keeps an integer past 2^53 exact" {
 	const d = back.data as NumberLiteralData;
 	assert !d.isFloat;
 	assert d.intVal == 9007199254740993;
+}
+
+test "round-trip NumberLiteral keeps an unsigned integer past 2^63 positive" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	for (const bits of [-9223372036854775807 - 1, -1] as int64[]) {
+		const orig = createNode(NodeKind.NumberLiteral, { value: (bits as uint64) as number, isFloat: false, intVal: bits }, synthToken(makeLoc(1, 0)));
+		const d = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, orig.location).data as NumberLiteralData;
+		assert !d.isFloat;
+		assert d.value > 0 && d.intVal == bits, `${d.value} ${d.intVal}`;
+	}
+	assert takeWireRefusals().length == 0;
 }
 
 test "round-trip NumberLiteral keeps an integral float a float" {
@@ -3659,6 +3737,31 @@ test "mapTypeToAst — Ref<Struct> wraps TypeObject inside TypeGeneric" {
 	const d = out.data as TypeGenericData;
 	assert (d.typExprBase.data as IdentifierData).name == "Ref";
 	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
+}
+
+test "mapTypeToAst — a class reaching itself through its own Ref gives getTypeImpl Ref<Holder> inside" {
+	const loc = makeLoc(1, 0);
+	const holder = makeStructType("Holder", ["next"], []);
+	const ref = makeModifierType(TypeKind.Ref, holder);
+	holder.typeChildren = [ref];
+	const out = mapTypeToAst(ref, loc, true);
+	const d = out.data as TypeGenericData;
+	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
+	const next = (d.typExprArgs[0].data as TypeObjectData).typExprFieldTypes[0];
+	assert next.kind == NodeKind.TypeGeneric;
+	const nextData = next.data as TypeGenericData;
+	assert (nextData.typExprBase.data as IdentifierData).name == "Ref";
+	assert (nextData.typExprArgs[0].data as IdentifierData).name == "Holder";
+}
+
+test "mapTypeToAst — an unnamed struct reaching itself through its Ref still stops getTypeImpl" {
+	const loc = makeLoc(1, 0);
+	const anon = makeStructType("", ["next"], []);
+	const ref = makeModifierType(TypeKind.Ref, anon);
+	anon.typeChildren = [ref];
+	let threw = false;
+	try { mapTypeToAst(ref, loc, true); } catch (e) { threw = true; }
+	assert threw;
 }
 
 test "mapTypeToAst — modifier with null inner falls through to <null> sentinel" {

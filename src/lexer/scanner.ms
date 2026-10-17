@@ -487,7 +487,8 @@ export function scanOperator(s: LexerState): boolean {
 			return true;
 		},
 		"*".code => {
-			if (next == "*".code) { skip(s, 2); addToken(s, TokenKind.StarStar, "**", startLine, startCol); }
+			if (next == "*".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.StarStarEq, "**=", startLine, startCol); }
+			else if (next == "*".code) { skip(s, 2); addToken(s, TokenKind.StarStar, "**", startLine, startCol); }
 			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.StarEq, "*=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Star, "*", startLine, startCol); }
 			return true;

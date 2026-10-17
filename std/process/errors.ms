@@ -26,7 +26,7 @@ export enum ProcessErrorKind {
 export interface ProcessError {
 	kind: ProcessErrorKind;
 	command: string;       // command that was attempted
-	exitCode: int32;       // 0 if N/A (SpawnFailed, SignalTerminated)
+	exitCode: int32;       // 127 not found, 126 found but cannot start (shell convention), 0 if N/A
 	signal: number;        // 0 if not signal-terminated
 	output: string;        // "" if pipe failed before any data captured
 	errorOutput: string;   // "" if pipe failed before any data captured
@@ -63,11 +63,37 @@ export function notFound(command: string): ProcessError {
 	return {
 		kind: ProcessErrorKind.NotFound,
 		command,
-		exitCode: 0,
+		exitCode: 127,
 		signal: 0,
 		output: "",
 		errorOutput: "",
 		message: `command not found: ${command}`,
+	};
+}
+
+export function startFailed(command: string, code: string): ProcessError {
+	const missing = code == "ENOENT";
+	return {
+		kind: missing ? ProcessErrorKind.NotFound : ProcessErrorKind.SpawnFailed,
+		command,
+		exitCode: missing ? 127 : 126,
+		signal: 0,
+		output: "",
+		errorOutput: "",
+		message: `spawnSync ${command} ${code}`,
+	};
+}
+
+export function errnoName(errnum: int32): string {
+	return match (errnum) {
+		1 => "EPERM",
+		2 => "ENOENT",
+		7 => "E2BIG",
+		8 => "ENOEXEC",
+		12 => "ENOMEM",
+		13 => "EACCES",
+		20 => "ENOTDIR",
+		_ => `UNKNOWN (errno ${errnum})`,
 	};
 }
 
@@ -159,6 +185,16 @@ test "pipeError has empty captures" {
 	assert e.kind == ProcessErrorKind.PipeError;
 	assert e.output == "";
 	assert e.errorOutput == "";
+}
+
+test "startFailed names the program and the start error" {
+	const missing = startFailed("taskset", errnoName(2));
+	assert missing.kind == ProcessErrorKind.NotFound && missing.exitCode == 127;
+	assert missing.message == "spawnSync taskset ENOENT";
+	const denied = startFailed("/tmp", errnoName(13));
+	assert denied.kind == ProcessErrorKind.SpawnFailed && denied.exitCode == 126;
+	assert denied.message == "spawnSync /tmp EACCES";
+	assert errnoName(99) == "UNKNOWN (errno 99)";
 }
 
 test "isNotFound classification" {

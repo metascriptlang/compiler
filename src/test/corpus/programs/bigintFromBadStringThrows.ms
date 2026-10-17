@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Undefined variable 'BigInt'
+// @xfail(raiser): bigint is not supported on the Raiser VM
 
 function main(): void {
 	const bad: string[] = ["-0x10", "+0x10", "-0b1", "1_000", "12n", "-", "0x", "0x1g", " 1x ", "1.5"];

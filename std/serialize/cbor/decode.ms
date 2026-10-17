@@ -19,7 +19,7 @@
 // memory). The macro body stays monolithic; AST construction is inlined.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey, pickAtomicAccessor, implementationOf } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, implementationOf } from "../discDetect";
 import { _cborEnumOrd, getDynamicField, asString, asBoolean, asNumber, asInt64,
 	cborToStringArray, cborToBooleanArray, cborToNumberArray, cborToFloat32Array,
 	cborToInt8Array, cborToInt16Array, cborToInt32Array, cborToInt64Array,
@@ -327,6 +327,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			}
 			if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
+				elemIsStruct = namesStruct(elemType);
 			} else if (elemType.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = elemType.typExprTypeName;
@@ -335,7 +336,10 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				}
 			} else if (elemType.kind == NodeKind.TypeGeneric) {
 				const peeled: Node = elemType.typExprArgs[0];
-				if (peeled.kind == NodeKind.TypeObject) {
+				if (namesStruct(peeled)) {
+					elemIsStruct = true;
+					en = peeled.name;
+				} else if (peeled.kind == NodeKind.TypeObject) {
 					elemIsStruct = true;
 					en = peeled.typExprTypeName;
 					if (en == "") {

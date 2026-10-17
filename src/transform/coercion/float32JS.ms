@@ -71,6 +71,7 @@ function compoundBase(op: string): string {
 		"*=" => "*",
 		"/=" => "/",
 		"%=" => "%",
+		"**=" => "**",
 		_ => "",
 	};
 }

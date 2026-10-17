@@ -5,7 +5,7 @@ import {
 	FunctionDeclData, BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData,
 	ConditionalExprData, TypeAssertionData,
 	SpreadExprData, MoveExprData, OutExprData, HiddenStdConvData, HiddenDerefData,
-	AwaitExprData,
+	AwaitExprData, CallExprData,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { booleanType } from "../../checker/types";
@@ -15,8 +15,12 @@ import {
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
+import { isNamespaceTyped } from "./namespaceValueLower";
 import { Spiller, bindTemp, tempRef, isVoidType, isAssignOp, lowerOperandList, lowerAssign } from "./operandOrder";
 import { blockifyArrowsReading } from "../coercion/nullishCoalesce";
+import { truthinessTest } from "../coercion/stringTruthiness";
+import { shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
+import { shortCircuitShareArm, fitShortCircuitArm } from "./conditionalExprLower";
 import { foldedNullOperand, isNullExpr } from "./operatorLower";
 import { walkExpandBlocks, isFuncBoundary } from "../walker";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
@@ -39,8 +43,14 @@ function dropsOperandEffects(node: Node): boolean {
 	return operand != null && cloneIfPure(operand) == null;
 }
 
+function dropsNamespaceObject(node: Node): boolean {
+	if (node.kind != NodeKind.MemberExpr) return false;
+	const object = (node.data as MemberExprData).object;
+	return isNamespaceTyped(object.nodeType) && object.kind != NodeKind.Identifier;
+}
+
 function isSpillPoint(node: Node): boolean {
-	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node);
+	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node) || dropsNamespaceObject(node);
 }
 
 function needsSpill(node: Node | null): boolean {
@@ -63,13 +73,20 @@ function lowerShortCircuit(e: Node, pre: Node[]): Node {
 	const d = e.data as BinaryExprData;
 	const loc = e.location;
 	const t = e.nodeType != null ? e.nodeType : booleanType();
-	const tmp = bindTemp(_sp, lowerAwaitExpr(d.left, pre), DeclKind.Let, t, pre, loc);
-	const inner: Node[] = [];
-	const right = lowerAwaitExpr(d.right, inner);
-	inner.push(makeExprStmt(makeAssign(tempRef(tmp, loc), right, loc), loc));
-	const test = d.operator == "&&" ? tempRef(tmp, loc) : makeUnary("!", tempRef(tmp, loc), loc);
-	pre.push(makeIf(test, makeBlock(inner, loc), null, loc));
-	return tempRef(tmp, loc);
+	const lhsType = d.left.nodeType != null ? d.left.nodeType : t;
+	const lhs = bindTemp(_sp, lowerAwaitExpr(d.left, pre), DeclKind.Const, lhsType, pre, loc);
+	const res = bindTemp(_sp, makeDefaultValue(t, loc), DeclKind.Let, t, pre, loc);
+	const rightStmts: Node[] = [];
+	if (shortCircuitRightRuns(d.operator, lhsType)) {
+		const right = lowerAwaitExpr(d.right, rightStmts);
+		rightStmts.push(makeExprStmt(makeAssign(tempRef(res, loc), fitShortCircuitArm(right, t, _sp.ctx), loc), loc));
+	}
+	const share = shortCircuitLeftShare(d.operator, lhsType);
+	const leftStmts: Node[] = share == null ? []
+		: [makeExprStmt(makeAssign(tempRef(res, loc), shortCircuitShareArm(tempRef(lhs, loc), share, t, _sp.ctx), loc), loc)];
+	const isAnd = d.operator == "&&";
+	pre.push(makeIf(truthinessTest(tempRef(lhs, loc), _sp.ctx), makeBlock(isAnd ? rightStmts : leftStmts, loc), makeBlock(isAnd ? leftStmts : rightStmts, loc), loc));
+	return tempRef(res, loc);
 }
 
 function lowerConditional(e: Node, pre: Node[]): Node {
@@ -116,6 +133,9 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	} else if (k == NodeKind.ConditionalExpr) {
 		if (isVoidType(e.nodeType)) return e;
 		return lowerConditional(e, pre);
+	} else if (k == NodeKind.CallExpr && dropsNamespaceObject((e.data as CallExprData).callee)) {
+		lowerAwaitExpr((e.data as CallExprData).callee, pre);
+		lowerOperandList(_sp, e, pre);
 	} else if (k == NodeKind.CallExpr || k == NodeKind.NewExpr || k == NodeKind.ArrayAccess
 		|| k == NodeKind.ArrayLiteral || k == NodeKind.ObjectLiteral) {
 		lowerOperandList(_sp, e, pre);
@@ -128,6 +148,7 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	} else if (k == NodeKind.MemberExpr) {
 		const d = e.data as MemberExprData;
 		d.object = lowerAwaitExpr(d.object, pre);
+		if (dropsNamespaceObject(e)) d.object = tempRef(bindTemp(_sp, d.object, DeclKind.Const, d.object.nodeType, pre, d.object.location), d.object.location);
 	} else if (k == NodeKind.TypeAssertion) {
 		const d = e.data as TypeAssertionData;
 		d.asExpr = lowerAwaitExpr(d.asExpr, pre);
@@ -325,7 +346,7 @@ test "a call before the await is bound first, so it still runs first" {
 }
 
 test "a short-circuit right operand awaits only inside its branch" {
-	assert bodyKinds("async function f() { const v = a && await p; }") == "VariableDecl;IfStmt;VariableDecl;";
+	assert bodyKinds("async function f() { const v = a && await p; }") == "VariableDecl;VariableDecl;IfStmt;VariableDecl;";
 }
 
 test "an await in a while condition moves into the loop body" {

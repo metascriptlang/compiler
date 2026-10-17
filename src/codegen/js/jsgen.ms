@@ -3,7 +3,7 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData } from "../../ast/node";
 import { JSGenerator, JSHelpers, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
 import { forEachChild } from "../../ast/visitor";
@@ -24,12 +24,13 @@ import {
 	emitBlockStmt, emitExprStmt, emitReturnStmt,
 	emitBreakStmt, emitContinueStmt,
 	emitSwitchStmt, emitThrowStmt, emitTryCatchStmt,
-	emitForStmt, emitForOfStmt, emitUnreachableStmt, emitAssertStmt,
+	emitForStmt, emitForOfStmt, emitUnreachableStmt, emitAssertStmt, emitModuleStorageDecl,
 } from "./statements";
 import {
 	emitFunctionDecl, emitEnumDecl, emitClassDecl, emitActorDecl,
 	emitMethodDecl, emitConstructorDecl,
 	emitImportDecl, emitExportDecl, emitDecoratedDecl,
+	classEvaluatesStatics, emitDeferredClassBinding, emitDeferredClassValue, emitDeferredDefaultExport,
 } from "./declarations";
 
 import { emitTestDecl } from "./test";
@@ -37,6 +38,8 @@ import { parseSource } from "../../parser/statements/validation";
 import { checkProgramJs } from "../../checker/checkPass";
 import { transformProgram } from "../../transform/index";
 import { JsImportEntry } from "../../checker/context";
+import { DynamicModulePlan } from "../../module/graph";
+import { mangleQualified, mangleModuleName } from "../c/names";
 
 // ===== Node Dispatcher =====
 
@@ -116,6 +119,10 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		// Program — emit all statements
 		NodeKind.Program => {
 			const pd = node.data as ProgramData;
+			if (gen.bundleMode && gen.dynamicPlan.lazy.has(gen.sourceFile)) {
+				emitLazyModuleProgram(gen, node, pd);
+				return;
+			}
 			for (const stmt of pd.programStmts) {
 				emitNodeDispatch(gen, stmt);
 			}
@@ -125,6 +132,157 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		_ => { emit(gen, `/* unsupported: ${node.kind} */`); },
 	};
 }
+
+// ===== Modules Reached Only Through import() =====
+
+function lazyModuleInitName(modulePath: string): string {
+	return mangleQualified("msModuleInit", mangleModuleName(modulePath));
+}
+
+function declarationOf(stmt: Node): Node {
+	if (stmt.kind == NodeKind.ExportDecl) return declarationOf((stmt.data as ExportDeclData).exportedDecl);
+	if (stmt.kind == NodeKind.DecoratedDecl) return declarationOf((stmt.data as DecoratedDeclData).decoratedNode);
+	return stmt;
+}
+
+function runsInModuleBody(stmt: Node): boolean {
+	return match (declarationOf(stmt).kind) {
+		NodeKind.FunctionDecl | NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.EnumDecl | NodeKind.ImportDecl
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ExternDecl
+			| NodeKind.MacroDecl | NodeKind.ComptimeBlock | NodeKind.TypeAnnotation | NodeKind.TestDecl | NodeKind.PropertyDecl => false,
+		_ => true,
+	};
+}
+
+// Declarations stay in the flat bundle scope so other modules keep naming them; the
+// body (initializers and statements, in source order) becomes the module's init function.
+function emitLazyModuleProgram(gen: JSGenerator, program: Node, pd: ProgramData): void {
+	const body: Node[] = [];
+	for (const stmt of pd.programStmts) {
+		if (runsInModuleBody(stmt)) body.push(stmt);
+		else if (classEvaluatesStatics(declarationOf(stmt))) {
+			emitDeferredClassBinding(gen, declarationOf(stmt));
+			body.push(stmt);
+		} else emitNodeDispatch(gen, stmt);
+	}
+	emit(gen, `${hasTopLevelAwait(program) ? "async " : ""}function ${lazyModuleInitName(gen.sourceFile)}() {\n`);
+	gen.indentLevel += 1;
+	for (const stmt of body) {
+		const decl = declarationOf(stmt);
+		if (decl.kind == NodeKind.VariableDecl) emitModuleStorageDecl(gen, decl);
+		else if (decl.kind == NodeKind.ClassDecl) emitDeferredClassValue(gen, decl);
+		else if (stmt.kind == NodeKind.ExportDecl && stmt.flags.has(NodeFlag.ExportDefault)) emitDeferredDefaultExport(gen, stmt);
+		else emitNodeDispatch(gen, stmt);
+	}
+	gen.indentLevel -= 1;
+	emit(gen, "}\n");
+}
+
+export function bundleModuleEvaluator(plan: DynamicModulePlan): string {
+	if (plan.records.length == 0) return "";
+	let table = "const msModuleRecords = [\n";
+	for (let i = 0; i < plan.records.length; i += 1) {
+		const path = plan.records[i];
+		const lazy = plan.lazy.has(path);
+		table = table + `  { init: ${lazy ? lazyModuleInitName(path) : "null"}, requested: [${plan.requested[i].join(", ")}], status: ${lazy ? 0 : 2}, hasTLA: ${plan.topLevelAwait.has(path)}, failed: false, error: undefined, dfsIndex: 0, dfsAncestorIndex: 0, asyncEvaluation: false, asyncOrdinal: 0, pendingAsyncDeps: 0, asyncParents: [], cycleRoot: ${i}, waiters: [] },\n`;
+	}
+	return table + "];\n" + MODULE_EVALUATOR;
+}
+
+// Record status: 0 linked, 1 evaluating, 2 evaluated, 3 evaluating async.
+const MODULE_EVALUATOR = "let msModuleNextAsyncOrdinal = 0;\n"
+	+ "function msModuleInnerEvaluate(at, stack, index) {\n"
+	+ "  const m = msModuleRecords[at];\n"
+	+ "  if (m.status === 2 || m.status === 3) { if (m.failed) throw m.error; return index; }\n"
+	+ "  if (m.status === 1) return index;\n"
+	+ "  m.status = 1;\n"
+	+ "  m.dfsIndex = index;\n"
+	+ "  m.dfsAncestorIndex = index;\n"
+	+ "  index += 1;\n"
+	+ "  m.pendingAsyncDeps = 0;\n"
+	+ "  stack.push(at);\n"
+	+ "  for (const req of m.requested) {\n"
+	+ "    index = msModuleInnerEvaluate(req, stack, index);\n"
+	+ "    let r = msModuleRecords[req];\n"
+	+ "    if (r.status === 1) { if (r.dfsAncestorIndex < m.dfsAncestorIndex) m.dfsAncestorIndex = r.dfsAncestorIndex; }\n"
+	+ "    else { r = msModuleRecords[r.cycleRoot]; if (r.failed) throw r.error; }\n"
+	+ "    if (r.asyncEvaluation) { m.pendingAsyncDeps += 1; r.asyncParents.push(at); }\n"
+	+ "  }\n"
+	+ "  if (m.pendingAsyncDeps > 0 || m.hasTLA) {\n"
+	+ "    m.asyncEvaluation = true;\n"
+	+ "    m.asyncOrdinal = msModuleNextAsyncOrdinal;\n"
+	+ "    msModuleNextAsyncOrdinal += 1;\n"
+	+ "    if (m.pendingAsyncDeps === 0) msModuleExecuteAsync(at);\n"
+	+ "  } else m.init();\n"
+	+ "  if (m.dfsAncestorIndex === m.dfsIndex) {\n"
+	+ "    let popped;\n"
+	+ "    do { popped = stack.pop(); const p = msModuleRecords[popped]; p.cycleRoot = at; p.status = p.asyncEvaluation ? 3 : 2; } while (popped !== at);\n"
+	+ "  }\n"
+	+ "  return index;\n"
+	+ "}\n"
+	+ "function msModuleExecuteAsync(at) {\n"
+	+ "  msModuleRecords[at].init().then(() => msModuleAsyncFulfilled(at), (e) => msModuleAsyncRejected(at, e));\n"
+	+ "}\n"
+	+ "function msModuleSettleWaiters(m) {\n"
+	+ "  const waiters = m.waiters;\n"
+	+ "  m.waiters = [];\n"
+	+ "  for (const w of waiters) { if (m.failed) w.reject(m.error); else w.resolve(1); }\n"
+	+ "}\n"
+	+ "function msModuleGatherAvailableAncestors(m, execList) {\n"
+	+ "  for (const pAt of m.asyncParents) {\n"
+	+ "    const p = msModuleRecords[pAt];\n"
+	+ "    if (msModuleRecords[p.cycleRoot].failed || execList.includes(pAt)) continue;\n"
+	+ "    p.pendingAsyncDeps -= 1;\n"
+	+ "    if (p.pendingAsyncDeps === 0) { execList.push(pAt); if (!p.hasTLA) msModuleGatherAvailableAncestors(p, execList); }\n"
+	+ "  }\n"
+	+ "}\n"
+	+ "function msModuleAsyncFulfilled(at) {\n"
+	+ "  const m = msModuleRecords[at];\n"
+	+ "  if (m.failed) return;\n"
+	+ "  if (m.status !== 3) throw new Error(\"internal: module evaluation finished on a module in status \" + m.status);\n"
+	+ "  m.asyncEvaluation = false;\n"
+	+ "  m.status = 2;\n"
+	+ "  msModuleSettleWaiters(m);\n"
+	+ "  const execList = [];\n"
+	+ "  msModuleGatherAvailableAncestors(m, execList);\n"
+	+ "  execList.sort((a, b) => msModuleRecords[a].asyncOrdinal - msModuleRecords[b].asyncOrdinal);\n"
+	+ "  for (const pAt of execList) {\n"
+	+ "    const p = msModuleRecords[pAt];\n"
+	+ "    if (p.failed) continue;\n"
+	+ "    if (p.hasTLA) { msModuleExecuteAsync(pAt); continue; }\n"
+	+ "    try { p.init(); }\n"
+	+ "    catch (e) { msModuleAsyncRejected(pAt, e); continue; }\n"
+	+ "    p.asyncEvaluation = false;\n"
+	+ "    p.status = 2;\n"
+	+ "    msModuleSettleWaiters(p);\n"
+	+ "  }\n"
+	+ "}\n"
+	+ "function msModuleAsyncRejected(at, e) {\n"
+	+ "  const m = msModuleRecords[at];\n"
+	+ "  if (m.failed) return;\n"
+	+ "  m.failed = true;\n"
+	+ "  m.error = e;\n"
+	+ "  m.status = 2;\n"
+	+ "  m.asyncEvaluation = false;\n"
+	+ "  for (const pAt of m.asyncParents) msModuleAsyncRejected(pAt, e);\n"
+	+ "  msModuleSettleWaiters(m);\n"
+	+ "}\n"
+	+ "function msModuleEvaluateFor(at, w) {\n"
+	+ "  let m = msModuleRecords[at];\n"
+	+ "  if (m.status === 2 || m.status === 3) { at = m.cycleRoot; m = msModuleRecords[at]; }\n"
+	+ "  if (m.status === 0) {\n"
+	+ "    const stack = [];\n"
+	+ "    try { msModuleInnerEvaluate(at, stack, 0); }\n"
+	+ "    catch (e) { for (const k of stack) { const r = msModuleRecords[k]; r.status = 2; r.failed = true; r.error = e; } w.reject(e); return; }\n"
+	+ "    if (m.asyncEvaluation) m.waiters.push(w); else w.resolve(1);\n"
+	+ "  } else if (m.failed) w.reject(m.error);\n"
+	+ "  else if (m.status === 3) m.waiters.push(w);\n"
+	+ "  else if (m.status === 2) w.resolve(1);\n"
+	+ "  else throw new Error(\"internal: import() met a module in status \" + m.status);\n"
+	+ "}\n"
+	+ "function msModuleImport(at) {\n"
+	+ "  return new Promise((resolve, reject) => { Promise.resolve().then(() => msModuleEvaluateFor(at, { resolve, reject })); });\n"
+	+ "}\n";
 
 // Register the dispatcher (lambda wrapper required — top-level fn is generic msClosure, typed var needs msClosureN)
 registerEmitNode((gen: JSGenerator, node: Node): void => { emitNodeDispatch(gen, node); });
@@ -153,7 +311,8 @@ export function generateJS(program: Node, jsImports: JsImportEntry[]): string {
 }
 
 // Multi-file mode: one ES module per source module. Derived imports are only
-// known after the body is emitted, yet they go in front of it: node loads a
+// known after the body is emitted, yet they go in front of it, behind the
+// source imports whose order decides module evaluation order: node loads a
 // `.js` file without a package type as CommonJS and switches to ESM only when
 // it meets module syntax before anything CommonJS cannot parse, and a
 // top-level await ahead of a trailing import is such a thing. A module with a
@@ -164,6 +323,8 @@ export interface JsModuleResult {
 	code: string;
 	neededModules: string[];
 	neededNames: string[][];
+	namespaceModules: string[];
+	namespaceNames: string[][];
 	exportedNames: string[];
 	testNames: string[];
 	testFuncs: string[];
@@ -209,17 +370,17 @@ export function generateJSModule(
 	}
 	const headerChunks = gen.buf.length;
 	emitNodeDispatch(gen, program);
-	let front = "";
+	let bindings = "";
 	for (let mi = 0; mi < gen.neededModules.length; mi += 1) {
 		const spec = lookupModuleSpec(gen, gen.neededModules[mi]);
 		if (spec == "") continue;
 		const specifiers: string[] = [];
 		for (let ni = 0; ni < gen.neededNames[mi].length; ni += 1) specifiers.push(importSpecifier(gen.neededNames[mi][ni], gen.neededLocals[mi][ni]));
-		front = front + "import { " + specifiers.join(", ") + ` } from "${spec}";\n`;
+		bindings = bindings + "import { " + specifiers.join(", ") + ` } from "${spec}";\n`;
 	}
-	if (front == "" && !hasImport && hasTopLevelAwait(program)) front = "export {};\n";
-	insertAfterHeader(gen, headerChunks, front);
-	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
+	if (bindings == "" && gen.moduleRequests == "" && !hasImport && hasTopLevelAwait(program)) bindings = "export {};\n";
+	insertAfterHeader(gen, headerChunks, gen.moduleRequests + bindings);
+	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, namespaceModules: gen.namespaceModules, namespaceNames: gen.namespaceNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
 }
 
 export function hasTopLevelAwait(node: Node): boolean {
@@ -259,9 +420,10 @@ export interface BundleModuleResult {
 	smap: SourceInfo;
 }
 
-export function generateJSBundleModule(program: Node, sourceFile: string, sourcemap: boolean, helpers: JSHelpers): BundleModuleResult {
+export function generateJSBundleModule(program: Node, sourceFile: string, sourcemap: boolean, helpers: JSHelpers, dynamicPlan: DynamicModulePlan): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
+	gen.dynamicPlan = dynamicPlan;
 	gen.helpers = helpers;
 	gen.smap = sourcemap;
 	gen.sourceFile = sourceFile;

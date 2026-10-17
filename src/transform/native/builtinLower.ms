@@ -12,8 +12,8 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike } from "../../checker/types";
+import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -21,10 +21,11 @@ import {
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef, takeValueShareFns, makeBinary, makeReturn, makeIf, makeBlock, makeFnDecl,
 } from "../util";
-import { rewriteEcho } from "./debugLower";
+import { rewriteEcho, evaluatedPlaceholder, takePlaceholderFns } from "./debugLower";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
-import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
+import { tryLowerPromiseBuiltin } from "../lowering/promiseLower";
+import { promiseSettleStmts, promiseFailStmts } from "../lowering/asyncBridge";
 import { evictHelperName } from "./nativeLower";
 
 // ===== Main Entry Point =====
@@ -34,9 +35,11 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		if (node.kind == NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
-		// new Promise(executor) → msPromiseNew(executor)
-		if (node.kind == NodeKind.NewExpr) {
-			return lowerNewPromise(node);
+		if (node.kind == NodeKind.ExprStmt) {
+			const expr = (node.data as ExprStmtData).expr;
+			const kind = expr.kind == NodeKind.CallExpr && expr.resolvedSym != null && !ctx.jsBackend ? expr.resolvedSym.builtinKind : "";
+			if (kind == "PromiseSettle") return promiseSettleStmts(expr, ctx);
+			if (kind == "PromiseFail") return promiseFailStmts(expr, ctx);
 		}
 		// arr.length = n → msXxxArraySetLen(&arr, n)
 		if (node.kind == NodeKind.BinaryExpr) {
@@ -51,10 +54,12 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 	const shareFns = takeValueShareFns();
 	const unionTextFns = _unionTextFns;
 	_unionTextFns = [];
+	const placeholderFns = takePlaceholderFns();
 	if (result.kind == NodeKind.Program) {
 		const pd = result.data as ProgramData;
 		for (const decl of shareFns) { pd.programStmts.push(decl); }
 		for (const decl of unionTextFns) { pd.programStmts.push(decl); }
+		for (const decl of placeholderFns) { pd.programStmts.push(decl); }
 	}
 	return result;
 }
@@ -127,6 +132,12 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 // Every type has a compiler-provided default. User extensions take priority.
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
 
+function isRadixLiteral(n: Node): boolean {
+	if (n.kind != NodeKind.NumberLiteral) return false;
+	const v = (n.data as NumberLiteralData).value;
+	return v >= 2 && v <= 36;
+}
+
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	const base = isStringLike(objType) ? stringType() : literalBase(objType);
 	if (base != objType) return lowerToString(callNode, obj, base, loc, ctx);
@@ -141,6 +152,13 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		bcall.nodeType = stringType();
 		return bcall;
 	}
+	if (isNullableBigInt(objType)) {
+		const cdn = callNode.data as CallExprData;
+		const radixArg = cdn.arguments.length > 0 ? cdn.arguments[0] : makeNumber(10, loc);
+		const ncall = makeCall(runtimeRef("msBigIntToStringOrNull", loc), [obj, radixArg], loc);
+		ncall.nodeType = stringType();
+		return ncall;
+	}
 	const tk = objType.kind;
 	if (tk == TypeKind.Char && (callNode.data as CallExprData).arguments.length == 0) return charToString(obj, loc);
 	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10.
@@ -149,9 +167,10 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	if (isNumeric(objType)) {
 		const cd2 = callNode.data as CallExprData;
 		const radixArg = cd2.arguments.length > 0 ? cd2.arguments[0] : makeNumber(10, loc);
-		let fn = "msNumberToStringRadix";
-		if (objType.kind == TypeKind.Uint64) { fn = "msUint64ToStringRadix"; }
-		else if (objType.kind == TypeKind.Int64) { fn = "msIntToStringRadix"; }
+		const checked = !ctx.jsBackend && cd2.arguments.length > 0 && !isRadixLiteral(radixArg);
+		let fn = checked ? "msNumberToStringRadixChecked" : "msNumberToStringRadix";
+		if (objType.kind == TypeKind.Uint64) { fn = checked ? "msUint64ToStringRadixChecked" : "msUint64ToStringRadix"; }
+		else if (objType.kind == TypeKind.Int64) { fn = checked ? "msIntToStringRadixChecked" : "msIntToStringRadix"; }
 		const call = makeCall(runtimeRef(fn, loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;
@@ -188,23 +207,9 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		return cond;
 	}
 
-	// Null → "null"
-	if (tk == TypeKind.Null) {
-		const s = makeString("null", loc);
-		s.nodeType = stringType();
-		return s;
-	}
-	// Function/Closure → "<function>"
-	if (tk == TypeKind.Function) {
-		const s = makeString("<function>", loc);
-		s.nodeType = stringType();
-		return s;
-	}
-	// Fallback: "<TypeName>" or "<object>"
-	const fallbackName = objType.typeName != "" ? objType.typeName : "object";
-	const s = makeString("<" + fallbackName + ">", loc);
-	s.nodeType = stringType();
-	return s;
+	if (tk == TypeKind.Null) return evaluatedPlaceholder(obj, objType, "null", loc, ctx);
+	if (tk == TypeKind.Function) return evaluatedPlaceholder(obj, objType, "<function>", loc, ctx);
+	return evaluatedPlaceholder(obj, objType, "<" + (objType.typeName != "" ? objType.typeName : "object") + ">", loc, ctx);
 }
 
 
@@ -212,9 +217,9 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 // Handles @builtin("Name") — known compiler builtins get inline C patterns.
 
 // Type tag for typed Promise.then/catch dispatch (matches MS_TYPETAG_* in combinator.h)
-// Per-T suffix helpers, typed readers, Promise.* / waitFor handlers, and
-// new-Promise rewriting all live in src/transform/lowering/promiseLower.ms.
-// See `tryLowerPromiseBuiltin` + `lowerNewPromise` imported at the top of this
+// Per-T suffix helpers, typed readers and Promise.* / waitFor handlers
+// all live in src/transform/lowering/promiseLower.ms.
+// See `tryLowerPromiseBuiltin` imported at the top of this
 // file. `isStructLikeType` moved to `../util` to break a circular import with
 // promiseLower (asyncBridge + builtinLower + promiseLower all need it).
 
@@ -402,7 +407,6 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 // ===== arr.length = n → setLength(arr, n) sugar =====
 // setLength is the real API. arr.length = n is syntactic sugar.
 // Rewrites BinaryExpr(=, MemberExpr(arr, "length"), n) → CallExpr to C runtime setLength.
-// `new Promise(executor) → msPromiseNew` lives in lowering/promiseLower.ms.
 
 function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return node;

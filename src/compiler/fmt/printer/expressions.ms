@@ -39,8 +39,7 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
 	if (child == null || child.flags.has(NodeFlag.Parenthesized) || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
-	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !isRight
-		&& (parentOp == "|" || parentOp == "&" || parentOp == "<")) {
+	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && assertionNeedsParens(child, parentOp, isRight)) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
 	if (child.kind != NodeKind.BinaryExpr) {
@@ -61,6 +60,22 @@ function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, opt
 	return callPrintNode(child, options);
 }
 
+const AS_PREC = 40;
+const UNBOUND_PREC = 100;
+
+// `as` binds at relational precedence, left to right; on the left a type would swallow `|`, `&` or `<`, and a
+// bare binary operand of the assertion must not bind looser than the parent.
+function assertionNeedsParens(child: Node, parentOp: string, isRight: boolean): boolean {
+	const parentPrec = opPrecedence(parentOp);
+	if (isRight) return parentPrec >= AS_PREC;
+	return parentOp == "|" || parentOp == "&" || parentOp == "<" || bareBinaryPrec((child.data as TypeAssertionData).asExpr) < parentPrec;
+}
+
+function bareBinaryPrec(node: Node): number {
+	if (node.kind != NodeKind.BinaryExpr || node.flags.has(NodeFlag.Parenthesized)) return UNBOUND_PREC;
+	return opPrecedence((node.data as BinaryExprData).operator);
+}
+
 function opPrecedence(op: string): number {
 	return match (op) {
 		"**" => 65,
@@ -75,7 +90,7 @@ function opPrecedence(op: string): number {
 		"&&" => 20,
 		"||" => 10,
 		"??" => 8,
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => 5,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => 5,
 		"|>" => 3,
 		_ => 0,
 	};
@@ -83,7 +98,7 @@ function opPrecedence(op: string): number {
 
 function isRightAssocOp(op: string): boolean {
 	return match (op) {
-		"**" | "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		"**" | "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
 }
@@ -439,7 +454,8 @@ function isUnaryLevel(node: Node): boolean {
 
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAssertionData;
-	const inner = d.asExpr.kind == NodeKind.TypeAssertion || (d.asType != "!" && isUnaryLevel(d.asExpr)) ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
+	const bare = d.asExpr.kind == NodeKind.TypeAssertion || (d.asType != "!" && (isUnaryLevel(d.asExpr) || (d.asExpr.kind == NodeKind.BinaryExpr && bareBinaryPrec(d.asExpr) >= AS_PREC)));
+	const inner = bare ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
 	if (d.asType == "!") return docGroup([inner, docText("!")]);
 	return docGroup([
 		inner,

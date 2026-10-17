@@ -192,8 +192,8 @@ export function convertUniversalChars(source: string): string {
 						parts.push(fromCodePoint(cp));
 					} else {
 						// Supplementary plane — encode as surrogate pair for JS/MS string
-						const hi: int32 = 0xD800 + ((cp - 0x10000 as int32) >> 10);
-						const lo: int32 = 0xDC00 + ((cp - 0x10000 as int32) & 0x3FF);
+						const hi: int32 = 0xD800 + ((cp - (0x10000 as int32)) >> 10);
+						const lo: int32 = 0xDC00 + ((cp - (0x10000 as int32)) & 0x3FF);
 						parts.push(fromCodePoint(hi));
 						parts.push(fromCodePoint(lo));
 					}

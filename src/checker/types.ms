@@ -500,6 +500,13 @@ export function isAffineAwaitable(t: Type | null): boolean {
 	return p.typeFlags.has(TypeFlag.AwaitableAffine);
 }
 
+export function createModuleNamespace(modulePath: string): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Module;
+	t.typeName = modulePath;
+	return t;
+}
+
 export function createTypeRef(name: string): Type {
 	const t = emptyType();
 	t.kind = TypeKind.TypeReference;
@@ -1992,6 +1999,18 @@ export function distinctCallTarget(t: Type | null): Type | null {
 	return body != null && body.kind == TypeKind.Function ? body : null;
 }
 
+export function distinctNumericBase(t: Type | null): Type | null {
+	let cur = t;
+	let depth = 0;
+	let body = distinctBody(cur);
+	while (body != null && depth < PEEL_MAX_DEPTH) {
+		cur = body;
+		body = distinctBody(cur);
+		depth += 1;
+	}
+	return cur != t && isNumeric(cur) ? cur : null;
+}
+
 export function distinctWidenBody(t: Type | null): Type | null {
 	if (t == null) return null;
 	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
@@ -2231,12 +2250,17 @@ export function destrPositionalElemType(srcType: Type | null, i: int32): Type | 
 	return null;
 }
 
-export function destrNamedFieldType(srcType: Type | null, fieldName: string): Type | null {
-	let bt = srcType;
-	if (bt == null) return null;
-	bt = peelTransparentInstance(bt);
+function destructuredFields(srcType: Type | null): Type | null {
+	if (srcType == null) return null;
+	let bt = peelTransparentInstance(srcType);
 	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
-	if (bt.kind != TypeKind.Struct) return null;
+	const body = bt.kind == TypeKind.GenericInstance ? peelToStructOrUnion(bt) : bt;
+	return body != null && body.kind == TypeKind.Struct ? body : null;
+}
+
+export function destrNamedFieldType(srcType: Type | null, fieldName: string): Type | null {
+	const bt = destructuredFields(srcType);
+	if (bt == null) return null;
 	for (let fi = 0; fi < bt.typeNames.length; fi += 1) {
 		if (bt.typeNames[fi] == fieldName && fi < bt.typeChildren.length) return bt.typeChildren[fi];
 	}
@@ -2276,11 +2300,8 @@ export function destrRestElemType(srcType: Type | null): Type | null {
 
 export function destrObjectRestNames(srcType: Type | null, taken: string[]): string[] {
 	const names: string[] = [];
-	let bt = srcType;
+	const bt = destructuredFields(srcType);
 	if (bt == null) return names;
-	bt = peelTransparentInstance(bt);
-	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
-	if (bt.kind != TypeKind.Struct) return names;
 	for (const fieldName of bt.typeNames) {
 		let isTaken = false;
 		for (const takenName of taken) {
@@ -2335,12 +2356,16 @@ export function booleanLiteralValue(t: Type | null): boolean {
 // typeName = enum type name (e.g. "NodeKind").
 // typeNames[0] = specific member (e.g. "BinaryExpr").
 // typeReturn = back-reference to the underlying Enum Type for fast subtype checks.
+export function enumMemberValue(t: Type, index: int32): int32 {
+	return t.typeChildren != null && index < t.typeChildren.length && t.typeChildren[index] != null ? t.typeChildren[index].typeValue : index;
+}
+
 export function enumOrdinalBounds(t: Type): int32[] {
 	const count = t.typeNames.length;
 	let low: int32 = 0;
 	let high: int32 = 0;
 	for (let i = 0; i < count; i += 1) {
-		const v: int32 = t.typeChildren != null && i < t.typeChildren.length && t.typeChildren[i] != null ? t.typeChildren[i].typeValue : i;
+		const v = enumMemberValue(t, i);
 		if (i == 0 || v < low) low = v;
 		if (i == 0 || v > high) high = v;
 	}
@@ -2547,6 +2572,17 @@ export function isFunctionKind(t: Type): boolean {
 	return t.kind == TypeKind.Function;
 }
 
+export function functionSlotOf(slot: Type | null): Type | null {
+	if (slot == null) return null;
+	let fn = peelTransparentInstance(slot);
+	if (isMaybeType(fn) && fn.typeReturn != null) fn = peelTransparentInstance(fn.typeReturn);
+	if (fn.kind == TypeKind.Union) {
+		const soleFn = soleUnionMember(fn, isFunctionKind);
+		if (soleFn != null) fn = soleFn;
+	}
+	return fn.kind == TypeKind.Function && fn.typeChildren != null ? fn : null;
+}
+
 export function isArrayShaped(t: Type): boolean {
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray) return true;
 	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
@@ -2580,6 +2616,23 @@ export function isTypeofResultType(t: Type | null): boolean {
 export function setMinArity(t: Type | null, minArity: number): void {
 	if (t == null) return;
 	t.typeValue = (minArity as int32) + 1;
+}
+
+export function callMinArity(t: Type | null): number {
+	if (t == null) return 0;
+	let min = getMinArity(t);
+	while (min > 0 && min <= t.typeChildren.length && acceptsVoid(t.typeChildren[min - 1])) min -= 1;
+	return min;
+}
+
+function acceptsVoid(t: Type | null): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Void) return true;
+	if (t.kind != TypeKind.Union) return false;
+	for (const member of t.typeChildren) {
+		if (member != null && member.kind == TypeKind.Void) return true;
+	}
+	return false;
 }
 
 export function getMinArity(t: Type | null): number {
@@ -2890,7 +2943,10 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 	if (t == null) return true;
 	const inner = skipModifier(t);
 	if (inner == null) return true;
-	if (inner.kind == TypeKind.Union) return unwrapRefNullUnion(inner) != null;
+	if (inner.kind == TypeKind.Union) {
+		const held = unwrapRefNullUnion(inner);
+		return held != null && isPointerShapedForUnknown(held);
+	}
 	return match (inner.kind) {
 		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow
 			| TypeKind.CString | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => true,
@@ -3006,6 +3062,44 @@ export function classAncestorInstance(t: Type | null, target: Type): Type | null
 	return null;
 }
 
+function classOrigin(sym: Symbol | null): Symbol | null {
+	return sym != null && sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+}
+
+function classBodyOf(t: Type | null): Type | null {
+	const body = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
+	const cls = body != null && body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : body;
+	return cls != null && cls.kind == TypeKind.Struct && cls.sym != null && cls.sym.symbolKind == SymbolKind.Class ? cls : null;
+}
+
+// Whether a value of `t` is an instance of some instantiation of the class `cls`.
+export function derivesFromClass(t: Type | null, cls: Symbol): boolean {
+	if (isAwaitable(t)) return cls.builtinKind == "Promise";
+	let cur = classBodyOf(t);
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (classOrigin(cur.sym) == classOrigin(cls)) return true;
+		cur = classBodyOf(cur.typeExtra);
+	}
+	return false;
+}
+
+// The members of a union that `x instanceof cls` selects, for a generic `cls`;
+// null when the union holds no instance of `cls`, or holds an ancestor class an
+// instance of `cls` could hide behind.
+export function genericInstanceMembers(t: Type | null, cls: Symbol): Type[] | null {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return null;
+	const selected: Type[] = [];
+	for (const m of t.typeChildren) {
+		if (derivesFromClass(m, cls)) {
+			selected.push(m);
+			continue;
+		}
+		const ancestor = classBodyOf(m);
+		if (ancestor != null && ancestor.sym != null && derivesFromClass(cls.symbolType, ancestor.sym)) return null;
+	}
+	return selected.length > 0 ? selected : null;
+}
+
 function isClassOrSubclass(sub: Type, sup: Type): boolean {
 	const supBody = sup.typeReturn;
 	const supSym = runtimeClassSym(supBody);
@@ -3061,19 +3155,36 @@ export function unwrapRef(t: Type): Type {
 	return t;
 }
 
-// If t is Union(Ref<T>, Null), Union(Ptr<T>, Null) or Union(unknown, Null),
-// return the pointer-shaped member. Otherwise return null. Used by codegen to
-// collapse nullable-pointer unions to bare pointer types (the null pointer is
-// the natural sentinel — no Maybe wrapper needed).
+// If t is Union(Ref<T>, Null), Union(Ptr<T>, Null), Union(unknown, Null) or
+// Union(bigint, Null), return the pointer-shaped member. Otherwise return null.
+// Used by codegen to collapse nullable-pointer unions to bare pointer types (the
+// null pointer is the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
 	if (t == null || t.kind != TypeKind.Union) return null;
 	if (t.typeChildren == null || t.typeChildren.length != 2) return null;
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a == null || b == null) return null;
-	if ((a.kind == TypeKind.Ref || a.kind == TypeKind.Ptr || a.kind == TypeKind.Unknown) && b.kind == TypeKind.Null) return a;
-	if ((b.kind == TypeKind.Ref || b.kind == TypeKind.Ptr || b.kind == TypeKind.Unknown) && a.kind == TypeKind.Null) return b;
+	if (isNullablePointerKind(a.kind) && b.kind == TypeKind.Null) return a;
+	if (isNullablePointerKind(b.kind) && a.kind == TypeKind.Null) return b;
 	return null;
+}
+
+function isNullablePointerKind(k: TypeKind): boolean {
+	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
+}
+
+export function isNullableBigInt(t: Type | null): boolean {
+	const held = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
+	return held != null && held.kind == TypeKind.BigInt;
+}
+
+export function holdsFalsyValue(t: Type): boolean {
+	const held = peelTransparentInstance(t);
+	const k = held.kind;
+	if (k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Function || k == TypeKind.Array
+		|| k == TypeKind.SizedArray || k == TypeKind.Span || k == TypeKind.Tuple || k == TypeKind.Set) return false;
+	return !isStructType(held);
 }
 
 // ===== Needs RC =====
@@ -3228,6 +3339,21 @@ function anyChildHoldsView(t: Type, seen: TypeVisitSet): boolean {
 	return false;
 }
 
+export function holdsInferred(t: Type | null): boolean {
+	return inferredScan(t, new TypeVisitSet());
+}
+
+function inferredScan(t: Type | null, seen: TypeVisitSet): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Inferred) return true;
+	if (isDeclaredStruct(t) || !typeVisitAdd(seen, t)) return false;
+	if (inferredScan(t.typeReturn, seen) || inferredScan(t.typeExtra, seen)) return true;
+	for (const child of t.typeChildren) {
+		if (inferredScan(child, seen)) return true;
+	}
+	return false;
+}
+
 export function mayHoldAddress(t: Type | null): boolean {
 	return holdsAddress(t, new TypeVisitSet());
 }
@@ -3363,6 +3489,37 @@ function copyTypeForSubst(t: Type): Type {
 	return result;
 }
 
+function distributedMembers(t: Type, paramName: string, concrete: Type): Type[] {
+	if (t.typeChildren.length != 4) return [];
+	const check = t.typeChildren[0];
+	if (check == null || check.kind != TypeKind.GenericParam || check.typeName != paramName) return [];
+	if (concrete.kind == TypeKind.Union) return concrete.typeChildren;
+	if (isMaybeType(concrete) && concrete.typeReturn != null) {
+		const payload = concrete.typeReturn!;
+		const members: Type[] = payload.kind == TypeKind.Union ? [...payload.typeChildren] : [payload];
+		members.push(nullType());
+		return members;
+	}
+	return [];
+}
+
+function substitutedConditional(t: Type, paramName: string, concrete: Type, active: Cursor<Type>[]): Type {
+	const cond = copyTypeForSubst(t);
+	substituteChildrenInPlace(cond, paramName, concrete, active);
+	return evaluateConditionalType(cond);
+}
+
+function substitutedConditionalAll(t: Type, names: string[], concretes: Type[], active: Cursor<Type>[]): Type {
+	const cond = copyTypeForSubst(t);
+	substituteChildrenInPlaceAll(cond, names, concretes, active);
+	return evaluateConditionalType(cond);
+}
+
+function unionOfParts(parts: Type[]): Type {
+	if (parts.length == 1) return parts[0];
+	return isNullableShape(parts) ? nullableUnionOf(parts) : createUnion(parts);
+}
+
 // In-place substitute all children of a copied type.
 function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type, seen: Cursor<Type>[]): void {
 	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
@@ -3446,10 +3603,11 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				return gi;
 			},
 			TypeKind.Conditional => {
-				// Substitute in all 4 children, then try to evaluate
-				const cond = copyTypeForSubst(t);
-				substituteChildrenInPlace(cond, paramName, concrete, active);
-				return evaluateConditionalType(cond);
+				const members = distributedMembers(t, paramName, concrete);
+				if (members.length == 0) return substitutedConditional(t, paramName, concrete, active);
+				const parts: Type[] = [];
+				for (const m of members) parts.push(substitutedConditional(t, paramName, m, active));
+				return unionOfParts(parts);
 			},
 			_ => t,
 		};
@@ -3531,9 +3689,17 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				return gi;
 			},
 			TypeKind.Conditional => {
-				const cond = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(cond, names, concretes, active);
-				return evaluateConditionalType(cond);
+				const checkIndex = t.typeChildren.length == 4 ? names.indexOf(t.typeChildren[0].typeName) : -1;
+				const members = checkIndex >= 0 ? distributedMembers(t, names[checkIndex], concretes[checkIndex]) : [];
+				if (members.length == 0) return substitutedConditionalAll(t, names, concretes, active);
+				const parts: Type[] = [];
+				for (const m of members) {
+					const each: Type[] = [];
+					for (const c of concretes) each.push(c);
+					each[checkIndex] = m;
+					parts.push(substitutedConditionalAll(t, names, each, active));
+				}
+				return unionOfParts(parts);
 			},
 			_ => t,
 		};
@@ -4281,6 +4447,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		return t.typeName + "<" + argsText + ">";
 	}
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.Module) return `typeof import("${t.typeName}")`;
 	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Span && t.typeReturn != null) return "Span<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Array && t.typeReturn != null) return "Vec<" + typeDisplayName(t.typeReturn) + ">";

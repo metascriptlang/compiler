@@ -60,3 +60,14 @@ test "genericInstanceCast: JS constructs and tests the instance class" {
 	assert !r.value.contains("instanceof Box)") && !r.value.contains("instanceof Box__Z"), "the test never names the erased class";
 	assert r.value.contains("is not Box<int32>"), "the message shows the instance";
 }
+
+test "genericInstanceCast: instanceof narrows a union to the members that instantiate the generic class" {
+	assert accepts("async function two(): Promise<number> { return 2; }\nfunction f(r: Promise<number> | number): string {\n\tif (r instanceof Promise) { return \"pending\"; }\n\treturn (r + 1).toString();\n}\n"), "a Promise member";
+	assert accepts(box + "function f(x: Box<string> | Box<number> | int32): int32 {\n\tif (x instanceof Box) { return 0; }\n\treturn x + 1;\n}\n"), "two instances are both selected";
+	assert accepts(box + "class Pair<U> extends Box<U> { w: U; constructor(v: U, w: U) { super(v); this.w = w; } }\nfunction f(x: Pair<int32> | string): int32 {\n\tif (x instanceof Box) { return x.w; }\n\treturn x.length;\n}\n"), "a subclass instance is selected";
+	assert hasError(box + "function f(x: Box<string> | Box<number> | int32): int32 {\n\tif (x instanceof Box) { return x + 1; }\n\treturn 0;\n}\n", "operator '+' cannot be applied"), "the true branch holds no number";
+}
+
+test "genericInstanceCast: instanceof refuses a union whose ancestor member could hide an instance" {
+	assert hasError("class Base { n: int32 = 0; }\nclass Sub<T> extends Base { v: T; constructor(v: T) { super(); this.v = v; } }\nfunction f(x: Base | string): boolean { return x instanceof Sub; }\n", "instanceof cannot test the generic class Sub");
+}

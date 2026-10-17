@@ -229,6 +229,18 @@ export function liftedOp(t: Type, op: AttachedOp, name: string, fnType: Type | n
 	return sym;
 }
 
+export function hasNoRuntimeRepr(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Void;
+}
+
+export function runtimeParamCount(t: Type): int32 {
+	let n: int32 = 0;
+	for (const param of t.typeChildren) {
+		if (!hasNoRuntimeRepr(param)) n += 1;
+	}
+	return n;
+}
+
 export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Readonly<string[]> | null, mutBits: int32, hookAbi: boolean): string {
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	if (fnType.typeReturn == null) cRetType = "void";
@@ -236,23 +248,20 @@ export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Read
 	const named = paramNames != null;
 	const names = paramNames != null ? paramNames : [];
 	const count = named ? names.length : fnType.typeChildren.length;
-	let paramList = "";
-	if (nrvo) {
-		paramList = cRetType + "* __result";
-		if (count > 0) paramList = paramList + ", ";
-	}
+	const parts: string[] = [];
+	if (nrvo) parts.push(cRetType + "* __result");
 	for (let i = 0; i < count; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
 		const typed = i < fnType.typeChildren.length;
+		if (typed && hasNoRuntimeRepr(fnType.typeChildren[i])) continue;
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		const mut = (mutBits & (1 << (i as int32))) != 0;
 		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
 		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}
-		paramList = named ? paramList + `${pType} ${safeName(names[i])}` : paramList + pType;
+		parts.push(named ? `${pType} ${safeName(names[i])}` : pType);
 	}
-	if (paramList == "") paramList = "void";
+	const paramList = parts.length > 0 ? parts.join(", ") : "void";
 	return `${nrvo ? "void" : cRetType} ${name}(${paramList})`;
 }
 
@@ -632,7 +641,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Uint64 => "uint64_t",
 		TypeKind.Boolean => "MS_BOOL",
 		TypeKind.BooleanLiteral => "MS_BOOL",
-		TypeKind.Char => "uint8_t",
+		TypeKind.Char | TypeKind.Module => "uint8_t",
 		TypeKind.String | TypeKind.StringLiteral => "msString",
 		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",
@@ -656,9 +665,13 @@ export function isPointerType(t: Type): boolean {
 	if (t == null) return false;
 	let inner = skipModifier(t);
 	if (inner != null) inner = skipModifier(peelTransparentInstance(inner));
+	while (inner != null && distinctBody(inner) != null) inner = skipModifier(peelTransparentInstance(distinctBody(inner)!));
 	if (inner == null) return false;
 	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
-	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return true;
+	if (inner.kind == TypeKind.Union) {
+		const held = unwrapRefNullUnion(inner);
+		return held != null && isPointerType(held);
+	}
 	return match (inner.kind) {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
 		// user `unknown` is void*; a Pending type must stay non-pointer
@@ -1921,11 +1934,13 @@ function genClosureCast(g: CGen, t: Type, withEnv: boolean, nrvoType: string): s
 	if (nrvoType != "") {
 		params = nrvoType + "*";
 	}
-	if (t != null && t.kind == TypeKind.Function && t.typeChildren.length > 0) {
+	if (t != null && t.kind == TypeKind.Function && runtimeParamCount(t) > 0) {
 		let i = 0;
 		while (i < t.typeChildren.length) {
-			if (params != "") params = params + ", ";
-			params = params + closureParamTypeToC(g, t.typeChildren[i]);
+			if (!hasNoRuntimeRepr(t.typeChildren[i])) {
+				if (params != "") params = params + ", ";
+				params = params + closureParamTypeToC(g, t.typeChildren[i]);
+			}
 			i = i + 1;
 		}
 		if (withEnv) params = params + ", void*";

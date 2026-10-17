@@ -63,7 +63,7 @@ test "typeof compared against a non-literal does not narrow" {
 	assert strictErrorCount("function apply(v: int32 | ((prev: int32) => int32), cur: int32): int32 {\n"
 		+ "\tlet k = \"function\";\n"
 		+ "\tif (typeof v === k) { return v(cur); }\n"
-		+ "\treturn v;\n}") == 1;
+		+ "\treturn v;\n}") == 2;
 }
 
 // ===== a string that is not a tag =====

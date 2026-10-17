@@ -9,7 +9,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind,
-	FlowNode, FlowFlag, FlowList,
+	FlowNode, FlowFlag, FlowList, FlowReduceLabelData,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
@@ -21,9 +21,10 @@ import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
 	detectUnionDiscriminant, enumMemberLiteralOf,
 	findVariantByStringDiscriminant, findFieldInVariant,
-	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
-	nullableUnionOf, hasGenericParams, isNullableShape,
+	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
+	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
+	classAncestorInstance, isNullableShape,
 } from "./types";
 import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
@@ -73,6 +74,7 @@ export interface FlowState {
 	depth: int32;                    // recursion guard; TypeScript caps at 2000
 	sharedFlows: SharedFlowEntry[];  // per-query Shared-flow cache
 	flowLoopStack: FlowLoopInfo[];   // in-progress loop analyses (re-entry detection)
+	reduceLabels: FlowReduceLabelData[];
 	// Phase 6 deferred fields (not yet used):
 	//   - initialType: Type — distinguish declaredType (widened) from
 	//     initialType (usually equal, but differs for parameters with init
@@ -89,6 +91,7 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 		depth: 0,
 		sharedFlows: [],
 		flowLoopStack: [],
+		reduceLabels: [],
 	};
 }
 
@@ -283,9 +286,15 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: N
 			current = current.antecedent;
 			continue;
 		}
+		if (flags.has(FlowFlag.ReduceLabel)) {
+			state.reduceLabels.push(current.reduceLabelData!);
+			result = walkForNonNullCheck(state, current.antecedent, refNode);
+			state.reduceLabels.pop();
+			break;
+		}
 		if (flags.has(FlowFlag.BranchLabel)) {
 			// All antecedents must prove non-null for the join to be non-null.
-			let list: FlowList | null = current.antecedents;
+			let list: FlowList | null = branchLabelAntecedents(state.reduceLabels, current);
 			let allNonNull = list != null;
 			while (list != null) {
 				if (!walkForNonNullCheck(state, list.flow, refNode)) {
@@ -302,7 +311,7 @@ function walkForNonNullCheck(state: FlowState, flow: FlowNode | null, refNode: N
 			result = false;
 			break;
 		}
-		// Assignment / ArrayMutation / Call / ReduceLabel / SwitchClause /
+		// Assignment / ArrayMutation / Call / SwitchClause /
 		// Shared — walk up.
 		current = current.antecedent;
 	}
@@ -435,7 +444,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			// it iteratively (mirrors TS getTypeAtFlowNode) so a long chain of
 			// sequential `if`s doesn't grow the call stack. Real merges (2+
 			// antecedents) still recurse into getTypeAtBranchLabel.
-			const ants = current.antecedents;
+			const ants = branchLabelAntecedents(state.reduceLabels, current);
 			if (ants != null && ants.next == null) {
 				current = ants.flow;
 				continue;
@@ -450,7 +459,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 				result = cachedLabel;
 				break;
 			}
-			result = getTypeAtBranchLabel(state, current);
+			result = getTypeAtBranchLabel(state, ants);
 			cacheSharedFlow(state, current, result);
 			break;
 		}
@@ -467,9 +476,13 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			break;
 		}
 		if (flags.has(FlowFlag.ReduceLabel)) {
-			// Try/finally ReduceLabel (Phase 6). Phase 2: pass through.
-			current = current.antecedent;
-			continue;
+			const outerMemo = state.sharedFlows;
+			state.sharedFlows = [];
+			state.reduceLabels.push(current.reduceLabelData!);
+			result = getTypeAtFlowNode(state, current.antecedent);
+			state.reduceLabels.pop();
+			state.sharedFlows = outerMemo;
+			break;
 		}
 		// Unknown flow kind — walk up to avoid getting stuck.
 		current = current.antecedent;
@@ -622,10 +635,18 @@ function narrowTypeBySwitchOnTypeof(t: Type, sd: SwitchStmtData, clauseStart: in
 // declared type (the narrowing from other branches is irrelevant because a
 // superset dominates).
 
-function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
+function branchLabelAntecedents(reduceLabels: FlowReduceLabelData[], flow: FlowNode): FlowList | null {
+	for (let i = reduceLabels.length - 1; i >= 0; i -= 1) {
+		if (reduceLabels[i].target == flow) return reduceLabels[i].antecedents;
+	}
+	return flow.antecedents;
+}
+
+function getTypeAtBranchLabel(state: FlowState, antecedentList: FlowList | null): FlowType {
 	const antecedents: Type[] = [];
 	let anyIncomplete = false;
-	let list: FlowList | null = flow.antecedents;
+	let subtypeReduction = false;
+	let list: FlowList | null = antecedentList;
 	while (list != null) {
 		// Skip Unreachable antecedents — they represent dead-code paths
 		// (e.g. the then-branch of `if (x === null) return;`) and contribute
@@ -644,6 +665,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 		}
 		const at = ft.t;
 		antecedents.push(at!);
+		if (!isSubsetOfDeclared(at!, state.declaredType)) subtypeReduction = true;
 		list = list.next;
 	}
 	if (antecedents.length == 0) {
@@ -670,9 +692,45 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 		}
 		if (!seen) uniq.push(a);
 	}
-	if (uniq.length == 0) return flowType(state.declaredType, anyIncomplete);
-	if (uniq.length == 1) return flowType(uniq[0], anyIncomplete);
-	return flowType(joinNarrowedTypes(state.declaredType, uniq), anyIncomplete);
+	const joined = subtypeReduction ? withoutSubclasses(uniq) : uniq;
+	if (joined.length == 0) return flowType(state.declaredType, anyIncomplete);
+	if (joined.length == 1) return flowType(joined[0], anyIncomplete);
+	return flowType(joinNarrowedTypes(state.declaredType, joined), anyIncomplete);
+}
+
+function declaredMembers(declared: Type): Type[] {
+	if (declared.kind == TypeKind.Union) return declared.typeChildren;
+	if (isMaybeType(declared) && declared.typeReturn != null) return [declared.typeReturn!, nullType()];
+	return [declared];
+}
+
+function isSubsetOfDeclared(t: Type, declared: Type | null): boolean {
+	if (declared == null || t == declared || sameType(t, declared)) return true;
+	const members = declaredMembers(declared);
+	for (const part of declaredMembers(t)) {
+		let found = false;
+		for (const m of members) {
+			if (m == part || sameType(m, part)) { found = true; break; }
+		}
+		if (!found) return false;
+	}
+	return true;
+}
+
+function withoutSubclasses(types: Type[]): Type[] {
+	const flat: Type[] = [];
+	for (const t of types) {
+		for (const m of declaredMembers(t)) appendIfUnique(flat, m);
+	}
+	const kept: Type[] = [];
+	for (const t of flat) {
+		let covered = false;
+		for (const other of flat) {
+			if (other != t && classAncestorInstance(t, other) != null) { covered = true; break; }
+		}
+		if (!covered) kept.push(t);
+	}
+	return kept.length == flat.length ? types : kept;
 }
 
 // ===== Loop label fixed-point =====
@@ -718,6 +776,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	const info: FlowLoopInfo = { loopNode: flow, types: [] };
 	let firstAnteType: FlowType = null as unknown as FlowType;
 	let widened = false;
+	let subtypeReduction = false;
 	const reversed: FlowNode[] = [];
 	let cursor: FlowList | null = flow.antecedents;
 	while (cursor != null) {
@@ -735,6 +794,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 			firstAnteType = ft;
 		}
 		appendIfUnique(info.types, ft.t);
+		if (ft.t != null && !isSubsetOfDeclared(ft.t, state.declaredType)) subtypeReduction = true;
 		if (ft.t == state.declaredType) {
 			widened = true;
 			break;
@@ -749,7 +809,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	if (info.types.length == 0) {
 		return flowType(state.declaredType, false);
 	}
-	const joined = unionOfTypes(info.types, state.declaredType);
+	const joined = unionOfTypes(subtypeReduction ? withoutSubclasses(info.types) : info.types, state.declaredType);
 	// Incomplete iff the first (non-looping) antecedent was itself incomplete.
 	const incomplete = firstAnteType != null && firstAnteType.incomplete;
 	return flowType(joined, incomplete);
@@ -757,13 +817,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 
 // Union a list of types with structural dedup. Single-element list returns
 // the element directly (no unnecessary union wrapper).
-//
-// Phase 3 gap: the reference tracks a `subtypeReduction` flag — set when any
-// antecedent type is not a subset of `initialType`. When true, it uses
-// UnionReductionSubtype (tighter collapse); otherwise UnionReductionLiteral
-// (looser). Our implementation always uses structural dedup, producing a
-// potentially coarser union. This is SOUND (supertype) but less precise.
-// Phase 6 can tighten once we add `initialType` and an `isSubsetOf` helper.
+
 // ===== Nullable join canonicalization =====
 //
 // THE single oracle for "a join whose members include null". Both join paths
@@ -943,7 +997,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 	// the identifier's declaration. If it's a const binding initialized to a
 	// condition expression, recursively narrow using that expression. Matches
 	// (matches the reference's getTypeOfDottedName + narrowTypeByAliasedCondition).
-	if (expr.kind == NodeKind.Identifier) {
+	if (expr.kind == NodeKind.Identifier && !isMatchingReference(expr, refNode)) {
 		const aliased = getAliasedCondition(expr);
 		if (aliased != null && aliasStillHolds(expr, refNode)) {
 			return narrowType(t, aliased, refNode, assumeTrue);
@@ -957,7 +1011,8 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		return narrowTypeByPredicate(t, expr, refNode, assumeTrue);
 	}
 	// Truthiness narrowing: bare expression used as a condition.
-	// `if (x)` where x: T | null → truthy: T (null removed), falsy: null.
+	// `if (x)` where x: T | null → truthy: T (null removed), falsy: null plus
+	// every member that has a falsy value (0, NaN, "", false, 0n).
 	// Handles both Identifier and MemberExpr via isMatchingReference.
 	// Positioned as the last-resort case — aliased conditions, type
 	// predicates, and equality checks all get priority above.
@@ -965,7 +1020,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		if (assumeTrue) {
 			return removeNullFromType(t);
 		}
-		return extractNullFromType(t);
+		return narrowToFalsy(t);
 	}
 	// Boolean-discriminator DU narrowing: `if (r.ok)` where r is
 	// `{ ok: true, ... } | { ok: false, ... }` narrows r to the matching variant.
@@ -1082,30 +1137,42 @@ function narrowTypeByInstanceof(t: Type | null, left: Node, right: Node, refNode
 	// a class — its resolvedSym.symbolType is the class/struct type.
 	if (right.resolvedSym == null || right.resolvedSym.symbolType == null) return t;
 	const target = right.resolvedSym.symbolType;
-	if (assumeTrue) {
-		// Truthy: narrow to the target type. For unions, verify target is a
-		// member; for non-unions, trust the user's instanceof check.
-		if (t.kind == TypeKind.Union && t.typeChildren != null) {
-			for (const v of t.typeChildren) {
-				const rel = typeRelation(target, v);
-				if (rel != TypeRelation.None) return target;
-			}
-			return t;
-		}
-		return target;
+	if (symGenericParams(right.resolvedSym) != "") {
+		const selected = genericInstanceMembers(t, right.resolvedSym);
+		if (selected == null) return t;
+		const kept: Type[] = [];
+		for (const v of t.typeChildren) if ((selected.indexOf(v) >= 0) == assumeTrue) kept.push(v);
+		if (kept.length == 0) return neverType();
+		return kept.length == 1 ? kept[0] : createUnion(kept);
 	}
-	// Falsy: remove the target from the union.
-	if (t.kind == TypeKind.Union && t.typeChildren != null) {
-		const remaining: Type[] = [];
-		for (const v of t.typeChildren) {
-			const rel = typeRelation(target, v);
-			if (rel == TypeRelation.None) remaining.push(v);
+	const members = declaredMembers(t);
+	const kept: Type[] = [];
+	for (const m of members) {
+		if (!assumeTrue) {
+			if (!isDerivedFrom(m, target)) kept.push(m);
+		} else if (isDerivedFrom(m, target)) {
+			kept.push(m);
+		} else if (isDerivedFrom(target, m)) {
+			appendIfUnique(kept, target);
 		}
-		if (remaining.length == 0) return t;
-		if (remaining.length == 1) return remaining[0];
-		return createUnion(remaining);
 	}
-	return t;
+	if (kept.length == 0) return assumeTrue ? target : t;
+	if (sameMembers(kept, members)) return t;
+	if (kept.length == 1) return kept[0];
+	return isNullableShape(kept) ? nullableUnionOf(kept) : createUnion(kept);
+}
+
+function sameMembers(a: Type[], b: Type[]): boolean {
+	if (a.length != b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i] != b[i]) return false;
+	}
+	return true;
+}
+
+function isDerivedFrom(source: Type, target: Type): boolean {
+	if (source.kind == TypeKind.Null) return false;
+	return source == target || sameType(source, target) || classAncestorInstance(source, target) != null;
 }
 
 // ===== Truthiness helpers =====
@@ -1143,6 +1210,18 @@ function extractNullFromType(t: Type | null): Type | null {
 		if (v.kind == TypeKind.Null) return v;
 	}
 	return t;
+}
+
+function narrowToFalsy(t: Type | null): Type | null {
+	if (t == null) return t;
+	if (isMaybeType(t)) return holdsFalsyValue(unwrapMaybeType(t)) ? t : nullType();
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	const kept: Type[] = [];
+	for (const v of t.typeChildren) {
+		if (v.kind == TypeKind.Null || holdsFalsyValue(v)) kept.push(v);
+	}
+	if (kept.length == 0 || kept.length == t.typeChildren.length) return t;
+	return kept.length == 1 ? kept[0] : createUnion(kept);
 }
 
 // Hidden conversions are repr plumbing (fitNode's variant↔union wrap/project);
@@ -1288,16 +1367,28 @@ function callNeverReturns(call: Node | null): boolean {
 
 export function isEndOfBodyReachable(body: Node): boolean {
 	if (body.flowNode == null) return false;
+	return reachesStart(body.flowNode, []);
+}
+
+function reachesStart(from: FlowNode, reduceLabels: FlowReduceLabelData[]): boolean {
 	const seen = new HashSet<FlowNode>();
-	const todo: FlowNode[] = [body.flowNode];
+	const todo: FlowNode[] = [from];
 	while (todo.length > 0) {
 		const flow = todo.pop();
 		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
 		seen.add(flow);
 		if (flow.flags.has(FlowFlag.Start)) return true;
 		if (flow.flags.has(FlowFlag.Call) && callNeverReturns(flow.node)) continue;
+		if (flow.flags.has(FlowFlag.ReduceLabel)) {
+			if (flow.antecedent == null) continue;
+			reduceLabels.push(flow.reduceLabelData!);
+			const reached = reachesStart(flow.antecedent, reduceLabels);
+			reduceLabels.pop();
+			if (reached) return true;
+			continue;
+		}
 		if (flow.flags.has(FlowFlag.LoopLabel) || flow.flags.has(FlowFlag.BranchLabel)) {
-			let list: FlowList | null = flow.antecedents;
+			let list: FlowList | null = flow.flags.has(FlowFlag.BranchLabel) ? branchLabelAntecedents(reduceLabels, flow) : flow.antecedents;
 			while (list != null) {
 				todo.push(list.flow);
 				list = list.next;

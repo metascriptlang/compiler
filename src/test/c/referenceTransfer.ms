@@ -74,7 +74,8 @@ test "shadowed catch bindings each release their own exception exactly once" {
 		const names = catchBindings(body);
 		assert names.length == depth, "catch depth " + depth.toString();
 		for (let i = 0; i < names.length; i += 1) {
-			assert body.split(`msDecref(${names[i]});`).length - 1 == 1, names[i];
+			const releases = body.split(`msDecref(${names[i]});`).length + body.split(`msDecrefCyclic(${names[i]});`).length - 2;
+			assert releases == 1, names[i];
 			for (let j = i + 1; j < names.length; j += 1) assert names[i] != names[j], "catch symbol identity";
 		}
 	}

@@ -149,6 +149,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.PlusEq => "PLUS_EQ",
 		TokenKind.MinusEq => "MINUS_EQ",
 		TokenKind.StarEq => "STAR_EQ",
+		TokenKind.StarStarEq => "STAR_STAR_EQ",
 		TokenKind.SlashEq => "SLASH_EQ",
 		TokenKind.PercentEq => "PERCENT_EQ",
 		TokenKind.AmpEq => "AMP_EQ",

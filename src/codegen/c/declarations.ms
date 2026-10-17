@@ -469,8 +469,11 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	// Global variable declarations go to GlobalVars section
 	if (node.kind == NodeKind.VariableDecl) {
 		if (isComptimeOnlyVarDecl(node)) return;
-		genGlobalVar(g, node);
-		return;
+		if (!isInitProcLocal(node)) {
+			genGlobalVar(g, node);
+			return;
+		}
+		if (g.preparingDeclarations) return;
 	}
 	// Handle top-level directives
 	if (node.kind == NodeKind.ExprStmt) {
@@ -505,6 +508,10 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	}
 }
 
+function isInitProcLocal(node: Readonly<Node>): boolean {
+	return node.resolvedSym != null && !hasFlag(node.resolvedSym, SymbolFlag.Global);
+}
+
 // ===== Global Variable Declaration =====
 
 function genGlobalVar(g: CGen, node: Readonly<Node>): void {
@@ -521,9 +528,9 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 
 	if (g.preparingDeclarations) return;
 	const cType = getTypeDesc(g, node.nodeType);
-	// Slots that are not module globals (DRC/transform temps hoisted to top level) keep a
-	// bare name that repeats across modules (per-module tempCounter) — static linkage is
-	// what makes them collision-free; nothing outside this module can reference them.
+	// Slots that are not module globals keep a bare name that can repeat across modules —
+	// static linkage is what makes them collision-free; nothing outside this module can
+	// reference them.
 	const staticPfx = isModuleSlot ? "" : "static ";
 	// Literal initializers → fold to C global initializer. This makes the global
 	// READY at program load time instead of waiting for Init000 dispatch order.

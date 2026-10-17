@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
-import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
+import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
@@ -1346,7 +1346,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 	if (d.importNames.length == 1 && d.importNames[0] == "*") {
 		const nsAlias = d.importAliases[0];
 		if (lookupLocal(ctx.table, nsAlias) != null) return;
-		const nsSym = makeSymbol(nsAlias, SymbolKind.Module, noneType(), false);
+		const nsSym = makeSymbol(nsAlias, SymbolKind.Module, sourcePath != "" ? createModuleNamespace(sourcePath) : noneType(), false);
 		nsSym.modulePath = sourcePath;
 		nsSym.location = node.location;
 		defineSymbol(ctx.table, nsSym);
@@ -1427,7 +1427,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 // from "./inner"` would re-export the class symbol cleanly but consumers
 // would see `Property '<method>' does not exist on type 'ClassName'` because
 // the per-method extension entries never reach the consumer's registry.
-function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, markExported: boolean): void {
+export function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, markExported: boolean): void {
 	if (ctx.extensionRegistry == null || sourcePath == "") return;
 	const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
 	if (modExports == null) return;

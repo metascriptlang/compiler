@@ -43,6 +43,8 @@ msBigInt* msBigIntShl(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntShr(const msBigInt* a, const msBigInt* b);
 
 int32_t msBigIntCmp(const msBigInt* a, const msBigInt* b);
+int32_t msBigIntCompareFloat64(const msBigInt* a, double d, int32_t unordered);
+int32_t msFloat64CompareBigInt(double d, const msBigInt* a, int32_t unordered);
 bool msBigIntIsZero(const msBigInt* a);
 msBigInt* msBigIntAsIntN(int64_t bits, const msBigInt* a);
 msBigInt* msBigIntAsUintN(int64_t bits, const msBigInt* a);

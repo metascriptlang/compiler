@@ -17,7 +17,7 @@ import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString }
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
-import { RaiserVM, execModule, createVM } from "../../raiser/vm";
+import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
 import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
@@ -110,9 +110,14 @@ export function evalASTCompile(program: Node): RaiserModule {
 }
 
 export function evalASTFull(program: Node): RaiserContext {
-	const raiserMod = evalASTCompile(program);
+	const transformed = transformForEngine(program);
 	const ctx = createContext();
-	load(ctx, raiserMod);
+	for (const e of _lastEngineCheckErrors) {
+		if (e.severity != Severity.Error) continue;
+		ctx.lastError = e.message;
+		return ctx;
+	}
+	load(ctx, generateRaiser(transformed));
 	execute(ctx);
 	return ctx;
 }
@@ -168,15 +173,18 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 }
 
 let _vmPreludeSyms: HashSet<Symbol> | null = null;
+let _vmStdHelpers: HashSet<Symbol> | null = null;
+
+function addWithOverloads(set: HashSet<Symbol>, s: Symbol): void {
+	set.add(s);
+	for (const o of s.overloads) set.add(o);
+}
 
 function isVmPreludeSym(sym: Symbol): boolean {
 	if (_raiserPreludeBuilding) return false;
 	if (_vmPreludeSyms == null) {
 		const own = new HashSet<Symbol>();
-		for (const s of globalScope(raiserPreludeCtx().table).symbols.values()) {
-			own.add(s);
-			for (const o of s.overloads) own.add(o);
-		}
+		for (const s of globalScope(raiserPreludeCtx().table).symbols.values()) addWithOverloads(own, s);
 		const exts = raiserPreludeCtx().extensionRegistry;
 		if (exts != null) {
 			for (const e of exts.methods) if (e.sym != null) own.add(e.sym);
@@ -185,6 +193,25 @@ function isVmPreludeSym(sym: Symbol): boolean {
 	}
 	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
 	return _vmPreludeSyms!.has(origin);
+}
+
+function isVmStdHelper(sym: Symbol): boolean {
+	if (_raiserPreludeBuilding) return false;
+	if (_vmStdHelpers == null) {
+		const prelude = raiserPreludeCtx();
+		const own = new HashSet<Symbol>();
+		for (const scope of prelude.preludeModuleScopes.values()) {
+			for (const s of scope) addWithOverloads(own, s);
+		}
+		if (prelude.extensionRegistry != null) {
+			for (const ext of prelude.extensionRegistry.methods) {
+				if (ext.sym != null) addWithOverloads(own, ext.sym!);
+			}
+		}
+		_vmStdHelpers = own;
+	}
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	return _vmStdHelpers!.has(origin);
 }
 
 function engineBodyCtx(definingModulePath: string, owner: Symbol | null): CheckerContext | null {
@@ -206,11 +233,17 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	return bodyCtx;
 }
 
-function vmStdSeeds(skipName: string): Symbol[] {
+function vmStdSeeds(sym: Symbol): Symbol[] {
 	const prelude = raiserPreludeCtx();
 	const seeds: Symbol[] = [];
+	const home = prelude.preludeModuleScopes.get(sym.modulePath);
+	if (home != null) {
+		for (const s of home) {
+			if (s.name != sym.name) seeds.push(s);
+		}
+	}
 	for (const s of globalScope(prelude.table).symbols.values()) {
-		if (s.name != skipName && !isPreludeExport(prelude, s)) seeds.push(s);
+		if (s.name != sym.name && !isPreludeExport(prelude, s)) seeds.push(s);
 	}
 	return seeds;
 }
@@ -318,8 +351,9 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
-	if (isVmPreludeSym(sym)) {
-		for (const s of vmStdSeeds(sym.name)) seeds.push(s);
+	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
+	if (isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym))) {
+		for (const s of vmStdSeeds(sym)) seeds.push(s);
 	} else if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
 			if (!isClass || s.name != sym.name) seeds.push(s);
@@ -347,16 +381,22 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	return idx;
 }
 
+export function releaseEngineHeaps(): void {
+	if (_engine != null) vmReleaseHeaps(_engine.vm);
+}
+
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
 	const result = compileIntoEngineSeeded(program, token, fnName, token, enclosingTypeAliases(token.table));
 	if (result == null as unknown as EngineMacroResult) return createContext();
+	let refused = false;
 	if (result.errors != null) {
 		for (const e of result.errors) {
 			if (e.severity != Severity.Error) continue;
 			addError(token, `@comptime block: ${e.message}`, e.line, e.column);
+			refused = true;
 		}
 	}
-	if (result.funcIdx < 0) return createContext();
+	if (refused || result.funcIdx < 0) return createContext();
 	const noArgs: RaiserValue[] = [];
 	const resultVal = callWithComptimeHostPolicy(result.vm, result.funcIdx, noArgs, token.modulePath);
 	if (result.vm.diagMessage != "") {
@@ -393,6 +433,7 @@ function evalFull(code: string): RaiserContext {
 }
 
 function compileForOrc(code: string): RaiserModule {
+	ensureHostTableLoaded();
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) { unreachable; }
 	const program = parseResult.value;
@@ -424,6 +465,31 @@ test "engine: a value outside an enum's members stops the conversion into it" {
 	const fromFloat = evalOrcVM(decl + " console.log(`${(z[1] as D) as int32}`);");
 	assert fromFloat.error == "", fromFloat.error;
 	assert fromFloat.output == "1\n", fromFloat.output;
+}
+
+test "engine: a uint64 past int64 converted into an enum stops with its unsigned value, as on C and JS" {
+	const decl = "enum D { A, B, C } enum S { Neg = -5, Zero = 0, One = 1 }" +
+		" let u: uint64[] = [9223372036854775808, 18446744073709551613, 1];";
+	const past = evalOrcVM(decl + " console.log(`${(u[0] as D) as int32}`);");
+	assert past.error.indexOf("value 9223372036854775808 not in range 0 .. 2") >= 0, past.error;
+	const negative = evalOrcVM(decl + " console.log(`${(u[1] as S) as int32}`);");
+	assert negative.error.indexOf("value 18446744073709551613 not in range -5 .. 1") >= 0, negative.error;
+	const ok = evalOrcVM(decl + " console.log(`${(u[2] as D) as int32} ${(u[2] as S) as int32}`);");
+	assert ok.error == "", ok.error;
+	assert ok.output == "1 1\n", ok.output;
+}
+
+test "engine: a bigint is refused on the vm instead of carrying the number through" {
+	const NO_BIGINT = "bigint is not supported on the Raiser VM";
+	const cast = evalOrcVM("function u(v: uint64): uint64 { return v; } const b = u(18446744073709551615) as bigint; console.log(`${b}`);");
+	assert cast.error.includes(NO_BIGINT), cast.error;
+	assert cast.output == "", cast.output;
+	const fromFloat = evalOrcVM("function f(v: float64): float64 { return v; } console.log(`${f(1.5) as bigint}`);");
+	assert fromFloat.error.includes(NO_BIGINT), fromFloat.error;
+	const literal = evalOrcVM("console.log(`${5n + 3n}`);");
+	assert literal.error.includes(NO_BIGINT), literal.error;
+	const comptime = evalSourceFull("function u(v: uint64): uint64 { return v; } const b = u(18446744073709551615) as bigint; return 1;");
+	assert comptime.lastError.includes(NO_BIGINT), comptime.lastError;
 }
 
 test "engine: a conversion into char stops outside 0 .. 255 and truncates a float, as on C and JS" {
@@ -540,9 +606,9 @@ test "engine: nested value copy retains reference identity under ORC" {
 }
 
 test "engine: value copy preserves Span fields and Span bindings" {
-	const r = evalFull("struct S { view: Span<int32>; } let a: Vec<int32> = [1];"
+	const r = evalFull("struct S { view: Span<int32>; } function run(): int32 { let a: Vec<int32> = [1];"
 		+ " let view: Span<int32> = a; let box: S = { view: a }; let copy = box;"
-		+ " view[0] = 4; copy.view[0] = 7; return a[0];");
+		+ " view[0] = 4; copy.view[0] = 7; return a[0]; } return run();");
 	assert r.lastError == "";
 	assert r.lastResult.intVal == 7;
 }
@@ -622,6 +688,21 @@ test "engine: super runs the parent constructor and a call through the base runs
 		+ " for (const a of all) { console.log(`${talk(a)} ${a.intro()}`); }");
 	assert vm.error == "";
 	assert vm.output == "a.2 I a.1\nb!2 I b!1\nxc!2 I xc!1\n";
+}
+
+test "engine: the template of a method with its own type parameters is never compiled" {
+	takeRaiserCompileErrors();
+	const vm = evalOrcVM("class Owner { tag: string = \"o\";"
+		+ " wrap<T>(v: T): () => T { return (): T => v; }"
+		+ " unused<T>(v: T): int32 { const f = (): int32 => 1; const g = (): T => v; return f(); }"
+		+ " both<A, B>(a: A, b: B): () => () => string { return (): () => string => { const inner = (): string => String(a) + String(b); return inner; }; }"
+		+ " static count<T>(xs: T[]): () => int32 { return (): int32 => xs.length as int32; } }"
+		+ " const o = new Owner();"
+		+ " console.log(o.tag);");
+	const warnings = takeRaiserCompileErrors();
+	assert vm.error == "", vm.error;
+	assert warnings.length == 0, warnings.length > 0 ? warnings[0].message : "";
+	assert vm.output == "o\n", vm.output;
 }
 
 test "engine: new Array(n) holds n distinct zero elements" {
@@ -745,12 +826,49 @@ test "engine: shift right on uint32 is logical" {
 	assert r.lastResult.intVal == 1;
 }
 
-test "engine: signed sub-int arithmetic wraps at the type width" {
+test "engine: signed arithmetic in range reaches the type's bounds" {
 	const ctx = evalOrcVM("function multiply(left: int16, right: int16): int16 { return left * right; }"
-		+ " function negate(x: int8): int8 { return -x; } let a: int16 = 32767; a += 1; let b: int8 = 127; b++;"
-		+ " console.log(`${multiply(300, 300)} ${multiply(-300, 300)} ${negate(-128)} ${a} ${b}`);");
+		+ " function negate(x: int8): int8 { return -x; } let a: int16 = 32766; a += 1; let b: int8 = -127; b--;"
+		+ " let c: int32 = 2147483646; c++; let d: int64 = -9223372036854775807; d -= 1;"
+		+ " console.log(`${multiply(181, 181)} ${multiply(-128, 256)} ${negate(-127)} ${a} ${b} ${c} ${d}`);");
 	assert ctx.error == "";
-	assert ctx.output == "24464 -24464 -128 -32768 -128\n";
+	assert ctx.output == "32761 -32768 127 32767 -128 2147483647 -9223372036854775808\n";
+}
+
+test "engine: signed overflow stops at every width" {
+	const programs = [
+		"function multiply(left: int16, right: int16): int16 { return left * right; } console.log(`${multiply(300, 300)}`);",
+		"function negate(x: int8): int8 { return -x; } console.log(`${negate(-128)}`);",
+		"let a: int16 = 32767; a += 1; console.log(`${a}`);",
+		"let b: int8 = 127; b++; console.log(`${b}`);",
+		"function add(x: int32, y: int32): int32 { return x + y; } console.log(`${add(2147483647, 1)}`);",
+		"function sub(x: int64, y: int64): int64 { return x - y; } console.log(`${sub(-9223372036854775807, 2)}`);",
+		"function mul(x: int64, y: int64): int64 { return x * y; } console.log(`${mul(4294967296, 2147483648)}`);",
+		"function neg(x: int64): int64 { return -x; } console.log(`${neg(-9223372036854775807 - 1)}`);",
+		"function div(x: int8, y: int8): int8 { return x / y; } console.log(`${div(-128, -1)}`);",
+	];
+	for (const program of programs) {
+		const ctx = evalOrcVM(program);
+		assert ctx.error.indexOf("over- or underflow") >= 0, program;
+		assert ctx.output == "", program;
+	}
+}
+
+test "engine: a char step past 0 or 255 stops and one onto a bound is kept" {
+	const programs = [
+		"let c = 255 as char; c++; console.log(`${c as int32}`);",
+		"let c = 255 as char; ++c; console.log(`${c as int32}`);",
+		"let c = 0 as char; c--; console.log(`${c as int32}`);",
+		"let c = 0 as char; --c; console.log(`${c as int32}`);",
+	];
+	for (const program of programs) {
+		const ctx = evalOrcVM(program);
+		assert ctx.error.indexOf("over- or underflow") >= 0, program;
+		assert ctx.output == "", program;
+	}
+	const kept = evalOrcVM("let a = 254 as char; a++; let b = 1 as char; b--; console.log(`${a as int32} ${b as int32}`);");
+	assert kept.error == "";
+	assert kept.output == "255 0\n";
 }
 
 test "engine: unsigned arithmetic wraps at the type width" {
@@ -761,11 +879,15 @@ test "engine: unsigned arithmetic wraps at the type width" {
 	assert ctx.output == "24464 0 255\n";
 }
 
-test "engine: a field or element update wraps at its type width" {
-	const ctx = evalOrcVM("struct Counter { n: int8; } const c: Counter = { n: 127 }; c.n++; const xs: uint8[] = [255]; xs[0] += 2;"
+test "engine: an unsigned field or element update wraps at its type width; a signed one stops" {
+	const ctx = evalOrcVM("struct Counter { n: uint8; } const c: Counter = { n: 255 }; c.n++; const xs: uint8[] = [255]; xs[0] += 2;"
 		+ " console.log(`${c.n} ${xs[0]}`);");
 	assert ctx.error == "";
-	assert ctx.output == "-128 1\n";
+	assert ctx.output == "0 1\n";
+	const field = evalOrcVM("struct Counter { n: int8; } const c: Counter = { n: 127 }; c.n++; console.log(`${c.n}`);");
+	assert field.error.indexOf("over- or underflow") >= 0;
+	const element = evalOrcVM("const xs: int32[] = [2147483647]; xs[0] *= 2; console.log(`${xs[0]}`);");
+	assert element.error.indexOf("over- or underflow") >= 0;
 }
 
 test "engine: compound assignment on a float local uses float arithmetic" {
@@ -1022,7 +1144,7 @@ test "objects through transform" {
 }
 
 test "build.ms pattern through transform" {
-	const ctx = evalFull("export default { root: \"src/main.ms\" };");
+	const ctx = evalFull("interface Config { root: string; } function defineConfig(config: Config): Config { return config; } export default defineConfig({ root: \"src/main.ms\" });");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
@@ -1148,7 +1270,7 @@ test "a closure made in a for-of reads the binding of its own iteration" {
 }
 
 test "a closure made in a for loop that continues reads the counter of its own iteration" {
-	const ctx = evalFull("function make(): number { const fs: (() => number)[] = []; for (let i = 0; i < 6; i++) { if (i % 2 == 0) continue; fs.push((): number => i); } let acc = 0; for (const f of fs) { acc = acc * 10 + f(); } return acc; } return make();");
+	const ctx = evalFull("function make(): number { const fs: (() => number)[] = []; for (let i = 0; i < 6; i++) { if (i % 2 == 0) continue; fs.push((): number => i); } let acc: number = 0; for (const f of fs) { acc = acc * 10 + f(); } return acc; } return make();");
 	assert ctx.lastError == "", ctx.lastError;
 	assert unboxFloat(ctx.lastResult) == 135;
 }

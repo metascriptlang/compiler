@@ -7,7 +7,7 @@
 // get wrapped with a runtime range check call.
 
 import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind, ExprStmtData, VariableDeclData, CallExprData } from "../../ast/node";
-import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive } from "../../checker/types";
+import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive, distinctNumericBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
@@ -27,10 +27,10 @@ export function injectEnumRangeChecks(program: Node, ctx: TransformContext): Nod
 	walkNode(program, (n: Node): Node => {
 		if (n.kind == NodeKind.TypeAssertion) {
 			const d = n.data as TypeAssertionData;
-			if (n.nodeType != null && n.nodeType.kind == TypeKind.Enum && d.asExpr != null) d.asExpr = checkedEnumSource(ctx, d.asExpr, n.nodeType);
+			if (n.nodeType != null && n.nodeType.kind == TypeKind.Enum && d.asExpr != null) d.asExpr = checkedEnumSource(ctx, d.asExpr, n.nodeType, true);
 		} else if (n.kind == NodeKind.HiddenStdConv) {
 			const d = n.data as HiddenStdConvData;
-			if (d.convType != null && d.convType.kind == TypeKind.Enum && d.convExpr != null) d.convExpr = checkedEnumSource(ctx, d.convExpr, d.convType);
+			if (d.convType != null && d.convType.kind == TypeKind.Enum && d.convExpr != null) d.convExpr = checkedEnumSource(ctx, d.convExpr, d.convType, true);
 		}
 		return n;
 	});
@@ -107,6 +107,11 @@ function isFloatSource(src: Type | null): boolean {
 	return s.kind == TypeKind.Float32 || s.kind == TypeKind.Float64 || s.kind == TypeKind.Number;
 }
 
+function isUint64Source(src: Type | null): boolean {
+	const s = peelToRepr(src);
+	return s != null && s.kind == TypeKind.Uint64;
+}
+
 function int64CheckFor(src: Type | null): string {
 	const s = peelToRepr(src);
 	if (s == null) return "";
@@ -171,12 +176,19 @@ function checkedConv(
 	return call;
 }
 
-function checkedEnumSource(ctx: TransformContext, expr: Node, dest: Type): Node {
+function checkedEnumSource(ctx: TransformContext, expr: Node, dest: Type, untypedBridge: boolean = false): Node {
 	const fnName = rangeCheckHelper(expr.nodeType, dest, ctx.rangeChecks);
 	if (fnName == "") return expr;
-	const call = makeRangeCheckFor(fnName, expr, dest, expr.location);
+	const fromU64 = untypedBridge && isUint64Source(expr.nodeType);
+	const call = makeRangeCheckFor(fromU64 ? "msCheckRangeI32FromU64" : fnName, expr, dest, expr.location);
 	call.nodeType = createPrimitive(TypeKind.Int32);
 	return call;
+}
+
+function checkedDistinctSource(ctx: TransformContext, expr: Node, base: Type): Node {
+	const checked = checkedConv(ctx, expr, expr.nodeType, base, expr);
+	if (checked != expr) checked.nodeType = base;
+	return checked;
 }
 
 function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
@@ -186,6 +198,11 @@ function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 		if (node.nodeType == null) return node;
 		if (node.nodeType.kind == TypeKind.Enum && d.asExpr != null) {
 			d.asExpr = checkedEnumSource(ctx, d.asExpr, node.nodeType);
+			return node;
+		}
+		const base = distinctNumericBase(node.nodeType);
+		if (base != null && d.asExpr != null) {
+			d.asExpr = checkedDistinctSource(ctx, d.asExpr, base);
 			return node;
 		}
 		return checkedConv(ctx, d.asExpr, src, node.nodeType, node);
