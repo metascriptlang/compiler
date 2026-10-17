@@ -15,6 +15,9 @@
 //   settle completed freed memory (heap-use-after-free every run under ASan).
 //   The Error slack is the rejections nothing awaits: a failed future never releases
 //   its error (inbox 2026-10-06-catch-handler-never-destroys-the-error).
+//   The dropped race's rejecting input waits on its winner: a dropped race that
+//   rejects is an unhandled rejection, and timers alone do not order its inputs (node
+//   fires a later-made 2 ms timer before a 1 ms one when its loop runs late).
 import { sleepAsync } from "std/core/promise";
 
 async function value(n: int32, ms: int32): Promise<int32> {
@@ -27,9 +30,15 @@ async function fail(ms: int32): Promise<int32> {
 	throw new Error("no");
 }
 
+async function failAfter(first: Promise<int32>): Promise<int32> {
+	await first;
+	throw new Error("no");
+}
+
 async function run(): Promise<void> {
 	for (let i = 0; i < 50; i++) {
-		Promise.race([value(1, 1), fail(2)]);
+		const first = value(1, 1);
+		Promise.race([first, failAfter(first)]);
 		Promise.all([value(1, 1), value(2, 2)]);
 		Promise.any([fail(1), value(2, 2)]);
 		Promise.allSettled([value(1, 1), fail(2)]);
