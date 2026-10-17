@@ -30,6 +30,20 @@ export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, r
 	return msNewPromise<T>(executor);
 }
 
+extern function msQueueJob(job: () => void): void from "queueMicrotask(#)";
+
+export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+	return msNewPromise<T>((resolve: (value: T) => void, reject: (reason: Error) => void): void => {
+		msQueueJob((): void => {
+			try {
+				callThen(thenable, resolve, reject);
+			} catch (e) {
+				reject(e);
+			}
+		});
+	});
+}
+
 @builtin("PromiseSpawn")
 export extern function spawn<T>(fn: () => T): Promise<T> from "Promise.resolve().then(#)";
 
