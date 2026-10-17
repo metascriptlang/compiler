@@ -831,6 +831,9 @@ export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): voi
 export function awaitReturnedThenable(ctx: CheckerContext, value: Node): Node {
 	const adopted = adoptThenable(ctx, value, "The value an async function returns");
 	if (adopted == value) return value;
+	if (ctx.tryGuardedFunction != null && ctx.tryGuardedFunction == ctx.currentFunction) {
+		addError(ctx, "a returned thenable is not awaited inside try — write `return await …` so catch and finally see its result", value.location.line, value.location.column);
+	}
 	const awaited = createNodeAt(NodeKind.AwaitExpr, { awaitArg: adopted }, value.location);
 	callCheckExpr(ctx, awaited, null);
 	return awaited;

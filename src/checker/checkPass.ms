@@ -2564,9 +2564,12 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 	const oldState = saveInitState(ctx.initTracker);
 	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const oldInTry = ctx.inTryExpr;
+	const oldGuarded = ctx.tryGuardedFunction;
 	if (d.catchBody != null) ctx.inTryExpr = true;
+	if (d.catchBody != null || d.finallyBody != null) ctx.tryGuardedFunction = ctx.currentFunction;
 	checkStmt(ctx, d.tryBody);
 	ctx.inTryExpr = oldInTry;
+	ctx.tryGuardedFunction = oldGuarded;
 	const branchInits: string[][] = [collectNewInits(ctx.initTracker, oldState)];
 	const branchConsumes: string[][] = [collectNewConsumes(ctx.affineTracker, oldAffine)];
 	const branchBreaks: BreakState[] = [breaksBlock(d.tryBody)];
@@ -2586,7 +2589,9 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 			markInitialized(ctx.initTracker, d.catchName);
 			sgRecordSym(ctx, d.catchBindingLocation.line, d.catchBindingLocation.column, d.catchBindingLocation.column + d.catchName.length, catchSym, catchType, SymbolKind.Variable, d.catchName, "", true);
 		}
+		if (d.finallyBody != null) ctx.tryGuardedFunction = ctx.currentFunction;
 		checkStmt(ctx, d.catchBody);
+		ctx.tryGuardedFunction = oldGuarded;
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		branchBreaks.push(breaksBlock(d.catchBody));

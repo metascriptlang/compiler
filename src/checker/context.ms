@@ -1329,6 +1329,7 @@ export class CheckerContext {
 	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
+	tryGuardedFunction: Symbol | null; // function whose body is inside a try that has a catch or finally
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
 	procInstCache: HashMap<Symbol, Symbol[]>;
@@ -1415,6 +1416,7 @@ export function createContext(): CheckerContext {
 		affineTracker: createAffineTracker(),
 		strictNullChecks: false,
 		inTryExpr: false,
+		tryGuardedFunction: null,
 		genericInstDepth: 0,
 		generatedInstances: [],
 		procInstCache: new HashMap<Symbol, Symbol[]>(),
