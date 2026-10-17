@@ -20,7 +20,8 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
+import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -591,7 +592,8 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 			}
 		}
 	}
-	if (d.keys.length == 0) {
+	const omitted = omittedFieldZeros(node, d);
+	if (d.keys.length == 0 && omitted.length == 0) {
 		emit(gen, "{}");
 		return;
 	}
@@ -608,7 +610,36 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 			emitCopyOnRead(gen, d.properties[i]);
 		}
 	}
+	for (let i = 0; i < omitted.length; i += 1) {
+		if (d.keys.length > 0 || i > 0) emit(gen, ", ");
+		emit(gen, omitted[i]);
+	}
 	emit(gen, " }");
+}
+
+function omittedFieldZeros(node: Node, d: ObjectLiteralData): string[] {
+	const out: string[] = [];
+	if (node.nodeType == null || d.keys.length != d.properties.length) return out;
+	const peeled = peelThrough(unwrapRef(node.nodeType), PEEL_ALL);
+	const base = peeled == null ? unwrapRef(node.nodeType) : peeled;
+	const t = spreadStructOf(base.kind == TypeKind.GenericInstance && base.typeReturn != null ? base.typeReturn : base);
+	if (t == null) return out;
+	for (let i = 0; i < t.typeNames.length && i < t.typeChildren.length; i += 1) {
+		const name = t.typeNames[i];
+		if (name.startsWith("__") || d.keys.includes(name) || spreadMayProvide(d, name)) continue;
+		const zero = jsDefaultValue(t.typeChildren[i]);
+		if (zero != "") out.push(`${name}: ${zero}`);
+	}
+	return out;
+}
+
+function spreadMayProvide(d: ObjectLiteralData, name: string): boolean {
+	for (let i = 0; i < d.keys.length; i += 1) {
+		if (d.keys[i] != "..." || d.properties[i].kind != NodeKind.SpreadExpr) continue;
+		const src = spreadStructOf((d.properties[i].data as SpreadExprData).spreadArg.nodeType);
+		if (src == null || src.typeNames.includes(name)) return true;
+	}
+	return false;
 }
 
 // ===== Array Literal =====

@@ -531,7 +531,7 @@ static inline void* msFutureRead(void* fp) {
 /* Owning futures (valueDrop set). The drop routine takes the slot without the
  * finished/failed checks: an unfinished or failed future holds an empty slot. */
 static inline bool msFutureOwnsValue(void* fp) {
-	return ((msFutureBase*)fp)->valueDrop != NULL;
+	return ((msFutureBase*)fp)->valueDrop != NULL && !((msFutureBase*)fp)->failed;
 }
 static inline void msFutureSetValueDrop(void* fp, msClosure drop) {
 	((msFutureBase*)fp)->valueDrop = (void (*)(void*))drop.fn;

@@ -59,6 +59,7 @@ static inline msFuture* msPromiseResolve(void* val) {
 /* Create pre-failed future (Reference: newFuture[T]() + fail(err)) */
 static inline msFuture* msPromiseReject(void* err) {
 	msFuture* f = (msFuture*)msFutureCreate();
+	msIncref(err);
 	msFutureFail(f, err);
 	return f;
 }
@@ -99,15 +100,6 @@ typedef struct {
 /* Resolves with FIRST fulfilled input. Rejects only if ALL reject.
  * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
 void* msPromiseAny(msRefArray* futures);
-
-/* ===== new Promise(executor) ===== */
-
-typedef struct {
-	msFuture* future;
-	bool settled;         /* only first resolve/reject takes effect */
-} msPromiseNewEnv;
-
-msFuture* msPromiseNew(msClosure executor);
 
 /* ===== Promise.then / .catch / .finally ===== */
 

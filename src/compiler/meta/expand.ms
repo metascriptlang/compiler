@@ -99,6 +99,11 @@ function isSpliceCall(node: Node | null): boolean {
 
 let _quoteGensym: HashSet<Node> = new HashSet<Node>();
 
+// The std/meta `msMetaBindSym` host while a typed getTypeImpl literal is built:
+// a Symbol cannot be spelled as a literal, so nodeToASTLiteral reads it back from
+// a bound handle the way a static bindSym does.
+let _bindSymHost: Symbol | null = null;
+
 function withNames(scope: string[], names: string[]): string[] {
 	if (names.length == 0) return scope;
 	const out: string[] = [];
@@ -212,6 +217,26 @@ function lowerQuoteExpr(node: Node): Node {
 
 // ===== nodeToASTLiteral: Node → ObjectLiteral AST =====
 //
+function bindSymHostOf(declCtx: CheckerContext, macroSym: Symbol): Symbol | null {
+	const nodeSym = lookupSymbolInDefiningScope(declCtx.table, macroSym.name, "Node");
+	const metaDir = nodeSym == null ? "" : nodeSym.modulePath.slice(0, nodeSym.modulePath.lastIndexOf("/") + 1);
+	const metaCtx = metaDir == "" ? null : lookupModuleCtx(metaDir + "index.ms");
+	return metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
+}
+
+function bindSymCall(hostSym: Symbol, name: string, bound: Symbol, loc: SourceLocation): Node {
+	const callee = createNodeAt(NodeKind.Identifier, { name: "msMetaBindSym" }, loc);
+	callee.resolvedSym = hostSym;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
+	return createNodeAt(NodeKind.TypeAssertion, {
+		asExpr: createNodeAt(NodeKind.CallExpr, {
+			callee: callee,
+			arguments: [mkString(name, loc), mkNumber(registerBoundSym(bound), loc)],
+		}, loc),
+		asType: "Node",
+	}, loc);
+}
+
 // Converts a Node into an AST ObjectLiteral that, when evaluated by Raiser,
 // produces a heap object matching nodeToValue's output for the same Node.
 // This lets us bind macro arguments via wrapper-Program const declarations.
@@ -267,7 +292,12 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	// Symbol introspection: surface name + kind for nodes the checker bound
 	// to a Symbol. Forward-only — macros read `value.resolvedSym.name`.
 	// declNode skipped to avoid Symbol↔Node cycle (V2 if codecs need decl site).
-	if (node.resolvedSym != null) {
+	if (node.resolvedSym != null && _bindSymHost != null) {
+		keys.push("resolvedSym");
+		values.push(createNodeAt(NodeKind.MemberExpr, {
+			object: bindSymCall(_bindSymHost, node.resolvedSym.name, node.resolvedSym, loc), property: "resolvedSym", isOptional: false,
+		}, loc));
+	} else if (node.resolvedSym != null) {
 		const symKeys: string[] = ["name", "kind"];
 		const symValues: Node[] = [
 			mkString(node.resolvedSym.name, loc),
@@ -1570,25 +1600,12 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			if (boundSym.symbolKind != SymbolKind.Macro) {
 				ensureShaped(boundSym, bindCtx);
 			}
-			const nodeSym = lookupSymbolInDefiningScope(bindCtx.table, macroSym.name, "Node");
-			const metaDir = nodeSym == null ? "" : nodeSym.modulePath.slice(0, nodeSym.modulePath.lastIndexOf("/") + 1);
-			const metaCtx = metaDir == "" ? null : lookupModuleCtx(metaDir + "index.ms");
-			const hostSym = metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
+			const hostSym = bindSymHostOf(bindCtx, macroSym);
 			if (hostSym == null) {
 				addError(ctx, `Macro '${macroName}': bindSym('${symName}') needs 'Node' imported from "std/meta" in the macro's module`, node.location.line, node.location.column);
 				return node;
 			}
-			const bloc = node.location;
-			const callee = createNodeAt(NodeKind.Identifier, { name: "msMetaBindSym" }, bloc);
-			callee.resolvedSym = hostSym;
-			callee.flags = callee.flags.incl(NodeFlag.BoundSym);
-			return createNodeAt(NodeKind.TypeAssertion, {
-				asExpr: createNodeAt(NodeKind.CallExpr, {
-					callee: callee,
-					arguments: [mkString(symName, bloc), mkNumber(registerBoundSym(boundSym), bloc)],
-				}, bloc),
-				asType: "Node",
-			}, bloc);
+			return bindSymCall(hostSym, symName, boundSym, node.location);
 		}
 		if (cd.callee.kind == NodeKind.Identifier
 				&& (cd.callee.data as IdentifierData).name == "getTypeImpl"
@@ -1618,10 +1635,10 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				// Assert to Node so flat reads on the spliced literal resolve through the
 				// NodeData unique-field-name rule; a bare literal would type as its own
 				// anonymous struct and expose only the keys it happens to carry.
-				return createNodeAt(NodeKind.TypeAssertion, {
-					asExpr: nodeToASTLiteral(implementation, node.location, false),
-					asType: "Node",
-				}, node.location);
+				_bindSymHost = bindSymHostOf(declCtx, macroSym);
+				const literal = nodeToASTLiteral(implementation, node.location, false);
+				_bindSymHost = null;
+				return createNodeAt(NodeKind.TypeAssertion, { asExpr: literal, asType: "Node" }, node.location);
 			}
 		}
 		// getTypeArg() — the explicit <T> written at THIS call site. Resolved in the

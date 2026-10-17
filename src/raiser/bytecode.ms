@@ -166,6 +166,9 @@ export enum RaiserOpcode {
 	ObjConv,          // ABC: fatal unless R[A] is nil or an instance of class K[B], named K[C]
 	BTruthy,          // ABC: if R[A] is truthy (ToBoolean) skip C
 	NarrowS,          // AB: fatal unless R[A] fits a signed B-bit integer
+	FutureNew,        // ABC: R[A] = a pending future
+	FutureSettle,     // ABC: complete future R[A] with R[B] unless it is already settled
+	FutureFail,       // ABC: fail future R[A] with exception R[B] unless it is already settled
 }
 
 export enum RaiserConvClass {

@@ -17,7 +17,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, zeroInit, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, zeroInit, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -2628,6 +2628,11 @@ function nrvoTempNeedsZero(cType: string): boolean {
 	return true;
 }
 
+function dropVoidArg(p: CProc, arg: string, node: Readonly<Node>): void {
+	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.NullLiteral) return;
+	emitStmtsLine(p, `(void)(${arg});`);
+}
+
 function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	// Reference implementation pattern: extract environment and function pointers from closure pair
 	const envExpr = callee + ".env";
@@ -2773,8 +2778,13 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		let argsStr = "";
 		let ai = 0;
 		while (ai < cc) {
-			if (ai > 0) argsStr = argsStr + ", ";
 			let arg = ctx.results[ctx.results.length - cc + ai];
+			if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length && hasNoRuntimeRepr(ovType.typeChildren[ai])) {
+				dropVoidArg(p, arg, cd.arguments[ai]);
+				ai += 1;
+				continue;
+			}
+			if (argsStr != "") argsStr = argsStr + ", ";
 			if (ovNeedsAddr && ai == 0) {
 				arg = nativeAddressReceiver(g, p, arg, cd.arguments[ai]);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
@@ -2844,8 +2854,13 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	const argList: string[] = [];
 	let i = 1;
 	while (i < cc) {
-		if (i > 1) argsStr = argsStr + ", ";
 		let arg = peekResult(ctx, cc, i);
+		if (hasParamTypes && i - 1 < calleeType.typeChildren.length && i - 1 < cd.arguments.length && hasNoRuntimeRepr(calleeType.typeChildren[i - 1])) {
+			dropVoidArg(p, arg, cd.arguments[i - 1]);
+			i += 1;
+			continue;
+		}
+		if (argsStr != "") argsStr = argsStr + ", ";
 		if (hasParamTypes && magic == CallMagic.None) {
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
@@ -2988,7 +3003,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const ptrTmp = getTemp(p, "void*");
 		const valTmp = getTemp(p, unboxType);
 		emitStmtsLine(p, `${ptrTmp.snippet} = ${argsStr};`);
-		emitStmtsLine(p, `${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
+		emitStmtsLine(p, `if (${ptrTmp.snippet} != NULL) ${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
 		emitStmtsLine(p, `free(${ptrTmp.snippet});`);
 		ctx.results.push(valTmp.snippet);
 		return;

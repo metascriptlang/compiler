@@ -2721,6 +2721,23 @@ export function setMinArity(t: Type | null, minArity: number): void {
 	t.typeValue = (minArity as int32) + 1;
 }
 
+export function callMinArity(t: Type | null): number {
+	if (t == null) return 0;
+	let min = getMinArity(t);
+	while (min > 0 && min <= t.typeChildren.length && acceptsVoid(t.typeChildren[min - 1])) min -= 1;
+	return min;
+}
+
+function acceptsVoid(t: Type | null): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Void) return true;
+	if (t.kind != TypeKind.Union) return false;
+	for (const member of t.typeChildren) {
+		if (member != null && member.kind == TypeKind.Void) return true;
+	}
+	return false;
+}
+
 export function getMinArity(t: Type | null): number {
 	if (t == null) return 0;
 	const encoded: int32 = t.typeValue;

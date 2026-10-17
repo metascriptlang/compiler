@@ -3,7 +3,7 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, SymbolFlag, Symbol,
+	Node, NodeKind, ProgramData, FunctionDeclData, SymbolFlag, Symbol, Type, TypeKind,
 	ExportDeclData, DecoratedDeclData, EnumDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
@@ -92,6 +92,17 @@ function isExpressionBody(node: Node): boolean {
 }
 
 // --- Compile a function body ---
+
+function runtimeParamNames(params: string[], fnType: Type | null): string[] {
+	if (fnType == null || fnType.kind != TypeKind.Function) return params;
+	const names: string[] = [];
+	for (let i = 0; i < params.length; i += 1) {
+		const t = i < fnType.typeChildren.length ? fnType.typeChildren[i] : null;
+		if (t != null && t.kind == TypeKind.Void) continue;
+		names.push(params[i]);
+	}
+	return names;
+}
 
 export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number, isMethod: boolean = false, globals: RaiserFuncMap | null = null): RaiserFunction {
 	const s = createCompState();
@@ -286,7 +297,8 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 				wantIdx = idx;
 				if (funcMap.symbolIndices != null && wantSym != null) funcMap.symbolIndices.set(wantSym, idx);
 			}
-			reserved.push({ idx, fnName: fd.fnName, params: fd.params, body: fd.fnBody, arity: fd.params.length, isMethod: false });
+			const runtime = runtimeParamNames(fd.params, fnNode.nodeType);
+			reserved.push({ idx, fnName: fd.fnName, params: runtime, body: fd.fnBody, arity: runtime.length, isMethod: false });
 		}
 		const classNode = unwrapToClassDecl(pd.programStmts[i]);
 		if (classNode != null) {
@@ -417,7 +429,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 					globalFuncMap.items.push({ name: fnNode.resolvedSym.modulePath + ":" + fnNode.resolvedSym.name, index: funcIdx });
 					globalFuncMap.items.push({ name: routineKey(fnNode.resolvedSym), index: funcIdx });
 				}
-				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, isMethod: false, fnName: fd.fnName, params: fd.params, body: fd.fnBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
+				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, isMethod: false, fnName: fd.fnName, params: runtimeParamNames(fd.params, fnNode.nodeType), body: fd.fnBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 				funcIdx += 1;
 			}
 			const enumNode = unwrapToEnumDecl(pd.programStmts[i]);

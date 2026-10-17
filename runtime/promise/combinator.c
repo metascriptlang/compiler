@@ -228,42 +228,6 @@ void* msPromiseAny(msRefArray* arr) {
 	return result;
 }
 
-/* ===== new Promise(executor) ===== */
-
-static void msPromiseResolveFn(void* env, void* value) {
-	msPromiseNewEnv* e = (msPromiseNewEnv*)env;
-	if (!e->settled) {
-		e->settled = true;
-		msFutureComplete(e->future, value);
-		free(e);
-	}
-}
-
-static void msPromiseRejectFn(void* env, void* error) {
-	msPromiseNewEnv* e = (msPromiseNewEnv*)env;
-	if (!e->settled) {
-		e->settled = true;
-		msFutureFail(e->future, error);
-		free(e);
-	}
-}
-
-msFuture* msPromiseNew(msClosure executor) {
-	msFuture* f = (msFuture*)msFutureCreate();
-	msPromiseNewEnv* env = (msPromiseNewEnv*)calloc(1, sizeof(msPromiseNewEnv));
-	env->future = f;
-	msClosure resolve = { .fn = (msClosureFn)msPromiseResolveFn, .env = env };
-	msClosure reject = { .fn = (msClosureFn)msPromiseRejectFn, .env = env };
-	/* Call executor(resolve, reject) synchronously */
-	if (executor.env != NULL) {
-		((void(*)(void*, msClosure, msClosure))executor.fn)(executor.env, resolve, reject);
-	} else {
-		((void(*)(msClosure, msClosure))executor.fn)(resolve, reject);
-	}
-	/* env freed by whichever of resolve/reject fires first (settled flag prevents double-free) */
-	return f;
-}
-
 /* ===== Promise.then ===== */
 
 /* Type-aware callback dispatch for .then.

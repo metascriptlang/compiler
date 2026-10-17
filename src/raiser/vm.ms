@@ -98,6 +98,7 @@ export interface RaiserFuture {
 	errorMsg: string;
 	errorObserved: boolean;
 	value: RaiserValue;
+	error: RaiserValue;
 	// The future owns the storage its value lives in, the way MS_FUTURE_STRUCT
 	// makes `value` a field of the future itself (runtime/promise/future.h) —
 	// the producing strand's heap dies with it, so the value is copied in on
@@ -361,7 +362,7 @@ function newFuture(vm: RaiserVM): int64 {
 	const waiters: number[] = [];
 	const valueArrayHeap = createArrayHeap();
 	const valueObjectHeap = createStructHeap();
-	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), valueArrayHeap, valueObjectHeap, waiters };
+	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap, waiters };
 	vm.sched.futures.items.push(f);
 	return vm.sched.futures.items.length - 1;
 }
@@ -429,7 +430,7 @@ function vmHandleSleep(vm: RaiserVM, inst: RaiserInstruction): void {
 	setReg(vm, vm.baseReg + inst.a, raiserFuture(fut));
 }
 
-function futureFail(vm: RaiserVM, handle: int64, message: string): void {
+function futureFail(vm: RaiserVM, handle: int64, message: string, thrown: RaiserValue): void {
 	if (handle < 0 || handle >= vm.sched.futures.items.length) {
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
@@ -439,6 +440,9 @@ function futureFail(vm: RaiserVM, handle: int64, message: string): void {
 	f.finished = true;
 	f.failed = true;
 	f.errorMsg = message;
+	const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, thrown, strandCopyMap(vm));
+	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
+	copyValueInto(f.error, owned);
 	for (const w of f.waiters) {
 		const s = vm.sched.strands.items[w];
 		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
@@ -488,7 +492,7 @@ function unhandledException(vm: RaiserVM): void {
 	if (s.resultFuture >= 0) {
 		// A spawned strand dies into its future: a reader re-raises it, and a
 		// failure nobody reads is reported as an orphan at exit.
-		futureFail(vm, s.resultFuture, msg);
+		futureFail(vm, s.resultFuture, msg, vm.currentException);
 		s.status = RaiserStrandStatus.Done;
 		vm.yielded = true;
 		return;
@@ -590,7 +594,8 @@ function vmHandleThrow(vm: RaiserVM, inst: RaiserInstruction): void {
 // Re-raise a failed future in its reader — the VM's msFutureRaiseFrom.
 function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 	f.errorObserved = true;
-	copyValueInto(vm.currentException, raiserString(f.errorMsg));
+	const thrown = f.error.kind == RaiserValueKind.Nil ? raiserString(f.errorMsg) : copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error);
+	copyValueInto(vm.currentException, thrown);
 	vm.unwinding = true;
 	vm.savedIp = vm.ip - 1;
 	unwindStep(vm);
@@ -1198,6 +1203,12 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleAwait(vm, inst);
 		} else if (op == RaiserOpcode.Sleep) {
 			vmHandleSleep(vm, inst);
+		} else if (op == RaiserOpcode.FutureNew) {
+			setReg(vm, base + inst.a, raiserFuture(newFuture(vm)));
+		} else if (op == RaiserOpcode.FutureSettle) {
+			futureComplete(vm, getReg(vm, base + inst.a).intVal, getReg(vm, base + inst.b));
+		} else if (op == RaiserOpcode.FutureFail) {
+			futureFail(vm, getReg(vm, base + inst.a).intVal, vmExceptionText(vm, getReg(vm, base + inst.b)), getReg(vm, base + inst.b));
 		} else if (op == RaiserOpcode.Try) {
 			vm.safePoints.push(vm.ip - 1 + getBx(inst));
 		} else if (op == RaiserOpcode.Catch) {
