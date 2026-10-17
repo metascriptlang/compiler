@@ -1983,17 +1983,8 @@ an alias too), `spawn(work)` with `async function work()` is refused at the call
 promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
 flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
 
-`await` takes a thenable as TypeScript does: an object whose `then` (a method, an inherited method
-or a function field) takes an `onFulfilled` callback gives the type of that callback's parameter, and
-the await resumes with the value `then` delivers. `then` is called from a queued job, after the
-caller's next statement; an `onRejected` call makes the await throw its argument, and only the first
-settlement counts. Two TypeScript shapes are refused at the `await`: a `then` whose `onFulfilled`
-receives something awaitable (a promise never holds a promise), and an `onRejected` whose parameter
-is not `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in
-`Promise.reject`. Measured 2026-10-17 on C (drc, orc, danger), JS and the Raiser with corpus
-`awaitUserThenable` and `awaitThenableOrder`; the Raiser calls `then` inside the await instead of
-from a job. A `Promise<T>` whose `T` is a thenable is not yet refused
-(`.inbox/compiler/2026-10-17-a-promise-of-a-thenable-holds-the-thenable-on-c-and-its-value-on-js.md`).
+`await` takes a thenable as TypeScript does, through the `then` protocol (see
+["`then` — thenable adoption"](#then--thenable-adoption)).
 
 #### Promise Chaining (.then / .catch / .finally)
 
@@ -3577,6 +3568,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+| `then(this T, onFulfilled: (v: U) => void, onRejected?: (e: Error) => void): void` | `x` → `promiseFromThenable(x, …)`, a `Promise<U>` | T meets a site where a promise adopts a value: `await`, an async function's return, `Promise.resolve`, an element of `Promise.all`/`race`/`any` |
 
 **Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter
 to `U` for a slot of type `U`, for `as U` and for an operand beside a `U`, `toItems` for `for..of` — and
@@ -3632,6 +3624,46 @@ path (store it in a local first). Corpus `orderingThroughValueOf` runs every acc
 Consequences: `const c2 = count`, `id(count)`, `[count]`, `nn ?? count` and `() => count` in a
 `() => Accessor<T>` slot keep the accessor; `console.log(count)` and `String(count)` print the handle
 (write `${count}` or `count.toString()`); `typeof count` inspects the handle.
+
+##### `then` — thenable adoption
+
+A type with a `then` that takes a callback is a thenable, and every site where a promise adopts a
+value adopts it as the `Promise<U>` its `then` describes, `U` being the parameter of `onFulfilled`:
+
+```ms
+class Deferred {
+	then(onFulfilled: (v: int32) => void, onRejected: (e: Error) => void): void { ... }
+}
+
+const a = await new Deferred();                                     // int32
+async function load(): Promise<int32> { return new Deferred(); }    // settles with what then delivers
+const p = Promise.resolve(new Deferred());                          // Promise<int32>
+const all = await Promise.all([new Deferred(), fetchCount()]);     // int32[]
+```
+
+The name is JavaScript's, as `toString` and `valueOf` keep theirs, because its sites are JavaScript's
+thenable-adoption sites. A type opts in with a method, an inherited method, a function-typed field (an
+interface member too), or an extension; an extension counts only on the type its receiver names, so a
+generic `then<T>(this x: T, ...)` makes no type a thenable. Strings and primitives never are.
+
+At every site `then` is called from a queued job, after the caller's next statement, never inside the
+adopting expression; `onFulfilled` settles with its argument, `onRejected` and a throwing `then` reject
+with the error, and only the first settlement counts. An async body returns a thenable as it is,
+where a returned promise must be written `return await`. Corpus `awaitUserThenable`, `awaitThenableOrder`,
+`thenableAdoptionSites`, `thenableCombinators` and `thenableAdoptionOrder` run the shapes on C and JS.
+
+Refused, each at its site with the reason:
+
+- a `then` whose `onFulfilled` receives something awaitable (a promise or another thenable): a promise
+  never holds a promise; or receives a type parameter: declare the type its callback receives;
+- a `then` whose first parameter is not a callback, or whose `onRejected` takes something other than
+  `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
+- `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
+  instantiated with one): write `Promise<U>`;
+- a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
+  what the callback returns;
+- an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
+  promise; and a combinator over a `Thenable[]` variable: thenables are adopted from an array literal.
 
 ##### `getDynamicField` — opt-in dynamic member access
 
