@@ -1,5 +1,4 @@
 // @stdout: int 6 | text six | pair 6 six | void ok | pending made | after done
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
 // note: a plain function that returns new Promise<T>(...) types the executor from T like any
 // other position, for every T; one that never settles still makes its promise.
 

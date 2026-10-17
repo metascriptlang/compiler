@@ -6,14 +6,14 @@
 
 async function run(): Promise<void> {
 	let handed = "";
-	await new Promise<void>((resolve, reject) => { reject("handed"); }).catch((e: string): void => { handed = e; });
+	await new Promise<void>((resolve, reject) => { reject(new Error("handed")); }).catch((e: string): void => { handed = e; });
 	let out = `catch ${handed}`;
 
 	let thrown = "";
 	await new Promise<void>((resolve) => { throw "raw"; }).catch((e: string): void => { thrown = e; });
 	out += ` | thrown ${thrown}`;
 
-	try { await new Promise<int32>((resolve, reject) => { reject("boom"); }); out += " | try lost"; }
+	try { await new Promise<int32>((resolve, reject) => { reject(new Error("boom")); }); out += " | try lost"; }
 	catch (e) { out += ` | try ${(e as Error).message}`; }
 	console.log(out + " | after done");
 }

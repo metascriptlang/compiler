@@ -8,7 +8,7 @@ test "new Promise<T> types its executor from T and is a Promise<T>" {
 	const result = checkOnly(DECLS + `
 struct Pair { n: int32; tag: string; }
 const a: Promise<int32> = new Promise<int32>((resolve, reject) => { resolve(1); });
-const b = new Promise<string>((resolve, reject) => { reject("e"); });
+const b = new Promise<string>((resolve, reject) => { reject(new Error("e")); });
 const c = new Promise<Pair>((resolve, reject) => { resolve({ n: 1, tag: "t" }); });
 const d = new Promise<void>((resolve, reject) => { resolve(); });
 async function use(): Promise<int32> { return await a + (await c).n; }

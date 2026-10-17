@@ -236,7 +236,7 @@ function collectFieldDecorators(t: Type): Node[][] {
 // a type without one (interface, anon struct) gets empty arrays.
 function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
-	return createNodeAt(NodeKind.TypeObject, {
+	const node = createNodeAt(NodeKind.TypeObject, {
 		typExprFieldNames: t.typeNames,
 		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited, impl),
 		typExprIndexKey: null as unknown as Node,
@@ -244,6 +244,11 @@ function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolea
 		typExprFieldDecorators: collectFieldDecorators(t),
 		typExprTypeName: t.typeName,
 	}, loc);
+	if (t.sym != null) {
+		node.resolvedSym = t.sym;
+		node.flags = node.flags.incl(NodeFlag.BoundSym);
+	}
+	return node;
 }
 
 // Build a TypeArray node for Array<T> / SizedArray<T,N> / Span<T>.
@@ -431,7 +436,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 		const placeholder = cyclePlaceholderName(t, impl);
 		if (placeholder != "" || !cycleBrokenByNamedType(visited, t, impl)) {
 			if (placeholder == "" && impl) throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
-			const result = atomicTypeNode(placeholder != "" ? placeholder : "<cycle>", loc);
+			const result = namedTypeNode(placeholder != "" ? placeholder : "<cycle>", placeholder != "" ? t.sym : null, loc);
 			result.nodeType = t;
 			return result;
 		}
@@ -3717,6 +3722,31 @@ test "mapTypeToAst — Ref<Struct> wraps TypeObject inside TypeGeneric" {
 	const d = out.data as TypeGenericData;
 	assert (d.typExprBase.data as IdentifierData).name == "Ref";
 	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
+}
+
+test "mapTypeToAst — a class reaching itself through its own Ref gives getTypeImpl Ref<Holder> inside" {
+	const loc = makeLoc(1, 0);
+	const holder = makeStructType("Holder", ["next"], []);
+	const ref = makeModifierType(TypeKind.Ref, holder);
+	holder.typeChildren = [ref];
+	const out = mapTypeToAst(ref, loc, true);
+	const d = out.data as TypeGenericData;
+	assert d.typExprArgs[0].kind == NodeKind.TypeObject;
+	const next = (d.typExprArgs[0].data as TypeObjectData).typExprFieldTypes[0];
+	assert next.kind == NodeKind.TypeGeneric;
+	const nextData = next.data as TypeGenericData;
+	assert (nextData.typExprBase.data as IdentifierData).name == "Ref";
+	assert (nextData.typExprArgs[0].data as IdentifierData).name == "Holder";
+}
+
+test "mapTypeToAst — an unnamed struct reaching itself through its Ref still stops getTypeImpl" {
+	const loc = makeLoc(1, 0);
+	const anon = makeStructType("", ["next"], []);
+	const ref = makeModifierType(TypeKind.Ref, anon);
+	anon.typeChildren = [ref];
+	let threw = false;
+	try { mapTypeToAst(ref, loc, true); } catch (e) { threw = true; }
+	assert threw;
 }
 
 test "mapTypeToAst — modifier with null inner falls through to <null> sentinel" {

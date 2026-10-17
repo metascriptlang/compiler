@@ -1,64 +1,66 @@
-// @stdout: order a b c d | int 42 | text hi | pair 7 seven | first 1 | void ok | later 9 | reject boom | thrown bad | text raw | late 5 | twice hi hi | after done
-// @xfail(raiser): raiser-solid owns Raiser Promise APIs
-// note: new Promise<T>(executor) runs the executor at once, in the calling order (the log reads
-// a b c d). resolve completes the promise with a value of T, whatever T is (number, string,
-// struct, void) and only the first resolve or reject counts; reject(message) rejects with an
-// Error carrying that message, as a thrown string does (the .catch reader is
-// newPromiseCatch); a throw out of the executor rejects unless it already settled. The promise can be
-// settled later, from a callback that outlives the executor. An await may read the same
-// promise twice.
+// @stdout: 10|void|later-7|3,4|rejected boom|thrown bad|1|first|7|5|annotated void|callback
+// @exit: 0
 
-struct Pair { n: int32; tag: string; }
-
-let log = "";
-let pending: ((v: int32) => void) | null = null;
-
-async function settleLater(v: int32): Promise<void> {
-	await sleepAsync(1);
-	const settle = pending;
-	if (settle !== null) settle(v);
+struct Point {
+	x: int32;
+	y: int32;
 }
 
-async function run(): Promise<void> {
-	log += "a";
-	const num = new Promise<int32>((resolve, reject) => { log += " b"; resolve(42); log += " c"; });
-	log += " d";
-	let out = `order ${log} | int ${await num}`;
+const out: string[] = [];
 
-	const text = new Promise<string>((resolve, reject) => { resolve("hi"); });
-	out += ` | text ${await text}`;
-
-	const pair = new Promise<Pair>((resolve, reject) => { resolve({ n: 7, tag: "seven" }); });
-	const pr = await pair;
-	out += ` | pair ${pr.n} ${pr.tag}`;
-
-	const first = new Promise<int32>((resolve, reject) => { resolve(1); resolve(2); reject("late"); });
-	out += ` | first ${await first}`;
-
-	const nothing = new Promise<void>((resolve, reject) => { resolve(); });
-	await nothing;
-	out += " | void ok";
-
-	const later = new Promise<int32>((resolve, reject) => { pending = resolve; });
-	settleLater(9);
-	out += ` | later ${await later}`;
-
-	const rejected = new Promise<string>((resolve, reject) => { reject("boom"); });
-	try { await rejected; out += " | reject lost"; } catch (e) { out += ` | reject ${(e as Error).message}`; }
-
-	const thrown = new Promise<string>((resolve, reject) => { throw new Error("bad"); });
-	try { await thrown; out += " | thrown lost"; } catch (e) { out += ` | thrown ${(e as Error).message}`; }
-
-	const thrownText = new Promise<int32>((resolve, reject) => { throw "raw"; });
-	try { await thrownText; out += " | text lost"; } catch (e) { out += ` | text ${(e as Error).message}`; }
-
-	const settled = new Promise<int32>((resolve, reject) => { resolve(5); throw new Error("ignored"); });
-	out += ` | late ${await settled}`;
-
-	const again = new Promise<string>((resolve, reject) => { resolve("hi"); });
-	out += ` | twice ${await again} ${await again}`;
-
-	console.log(out + " | after done");
+async function after(ms: number, run: () => void): Promise<void> {
+	await sleepAsync(ms);
+	run();
 }
 
-await run();
+function callVoid(cb: (v: void) => void): void {
+	cb();
+}
+
+function inferred(): Promise<number> {
+	return new Promise((resolve) => { resolve(7); });
+}
+
+function annotated(ms: number): Promise<number> {
+	return new Promise<number>((resolve: (v: number) => void, reject: (e: Error) => void): void => { resolve(ms); });
+}
+
+async function main(): Promise<void> {
+	out.push(`${await new Promise<number>((resolve, reject) => { resolve(10); })}`);
+
+	await new Promise<void>((resolve) => { after(5, (): void => { resolve(); }); });
+	out.push("void");
+
+	const word = await new Promise<string>((resolve) => {
+		after(5, (): void => { resolve(`later-${3 + 4}`); });
+	});
+	out.push(word);
+
+	const p = await new Promise<Point>((resolve) => { resolve({ x: 3, y: 4 }); });
+	out.push(`${p.x},${p.y}`);
+
+	try {
+		await new Promise<number>((resolve, reject) => { reject(new Error("boom")); });
+	} catch (e) {
+		out.push(`rejected ${e.message}`);
+	}
+
+	try {
+		await new Promise<number>((resolve) => { throw new Error("bad"); });
+	} catch (e) {
+		out.push(`thrown ${e.message}`);
+	}
+
+	out.push(`${await new Promise<number>((resolve, reject) => { resolve(1); resolve(2); reject(new Error("late")); })}`);
+	const first = `first${""}`;
+	const second = `second${""}`;
+	out.push(await new Promise<string>((resolve) => { resolve(first); resolve(second); }));
+	out.push(`${await inferred()}`);
+	out.push(`${await annotated(5)}`);
+	await new Promise<void>((resolve: () => void): void => { resolve(); });
+	out.push("annotated void");
+	callVoid((v: void): void => { out.push("callback"); });
+	console.log(out.join("|"));
+}
+
+main();

@@ -22,11 +22,11 @@
 // — shared by asyncBridge, builtinLower, and promiseLower. Keeping it in any one
 // of them would create a circular import.
 
-import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isAwaitable, awaitedType, unwrapRef, createPtr, createFunction, createClosureType, voidType, booleanType, typeDisplayName } from "../../checker/types";
-import { TransformContext, mintSym } from "../context";
-import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, ownedInFuture, runtimeRef, makeValueShareFn, makeFutureDropClosure, makeTypedIdentResolved, makeLocalDecl, makeExprStmt, makeBlock, makeIf, makeFnDecl, makeObjectLiteral, generatedFnCount, addGeneratedFn } from "../util";
-import { makeRetFutAlloc, makeFutureCompleteStmts } from "./asyncBridge";
+import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
+import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
+import { TransformContext } from "../context";
+import { promisePendingAlloc } from "./asyncBridge";
+import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, makeValueShareFn } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -258,63 +258,8 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc);
 	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
+	if (builtinKind == "PromisePending") return promisePendingAlloc(node);
+	if (builtinKind == "PromiseSettle" || builtinKind == "PromiseFail") return node;
 	return null as unknown as Node;
 }
 
-// `new Promise<T>(executor)` → msPromiseNewValue(executor, <T's future>, {fn: $resolveN}).
-// The runtime owns the settle-once env and the reject closure; the resolve closure is a
-// generated top-level function that completes the future by the same writer contract an
-// async function's return uses, so every T the await readers know completes right.
-export function lowerNewPromise(node: Node, ctx: TransformContext): Node {
-	if (ctx.jsBackend || node.nodeType == null || !isAwaitable(node.nodeType)) return node;
-	const d = node.data as NewExprData;
-	if (d.newArguments.length != 1) return node;
-	const loc = node.location;
-	const held = awaitedType(node.nodeType);
-	const isVoid = held == null || held.kind == TypeKind.Void;
-	const valueType = isVoid ? voidType() : held!;
-	const voidPtrType = createPtr(voidType());
-	const promiseType = node.nodeType!;
-
-	const params: Symbol[] = [];
-	const paramTypes: string[] = [];
-	const valueSym = isVoid ? null : mintSym(ctx, SymbolKind.Parameter, "value", valueType);
-	if (valueSym != null) { params.push(valueSym); paramTypes.push(typeDisplayName(valueType)); }
-	const envSym = mintSym(ctx, SymbolKind.Parameter, "env", voidPtrType);
-	params.push(envSym);
-	paramTypes.push("Ptr<void>");
-
-	const futSym = mintSym(ctx, SymbolKind.Variable, "$fut", promiseType);
-	const settle = makeCall(runtimeRef("msPromiseNewFuture", loc), [makeTypedIdentResolved(envSym, voidPtrType, loc)], loc);
-	settle.nodeType = promiseType;
-	const futIdent = (): Node => makeTypedIdentResolved(futSym, promiseType, loc);
-	const completion: Node[] = [makeLocalDecl(futSym, settle, promiseType, loc)];
-	if (ownedInFuture(held)) {
-		completion.push(makeExprStmt(makeCall(runtimeRef("msFutureOwnResult", loc), [futIdent(), makeFutureDropClosure(held, ctx, loc)], loc), loc));
-	}
-	const written = valueSym != null ? makeTypedIdentResolved(valueSym, valueType, loc) : null;
-	for (const s of makeFutureCompleteStmts(written, isVoid, promiseType, held, loc, futSym, ctx)) completion.push(s);
-	const firstSettle = makeCall(runtimeRef("msPromiseNewTake", loc), [makeTypedIdentResolved(envSym, voidPtrType, loc)], loc);
-	firstSettle.nodeType = booleanType();
-	const body = makeBlock([makeIf(firstSettle, makeBlock(completion, loc), null, loc)], loc);
-
-	const fnSym = mintSym(ctx, SymbolKind.Function, "$resolve" + generatedFnCount().toString(), null);
-	const fnNode = makeFnDecl(fnSym.name, params, paramTypes, body, "", "void", loc);
-	const paramTypesResolved: Type[] = [];
-	const paramNames: string[] = [];
-	if (valueSym != null) { paramTypesResolved.push(valueType); paramNames.push("value"); }
-	paramTypesResolved.push(voidPtrType);
-	paramNames.push("env");
-	fnNode.nodeType = createFunction(paramTypesResolved, paramNames, voidType());
-	fnSym.symbolType = fnNode.nodeType;
-	fnNode.resolvedSym = fnSym;
-	addGeneratedFn(fnNode);
-
-	const pair = makeObjectLiteral(["fn", "env"], [makeTypedIdentResolved(fnSym, fnNode.nodeType, loc), makeNull(loc)], loc);
-	pair.flags = pair.flags.incl(NodeFlag.Closure);
-	pair.nodeType = createClosureType(paramTypesResolved, paramNames, voidType());
-
-	const newCall = makeCall(runtimeRef("msPromiseNewValue", loc), [d.newArguments[0], makeRetFutAlloc(isVoid ? null : held, loc), pair], loc);
-	newCall.nodeType = promiseType;
-	return newCall;
-}

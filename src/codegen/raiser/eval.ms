@@ -18,7 +18,7 @@ import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString }
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
-import { RaiserVM, execModule, createVM } from "../../raiser/vm";
+import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
 import { RaiserFuncMap } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState } from "../../checker/symbol";
@@ -376,6 +376,10 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		});
 	}
 	return idx;
+}
+
+export function releaseEngineHeaps(): void {
+	if (_engine != null) vmReleaseHeaps(_engine.vm);
 }
 
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {

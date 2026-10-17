@@ -2044,7 +2044,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 				d.forOfPattern.location.line, d.forOfPattern.location.column);
 		}
 		// Destructured for-of: define symbols for each pattern element
-		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, true);
+		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, null);
 	} else {
 		const forSym = makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
 		setFlag(forSym, SymbolFlag.ForVar);
@@ -2069,18 +2069,21 @@ function destructuresByPosition(t: Type): boolean {
 	return base.kind == TypeKind.Tuple || base.kind == TypeKind.Array || base.kind == TypeKind.SizedArray || base.kind == TypeKind.Span;
 }
 
-function definePatternBinding(ctx: CheckerContext, sym: Symbol, forVar: boolean): void {
-	if (forVar) {
+function definePatternBinding(ctx: CheckerContext, sym: Symbol, declaring: Node | null): void {
+	if (declaring == null) {
 		setFlag(sym, SymbolFlag.ForVar);
-	} else if (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global) {
-		setFlag(sym, SymbolFlag.Global);
-		stampOwner(ctx, sym);
-		sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+	} else {
+		sym.declNode = declaring;
+		if (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global) {
+			setFlag(sym, SymbolFlag.Global);
+			stampOwner(ctx, sym);
+			sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+		}
 	}
 	defineSymbol(ctx.table, sym);
 }
 
-function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, forVar: boolean): void {
+function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, declaring: Node | null): void {
 	if (pattern.kind == NodeKind.ArrayPattern) {
 		const apd = pattern.data as ArrayPatternData;
 		let i = 0;
@@ -2095,7 +2098,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
 					if (bound != null) elem.nodeType = bound;
 					const elemSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-					definePatternBinding(ctx, elemSym, forVar);
+					definePatternBinding(ctx, elemSym, declaring);
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
@@ -2110,7 +2113,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
 						}
 						const restSym = makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
-						definePatternBinding(ctx, restSym, forVar);
+						definePatternBinding(ctx, restSym, declaring);
 						inner.resolvedSym = restSym;
 						markInitialized(ctx.initTracker, id.name);
 					}
@@ -2149,7 +2152,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `object rest '${restId.name}' requires a source with remaining named fields`, prop.location.line, prop.location.column);
 						}
 						const objRestSym = makeSymbol(restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
-						definePatternBinding(ctx, objRestSym, forVar);
+						definePatternBinding(ctx, objRestSym, declaring);
 						inner.resolvedSym = objRestSym;
 						markInitialized(ctx.initTracker, restId.name);
 					}
@@ -2166,7 +2169,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
 				const aliasSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-				definePatternBinding(ctx, aliasSym, forVar);
+				definePatternBinding(ctx, aliasSym, declaring);
 				p.propAlias.resolvedSym = aliasSym;
 				markInitialized(ctx.initTracker, id.name);
 			}
@@ -2951,7 +2954,7 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
 	checkExpr(ctx, d.destrInit, null);
 	const initType = d.destrInit.nodeType != null ? d.destrInit.nodeType : inferredType();
-	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst, false);
+	defineForOfPatternBindings(ctx, d.destrPattern, initType, d.destrIsConst, node);
 }
 
 // ===== Check Program Body =====

@@ -22,7 +22,7 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
@@ -3278,11 +3278,12 @@ setGlobalHookOwners(sharedHookOwners);
 
 	const tD = performance.now();
 
-	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
+	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module or a timer alive)
 	if (opts.targetOs == "emcc" && aliveSet.computed) {
 		let hasAsync = false;
 		for (const mp of aliveModules) {
 			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
+			if (mp.endsWith("core/system/index.ms") && (aliveSetHasNamed(aliveSet, mp, "setTimeout") || aliveSetHasNamed(aliveSet, mp, "setInterval"))) hasAsync = true;
 		}
 		if (hasAsync) {
 			linkFlags = appendFlag(linkFlags, "-sASYNCIFY");
