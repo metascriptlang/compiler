@@ -1983,6 +1983,18 @@ an alias too), `spawn(work)` with `async function work()` is refused at the call
 promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
 flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
 
+`await` takes a thenable as TypeScript does: an object whose `then` (a method, an inherited method
+or a function field) takes an `onFulfilled` callback gives the type of that callback's parameter, and
+the await resumes with the value `then` delivers. `then` is called from a queued job, after the
+caller's next statement; an `onRejected` call makes the await throw its argument, and only the first
+settlement counts. Two TypeScript shapes are refused at the `await`: a `then` whose `onFulfilled`
+receives something awaitable (a promise never holds a promise), and an `onRejected` whose parameter
+is not `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in
+`Promise.reject`. Measured 2026-10-17 on C (drc, orc, danger), JS and the Raiser with corpus
+`awaitUserThenable` and `awaitThenableOrder`; the Raiser calls `then` inside the await instead of
+from a job. A `Promise<T>` whose `T` is a thenable is not yet refused
+(`.inbox/compiler/2026-10-17-a-promise-of-a-thenable-holds-the-thenable-on-c-and-its-value-on-js.md`).
+
 #### Promise Chaining (.then / .catch / .finally)
 
 ```typescript
