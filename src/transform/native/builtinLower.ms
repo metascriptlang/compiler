@@ -12,7 +12,7 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { walkNode } from "../walker";
@@ -285,13 +285,33 @@ let _unionTextFns: Node[] = [];
 function selectUnionText(node: Node, ctx: TransformContext): Node {
 	const args = (node.data as CallExprData).arguments;
 	const loc = node.location;
-	if (ctx.jsBackend) {
-		const call = makeCall(makeMember(args[0], "toString", loc), [], loc);
-		call.nodeType = stringType();
-		return call;
-	}
+	const x = args[0];
+	const xt = x.nodeType!;
 	const holder = args[1].resolvedSym!;
 	const ut = args[1].nodeType!;
+	const select = ctx.jsBackend ? null : unionTextFn(holder, ut, args, loc, ctx);
+	if (!isMaybeType(xt)) return selectedText(select, x, loc);
+	const m = mintSym(ctx, SymbolKind.Parameter, "m", xt);
+	const present = makeMember(makeTypedIdentResolved(m, xt, loc), "present", loc);
+	present.nodeType = booleanType();
+	const absent = makeString("null", loc);
+	absent.nodeType = stringType();
+	const value = makeMember(makeTypedIdentResolved(m, xt, loc), "value", loc);
+	value.nodeType = unwrapMaybeType(xt);
+	const body = makeBlock([
+		makeIf(present, makeBlock([makeReturn(selectedText(select, value, loc), loc)], loc), null, loc),
+		makeReturn(absent, loc),
+	], loc);
+	return selectedText(textFn(m, xt, body, loc, ctx), x, loc);
+}
+
+function selectedText(select: Node | null, value: Node, loc: SourceLocation): Node {
+	const call = select != null ? makeCall(select, [value], loc) : makeCall(makeMember(value, "toString", loc), [], loc);
+	call.nodeType = stringType();
+	return call;
+}
+
+function unionTextFn(holder: Symbol, ut: Type, args: Node[], loc: SourceLocation, ctx: TransformContext): Node {
 	const stmts: Node[] = [];
 	for (let ai = 2; ai < args.length; ai += 1) {
 		const ret = makeReturn(args[ai], loc);
@@ -302,15 +322,17 @@ function selectUnionText(node: Node, ctx: TransformContext): Node {
 		isSlot.nodeType = booleanType();
 		stmts.push(makeIf(isSlot, makeBlock([ret], loc), null, loc));
 	}
+	return textFn(holder, ut, makeBlock(stmts, loc), loc, ctx);
+}
+
+function textFn(param: Symbol, pt: Type, body: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	const sym = mintSym(ctx, SymbolKind.Function, "$unionText" + _unionTextFns.length.toString(), null);
-	const fnNode = makeFnDecl(sym.name, [holder], ["unknown"], makeBlock(stmts, loc), "", "string", loc);
-	fnNode.nodeType = createFunction([ut], [holder.name], stringType());
+	const fnNode = makeFnDecl(sym.name, [param], ["unknown"], body, "", "string", loc);
+	fnNode.nodeType = createFunction([pt], [param.name], stringType());
 	sym.symbolType = fnNode.nodeType;
 	fnNode.resolvedSym = sym;
 	_unionTextFns.push(fnNode);
-	const call = makeCall(makeTypedIdentResolved(sym, fnNode.nodeType, loc), [args[0]], loc);
-	call.nodeType = stringType();
-	return call;
+	return makeTypedIdentResolved(sym, fnNode.nodeType, loc);
 }
 
 // The reverse direction (AsString) is NOT intercepted: a borrow escaping the

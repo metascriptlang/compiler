@@ -389,9 +389,9 @@ export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean =
 	if (!dumped && !isArrayShaped(t) && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum))) return null;
 	const loc = expr.location;
 	const declared = declaredToString(ctx, expr);
-	const slotUnion = heldInSlotUnion(t);
-	if (declared != null && (!slotUnion || receivesUnion(declared.resolvedSym!))) return declared;
-	if (slotUnion) return unionTextCall(ctx, expr, debug, loc);
+	const slotUnion = textedSlotUnion(t);
+	if (declared != null && (slotUnion == null || receivesUnion(declared.resolvedSym!))) return declared;
+	if (slotUnion != null) return unionTextCall(ctx, expr, slotUnion, debug, loc);
 	if (!dumped) return null;
 	const dump = debug
 		? boundCall(ctx, "valueDebug", [expr], loc)
@@ -449,7 +449,7 @@ export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
 	if (t == null) return;
 	let call: Node;
 	if (heldInSlotUnion(t)) {
-		call = unionTextCall(ctx, receiver, false, node.location);
+		call = unionTextCall(ctx, receiver, valueShape(t), false, node.location);
 	} else if (dumpedShape(t, valueShape(t))) {
 		call = boundCall(ctx, "valueDump", [receiver, createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, node.location)], node.location);
 		callCheckExpr(ctx, call, null);
@@ -474,8 +474,13 @@ function heldInSlotUnion(t: Type): boolean {
 	return shape.kind == TypeKind.Union && isSlotUnion(shape) && !isResult(shape) && !taggedByLiteral(shape);
 }
 
-function unionTextCall(ctx: CheckerContext, expr: Node, debug: boolean, loc: SourceLocation): Node {
-	const ut = valueShape(expr.nodeType!);
+function textedSlotUnion(t: Type): Type | null {
+	const shape = valueShape(t);
+	if (heldInSlotUnion(shape)) return shape;
+	return isMaybeType(shape) && heldInSlotUnion(unwrapMaybeType(shape)) ? valueShape(unwrapMaybeType(shape)) : null;
+}
+
+function unionTextCall(ctx: CheckerContext, expr: Node, ut: Type, debug: boolean, loc: SourceLocation): Node {
 	const holder = makeSymbol("u", SymbolKind.Parameter, ut, false);
 	const args: Node[] = [expr, holderRead(holder, ut, loc)];
 	for (const member of ut.typeChildren) {
