@@ -1,5 +1,6 @@
 // @stdout: mismatches 0 stops 17007 fast blocks 37614
 // @skip-js: binds the C fixture guardFuzz.c, which drives the runtime's block-reduction helpers
+// @skip-raiser: binds the C fixture guardFuzz.c, whose msTestBlockReduceMismatches has no Raiser host bridge
 // note: a fixed-seed differential fuzz of the block guard: per block, msSumFits/msDotFits and the plain sum against the checked
 // loop, every width and += / -=; equal value when nothing overflows, the same stop element when something does.
 
