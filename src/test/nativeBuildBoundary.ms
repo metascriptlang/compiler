@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, or all");
 	exit(2);
 }
 
@@ -737,6 +737,42 @@ function runUpcastCast(): void {
 	record("a derived interface, a structural match and a class reach their base as a cast pointer", "1 1 5 4 4", value(dir));
 }
 
+function toolPresent(exe: string): boolean {
+	return execFileCapture(exe, ["--version"]).ok;
+}
+
+function runEmccArgvFs(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-argv-fs: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-argv-fs`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"import { readFile, writeFile, mkdir, exists, readDir, remove } from \"std/fs\";",
+		"import { argv } from \"std/process\";",
+		"const parts: string[] = [`argc=${argv.length - 1}`];",
+		"for (let i = 1; i < argv.length; i++) parts.push(argv[i]);",
+		"writeFile(\"note.txt\", \"kept\");",
+		"const back = readFile(\"note.txt\");",
+		"parts.push(back.ok ? back.value : \"read failed\");",
+		"mkdir(\"sub\");",
+		"writeFile(\"sub/inner.txt\", \"x\");",
+		"parts.push(readDir(\"sub\").join(\",\"));",
+		"remove(\"sub/inner.txt\");",
+		"parts.push(`${exists(\"sub/inner.txt\")} ${exists(\"note.txt\")}`);",
+		"console.log(parts.join(\"|\"));",
+		"",
+	].join("\n"));
+	const built = command(dir, "emcc-argv-fs", compiler, ["build", "main.ms", "--os=emcc", "--passL=-sNODERAWFS=1", "--output=probe.js"]);
+	need(built.code == 0, "emcc-argv-fs build");
+	const none = command(dir, "emcc-argv-fs-none", "node", ["probe.js"]);
+	record("an emcc program reads no arguments and uses the file system", "argc=0|kept|inner.txt|false true", none.stdout.trim());
+	const two = command(dir, "emcc-argv-fs-two", "node", ["probe.js", "one", "two words"]);
+	record("an emcc program receives its arguments in order", "argc=2|one|two words|kept|inner.txt|false true", two.stdout.trim());
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -747,6 +783,7 @@ if (group == "project-cache" || group == "all") runProjectCache();
 if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
 if (group == "upcast-cast" || group == "all") runUpcastCast();
+if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
 
 let failures = 0;
 console.log(`root ${root}`);

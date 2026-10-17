@@ -135,6 +135,11 @@ static void _msInitConsoleUtf8(void) {
 }
 #endif
 
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__linux__)
+extern int cmdCount;
+extern char** cmdLine;
+#endif
+
 static inline double msProcessArgc(void) {
 #if defined(_WIN32)
 	_msInitWargv();
@@ -154,7 +159,7 @@ static inline double msProcessArgc(void) {
 	fclose(f);
 	return (double)cached_argc;
 #else
-	return 0.0;
+	return cmdLine ? (double)cmdCount : 0.0;
 #endif
 }
 
@@ -202,7 +207,8 @@ static inline msString msProcessArgvAt(double index) {
 	fclose(f);
 	return MS_EMPTY_STRING;
 #else
-	return MS_EMPTY_STRING;
+	if (!cmdLine || idx < 0 || idx >= cmdCount) return MS_EMPTY_STRING;
+	return msStringFromCStr(cmdLine[idx]);
 #endif
 }
 
