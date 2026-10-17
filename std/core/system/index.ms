@@ -536,6 +536,8 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msCheckRangeI64FromU64(v: uint64): int64;
+	@compilerFunc
+	extern function msCheckRangeI32FromU64(v: uint64, lo: int64, hi: int64): int32;
 
 	@compilerFunc
 	extern function msCheckRangeU64(v: float64): uint64;

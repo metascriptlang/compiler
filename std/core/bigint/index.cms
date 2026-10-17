@@ -53,6 +53,10 @@ when (!bare && !solana) {
 		@compilerFunc
 		extern function msBigIntCmp(a: bigint, b: bigint): int32;
 		@compilerFunc
+		extern function msBigIntCompareFloat64(a: bigint, d: float64, unordered: int32): int32;
+		@compilerFunc
+		extern function msFloat64CompareBigInt(d: float64, a: bigint, unordered: int32): int32;
+		@compilerFunc
 		extern function msBigIntIsZero(a: bigint): boolean;
 		@compilerFunc
 		extern function msBigIntToInt64(a: bigint): int64;
