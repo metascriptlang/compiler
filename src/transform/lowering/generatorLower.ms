@@ -756,8 +756,9 @@ function bindCatchToCurExc(node: Node, sc: StateCollector): void {
 // finallyPath helpers: the normal exit routes through a dedicated landing-free
 // finally state (an exception raised BY the finally body propagates directly
 // instead of re-entering a landing that would run the finally a second time);
-// the exception path runs the finally then re-raises $curExc out of the
-// machine (reference closureiters end-finally raise branch). Returns the
+// the exception path runs the finally then re-raises $curExc from its own
+// state, so the routing lands it on an enclosing try's landing or, with none,
+// out of the machine (reference closureiters end-finally raise branch). Returns the
 // finally state index so later excLanding mark-loops can skip it.
 function appendNormalFinally(sc: StateCollector, exitStateIdx: number, frame: FinallyFrame, afterSt: number, loc: SourceLocation, resultType: Type | null): number {
 	const finNormal = allocState(sc);
@@ -769,7 +770,6 @@ function appendNormalFinally(sc: StateCollector, exitStateIdx: number, frame: Fi
 
 function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, frame: FinallyFrame, loc: SourceLocation, resultType: Type | null): void {
 	const end = emitInline(cloneStmts(frame.stmts), sc, finReraiseIdx, loc, resultType);
-	sc.items[end].stmts.push(makeStateAssign(-1, loc, sc.stateSym));
 	const curExcRef = makeTypedIdentResolved(sc.curExcSym, null, loc);
 	if (sc.excType != null) curExcRef.nodeType = sc.excType;
 	sc.items[end].stmts.push(createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc)));
@@ -784,7 +784,7 @@ function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, frame: 
 //   normal try completion   → finNormal  [fin..., goto afterSt]
 //   normal catch completion → finNormal2 [fin..., goto afterSt]  (catch case)
 //   raise in try body       → catchSt (catch case) / finReraise
-//   raise in catch body     → finReraise [fin..., $state=-1, rethrow $curExc]
+//   raise in catch body     → finReraise [fin..., rethrow $curExc]
 //   break/continue/return crossing the try → splitStmts via sc.finallyStack
 // tryExit/catchExit keep an excLanding on purpose: a
 // trailing await's resume read (the re-raising read) executes at their entry.
