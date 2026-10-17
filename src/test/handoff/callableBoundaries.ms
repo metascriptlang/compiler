@@ -1,5 +1,5 @@
 import { strictErrorCount } from "./helpers";
-import { compileToC, compileToCWithStd, compileToJS } from "../helpers";
+import { compileToC, compileToCWithStd, compileToJS, compileToJSBare } from "../helpers";
 
 test "callableBoundaries: required callable fields cannot use value default initialization" {
 	const cases = [
@@ -112,7 +112,7 @@ test "callableBoundaries: static receivers do not shift explicit parameter modif
 		{ name: "the JS backend takes a ref in the second and the third position", source: "\nstruct Ctx { n: int32; }\nstruct R { k: int32; }\nclass Box { v: int32 = 0; }\nfunction seven(): int32 { return 7; }\nfunction fresh(): Ctx { return { n: 0 }; }\nfunction create(this typeof R, ref c: Ctx, k: int32): R {\n\tc.n = c.n + 1;\n\treturn { k: k };\n}\nfunction make(this typeof R, k: int32, name: string, ref c: Ctx): R {\n\tc.n = k;\n\treturn { k: k + name.length };\n}\nfunction split(this typeof R, out half: int32, k: int32): R {\n\thalf = k / 2;\n\treturn { k: k };\n}\nlet c: Ctx = { n: 0 };\nlet h: int32 = 0;\nR.create(c, seven());\nR.make(7, \"ab\", c);", expected: 0 },
 	];
 	for (const item of cases1) {
-		const result = compileToJS(item.source);
+		const result = compileToJSBare(item.source);
 		assert result.ok == (item.expected == 0), item.name + (result.ok ? "" : ": " + result.error);
 	}
 }

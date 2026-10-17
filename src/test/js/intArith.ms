@@ -6,7 +6,7 @@
 //
 // Runtime coverage for the values: corpus/programs/016-jsIntegerModel.ms.
 
-import { compileToJS, compileToJSWithStd } from "../helpers";
+import { compileToJS, compileToJSWithStd, compileToJSBare } from "../helpers";
 
 test "int32 division by a literal truncates" {
 	const result = compileToJS("function f(a: int32): int32 { return a / 3; }");
@@ -178,7 +178,7 @@ test "uint32 remainder is left alone" {
 // Signed arithmetic stays untouched: matching C-danger would mean inventing a
 // wrap where C-debug traps instead of producing a value.
 test "int32 addition is left alone" {
-	const result = compileToJS("function f(a: int32, b: int32): int32 { return a + b; }");
+	const result = compileToJSBare("function f(a: int32, b: int32): int32 { return a + b; }");
 	assert result.ok;
 	assert !result.value.contains("| 0");
 }
@@ -190,14 +190,14 @@ test "uint8 addition wraps at a byte" {
 }
 
 test "int8 addition stops past its width instead of wrapping" {
-	const result = compileToJS("function f(a: int8, b: int8): int8 { return a + b; }");
+	const result = compileToJSBare("function f(a: int8, b: int8): int8 { return a + b; }");
 	assert result.ok;
 	assert result.value.contains("msOverflowI8");
 	assert !result.value.contains("<< 24");
 }
 
 test "int16 negation stops past its width instead of wrapping" {
-	const result = compileToJS("function f(a: int16): int16 { return -a; }");
+	const result = compileToJSBare("function f(a: int16): int16 { return -a; }");
 	assert result.ok;
 	assert result.value.contains("msOverflowI16");
 	assert !result.value.contains("<< 16");
@@ -278,7 +278,7 @@ test "uint64 postfix decrement wraps and reads back the value before it" {
 }
 
 test "int64 compound add stores the checked BigInt sum" {
-	const result = compileToJS("function f(b: int64): int64 { let a: int64 = 1; a += b; return a; }");
+	const result = compileToJSBare("function f(b: int64): int64 { let a: int64 = 1; a += b; return a; }");
 	assert result.ok;
 	assert result.value.contains("msOverflowI64");
 	assert !result.value.contains("+=");
@@ -291,7 +291,7 @@ test "uint8 step on a call-indexed element hoists the index and wraps" {
 }
 
 test "int32 increment stores the checked step" {
-	const result = compileToJS("function f(a: int32): int32 { let x = a; x++; return x; }");
+	const result = compileToJSBare("function f(a: int32): int32 { let x = a; x++; return x; }");
 	assert result.ok;
 	assert result.value.contains("msOverflowI32");
 	assert !result.value.contains("x++");
@@ -299,7 +299,7 @@ test "int32 increment stores the checked step" {
 
 test "the counter of a for-of over an array or a string steps without an overflow check" {
 	for (const src of ["function f(xs: int32[]): void { for (const x of xs) console.log(x); }", "function f(s: string): void { for (const c of s) console.log(c); }"]) {
-		const result = compileToJS(src);
+		const result = compileToJSBare(src);
 		assert result.ok, src;
 		assert !result.value.contains("msOverflowI32"), src;
 		assert result.value.contains(" + 1)"), src;
@@ -308,14 +308,14 @@ test "the counter of a for-of over an array or a string steps without an overflo
 
 test "a char step stores the checked step, prefix and postfix" {
 	for (const step of ["c++", "++c", "c--", "--c"]) {
-		const result = compileToJS(`function f(c: char): char { ${step}; return c; }`);
+		const result = compileToJSBare(`function f(c: char): char { ${step}; return c; }`);
 		assert result.ok, step;
 		assert result.value.contains("msOverflowChar"), step;
 	}
 }
 
 test "int32 step on a call-indexed element hoists the index and stops on overflow" {
-	const result = compileToJS("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: int32[]): void { a[at()]++; a[at()] *= 2; }");
+	const result = compileToJSBare("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: int32[]): void { a[at()]++; a[at()] *= 2; }");
 	assert result.ok;
 	assert result.value.contains("msOverflowI32");
 }
