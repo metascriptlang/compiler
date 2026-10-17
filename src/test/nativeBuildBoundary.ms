@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, or all");
 	exit(2);
 }
 
@@ -773,6 +773,41 @@ function runEmccArgvFs(): void {
 	record("an emcc program receives its arguments in order", "argc=2|one|two words|kept|inner.txt|false true", two.stdout.trim());
 }
 
+function runEmccWatchProcess(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-watch-process: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-watch-process`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"import { watch } from \"std/fs/watch\";",
+		"import { exec, execFileCapture } from \"std/process\";",
+		"const w = watch(\".\", false);",
+		"const e = exec(\"echo hi\");",
+		"const f = execFileCapture(\"echo\", [\"hi\"]);",
+		"console.log([",
+		"\tw.ok ? \"watch ok\" : w.error.message,",
+		"\te.ok ? `exec ${e.value.trim()}` : e.error.message,",
+		"\tf.ok ? `execFile ${f.value.trim()}` : f.error.message,",
+		"].join(\"|\"));",
+		"",
+	].join("\n"));
+	const built = command(dir, "emcc-watch-process", compiler, ["build", "main.ms", "--os=emcc", "--passL=-sNODERAWFS=1", "--output=probe.js"]);
+	need(built.code == 0, "emcc-watch-process build");
+	const browser = command(dir, "emcc-watch-process-run", "node", ["probe.js"]);
+	record(
+		"an emcc program links watch and process spawn and each reports it is unsupported",
+		"file watching has no backend for this platform yet|spawn failed: ENOSYS: process spawning is not supported on this target|spawnSync echo ENOSYS: process spawning is not supported on this target",
+		browser.stdout.trim(),
+	);
+	const native = command(dir, "emcc-watch-process-native", compiler, ["build", "main.ms", "--output=native"]);
+	need(native.code == 0, "emcc-watch-process native build");
+	const ran = command(dir, "emcc-watch-process-native-run", `${dir}/native`, []);
+	record("the same program on the host watches and spawns", "watch ok|exec hi|execFile hi", ran.stdout.trim());
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -784,6 +819,7 @@ if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
 if (group == "upcast-cast" || group == "all") runUpcastCast();
 if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
+if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
 
 let failures = 0;
 console.log(`root ${root}`);

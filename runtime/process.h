@@ -12,11 +12,23 @@
 #include <stdlib.h>
 #include "runtime/core/system.h"
 
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+#define MS_NO_SPAWN 1
+#else
+#define MS_NO_SPAWN 0
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 #include <errno.h>
 #include <direct.h>
 #include <shellapi.h>
+#elif MS_NO_SPAWN
+#include <sys/types.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <fcntl.h>
 #else
 #include <sys/types.h>
 #include <unistd.h>
@@ -420,6 +432,12 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	CloseHandle(pi.hThread);
 	return (double)exitCode;
 }
+#elif MS_NO_SPAWN
+static inline double msProcessExecFile(msString path, msStringArray* args) {
+	(void)path; (void)args;
+	errno = ENOSYS;
+	return -1.0;
+}
 #else
 /* posix_spawn hands the child every descriptor without FD_CLOEXEC, and macOS has no
  * pipe2: a spawn that lands between pipe() and the FD_CLOEXEC below leaks the pipe
@@ -513,10 +531,11 @@ static inline msString msProcSpawnGetStderr(void) { return _msProcSpawnStderr; }
 static inline int32_t msProcSpawnGetOk(void) { return _msProcSpawnOk; }
 static inline int32_t msProcSpawnGetPipeOk(void) { return _msProcSpawnPipeOk; }
 static inline int32_t msProcSpawnGetErrno(void) { return _msProcSpawnErrno; }
+static inline int32_t msProcSpawnGetUnsupported(void) { return _msProcSpawnErrno == ENOSYS; }
 
 #define MS_SPAWN_MAX_OUTPUT (16 * 1024 * 1024)
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !MS_NO_SPAWN
 /* Move whatever is currently readable on `fd` into a growable buffer. Only ever
  * called on a descriptor poll() just reported ready, so the read cannot block.
  * Returns 0 once the pipe is at EOF (every write end closed), on a read error,
@@ -731,6 +750,7 @@ static inline msString msProcessSpawnSync(msString command) {
 	_msProcSpawnStderr = MS_EMPTY_STRING;
 	_msProcSpawnOk = 0;
 	_msProcSpawnPipeOk = 1;
+	_msProcSpawnErrno = 0;
 
 	const char* cmd = msStringToCString(command);
 
@@ -800,6 +820,10 @@ static inline msString msProcessSpawnSync(msString command) {
 
 	return _msWinFinishCapture(outRd, errRd, pi);
 
+#elif MS_NO_SPAWN
+	(void)command;
+	_msProcSpawnErrno = ENOSYS;
+	return MS_EMPTY_STRING;
 #else  /* POSIX */
 	int outPipe[2], errPipe[2];
 	if (_msSpawnPipe(outPipe) < 0) return MS_EMPTY_STRING;
@@ -990,6 +1014,10 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 
 	return _msWinFinishCapture(outRd, errRd, pi);
 
+#elif MS_NO_SPAWN
+	(void)exe; (void)args; (void)cwd;
+	_msProcSpawnErrno = ENOSYS;
+	return MS_EMPTY_STRING;
 #else  /* POSIX */
 	int outPipe[2], errPipe[2];
 	if (_msSpawnPipe(outPipe) < 0) return MS_EMPTY_STRING;
