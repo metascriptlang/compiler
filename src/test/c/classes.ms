@@ -112,6 +112,16 @@ test "E2E C: a decorated accessor stays an accessor and keeps its name" {
 	assert accessorError(deco + "struct V2 { x: float32; @logged get sum(): float32 { return this.x; } }").contains("Decorated getter 'sum' at line 3 is not supported");
 }
 
+test "E2E C: an accessor field is a typed instance field of a class" {
+	assert accessorError("class C { accessor n: int32 = 1; }\nconst c = new C();\nc.n += 1;\nconsole.log(c.n);") == "compiled";
+	assert accessorError("class C { static accessor n: int32 = 1; }").contains("Accessor field 'n' at line 1 cannot be static");
+	assert accessorError("class C { readonly accessor n: int32 = 1; }").contains("'accessor' modifier cannot be used with 'readonly' modifier");
+	assert accessorError("class C { accessor n = 1; }").contains("Accessor field 'n' at line 1 needs a type annotation");
+	assert accessorError("class C { accessor n(): int32 { return 1; } }").contains("Accessor field 'n' at line 1 cannot be a method");
+	assert accessorError("actor A { accessor n: int32 = 1; }").contains("an accessor field belongs to a class, not to an actor");
+	assert accessorError("class C { accessor: int32 = 1; }\nconst c = new C();\nconsole.log(c.accessor);") == "compiled";
+}
+
 test "E2E C: a compound assignment to an accessor through a call receiver is refused" {
 	assert accessorError("class C { get n(): int32 { return 1; } set n(v: int32) {} }\nfunction make(): C { return new C(); }\nmake().n += 1;").contains("needs a receiver that is a name or a field path");
 }
@@ -138,6 +148,13 @@ test "fmt: class accessors print back as get and set" {
 	assert out.contains("get n(): int32"), out;
 	assert out.contains("set n(v: int32)"), out;
 	assert !out.contains("get_n"), out;
+}
+
+test "fmt: an accessor field prints back as written" {
+	const out = fmtSource("class C {\n\tprivate accessor n: int32 = 1;\n\t@paint accessor x: float32 = 0.0;\n}\n");
+	assert out.contains("private accessor n: int32 = 1;"), out;
+	assert out.contains("accessor x: float32 = 0.0;"), out;
+	assert !out.contains("accessor_storage"), out;
 }
 
 test "fmt: struct getters print back inside their struct, in source order" {
