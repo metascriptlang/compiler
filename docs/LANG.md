@@ -3648,8 +3648,7 @@ generic `then<T>(this x: T, ...)` makes no type a thenable. Strings and primitiv
 
 At every site `then` is called from a queued job, after the caller's next statement, never inside the
 adopting expression; `onFulfilled` settles with its argument, `onRejected` and a throwing `then` reject
-with the error, and only the first settlement counts. An async body returns a thenable as it is,
-where a returned promise must be written `return await`. Corpus `awaitUserThenable`, `awaitThenableOrder`,
+with the error, and only the first settlement counts. Corpus `awaitUserThenable`, `awaitThenableOrder`,
 `thenableAdoptionSites`, `thenableCombinators` and `thenableAdoptionOrder` run the shapes on C and JS.
 
 Refused, each at its site with the reason:
@@ -3660,6 +3659,8 @@ Refused, each at its site with the reason:
   `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
 - `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
   instantiated with one): write `Promise<U>`;
+- `return thenable` inside a `try` that has a catch or finally, since the catch would not see the
+  rejection: write `return await`;
 - a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
   what the callback returns;
 - an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
