@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, isStringLiteralUnion, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, storesNothing } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
+import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, isIntegerType } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -2135,6 +2135,13 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 		genArrayType(g, createArray(innerType));
 		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy", "int64_tArrayPallCell");
 		return "msPromiseAllFor_msFuture_int64";
+	}
+	if (isIntegerType(innerType)) {
+		genArrayType(g, createArray(innerType));
+		const futName = "msFuture_" + mangle(innerDesc);
+		const arrName = arrayCTypeName(createArray(innerType));
+		emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, getArrayContentType(arrName), "MS_COPY_SAME", "msNumberArrayDestroy", arrName + "PallCell");
+		return "msPromiseAllFor_" + futName;
 	}
 
 	// Arrays-of-arrays: Promise<T[]>[] → Promise<T[][]> — not a common use case.
