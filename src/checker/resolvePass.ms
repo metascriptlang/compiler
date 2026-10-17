@@ -845,19 +845,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
 		if (baseName == "Promise" && args.length == 1) {
-			const inner = resolveAnnotation(args[0], ctx, line, col);
-			if (isAwaitable(inner)) {
-				const value = awaitedType(inner);
-				const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
-				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
-				return value != null ? createPromise(value) : errorType();
-			}
-			const delivered = thenablePromised(ctx, inner);
-			if (delivered != null) {
-				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so write 'Promise<${typeDisplayName(delivered)}>'`, line, col);
-				return createPromise(delivered);
-			}
-			return createPromise(inner);
+			return promiseAnnotationOf(ctx, resolveAnnotation(args[0], ctx, line, col), line, col);
 		}
 		if (baseName == "Iterator" && args.length == 1) {
 			return createIterator(resolveAnnotation(args[0], ctx, line, col));
@@ -1256,6 +1244,21 @@ export function fillForwardSymbol(ctx: CheckerContext, sym: Symbol): void {
 	else if (decl.kind == NodeKind.ActorDecl) fillActor(ctx, decl);
 	else return;
 	if (hasFlag(sym, SymbolFlag.Exported)) markDeclMethodsExported(ctx, decl);
+}
+
+function promiseAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
+	if (isAwaitable(inner)) {
+		const value = awaitedType(inner);
+		const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
+		addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
+		return value != null ? createPromise(value) : errorType();
+	}
+	const delivered = thenablePromised(ctx, inner);
+	if (delivered != null) {
+		addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so write 'Promise<${typeDisplayName(delivered)}>'`, line, col);
+		return createPromise(delivered);
+	}
+	return createPromise(inner);
 }
 
 export function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
