@@ -854,15 +854,25 @@ function leavesInlineConv(source: Type, target: Type): boolean {
 	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
 }
 
+function runtimeParams(fn: Type): Type[] {
+	const params: Type[] = [];
+	for (const param of fn.typeChildren) {
+		if (param == null || param.kind != TypeKind.Void) params.push(param);
+	}
+	return params;
+}
+
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
 	if (leavesInlineConv(source, target)) return false;
-	if (source.typeChildren.length != target.typeChildren.length) return false;
+	const sourceParams = runtimeParams(source);
+	const targetParams = runtimeParams(target);
+	if (sourceParams.length != targetParams.length) return false;
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
-	for (const sourceParam of source.typeChildren) {
-		if (!isAssignable(target.typeChildren[i], sourceParam)) return false;
+	for (const sourceParam of sourceParams) {
+		if (!isAssignable(targetParams[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Repr invariance (Nim tyProc: params AND return invariant via
@@ -871,8 +881,8 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	// signature, so a numeric-width change calls through the wrong ABI).
 	// Mirrors the sameElementRepr gate on Array/Span/Ptr elements above.
 	let ri = 0;
-	for (const sp of source.typeChildren) {
-		if (fnSlotReprMismatch(sp, target.typeChildren[ri])) return false;
+	for (const sp of sourceParams) {
+		if (fnSlotReprMismatch(sp, targetParams[ri])) return false;
 		ri += 1;
 	}
 	if (fnSlotReprMismatch(source.typeReturn, target.typeReturn)) return false;

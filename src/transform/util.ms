@@ -100,14 +100,6 @@ export function makeFutureCopyRead(fut: Node, t: Type, loc: SourceLocation): Nod
 // closure without an environment.
 let _shareFnDecls: Node[] = [];
 
-export function generatedFnCount(): number {
-	return _shareFnDecls.length;
-}
-
-export function addGeneratedFn(decl: Node): void {
-	_shareFnDecls.push(decl);
-}
-
 export function takeValueShareFns(): Node[] {
 	const out = _shareFnDecls;
 	_shareFnDecls = [];

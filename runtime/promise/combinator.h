@@ -59,6 +59,7 @@ static inline msFuture* msPromiseResolve(void* val) {
 /* Create pre-failed future (Reference: newFuture[T]() + fail(err)) */
 static inline msFuture* msPromiseReject(void* err) {
 	msFuture* f = (msFuture*)msFutureCreate();
+	msIncref(err);
 	msFutureFail(f, err);
 	return f;
 }
@@ -106,29 +107,6 @@ void* msPromiseAny(msRefArray* futures);
 static inline void msFutureOwnResult(msFuture* out, msClosure drop) {
     if (drop.fn != NULL && !msIsPoolWorker) msFutureSetValueDrop(out, drop);
 }
-
-/* ===== new Promise(executor) ===== */
-
-/* The resolve and reject closures an executor receives share one env: it holds the
- * promise's future and the settled flag, so only the first settle takes effect and a
- * later call is a no-op. The env is a counted object, so every copy of either closure
- * keeps it alive; it drops its reference to the future when the last copy goes. */
-typedef struct {
-	msFuture* future;
-	bool settled;
-} msPromiseNewEnv;
-
-/* True for the first settle only (marking the promise settled). The resolve closure of
- * each T is generated code: it asks msPromiseNewTake, then completes the future that
- * msPromiseNewFuture hands it as an owned reference. */
-bool msPromiseNewTake(void* env);
-msFuture* msPromiseNewFuture(void* env);
-
-/* Runs executor(resolve, reject) synchronously. `fut` is the future for T, `resolve`
- * carries the generated resolve function. A throw out of the executor rejects the
- * promise unless it already settled. The call borrows `fut` like any argument and
- * returns its own reference to it. */
-void* msPromiseNewValue(msClosure executor, void* fut, msClosure resolve);
 
 /* ===== Promise.then / .catch / .finally ===== */
 

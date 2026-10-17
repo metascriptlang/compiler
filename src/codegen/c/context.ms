@@ -652,6 +652,14 @@ export function aliveSetHas(aliveSet: Readonly<AliveSet>, modulePath: string, na
 	return aliveSet._set.has(key);
 }
 
+export function aliveSetHasNamed(aliveSet: AliveSet, modulePath: string, name: string): boolean {
+	if (aliveSetHas(aliveSet, modulePath, name)) return true;
+	for (const sym of aliveSet._syms) {
+		if (sym.name == name && sym.modulePath == modulePath) return true;
+	}
+	return false;
+}
+
 export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {
 	if (!aliveSet.computed) return true;
 	return aliveSet._modules.has(modulePath);

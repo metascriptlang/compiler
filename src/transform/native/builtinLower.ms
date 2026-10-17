@@ -26,7 +26,8 @@ import { rewriteEcho, buildStructToString, buildUnionText, evaluatedPlaceholder,
 import { isSlotUnion } from "../../checker/fit";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
-import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
+import { tryLowerPromiseBuiltin } from "../lowering/promiseLower";
+import { promiseSettleStmts, promiseFailStmts } from "../lowering/asyncBridge";
 import { evictHelperName } from "./nativeLower";
 
 // ===== Main Entry Point =====
@@ -37,9 +38,11 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		if (node.kind == NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
-		// new Promise<T>(executor) → msPromiseNewValue(executor, future, resolve)
-		if (node.kind == NodeKind.NewExpr) {
-			return lowerNewPromise(node, ctx);
+		if (node.kind == NodeKind.ExprStmt) {
+			const expr = (node.data as ExprStmtData).expr;
+			const kind = expr.kind == NodeKind.CallExpr && expr.resolvedSym != null && !ctx.jsBackend ? expr.resolvedSym.builtinKind : "";
+			if (kind == "PromiseSettle") return promiseSettleStmts(expr, ctx);
+			if (kind == "PromiseFail") return promiseFailStmts(expr, ctx);
 		}
 		// arr.length = n → msXxxArraySetLen(&arr, n)
 		if (node.kind == NodeKind.BinaryExpr) {
@@ -250,9 +253,9 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 // Handles @builtin("Name") — known compiler builtins get inline C patterns.
 
 // Type tag for typed Promise.then/catch dispatch (matches MS_TYPETAG_* in combinator.h)
-// Per-T suffix helpers, typed readers, Promise.* / waitFor handlers, and
-// new-Promise rewriting all live in src/transform/lowering/promiseLower.ms.
-// See `tryLowerPromiseBuiltin` + `lowerNewPromise` imported at the top of this
+// Per-T suffix helpers, typed readers and Promise.* / waitFor handlers
+// all live in src/transform/lowering/promiseLower.ms.
+// See `tryLowerPromiseBuiltin` imported at the top of this
 // file. `isStructLikeType` moved to `../util` to break a circular import with
 // promiseLower (asyncBridge + builtinLower + promiseLower all need it).
 
@@ -396,7 +399,6 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 // ===== arr.length = n → setLength(arr, n) sugar =====
 // setLength is the real API. arr.length = n is syntactic sugar.
 // Rewrites BinaryExpr(=, MemberExpr(arr, "length"), n) → CallExpr to C runtime setLength.
-// `new Promise(executor) → msPromiseNewValue` lives in lowering/promiseLower.ms.
 
 function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return node;

@@ -1443,6 +1443,30 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
 		return dest;
 	}
+	if (asyncKind == "PromisePending") {
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
+		return dest;
+	}
+	if (asyncKind == "PromiseReject" && d.arguments.length == 1) {
+		const errorReg = compileExpr(s, d.arguments[0]);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
+		emitInst(s, raiserABC(RaiserOpcode.FutureFail, dest, errorReg, 0));
+		return dest;
+	}
+	if ((asyncKind == "PromiseSettle" || asyncKind == "PromiseFail") && d.arguments.length >= 1) {
+		const futReg = compileExpr(s, d.arguments[0]);
+		let valueReg = 0;
+		if (d.arguments.length > 1 && (d.arguments[1].nodeType == null || d.arguments[1].nodeType!.kind != TypeKind.Void)) {
+			valueReg = compileExpr(s, d.arguments[1]);
+		} else {
+			valueReg = allocReg(s);
+			emitLoadConst(s, valueReg, raiserNil());
+		}
+		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, 0));
+		return futReg;
+	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
 		// finished is indistinguishable from the value itself.
@@ -1606,7 +1630,6 @@ function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: strin
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const argCount = d.arguments.length;
 
 	// Compile callee expression → register holding the closure pair object
 	const closureReg = compileExpr(s, d.callee);
@@ -1622,9 +1645,14 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 
 	// Precompile all args into temp registers
 	const argRegs: number[] = [];
-	for (let i = 0; i < argCount; i = i + 1) {
+	for (let i = 0; i < d.arguments.length; i = i + 1) {
+		if (d.arguments[i].nodeType != null && d.arguments[i].nodeType!.kind == TypeKind.Void) {
+			if (d.arguments[i].kind != NodeKind.Identifier) compileExpr(s, d.arguments[i]);
+			continue;
+		}
 		argRegs.push(compileExpr(s, d.arguments[i]));
 	}
+	const argCount = argRegs.length;
 
 	// Allocate dest + (argCount+1) slots (worst case: env + args)
 	const totalArgs = argCount + 1;

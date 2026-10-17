@@ -20,11 +20,12 @@ import { parseSource } from "../../parser/statements/validation";
 import { sgQueryAtPosition } from "../../checker/suggest";
 import { callMacroEngineCompiler, callMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
-	clearObjectHeap, clearArrayHeap, RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
+	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
 	raiserString, raiserBool, raiserNil, raiserArray,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectGetField,
 } from "../../raiser/value";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
+import { vmReleaseHeaps } from "../../raiser/vm";
 import { nodeToValue, valueToExpansion, takeWireRefusals } from "./bridge";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { forEachChild } from "../../ast/visitor";
@@ -693,8 +694,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	popActiveMetaCtx();
 	if (vm.error != "") {
 		addError(ctx, `decorator '${name}' failed: ${vm.error}`, loc.line, loc.column);
-		clearObjectHeap(objHeap);
-		clearArrayHeap(arrHeap);
+		vmReleaseHeaps(vm);
 		return target;
 	}
 	if (vm.diagMessage != "") {
@@ -703,14 +703,12 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		const diagCol = vm.diagColumn > 0 ? vm.diagColumn as int32 : loc.column;
 		vm.diagMessage = "";
 		addError(ctx, `decorator '${name}': ${diagMsg}`, diagLine, diagCol);
-		clearObjectHeap(objHeap);
-		clearArrayHeap(arrHeap);
+		vmReleaseHeaps(vm);
 		return target;
 	}
 	if (res.kind != RaiserValueKind.Object) {
 		addError(ctx, `decorator '${name}' produced no result object`, loc.line, loc.column);
-		clearObjectHeap(objHeap);
-		clearArrayHeap(arrHeap);
+		vmReleaseHeaps(vm);
 		return target;
 	}
 	const h = res.intVal;
@@ -747,8 +745,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		const at = refusal.location.line > 0 ? refusal.location : loc;
 		addError(ctx, `decorator '${name}': ${refusal.message}`, at.line, at.column);
 	}
-	clearObjectHeap(objHeap);
-	clearArrayHeap(arrHeap);
+	vmReleaseHeaps(vm);
 	return outNode;
 }
 

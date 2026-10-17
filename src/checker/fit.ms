@@ -584,7 +584,7 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType);
 			if (injected != null as unknown as Node) payload = injected;
 		}
-		const upcast = tryValueStructUpcast(payload, formal.typeReturn, exprType);
+		const upcast = tryStructUpcast(payload, formal.typeReturn, exprType);
 		if (upcast != null as unknown as Node) payload = upcast;
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
@@ -2484,10 +2484,12 @@ export function tryAdoptAnonStruct(ctx: CheckerContext, expr: Node, formalIn: Ty
 	return lit;
 }
 
-export function tryValueStructUpcast(expr: Node, formalIn: Type | null, exprTypeIn: Type | null): Node {
+export function tryStructUpcast(expr: Node, formalIn: Type | null, exprTypeIn: Type | null): Node {
 	const formal = skipModifier(formalIn);
 	const exprType = skipModifier(exprTypeIn);
 	if (formal == null || exprType == null || formal == exprType) return null as unknown as Node;
+	const refUpcast = refStructUpcast(expr, formal, exprType);
+	if (refUpcast != null) return refUpcast;
 	if (formal.kind != TypeKind.Struct || exprType.kind != TypeKind.Struct) return null as unknown as Node;
 	if (!isValueStructDecl(formal) || !isValueStructDecl(exprType)) return null as unknown as Node;
 	if (valueStructBaseDepth(exprType, formal) == 0) return null as unknown as Node;
@@ -2496,6 +2498,18 @@ export function tryValueStructUpcast(expr: Node, formalIn: Type | null, exprType
 	conv.flags = conv.flags.incl(NodeFlag.Sem);
 	conv.location = expr.location;
 	return conv;
+}
+
+function refStructUpcast(expr: Node, formal: Type, exprType: Type): Node | null {
+	const target = formal.kind == TypeKind.Union ? nonNullMemberOfNullable(formal) : formal;
+	const source = exprType.kind == TypeKind.Union ? nonNullMemberOfNullable(exprType) : exprType;
+	if (target == null || source == null || target.kind != TypeKind.Ref || source.kind != TypeKind.Ref) return null;
+	if (hasGenericParams(target)) return null;
+	const to = target.typeReturn;
+	const from = source.typeReturn;
+	if (to == null || from == null || to.kind != TypeKind.Struct || from.kind != TypeKind.Struct || sameType(to, from)) return null;
+	if (!isAssignable(exprType, formal)) return null;
+	return classUpcast(expr, source == exprType ? target : formal);
 }
 
 export function reportReadonlyDrop(ctx: CheckerContext, source: Type | null, target: Type | null, line: int32, column: int32): void {
@@ -2601,7 +2615,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	}
 	const adopted = tryAdoptAnonStruct(ctx, expr, formal, exprType);
 	if (adopted != null as unknown as Node) return adopted;
-	const upcast = tryValueStructUpcast(expr, formal, exprType);
+	const upcast = tryStructUpcast(expr, formal, exprType);
 	if (upcast != null as unknown as Node) return upcast;
 	if (instantiateGenericFnValue(ctx, expr, formal)) return fitNode(ctx, expr, formal, expr.nodeType);
 	const thunk = synthClosureThunk(expr, formal, exprType);

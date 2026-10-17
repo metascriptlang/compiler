@@ -228,62 +228,6 @@ void* msPromiseAny(msRefArray* arr) {
 	return result;
 }
 
-/* ===== new Promise(executor) ===== */
-
-static void msPromiseNewEnvDestroy(void* p) {
-	msPromiseNewEnv* e = (msPromiseNewEnv*)p;
-	msDecref(e->future);
-}
-
-static const msTypeInfo msPromiseNewEnvTypeInfo = {
-	.name = "msPromiseNewEnv",
-	.isCyclic = false,
-	.traceFn = NULL,
-	.destroyFn = (msDestroyProc)msPromiseNewEnvDestroy,
-	.flags = 0,
-};
-
-bool msPromiseNewTake(void* env) {
-	msPromiseNewEnv* e = (msPromiseNewEnv*)env;
-	if (e->settled) return false;
-	e->settled = true;
-	return true;
-}
-
-msFuture* msPromiseNewFuture(void* env) {
-	msFuture* f = ((msPromiseNewEnv*)env)->future;
-	msIncref(f);
-	return f;
-}
-
-static void msPromiseNewReject(msString error, void* env) {
-	if (!msPromiseNewTake(env)) return;
-	msString message = MS_EMPTY_STRING;
-	msStringCopy(&message, error);
-	msFutureFail(((msPromiseNewEnv*)env)->future, msMakeError(message));
-}
-
-void* msPromiseNewValue(msClosure executor, void* fut, msClosure resolve) {
-	msPromiseNewEnv* env = (msPromiseNewEnv*)msAllocTyped(sizeof(msPromiseNewEnv), &msPromiseNewEnvTypeInfo);
-	env->future = (msFuture*)fut;
-	env->settled = false;
-	msIncref(fut);
-	resolve.env = env;
-	msClosure reject = { .fn = (msClosureFn)msPromiseNewReject, .env = env };
-	if (executor.env != NULL) ((void(*)(msClosure, msClosure, void*))executor.fn)(resolve, reject, executor.env);
-	else ((void(*)(msClosure, msClosure))executor.fn)(resolve, reject);
-	if (msErr) {
-		void* thrown = (void*)msCurrException;
-		msErr = false;
-		msCurrException = NULL;
-		if (env->settled) msDecref(thrown);
-		else { env->settled = true; msFutureFail(fut, thrown); }
-	}
-	msDecref(env);
-	msIncref(fut);
-	return fut;
-}
-
 /* ===== Promise.then ===== */
 
 /* Type-aware callback dispatch for .then.

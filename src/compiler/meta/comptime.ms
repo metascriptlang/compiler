@@ -20,7 +20,7 @@ import {
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
-import { evalASTFull, evalProgramViaEngine } from "../../codegen/raiser/eval";
+import { evalASTFull, evalProgramViaEngine, releaseEngineHeaps } from "../../codegen/raiser/eval";
 import {
 	clearObjectHeap, clearArrayHeap, RaiserValueKind,
 } from "../../raiser/value";
@@ -112,8 +112,12 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	result.nodeType = staticType as unknown as Type;
 
 	// Reclaim VM heaps — prevents monotonic growth during long builds
-	clearObjectHeap(ctx.objectHeap);
-	clearArrayHeap(ctx.arrayHeap);
+	if (checkerCtx != null) {
+		releaseEngineHeaps();
+	} else {
+		clearObjectHeap(ctx.objectHeap);
+		clearArrayHeap(ctx.arrayHeap);
+	}
 	ctx = null;
 
 	return result;

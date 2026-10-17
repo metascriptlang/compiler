@@ -43,7 +43,7 @@ setup() {
   rm -rf "$T/ws" "$T/ctl" "$T/fakebin" "$T/decoy" "$T/decoy-wt"; mkdir -p "$T/ws/.wt" "$T/ctl" "$T/fakebin"
   export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT
   export MSC_LAND_QUEUE_IDLE=${IDLE:-2} MSC_LAND_QUEUE_POLL=1 MSC_LAND_QUEUE_WAIT_POLL=1
-  unset MSC_WT_ROOT WT_CARD_ROOT WT_WORKTREE_ROOT WT_BASE CLAUDE_PROJECT_DIR
+  unset MSC_WT_ROOT WT_CARD_ROOT WT_WORKTREE_ROOT WT_BASE CLAUDE_PROJECT_DIR GATE_PAR MSCORPUS_BUILD_JOBS
   R=$T/ws/repo
   git init -q -b main "$R"
   git -C "$R" config user.email t@t; git -C "$R" config user.name t
@@ -54,7 +54,7 @@ setup() {
 if [ "$1" = --inert ]; then exit "$(cat "$LQ_TEST/inert" 2>/dev/null || echo 0)"; fi
 [ "$1" = --tree-key ] && exit 0
 name=$(git symbolic-ref --short HEAD)
-printf '%s head=%s files=%s\n' "$name" "$(git rev-parse --short HEAD)" "$(git ls-tree --name-only HEAD | grep -v '^tools$' | paste -sd, -)" >>"$LQ_TEST/gates.log"
+printf '%s head=%s files=%s par=%s jobs=%s\n' "$name" "$(git rev-parse --short HEAD)" "$(git ls-tree --name-only HEAD | grep -v '^tools$' | paste -sd, -)" "${GATE_PAR:-}" "${MSCORPUS_BUILD_JOBS:-}" >>"$LQ_TEST/gates.log"
 v=$(cat verdict 2>/dev/null || echo green)
 case "$v" in
   green) exit 0 ;;
@@ -91,6 +91,7 @@ check "S1 a.txt on main" 'onmain a.txt'
 check "S1 .done written" '[ -e "$MSC_LAND_QUEUE/a.done" ]'
 check "S1 main checkout file synced" '[ -e "$R/a.txt" ]'
 check "S1 runner exits when idle" 'runner_down 20'
+check "S1 gate runs at the bounded width when the caller set none" 'grep -q "^wt/a .* par=3 jobs=8$" "$T/ctl/gates.log"'
 
 echo "== S2 two queued lands: the second is gated on a tree that contains the first"
 setup; mkwt a; mkwt b

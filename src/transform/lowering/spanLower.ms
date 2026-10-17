@@ -381,23 +381,15 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 	const startExpr = bd.left;
 	const endExpr = bd.right;
 
-	// Build data pointer: arr.data + start (pointer arithmetic in C)
-	let dataBase: Node | null = null;
-	if (arrType.kind == TypeKind.Array) {
-		// Heap array: arr.p->data + start (nativeLower rewrites .data to .p->data for Arrays)
-		dataBase = makeMember(d.array, "data", loc);
+	let dataExpr: Node;
+	if (arrType.kind == TypeKind.Array || arrType.kind == TypeKind.String) {
+		dataExpr = makeCall(runtimeRef("msArrDataAt", loc), [makeMember(d.array, "p", loc), startExpr], loc);
 	} else if (arrType.kind == TypeKind.SizedArray || arrType.kind == TypeKind.Span) {
-		// Stack array or span: arr.data + start
-		dataBase = makeMember(d.array, "data", loc);
-	} else if (arrType.kind == TypeKind.String) {
-		// String: msArrDataOr0(str.p) + start — msString holds the bytes in its payload
-		dataBase = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.array, "p", loc)], loc);
+		dataExpr = makeBinary(makeMember(d.array, "data", loc), "+", startExpr, loc);
 	} else {
 		return node;
 	}
 
-	// data = base + start
-	const dataExpr = makeBinary(dataBase, "+", startExpr, loc);
 	// Set pointer type for correct C emission
 	if (resultType.typeReturn != null) {
 		dataExpr.nodeType = createPtr(resultType.typeReturn);

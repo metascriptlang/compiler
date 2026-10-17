@@ -52,6 +52,7 @@ const ulps = (got, want) => {
 };
 
 const xs = [2, 3, 0.3, 1.1, 7, 49.283038373705544, 1e-300, 1e300, 0, -0, -8, 1, -1, Infinity, -Infinity, NaN, 10, Math.PI];
+const LOGGED = /^Program log: 0x0, 0x0, 0x0, 0x0, 0x([0-9a-f]+)$/;
 const ys = [0.5, 1.5, 37, 37, -0.5, 1.5, 0.5, -0.5, -0.5, -0.5, 1 / 3, NaN, Infinity, -0.5, 1.5, 0, -1074, Math.E];
 const ops = [["x ** 1.5", (x) => x ** 1.5], ["x ** 37", (x) => x ** 37], ["x ** -0.5", (x) => x ** -0.5], ["Math.pow(x, y)", (x, y) => Math.pow(x, y)]];
 let exact = 0, near = 0, maxUnits = 0;
@@ -59,7 +60,8 @@ for (const [op, [name, f]] of ops.entries()) {
 	for (const [at, x] of xs.entries()) {
 		const want = f(x, ys[at]);
 		const outcome = await run(op, at);
-		const got = outcome.ok && outcome.logs.length === 1 ? BigInt(outcome.logs[0].slice("Program log: ".length)) : null;
+		const logged = outcome.ok && outcome.logs.length === 1 ? LOGGED.exec(outcome.logs[0]) : null;
+		const got = logged ? BigInt(`0x${logged[1]}`) : null;
 		const off = got === null ? -1n : ulps(got, want);
 		if (off === 0n) exact++;
 		else if (off === 1n) near++;
