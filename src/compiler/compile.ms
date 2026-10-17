@@ -1573,12 +1573,8 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorPoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/actor/actor.c";
-		if (opts.targetOs == "windows") {
-			rtFiles = rtFiles + "\n" + "runtime/fs/windows.c";
-		} else {
-			rtFiles = rtFiles + "\n" + "runtime/fs/posix.c";
-		}
 	}
+	rtFiles = rtFiles + "\n" + (opts.targetOs == "windows" ? "runtime/fs/windows.c" : "runtime/fs/posix.c");
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
 	rtFiles = rtFiles + "\n" + "runtime/promise/moduleEval.c";
