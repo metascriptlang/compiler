@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -343,6 +343,19 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 	return result;
 }
 
+function takesUnknown(target: Type): boolean {
+	if (target.kind == TypeKind.Union) {
+		for (const member of target.typeChildren) {
+			if (member != null && takesUnknown(member)) return true;
+		}
+		return false;
+	}
+	return match (target.kind) {
+		TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Error => true,
+		_ => false,
+	};
+}
+
 function openNullableUnionPayload(union: Type, carrier: Type): Type | null {
 	if (union.kind != TypeKind.Union || !isMaybeType(carrier)) return null;
 	const payload = nonNullMemberOfNullable(union);
@@ -503,6 +516,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		return isAssignable(source, target.typeReturn);
 	}
 
+	if (source.kind == TypeKind.Unknown && !takesUnknown(target)) return false;
 	if (source.kind == TypeKind.Module || target.kind == TypeKind.Module) return isOpenSlot(source) || isOpenSlot(target);
 
 	// Inference sentinels (Inferred = open signature, None = typeless node) and
@@ -1793,6 +1807,22 @@ test "different kind" {
 test "unknown compatible" {
 	assert isAssignable(inferredType(), numberType());
 	assert isAssignable(numberType(), inferredType());
+}
+
+test "unknown flows only into a slot that takes unknown" {
+	const cls = createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true));
+	assert !isAssignable(unknownType(), cls);
+	assert isAssignable(unknownType(), unknownType());
+	assert isAssignable(unknownType(), createUnion([unknownType(), nullType()]));
+	assert isAssignable(cls, unknownType());
+}
+
+test "a function taking a class does not stand in for one taking unknown" {
+	const cls = createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true));
+	const takesClass = createFunction([cls], ["e"], voidType());
+	const takesUnknown = createFunction([unknownType()], ["reason"], voidType());
+	assert !isAssignable(takesClass, takesUnknown);
+	assert isAssignable(takesUnknown, takesClass);
 }
 
 test "numeric widening" {
