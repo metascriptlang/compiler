@@ -612,7 +612,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				splitTryFinally(stmt, sc, currentState, afterSt, loc, resultType);
 				currentState = afterSt;
 				i += 1;
-			} else if (td.catchBody == null) {
+			} else if (!td.hasCatchClause) {
 				const merged: Node[] = extractBodyStmts(td.tryBody);
 				for (let ri = i + 1; ri < stmts.length; ri += 1) merged.push(stmts[ri]);
 				splitStmts(merged, sc, currentState, exitState, loc, resultType);
@@ -800,7 +800,7 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 	const frame: FinallyFrame = { stmts: extractBodyStmts(td.finallyBody), loopDepth: sc.loopStack.length, hasYield: containsYield(td.finallyBody) };
 	sc.finallyStack.push(frame);
 
-	if (td.catchBody == null) {
+	if (!td.hasCatchClause) {
 		const finReraise = allocState(sc);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
 		for (let s = tryStart; s < sc.items.length; s += 1) {
