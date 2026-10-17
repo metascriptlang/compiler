@@ -730,21 +730,27 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	}
 	sc.items[tryExit].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
 
-	// Rewrite the catch variable to read the env-carried current exception
-	// ($curExc, reference :curExc) directly. buildExcRouting stores $excCaught into
-	// $curExc on the raise path, which survives the await→raise→catch state
-	// boundary that the runtime global msCurrException does not. Reading the env
-	// field (not a per-state local) keeps the value in scope across every split
-	// state and lets the env's DRC hooks own its lifetime — a local would be
-	// cleaned up per-state and dangle on the try-body unwind paths.
-	// $curExc carries the caught exception; its type must be the exception type
-	// (DRC-owned) even when the handler never reads the catch var — otherwise the
-	// env field falls back to void* and the exception leaks (no destructor hook).
+	bindCatchToCurExc(node, sc);
+	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
+}
+
+// Rewrite the catch variable to read the env-carried current exception
+// ($curExc, reference :curExc) directly. buildExcRouting stores $excCaught into
+// $curExc on the raise path, which survives the await→raise→catch state
+// boundary that the runtime global msCurrException does not. Reading the env
+// field (not a per-state local) keeps the value in scope across every split
+// state and lets the env's DRC hooks own its lifetime — a local would be
+// cleaned up per-state and dangle on the try-body unwind paths.
+// $curExc carries the caught exception; its type must be the exception type
+// (DRC-owned) even when the handler never reads the catch var — otherwise the
+// env field falls back to void* and the exception leaks (no destructor hook).
+// Shared by the catch-only and catch+finally splits: the reference binds an
+// except branch the same way whether or not a finally follows it.
+function bindCatchToCurExc(node: Node, sc: StateCollector): void {
 	if (node.nodeType != null) sc.excType = node.nodeType;
 	if (node.resolvedSym != null) {
-		renameIdentInSubtree(td.catchBody, node.resolvedSym, "$curExc", node.nodeType, sc.curExcSym);
+		renameIdentInSubtree((node.data as TryCatchStmtData).catchBody, node.resolvedSym, "$curExc", node.nodeType, sc.curExcSym);
 	}
-	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
 }
 
 // finallyPath helpers: the normal exit routes through a dedicated landing-free
@@ -820,6 +826,7 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		sc.finallyStack.push(frame);
 		const catchExit = allocState(sc);
 		const finReraise = allocState(sc);
+		bindCatchToCurExc(node, sc);
 		splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, catchExit, loc, resultType);
 		// The normal-exit finally states stay landing-free (single finally run);
 		// everything else in the catch range — catchSt itself, catchExit's entry
