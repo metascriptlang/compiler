@@ -170,11 +170,10 @@ export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
 export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u as Ptr<void>)); }
 
-function sameKey<T>(this a: T, b: T): boolean { return a == b; }
-function sameKey(this a: number, b: number): boolean { return a == b || (a != a && b != b); }
-function sameKey(this a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
-function sameKey(this a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
-function sameKey(this a: unknown, b: unknown): boolean { return a == b; }
+function sameKey<T>(a: T, b: T): boolean { return a == b; }
+function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
+function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
+function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
 
 test "a NaN key is found and stored once, like a TypeScript Map" {
 	const zero: number = 0.0;
@@ -243,7 +242,7 @@ function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (m.data[h].hcode != 0) {
-		if (m.data[h].hcode == hc && m.data[h].key.sameKey(key)) {
+		if (m.data[h].hcode == hc && sameKey(m.data[h].key, key)) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -445,7 +444,7 @@ function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode != 0) {
-		if (s.data[h].hcode == hc && s.data[h].key.sameKey(key)) {
+		if (s.data[h].hcode == hc && sameKey(s.data[h].key, key)) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -596,7 +595,7 @@ function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = m.entries[slot];
-			if (e.hcode == hc && e.key.sameKey(key)) return h;
+			if (e.hcode == hc && sameKey(e.key, key)) return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -841,7 +840,7 @@ function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = s.entries[slot];
-			if (e.hcode == hc && e.key.sameKey(key)) return h;
+			if (e.hcode == hc && sameKey(e.key, key)) return h;
 		}
 		h = (h + 1) & mask;
 	}
