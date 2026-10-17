@@ -161,9 +161,10 @@ export function unboxFnNameForType(t: Type | null): string {
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
 		TypeKind.Boolean => "msUnboxBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32
 			| TypeKind.Enum => "msUnboxInt32",
+		TypeKind.Int64 | TypeKind.Uint64 => "msUnboxInt64",
 		TypeKind.String => "msUnboxString",
 		_ => "",
 	};
@@ -177,8 +178,9 @@ export function typedFutureReadFn(t: Type | null): string {
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
 		TypeKind.Boolean => "msFutureReadBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msFutureReadInt32",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => "msFutureReadInt32",
+		TypeKind.Int64 | TypeKind.Uint64 => "msFutureReadInt64",
 		TypeKind.String => "msFutureReadString",
 		_ => "",
 	};

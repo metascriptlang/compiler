@@ -115,8 +115,9 @@ function boxValueForFuture(node: Node, loc: SourceLocation): Node {
 	return match (node.nodeType.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(runtimeRef("msBoxDouble", loc), [node], loc),
 		TypeKind.Boolean => makeCall(runtimeRef("msBoxBool", loc), [node], loc),
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 |
-		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(runtimeRef("msBoxInt32", loc), [node], loc),
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 |
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => makeCall(runtimeRef("msBoxInt32", loc), [node], loc),
+		TypeKind.Int64 | TypeKind.Uint64 => makeCall(runtimeRef("msBoxInt64", loc), [node], loc),
 		_ => node,
 	};
 }
