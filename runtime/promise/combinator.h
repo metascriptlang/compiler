@@ -436,6 +436,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
             } else { \
                 msDecref(s->arr); \
             } \
+            msDecref(s->result); \
             free(s->inputs); \
             free(s); \
         } \
@@ -463,6 +464,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); } \
         elemFutType##_allState* state = (elemFutType##_allState*)calloc(1, sizeof(elemFutType##_allState)); \
         state->result = result; \
+        msIncref(result); \
         state->inputs = inputsCopy; \
         state->arr = resultArr; \
         state->share = share; \
