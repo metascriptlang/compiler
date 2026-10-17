@@ -101,6 +101,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Spawn => "Spawn",
 		RaiserOpcode.Await => "Await",
 		RaiserOpcode.Sleep => "Sleep",
+		RaiserOpcode.ModuleImport => "ModuleImport",
 		RaiserOpcode.FutureNew => "FutureNew",
 		RaiserOpcode.FutureSettle => "FutureSettle",
 		RaiserOpcode.FutureFail => "FutureFail",
@@ -115,7 +116,7 @@ export function opName(op: RaiserOpcode): string {
 // --- Format helpers ---
 
 function isABxOp(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch;
+	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch || op == RaiserOpcode.ModuleImport;
 }
 
 function isAxOp(op: RaiserOpcode): boolean {

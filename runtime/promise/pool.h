@@ -70,10 +70,10 @@ bool msPoolHelpOne(void);
  * (msAwaitSlotWait, msWaitForReady) so shouldSend sees available capacity.
  * Re-increment when exiting the wait loop. */
 /* Returns whether it decremented — the decrement saturates at 0, so re-increment
- * ONLY when it did, or the counter drifts up and strands msDrainUntilIdle. */
+ * ONLY when it did, or the counter drifts up and shouldSend inlines spawns an idle pool could take. */
 bool msPoolBusyDec(void);
 void msPoolBusyInc(void);
-int32_t msPoolBusyPeek(void);
+int32_t msPoolPendingPeek(void);
 
 /* Wake a specific worker by scheduler ID (targeted: no spurious wakeups) */
 void msPoolWakeWorker(int schedulerID);

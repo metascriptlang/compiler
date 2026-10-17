@@ -165,7 +165,8 @@ export enum RaiserOpcode {
 	InstanceOf,       // ABC: R[A] = R[B] is an object whose class is K[C] or derives from it
 	ObjConv,          // ABC: fatal unless R[A] is nil or an instance of class K[B], named K[C]
 	BTruthy,          // ABC: if R[A] is truthy (ToBoolean) skip C
-	NarrowS,          // AB: fatal unless R[A] fits a signed B-bit integer
+	NarrowS,          // ABC: fatal unless R[A] fits a signed B-bit integer, or an unsigned one when C is 1
+	ModuleImport,     // ABx: R[A] = future of import() of the module record named K[Bx]
 	FutureNew,        // ABC: R[A] = a pending future
 	FutureSettle,     // ABC: complete future R[A] with R[B] unless it is already settled
 	FutureFail,       // ABC: fail future R[A] with exception R[B] unless it is already settled

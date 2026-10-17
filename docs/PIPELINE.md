@@ -97,6 +97,16 @@ optimization (`optimize.ms`, redundant-op elimination). See [`ANALYZER.md`](ANAL
 for the RC insertion-point table and the moveOrCopy decision tree. DRC convention:
 `msAlloc` returns rc=0 = sole owner; `msDecRefIsLast` true at rc==0 (rc counts the owners beyond the first).
 
+### After DRC, before codegen (C only) — `transform/native/nativeLower.ms`
+
+`lowerNativeAccess` rewrites array and string access to runtime macros. Before it,
+`blockReduce.ms` versions a checked signed-integer reduction whose loop body is only
+`acc += xs[i]`, `acc -= x` or `acc += a[i] * b[i]` into blocks of 1024 elements: a read-only
+pass proves `|acc| + n·max|term| <= MAX`, so the block runs as a plain sum; otherwise the
+unchanged checked body runs and stops at the exact element. It runs after DRC because the
+cursor analysis counts any pointer passed to a call as a possible mutation and would then own
+the borrowed array. Pins: `src/test/c/blockReduce.ms`, `src/test/corpus/programs/blockReduce*`.
+
 ## Phase 5 — Backend Codegen (`src/codegen/c`, `src/codegen/js`)
 
 **Codegen is a thin/dumb emitter** — it only dumps what earlier phases produced. If you find

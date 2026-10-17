@@ -23,7 +23,7 @@ import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
 	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
-	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef,
+	makeWhile, makeBinary, makeNumber, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef, counterType, makeCounterStep,
 } from "../util";
 
 export function isLowerableSpreadLiteral(node: Node): boolean {
@@ -130,23 +130,21 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 		srcDecl.resolvedSym = srcSym;
 		srcDecl.nodeType = srcT;
 		out.push(srcDecl);
-		const iSym = freshTempSym(ctx, "spri", int32Type());
+		const indexType = counterType(ctx);
+		const iSym = freshTempSym(ctx, "spri", indexType);
 		const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
 		iDecl.resolvedSym = iSym;
-		iDecl.nodeType = int32Type();
+		iDecl.nodeType = indexType;
 		out.push(iDecl);
-		const elemAccess = makeArrayAccess(viewRef(srcSym, srcT, loc), typedRef(iSym, int32Type(), loc), loc);
+		const elemAccess = makeArrayAccess(viewRef(srcSym, srcT, loc), typedRef(iSym, indexType, loc), loc);
 		const bareSrc = bareArrayType(srcT);
 		elemAccess.nodeType = bareSrc != null ? bareSrc.typeReturn : null;
 		const bodyStmts: Node[] = [];
 		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc, ctx));
-		bodyStmts.push(makeExprStmt(makeAssign(
-			typedRef(iSym, int32Type(), loc),
-			makeBinary(typedRef(iSym, int32Type(), loc), "+", makeNumber(1, loc), loc),
-		loc), loc));
+		bodyStmts.push(makeCounterStep(iSym, indexType, loc));
 		const lenMember = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
 		lenMember.nodeType = int32Type();
-		const cond = makeBinary(typedRef(iSym, int32Type(), loc), "<", lenMember, loc);
+		const cond = makeBinary(typedRef(iSym, indexType, loc), "<", lenMember, loc);
 		out.push(makeWhile(cond, makeBlock(bodyStmts, loc), loc));
 	}
 	const litData: IdentifierData = { name: accSym.name };

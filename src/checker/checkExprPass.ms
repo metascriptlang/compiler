@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { integerLiteralText, adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, convertedTo, wrapsIntoUnsignedTarget, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, UnionRead, readUnionOperand, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, scalarConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns } from "./fit";
+import { integerLiteralText, adoptLiteralArms, declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, convertedTo, wrapsIntoUnsignedTarget, tupleIndexType, checkRelationalOperands, checkBinaryOperands, refuseDisjointStrings, typeofComparisonHint, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, rejectCharArith, rejectCharUnary, textlessValue, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, UnionRead, readUnionOperand, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, scalarConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -213,8 +213,19 @@ function isReadonlyAttachedStatic(owner: Node, field: Symbol | null): boolean {
 	return (field.declNode.data as PropertyDeclData).propIsReadonly;
 }
 
+function refuseNamespaceWrite(ctx: CheckerContext, target: Node): boolean {
+	const object = (target.data as MemberExprData).object;
+	const viaNamespace = (object.resolvedSym != null && object.resolvedSym.symbolKind == SymbolKind.Module)
+		|| (object.nodeType != null && object.nodeType.kind == TypeKind.Module);
+	if (!viaNamespace) return false;
+	addError(ctx, `cannot assign to '${(target.data as MemberExprData).property}' because it is a read-only property of a module namespace: only the module that declares it can write it`,
+		target.location.line, target.location.column);
+	return true;
+}
+
 function reportReadonlyField(ctx: CheckerContext, target: Node): void {
 	const md = target.data as MemberExprData;
+	if (refuseNamespaceWrite(ctx, target)) return;
 	if (md.object.nodeType == null) return;
 	if (isReadonlyAttachedStatic(md.object, target.resolvedSym)) {
 		addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
@@ -776,6 +787,7 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	reportSharedWrite(ctx, d.updateArg);
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
 		const umd = d.updateArg.data as MemberExprData;
+		refuseNamespaceWrite(ctx, d.updateArg);
 		if (umd.property == "length" && umd.object.nodeType != null &&
 			(umd.object.nodeType.kind == TypeKind.Array || umd.object.nodeType.kind == TypeKind.SizedArray || umd.object.nodeType.kind == TypeKind.Span || isStringLike(umd.object.nodeType) || umd.object.nodeType.kind == TypeKind.CString)) {
 			if (umd.object.nodeType.kind == TypeKind.SizedArray) {
@@ -1358,6 +1370,15 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 		&& d.operator != "instanceof") {
 		addError(ctx, "operator '" + d.operator + "' cannot be applied to 'unknown' — narrow with an explicit cast", node.location.line, node.location.column);
 	}
+	if ((d.operator == "+" || d.operator == "+=") && effLeft != null && effRight != null) {
+		const textOperand = isStringLike(effLeft) ? d.right : (isStringLike(effRight) ? d.left : null);
+		const textless = textOperand != null ? textlessValue(textOperand == d.right ? effRight : effLeft) : "";
+		if (textless != "") {
+			addError(ctx, textless, textOperand!.location.line, textOperand!.location.column);
+			node.nodeType = errorType();
+			return;
+		}
+	}
 	const voidLeft = effLeft != null && effLeft.kind == TypeKind.Void;
 	const voidRight = effRight != null && effRight.kind == TypeKind.Void;
 	if ((voidLeft || voidRight) && d.operator != "=") {
@@ -1366,7 +1387,6 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 			|| d.operator == "==" || d.operator == "!=";
 		const otherNullish = voidOther != null
 			&& (voidOther.kind == TypeKind.Null || voidOther.kind == TypeKind.Void);
-		const concatOk = d.operator == "+" && voidOther != null && isStringLike(voidOther);
 		const nullishOk = d.operator == "??" || d.operator == "??=";
 		if (d.operator == "&&" || d.operator == "||"
 			|| d.operator == "&&=" || d.operator == "||=") {
@@ -1376,7 +1396,7 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 			addError(ctx, "comparison of 'void' and '" + typeDisplayName(voidOther!)
 				+ "' — the types have no overlap; a void result only equals null",
 				node.location.line, node.location.column);
-		} else if (!isEqOp && !concatOk && !nullishOk) {
+		} else if (!isEqOp && !nullishOk) {
 			addError(ctx, "operator '" + d.operator
 				+ "' cannot be applied to 'void' — a void call produces no value",
 				node.location.line, node.location.column);
@@ -1483,6 +1503,7 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 	if (isRelational) checkRelationalOperands(ctx, d.operator, effLeft!, effRight!, node);
 	if (isComparisonOp(d.operator)) refuseMixedSignedCompare(ctx, d.operator, effLeft, effRight, node);
 	if (rejectBigIntMix(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
+	if (rejectCharArith(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
 	if (rejectLossyIntFloatMix(ctx, d.operator, d.left, d.right, effLeft, effRight)) { node.nodeType = errorType(); return; }
 	if (checkBinaryOperands(ctx, d.operator, effLeft!, effRight!, node)) { node.nodeType = errorType(); return; }
 	if (compoundOperandRefuses(d.operator, effLeft, effRight)) {
@@ -2657,6 +2678,7 @@ function checkUnaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		return;
 	}
 	checkExpr(ctx, d.operand, unaryExpected);
+	if (rejectCharUnary(ctx, d.unaryOp, d.operand.nodeType, node)) { node.nodeType = errorType(); return; }
 	if (d.unaryOp == "!") {
 		refuseFunctionTruthiness(ctx, d.operand);
 	} else if ((d.unaryOp == "-" || d.unaryOp == "+") && unaryArithFails(ctx, d.unaryOp, d.operand.nodeType)

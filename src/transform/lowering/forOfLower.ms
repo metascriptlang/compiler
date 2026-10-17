@@ -21,7 +21,7 @@ import { walkNode } from "../walker";
 import {
 	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
-	makeIf, makeString, makeHiddenDeref, runtimeRef, extractBodyStmts, boolToDeclKind,
+	makeIf, makeString, makeHiddenDeref, runtimeRef, extractBodyStmts, boolToDeclKind, counterType, makeCounterStep,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -119,8 +119,9 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 // ===== Array/String For-Of =====
 
 function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null): Node {
-	const idxSym = freshTempSym(ctx, "idx", int32Type());
-	const lenSym = freshTempSym(ctx, "len", int32Type());
+	const indexType = counterType(ctx);
+	const idxSym = freshTempSym(ctx, "idx", indexType);
+	const lenSym = freshTempSym(ctx, "len", indexType);
 	const iterType = d.forOfIterable.nodeType != null ? peelTransparentInstance(d.forOfIterable.nodeType) : null;
 	// reference array: the iter expr keeps its Ref<Array> type (nativeLower derefs the
 	// synthesized .length/[idx] access), but element-type stamping must read through the
@@ -153,19 +154,15 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	// let $idx = 0;
 	const idxDecl = makeVarDecl(idxSym.name, makeNumber(0, loc), DeclKind.Let, loc);
 	idxDecl.resolvedSym = idxSym;
+	idxDecl.nodeType = indexType;
 	preamble.push(idxDecl);
 
 	const lenDecl = makeVarDecl(lenSym.name, lengthOf(iterExpr, isString, loc), DeclKind.Const, loc);
 	lenDecl.resolvedSym = lenSym;
+	lenDecl.nodeType = indexType;
 	preamble.push(lenDecl);
 
-	// $idx = $idx + 1;
-	const increment = makeAssign(
-		makeIdentResolved(idxSym, loc),
-		makeBinary(makeIdentResolved(idxSym, loc), "+", makeNumber(1, loc), loc),
-		loc
-	);
-	const incStmt = makeExprStmt(increment, loc);
+	const incStmt = makeCounterStep(idxSym, indexType, loc);
 
 	// Build while body — bindings scoped inside the loop iteration
 	const whileStmts: Node[] = [];

@@ -129,6 +129,63 @@ export function makeValueShareFn(t: Type, ctx: TransformContext, loc: SourceLoca
 	return pair;
 }
 
+export function makeLocalDecl(sym: Symbol, init: Node, t: Type, loc: SourceLocation): Node {
+	const decl = makeVarDecl(sym.name, init, DeclKind.Const, loc);
+	decl.nodeType = t;
+	decl.resolvedSym = sym;
+	return decl;
+}
+
+// The statements of a future's value-drop routine: take whatever the slot still
+// holds into a local, and the local's scope exit runs the value's own destructor.
+// A reader that took the value left the slot empty.
+export function makeValueDropStmts(t: Type, futSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node[] {
+	const voidPtrType = createPtr(voidType());
+	const stmts: Node[] = [];
+	if (boxedInFuture(t)) {
+		const rawSym = mintSym(ctx, SymbolKind.Variable, "$raw", voidPtrType);
+		const take = makeCall(runtimeRef("msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = voidPtrType;
+		stmts.push(makeLocalDecl(rawSym, take, voidPtrType, loc));
+		const unbox = makeCall(runtimeRef("msUnboxStruct", loc), [makeTypedIdentResolved(rawSym, voidPtrType, loc)], loc);
+		unbox.nodeType = t;
+		const held = makeBinary(makeTypedIdentResolved(rawSym, voidPtrType, loc), "!=", makeNull(loc), loc);
+		held.nodeType = booleanType();
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeIf(held, makeBlock([makeLocalDecl(droppedSym, unbox, t, loc)], loc), null, loc));
+	} else {
+		const take = makeCall(runtimeRef(inlineInFuture(t) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = t;
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeLocalDecl(droppedSym, take, t, loc));
+	}
+	return stmts;
+}
+
+// drop(fut) for a future of `t` that generated code completes, as a
+// closure without an environment over a generated top-level function (the builtin
+// pass runs after lambda lifting). A result the future does not own (a number)
+// gets the empty closure, which the runtime reads as "nothing to drop".
+export function makeFutureDropClosure(t: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
+	const voidPtrType = createPtr(voidType());
+	const closureType = createClosureType([voidPtrType], ["fut"], voidType());
+	const pair = (fnValue: Node): Node => {
+		const lit = makeObjectLiteral(["fn", "env"], [fnValue, makeNull(loc)], loc);
+		lit.flags = lit.flags.incl(NodeFlag.Closure);
+		lit.nodeType = closureType;
+		return lit;
+	};
+	if (t == null || !ownedInFuture(t)) return pair(makeNull(loc));
+	const sym = mintSym(ctx, SymbolKind.Function, "$drop" + _shareFnDecls.length.toString(), null);
+	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
+	const fnNode = makeFnDecl(sym.name, [futSym], ["Ptr<void>"], makeBlock(makeValueDropStmts(t, futSym, ctx, loc), loc), "", "void", loc);
+	fnNode.nodeType = createFunction([voidPtrType], ["fut"], voidType());
+	sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_shareFnDecls.push(fnNode);
+	return pair(makeTypedIdentResolved(sym, fnNode.nodeType, loc));
+}
+
 export function makeOwnsValueCheck(fut: Node, loc: SourceLocation): Node {
 	const call = makeCall(runtimeRef("msFutureOwnsValue", loc), [fut], loc);
 	call.nodeType = booleanType();
@@ -163,7 +220,7 @@ export function unboxFnNameForType(t: Type | null): string {
 		TypeKind.Boolean => "msUnboxBool",
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Enum => "msUnboxInt32",
+			| TypeKind.Enum | TypeKind.Module => "msUnboxInt32",
 		TypeKind.String => "msUnboxString",
 		_ => "",
 	};
@@ -407,6 +464,11 @@ export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 		n.nodeType = t;
 		return n;
 	}
+	if (k == TypeKind.Module) {
+		const unit = makeNumber(0, loc);
+		unit.nodeType = getSysType(TypeKind.Uint8);
+		return unit;
+	}
 	// Boolean → false
 	if (k == TypeKind.Boolean) {
 		return makeBool(false, loc);
@@ -436,6 +498,20 @@ export function makeVarDecl(varName: string, init: Node, declKind: DeclKind, loc
 
 export function makeExprStmt(exprNode: Node, loc: SourceLocation): Node {
 	return createNode(NodeKind.ExprStmt, { expr: exprNode }, syntheticToken(loc));
+}
+
+export function counterType(ctx: TransformContext): Type {
+	return ctx.jsBackend || ctx.raiserBackend ? int32Type() : getSysType(TypeKind.Int64);
+}
+
+export function makeCounterStep(counter: Symbol, t: Type, loc: SourceLocation): Node {
+	const target = makeIdentResolved(counter, loc);
+	target.nodeType = t;
+	const current = makeIdentResolved(counter, loc);
+	current.nodeType = t;
+	const next = makeBinary(current, "+", makeNumber(1, loc), loc);
+	next.flags = next.flags.incl(NodeFlag.NoOverflowCheck);
+	return makeExprStmt(makeAssign(target, next, loc), loc);
 }
 
 export function makeReturn(arg: Node | null, loc: SourceLocation): Node {

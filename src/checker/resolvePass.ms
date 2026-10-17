@@ -510,6 +510,28 @@ function constArrayDimension(text: string, ctx: CheckerContext, line: int32, col
 	return fd.intVal as int32;
 }
 
+function refuseVoidMember(ctx: CheckerContext, parts: string[], members: Type[], text: string, line: int32, col: int32): void {
+	let hasVoid = false;
+	for (const m of members) {
+		if (m.kind == TypeKind.Void) hasVoid = true;
+	}
+	if (!hasVoid) return;
+	const kept: string[] = [];
+	let i = 0;
+	for (const up of parts) {
+		const part = up.trim();
+		if (part.length == 0) continue;
+		const shown = members[i].kind == TypeKind.Void ? "null" : part;
+		if (!kept.includes(shown)) kept.push(shown);
+		i += 1;
+	}
+	const msg = "'" + text + "' puts void in a union, and void is no value — write '" + kept.join(" | ") + "'";
+	for (const e of ctx.errors) {
+		if (e.message == msg) return;
+	}
+	addError(ctx, msg, line, col);
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -546,6 +568,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		addError(ctx, "'distinct' is only allowed at the start of a type alias right-hand side (type X = distinct Y)", line, col);
 		return errorType();
 	}
+
+	if (trimmed.length > 7 && trimmed.slice(0, 7) == "typeof ") return resolveTypeQuery(ctx, trimmed.slice(7, trimmed.length).trim(), line, col);
 
 	// Tier 3: infer X — produce a GenericParam placeholder for conditional type unification
 	if (trimmed.length > 6 && trimmed.slice(0, 6) == "infer ") {
@@ -659,6 +683,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				members.push(resolveAnnotation(part, ctx, line, col));
 			}
 		}
+		if (line > 0) refuseVoidMember(ctx, unionParts, members, trimmed, line, col);
 		if (members.length > 0 && isNullableShape(members) && !anyHasGenericParams(members)) {
 			for (const m of members) {
 				if (isForwardAlias(m)) return deferNullableUnion(members);
@@ -1045,6 +1070,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
+}
+
+function resolveTypeQuery(ctx: CheckerContext, operand: string, line: int32, col: int32): Type {
+	const sym = lookupSymbol(ctx.table, operand);
+	if (sym != null && sym.symbolKind == SymbolKind.Module && sym.symbolType != null) {
+		markUsedIn(ctx, sym);
+		return sym.symbolType;
+	}
+	if (line > 0) {
+		addError(ctx, `'typeof ${operand}' in a type names a namespace import only ('import * as ${operand} from "…"'); the type of another value is not supported as a type query`, line, col);
+		return errorType();
+	}
+	return inferredType();
 }
 
 function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {

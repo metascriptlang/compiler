@@ -11,9 +11,11 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { CandidateScore, unknownReturnRefusal, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
+import { CandidateScore, unknownReturnRefusal, returnReprRefusal, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, findDeclaredExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { adoptLiteralArms, distinctText, distinctTextRefusal, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
+import { adoptLiteralArms, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, adoptLiteralTo, checkSwitchCase, kindArmHandled, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, wrapInConv, tryAdoptAnonStruct, tryApplyConverter, tryStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
+import { checkImportCall } from "./importCall";
+import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
@@ -906,7 +908,12 @@ function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Typ
 	factory.location = d.newCallee.location;
 	node.kind = NodeKind.CallExpr;
 	node.data = { callee: factory, arguments: d.newArguments, isDirectCall: true, resolvedOverloadIdx: -1 } as NodeData;
-	return checkCallExpr(ctx, node, expected);
+	const promise = checkCallExpr(ctx, node, expected);
+	const held = isAwaitable(promise) ? awaitedType(promise) : null;
+	if (held != null && isAwaitable(held)) {
+		addError(ctx, "'new Promise<" + typeDisplayName(held) + ">' is refused: its resolve would receive a promise, and a synchronous executor cannot await it; resolve the value itself", node.location.line, node.location.column);
+	}
+	return promise;
 }
 
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
@@ -1476,6 +1483,7 @@ function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boo
 
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
+	if (d.callee != null && isImportKeyword(d.callee)) return checkImportCall(ctx, node);
 	if (!lowerTypedCallee(ctx, node, d)) return errorType();
 	if (d.callee == null) {
 		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
@@ -1671,7 +1679,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (ctx.extensionRegistry != null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType != null ? peelTransparentInstance(me.object.nodeType) : null;
-			const isNamespaceQualified = me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module;
+			const isNamespaceQualified = (me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module)
+				|| (objType != null && objType.kind == TypeKind.Module);
 			if (objType != null && !isNamespaceQualified) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
@@ -2195,12 +2204,24 @@ function argLabel(pi: int32, hasReceiver: boolean): string {
 function textOfDistinctArgs(ctx: CheckerContext, args: Node[], argTypes: Type[], hasReceiver: boolean): void {
 	for (let ai = hasReceiver ? 1 : 0; ai < args.length; ai += 1) {
 		const t = args[ai].nodeType;
+		if (refuseNamespaceText(ctx, args[ai])) continue;
 		if (t == null || distinctBody(t) == null) continue;
 		const text = distinctText(ctx, args[ai], t);
 		if (text == null) continue;
 		args[ai] = text;
 		if (ai < argTypes.length) argTypes[ai] = stringType();
 	}
+}
+
+function refuseTextlessArgs(ctx: CheckerContext, args: Node[], hasReceiver: boolean): boolean {
+	let refused = false;
+	for (let ai = hasReceiver ? 1 : 0; ai < args.length; ai += 1) {
+		const textless = textlessValue(args[ai].nodeType);
+		if (textless == "") continue;
+		addError(ctx, textless, args[ai].location.line, args[ai].location.column);
+		refused = true;
+	}
+	return refused;
 }
 
 function argLabelCap(pi: int32, hasReceiver: boolean): string {
@@ -2212,6 +2233,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 	const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
 	if (builtin == "Echo" || builtin == "ToString") textOfDistinctArgs(ctx, args, argTypes, hasReceiver);
 	if (builtin == "Echo") return;
+	if (builtin == "ToString" && refuseTextlessArgs(ctx, args, hasReceiver)) return;
 	const d = node.data as CallExprData;
 	const lastCT = calleeType.typeChildren.length > 0
 		? calleeType.typeChildren[calleeType.typeChildren.length - 1] : null;
@@ -2246,6 +2268,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			const collapsedParam = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : null;
 			if (collapsedParam == null || (collapsedParam.kind != TypeKind.Unknown && !isUnresolvedType(collapsedParam))) {
 				addError(ctx, argLabelCap(pi, hasReceiver) + ": unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", node.location.line, node.location.column);
+				continue;
 			}
 		}
 		const intoUnknown = foreignVarargs ? args[pi] : convertIntoUnknown(args[pi], argTypes[pi], paramType);
@@ -2366,7 +2389,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 							argTypes[pi] = args[pi].nodeType!;
 						} else {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
+							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}
@@ -2412,7 +2435,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				args[pi] = convNode;
 			}
 			const paramValue = skipModifier(paramType);
-			if (paramValue != null && paramValue.kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+			if (!formalAwaitsBinding && paramValue != null && paramValue.kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
 				const uw = widenVariantToUnion(args[pi], paramValue, argNow);
 				if (uw != null as unknown as Node) args[pi] = uw;
@@ -2542,7 +2565,7 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 		const formal = applySubstitutions(fnType.typeChildren[ai], bindings);
 		if (formal == null || hasGenericParams(formal)) continue;
 		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal)) {
-			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + refDerefHint(arg, arg.nodeType, formal),
+			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + returnReprRefusal(arg.nodeType, formal, wrappedFnText(arg)) + refDerefHint(arg, arg.nodeType, formal),
 				arg.location.line, arg.location.column);
 			continue;
 		}
@@ -3146,7 +3169,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		// (checkExpr ObjectLiteral: a generic-containing formal is never stamped)
 		// now gets the instantiated formal: codegen must emit the same struct
 		// identity the instance's parameter uses, not the literal's own anon name.
-		const substitutedRef = substituted.kind == TypeKind.Ref && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+		const carried = isMaybeType(substituted) && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+		const substitutedRef = carried.kind == TypeKind.Ref && carried.typeReturn != null ? carried.typeReturn : carried;
 		const substitutedObject = substitutedRef.kind == TypeKind.GenericInstance ? peelToStructOrUnion(substitutedRef) : substitutedRef;
 		if (arg.kind == NodeKind.ObjectLiteral && substitutedObject != null && substitutedObject.kind == TypeKind.Struct
 				&& !hasGenericParams(substituted)) {
@@ -3155,9 +3179,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			if (!skipConstruct) {
 				rearmUnfitProperties(ctx, arg, substitutedObject);
 				rearmLiteralForRecheck(arg, calleeType.typeChildren[pi]);
-				callCheckExpr(ctx, arg, substituted);
+				callCheckExpr(ctx, arg, carried);
 			}
-			if (arg.nodeType == null) arg.nodeType = substituted;
+			if (arg.nodeType == null) arg.nodeType = carried;
+			if (carried != substituted && !isMaybeType(arg.nodeType)) {
+				cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+				if (pi < argTypes.length) argTypes[pi] = substituted;
+				continue;
+			}
 			if (pi < argTypes.length) argTypes[pi] = arg.nodeType;
 			continue;
 		}
@@ -3178,7 +3207,13 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 			continue;
 		}
-		if (!isMaybeType(substituted) || substituted.typeReturn == null) continue;
+		if (!isMaybeType(substituted) || substituted.typeReturn == null) {
+			const convType = substituted.kind == TypeKind.Sink && substituted.typeReturn != null ? substituted.typeReturn : substituted;
+			if (arg.nodeType != null && convType.kind != TypeKind.Var && !hasGenericParams(convType) && needsStdConv(arg.nodeType, convType)) {
+				cd.arguments[pi] = wrapInConv(arg, convType);
+			}
+			continue;
+		}
 		if (arg.kind == NodeKind.NullLiteral) {
 			cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType!);
 			if (pi < argTypes.length) argTypes[pi] = substituted;
@@ -3222,7 +3257,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		if (isAssignable(checkedT, formalT)) continue;
 		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai)
-			+ ": got " + typeDisplayName(checkedT) + ", expected " + typeDisplayName(formalT) + explainStructuralPrefix(checkedT, formalT) + refDerefHint(cd.arguments[ai], checkedT, formalT),
+			+ ": got " + typeDisplayName(checkedT) + ", expected " + typeDisplayName(formalT) + returnReprRefusal(checkedT, formalT, wrappedFnText(cd.arguments[ai])) + explainStructuralPrefix(checkedT, formalT) + refDerefHint(cd.arguments[ai], checkedT, formalT),
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
@@ -4572,8 +4607,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Keep MemberExpr (don't rewrite to Identifier):
 	//   C codegen: handles Module MemberExpr → emits mangled name
 	//   JS codegen: emits ns.X naturally (standard ES6 namespace access)
-	if (d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Module) {
-		const nsModPath = d.object.resolvedSym.modulePath;
+	const nsObject = d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Module;
+	if (nsObject || objType.kind == TypeKind.Module) {
+		const nsModPath = nsObject ? d.object.resolvedSym.modulePath : objType.typeName;
 		if (nsModPath != "") {
 			const expInfo = findExportedSymbol(ctx.exportRegistry, nsModPath, d.property);
 			if (expInfo != null) {
@@ -4584,7 +4620,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				node.nodeType = memSym.symbolType;
 				return memSym.symbolType;
 			}
-			addError(ctx, `Module '${d.object.resolvedSym.name}' has no export '${d.property}'`, node.location.line, node.location.column);
+			addError(ctx, `Module '${nsObject ? d.object.resolvedSym.name : typeDisplayName(objType)}' has no export '${d.property}'`, node.location.line, node.location.column);
 			return inferredType();
 		}
 	}

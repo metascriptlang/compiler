@@ -140,6 +140,14 @@ function parseTypeAtom(state: ParserState): Node {
 		return parseTypeAtom(state);
 	}
 
+	if (token.kind == TokenKind.Typeof) {
+		advance(state);
+		const operandAt = state.position;
+		skipTypeQueryOperand(state);
+		const operandText = collectTokenText(state, operandAt, state.position);
+		return createNode(NodeKind.Identifier, { name: operandText }, state.tokens[operandAt]);
+	}
+
 	// Function type: (a: T, b: U) => R
 	if (token.kind == TokenKind.LParen) {
 		return applyArraySuffix(state, parseTypeFunctionOrParen(state));
@@ -494,6 +502,16 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	// No '?' consumption — that's the whole point
 }
 
+function skipTypeQueryOperand(state: ParserState): void {
+	if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+	advance(state);
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
+		advance(state);
+		if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+		advance(state);
+	}
+}
+
 function skipTypeAtom(state: ParserState): void {
 	const token = current(state);
 
@@ -501,6 +519,12 @@ function skipTypeAtom(state: ParserState): void {
 		addError(state, distinctMisplacedMessage(token.line));
 		advance(state);
 		skipTypeAtom(state);
+		return;
+	}
+
+	if (token.kind == TokenKind.Typeof) {
+		advance(state);
+		skipTypeQueryOperand(state);
 		return;
 	}
 

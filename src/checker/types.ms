@@ -499,6 +499,13 @@ export function isAffineAwaitable(t: Type | null): boolean {
 	return p.typeFlags.has(TypeFlag.AwaitableAffine);
 }
 
+export function createModuleNamespace(modulePath: string): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Module;
+	t.typeName = modulePath;
+	return t;
+}
+
 export function createTypeRef(name: string): Type {
 	const t = emptyType();
 	t.kind = TypeKind.TypeReference;
@@ -4463,6 +4470,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		return t.typeName + "<" + argsText + ">";
 	}
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.Module) return `typeof import("${t.typeName}")`;
 	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Span && t.typeReturn != null) return "Span<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Array && t.typeReturn != null) return "Vec<" + typeDisplayName(t.typeReturn) + ">";

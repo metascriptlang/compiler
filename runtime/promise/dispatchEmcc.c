@@ -256,7 +256,7 @@ void msDestroyDispatcher(void) {
 
 /* No-ops for emcc (no threads, no actors) */
 bool (*msActorPollHook)(void) = NULL;
-int32_t msPoolBusyPeek(void) { return 0; }
+int32_t msPoolPendingPeek(void) { return 0; }
 bool msCompletionQueueDrain(void) { return false; }
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
     msPostCompletion(fut, NULL, isFail, error);
@@ -280,6 +280,10 @@ void msAsyncCb(void* raw) {
     }
     if (next == NULL) { free(e); return; }
     msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
+}
+
+void msEnsureOwnerDispatcher(void) {
+    (void)msGetDispatcher();
 }
 
 void msAsyncStart(void* retFut, msClosure stepper) {

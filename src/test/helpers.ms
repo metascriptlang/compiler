@@ -21,6 +21,7 @@ import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
+import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
@@ -97,7 +98,7 @@ function placeOwnedInstances(units: CheckedUnit[], classesBesideGeneric: boolean
 	}
 }
 
-export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false): CompileResult {
+export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false, lowerAccess: boolean = false): CompileResult {
 	resetBuildState();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
@@ -136,9 +137,10 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	inferRaises([analyzed]);
+	const lowered = lowerAccess ? lowerNativeAccess(analyzed, nativeCtx) : analyzed;
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
-	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
+	const cCode = generateCModule(lowered, checkerCtx, modPath, aliveSet, false, false);
 	if (checkerCtx.errors.length > preCgErrors) return Result.err(collectErrors(checkerCtx.errors, "codegen:"));
 	return Result.ok(cCode);
 }

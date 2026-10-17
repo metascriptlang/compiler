@@ -107,8 +107,8 @@ void msDrainUntilIdle(void);
 int msReportOrphanFailures(void);
 void msNoteOrphanFailure(void* fut);
 void msClearOrphanFailure(void* fut);
-/* Live busy-worker count (pool.c; 0 on single-threaded targets) */
-int32_t msPoolBusyPeek(void);
+/* Queued-or-running pool task count (pool.c; 0 on single-threaded targets) */
+int32_t msPoolPendingPeek(void);
 
 bool msRunOnce(int timeoutMs);
 int32_t msGetWakePipeFd(void);
