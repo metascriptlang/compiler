@@ -281,6 +281,10 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
+	arr.sortBy(cmp);
+}
+
 /**
  * Calls a function on every element in order and returns the results as a new array.
  * @param fn Mapper receiving the element and its index.

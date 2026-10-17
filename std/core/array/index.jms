@@ -45,6 +45,7 @@ export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
 // wrong for numbers.
 export extern function sort(this arr: number[]): void from "#.sort((a, b) => a - b)";
 export extern function sort(this arr: string[]): void from "#.sort()";
+export extern function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void from "#.sort(#)";
 export function fill<T>(this arr: T[], value: T): void {
 	when (needsCopy<T>()) {
 		for (let i = 0; i < arr.length; i += 1) {
