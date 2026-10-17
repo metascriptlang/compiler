@@ -1,4 +1,4 @@
-#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+#ifndef MSOS_BARE
 /*
  * MetaScript AwaitGroup implementation — see awaitGroup.h for design.
  *
@@ -396,4 +396,4 @@ void msAwaitSlotRelease(void* sp) {
 	}
 }
 
-#endif /* !MSOS_BARE && !MSOS_WASM */
+#endif /* !MSOS_BARE */

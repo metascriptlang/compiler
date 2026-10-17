@@ -1,4 +1,19 @@
-#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+#if defined(MSOS_WASM) || defined(MSOS_EMCC)
+#include "runtime/core/system.h"
+#include "runtime/promise/pool.h"
+
+/* No worker thread exists on this target: every spawn runs on the spawning thread, so its
+ * future is complete before anything awaits it and nothing ever helps or waits on a pool. */
+_Thread_local bool msIsPoolWorker = false;
+MS_TLS_PUBLISH(msIsPoolWorker)
+
+void msPoolSubmit(struct msSpawnCtx* ctx) { msSpawnWorkerRun(ctx); }
+bool msPoolHelpOne(void) { return false; }
+bool msPoolBusyDec(void) { return false; }
+void msPoolBusyInc(void) {}
+int32_t msPoolPendingPeek(void) { return 0; }
+
+#elif !defined(MSOS_BARE)
 /*
  * MetaScript Thread Pool — Malebolgia-style fixed worker pool
  *
@@ -457,4 +472,4 @@ void msPoolShutdown(void) {
 	gPool = NULL;
 }
 
-#endif /* !MSOS_BARE && !MSOS_WASM */
+#endif /* MSOS_WASM || MSOS_EMCC, else !MSOS_BARE */

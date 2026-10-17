@@ -1559,10 +1559,9 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 
 	let rtFiles = "";
 	if (opts.targetOs == "emcc") {
-		// Single-threaded: Asyncify-based async. spawn/Actor not yet supported.
-		rtFiles = "runtime/promise/dispatchEmcc.c";
+		rtFiles = "runtime/promise/dispatchEmcc.c\nruntime/promise/pool.c\nruntime/promise/awaitGroup.c";
 	} else if (opts.targetOs == "wasm") {
-		rtFiles = "runtime/promise/dispatchWasm.c";
+		rtFiles = "runtime/promise/dispatchWasm.c\nruntime/promise/pool.c\nruntime/promise/awaitGroup.c";
 	} else {
 		// Desktop: full dispatcher + thread pool + selectors
 		rtFiles = "runtime/promise/dispatchFull.c";

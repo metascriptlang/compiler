@@ -280,6 +280,11 @@ static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
 		}
 #endif
 		atomic_store_explicit(&g->doneFut, fut, memory_order_release);
+#if !MS_FUTURE_SUBMIT_REF
+		/* Every slot already ran inline, before doneFut existed for finishSlot to complete. */
+		if (fut != NULL && atomic_load_explicit(&g->pending, memory_order_acquire) <= 0)
+			atomic_store_explicit(&((msFutureBase*)fut)->finished, true, memory_order_release);
+#endif
 	}
 }
 
