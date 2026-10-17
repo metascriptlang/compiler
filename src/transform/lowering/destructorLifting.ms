@@ -1513,7 +1513,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	let hasCycles = false;
 
 	for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {
-		opPrototype(objType, attachedOpOf(hook), cName + hookSuffix(hook), lctx.checkerCtx);
+		liftedOp(objType, attachedOpOf(hook), cName + hookSuffix(hook), null);
 	}
 	const destroySym = generateHook("destroy",  typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
