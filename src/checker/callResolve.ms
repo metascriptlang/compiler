@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -24,7 +24,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, enumMemberName, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createStringLiteral, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, callMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, functionSlotOf } from "./types";
+import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createStringLiteral, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, callMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isPrimitiveKind, derivesFromClass, isTypeofTag, functionSlotOf } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
@@ -764,6 +764,73 @@ function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 
 function isStdPromise(sym: Symbol | null): boolean {
 	return sym != null && sym.modulePath.replaceAll("\\", "/").contains("std/core/promise/");
+}
+
+function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
+	if (isPrimitiveKind(t.kind) || isStringLike(t)) return null;
+	const field = functionSlotOf(getProperty(t, "then"));
+	if (field != null) return field;
+	if (ctx.extensionRegistry == null) return null;
+	const receiver = withoutReadonlyView(t);
+	const ext = findFirstMatchingExt(findAllExtensionsByName(ctx.extensionRegistry, "then"), receiver);
+	if (ext == null || ext.isStatic) return null;
+	if (ext.sym != null) ensureShaped(ext.sym, ctx);
+	const method = getExtFnType(ext);
+	if (method.kind != TypeKind.Function || method.typeChildren.length == 0) return null;
+	const bindings = createUnifyBindings();
+	unifyType(method.typeChildren[0], receiver, bindings);
+	return stripReceiverParam(bindings.names.length > 0 ? instantiateGeneric(method, bindings.names, bindings.types) : method);
+}
+
+function refuseThenable(ctx: CheckerContext, operand: Node, reason: string): void {
+	addError(ctx, `Type of 'await' operand must either be a valid promise or must not contain a callable 'then' member: ${reason}`, operand.location.line, operand.location.column);
+}
+
+export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): void {
+	const operand = d.awaitArg;
+	const t = operand.nodeType;
+	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return;
+	const then = thenSignatureOf(ctx, t);
+	if (then == null) return;
+	const owner = typeDisplayName(t);
+	const onFulfilled = then.typeChildren.length > 0 ? functionSlotOf(then.typeChildren[0]) : null;
+	if (onFulfilled == null) {
+		refuseThenable(ctx, operand, `the first parameter of '${owner}.then' must be a callback`);
+		return;
+	}
+	const promised = onFulfilled.typeChildren.length > 0 ? onFulfilled.typeChildren[0] : voidType();
+	if (hasGenericParams(promised)) {
+		refuseThenable(ctx, operand, `'${owner}.then' delivers the type parameter '${typeDisplayName(promised)}': declare the type its callback receives`);
+		return;
+	}
+	if (isAwaitable(promised) || thenSignatureOf(ctx, promised) != null) {
+		refuseThenable(ctx, operand, `'${owner}.then' delivers '${typeDisplayName(promised)}', which is awaitable itself, and a promise never holds a promise: settle it with the inner value`);
+		return;
+	}
+	const passesReject = then.typeChildren.length > 1;
+	if (passesReject) {
+		const onRejected = functionSlotOf(then.typeChildren[1]);
+		const reason = onRejected != null && onRejected.typeChildren.length > 0 ? onRejected.typeChildren[0] : null;
+		const errorSym = lookupSymbol(ctx.table, "Error");
+		if (reason == null || errorSym == null || !derivesFromClass(reason, errorSym)) {
+			const got = reason != null ? `, not '${typeDisplayName(reason)}'` : "";
+			refuseThenable(ctx, operand, `the second parameter of '${owner}.then' must be a callback taking an Error${got}, the reason an awaited promise rejects with`);
+			return;
+		}
+	}
+	const loc = operand.location;
+	const thenArgs: Node[] = [createNodeAt(NodeKind.Identifier, { name: "fulfil" }, loc)];
+	if (passesReject) thenArgs.push(createNodeAt(NodeKind.Identifier, { name: "reject" }, loc));
+	const thenee = createNodeAt(NodeKind.MemberExpr, { object: createNodeAt(NodeKind.Identifier, { name: "thenable" }, loc), property: "then", isOptional: false }, loc);
+	const thenCall = createNodeAt(NodeKind.CallExpr, { callee: thenee, arguments: thenArgs, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	const callThen = createNodeAt(NodeKind.ArrowFunction, {
+		arrowParams: ["thenable", "fulfil", "reject"], arrowParamTypes: ["", "", ""],
+		arrowBody: createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: thenCall }, loc)] }, loc),
+		arrowFlags: "", arrowReturnType: "", arrowDefaults: [null as unknown as Node, null as unknown as Node, null as unknown as Node],
+	}, loc);
+	const adopt = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "promiseFromThenable" }, loc), arguments: [operand, callThen], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	d.awaitArg = adopt;
+	callCheckExpr(ctx, adopt, createPromise(promised));
 }
 
 function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Type | null): Type {

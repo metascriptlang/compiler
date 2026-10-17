@@ -883,6 +883,7 @@ function checkConditionalExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as AwaitExprData;
 	checkExpr(ctx, d.awaitArg, null);
+	adoptAwaitedThenable(ctx, d);
 	const argType = d.awaitArg.nodeType;
 	if (argType != null && isAwaitable(argType)) {
 		const promiseInner = awaitedType(argType);
@@ -3497,7 +3498,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass } from "./instantiate";
-import { anyArgIsParametric, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
+import { adoptAwaitedThenable, anyArgIsParametric, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);
