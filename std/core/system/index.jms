@@ -235,6 +235,13 @@ function msOverflowI8(v: float64): int8 {
 }
 
 @compilerFunc
+function msOverflowChar(v: float64): char {
+	@emit(`if ((${v} & 255) !== ${v}) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
 function msOverflowI16(v: float64): int16 {
 	@emit(`if (${v} > 32767 || ${v} < -32768) ${msDefect}("over- or underflow");
 	return ${v};`);
@@ -243,14 +250,14 @@ function msOverflowI16(v: float64): int16 {
 
 @compilerFunc
 function msOverflowI32(v: float64): int32 {
-	@emit(`if (${v} > 2147483647 || ${v} < -2147483648) ${msDefect}("over- or underflow");
+	@emit(`if ((${v} | 0) !== ${v}) ${msDefect}("over- or underflow");
 	return ${v};`);
 	unreachable;
 }
 
 @compilerFunc
 function msOverflowI64(v: int64): int64 {
-	@emit(`if (${v} > 9223372036854775807n || ${v} < -9223372036854775808n) ${msDefect}("over- or underflow");
+	@emit(`if (BigInt.asIntN(64, ${v}) !== ${v}) ${msDefect}("over- or underflow");
 	return ${v};`);
 	unreachable;
 }

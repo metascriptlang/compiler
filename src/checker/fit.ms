@@ -5,7 +5,7 @@
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, ConditionalExprData, StringLiteralData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName, crossesCharBoundary } from "./compat";
+import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, holdsFalsyValue, unwrapMaybeType } from "./types";
@@ -265,6 +265,12 @@ export function nullishPayloadType(t: Type | null): Type | null {
 	return t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
 }
 
+export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
+	if (expr.nodeType == null || expr.nodeType.kind != TypeKind.Module) return false;
+	addError(ctx, `a module namespace (${typeDisplayName(expr.nodeType)}) has no text form here; read one of its exports instead`, expr.location.line, expr.location.column);
+	return true;
+}
+
 // Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
 // stringification the call site needs is planted DURING checking, so it is bound
 // by the same overload resolution a hand-written `x.toString()` gets and reaches
@@ -272,7 +278,7 @@ export function nullishPayloadType(t: Type | null): Type | null {
 // and enums have no declaration and stay on the builtin-lowering path.
 export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 	const t = expr.nodeType;
-	if (t == null) return null;
+	if (t == null || refuseNamespaceText(ctx, expr)) return null;
 	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
 	const peeled = peelToStructOrUnion(t);
 	if (peeled == null || peeled.kind != TypeKind.Struct) return null;
@@ -659,6 +665,32 @@ export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type 
 	const otherName = other != null ? typeDisplayName(other) : "unknown";
 	addError(ctx, "cannot mix bigint and '" + otherName + "' in '" + op + "' — convert explicitly with BigInt(x) or Number(b)", node.location.line, node.location.column);
 	return true;
+}
+
+export function rejectCharArith(ctx: CheckerContext, op: string, leftType: Type | null, rightType: Type | null, node: Node): boolean {
+	if (leftType == null || rightType == null || binaryOperandClass(compoundBase(op)) != "arith") return false;
+	const leftChar = leftType.kind == TypeKind.Char;
+	const rightChar = rightType.kind == TypeKind.Char;
+	if ((!leftChar && !rightChar) || !isNumeric(leftType) || !isNumeric(rightType)) return false;
+	const target = leftChar && rightChar ? "int32" : typeDisplayName(leftChar ? rightType : leftType);
+	addError(ctx, "operator '" + op + "' cannot be applied to '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType)
+		+ "': a char is not a number — convert it with an explicit 'as " + target + "'", node.location.line, node.location.column);
+	return true;
+}
+
+export function rejectCharUnary(ctx: CheckerContext, op: string, t: Type | null, node: Node): boolean {
+	if (t == null || t.kind != TypeKind.Char || (op != "-" && op != "+")) return false;
+	if (ctx.extensionRegistry != null && resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [t]) != null) return false;
+	addError(ctx, "unary '" + op + "' cannot be applied to 'char': a char is not a number — convert it with an explicit 'as int32'",
+		node.location.line, node.location.column);
+	return true;
+}
+
+export function textlessValue(t: Type | null): string {
+	if (t == null) return "";
+	if (t.kind == TypeKind.Void) return "a 'void' value has no text — a void call produces no value; call it on its own line";
+	if (t.kind == TypeKind.Never) return "a 'never' value has no text — the expression never produces a value";
+	return "";
 }
 
 function mixesNumericOperands(op: string): boolean {
@@ -2697,6 +2729,11 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + order, expr.location.line, expr.location.column);
 			return expr;
 		}
+		const wrap = returnReprRefusal(exprType, formal, wrappedFnText(expr));
+		if (wrap != "") {
+			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + wrap, expr.location.line, expr.location.column);
+			return expr;
+		}
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or declare a converter to '" + typeDisplayName(formal) + "')", expr.location.line, expr.location.column);
 		return expr;
 	}
@@ -2733,7 +2770,12 @@ export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, forma
 }
 
 function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): void {
-	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal), expr.location.line, expr.location.column);
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + returnReprRefusal(exprType, formal, wrappedFnText(expr)) + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal), expr.location.line, expr.location.column);
+}
+
+export function wrappedFnText(fn: Node): string {
+	if (fn.kind == NodeKind.ArrowFunction || fn.kind == NodeKind.FunctionExpr) return "=>";
+	return fn.kind == NodeKind.Identifier ? (fn.data as IdentifierData).name : "";
 }
 
 export function refDerefHint(expr: Node, exprType: Type | null, formal: Type | null): string {

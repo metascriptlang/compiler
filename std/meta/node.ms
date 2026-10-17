@@ -51,6 +51,7 @@ export enum TypeKind {
 	// after Error.
 	BigInt,
 	Set,
+	Module,
 }
 
 // ===== Calling Convention =====
@@ -296,6 +297,7 @@ export enum NodeFlag {
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
 	OptionalChainEnd, // parser: last link of a run that starts at `?.` — the null test covers every link from the `?.` to here
+	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
 }
 
 // ===== Node Kind Enum =====

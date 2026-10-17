@@ -192,7 +192,7 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	 * while the loop thread waits here. Proven 2026-09-05 by corpus 422.
 	 *
 	 * Re-increment ONLY if the decrement took - see msPoolBusyDec (pool.c):
-	 * the count saturates at 0 and an unconditional Inc strands the exit drain. */
+	 * the count saturates at 0 and an unconditional Inc drifts it upward. */
 	bool worker = msIsPoolWorker;
 	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
 	if (!worker) {

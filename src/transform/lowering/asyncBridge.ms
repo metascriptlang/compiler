@@ -27,7 +27,7 @@ import { TransformContext, mintSym } from "../context";
 import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeUnary, makeWhile, makeBool, makeNumber, makeString,
-	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, runtimeRef,
+	makeAssign, makeBinary, makeTryCatch, makeCatchSym, syntheticToken, extractBodyStmts, runtimeRef,
 	isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
@@ -73,7 +73,7 @@ function promiseTypeFor(inner: Type | null): Type {
 	return inner != null ? createPromise(inner) : createPromise(voidType());
 }
 
-import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture, typedFutureReadFn } from "../util";
+import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture, makeValueDropStmts, makeFutureDropClosure, typedFutureReadFn } from "../util";
 
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
@@ -89,47 +89,21 @@ function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	return call;
 }
 
-// The routine a future runs on its value when the future is destroyed: it takes
-// whatever the slot still holds into a local, and the local's scope exit runs the
-// value's own destructor. A reader that took the value left the slot empty.
+// The routine a future runs on its value when the future is destroyed: the body
+// is shared with the drop closures of the builtin pass (makeValueDropStmts in ../util).
 function makeValueDropFn(t: Type, ctx: TransformContext, loc: SourceLocation): Node {
 	const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
 	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
-	const stmts: Node[] = [];
-	if (boxedInFuture(t)) {
-		const rawSym = mintSym(ctx, SymbolKind.Variable, "$raw", voidPtrType);
-		const take = makeCall(runtimeRef("msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
-		take.nodeType = voidPtrType;
-		stmts.push(makeLocalDecl(rawSym, take, voidPtrType, loc));
-		const unbox = makeCall(runtimeRef("msUnboxStruct", loc), [makeTypedIdentResolved(rawSym, voidPtrType, loc)], loc);
-		unbox.nodeType = t;
-		const held = makeBinary(makeTypedIdentResolved(rawSym, voidPtrType, loc), "!=", makeNull(loc), loc);
-		held.nodeType = booleanType();
-		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
-		stmts.push(makeIf(held, makeBlock([makeLocalDecl(droppedSym, unbox, t, loc)], loc), null, loc));
-	} else {
-		const take = makeCall(runtimeRef(inlineInFuture(t) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
-		take.nodeType = t;
-		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
-		stmts.push(makeLocalDecl(droppedSym, take, t, loc));
-	}
 	const fnExpr = createNode(NodeKind.FunctionExpr, {
 		funcExprParams: ["fut"],
 		funcExprParamTypes: ["Ptr<void>"],
-		funcExprBody: makeBlock(stmts, loc),
+		funcExprBody: makeBlock(makeValueDropStmts(t, futSym, ctx, loc), loc),
 		funcExprFlags: "",
 		funcExprReturnType: "void",
 	}, syntheticToken(loc));
 	fnExpr.nodeType = createClosureType([voidPtrType], ["fut"], voidType());
 	fnExpr.paramSyms = [futSym];
 	return fnExpr;
-}
-
-function makeLocalDecl(sym: Symbol, init: Node, t: Type, loc: SourceLocation): Node {
-	const decl = makeVarDecl(sym.name, init, DeclKind.Const, loc);
-	decl.nodeType = t;
-	decl.resolvedSym = sym;
-	return decl;
 }
 
 // msFutureSetValueDrop($retFut, drop): the async function's future owns its value.
@@ -235,7 +209,12 @@ export function promiseSettleStmts(call: Node, ctx: TransformContext): Node {
 	futDecl.nodeType = promiseType;
 	futDecl.resolvedSym = futSym;
 	const value = isVoid ? null : cd.arguments[1];
-	const complete = makeBlock(makeFutureCompleteStmts(value, isVoid, promiseType, inner, loc, futSym, ctx), loc);
+	const completion: Node[] = [];
+	if (!isVoid && ownedInFuture(inner)) {
+		completion.push(makeExprStmt(makeCall(runtimeRef("msFutureOwnResult", loc), [makeTypedIdentResolved(futSym, promiseType, loc), makeFutureDropClosure(inner, ctx, loc)], loc), loc));
+	}
+	for (const s of makeFutureCompleteStmts(value, isVoid, promiseType, inner, loc, futSym, ctx)) completion.push(s);
+	const complete = makeBlock(completion, loc);
 	return makeBlock([futDecl, makeIf(futurePending(futSym, promiseType, loc), complete, null, loc)], loc);
 }
 
@@ -443,7 +422,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 			// This state yields a future. The generator lower produces:
 			//   [...stmts, $state=next, return {value: yieldArg, done: false}]
 			// We replace with the stepper pattern:
-			//   [...stmts, $yf_N = yieldArg, $state=next, if(finished) continue, return $yf_N]
+			//   [...stmts, $yf_N = yieldArg, $state=next, return $yf_N]
 			//
 			// The yield return may be at the top level OR nested inside if/while blocks
 			// (from splitIf/splitWhile). We handle both cases.
@@ -484,14 +463,9 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 				// Set next state (reuse the state assign from splitStmts)
 				stateStmts.push(state.stmts[copyEnd - 2]); // $state = nextState
 
-				// Pre-resolved check: if (msFutureFinished($yf_N)) continue;
-				const finishedCheck = makeCall(runtimeRef("msFutureFinished", loc), [makeTypedIdentResolved(yfSym, yfType, loc)], loc);
-				finishedCheck.nodeType = booleanType();
-				const continueStmt = makeContinue(loc);
-				const preResolvedIf = makeIf(finishedCheck, makeBlock([continueStmt], loc), makeBlock([], loc), loc);
-				stateStmts.push(preResolvedIf);
-
-				// Not resolved: return the yielded future to msAsyncCb for registration
+				// Return the yielded future to msAsyncCb, finished or not: it registers a
+				// callback, and a finished future's callback runs at the next turn of the
+				// owner's callback queue (PARALOCK Amendment P).
 				stateStmts.push(makeReturn(makeTypedIdentResolved(yfSym, yfType, loc), loc));
 			} else {
 				// Nested yield: yield return is inside an if/while block (from splitIf/splitWhile).
@@ -506,9 +480,6 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 					const yfType = promiseTypeFor(state.yieldVarType);
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(yfSym, yfType, loc), yieldArg, loc), loc));
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.stateSym, null, loc), makeNumber(state.nextState, loc), loc), loc));
-					const finishedCheck = makeCall(runtimeRef("msFutureFinished", loc), [makeTypedIdentResolved(yfSym, yfType, loc)], loc);
-					finishedCheck.nodeType = booleanType();
-					stateStmts.push(makeIf(finishedCheck, makeBlock([makeContinue(loc)], loc), makeBlock([], loc), loc));
 					stateStmts.push(makeReturn(makeTypedIdentResolved(yfSym, yfType, loc), loc));
 				} else {
 					// Truly unexpected — copy all stmts unchanged

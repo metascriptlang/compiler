@@ -31,6 +31,7 @@ export class ParserState {
 	noArrowReturnType: int32;
 	trailingDecls: Node[];
 	splits: TokenSplit[];
+	sawImportCall: boolean;
 }
 
 export interface TokenSplit {
@@ -39,7 +40,7 @@ export interface TokenSplit {
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [] };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
 }
 
 export interface ParserMark {
@@ -261,6 +262,20 @@ export function consumeSemicolon(state: ParserState): void {
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 		advance(state);
 	}
+}
+
+export function expectCloser(state: ParserState, open: Token, close: TokenKind): void {
+	if (current(state).kind == close) {
+		advance(state);
+		return;
+	}
+	const closeText = match (close) {
+		TokenKind.RParen => ")",
+		TokenKind.RBracket => "]",
+		TokenKind.RBrace => "}",
+		_ => `${close}`,
+	};
+	addError(state, `Expected '${closeText}' to close the '${open.value}' opened at line ${open.line}, column ${open.column}`);
 }
 
 // Skip balanced delimiter pairs: parens, braces, brackets.

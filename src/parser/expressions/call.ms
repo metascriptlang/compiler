@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, CallExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, stampEnd, takePendingComments } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, stampEnd, takePendingComments, expectCloser } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
 
@@ -23,7 +23,7 @@ export function takeListEndComments(): Token[] {
 	return comments;
 }
 
-export function parseExprList(state: ParserState, endKind: TokenKind, exprParser: ExprParser): NodesResult {
+export function parseExprList(state: ParserState, open: Token, endKind: TokenKind, exprParser: ExprParser): NodesResult {
 	const items: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind != endKind) {
 		const leading = takePendingComments(state);
@@ -41,7 +41,7 @@ export function parseExprList(state: ParserState, endKind: TokenKind, exprParser
 		}
 	}
 	_listEndComments = takePendingComments(state);
-	if (current(state).kind == endKind) { advance(state); }
+	expectCloser(state, open, endKind);
 	return Result.ok(items);
 }
 
@@ -55,7 +55,7 @@ export function parseCallExpr(state: ParserState, callee: Expression, exprParser
 	const typeArg = state.pendingTypeArg;
 	state.pendingTypeArg = "";
 	advance(state);
-	const args = try parseExprList(state, TokenKind.RParen, exprParser);
+	const args = try parseExprList(state, lparen, TokenKind.RParen, exprParser);
 	const callNode = createNode(NodeKind.CallExpr, { callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, lparen);
 	callNode.comments = takeListEndComments();
 	stampEnd(state, callNode);
@@ -84,8 +84,8 @@ function listCount(input: string): int32 {
 	const lr = lex(`[${input}]`);
 	if (!lr.ok) return -1;
 	const state = createState(lr.value);
-	advance(state); // skip [
-	const result = parseExprList(state, TokenKind.RBracket, mockExpr);
+	const open = advance(state);
+	const result = parseExprList(state, open, TokenKind.RBracket, mockExpr);
 	if (!result.ok) return -1;
 	return result.value.length;
 }

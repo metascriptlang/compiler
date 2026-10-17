@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../context";
 import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -156,9 +156,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 				const endIdx = try parseExprWithPrec(state, 0);
 				idx = createNode(NodeKind.BinaryExpr, { operator: rangeTok.value, left: idx, right: endIdx }, rangeTok);
 			}
-			if (current(state).kind == TokenKind.RBracket) {
-				advance(state);
-			}
+			expectCloser(state, token, TokenKind.RBracket);
 			const accessData: NodeData = {
 				array: left,
 				index: idx
@@ -364,6 +362,12 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
 	}
 
+	if (token.kind == TokenKind.Import && peek(state, 1).kind == TokenKind.LParen) {
+		advance(state);
+		state.sawImportCall = true;
+		return Result.ok(createNode(NodeKind.Identifier, { name: "import" }, token));
+	}
+
 	if (token.kind == TokenKind.Ident ||
 		token.kind == TokenKind.This ||
 		token.kind == TokenKind.Super) {
@@ -383,7 +387,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		}
 		advance(state);
 		const expr = try parseExprWithPrec(state, 0);
-		if (current(state).kind == TokenKind.RParen) { advance(state); }
+		expectCloser(state, token, TokenKind.RParen);
 		expr.flags = expr.flags.incl(NodeFlag.Parenthesized);
 		return Result.ok(expr);
 	}
@@ -453,8 +457,8 @@ function parsePrimary(state: ParserState): ExprResult {
 		// Parse arguments if present
 		const args: Node[] = [];
 		if (!isAtEnd(state) && current(state).kind == TokenKind.LParen) {
-			advance(state);
-			const argList = try parseExprList(state, TokenKind.RParen, parseExprWithPrec);
+			const lparen = advance(state);
+			const argList = try parseExprList(state, lparen, TokenKind.RParen, parseExprWithPrec);
 			const newNode = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: argList }, token);
 			newNode.comments = takeListEndComments();
 			if (newTypeArg != "") newNode.typeArg = newTypeArg;
@@ -636,7 +640,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Array literal: [expr, expr, ...]
 	if (token.kind == TokenKind.LBracket) {
 		advance(state);
-		const elems = try parseExprList(state, TokenKind.RBracket, parseExprWithPrec);
+		const elems = try parseExprList(state, token, TokenKind.RBracket, parseExprWithPrec);
 		const arrayNode = createNode(NodeKind.ArrayLiteral, { elements: elems }, token);
 		arrayNode.comments = takeListEndComments();
 		return Result.ok(arrayNode);

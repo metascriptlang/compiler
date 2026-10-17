@@ -101,6 +101,29 @@ test "a function returning a class instance stands in for one returning unknown"
 	assert strictErrorCount("class Cell { n: number = 3; }\nfunction make(): Cell { return new Cell(); }\nfunction callIt(read: () => unknown): void { read(); }\ncallIt(make);\nconst f: () => unknown = make;") == 0;
 }
 
+const UNKNOWN_CB = "function call(cb: (reason: unknown) => void): void {}\n";
+const TAKES_ERROR = "parameter 'e' takes Error, but the expected function passes it unknown";
+
+test "a function taking a class does not stand in for one taking unknown" {
+	assert hasError(UNKNOWN_CB + "call((e: Error): void => {});", TAKES_ERROR);
+	assert hasError(UNKNOWN_CB + "function onErr(e: Error): void {}\ncall(onErr);", TAKES_ERROR);
+	assert hasError("const cb: (reason: unknown) => void = (e: Error): void => {};", TAKES_ERROR);
+	assert hasError("class Host { run(cb: (reason: unknown) => void): void {} }\nnew Host().run((e: Error): void => {});", TAKES_ERROR);
+	assert hasError("interface Named { name: string; }\n" + UNKNOWN_CB + "call((n: Named): void => {});", "parameter 'n' takes Named");
+	assert hasError("function call<T>(v: T, cb: (x: T) => void): void {}\nconst u: unknown = new Error(\"x\");\ncall(u, (e: Error): void => {});", "Argument type mismatch in 'call' arg 1");
+}
+
+test "a function taking unknown stands in for one taking a class" {
+	assert strictErrorCount("function call(cb: (e: Error) => void): void {}\ncall((reason: unknown): void => {});\ncall((reason: unknown | null): void => {});\nconst cb: (e: Error) => void = (reason: unknown): void => {};") == 0;
+	assert strictErrorCount(UNKNOWN_CB + "call((reason: unknown): void => {});\ncall((reason: unknown | null): void => {});\ncall((reason) => {});") == 0;
+}
+
+test "a function slot holding unknown does not read as a class" {
+	assert hasError("function call(make: () => Error): void {}\ncall((): unknown => new Error(\"x\"));", "Argument type mismatch in 'call' arg 0");
+	assert strictErrorCount("interface HasErr { x: Error; }\nclass Holder { x: unknown = new Error(\"x\"); }\nconst h: HasErr = new Holder();") >= 1;
+	assert strictErrorCount("const us: unknown[] = [];\nconst es: Error[] = us;") >= 1;
+}
+
 test "a named function keeps its return type invariant against the parameter" {
 	assert hasError("function eff(f: () => void): void { f(); }\nfunction one(): number { return 1; }\neff(one);", "Argument type mismatch in 'eff' arg 0");
 }

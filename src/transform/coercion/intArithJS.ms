@@ -19,13 +19,13 @@
 // its own C backend: 4294967295² is 1 in C and 0 in JS. Math.imul is exact, so
 // MS uses it. See NIM-REF CG-13.
 //
-// Signed + - *, unary minus and steps stop on overflow (msOverflowI*), as the
+// Signed + - *, unary minus and steps, and char steps, stop on overflow (msOverflow*), as the
 // C backend's checkedArith.h does; unlike C, --danger keeps the check here.
 //
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
@@ -48,7 +48,7 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	if (d.operator == "/" || d.operator == "%" || d.operator == "**") return divideAsInteger(node, d);
 	if (isShiftOp(d.operator) && subIntKind(d.left.nodeType) != TypeKind.Unknown) return shiftAtLeftWidth(node, d);
 	const signed = signedType(node.nodeType);
-	if (signed != null && wrapsAtWidth(d.operator)) return overflowChecked(node, signed, node.location);
+	if (signed != null && wrapsAtWidth(d.operator) && !node.flags.has(NodeFlag.NoOverflowCheck)) return overflowChecked(node, signed, node.location);
 	const narrow = subIntKind(node.nodeType);
 	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);
@@ -96,6 +96,7 @@ function overflowChecked(inner: Node, t: Type, loc: SourceLocation): Node {
 		TypeKind.Int8 => "I8",
 		TypeKind.Int16 => "I16",
 		TypeKind.Int32 => "I32",
+		TypeKind.Char => "Char",
 		_ => "I64",
 	};
 	const call = makeCall(runtimeRef("msOverflow" + suffix, loc), [inner], loc);
@@ -219,7 +220,7 @@ function unaryAsUnsigned(node: Node): Node {
 export function needsIntegerUpdateRewrite(d: UpdateExprData): boolean {
 	const t = peelToRepr(d.updateArg.nodeType);
 	if (t == null) return false;
-	return t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64 || isSignedKind(t.kind) || subIntKind(t) != TypeKind.Unknown;
+	return t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64 || t.kind == TypeKind.Char || isSignedKind(t.kind) || subIntKind(t) != TypeKind.Unknown;
 }
 
 // A postfix step reads back the value before the step: on a wrapping width that
@@ -228,7 +229,7 @@ function updateAtWidth(node: Node, ctx: TransformContext): Node {
 	const d = node.data as UpdateExprData;
 	const t = peelToRepr(d.updateArg.nodeType);
 	if (t == null) return node;
-	if (subIntKind(t) == TypeKind.Unknown && t.kind != TypeKind.Uint32 && !isSignedKind(t.kind)) return node;
+	if (subIntKind(t) == TypeKind.Unknown && t.kind != TypeKind.Uint32 && t.kind != TypeKind.Char && !isSignedKind(t.kind)) return node;
 	const readBack = cloneIfPure(d.updateArg);
 	if (readBack == null) {
 		if (ctx.checkerCtx != null) {
@@ -238,7 +239,7 @@ function updateAtWidth(node: Node, ctx: TransformContext): Node {
 	}
 	const loc = node.location;
 	const step = d.updateOp == "++" ? "+" : "-";
-	if (isSignedKind(t.kind)) {
+	if (isSignedKind(t.kind) || t.kind == TypeKind.Char) {
 		const checked = makeBinary(d.updateArg, "=", overflowChecked(makeBinary(readBack, step, stepOne(t, loc), loc), t, loc), loc);
 		if (d.isPrefix) return checked;
 		const before = makeBinary(checked, d.updateOp == "++" ? "-" : "+", stepOne(t, loc), loc);

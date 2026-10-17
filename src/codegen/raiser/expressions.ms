@@ -1356,18 +1356,25 @@ function namespaceMemberIdent(node: Node): Node | null {
 	if (node.kind != NodeKind.MemberExpr || node.resolvedSym == null) return null;
 	const d = node.data as MemberExprData;
 	const ns = d.object.resolvedSym;
-	if (ns == null || ns.symbolKind != SymbolKind.Module) return null;
-	const ident = createNodeAt(NodeKind.Identifier, { name: `${ns.name}.${d.property}` }, node.location);
+	const nsIdent = ns != null && ns.symbolKind == SymbolKind.Module;
+	if (!nsIdent && (d.object.nodeType == null || d.object.nodeType.kind != TypeKind.Module)) return null;
+	const ident = createNodeAt(NodeKind.Identifier, { name: `${nsIdent ? ns.name : "$ns"}.${d.property}` }, node.location);
 	ident.resolvedSym = node.resolvedSym;
 	ident.nodeType = node.nodeType;
 	ident.flags = node.flags;
 	return ident;
 }
 
+function compileNamespaceObject(s: RaiserCompState, member: Node): void {
+	const object = (member.data as MemberExprData).object;
+	if (object.kind != NodeKind.Identifier) compileExpr(s, object);
+}
+
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const nsCallee = namespaceMemberIdent(d.callee);
 	if (nsCallee != null) {
+		compileNamespaceObject(s, d.callee);
 		const written = d.callee;
 		d.callee = nsCallee;
 		const result = compileCallExpr(s, node);
@@ -1428,6 +1435,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const delayReg = compileExpr(s, d.arguments[0]);
 		const dest = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
+		return dest;
+	}
+	if (isModuleImportCall(d.callee) && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
+		const dest = allocReg(s);
+		const name = addConst(s, raiserString((d.arguments[0].data as StringLiteralData).value));
+		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
 		return dest;
 	}
 	if (asyncKind == "PromisePending") {
@@ -1701,6 +1714,7 @@ function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: str
 	const oneReg = allocReg(s);
 	emitLoadConst(s, oneReg, isFloatExpr(target) ? raiserFloat(1.0) : raiserInt(1));
 	emitCompoundArith(s, updateOp == "++" ? "+=" : "-=", dest, fromReg, oneReg, target);
+	if (target.nodeType != null && peelDistinct(target.nodeType).kind == TypeKind.Char) emitInst(s, raiserABC(RaiserOpcode.NarrowS, dest, 8, 1));
 }
 
 function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, target: Node): int32 {
@@ -1943,7 +1957,10 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as MemberExprData;
 	const nsMember = namespaceMemberIdent(node);
-	if (nsMember != null) return compileExpr(s, nsMember);
+	if (nsMember != null) {
+		compileNamespaceObject(s, node);
+		return compileExpr(s, nsMember);
+	}
 
 	const sym = node.resolvedSym;
 	if (sym != null && sym.symFlags.has(SymbolFlag.Static) && !sym.symFlags.has(SymbolFlag.Mutable)
@@ -2040,6 +2057,10 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 	emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.arguments[0]), RaiserConvClass.I64));
 	emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, arrReg, count, 0));
 	return arrReg;
+}
+
+function isModuleImportCall(callee: Node): boolean {
+	return callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "msModuleImport";
 }
 
 // exit(code) / process.exit(code) — name-based like setLength: the import

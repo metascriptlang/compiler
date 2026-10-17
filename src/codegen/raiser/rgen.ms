@@ -20,6 +20,9 @@ import {
 	RaiserModule, RaiserFunction,
 	createRaiserFunction, createRaiserModule
 } from "../../raiser/module";
+import { DynamicModulePlan } from "../../module/graph";
+import { mangleModuleName } from "../c/names";
+import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserFuncEntry, RaiserBuiltinMap, RaiserBuiltinEntry,
@@ -390,7 +393,18 @@ interface RaiserProjectDecl {
 	ctorBody: Node;
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
+function hasTopLevelAwait(node: Node): boolean {
+	if (node.kind == NodeKind.AwaitExpr) return true;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction
+			|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ClassDecl) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found) found = hasTopLevelAwait(child);
+	});
+	return found;
+}
+
+export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan()): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserFuncMap = { items: [], symbolIndices: null };
 	for (const moduleInput of modules) {
@@ -591,6 +605,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	const entryS = createCompState();
 	let lastResultReg = 0;
 	for (let ii = 0; ii < initIndices.length; ii += 1) {
+		if (plan.lazy.has(modules[ii].modulePath)) continue;
 		const destReg = allocReg(entryS);
 		emitInst(entryS, raiserABC(RaiserOpcode.Call, destReg, initIndices[ii], 0));
 		lastResultReg = destReg;
@@ -604,6 +619,20 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);
 	compiled.globalCount = globals.items.length;
+	for (let ri = 0; ri < plan.records.length; ri += 1) {
+		const path = plan.records[ri];
+		let init: number = -1;
+		let hasTLA = false;
+		if (plan.lazy.has(path)) {
+			for (let mi = 0; mi < modules.length; mi += 1) {
+				if (modules[mi].modulePath != path) continue;
+				init = initIndices[mi];
+				hasTLA = hasTopLevelAwait(modules[mi].program);
+			}
+			if (init < 0) throw new Error(`internal: module ${path}, reached only through import(), has no Raiser init function`);
+		}
+		compiled.records.push({ name: mangleModuleName(path), init, requested: plan.requested[ri], hasTLA });
+	}
 	return compiled;
 }
 
