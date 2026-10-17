@@ -1,5 +1,4 @@
 // @stdout: generic-method ok 12
-// @xfail(raiser): overloaded class methods run the last-declared body on the Raiser (arc name-to-symbol, corpus 258-classMethodOverload)
 // note: an overloaded class method with its own type parameter runs an instantiation bound from the call's arguments: a value or a function picks `sig<T>(value: T)` or `sig<T>(fn: (prev: T | null) => T)` in either declaration order, with an annotated arrow, a contextually typed arrow under an explicit type argument, a number and an object literal, and `T | null` and `T` formals bind `T` from a plain value. Same output on C and JS.
 let wrong = "";
 let rows = 0;

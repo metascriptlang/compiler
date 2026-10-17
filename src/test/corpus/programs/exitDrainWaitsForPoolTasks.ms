@@ -3,6 +3,7 @@
 // @stdout: helped string 0-done
 // @stdout: helped twice 0
 // @stdout: timer-bound 21
+// @skip-raiser: spin(30000000) runs past the Raiser interpreter limit of 10M iterations; the program pins the native exit drain
 // @serial
 
 // note: The exit drain must not return while a pool task is still in flight. Each
