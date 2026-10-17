@@ -699,6 +699,7 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 	// Emscripten: emcc links to .js + .wasm bundle
 	if (opts.targetOs == "emcc") {
 		let eflags = appendFlag(base, "-sWASM=1 -sALLOW_MEMORY_GROWTH=1");
+		eflags = appendFlag(eflags, modeFlags(opts.mode));
 		eflags = appendFlag(eflags, opts.passL);
 		return eflags;
 	}
@@ -1434,6 +1435,15 @@ test "a clang is refused for SBF, with the reason, unless its target list names 
 	assert printedTargetsRefusal(Result.err(notFound("\"/nonexistent/clang\" --print-targets"))) == "was not found";
 	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    bpf        - BPF (host endian)\n    bpfel      - BPF (little endian)\n")) == "has no sbf target";
 	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    sbf        - SBF new (little endian)\n")) == "";
+}
+
+test "an emcc link runs the build mode's optimizer, as emcc optimizes the wasm only at link" {
+	for (const pair of [["", "-O0"], ["--release", "-O2"], ["--danger", "-O3"]]) {
+		const opts = newCliOptions();
+		const args = pair[0] == "" ? ["--os=emcc"] : ["--os=emcc", pair[0]];
+		assert applyArgs(opts, args, 0).ok;
+		assert cliLinkFlags(cliCompileFlags(opts), opts).indexOf(pair[1], 0) >= 0;
+	}
 }
 
 test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {
