@@ -104,6 +104,10 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 		const d = e.data as AwaitExprData;
 		d.awaitArg = lowerAwaitExpr(d.awaitArg, pre);
 		if (isVoidType(e.nodeType)) return e;
+		if (isNeverType(e.nodeType)) {
+			pre.push(makeExprStmt(e, e.location));
+			return e;
+		}
 		return tempRef(bindTemp(_sp, e, DeclKind.Const, e.nodeType, pre, e.location), e.location);
 	}
 	if (k == NodeKind.BinaryExpr) {
@@ -152,6 +156,17 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	return e;
 }
 
+function cutAfterNever(stmts: Node[]): boolean {
+	for (let i = 0; i < stmts.length; i += 1) {
+		const s = stmts[i];
+		if (s.kind == NodeKind.ExprStmt && isNeverType((s.data as ExprStmtData).expr.nodeType)) {
+			stmts.shrink(i + 1);
+			return true;
+		}
+	}
+	return false;
+}
+
 function lowerAwaitStmts(stmts: Node[]): Node[] {
 	const out: Node[] = [];
 	for (const s of stmts) {
@@ -187,6 +202,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 		} else if (d.expr.kind == NodeKind.ConditionalExpr) {
 			const cd = d.expr.data as ConditionalExprData;
 			const cond = lowerAwaitExpr(cd.ternaryCondition, pre);
+			if (cutAfterNever(pre)) return pre;
 			const thenBranch = makeBlock(lowerAwaitStmt(makeExprStmt(cd.ternaryConsequent, loc)), loc);
 			const elseBranch = makeBlock(lowerAwaitStmt(makeExprStmt(cd.ternaryAlternate, loc)), loc);
 			pre.push(makeIf(cond, thenBranch, elseBranch, loc));
@@ -206,11 +222,10 @@ function lowerAwaitStmt(s: Node): Node[] {
 	} else if (k == NodeKind.ReturnStmt) {
 		const d = s.data as ReturnStmtData;
 		const arg = d.argument!;
-		if (arg.kind == NodeKind.AwaitExpr && (isVoidType(arg.nodeType) || isNeverType(arg.nodeType))) {
+		if (arg.kind == NodeKind.AwaitExpr && isVoidType(arg.nodeType)) {
 			const ad = arg.data as AwaitExprData;
 			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
 			pre.push(makeExprStmt(arg, loc));
-			if (isNeverType(arg.nodeType)) return pre;
 			d.argument = null;
 		} else {
 			d.argument = lowerAwaitExpr(arg, pre);
@@ -243,7 +258,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 		if (needsSpill(d.whileCondition)) {
 			const head: Node[] = [];
 			const cond = lowerAwaitExpr(d.whileCondition, head);
-			head.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
+			if (!cutAfterNever(head)) head.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
 			for (const b of (body.data as BlockStmtData).statements) head.push(b);
 			d.whileCondition = makeBool(true, loc);
 			d.whileBody = makeBlock(head, loc);
@@ -259,7 +274,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 			const entered = bindTemp(_sp, makeBool(false, loc), DeclKind.Let, booleanType(), pre, loc);
 			const head: Node[] = [];
 			const cond = lowerAwaitExpr(d.doCondition, head);
-			head.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
+			if (!cutAfterNever(head)) head.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
 			const loopStmts: Node[] = [
 				makeIf(tempRef(entered, loc), makeBlock(head, loc), null, loc),
 				makeExprStmt(makeAssign(tempRef(entered, loc), makeBool(true, loc), loc), loc),
@@ -282,6 +297,14 @@ function lowerAwaitStmt(s: Node): Node[] {
 		d.tryBody = lowerAwaitSlot(d.tryBody)!;
 		d.catchBody = lowerAwaitSlot(d.catchBody)!;
 		d.finallyBody = lowerAwaitSlot(d.finallyBody)!;
+	}
+	if (cutAfterNever(pre)) {
+		if (k == NodeKind.VariableDecl) {
+			const d = s.data as VariableDeclData;
+			d.initializer = makeDefaultValue(s.resolvedSym != null ? s.resolvedSym.symbolType : d.initializer.nodeType, loc);
+			pre.push(s);
+		}
+		return pre;
 	}
 	pre.push(s);
 	return pre;
