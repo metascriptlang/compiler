@@ -37,9 +37,9 @@ import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, usedBeforeDeclaration, jsxComponentSym } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, readIsDeferred, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, returnsFromAsyncBody, usedBeforeDeclaration, jsxComponentSym } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
-import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, refuseUnwrittenOut, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
+import { awaitReturnedThenable, foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, refusesTypeArm, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, refuseUnwrittenOut, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
@@ -2496,6 +2496,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		checkExpr(ctx, d.argument, null);
 	} else {
 		checkExpr(ctx, d.argument, ctx.matchExprDepth > 0 ? ctx.matchArmExpected : returnExpected);
+		if (ctx.matchExprDepth == 0 && returnsFromAsyncBody(ctx)) d.argument = awaitReturnedThenable(ctx, d.argument);
 	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
 	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.

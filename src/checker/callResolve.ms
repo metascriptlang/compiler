@@ -17,7 +17,7 @@ import { adoptLiteralArms, distinctText, distinctTextRefusal, adoptLiteralTo, ch
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
-import { bindFromExplicitTypeArgs, builtinTypeNamed, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
+import { bindFromExplicitTypeArgs, builtinTypeNamed, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
@@ -766,46 +766,31 @@ function isStdPromise(sym: Symbol | null): boolean {
 	return sym != null && sym.modulePath.replaceAll("\\", "/").contains("std/core/promise/");
 }
 
-function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
-	if (isPrimitiveKind(t.kind) || isStringLike(t)) return null;
-	const field = functionSlotOf(getProperty(t, "then"));
-	if (field != null) return field;
-	if (ctx.extensionRegistry == null) return null;
-	const receiver = withoutReadonlyView(t);
-	const ext = findDeclaredExt(findAllExtensionsByName(ctx.extensionRegistry, "then"), receiver);
-	if (ext == null || ext.isStatic) return null;
-	if (ext.sym != null) ensureShaped(ext.sym, ctx);
-	const method = getExtFnType(ext);
-	if (method.kind != TypeKind.Function || method.typeChildren.length == 0) return null;
-	const bindings = createUnifyBindings();
-	unifyType(method.typeChildren[0], receiver, bindings);
-	return stripReceiverParam(bindings.names.length > 0 ? instantiateGeneric(method, bindings.names, bindings.types) : method);
+function refuseThenable(ctx: CheckerContext, site: string, operand: Node, reason: string): void {
+	addError(ctx, `${site} must either be a valid promise or must not contain a callable 'then' member: ${reason}`, operand.location.line, operand.location.column);
 }
 
-function refuseThenable(ctx: CheckerContext, operand: Node, reason: string): void {
-	addError(ctx, `Type of 'await' operand must either be a valid promise or must not contain a callable 'then' member: ${reason}`, operand.location.line, operand.location.column);
-}
+type ThenableAdoption = { call: Node, promised: Type };
 
-export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): void {
-	const operand = d.awaitArg;
+function thenableAdoption(ctx: CheckerContext, operand: Node, site: string): ThenableAdoption | null {
 	const t = operand.nodeType;
-	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return;
+	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return null;
 	const then = thenSignatureOf(ctx, t);
-	if (then == null) return;
+	if (then == null) return null;
 	const owner = typeDisplayName(t);
 	const onFulfilled = then.typeChildren.length > 0 ? functionSlotOf(then.typeChildren[0]) : null;
 	if (onFulfilled == null) {
-		refuseThenable(ctx, operand, `the first parameter of '${owner}.then' must be a callback`);
-		return;
+		refuseThenable(ctx, site, operand, `the first parameter of '${owner}.then' must be a callback`);
+		return null;
 	}
 	const promised = onFulfilled.typeChildren.length > 0 ? onFulfilled.typeChildren[0] : voidType();
 	if (hasGenericParams(promised)) {
-		refuseThenable(ctx, operand, `'${owner}.then' delivers the type parameter '${typeDisplayName(promised)}': declare the type its callback receives`);
-		return;
+		refuseThenable(ctx, site, operand, `'${owner}.then' delivers the type parameter '${typeDisplayName(promised)}': declare the type its callback receives`);
+		return null;
 	}
 	if (isAwaitable(promised) || thenSignatureOf(ctx, promised) != null) {
-		refuseThenable(ctx, operand, `'${owner}.then' delivers '${typeDisplayName(promised)}', which is awaitable itself, and a promise never holds a promise: settle it with the inner value`);
-		return;
+		refuseThenable(ctx, site, operand, `'${owner}.then' delivers '${typeDisplayName(promised)}', which is awaitable itself, and a promise never holds a promise: settle it with the inner value`);
+		return null;
 	}
 	const passesReject = then.typeChildren.length > 1;
 	if (passesReject) {
@@ -814,8 +799,8 @@ export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): voi
 		const errorSym = lookupSymbol(ctx.table, "Error");
 		if (reason == null || errorSym == null || !derivesFromClass(reason, errorSym)) {
 			const got = reason != null ? `, not '${typeDisplayName(reason)}'` : "";
-			refuseThenable(ctx, operand, `the second parameter of '${owner}.then' must be a callback taking an Error${got}, the reason an awaited promise rejects with`);
-			return;
+			refuseThenable(ctx, site, operand, `the second parameter of '${owner}.then' must be a callback taking an Error${got}, the reason an awaited promise rejects with`);
+			return null;
 		}
 	}
 	const loc = operand.location;
@@ -828,9 +813,88 @@ export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): voi
 		arrowBody: createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: thenCall }, loc)] }, loc),
 		arrowFlags: "", arrowReturnType: "", arrowDefaults: [null as unknown as Node, null as unknown as Node, null as unknown as Node],
 	}, loc);
-	const adopt = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "promiseFromThenable" }, loc), arguments: [operand, callThen], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
-	d.awaitArg = adopt;
-	callCheckExpr(ctx, adopt, createPromise(promised));
+	const call = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "promiseFromThenable" }, loc), arguments: [operand, callThen], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	return { call, promised };
+}
+
+export function adoptThenable(ctx: CheckerContext, operand: Node, site: string): Node {
+	const adoption = thenableAdoption(ctx, operand, site);
+	if (adoption == null) return operand;
+	callCheckExpr(ctx, adoption.call, createPromise(adoption.promised));
+	return adoption.call;
+}
+
+export function adoptAwaitedThenable(ctx: CheckerContext, d: AwaitExprData): void {
+	d.awaitArg = adoptThenable(ctx, d.awaitArg, "Type of 'await' operand");
+}
+
+export function awaitReturnedThenable(ctx: CheckerContext, value: Node): Node {
+	const adopted = adoptThenable(ctx, value, "The value an async function returns");
+	if (adopted == value) return value;
+	const awaited = createNodeAt(NodeKind.AwaitExpr, { awaitArg: adopted }, value.location);
+	callCheckExpr(ctx, awaited, null);
+	return awaited;
+}
+
+const PROMISE_COMBINATORS = ["all", "race", "any", "allSettled"];
+
+function promiseStaticOf(ctx: CheckerContext, callee: Node): string {
+	if (callee.kind != NodeKind.MemberExpr) return "";
+	const m = callee.data as MemberExprData;
+	if (m.object.kind != NodeKind.Identifier || (m.object.data as IdentifierData).name != "Promise") return "";
+	return isStdPromise(lookupSymbol(ctx.table, "Promise")) ? m.property : "";
+}
+
+function takesContext(n: Node): boolean {
+	return n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr;
+}
+
+function adoptPromiseInputs(ctx: CheckerContext, node: Node, expected: Type | null): Type | null {
+	if (node.kind != NodeKind.CallExpr) return expected;
+	const d = node.data as CallExprData;
+	const name = promiseStaticOf(ctx, d.callee);
+	if (name == "" || d.arguments.length != 1 || takesContext(d.arguments[0])) return expected;
+	const arg = d.arguments[0];
+	if (name == "resolve") {
+		callCheckExpr(ctx, arg, expected != null && isAwaitable(expected) ? awaitedType(expected) : null);
+		const adoption = thenableAdoption(ctx, arg, "The value 'Promise.resolve' takes");
+		if (adoption == null) return expected;
+		node.data = adoption.call.data;
+		return createPromise(adoption.promised);
+	}
+	if (PROMISE_COMBINATORS.indexOf(name) < 0 || arg.kind != NodeKind.ArrayLiteral) return expected;
+	const elements = (arg.data as ArrayLiteralData).elements;
+	for (let i = 0; i < elements.length; i += 1) {
+		const el = elements[i];
+		if (el == null || takesContext(el) || el.kind == NodeKind.SpreadExpr) continue;
+		callCheckExpr(ctx, el, null);
+		elements[i] = adoptThenable(ctx, el, `An element of 'Promise.${name}'`);
+	}
+	return expected;
+}
+
+function refusePromiseOfThenable(ctx: CheckerContext, node: Node, result: Type): void {
+	if (node.kind != NodeKind.CallExpr || !isAwaitable(result)) return;
+	const held = awaitedType(result);
+	const promised = thenablePromised(ctx, held);
+	if (held == null || promised == null) return;
+	addError(ctx, `this call makes '${typeDisplayName(result)}', a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so it holds '${typeDisplayName(promised)}'`, node.location.line, node.location.column);
+}
+
+function expressionBodyType(callback: Node): Type | null {
+	if (callback.kind != NodeKind.ArrowFunction) return null;
+	const body = (callback.data as ArrowFunctionData).arrowBody;
+	return body != null && body.kind != NodeKind.BlockStmt ? body.nodeType : null;
+}
+
+function refuseThenCallbackThenable(ctx: CheckerContext, node: Node): void {
+	if (node.kind != NodeKind.CallExpr) return;
+	const d = node.data as CallExprData;
+	if (d.callee.kind != NodeKind.MemberExpr || (d.callee.data as MemberExprData).property != "then" || d.arguments.length == 0) return;
+	const receiver = (d.callee.data as MemberExprData).object.nodeType;
+	const returned = expressionBodyType(d.arguments[0]);
+	if (receiver == null || !isAwaitable(receiver) || returned == null || thenSignatureOf(ctx, returned) == null) return;
+	addError(ctx, `a '.then' callback returns '${typeDisplayName(returned)}', a thenable the promise would adopt, but '.then' gives 'Promise<void>' and drops what the callback returns: await it in an async function instead`, d.arguments[0].location.line, d.arguments[0].location.column);
 }
 
 function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Type | null): Type {
@@ -1236,7 +1300,9 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	if (node.kind == NodeKind.CallExpr) {
 		for (const arg of (node.data as CallExprData).arguments) if (arg.kind == NodeKind.Identifier) tracker.argIdents.push(arg);
 	}
-	let r = checkCallExprInner(ctx, node, expectedType);
+	let r = checkCallExprInner(ctx, node, adoptPromiseInputs(ctx, node, expectedType));
+	refusePromiseOfThenable(ctx, node, r);
+	refuseThenCallbackThenable(ctx, node);
 	tracker.argIdents.shrink(identsFrom);
 	settleUnassignedArgs(ctx, readsFrom);
 	const seen = node.kind == NodeKind.CallExpr && isUnresolvedType(r) ? callSelfReadType((node.data as CallExprData).callee) : null;

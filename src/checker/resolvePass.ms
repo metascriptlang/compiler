@@ -12,9 +12,9 @@ import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { isSysType, peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createUnionInOrder, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { getIdentId } from "./idents";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
+import { findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { forEachChild } from "../ast/visitor";
-import { nestedViewType, ownedAlternativeOf, findViewType, createOutVar } from "./types";
+import { nestedViewType, ownedAlternativeOf, findViewType, createOutVar, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -827,6 +827,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
 				return value != null ? createPromise(value) : errorType();
 			}
+			const delivered = thenablePromised(ctx, inner);
+			if (delivered != null) {
+				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so write 'Promise<${typeDisplayName(delivered)}>'`, line, col);
+				return createPromise(delivered);
+			}
 			return createPromise(inner);
 		}
 		if (baseName == "Iterator" && args.length == 1) {
@@ -1213,6 +1218,31 @@ export function fillForwardSymbol(ctx: CheckerContext, sym: Symbol): void {
 	else if (decl.kind == NodeKind.ActorDecl) fillActor(ctx, decl);
 	else return;
 	if (hasFlag(sym, SymbolFlag.Exported)) markDeclMethodsExported(ctx, decl);
+}
+
+export function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
+	if (isPrimitiveKind(t.kind) || isStringLike(t)) return null;
+	const field = functionSlotOf(getProperty(t, "then"));
+	if (field != null) return field;
+	if (ctx.extensionRegistry == null) return null;
+	const receiver = withoutReadonlyView(t);
+	const ext = findDeclaredExt(findAllExtensionsByName(ctx.extensionRegistry, "then"), receiver);
+	if (ext == null || ext.isStatic) return null;
+	if (ext.sym != null) ensureShaped(ext.sym, ctx);
+	const method = getExtFnType(ext);
+	if (method.kind != TypeKind.Function || method.typeChildren.length == 0) return null;
+	const bindings = createUnifyBindings();
+	unifyType(method.typeChildren[0], receiver, bindings);
+	return stripReceiverParam(bindings.names.length > 0 ? instantiateGeneric(method, bindings.names, bindings.types) : method);
+}
+
+export function thenablePromised(ctx: CheckerContext, t: Type | null): Type | null {
+	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return null;
+	const then = thenSignatureOf(ctx, t);
+	if (then == null) return null;
+	const onFulfilled = then.typeChildren.length > 0 ? functionSlotOf(then.typeChildren[0]) : null;
+	if (onFulfilled == null) return null;
+	return onFulfilled.typeChildren.length > 0 ? onFulfilled.typeChildren[0] : voidType();
 }
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
