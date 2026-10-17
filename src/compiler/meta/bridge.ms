@@ -441,7 +441,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 	// A shape unfolds only the type it was asked about: a named struct met inside
 	// another shape is its name, and a macro asks getTypeImpl of that node to unfold it.
 	if (visited.length > 0 && isNamedNominalStruct(t) && !isAskedTypeBehindItsRef(visited, t)) {
-		const named = atomicTypeNode(t.typeName, loc);
+		const named = namedTypeNode(t.typeName, t.sym, loc);
 		named.nodeType = t;
 		return named;
 	}

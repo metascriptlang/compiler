@@ -28,8 +28,8 @@ function named(n: Node | null): string {
 macro probe(e: Node): Node {
 	const ps = getType(e).typExprParams;
 	const text = [
-		named(ps[0]), named(ps[1]), named(ps[2].typExprFieldTypes[0]), named(ps[3].typExprArgs[0].typExprElement),
-		named(ps[4]), named(ps[4].typExprFieldTypes[0].typExprArgs[0].typExprElement),
+		named(ps[0]), named(ps[1]), named(getTypeImpl(ps[2]).typExprFieldTypes[0]), named(ps[3].typExprArgs[0].typExprElement),
+		named(ps[4]), named(getTypeImpl(ps[4]).typExprFieldTypes[0].typExprArgs[0].typExprElement),
 	].join(" ") + "|" + named(getTypeImpl(ps[0])) + " " + named(getTypeImpl(ps[1]))
 		+ "|" + named(getTypeImpl(Holder)) + " " + named(getTypeImpl(Holder).typExprFieldTypes[0]) + " " + named(getTypeImpl(Holder).typExprFieldTypes[1]);
 	return { kind: NodeKind.StringLiteral, line: e.line, column: e.column, value: text };
