@@ -907,6 +907,27 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	return true;
 }
 
+function paramRefusal(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
+	const targetParams = runtimeParams(target);
+	let ri = 0;
+	let ni = 0;
+	for (const taken of source.typeChildren) {
+		if (taken != null && taken.kind == TypeKind.Void) { ni += 1; continue; }
+		if (ri >= targetParams.length) return "";
+		const passed = targetParams[ri];
+		if (!isAssignable(passed, taken)) {
+			if (taken == null || taken.kind == TypeKind.Function || passed.kind == TypeKind.Function) return "";
+			const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+			return " — parameter '" + name + "' takes " + typeDisplayName(taken) + ", but the expected function passes it "
+				+ typeDisplayName(passed) + "; declare the parameter " + typeDisplayName(passed) + " and narrow it inside";
+		}
+		ri += 1;
+		ni += 1;
+	}
+	return "";
+}
+
 // A literal bound without an annotation freezes as `__anonN__...` (anonStructName).
 export function isAnonLiteralName(name: string): boolean {
 	return name.length > 6 && name.slice(0, 6) == "__anon";
@@ -1015,6 +1036,8 @@ function objectShapeTarget(source: Type | null, target: Type | null): Type | nul
 // the wrong slots, "got A, expected B" reads like a compiler bug. Name the field
 // that moved. Empty string when the plain message already explains the rejection.
 export function explainStructuralPrefix(source: Type | null, target: Type | null): string {
+	const param = paramRefusal(skipModifier(source), skipModifier(target));
+	if (param != "") return param;
 	if (dropsReadonlyView(source, target)) {
 		return " — a read-only view never converts back to the mutable type: declare the parameter "
 			+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
