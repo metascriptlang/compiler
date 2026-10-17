@@ -2604,7 +2604,7 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	for (let ci = 0; ci < d.switchCases.length; ci += 1) {
 		const c = d.switchCases[ci];
 		const cd = c.data as SwitchCaseData;
-		if (cd.caseTests.length == 0) hasDefault = true;
+		if (cd.isDefault) hasDefault = true;
 		restoreInitState(ctx.initTracker, oldState);
 		restoreConsumeState(ctx.affineTracker, oldAffine);
 		for (const t of cd.caseTests) {
