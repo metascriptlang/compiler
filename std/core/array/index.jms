@@ -23,7 +23,7 @@ export function at<T>(this arr: Vec<T>, idx: number): T {
 }
 export extern function indexOf<T>(this arr: Vec<T>, value: T): number from "#.indexOf(#)";
 export extern function includes<T>(this arr: Vec<T>, value: T): boolean from "#.includes(#)";
-export { lastIndexOf, findIndex, findLastIndex } from "./shared";
+export { lastIndexOf, findIndex, findLastIndex, filter, some, find } from "./shared";
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	@emit(`var i = ${view}.base.indexOf(${value}, ${view}.off);
 	return i >= 0 && i < ${view}.off + ${view}.len ? i - ${view}.off : -1;`);
