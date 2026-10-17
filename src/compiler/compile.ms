@@ -4,6 +4,7 @@ import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd,
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
+import { isAlphanumeric, isDigit } from "../lexer/chars";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity } from "../checker/context";
@@ -1369,7 +1370,17 @@ function bundleExportList(names: string[], locals: string[], reexports: BundleRe
 }
 
 function exportSpecifier(local: string, name: string): string {
-	return local == name ? name : `${local} as ${name}`;
+	const exported = isJsIdentifierName(name) ? name : `"${name}"`;
+	return local == exported ? exported : `${local} as ${exported}`;
+}
+
+function isJsIdentifierName(name: string): boolean {
+	if (name.length == 0 || isDigit(name.byteAt(0))) return false;
+	for (let i = 0; i < name.length; i += 1) {
+		const ch = name.byteAt(i);
+		if (!isAlphanumeric(ch) && ch != "$".code) return false;
+	}
+	return true;
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
