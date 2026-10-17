@@ -5,7 +5,7 @@ import {
 	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
 } from "../ast/node";
 import { isIntegerType, isFloatType, createPrimitive } from "./types";
-import { makeNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
+import { makeNumber, makeFloatNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
 import { int64Bits } from "../utils/stdBackport";
 
 const CONSTANT_CHAIN_LIMIT: int32 = 64;
@@ -782,8 +782,8 @@ export function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
 			}
 			const floating = od.isFloat || (node.nodeType != null && (isFloatType(node.nodeType) || node.nodeType.kind == TypeKind.Number));
 			const result = match (op) {
-				"-" => floating ? makeNumber(-nv, loc) : makeIntNumber(int64Bits(0 - (od.intVal as uint64)), loc),
-				"+" => floating ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
+				"-" => od.isFloat ? makeFloatNumber(-nv, loc) : floating ? makeNumber(-nv, loc) : makeIntNumber(int64Bits(0 - (od.intVal as uint64)), loc),
+				"+" => od.isFloat ? makeFloatNumber(nv, loc) : floating ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
 				_ => node,
 			};
 			if (result != node && node.nodeType != null) {
