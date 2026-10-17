@@ -56,6 +56,7 @@ import "./comptimeBlockStaticType";
 import "./nrvoOutTempZero";
 import "./emissionOwnership";
 import "./arraySpliceEmit";
+import "./arrayLengthAssignEmit";
 import "./raiseChecks";
 import "./inlineFunctions";
 import "./pointerAddress";
