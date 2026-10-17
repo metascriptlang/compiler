@@ -1,4 +1,5 @@
 // @stdout: forOf 10 skip 8 string 6 spread 5 rest 2 7 pairs 14
+// @xfail(raiser): the Raiser has no host bridge for msGenericArrayPush, the rest accumulator (inbox 2026-10-17-raiser-has-no-host-bridge-for-msgenericarraypush)
 // note: the counters the compiler writes for a for-of over an array or a string, a spread and a rest pattern reach every element once, a `continue` included.
 
 interface P { a: int32; b: int32 }
