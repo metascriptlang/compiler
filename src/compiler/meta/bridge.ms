@@ -1578,7 +1578,7 @@ function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrH
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
 
-const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten;
+const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor;
 
 export interface WireRefusal {
 	message: string;
