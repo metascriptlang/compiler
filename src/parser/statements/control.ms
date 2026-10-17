@@ -2,12 +2,12 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, StringLiteralData, createNode, makeLoc } from "../../ast/node";
+import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd, takePendingComments } from "../context";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
-import { programOk, stmtKind } from "./validation";
+import { programOk, stmtKind, stmtAt } from "./validation";
 
 
 type NodeResult = Result<Node, string>;
@@ -384,7 +384,12 @@ export function parseSwitchStmt(state: ParserState): NodeResult {
 	const cases: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const caseNode = try parseSwitchCase(state);
-		cases.push(caseNode);
+		const prev = cases.length > 0 ? cases[cases.length - 1].data as SwitchCaseData : null;
+		if (prev != null && prev.caseStmts.length == 0) {
+			stackLabels(prev, caseNode.data as SwitchCaseData);
+		} else {
+			cases.push(caseNode);
+		}
 	}
 
 	if (current(state).kind == TokenKind.RBrace) {
@@ -396,6 +401,12 @@ export function parseSwitchStmt(state: ParserState): NodeResult {
 		switchCases: cases,
 		switchLowered: false,
 	}, switchToken));
+}
+
+function stackLabels(into: SwitchCaseData, next: SwitchCaseData): void {
+	for (const t of next.caseTests) into.caseTests.push(t);
+	into.isDefault = into.isDefault || next.isDefault;
+	into.caseStmts = next.caseStmts;
 }
 
 function parseSwitchCase(state: ParserState): NodeResult {
@@ -575,6 +586,16 @@ test "do-while no semi" { assert programOk("do { x; } while (y)"); }
 test "switch case+default" { assert programOk("switch (x) { case 1: a; break; default: b; }"); }
 
 test "switch multi case" { assert programOk("switch (x) { case 1: a; break; case 2: b; break; }"); }
+
+test "an empty case stacks its labels onto the next case" {
+	const sw = stmtAt("switch (x) { case 1: case 2: a; break; case 3: default: b; case 4: }", 0).data as SwitchStmtData;
+	assert sw.switchCases.length == 3;
+	const both = sw.switchCases[0].data as SwitchCaseData;
+	assert both.caseTests.length == 2 && both.caseStmts.length == 2 && !both.isDefault;
+	const intoDefault = sw.switchCases[1].data as SwitchCaseData;
+	assert intoDefault.caseTests.length == 1 && intoDefault.isDefault && intoDefault.caseStmts.length == 1;
+	assert (sw.switchCases[2].data as SwitchCaseData).caseStmts.length == 0;
+}
 
 test "switch return" { assert programOk("function f(x) { switch (x) { case 1: return \"one\"; default: return \"other\"; } }"); }
 // For-in
