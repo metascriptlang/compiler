@@ -1,6 +1,6 @@
-// @stdout: declared 1|inferred 2|arrow 3|resolve 4|resolved later 5|handle 7|handle resolve 8|plain 4|caught nope
+// @stdout: declared 1|inferred 2|arrow 3|resolve 4|resolved later 5|handle 7|handle resolve 8|plain 4|caught nope|awaited in try 2
 // @exit: 0
-// note: every place a promise adopts a value adopts a thenable through the same `then` call: an async function's return (declared, inferred, arrow), `Promise.resolve`, and `await`. A `then` declared by an extension counts only when its receiver names the type: the generic `then<T>(this x: T)` in handleLib reaches neither `Plain` nor anything else, so an async function returns a `Plain` as itself.
+// note: every place a promise adopts a value adopts a thenable through the same `then` call: an async function's return (declared, inferred, arrow), `Promise.resolve`, and `await`. A `then` declared by an extension counts only when its receiver names the type: the generic `then<T>(this x: T)` in handleLib reaches neither `Plain` nor anything else, so an async function returns a `Plain` as itself. Inside a `try` with a catch, `return await` lets the catch see the rejection (a bare `return thenable` there is refused).
 
 import { Handle, Plain } from "./handleLib";
 
@@ -31,6 +31,13 @@ async function inferred() { return new Now(2); }
 const arrow = async () => new Now(3);
 async function refused(): Promise<int32> { return new Refuse(); }
 async function givePlain(): Promise<Plain> { return new Plain(); }
+async function awaitedInTry(): Promise<int32> {
+	try {
+		return await new Refuse();
+	} catch (e) {
+		return 2;
+	}
+}
 
 async function main(): Promise<void> {
 	out.push(`declared ${await declared()}`);
@@ -47,6 +54,7 @@ async function main(): Promise<void> {
 	} catch (e) {
 		out.push(`caught ${e.message}`);
 	}
+	out.push(`awaited in try ${await awaitedInTry()}`);
 	console.log(out.join("|"));
 }
 
