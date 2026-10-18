@@ -82,7 +82,7 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 
 export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistry, modulePath: string, ctx: CheckerContext, exportedName: string = ""): ExportedSymInfo {
 	let primaryExt: ExtensionMethod | null = null;
-	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) primaryExt = findExtensionBySym(extensionRegistry, sym);
+	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) primaryExt = findExtensionBySym(extensionRegistry, sym, exportedName);
 
 	const ovExts: (ExtensionMethod | null)[] = [];
 	for (const ov of sym.overloads) {
@@ -253,7 +253,7 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	// Dedup by sym identity first (cheap fast-path).
 	if (method.sym != null) {
 		for (const existing of registry.methods) {
-			if (existing.sym == method.sym) return;
+			if (existing.sym == method.sym && existing.methodName == method.methodName) return;
 		}
 	}
 	// Stronger dedup: same logical extension may register through multiple
@@ -265,6 +265,7 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	if (method.sym != null && method.sym.modulePath != "") {
 		for (const other of registry.methods) {
 			if (other.sym != null
+					&& other.methodName == method.methodName
 					&& other.sym.name == method.sym.name
 					&& other.sym.modulePath == method.sym.modulePath
 					&& other.isStatic == method.isStatic
@@ -316,11 +317,14 @@ export function hasExtensionByName(registry: ExtensionRegistry, methodName: stri
 // findExtensionBySym — match by symbol identity (not name).
 // Class method symbols have mangled names (GPUInstance_release) but their extension
 // registry entries use original names (release). Symbol identity bridges the mismatch.
-export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol): ExtensionMethod {
+export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol, name: string = ""): ExtensionMethod {
+	let first: ExtensionMethod | null = null;
 	for (const m of registry.methods) {
-		if (m.sym != null && m.sym == sym) return m;
+		if (m.sym == null || m.sym != sym) continue;
+		if (name == "" || m.methodName == name) return m;
+		if (first == null) first = m;
 	}
-	return null as unknown as ExtensionMethod;
+	return first as unknown as ExtensionMethod;
 }
 
 // findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
