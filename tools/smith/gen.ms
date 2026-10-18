@@ -85,6 +85,26 @@ struct Fn {
 	cost: int64;
 }
 
+struct MetaPair {
+	viaMeta: string;
+	plain: string;
+}
+
+function metaOpWord(op: string): string {
+	return match (op) {
+		"+" => "Add",
+		"-" => "Sub",
+		"*" => "Mul",
+		"/" => "Div",
+		"%" => "Rem",
+		"&" => "And",
+		"|" => "Or",
+		"^" => "Xor",
+		"<<" => "Shl",
+		_ => "Shr",
+	};
+}
+
 struct ClsMember {
 	name: string;
 	ty: Ty;
@@ -462,6 +482,8 @@ class Gen {
 	clsNames: int32 = 0;
 	arrowDepth: int32 = 0;
 	clsStatics: int32 = -1;
+	metaCount: int32 = 0;
+	metaSites: int32 = 0;
 	imports: string[] = [];
 	taskFams: Fam[] = [];
 	taskText: string = "";
@@ -871,6 +893,7 @@ class Gen {
 		if (fam == Fam.Native) { return this.nativeExpr(t, depth); }
 		if (fam == Fam.Cls) { return this.clsExpr(t, depth); }
 		if (fam == Fam.Conv) { return this.convExpr(t, depth); }
+		if (fam == Fam.Meta) { return this.metaExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1466,6 +1489,757 @@ class Gen {
 	cvSeal(text: string, shape: Shape): string {
 		this.famShape = shape;
 		return text;
+	}
+
+	metaHelpers(t: Ty, show: boolean): void {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		if (!show) {
+			this.useHelper("metaChk" + X, "function metaChk" + X + "(a: " + T + ", b: " + T + "): " + T + " {\n" +
+				"\tif (String(a) != String(b)) { throw new Error(\"meta \" + String(a) + \" vs \" + String(b)); }\n" +
+				"\treturn a;\n}\n");
+			return;
+		}
+		this.useHelper("metaShow" + X, "function metaShow" + X + "(k: string, a: " + T + ", b: " + T + "): void {\n" +
+			"\tconsole.log(k + \" \" + String(a) + \" \" + String(b));\n" +
+			"\tif (String(a) != String(b)) { throw new Error(\"meta \" + k); }\n}\n");
+	}
+
+	metaImports(names: string[]): void {
+		for (const n of names) { this.useHelper("metaImport" + n, "import { " + n + " } from \"std/meta\";\n"); }
+	}
+
+	metaPure(t: Ty, depth: int32): string {
+		const fams = this.fams;
+		const fns = this.fns;
+		this.fams = [];
+		this.fns = [];
+		const inElse = this.elseArms > 0;
+		if (inElse) { this.arithInElse++; }
+		const text = this.expr(t, depth);
+		if (inElse) { this.arithInElse--; }
+		this.fams = fams;
+		this.fns = fns;
+		return text;
+	}
+
+	metaPureCond(depth: int32): string {
+		const fams = this.fams;
+		const fns = this.fns;
+		this.fams = [];
+		this.fns = [];
+		const text = this.cond(depth);
+		this.fams = fams;
+		this.fns = fns;
+		return text;
+	}
+
+	metaClosed(t: Ty, depth: int32, vars: Var[]): string {
+		const scope = this.scope;
+		const globals = this.globals;
+		const fns = this.fns;
+		const fams = this.fams;
+		const ents = this.ents;
+		this.scope = vars;
+		this.globals = [];
+		this.fns = [];
+		this.fams = [];
+		this.ents = [];
+		const text = this.expr(t, depth);
+		this.scope = scope;
+		this.globals = globals;
+		this.fns = fns;
+		this.fams = fams;
+		this.ents = ents;
+		return text;
+	}
+
+	metaOps(t: Ty): string[] {
+		if (isFloat(t)) { return FLOAT_OPS; }
+		return trapsOnOverflow(t) ? ["&", "|", "^", "<<", ">>"] : ["+", "-", "*", "&", "|", "^", "<<", ">>"];
+	}
+
+	metaCharge(from: int64): boolean {
+		return this.reserve((this.cost - from) / this.mult + (1 as int64));
+	}
+
+	metaBody(ret: Ty, params: Var[], withFams: boolean, cap: int64): Routine {
+		const scope = this.scope;
+		const ents = this.ents;
+		const globals = this.globals;
+		const fns = this.fns;
+		const fams = this.fams;
+		const cost = this.cost;
+		const costCap = this.costCap;
+		const mult = this.mult;
+		const atTop = this.atTop;
+		const bodyDepth = this.bodyDepth;
+		const elseArms = this.elseArms;
+		const arithInElse = this.arithInElse;
+		this.scope = params.map((v: Var): Var => v);
+		this.ents = [];
+		this.globals = [];
+		this.fns = [];
+		if (!withFams) { this.fams = []; }
+		this.cost = 0 as int64;
+		this.costCap = cap;
+		this.mult = 1 as int64;
+		this.atTop = false;
+		this.bodyDepth = 0;
+		this.elseArms = 0;
+		this.arithInElse = 0;
+		const body = this.block(0, "\t", false, ret, true);
+		this.ents = [];
+		const tail = "\treturn " + this.expr(ret, 0) + ";\n";
+		const spent = this.cost;
+		this.scope = scope;
+		this.ents = ents;
+		this.globals = globals;
+		this.fns = fns;
+		this.fams = fams;
+		this.cost = cost;
+		this.costCap = costCap;
+		this.mult = mult;
+		this.atTop = atTop;
+		this.bodyDepth = bodyDepth;
+		this.elseArms = elseArms;
+		this.arithInElse = arithInElse;
+		return { text: body + tail, cost: spent };
+	}
+
+	metaClosedText(depth: int32): string {
+		const scope = this.scope;
+		const globals = this.globals;
+		const fns = this.fns;
+		const fams = this.fams;
+		const ents = this.ents;
+		this.scope = [];
+		this.globals = [];
+		this.fns = [];
+		this.fams = [];
+		this.ents = [];
+		const text = this.strText(depth);
+		this.scope = scope;
+		this.globals = globals;
+		this.fns = fns;
+		this.fams = fams;
+		this.ents = ents;
+		return text;
+	}
+
+	metaBlockPair(t: Ty): MetaPair {
+		const from = this.cost;
+		const T = tyName(t);
+		if (t == Ty.Int32 && this.rng.chance(20)) {
+			const s = this.metaClosedText(1);
+			if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+			return { viaMeta: "((@comptime { return (" + s + ").length; }) as " + T + ")", plain: "((" + s + ").length as " + T + ")" };
+		}
+		if (this.rng.chance(50)) {
+			const e = this.metaClosed(t, 1, []);
+			if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+			return { viaMeta: "(@comptime { return " + e + "; })", plain: e };
+		}
+		const a = this.entName("a");
+		const j = this.entName("j");
+		const trips = this.rng.between(1, 4);
+		const init = this.metaClosed(t, 1, []);
+		const savedMult = this.mult;
+		this.mult = this.mult * (trips as int64);
+		const step = this.metaClosed(t, 1, [{ name: a, ty: t, writable: false }, { name: j, ty: Ty.Int32, writable: false }]);
+		this.mult = savedMult;
+		const body = "let " + a + ": " + T + " = " + init + "; for (let " + j + ": int32 = 0; " + j + " < " + String(trips) + "; " + j + "++) { " + a + " = " + step + "; } return " + a + ";";
+		if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+		return { viaMeta: "(@comptime { " + body + " })", plain: "((): " + T + " => { " + body + " })()" };
+	}
+
+	metaFnPair(t: Ty): MetaPair {
+		const cap = this.spare(2 as int64);
+		if (cap < (16 as int64)) { return { viaMeta: "", plain: "" }; }
+		const count = this.rng.between(1, 3);
+		const params: Var[] = [];
+		let sig = "";
+		for (let i = 0; i < count; i++) {
+			const p = this.pickTy();
+			const name = this.entName("m");
+			params.push({ name: name, ty: p, writable: false });
+			sig = sig == "" ? name + ": " + tyName(p) : sig + ", " + name + ": " + tyName(p);
+		}
+		const body = this.metaBody(t, params, false, cap);
+		if (!this.reserve((2 as int64) * body.cost + (2 as int64))) { return { viaMeta: "", plain: "" }; }
+		const id = String(this.metaCount);
+		this.metaCount++;
+		const rest = "(" + sig + "): " + tyName(t) + " {\n" + body.text + "}\n";
+		const comptimeName = this.useHelper("metaFn" + id, "@comptime function metaFn" + id + rest);
+		const plainName = this.useHelper("metaPlain" + id, "function metaPlain" + id + rest);
+		let args = "";
+		for (const p of params) {
+			let a = this.literal(p.ty);
+			if (this.rng.chance(30)) {
+				const k = "metaK" + String(this.metaCount);
+				this.metaCount++;
+				a = this.useHelper(k, "const " + k + ": " + tyName(p.ty) + " = " + a + ";\n");
+			}
+			args = args == "" ? a : args + ", " + a;
+		}
+		return { viaMeta: comptimeName + "(" + args + ")", plain: plainName + "(" + args + ")" };
+	}
+
+	metaMacroPair(t: Ty, depth: int32, hoist: boolean): MetaPair {
+		const from = this.cost;
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const ops = this.metaOps(t);
+		const form = hoist ? 7 : this.rng.below(7);
+		if (form == 0) {
+			const op = this.pickOp(ops);
+			const name = "metaBin" + metaOpWord(op);
+			this.metaImports(["Node"]);
+			this.useHelper(name, "macro " + name + "(a: Node, b: Node): Node { return quote { (${a} " + op + " ${b}) }; }\n");
+			const a = this.metaPure(t, depth + 1);
+			const b = this.metaPure(t, depth + 1);
+			if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+			return { viaMeta: name + "(" + a + ", " + b + ")", plain: "(" + a + " " + op + " " + b + ")" };
+		}
+		if (form == 1) {
+			this.metaImports(["Node"]);
+			const c = this.metaPureCond(depth + 1);
+			const a = this.metaPure(t, depth + 1);
+			this.elseArms++;
+			const b = this.metaPure(t, depth + 1);
+			this.elseArms--;
+			if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+			this.useHelper("metaPick", "macro metaPick(c: Node, a: Node, b: Node): Node { return quote { (${c} ? ${a} : ${b}) }; }\n");
+			return { viaMeta: "metaPick(" + c + ", " + a + ", " + b + ")", plain: "(" + c + " ? " + a + " : " + b + ")" };
+		}
+		if (form == 2) {
+			const name = "metaTwice" + X;
+			this.metaImports(["Node"]);
+			const shape = isFloat(t) ? "(${a} * ${a})" : "((${a} >> (1 as " + T + ")) ^ ${a})";
+			this.useHelper(name, "macro " + name + "(a: Node): Node { return quote { " + shape + " }; }\n");
+			const a = this.metaPure(t, depth + 1);
+			if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+			const plain = isFloat(t) ? "(" + a + " * " + a + ")" : "((" + a + " >> (1 as " + T + ")) ^ " + a + ")";
+			return { viaMeta: name + "(" + a + ")", plain: plain };
+		}
+		if (form == 3) {
+			const outer = this.pickOp(ops);
+			const inner = this.pickOp(ops);
+			const name = "metaNest" + metaOpWord(outer) + metaOpWord(inner);
+			this.metaImports(["Node"]);
+			this.useHelper(name, "macro " + name + "(a: Node, b: Node, c: Node): Node {\n" +
+				"\tconst inner: Node = quote { (${b} " + inner + " ${c}) };\n" +
+				"\treturn quote { (${a} " + outer + " ${inner}) };\n}\n");
+			const a = this.metaPure(t, depth + 1);
+			const b = this.metaPure(t, depth + 1);
+			const c = this.metaPure(t, depth + 1);
+			if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+			return { viaMeta: name + "(" + a + ", " + b + ", " + c + ")", plain: "(" + a + " " + outer + " (" + b + " " + inner + " " + c + "))" };
+		}
+		if (form == 4) {
+			const folds = isFloat(t) ? ["+", "-", "*"] : ["+", "-", "*", "&", "|", "^", "<<"];
+			const op = folds[this.rng.below(folds.length)];
+			let x = this.rng.between(0, 7);
+			let y = op == "<<" ? this.rng.between(0, 3) : this.rng.between(0, 7);
+			if (op == "-" && x < y) {
+				const swap = x;
+				x = y;
+				y = swap;
+			}
+			const name = "metaFold" + metaOpWord(op);
+			this.metaImports(["Node", "NodeKind", "intValue"]);
+			this.useHelper(name, "macro " + name + "(a: Node, b: Node): Node {\n" +
+				"\treturn { kind: NodeKind.NumberLiteral, line: a.line, column: a.column, value: intValue(a) " + op + " intValue(b), isFloat: false };\n}\n");
+			return {
+				viaMeta: "(" + name + "(" + String(x) + ", " + String(y) + ") as " + T + ")",
+				plain: "((" + String(x) + " as " + T + ") " + op + " (" + String(y) + " as " + T + "))",
+			};
+		}
+		if (form == 5) {
+			const op = this.pickOp(ops);
+			const name = "metaChain" + metaOpWord(op);
+			this.metaImports(["Node", "intValue"]);
+			this.useHelper(name, "macro " + name + "(x: Node, n: Node): Node {\n" +
+				"\tconst k = intValue(n);\n" +
+				"\tlet acc: Node = x;\n" +
+				"\tfor (let i = 1; i < k; i++) { acc = quote { (${acc} " + op + " ${x}) }; }\n" +
+				"\treturn acc;\n}\n");
+			const n = this.rng.between(1, 4);
+			const a = this.metaPure(t, depth + 1);
+			if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+			let plain = a;
+			for (let i = 1; i < n; i++) { plain = "(" + plain + " " + op + " " + a + ")"; }
+			return { viaMeta: name + "(" + a + ", " + String(n) + ")", plain: plain };
+		}
+		if (form == 6) {
+			const s = "\"" + this.strLiteral(0) + "\"";
+			this.metaImports(["Node", "NodeKind", "stringValue"]);
+			this.useHelper("metaStrLen", "macro metaStrLen(s: Node): Node {\n" +
+				"\treturn { kind: NodeKind.NumberLiteral, line: s.line, column: s.column, value: stringValue(s).length, isFloat: false };\n}\n");
+			return { viaMeta: "(metaStrLen(" + s + ") as " + T + ")", plain: "((" + s + ").length as " + T + ")" };
+		}
+		const name = "metaHoist" + X;
+		this.metaImports(["Node", "NodeKind", "DeclKind"]);
+		const body = isFloat(t) ? "(tmp + tmp)" : "((tmp & (15 as " + T + ")) + ((tmp >> (2 as " + T + ")) & (15 as " + T + ")))";
+		this.useHelper(name, "macro " + name + "(x: Node): Node {\n" +
+			"\treturn {\n" +
+			"\t\tkind: NodeKind.SpliceMany, line: x.line, column: x.column,\n" +
+			"\t\tspliceNodes: [\n" +
+			"\t\t\t{ kind: NodeKind.VariableDecl, line: x.line, column: x.column, declName: \"tmp\", declType: \"" + T + "\",\n" +
+			"\t\t\t  initializer: x, declKind: DeclKind.Const, nameLocation: { line: x.line, column: x.column } },\n" +
+			"\t\t\tquote { " + body + " },\n" +
+			"\t\t],\n" +
+			"\t};\n}\n");
+		const x = this.metaPure(t, depth + 1);
+		if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+		return { viaMeta: name + "(" + x + ")", plain: body.replaceAll("tmp", "(" + x + ")") };
+	}
+
+	metaJsxAttr(): string {
+		return ["x", "y", "val", "data-id"][this.rng.below(4)];
+	}
+
+	metaJsxTag(): string {
+		return ["item", "row", "x.y", "svg:rect"][this.rng.below(4)];
+	}
+
+	metaJsxText(): string {
+		return ["t", "u", "hi there", "é日本", "ok"][this.rng.below(5)];
+	}
+
+	metaJsxPair(t: Ty, depth: int32): MetaPair {
+		const from = this.cost;
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const ops = isFloat(t) ? ["+", "-", "*"] : trapsOnOverflow(t) ? ["&", "|", "^"] : ["&", "|", "^", "+", "-", "*"];
+		const op = this.pickOp(ops);
+		const one = isFloat(t) ? "1.0" : "(1 as " + T + ")";
+		const init = op == "&" ? "(~(0 as " + T + "))" : op == "*" ? one : zero(t);
+		const name = "metaJsx" + metaOpWord(op) + X;
+		this.metaImports(["Node", "NodeKind"]);
+		this.useHelper(name, "macro " + name + "(node: Node): Node {\n" +
+			"\tlet acc: Node = quote { " + init + " };\n" +
+			"\tif (node.kind == NodeKind.JSXFragment) {\n" +
+			"\t\tfor (const c of node.jsxFragChildren) {\n" +
+			"\t\t\tif (c.kind == NodeKind.JSXExpressionContainer) { acc = quote { (${acc} " + op + " ${c.jsxExpr}) }; }\n" +
+			"\t\t}\n" +
+			"\t\treturn acc;\n" +
+			"\t}\n" +
+			"\tfor (const a of node.jsxAttrs) {\n" +
+			"\t\tif (a.kind == NodeKind.JSXAttribute && a.jsxAttrName != \"key\") { acc = quote { (${acc} " + op + " ${a.jsxAttrValue}) }; }\n" +
+			"\t}\n" +
+			"\tfor (const c of node.jsxChildren) {\n" +
+			"\t\tif (c.kind == NodeKind.JSXExpressionContainer) { acc = quote { (${acc} " + op + " ${c.jsxExpr}) }; }\n" +
+			"\t}\n" +
+			"\treturn acc;\n}\n");
+		const tag = this.metaJsxTag();
+		const form = this.rng.below(3);
+		let plain = init;
+		let jsx = "";
+		if (form == 2) {
+			jsx = "<>";
+			const n = this.rng.between(1, 3);
+			for (let i = 0; i < n; i++) {
+				if (this.rng.chance(40)) { jsx += this.metaJsxText(); }
+				const e = this.metaPure(t, depth + 1);
+				jsx += "{" + e + "}";
+				plain = "(" + plain + " " + op + " " + e + ")";
+			}
+			jsx += "</>";
+		} else {
+			jsx = "<" + tag;
+			const attrs = this.rng.between(0, 2);
+			for (let i = 0; i < attrs; i++) {
+				if (this.rng.chance(30)) { jsx += " key=\"k\""; }
+				if (this.rng.chance(25)) { jsx += " {...{}}"; }
+				const e = this.metaPure(t, depth + 1);
+				jsx += " " + this.metaJsxAttr() + "={" + e + "}";
+				plain = "(" + plain + " " + op + " " + e + ")";
+			}
+			const kids = form == 1 ? 0 : this.rng.between(1, 3);
+			if (kids == 0) {
+				jsx += attrs == 0 ? " key=\"k\"/>" : "/>";
+			} else {
+				jsx += ">";
+				for (let i = 0; i < kids; i++) {
+					const k = this.rng.below(3);
+					if (k == 0) {
+						jsx += this.metaJsxText();
+					} else if (k == 1) {
+						jsx += "<b/>";
+					} else {
+						const e = this.metaPure(t, depth + 1);
+						jsx += "{" + e + "}";
+						plain = "(" + plain + " " + op + " " + e + ")";
+					}
+				}
+				jsx += "</" + tag + ">";
+			}
+		}
+		if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+		return { viaMeta: name + "(" + jsx + ")", plain: plain };
+	}
+
+	metaTraitPair(t: Ty, depth: int32): MetaPair {
+		const from = this.cost;
+		const T = tyName(t);
+		const name = "metaTrait" + tyTitle(t);
+		this.useHelper("metaImportTraits", "import { isPlainData } from \"std/typetraits\";\n");
+		this.useHelper(name, "function " + name + "<U>(x: U, a: " + T + ", b: " + T + "): " + T + " {\n" +
+			"\twhen (isPlainData<U>()) { return a; } else { return b; }\n}\n");
+		const a = this.metaPure(t, depth + 1);
+		const b = this.metaPure(t, depth + 1);
+		if (!this.metaCharge(from)) { return { viaMeta: "", plain: "" }; }
+		const k = this.rng.below(10);
+		if (k < 6) {
+			const u = this.pickTy();
+			const x = this.metaPure(u, depth + 1);
+			return { viaMeta: name + "<" + tyName(u) + ">(" + x + ", " + a + ", " + b + ")", plain: a };
+		}
+		if (k < 8) { return { viaMeta: name + "<string>(\"" + this.strLiteral(0) + "\", " + a + ", " + b + ")", plain: b }; }
+		return { viaMeta: name + "<int32[]>([1, 2], " + a + ", " + b + ")", plain: b };
+	}
+
+	metaInlinePair(t: Ty, depth: int32): MetaPair {
+		const cap = this.spare(2 as int64);
+		if (cap < (16 as int64)) { return { viaMeta: "", plain: "" }; }
+		const count = this.rng.between(1, 3);
+		const params: Var[] = [];
+		let sig = "";
+		for (let i = 0; i < count; i++) {
+			const p = this.pickTy();
+			const name = this.entName("m");
+			params.push({ name: name, ty: p, writable: false });
+			sig = sig == "" ? name + ": " + tyName(p) : sig + ", " + name + ": " + tyName(p);
+		}
+		const body = this.metaBody(t, params, true, cap);
+		if (!this.reserve((2 as int64) * body.cost + (2 as int64))) { return { viaMeta: "", plain: "" }; }
+		const id = String(this.metaCount);
+		this.metaCount++;
+		const rest = "(" + sig + "): " + tyName(t) + " {\n" + body.text + "}\n";
+		const note = this.rng.chance(50) ? "@inline " : "@noinline ";
+		const marked = this.useHelper("metaInl" + id, note + "function metaInl" + id + rest);
+		const plainName = this.useHelper("metaPlain" + id, "function metaPlain" + id + rest);
+		let args = "";
+		for (const p of params) {
+			const a = this.metaPure(p.ty, depth + 1);
+			args = args == "" ? a : args + ", " + a;
+		}
+		return { viaMeta: marked + "(" + args + ")", plain: plainName + "(" + args + ")" };
+	}
+
+	metaPair(shape: int32, t: Ty, depth: int32, hoist: boolean): MetaPair {
+		if (shape == 0) { return this.metaBlockPair(t); }
+		if (shape == 1) { return this.metaFnPair(t); }
+		if (shape == 2) { return this.metaMacroPair(t, depth, hoist); }
+		if (shape == 3) { return this.metaJsxPair(t, depth); }
+		if (shape == 4) { return this.metaTraitPair(t, depth); }
+		if (shape == 5) { return this.metaInlinePair(t, depth); }
+		return { viaMeta: "", plain: "" };
+	}
+
+	metaExpr(t: Ty, depth: int32): string {
+		if (this.wt(W.MetaBlock) + this.wt(W.MetaFn) + this.wt(W.MetaMacro) + this.wt(W.MetaJsx) + this.wt(W.MetaWhen) + this.wt(W.MetaInline) == 0) { return ""; }
+		const pair = this.metaPair(this.pickW(W.MetaBlock, W.MetaInline), t, depth, false);
+		if (pair.viaMeta == "") { return ""; }
+		this.metaHelpers(t, false);
+		this.famShape = Shape.Other;
+		return "metaChk" + tyTitle(t) + "(" + pair.viaMeta + ", " + pair.plain + ")";
+	}
+
+	metaAtom(want: boolean): string {
+		const yes = ["(c || js || raiser)", "(!nosuchflag)", "(!nosuchflagB)", "(!(c && js))", "(!(js && raiser))"];
+		const no = ["nosuchflag", "nosuchflagB", "(c && js)", "(js && raiser)", "(c && raiser)", "(!(c || js || raiser))"];
+		const list = want ? yes : no;
+		return list[this.rng.below(list.length)];
+	}
+
+	metaCond(want: boolean, depth: int32): string {
+		if (depth >= 2 || this.rng.chance(50)) { return this.metaAtom(want); }
+		const k = this.rng.below(3);
+		if (k == 0) { return "(!" + this.metaCond(!want, depth + 1) + ")"; }
+		if (k == 1) {
+			if (want) { return "(" + this.metaCond(true, depth + 1) + " && " + this.metaCond(true, depth + 1) + ")"; }
+			return "(" + this.metaCond(false, depth + 1) + " && " + this.metaCond(this.rng.chance(50), depth + 1) + ")";
+		}
+		if (want) { return "(" + this.metaCond(true, depth + 1) + " || " + this.metaCond(this.rng.chance(50), depth + 1) + ")"; }
+		return "(" + this.metaCond(false, depth + 1) + " || " + this.metaCond(false, depth + 1) + ")";
+	}
+
+	metaWhen(t: Ty, indent: string): string {
+		const from = this.cost;
+		const T = tyName(t);
+		const arms = this.rng.between(1, 3);
+		const live = this.rng.below(arms + 1);
+		const withElse = live == arms || this.rng.chance(70);
+		const values: string[] = [];
+		for (let i = 0; i <= arms; i++) { values.push(this.metaPure(t, 1)); }
+		const target = "l" + String(this.localCount);
+		this.localCount++;
+		const plain = "l" + String(this.localCount);
+		this.localCount++;
+		const dead = ["metaMissing", "(metaMissing + 1)", "(\"text\" as " + T + ")"];
+		let chain = "";
+		for (let i = 0; i < arms; i++) {
+			const want = i == live ? true : i < live ? false : this.rng.chance(50);
+			const value = i == live || this.rng.chance(50) ? values[i] : dead[this.rng.below(dead.length)];
+			chain += (i == 0 ? "when (" : " else when (") + this.metaCond(want, 0) + ") { " + target + " = " + value + "; }";
+		}
+		if (withElse) {
+			const value = live == arms || this.rng.chance(50) ? values[arms] : dead[this.rng.below(dead.length)];
+			chain += " else { " + target + " = " + value + "; }";
+		}
+		if (!this.metaCharge(from)) { return ""; }
+		this.scope.push({ name: target, ty: t, writable: true });
+		this.scope.push({ name: plain, ty: t, writable: true });
+		this.metaHelpers(t, true);
+		const label = "m" + String(this.metaSites);
+		this.metaSites++;
+		return indent + "let " + target + ": " + T + " = " + zero(t) + ";\n" +
+			indent + chain + "\n" +
+			indent + "let " + plain + ": " + T + " = " + values[live] + ";\n" +
+			indent + "metaShow" + tyTitle(t) + "(\"" + label + "\", " + target + ", " + plain + ");\n";
+	}
+
+	metaJsxString(t: Ty, indent: string): string {
+		const from = this.cost;
+		this.metaImports(["Node", "NodeKind"]);
+		this.useHelper("metaJsxS", "macro metaJsxS(node: Node): Node {\n" +
+			"\tif (node.kind == NodeKind.JSXFragment) {\n" +
+			"\t\tlet acc: Node = { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: \"<>\" };\n" +
+			"\t\tfor (const c of node.jsxFragChildren) {\n" +
+			"\t\t\tif (c.kind == NodeKind.JSXText) { acc = quote { ${acc} + ${{ kind: NodeKind.StringLiteral, line: c.line, column: c.column, value: c.jsxText }} }; }\n" +
+			"\t\t\telse if (c.kind == NodeKind.JSXExpressionContainer) { acc = quote { ${acc} + (\"\" + ${c.jsxExpr}) }; }\n" +
+			"\t\t\telse { acc = quote { ${acc} + \"?\" }; }\n" +
+			"\t\t}\n" +
+			"\t\treturn quote { ${acc} + \"</>\" };\n" +
+			"\t}\n" +
+			"\tlet acc: Node = { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: \"<\" + node.jsxTag };\n" +
+			"\tfor (const a of node.jsxAttrs) {\n" +
+			"\t\tif (a.kind == NodeKind.JSXAttribute) {\n" +
+			"\t\t\tconst nm: Node = { kind: NodeKind.StringLiteral, line: a.line, column: a.column, value: \" \" + a.jsxAttrName + \"=\" };\n" +
+			"\t\t\tacc = quote { ${acc} + ${nm} + (\"\" + ${a.jsxAttrValue}) };\n" +
+			"\t\t} else {\n" +
+			"\t\t\tacc = quote { ${acc} + \" ...\" };\n" +
+			"\t\t}\n" +
+			"\t}\n" +
+			"\tif (node.jsxSelfClosing) { return quote { ${acc} + \"/>\" }; }\n" +
+			"\tacc = quote { ${acc} + \">\" };\n" +
+			"\tfor (const c of node.jsxChildren) {\n" +
+			"\t\tif (c.kind == NodeKind.JSXText) {\n" +
+			"\t\t\tconst s: Node = { kind: NodeKind.StringLiteral, line: c.line, column: c.column, value: c.jsxText };\n" +
+			"\t\t\tacc = quote { ${acc} + ${s} };\n" +
+			"\t\t} else if (c.kind == NodeKind.JSXExpressionContainer) {\n" +
+			"\t\t\tacc = quote { ${acc} + (\"\" + ${c.jsxExpr}) };\n" +
+			"\t\t} else {\n" +
+			"\t\t\tacc = quote { ${acc} + \"?\" };\n" +
+			"\t\t}\n" +
+			"\t}\n" +
+			"\tconst close: Node = { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: \"</\" + node.jsxTag + \">\" };\n" +
+			"\treturn quote { ${acc} + ${close} };\n}\n");
+		this.metaShowStrHelper();
+		const tag = this.metaJsxTag();
+		const form = this.rng.below(3);
+		let jsx = "";
+		let plain = "";
+		if (form == 2) {
+			jsx = "<>";
+			plain = "\"<>\"";
+			const n = this.rng.between(1, 4);
+			for (let i = 0; i < n; i++) {
+				const k = this.rng.below(3);
+				if (k == 0) {
+					const text = this.metaJsxText();
+					jsx += text;
+					plain += " + \"" + text + "\"";
+				} else if (k == 1) {
+					jsx += "<b/>";
+					plain += " + \"?\"";
+				} else {
+					const e = this.metaPure(t, 1);
+					jsx += "{" + e + "}";
+					plain += " + (\"\" + " + e + ")";
+				}
+			}
+			jsx += "</>";
+			plain += " + \"</>\"";
+		} else {
+			jsx = "<" + tag;
+			plain = "\"<" + tag + "\"";
+			const attrs = this.rng.between(0, 2);
+			for (let i = 0; i < attrs; i++) {
+				if (this.rng.chance(30)) {
+					jsx += " key=\"k\"";
+					plain += " + \" key=\" + (\"\" + \"k\")";
+				}
+				if (this.rng.chance(25)) {
+					jsx += " {...{}}";
+					plain += " + \" ...\"";
+				}
+				const name = this.metaJsxAttr();
+				const e = this.metaPure(t, 1);
+				jsx += " " + name + "={" + e + "}";
+				plain += " + \" " + name + "=\" + (\"\" + " + e + ")";
+			}
+			const kids = form == 1 ? 0 : this.rng.between(1, 3);
+			if (kids == 0) {
+				jsx += "/>";
+				plain += " + \"/>\"";
+			} else {
+				jsx += ">";
+				plain += " + \">\"";
+				for (let i = 0; i < kids; i++) {
+					const k = this.rng.below(3);
+					if (k == 0) {
+						const text = this.metaJsxText();
+						jsx += text;
+						plain += " + \"" + text + "\"";
+					} else if (k == 1) {
+						jsx += "<b/>";
+						plain += " + \"?\"";
+					} else {
+						const e = this.metaPure(t, 1);
+						jsx += "{" + e + "}";
+						plain += " + (\"\" + " + e + ")";
+					}
+				}
+				jsx += "</" + tag + ">";
+				plain += " + \"</" + tag + ">\"";
+			}
+		}
+		if (!this.metaCharge(from)) { return ""; }
+		const label = "m" + String(this.metaSites);
+		this.metaSites++;
+		return indent + "metaShowStr(\"" + label + "\", metaJsxS(" + jsx + "), " + plain + ");\n";
+	}
+
+	metaShowStrHelper(): void {
+		this.useHelper("metaShowStr", "function metaShowStr(k: string, a: string, b: string): void {\n" +
+			"\tconsole.log(k + \" \" + a + \" \" + b);\n" +
+			"\tif (a != b) { throw new Error(\"meta \" + k); }\n}\n");
+	}
+
+	metaBlockText(indent: string): string {
+		const from = this.cost;
+		const s = this.metaClosedText(1);
+		if (!this.metaCharge(from)) { return ""; }
+		this.metaShowStrHelper();
+		const label = "m" + String(this.metaSites);
+		this.metaSites++;
+		return indent + "metaShowStr(\"" + label + "\", (@comptime { return " + s + "; }), " + s + ");\n";
+	}
+
+	metaDecorText(indent: string): string {
+		const names = ["x", "y", "z"];
+		const count = this.rng.between(0, 3);
+		let fields = "";
+		let listed = "";
+		let showD = "";
+		let showO = "";
+		const d = this.entName("d");
+		const o = this.entName("d");
+		for (let i = 0; i < count; i++) {
+			const ty = this.pickTy();
+			fields += " " + names[i] + ": " + tyName(ty) + " = " + this.literal(ty) + ";";
+			listed += (i == 0 ? "" : ",") + names[i];
+			showD += " + \",\" + String(" + d + "." + names[i] + ")";
+			showO += " + \",\" + String(" + o + "." + names[i] + ")";
+		}
+		if (!this.reserve((2 as int64) * (count as int64) + (4 as int64))) { return ""; }
+		this.metaImports(["Node", "NodeKind", "ClassDecoratorContext"]);
+		this.useHelper("metaDescribe", "macro metaDescribe(value: Node, context: ClassDecoratorContext): Node {\n" +
+			"\tlet names = \"\";\n" +
+			"\tfor (const m of value.classBody) {\n" +
+			"\t\tif (m.kind == NodeKind.PropertyDecl) { names = names + (names == \"\" ? \"\" : \",\") + m.propName; }\n" +
+			"\t}\n" +
+			"\tvalue.classBody.push({\n" +
+			"\t\tkind: NodeKind.MethodDecl, line: value.line, column: value.column,\n" +
+			"\t\tmethodName: \"tag\", methodParams: [], methodParamTypes: [],\n" +
+			"\t\tmethodBody: {\n" +
+			"\t\t\tkind: NodeKind.BlockStmt, line: value.line, column: value.column,\n" +
+			"\t\t\tstatements: [{\n" +
+			"\t\t\t\tkind: NodeKind.ReturnStmt, line: value.line, column: value.column,\n" +
+			"\t\t\t\targument: { kind: NodeKind.StringLiteral, line: value.line, column: value.column, value: context.name + \":\" + names },\n" +
+			"\t\t\t}],\n" +
+			"\t\t},\n" +
+			"\t\tmethodIsStatic: false, methodFlags: \"\", methodVisibility: \"public\", methodReturnType: \"string\", methodDefaults: [], nativeName: \"\",\n" +
+			"\t});\n" +
+			"\treturn value;\n}\n");
+		const id = String(this.metaCount);
+		this.metaCount++;
+		this.useHelper("MetaD" + id, "@metaDescribe\nclass MetaD" + id + " {" + fields + " }\n");
+		this.useHelper("MetaP" + id, "class MetaP" + id + " {" + fields + " tag(): string { return \"MetaD" + id + ":" + listed + "\"; } }\n");
+		this.metaShowStrHelper();
+		const label = "m" + String(this.metaSites);
+		this.metaSites++;
+		return indent + "const " + d + " = new MetaD" + id + "();\n" +
+			indent + "const " + o + " = new MetaP" + id + "();\n" +
+			indent + "metaShowStr(\"" + label + "\", " + d + ".tag()" + showD + ", " + o + ".tag()" + showO + ");\n";
+	}
+
+	metaFieldMacro(name: string, op: string): void {
+		this.metaImports(["Node", "NodeKind", "ClassFieldDecoratorContext"]);
+		this.useHelper(name, "macro " + name + "(n: int32): (value: Node, context: ClassFieldDecoratorContext) => (init: Node) => Node {\n" +
+			"\treturn (value: Node, context: ClassFieldDecoratorContext): (init: Node) => Node => {\n" +
+			"\t\treturn (init: Node): Node => ({\n" +
+			"\t\t\tkind: NodeKind.BinaryExpr, line: init.line, column: init.column, operator: \"" + op + "\",\n" +
+			"\t\t\tleft: init,\n" +
+			"\t\t\tright: { kind: NodeKind.NumberLiteral, line: init.line, column: init.column, value: n, isFloat: false },\n" +
+			"\t\t});\n" +
+			"\t};\n}\n");
+	}
+
+	metaDecorFieldText(indent: string): string {
+		const names = ["x", "y", "z"];
+		const count = this.rng.between(1, 3);
+		if (!this.reserve((2 as int64) * (count as int64) + (4 as int64))) { return ""; }
+		const d = this.entName("d");
+		const o = this.entName("d");
+		let decorated = "";
+		let plain = "";
+		let showD = "\"\"";
+		let showO = "\"\"";
+		for (let i = 0; i < count; i++) {
+			const init = String(this.rng.between(0, 99));
+			const n = String(this.rng.between(1, 9));
+			const scale = this.rng.chance(50);
+			this.metaFieldMacro(scale ? "metaScale" : "metaPlus", scale ? "*" : "+");
+			decorated += " @" + (scale ? "metaScale" : "metaPlus") + "(" + n + ") " + names[i] + ": int32 = " + init + ";";
+			plain += " " + names[i] + ": int32 = " + init + (scale ? " * " : " + ") + n + ";";
+			showD += " + String(" + d + "." + names[i] + ") + \";\"";
+			showO += " + String(" + o + "." + names[i] + ") + \";\"";
+		}
+		const id = String(this.metaCount);
+		this.metaCount++;
+		this.useHelper("MetaD" + id, "class MetaD" + id + " {" + decorated + " }\n");
+		this.useHelper("MetaP" + id, "class MetaP" + id + " {" + plain + " }\n");
+		this.metaShowStrHelper();
+		const label = "m" + String(this.metaSites);
+		this.metaSites++;
+		return indent + "const " + d + " = new MetaD" + id + "();\n" +
+			indent + "const " + o + " = new MetaP" + id + "();\n" +
+			indent + "metaShowStr(\"" + label + "\", " + showD + ", " + showO + ");\n";
+	}
+
+	metaStatement(t: Ty, indent: string): string {
+		const shape = this.pickW(W.MetaBlock, W.MetaDecor);
+		if (shape == 6) { return this.rng.chance(35) ? this.metaDecorFieldText(indent) : this.metaDecorText(indent); }
+		if (shape == 0 && this.rng.chance(25)) { return this.metaBlockText(indent); }
+		if (shape == 3 && this.rng.chance(50)) { return this.metaJsxString(t, indent); }
+		if (shape == 4 && this.rng.chance(70)) { return this.metaWhen(t, indent); }
+		const pair = this.metaPair(shape, t, 0, shape == 2 && this.rng.chance(25));
+		if (pair.viaMeta == "") { return ""; }
+		this.metaHelpers(t, true);
+		const name = this.newLocal(t);
+		const label = "m" + String(this.metaSites);
+		this.metaSites++;
+		return indent + "let " + name + ": " + tyName(t) + " = " + pair.viaMeta + ";\n" +
+			indent + "metaShow" + tyTitle(t) + "(\"" + label + "\", " + name + ", " + pair.plain + ");\n";
+	}
+
+	metaPlant(): string {
+		this.metaHelpers(Ty.Int32, false);
+		return "metaChkInt32(@comptime { return 6 * 7; }, 6 * 7 + plantDelta())";
 	}
 
 	cvOp(op: string, t: Ty, a: string, b: string): string {
@@ -2661,6 +3435,7 @@ class Gen {
 		if (fam == Fam.Native) { return this.nativeStatement(t, indent, depth); }
 		if (fam == Fam.Cls) { return this.clsStatement(indent); }
 		if (fam == Fam.Conv) { return this.convStatement(t, indent); }
+		if (fam == Fam.Meta) { return this.metaStatement(t, indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -6307,6 +7082,7 @@ class Gen {
 function plantDecls(plant: Plant): string {
 	if (plant == Plant.None) { return ""; }
 	if (plant == Plant.Model) { return "function modelDelta(): int32 { return 1; }\n"; }
+	if (plant == Plant.Meta) { return "function plantDelta(): int32 { return 1; }\n"; }
 	if (plant == Plant.San) {
 		return "@include(\"stdlib.h\")\n" +
 			"extern function malloc(size: uint64): Ptr<void>;\n" +
@@ -6319,6 +7095,7 @@ function plantDecls(plant: Plant): string {
 			"\treturn 0;\n" +
 			"}\n";
 	}
+	if (plant == Plant.Meta) { return "function plantDelta(): int32 { return 1; }\n"; }
 	const flag = plant == Plant.Backend ? "js" : "debug";
 	const inside = plant == Plant.Backend ? "1" : "0";
 	const outside = plant == Plant.Backend ? "0" : "1";
@@ -6391,7 +7168,9 @@ export function generate(seed: uint64, f: Features): string {
 	}
 
 	let plantSite = "";
-	if (f.plant != Plant.None && f.plant != Plant.Model) {
+	if (f.plant == Plant.Meta) {
+		plantSite = "console.log(\"plant \" + String(" + g.metaPlant() + "));\n";
+	} else if (f.plant != Plant.None && f.plant != Plant.Model) {
 		for (const v of g.globals) {
 			if (plantSite == "" && !isFloat(v.ty)) {
 				plantSite = v.name + " = " + v.name + " ^ (plantDelta() as " + tyName(v.ty) + ");\n";
@@ -6676,7 +7455,7 @@ test "a san plant writes freed memory and leaves the printed result alone" {
 	const text = generate(5 as uint64, f);
 	assert text.contains("\tfree(raw);\n\tconst p = raw as Ptr<uint8>;\n\tp[0] = 1 as uint8;\n\treturn 0;\n");
 	assert text.contains("plantDelta()");
-	assert !text.contains("when (");
+	assert !text.contains("when (debug) {");
 	const r = Features.defaults().overlay("plant=san");
 	assert r.ok;
 	if (r.ok) { assert r.value.plant == Plant.San && r.value.format().contains(" plant=san"); }
@@ -8822,4 +9601,246 @@ test "a class temporary is held by a declaration or a helper, never inside a lar
 		}
 	}
 	assert temps > 40;
+}
+
+test "the meta family alone reaches each of its shapes" {
+	const f = withWeights("fams=meta types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	const shapes = ["(@comptime { return ", "(@comptime { let a", "=> { let a", "@comptime function metaFn", "function metaPlain", "macro metaBin",
+		"macro metaPick", "macro metaTwice", "macro metaNest", "macro metaFold", "macro metaChain", "macro metaStrLen", "macro metaHoist",
+		"(node: Node): Node {\n\tlet acc: Node = quote {", "metaJsxS(<", "isPlainData<U>()", "@inline function metaInl", "@noinline function metaInl",
+		"\twhen (", " else when (", " else { l", "metaChkInt32(", "metaShowInt32(", "metaShowStr(",
+		").length; }) as ", "\", (@comptime { return ", " {...{}}", "macro metaDescribe", "@metaDescribe\nclass MetaD", "macro metaScale", "macro metaPlus", "ClassFieldDecoratorContext"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "the decorator shapes the Raiser cannot run are parked and never generated" {
+	const f = withWeights("fams=meta stmts=8 w.stmt.fam=80 w.meta.block=0 w.meta.fn=0 w.meta.macro=0 w.meta.jsx=0 w.meta.when=0 w.meta.inline=0");
+	let decorated = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		decorated += countOf(text, "@meta");
+		assert !text.contains("ClassMethodDecoratorContext");
+		assert !text.contains(" static ");
+		assert !text.contains(") @meta");
+	}
+	assert decorated > 10;
+}
+
+test "a zero meta weight keeps its shape out of every program" {
+	const keys = ["w.meta.block", "w.meta.fn", "w.meta.macro", "w.meta.jsx", "w.meta.when", "w.meta.inline", "w.meta.decor"];
+	const markers = [
+		["(@comptime {"],
+		["@comptime function"],
+		["macro metaBin", "macro metaPick", "macro metaTwice", "macro metaNest", "macro metaFold", "macro metaChain", "macro metaStrLen", "macro metaHoist"],
+		["macro metaJsx"],
+		["when ("],
+		["function metaInl"],
+		["macro metaDescribe", "class MetaD", "macro metaScale", "macro metaPlus"],
+	];
+	for (let k = 0; k < keys.length; k++) {
+		let zeros = "fams=meta stmts=8 w.stmt.fam=80 w.expr.fam=40";
+		for (let o = 0; o < keys.length; o++) { if (o != k) { zeros += " " + keys[o] + "=0"; } }
+		const only = withWeights(zeros);
+		let hits = 0;
+		let strays = 0;
+		for (let seed = 1; seed < 21; seed++) {
+			const text = generate(seed as uint64, only);
+			for (let m = 0; m < markers.length; m++) {
+				for (const marker of markers[m]) {
+					if (m == k) { hits += countOf(text, marker); } else { strays += countOf(text, marker); }
+				}
+			}
+		}
+		assert hits > 0 && strays == 0;
+	}
+}
+
+test "a meta plant puts one off-by-one pair after the entries and declares its delta" {
+	const f = withWeights("plant=meta");
+	for (let seed = 1; seed <= 6; seed++) {
+		const text = generate(seed as uint64, f);
+		assert text.contains("function plantDelta(): int32 { return 1; }\n");
+		assert countOf(text, "metaChkInt32(@comptime { return 6 * 7; }, 6 * 7 + plantDelta())") == 1;
+		assert countOf(text, "plantDelta()") == 2;
+		assert !text.contains("when (debug)") && !text.contains("when (js)");
+	}
+	const plain = generate(1 as uint64, withWeights("plant=none"));
+	assert !plain.contains("plantDelta");
+	assert withWeights("plant=meta").format().contains(" plant=meta");
+}
+
+function whenName(s: string, pos: int32[]): string {
+	let end = pos[0];
+	while (end < s.length && ((s.charCodeAt(end) >= 97 && s.charCodeAt(end) <= 122) || (s.charCodeAt(end) >= 65 && s.charCodeAt(end) <= 90))) { end++; }
+	const name = s.slice(pos[0], end);
+	pos[0] = end;
+	return name;
+}
+
+function whenSkip(s: string, pos: int32[]): void {
+	while (pos[0] < s.length && s.charAt(pos[0]) == " ") { pos[0]++; }
+}
+
+function whenNot(s: string, pos: int32[], lane: string): boolean {
+	whenSkip(s, pos);
+	const ch = s.charAt(pos[0]);
+	if (ch == "!") {
+		pos[0]++;
+		return !whenNot(s, pos, lane);
+	}
+	if (ch == "(") {
+		pos[0]++;
+		const v = whenOr(s, pos, lane);
+		whenSkip(s, pos);
+		if (s.charAt(pos[0]) != ")") { throw new Error("when condition: expected ) in " + s); }
+		pos[0]++;
+		return v;
+	}
+	const name = whenName(s, pos);
+	if (name == "") { throw new Error("when condition: expected a flag name in " + s); }
+	return name == lane;
+}
+
+function whenAnd(s: string, pos: int32[], lane: string): boolean {
+	let v = whenNot(s, pos, lane);
+	whenSkip(s, pos);
+	while (s.slice(pos[0], pos[0] + 2) == "&&") {
+		pos[0] += 2;
+		const r = whenNot(s, pos, lane);
+		v = v && r;
+		whenSkip(s, pos);
+	}
+	return v;
+}
+
+function whenOr(s: string, pos: int32[], lane: string): boolean {
+	let v = whenAnd(s, pos, lane);
+	whenSkip(s, pos);
+	while (s.slice(pos[0], pos[0] + 2) == "||") {
+		pos[0] += 2;
+		const r = whenAnd(s, pos, lane);
+		v = v || r;
+		whenSkip(s, pos);
+	}
+	return v;
+}
+
+test "a generated when condition has the wanted value on every backend and uses no unsupported form" {
+	for (let seed = 1; seed <= 150; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		for (const want of [true, false]) {
+			const text = g.metaCond(want, 0);
+			assert !text.contains("true") && !text.contains("false") && !text.contains(">") && !text.contains("<");
+			for (const lane of ["c", "js", "raiser"]) {
+				const pos = [0];
+				assert whenOr(text, pos, lane) == want;
+				assert pos[0] == text.length;
+			}
+		}
+	}
+}
+
+test "a when chain assigns its live arm and keeps a dropped arm out of the plain side" {
+	const f = withWeights("fams=meta types=int32 stmts=8 w.stmt.fam=80 w.meta.block=0 w.meta.fn=0 w.meta.macro=0 w.meta.jsx=0 w.meta.inline=0 w.meta.decor=0");
+	let chains = 0;
+	let dead = 0;
+	let live = [0, 0, 0, 0];
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			const t = line.trim();
+			if (!t.startsWith("when (")) { continue; }
+			chains++;
+			if (t.contains("metaMissing") || t.contains("\"text\" as")) { dead++; }
+			let arms = 0;
+			let at = t.indexOf("when (");
+			while (at >= 0) {
+				arms++;
+				at = t.indexOf("when (", at + 5);
+			}
+			live[arms - 1 < 3 ? arms - 1 : 3]++;
+		}
+	}
+	assert chains > 20 && dead > 5;
+	assert live[0] > 0 && live[1] > 0;
+}
+
+function identCode(code: int32): boolean {
+	return (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || (code >= 48 && code <= 57) || code == 95;
+}
+
+function usesName(text: string, prefix: string): boolean {
+	let at = text.indexOf(prefix);
+	while (at >= 0) {
+		const identBefore = at > 0 && identCode(text.charCodeAt(at - 1));
+		const digitAfter = at + prefix.length < text.length && text.charCodeAt(at + prefix.length) >= 48 && text.charCodeAt(at + prefix.length) <= 57;
+		if (!identBefore && digitAfter) { return true; }
+		at = text.indexOf(prefix, at + 1);
+	}
+	return false;
+}
+
+test "a comptime function and a macro operand read no global and call no generated function" {
+	const f = withWeights("fams=meta types=int32,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.meta.block=0 w.meta.macro=0 w.meta.jsx=0 w.meta.when=0 w.meta.inline=0 w.meta.decor=0");
+	let bodies = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		let at = text.indexOf("@comptime function metaFn");
+		while (at >= 0) {
+			const end = text.indexOf("\n}\n", at);
+			const body = text.slice(at, end);
+			assert !usesName(body, "g") && !usesName(body, "f");
+			assert !body.contains("(q") && !body.contains("BoxG") && !body.contains("function* ");
+			bodies++;
+			at = text.indexOf("@comptime function metaFn", end);
+		}
+	}
+	assert bodies > 10;
+}
+
+test "a meta routine restores the scope, entities and budget of the function around it" {
+	for (let seed = 1; seed <= 24; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Int64, Ty.Float64];
+		g.stmtMax = 8;
+		g.depthMax = 3;
+		g.exprMax = 4;
+		g.tripMax = 4;
+		g.fams = [Fam.Meta, Fam.Closure, Fam.Own];
+		g.w = withWeights("w.stmt.fam=80 w.expr.fam=60").w;
+		g.globals = [{ name: "g0", ty: Ty.Int8, writable: true }];
+		g.fn(0);
+		assert g.cost <= FN_COST_CAP;
+		assert g.mult == (1 as int64);
+		assert g.scope.length == g.fns[0].params.length;
+		assert g.ents.length == 0;
+		assert g.fams.length == 3;
+		assert g.globals.length == 1;
+		assert g.fns.length == 1;
+		assert g.bodyDepth == 0 && g.elseArms == 0 && g.arithInElse == 0 && !g.atTop;
+	}
+}
+
+test "a quote splices a whole call argument nowhere" {
+	const f = withWeights("fams=meta stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	let splices = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (!line.contains("quote {")) { continue; }
+			let at = line.indexOf("${");
+			while (at >= 0) {
+				splices++;
+				assert at == 0 || line.charAt(at - 1) != ",";
+				assert at < 2 || line.charAt(at - 1) != "(" || !identCode(line.charCodeAt(at - 2));
+				at = line.indexOf("${", at + 2);
+			}
+		}
+	}
+	assert splices > 50;
 }
