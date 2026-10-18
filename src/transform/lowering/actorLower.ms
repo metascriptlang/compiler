@@ -26,6 +26,7 @@ import {
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf } from "../../checker/types";
+import { ctorRoutineFor } from "../../checker/ctorRoutine";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
@@ -683,7 +684,9 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 				nameLocation: loc,
 			}, syntheticToken(loc));
 			// Build proper Function type with actor Ref as first param (codegen needs it for Watchdog* this)
-			const actorRefType = createRef(createStruct(name, [], [], true));
+			const actorBody = createStruct(name, [], [], true);
+			actorBody.sym = lowered.actorSym;
+			const actorRefType = createRef(actorBody);
 			const ctorTypeChildren: Type[] = [actorRefType];
 			if (m.nodeType != null && m.nodeType.typeChildren != null) {
 				for (const tc of m.nodeType.typeChildren) ctorTypeChildren.push(tc);
@@ -984,6 +987,7 @@ function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: T
 			ctorDefaults: [],
 		}, syntheticToken(loc));
 		ctor.nodeType = createFunction([], [], voidType());
+		ctor.resolvedSym = ctorRoutineFor(ctx.checkerCtx, actor.actorSym);
 		ctor.paramSyms = [mintSym(ctx, SymbolKind.Parameter, "this", actorType)];
 		d.classBody.push(ctor);
 	}

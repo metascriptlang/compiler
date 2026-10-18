@@ -1,5 +1,5 @@
 import { errorCount } from "../handoff/helpers";
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJSWithStd } from "../helpers";
 
 const BRAND = "type Brand661<T> = T;\nfunction mk661<T>(o: T): Brand661<T> { return o; }\n";
 
@@ -9,7 +9,7 @@ function emitC(src: string): string {
 }
 
 function emitJs(src: string): string {
-	const r = compileToJS(src);
+	const r = compileToJSWithStd(src);
 	return r.ok ? r.value : "error: " + r.error;
 }
 

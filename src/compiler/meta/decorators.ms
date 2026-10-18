@@ -13,7 +13,7 @@ import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecorate
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
 import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators, resolveDecoratorSymbol } from "../../checker/decoratorHelpers";
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
-import { lookupModuleCtx } from "../../checker/instantiate";
+import { declaringModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { fieldInitAssignment } from "../../transform/lowering/ctorLower";
 import { parseSource } from "../../parser/statements/validation";
@@ -29,6 +29,29 @@ import { vmReleaseHeaps } from "../../raiser/vm";
 import { nodeToValue, valueToExpansion, takeWireRefusals } from "./bridge";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { forEachChild } from "../../ast/visitor";
+
+// The names the wrapper binds; a decorator body placed inside it must not see them.
+const wrapperBindings = ["value", "kind", "name", "isStatic", "isPrivate", "metaKeys", "metaValues", "inheritedKeys", "inheritedValues", "init", "sink", "get", "set", "has", "__dec", "r0", "r"];
+const decoratorBodyName = "$dec:__dec";
+
+function wrapperName(name: string): string {
+	return wrapperBindings.includes(name) ? "$dec:" + name : name;
+}
+
+function gensymWrapper(node: Node): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
+		const id = node.data as IdentifierData;
+		id.name = wrapperName(id.name);
+	} else if (node.kind == NodeKind.VariableDecl) {
+		const vd = node.data as VariableDeclData;
+		vd.declName = wrapperName(vd.declName);
+	} else if (node.kind == NodeKind.FunctionDecl) {
+		const fd = node.data as FunctionDeclData;
+		fd.params = fd.params.map((p: string): string => wrapperName(p));
+	}
+	forEachChild(node, gensymWrapper);
+}
 
 function rebaseLocations(node: Node, loc: SourceLocation): void {
 	if (node == null) return;
@@ -324,7 +347,7 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const dd = member.data as DecoratedDeclData;
 			const inner = dd.decoratedNode;
 			if (inner == null || memberCategory(inner) != category) continue;
-			recordFieldDecorators(planClassSymbol(ctx, plan), dd);
+			recordFieldDecorators(planClassSymbol(plan), dd);
 			const stmts: Node[] = [];
 			const inits: MemberInits = { fieldName: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "", isStatic: category == 0 || category == 2, stmts: stmts };
 			plan.activeInits = inits;
@@ -395,11 +418,9 @@ function kindLabel(kind: NodeKind): string {
 }
 
 function declaringCtx(ctx: CheckerContext, sym: Symbol): CheckerContext {
-	if (sym.modulePath != "" && sym.modulePath != ctx.modulePath) {
-		const other = lookupModuleCtx(sym.modulePath);
-		if (other != null) return other;
-	}
-	return ctx;
+	const declCtx = declaringModuleCtx(ctx, sym);
+	if (declCtx == null) throw new Error(`internal: decorator '${sym.name}' is declared in '${sym.modulePath}', which has no checked scope`);
+	return declCtx;
 }
 
 function arrowReturnText(t: string): string {
@@ -430,15 +451,11 @@ function containsArrow(t: string): boolean {
 	return false;
 }
 
-function declaringName(sym: Symbol): string {
-	return sym.name;
-}
-
-function macroDeclNode(regCtx: CheckerContext, sym: Symbol): Node {
-	if (sym.declNode != null && sym.declNode.kind == NodeKind.MacroDecl) return sym.declNode;
-	const ds = lookupSymbol(regCtx.table, declaringName(sym));
-	if (ds != null && ds.declNode != null && ds.declNode.kind == NodeKind.MacroDecl) return ds.declNode;
-	return null as unknown as Node;
+function macroDeclNode(sym: Symbol): Node {
+	if (sym.declNode == null || sym.declNode.kind != NodeKind.MacroDecl) {
+		throw new Error(`internal: macro '${sym.name}' reaches the decorator expander without its declaration node`);
+	}
+	return sym.declNode;
 }
 
 function macroDeclReturnRaw(decl: Node): string {
@@ -543,7 +560,7 @@ function calleeName(call: Node): string {
 }
 
 function buildCallee(sym: Symbol, md: MacroInvocationData, isMacro: boolean, isFactory: boolean, loc: SourceLocation): Node {
-	let callee: Node = createNodeAt(NodeKind.Identifier, { name: isMacro ? "__dec" : sym.name }, loc);
+	let callee: Node = createNodeAt(NodeKind.Identifier, { name: isMacro ? decoratorBodyName : sym.name }, loc);
 	if (isFactory) {
 		const factoryArgs: Node[] = [];
 		for (const a of md.macroArgs) factoryArgs.push(cloneNodeForCheck(a));
@@ -571,7 +588,7 @@ function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInv
 			paramList = paramList + params[i];
 			if (i < types.length && types[i] != "") paramList = paramList + ": " + types[i];
 		}
-		macroBody = callMacroBodyPreparer(cloneNodeForCheck(macroDecl.macroDeclBody), ctx, sym, declaringName(sym));
+		macroBody = callMacroBodyPreparer(cloneNodeForCheck(macroDecl.macroDeclBody), ctx, sym, sym.name);
 	}
 	const arity = decoratorArity(sym, decl, isMacro, isFactory);
 	const pr = parseSource(wrapperSource(isMacro, paramList, shape, arity));
@@ -581,12 +598,13 @@ function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInv
 	}
 	const program = pr.value;
 	rebaseLocations(program, loc);
+	gensymWrapper(program);
 	const fn = (program.data as ProgramData).programStmts[0];
 	const stmts = ((fn.data as FunctionDeclData).fnBody.data as BlockStmtData).statements;
 	for (const st of stmts) {
 		if (st.kind != NodeKind.VariableDecl) continue;
 		const vd = st.data as VariableDeclData;
-		if (vd.declName == "__dec" && macroBody != null && vd.initializer != null && vd.initializer.kind == NodeKind.ArrowFunction) {
+		if (vd.declName == decoratorBodyName && macroBody != null && vd.initializer != null && vd.initializer.kind == NodeKind.ArrowFunction) {
 			(vd.initializer.data as ArrowFunctionData).arrowBody = macroBody;
 		} else if (vd.initializer != null && vd.initializer.kind == NodeKind.CallExpr && calleeName(vd.initializer) == "__callee__") {
 			(vd.initializer.data as CallExprData).callee = buildCallee(sym, md, isMacro, isFactory, loc);
@@ -638,7 +656,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const isMacro = sym.symbolKind == SymbolKind.Macro;
 	const isFactory = md.macroHasParens;
 	const regCtx = declaringCtx(ctx, sym);
-	const decl = isMacro ? macroDeclNode(regCtx, sym) : (null as unknown as Node);
+	const decl = isMacro ? macroDeclNode(sym) : (null as unknown as Node);
 	if (!isMacro && (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function)) ensureShaped(sym, regCtx);
 	const shape = isMacro
 		? classifyReturnText(macroReturnText(decl, isFactory))
@@ -830,15 +848,15 @@ function injectIntoConstructor(plan: ClassPlan, stmts: Node[]): void {
 	body.statements = merged;
 }
 
-function planClassSymbol(ctx: CheckerContext, plan: ClassPlan): Symbol {
+function planClassSymbol(plan: ClassPlan): Symbol {
 	const sym = plan.classNode.resolvedSym;
-	if (sym != null) return sym;
-	return lookupSymbol(ctx.table, plan.className);
+	if (sym == null) throw new Error(`internal: class '${plan.className}' reached decorator application without its symbol`);
+	return sym;
 }
 
 function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
 	if (plan.metaKeys.length > 0) {
-		const sym = planClassSymbol(ctx, plan);
+		const sym = planClassSymbol(plan);
 		if (sym != null) {
 			sym.metaKeys = plan.metaKeys;
 			sym.metaValues = plan.metaValues;

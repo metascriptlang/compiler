@@ -57,6 +57,7 @@ function wrapFuncArgsAsThunks(node: Node): void {
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		const arg = cd.arguments[i];
 		if (arg.flags.has(NodeFlag.Closure)) continue;
+		if (i < calleeType.typeChildren.length && calleeType.typeChildren[i].kind == TypeKind.Ptr) continue;
 		let argType = arg.nodeType;
 		if (argType == null && arg.resolvedSym != null && arg.resolvedSym.symbolKind == SymbolKind.Function) {
 			argType = arg.resolvedSym.symbolType;
@@ -92,7 +93,7 @@ function getCalleeType(cd: CallExprData): Type | null {
 }
 
 // ===== Tests =====
-import { createFunction, createClosureType, numberType, voidType } from "../../checker/types";
+import { createFunction, createClosureType, numberType, voidType, createPtr } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { createNode } from "../../ast/node";
 import { makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeCall, makeMember } from "../util";
@@ -111,6 +112,7 @@ function wrapProgram(stmts: Node[]): Node {
 function makeTestCall(sym: Symbol, calleeType: Type): { prog: Node, call: Node } {
 	const loc = makeLoc(0, 0);
 	const callee = makeTypedIdentResolved(sym, calleeType, loc);
+	callee.nodeType = calleeType;
 	const callNode = makeCall(callee, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	const prog = wrapProgram([exprStmt]);
@@ -170,6 +172,30 @@ test "Named function callee stays direct" {
 	const t = makeTestCall(sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
 	assert isDirect(t.call) == true;
+}
+
+function callWithFunctionArg(formal: Type): { prog: Node, call: Node } {
+	const loc = makeLoc(0, 0);
+	const routineType = createFunction([numberType()], [], voidType());
+	const routine = makeIdentResolved(makeSymbol("dispatch", SymbolKind.Function, routineType, false), loc);
+	routine.nodeType = routineType;
+	const calleeType = createFunction([formal], ["fn"], voidType());
+	const callee = makeTypedIdentResolved(makeSymbol("register", SymbolKind.Function, calleeType, false), calleeType, loc);
+	const callNode = makeCall(callee, [routine], loc);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
+	return { prog: wrapProgram([exprStmt]), call: callNode };
+}
+
+test "A named function passed to a pointer formal stays the function's address" {
+	const t = callWithFunctionArg(createPtr(voidType()));
+	markClosureCalls(t.prog, makeCtx());
+	assert (t.call.data as CallExprData).arguments[0].kind == NodeKind.Identifier;
+}
+
+test "A named function passed to a closure formal becomes a thunk" {
+	const t = callWithFunctionArg(createClosureType([numberType()], [], voidType()));
+	markClosureCalls(t.prog, makeCtx());
+	assert (t.call.data as CallExprData).arguments[0].kind == NodeKind.ObjectLiteral;
 }
 
 test "Synthesized callee without a symbol stays direct" {

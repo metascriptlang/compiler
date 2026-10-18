@@ -1763,6 +1763,14 @@ union stays whole and a call on it is rejected. Inside the branch the narrowed v
 directly as an operand, callee, condition or receiver; no `as` is needed (an explicit
 `v as int32` remains a no-op there).
 
+Separate `if (typeof x === "...")` branches each test the original stored union tag
+after the preceding branch rejoins; narrowing a read never changes the storage
+representation. `src/test/corpus/programs/sequentialTypeof.ms` printed
+`n:8 s:hi b:yes b:no` with `./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/sequentialTypeof.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/sequentialTypeof.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/sequentialTypeof.ms`
+(source tree `80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`).
+
 ### Struct Field Type Checking
 
 Object literal construction validates field types against the expected struct type (Gap 1).
@@ -2011,6 +2019,9 @@ an alias too), `spawn(work)` with `async function work()` is refused at the call
 `await work()` or `await spawn(() => workSync())`, and an async body whose return is itself a
 promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
 flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
+
+`await` takes a thenable as TypeScript does, through the `then` protocol (see
+["`then` — thenable adoption"](#then--thenable-adoption)).
 
 #### Promise Chaining (.then / .catch / .finally)
 
@@ -3497,6 +3508,23 @@ const p: Person = { name: "Alice", age: 30 };
 p.toString()              // plain JSON (no colors)
 ```
 
+Dynamic-array `.toString()` uses comma-separated element text. An empty array
+becomes `""`; an empty nested array or `null` element leaves an empty field
+between separators; a declared element `toString` takes precedence. The
+portable declaration is `std/core/array/shared.ms` `toString`. On source tree
+`80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`, the three commands
+`./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/arrayText.ms`
+each printed `1,2,3|ab,c||1,2,,3|a,,b|label:x,label:y`.
+
+`String(xs)` and `` `${xs}` `` use that same checked method. On tree
+`4e18eddad4d988ba10db163a62ddd34142cdd369`,
+`./msc-n2s-static-stage2 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-static-stage2 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-static-stage2 run --target=raiser src/test/corpus/programs/arrayText.ms`
+also printed `1,2,3 1,2,3 1,2,,3 1,2,,3 a,,b a,,b label:x,label:y label:x,label:y`.
+
 #### Custom String Format via Extension Methods
 
 Override the default format for any type by defining a `toString` extension method:
@@ -3594,6 +3622,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+| `then(this T, onFulfilled: (v: U) => void, onRejected?: (e: Error) => void): void` | `x` → `promiseFromThenable(x, …)`, a `Promise<U>` | T meets a site where a promise adopts a value: `await`, an async function's return, `Promise.resolve`, an element of `Promise.all`/`race`/`any` |
 
 **Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter
 to `U` for a slot of type `U`, for `as U` and for an operand beside a `U`, `toItems` for `for..of` — and
@@ -3649,6 +3678,47 @@ path (store it in a local first). Corpus `orderingThroughValueOf` runs every acc
 Consequences: `const c2 = count`, `id(count)`, `[count]`, `nn ?? count` and `() => count` in a
 `() => Accessor<T>` slot keep the accessor; `console.log(count)` and `String(count)` print the handle
 (write `${count}` or `count.toString()`); `typeof count` inspects the handle.
+
+##### `then` — thenable adoption
+
+A type with a `then` that takes a callback is a thenable, and every site where a promise adopts a
+value adopts it as the `Promise<U>` its `then` describes, `U` being the parameter of `onFulfilled`:
+
+```ms
+class Deferred {
+	then(onFulfilled: (v: int32) => void, onRejected: (e: Error) => void): void { ... }
+}
+
+const a = await new Deferred();                                     // int32
+async function load(): Promise<int32> { return new Deferred(); }    // settles with what then delivers
+const p = Promise.resolve(new Deferred());                          // Promise<int32>
+const all = await Promise.all([new Deferred(), fetchCount()]);     // int32[]
+```
+
+The name is JavaScript's, as `toString` and `valueOf` keep theirs, because its sites are JavaScript's
+thenable-adoption sites. A type opts in with a method, an inherited method, a function-typed field (an
+interface member too), or an extension; an extension counts only on the type its receiver names, so a
+generic `then<T>(this x: T, ...)` makes no type a thenable. Strings and primitives never are.
+
+At every site `then` is called from a queued job, after the caller's next statement, never inside the
+adopting expression; `onFulfilled` settles with its argument, `onRejected` and a throwing `then` reject
+with the error, and only the first settlement counts. Corpus `awaitUserThenable`, `awaitThenableOrder`,
+`thenableAdoptionSites`, `thenableCombinators` and `thenableAdoptionOrder` run the shapes on C and JS.
+
+Refused, each at its site with the reason:
+
+- a `then` whose `onFulfilled` receives something awaitable (a promise or another thenable): a promise
+  never holds a promise; or receives a type parameter: declare the type its callback receives;
+- a `then` whose first parameter is not a callback, or whose `onRejected` takes something other than
+  `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
+- `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
+  instantiated with one): write `Promise<U>`;
+- `return thenable` inside a `try` that has a catch or finally, since the catch would not see the
+  rejection: write `return await`;
+- a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
+  what the callback returns;
+- an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
+  promise; and a combinator over a `Thenable[]` variable: thenables are adopted from an array literal.
 
 ##### `getDynamicField` — opt-in dynamic member access
 

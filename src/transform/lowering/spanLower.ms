@@ -20,7 +20,7 @@ import { containsConditionalEval } from "./callHoist";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull, makeHiddenStdConv, runtimeRef,
+	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, generatedRef,
 } from "../util";
 import { overloadWinner } from "../../checker/symbol";
 
@@ -67,7 +67,7 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 					}
 
 					if (srcType.kind == TypeKind.Array) {
-						const elems = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						const elems = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
 						elems.nodeType = createPtr(spanTarget.typeReturn);
 						const dataExpr = makeHiddenStdConv(elems, spanDataPtr(spanTarget.typeReturn), loc);
 						const lenExpr = makeMember(secondRead(d.convExpr), "length", loc);
@@ -79,7 +79,7 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
 						// String -> Span<char>: { data: msArrDataOr0(str.p), len: str.len }
-						const bytes = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						const bytes = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
 						bytes.nodeType = createPtr(spanTarget.typeReturn);
 						const dataExpr2 = makeHiddenStdConv(bytes, createPtr(spanTarget.typeReturn), loc);
 						const lenExpr2 = makeMember(secondRead(d.convExpr), "len", loc);

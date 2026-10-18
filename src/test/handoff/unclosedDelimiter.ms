@@ -1,4 +1,4 @@
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJS, compileToJSBare } from "../helpers";
 
 function refusedOnBoth(source: string, expected: string): string {
 	const c = compileToC(source);
@@ -41,6 +41,6 @@ test "unclosedDelimiter: the same shapes closed compile on C and JS" {
 	const source = PRELUDE + "console.log(\"a \" + xs.join(\",\"));\nconst r = f(g(1));\nconst c = new C(1);\nconst ys = [1, 2];\nconst p = (1 + 2);\nconst q = xs[0];\nconst o = { a: 1, b: 2 };\nconsole.log(`${r} ${c.x} ${ys.length} ${p} ${q} ${o.a}`);\n";
 	const c = compileToC(source);
 	assert c.ok, c.ok ? "" : c.error;
-	const js = compileToJS(source);
+	const js = compileToJSBare(source);
 	assert js.ok, js.ok ? "" : js.error;
 }

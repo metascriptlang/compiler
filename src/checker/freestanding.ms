@@ -130,7 +130,7 @@ function moduleBindingOf(node: Node): Node | null {
 
 export function moduleBindingNeedsWritableStorage(node: Node): boolean {
 	const binding = moduleBindingOf(node);
-	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.modulePath == "") return false;
+	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.declNode == null) return false;
 	if (!hasFlag(binding.resolvedSym, SymbolFlag.Global)) return false;
 	const d = binding.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const) return true;
@@ -258,8 +258,15 @@ function fsVariable(name: string, kind: DeclKind, initializer: Node): Node {
 	}, fsLoc());
 	const sym = makeSymbol(name, SymbolKind.Variable, null, false);
 	sym.modulePath = "test.ms";
+	sym.declNode = node;
 	setFlag(sym, SymbolFlag.Global);
 	node.resolvedSym = sym;
+	return node;
+}
+
+function fsLowered(name: string, kind: DeclKind, initializer: Node): Node {
+	const node = fsVariable(name, kind, initializer);
+	node.resolvedSym.declNode = null as unknown as Node;
 	return node;
 }
 
@@ -281,6 +288,12 @@ test "freestanding: surviving writable module bindings are collected through wra
 	assert hits.length == 2;
 	assert hits[0] == writableLet;
 	assert hits[1] == nonConstant;
+}
+
+test "freestanding: a binding the compiler lowered into the module is not the author's" {
+	const hoisted = fsLowered("__call_0", DeclKind.Const, fsCall());
+	const counter = fsLowered("__lhs_1", DeclKind.Let, fsNumber(0));
+	assert collectWritableModuleBindings(fsProgram([hoisted, counter])).length == 0;
 }
 
 test "freestanding: scalar module const literals need no writable storage" {

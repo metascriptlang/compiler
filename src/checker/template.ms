@@ -18,7 +18,7 @@ import {
 	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, VariableDeclData,
 	ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData,
 	MatchCaseData, SpliceManyData,
-	Type, TypeKind, Symbol, createNodeAt,
+	Type, TypeKind, Symbol, createNodeAt, NodeFlag,
 } from "../ast/node";
 import { CheckerContext, addError, extractGenericNames } from "./context";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
@@ -165,6 +165,7 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	if (expandedExpr.typeArg != "") callNode.typeArg = expandedExpr.typeArg;
 	callNode.nodeType = expandedExpr.nodeType;
 	callNode.resolvedSym = expandedExpr.resolvedSym;
+	callNode.flags = callNode.flags.has(NodeFlag.Parenthesized) ? expandedExpr.flags.incl(NodeFlag.Parenthesized) : expandedExpr.flags;
 
 	return expandedExpr.nodeType != null ? expandedExpr.nodeType : inferredType();
 }

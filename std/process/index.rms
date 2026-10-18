@@ -1,9 +1,8 @@
 // std/process — Raiser tier. Same surface as index.cms: kernels are host
 // bridges (hostTable.ms), everything else is portable MS carried verbatim.
-// exit() is the one exception — Tier 0, not Tier 1: the call site is
-// intercepted by the Raiser codegen and emits Halt (Nim's VM likewise has
-// no quit op), so the declaration below exists for the checker only,
-// mirroring the push/setLength pattern.
+// exit() is the one exception — Tier 0, not Tier 1: its `Exit` tag makes the
+// Raiser codegen emit Halt at the call site, so the declaration below exists
+// for the checker only.
 
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
@@ -28,8 +27,8 @@ extern function msProcSpawnGetOk(): int32 from "msProcSpawnGetOk";
 extern function msProcSpawnGetPipeOk(): int32 from "msProcSpawnGetPipeOk";
 extern function msProcSpawnGetErrno(): int32 from "msProcSpawnGetErrno";
 
-// Intercepted by the codegen to Halt(code) — never executed as a call.
-export function exit(code: number): void {}
+@builtin("Exit")
+export extern function exit(code: number): never;
 
 export const argv: string[] = msProcessArgv();
 

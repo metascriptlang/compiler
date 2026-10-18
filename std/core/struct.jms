@@ -59,7 +59,9 @@ export extern function toItems<K, V>(this m: HashMap<K, V>): K[] from "Array.fro
 export extern function toPairs<K, V>(this m: HashMap<K, V>): Array<[K, V]> from "Array.from(#.entries())";
 export extern function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: K) => void): void from "#.forEach(#)";
 
+@builtin("MapFromPairs")
 export extern function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
+@builtin("MapFromPairs")
 export extern function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
 
 @builtin("StdSet")
@@ -138,6 +140,7 @@ export function toString<E>(this self: BitSet<E>): string {
 }
 
 
+@compilerFunc
 export function msSetCard32(v: uint32): int32 {
 	let n: uint32 = v;
 	let c: int32 = 0;

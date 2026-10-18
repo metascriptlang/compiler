@@ -97,7 +97,7 @@ function unwrapCallArguments(node: Node): Node {
 	const d = node.data as CallExprData;
 	const kind = callBuiltinKind(node);
 	const sym = d.callee.resolvedSym;
-	const echo = kind == "Echo" || kind == "ToString" || isRuntimeProcCall(node, "msPrintln") || (sym != null && sym.nativeName == "msStringFromValue");
+	const echo = kind == "Echo" || kind == "ToString" || kind == "UnionText" || kind == "UnionDebug" || isRuntimeProcCall(node, "msPrintln") || (sym != null && sym.nativeName == "msStringFromValue");
 	if (sym == null && !echo) return node;
 	const formals = sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && sym.nativeName != "" ? sym.symbolType.typeChildren : null;
 	for (let i = 0; i < d.arguments.length; i += 1) {

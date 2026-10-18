@@ -1,32 +1,6 @@
-// Method → Function Lowering — convert class methods into top-level functions.
-//
-// Why: at the C/Raiser ABI level, a class method is just a function that takes
-// the receiver as its first param. The user-facing call site has already been
-// rewritten by `extensionMethodLower` (`b.count(items)` → `count(b, items)`),
-// so by the time we run, no consumer needs the method to live on the class
-// any more. Lifting MethodDecl → FunctionDecl at module top-level gives every
-// downstream pass (lambdaLifting, dce, codegen) a single uniform shape to
-// reason about — no parallel `genMethodAsFunction` path that drifts from
-// `genFunctionDecl` (Bug 9 was exactly that drift).
-//
-// Ref parity: the reference synthesises dispatcher procs pre-codegen, then
-// dispatches `skProc | skFunc | skMethod | …` through the same `genProc`.
-// We do the equivalent — produce FunctionDecl, codegen only sees FunctionDecl.
-//
-// Scope (this pass): instance + static methods AND constructors. The
-// constructor body lifts to a top-level `<Class>_init(this, ...)` function;
-// no `_new` wrapper is synthesised — the C codegen NewExpr handler inlines
-// `alloc + _init(this, args)` at the call site (matches the inline pattern
-// already used for class-without-ctor and matches Nim's `genObjConstr`).
-//
-// JS backend: NOT applied. JS keeps `class Foo { ... }` native because its
-// class semantics map 1:1 with what we want at the source level (single
-// dispatch on `this`, prototype chain). The transform is wired in the
-// `!jsBackend` branch of the pipeline.
-
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
-import { makeSymbol, setFlag, SymbolFlag, initFnName, registerCtorInit } from "../../checker/symbol";
+import { setFlag, SymbolFlag, initFnName, makeSymbol } from "../../checker/symbol";
 import { newSym } from "../../checker/context";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { declGenericParams } from "../../checker/types";
@@ -77,12 +51,6 @@ function methodToFunctionDecl(methodNode: Node): Node {
 // Synthesize a `<Class>_init(this, ...)` FunctionDecl from a ConstructorDecl.
 // The ctor body becomes the function body; `this` is prepended as the first
 // parameter so the function shape mirrors any other instance method.
-//
-// We synthesise a fresh Symbol (kind=Function, Exported flag) because the
-// ConstructorDecl never had its own resolvedSym — its types/defaults were
-// stamped onto the class symbol, which is SymbolKind.Class and not appropriate
-// for a callable. Defaults are receiver-aligned (null prepended) the same way
-// `collectClassMethod` aligns method defaults.
 function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: Node, ctx: TransformContext): Node {
 	const cd = ctorNode.data as ConstructorDeclData;
 	const className = (classNode.data as ClassDeclData).className;
@@ -131,19 +99,14 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	} else {
 		fnNode.nodeType = createFunction([], newParams, voidType());
 	}
-	// Synthesize a Symbol so `genFunctionDecl` treats this as exported (cross-module
-	// callable) and `mangledFunctionName` produces the same name shape as method
-	// lifts. mutatedParams is left at 0 — ctor params don't currently feed
-	// param-mutation analysis (it runs over functions' bodies, not ctors). If
-	// that becomes a problem, propagate the bitfield here from the class symbol.
-	const initSym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, SymbolKind.Function, initName, fnNode.nodeType) : makeSymbol(initName, SymbolKind.Function, fnNode.nodeType, false);
-	if (ctx.checkerCtx != null && classNode.resolvedSym != null) registerCtorInit(classNode.resolvedSym, className, ctorNode.nodeType != null ? ctorNode.nodeType : createFunction([], [], voidType()), initSym);
+	const initSym = ctorNode.resolvedSym;
+	if (initSym == null) throw new Error(`internal: constructor of '${className}' reached lowering without its routine symbol`);
+	initSym.symbolType = fnNode.nodeType;
 	setFlag(initSym, SymbolFlag.Exported);
 	setFlag(initSym, SymbolFlag.ClassInit);
 	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(classNode.resolvedSym, className));
 	initSym.location = ctorNode.location;
 	initSym.declNode = fnNode;
-	if (defaults.length > 0) initSym.defaultParams = defaults;
 	fnNode.resolvedSym = initSym;
 	fnNode.flags = ctorNode.flags;
 	fnNode.variantSlot = ctorNode.variantSlot;

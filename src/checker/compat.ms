@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -135,7 +135,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	}
 	if (source.kind == TypeKind.Struct) {
 		if (source == target) return false;
-		if (source.typeName != "" && source.typeName == target.typeName) return false;
+		if (sameNominal(source, target)) return false;
 		const sNames = source.typeNames;
 		const sChildren = source.typeChildren;
 		const tChildren = target.typeChildren;
@@ -436,7 +436,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				}
 				if (source.typeReturn != null && target.typeReturn != null
 					&& source.typeReturn.kind != TypeKind.GenericInstance
-					&& sameNominal(source.typeReturn, target.typeReturn)) {
+					&& (sameNominal(source.typeReturn, target.typeReturn) || isOwnGenericBase(source.typeReturn, target.typeReturn))) {
 					return true;
 				}
 				return isAssignable(source.typeReturn, target.typeReturn);
@@ -444,7 +444,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum => sameNominal(source, target),
-			TypeKind.Distinct | TypeKind.Module => source.typeName == target.typeName,
+			TypeKind.Distinct => sameDistinct(source, target),
+			TypeKind.Module => source.typeName == target.typeName,
 			TypeKind.EnumLiteral => sameEnumMember(source, target),
 			TypeKind.GenericInstance => {
 				if (!sameGenericBase(source, target)) {
@@ -630,7 +631,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	// EnumLiteral → Enum (subtype: NodeKind.BinaryExpr assignable to NodeKind)
 	if (source.kind == TypeKind.EnumLiteral && target.kind == TypeKind.Enum) {
-		return source.typeName == target.typeName;
+		return source.typeReturn != null && sameNominal(source.typeReturn, target);
 	}
 	// Enum → EnumLiteral is NOT allowed (would lose specificity) — fall through to false
 	// Enum/EnumLiteral → Number/Int32 (enums are ints at runtime)
@@ -653,6 +654,35 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// (Target-is-union check moved earlier — see above the Ref auto-deref branch.)
 
 	return false;
+}
+
+export function structuralMemberIndex(formal: Type, exprType: Type): int32 {
+	if (!isTagCarriedUnion(formal) || isPrimitiveUnionMember(exprType)) return -1;
+	let found: int32 = -1;
+	let ci: int32 = 0;
+	for (const child of formal.typeChildren) {
+		if (child == null || child.kind == TypeKind.Null) return -1;
+		if (sameType(child, exprType)) {
+			if (found >= 0) return -1;
+			found = ci;
+		}
+		ci += 1;
+	}
+	return found;
+}
+
+// `A | null` meeting `A | B | null`: the same subtyping one level down, under
+// the Maybe carrier. Returns the payload's slot in the wider union, or -1.
+export function maybePayloadWidenSlot(source: Type | null, target: Type | null): int32 {
+	if (source == null || target == null || !isMaybeType(target)) return -1;
+	const narrow = isMaybeType(source) ? source.typeReturn : unwrapRefNullUnion(source);
+	const wide = target.typeReturn;
+	if (narrow == null || wide == null) return -1;
+	if (wide.kind != TypeKind.Union || wide.typeChildren == null) return -1;
+	if (narrow.kind == TypeKind.Union && !isAllStringLiteralUnion(narrow)) return -1;
+	if (unwrapRefNullUnion(wide) != null) return -1;
+	const vi = variantIndexInUnion(wide, unwrapRef(narrow));
+	return vi >= 0 ? vi : structuralMemberIndex(wide, narrow);
 }
 
 function isUnionAssignable(source: Type, target: Type): boolean {
@@ -1155,7 +1185,14 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
+function sameDistinct(a: Type, b: Type): boolean {
+	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
+	return sameNominal(a, b);
+}
+
 export function sameNominal(a: Type, b: Type): boolean {
+	if (a == b) return true;
+	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
 	if (a.sym != null && b.sym != null) {
 		if (a.sym == b.sym) return true;
 		return a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
@@ -1164,7 +1201,27 @@ export function sameNominal(a: Type, b: Type): boolean {
 			&& a.sym.location.line == b.sym.location.line
 			&& a.sym.location.column == b.sym.location.column;
 	}
-	return a.typeName != "" && a.typeName == b.typeName;
+	return a.sym == null && b.sym == null && a.kind == b.kind
+		&& a.typeName != "" && a.typeName == b.typeName
+		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren);
+}
+
+// The variant of an enum-discriminated union whose key names the member `lit`
+// denotes; -1 when `lit` is a member of another enum.
+export function findVariantByEnumMember(unionType: Type, lit: Type): int32 {
+	const enumT = unionType.typeExtra;
+	if (enumT == null || enumT.kind != TypeKind.Enum || lit.kind != TypeKind.EnumLiteral
+			|| lit.typeReturn == null || !sameNominal(lit.typeReturn, enumT)) return -1;
+	const member = enumT.typeNames.indexOf(lit.typeNames[0]);
+	if (member < 0) return -1;
+	for (let vi = 0; vi + 1 < unionType.typeNames.length && vi < unionType.typeChildren.length; vi += 1) {
+		if (variantKeyMember(enumT, unionType.typeNames[vi + 1]) == member) return vi;
+	}
+	return -1;
+}
+
+function isOwnGenericBase(base: Type, inst: Type): boolean {
+	return inst.kind == TypeKind.GenericInstance && inst.typeExtra != null && unwrapRefBase(inst.typeExtra) == base;
 }
 
 function sameGenericBase(a: Type, b: Type): boolean {
@@ -1234,6 +1291,7 @@ function sameNameList(a: string[], b: string[]): boolean {
 }
 
 function sameStructType(a: Type, b: Type): boolean {
+	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
 	if (a.typeName != "" || b.typeName != "") return sameNominal(a, b);
 	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
@@ -1255,7 +1313,8 @@ function sameTypeInner(a: Type, b: Type): boolean {
 	return match (a.kind) {
 		TypeKind.Struct => sameStructType(a, b),
 		TypeKind.Enum => sameNominal(a, b),
-		TypeKind.Distinct | TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral
+		TypeKind.Distinct => sameDistinct(a, b),
+		TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral
 			| TypeKind.TypeReference => a.typeName == b.typeName,
 		TypeKind.EnumLiteral => sameEnumMember(a, b),
 		TypeKind.GenericInstance => sameGenericBase(a, b) && sameTypeList(a.typeChildren, b.typeChildren),
@@ -1322,7 +1381,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				return TypeRelation.None;
 			},
 			TypeKind.Enum => sameNominal(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
-			TypeKind.Distinct => formal.typeName == actual.typeName ? TypeRelation.Exact : TypeRelation.None,
+			TypeKind.Distinct => sameDistinct(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
 			// Literal types carry their value in typeName — two different literals
 			// are different types (isAssignable :368/:384, sameType :651).
 			TypeKind.StringLiteral | TypeKind.BooleanLiteral => {
@@ -1465,7 +1524,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// EnumLiteral cross-kind rules:
 	// formal=Enum(K), actual=EnumLiteral(K,A) → Subtype (literal narrows general enum)
 	if (formal.kind == TypeKind.Enum && actual.kind == TypeKind.EnumLiteral) {
-		if (formal.typeName == actual.typeName) return TypeRelation.Subtype;
+		if (actual.typeReturn != null && sameNominal(formal, actual.typeReturn)) return TypeRelation.Subtype;
 		return TypeRelation.None;
 	}
 	// formal=EnumLiteral(K,A), actual=Enum(K) → None (would lose specificity)
@@ -1475,6 +1534,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// EnumLiteral → numeric (enums are ints at runtime)
 	if (actual.kind == TypeKind.EnumLiteral && isNumeric(formal)) {
 		return TypeRelation.IntConv;
+	}
+	if (isMaybeType(formal) && !isMaybeType(actual) && formal.typeReturn != null) {
+		return typeRelation(formal.typeReturn, actual) == TypeRelation.None ? TypeRelation.None : TypeRelation.Subtype;
 	}
 	// Union target: best match
 	if (formal.kind == TypeKind.Union) {
@@ -2338,10 +2400,16 @@ test "complexDisambiguation per-param contradiction returns 0" {
 	assert cmp == 0;
 }
 
+function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
+	const t = createStruct(name, names, types, isValue);
+	t.sym = makeSymbol(name, SymbolKind.Struct, t, false);
+	return t;
+}
+
 test "narrowing a readonly union to a variant is not dropping the view" {
-	const leaf = createRef(createStruct("Leaf", ["v"], [numberType()], false));
-	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
-	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const leaf = createRef(declaredStruct("Leaf", ["v"], [numberType()], false));
+	const pair = declaredStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = declaredStruct("NameData", ["label"], [stringType()], true);
 	const u = createUnion([pair, name]);
 	const view = createReadonlyView(u);
 	assert isReadonlyView(view);
@@ -2351,7 +2419,7 @@ test "narrowing a readonly union to a variant is not dropping the view" {
 }
 
 test "a view assigned into a nullable of itself keeps the view" {
-	const leaf = createRef(createStruct("Leaf", ["v"], [numberType()], false));
+	const leaf = createRef(declaredStruct("Leaf", ["v"], [numberType()], false));
 	const view = createReadonlyView(leaf);
 	const nullableView = createUnion([view, nullType()]);
 	const nullableLeaf = createUnion([leaf, nullType()]);
@@ -2374,7 +2442,7 @@ test "a read-only view reaches a union only through a matching read-only member"
 	const wrongBranch = createUnion([unrelated, writable]);
 	assert !isAssignable(view, wrongBranch);
 	assert dropsReadonlyView(view, wrongBranch);
-	const leaf = createRef(createStruct("UnionLeaf", ["v"], [numberType()], false));
+	const leaf = createRef(declaredStruct("UnionLeaf", ["v"], [numberType()], false));
 	const leafView = createReadonlyView(leaf);
 	assert isAssignable(leafView, createUnion([leafView, stringType()]));
 	assert !isAssignable(leafView, createUnion([leaf, stringType()]));
@@ -2404,4 +2472,63 @@ test "two sets relate as their element types do, and below a generic match they 
 	assert typeRelation(createBitSet(createGenericParam("E")), createBitSet(color)) == TypeRelation.Generic;
 	assert typeRelation(createBitSet(shade), createBitSet(color)) == TypeRelation.None;
 	assert typeRelation(createBitSet(numberType()), createBitSet(createPrimitive(TypeKind.Int32))) == TypeRelation.None;
+}
+
+export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): int32 {
+	if (unionType == null || unionType.typeChildren == null || variantType == null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		if (unionType.typeChildren[i] == variantType) return i;
+	}
+	const target = peelToStruct(variantType);
+	if (target == null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		if (sameType(peelToStruct(unionType.typeChildren[i]), target)) return i;
+	}
+	return -1;
+}
+
+export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
+	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
+	if (exprType.kind != TypeKind.Struct) return primitiveMemberIndexInUnion(formal, exprType);
+	// Identity/name first; a named variant resolves there. Union variants are
+	// often ANONYMOUS object types while the value carries a type ALIAS name
+	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
+	// structural match the object-literal path uses to pick its variant.
+	const byIdentity = duVariantIndexOfType(formal, exprType) as int32;
+	if (byIdentity >= 0) return byIdentity;
+	const names = exprType.typeNames;
+	if (names == null || names.length == 0) return -1;
+	// Candidates that survive the type comparison are the same structural type;
+	// they share a layout only when their storage matches, else refuse.
+	const types = exprType.typeChildren;
+	let found: int32 = -1;
+	let vi: int32 = 0;
+	for (const member of formal.typeChildren) {
+		const child = peelToStruct(member);
+		if (child != null && child.typeNames != null && child.typeNames.length == names.length) {
+			let same = true;
+			for (let fi = 0; fi < names.length; fi += 1) {
+				if (child.typeNames[fi] != names[fi]) { same = false; break; }
+			}
+			if (same && types != null && child.typeChildren != null
+					&& child.typeChildren.length == types.length) {
+				for (let fi = 0; fi < types.length; fi += 1) {
+					const want = types[fi];
+					const have = child.typeChildren[fi];
+					if (want == null || have == null) continue;
+					if (want.kind != have.kind || want.typeName != have.typeName) { same = false; break; }
+					if (want.kind == TypeKind.EnumLiteral && want.typeNames.join(",") != have.typeNames.join(",")) { same = false; break; }
+				}
+			}
+			if (same) {
+				if (found < 0) {
+					found = vi;
+				} else if (formal.typeChildren[found].kind != member.kind) {
+					return -1;
+				}
+			}
+		}
+		vi += 1;
+	}
+	return found;
 }

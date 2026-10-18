@@ -11,23 +11,18 @@
 //   f("hello", ["a", "b", "c"]);
 
 import {
-	Node, NodeKind, NodeData, Type, TypeKind, SymbolKind,
+	Node, NodeKind, NodeData, Type, TypeKind,
 	CallExprData, IdentifierData, NewExprData,
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { lookupSymbol, getCtorParamTypes, hasFlag, overloadWinner, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, overloadWinner } from "../../checker/symbol";
+import { ctorFormalTypes } from "../../checker/ctorRoutine";
 
-// Holds the active ctx for the current walk. Closure over `ctx` would be
-// cleaner but walkNode's visitor signature is fixed to (node) => node.
-let activeCtx: TransformContext | null = null;
-
-export function lowerRestParams(program: Node, ctx: TransformContext): Node {
-	activeCtx = ctx;
+export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 	walkNode(program, lowerRest);
-	activeCtx = null;
 	return program;
 }
 
@@ -45,8 +40,8 @@ function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 
 function lowerRestNew(node: Node): Node {
 	const d = node.data as NewExprData;
-	if (d.newCallee == null || d.newCallee.resolvedSym == null) return node;
-	d.newArguments = packCtorRest(d.newArguments, getCtorParamTypes(d.newCallee.resolvedSym), node.location.line);
+	if (node.resolvedSym == null) return node;
+	d.newArguments = packCtorRest(d.newArguments, ctorFormalTypes(node.resolvedSym), node.location.line);
 	return node;
 }
 
@@ -91,27 +86,15 @@ function lowerRest(node: Node): Node {
 	// console.log is a flat-varargs intrinsic — every backend prints its args
 	// individually (C debugLower, JS native, Raiser loop); packing breaks all three.
 	if (isConsoleLogCallee(callee)) return node;
-	if (callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super"
-		&& callee.resolvedSym != null && callee.resolvedSym.symbolKind == SymbolKind.Class) {
-		d.arguments = packCtorRest(d.arguments, getCtorParamTypes(callee.resolvedSym), node.location.line);
+	if (callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super" && callee.resolvedSym != null) {
+		d.arguments = packCtorRest(d.arguments, ctorFormalTypes(callee.resolvedSym), node.location.line);
 		return node;
 	}
 	let sym = callee.resolvedSym;
-	// Synthetic calls inserted by earlier transforms (stringConcatFlatten,
-	// nativeLower) emit bare Identifier callees with no resolvedSym. Look the
-	// name up in the global symbol table so varargs packing still applies.
-	if (sym == null && callee.kind == NodeKind.Identifier
-		&& activeCtx != null && activeCtx.checkerCtx != null) {
-		const id = callee.data as IdentifierData;
-		const found = lookupSymbol(activeCtx.checkerCtx.table, id.name);
-		if (found != null) {
-			sym = found;
-			callee.resolvedSym = found;
-		}
-	}
 	if (sym == null) return node;
 	sym = overloadWinner(sym, d.resolvedOverloadIdx);
 	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
+	if (sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl) return node;
 	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
 
 	const typeChildren = sym.symbolType.typeChildren;

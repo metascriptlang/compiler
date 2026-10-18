@@ -73,7 +73,7 @@ test "null through unknown is refused for a dynamic array on both backends" {
 test "a nullable dynamic array holds null and narrows on both backends" {
 	const prelude = "class K { v: int32 = 1; }\n";
 	for (const t of ["int32[]", "string[]", "K[]"]) {
-		const src = prelude + "let a: " + t + " | null = null;\nconsole.log(a == null);\nif (a != null) { console.log(a.length); }";
+		const src = prelude + "function hold(): " + t + " | null { return null; }\nconst a = hold();\nconsole.log(a == null);\nif (a != null) { console.log(a.length); }";
 		assert compileToC(src).ok;
 		assert compileToJS(src).ok;
 	}
@@ -94,7 +94,7 @@ test "null through unknown is refused for a std collection on both backends" {
 
 test "a nullable std collection holds null and narrows on both backends" {
 	for (const t of ["Map<string, int32>", "HashMap<string, int32>", "Set<string>", "HashSet<string>"]) {
-		const src = "let a: " + t + " | null = null;\nconsole.log(a == null);\nif (a != null) { console.log(a.size); }";
+		const src = "function hold(): " + t + " | null { return null; }\nconst a = hold();\nconsole.log(a == null);\nif (a != null) { console.log(a.size); }";
 		assert compileToC(src).ok;
 		assert compileToJS(src).ok;
 	}

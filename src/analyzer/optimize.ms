@@ -15,8 +15,8 @@ import {
 	ForOfStmtData, DoWhileStmtData, HiddenDerefData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef, makeHiddenAddr } from "../transform/util";
+import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
+import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, generatedProcSym, makeHiddenAddr } from "../transform/util";
 import { testLoc, testFnRef } from "./inject";
 import { testVarSym, symListHas, symListAdd } from "./scope";
 
@@ -265,7 +265,7 @@ test "keeps apart two variables spelled alike" {
 test "a call named like a wasMoved op that is not one pairs with nothing" {
 	const loc = testLoc();
 	const x = testVarSym("x");
-	const lookalike = makeExprStmt(makeCall(runtimeRef("noteWasMoved", loc), [makeIdentResolved(x, loc)], loc), loc);
+	const lookalike = makeExprStmt(makeCall(testFnRef("noteWasMoved", loc), [makeIdentResolved(x, loc)], loc), loc);
 	const result = optimizeBlock([lookalike, makeDestroyCallForTest(x)]);
 	assert result.length == 2;
 }
@@ -295,8 +295,12 @@ test "extracts var from wasMoved call" {
 test "a wasMoved on the address of a variable pairs with a destroy on the same address" {
 	const loc = testLoc();
 	const x = testVarSym("x");
-	const wm = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("RWasMoved", AttachedOp.AttachedWasMoved), null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
-	const ds = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("RDestroy", AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
+	const wasMoved = generatedProcSym("RWasMoved");
+	setFlag(wasMoved, SymbolFlag.WasMovedOp);
+	const destroy = generatedProcSym("RDestroy");
+	setFlag(destroy, SymbolFlag.DestroyOp);
+	const wm = makeExprStmt(makeCall(makeTypedIdentResolved(wasMoved, null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
+	const ds = makeExprStmt(makeCall(makeTypedIdentResolved(destroy, null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
 	assert opCallTarget(wm, SymbolFlag.WasMovedOp) == x;
 	assert optimizeBlock([wm, ds]).length == 1;
 }

@@ -1,4 +1,4 @@
-import { Node, NodeFlag, NodeKind, bindSym, define, getType, sameType, stringValue } from "std/meta";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, sameType, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator, snakeCase } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
@@ -1036,8 +1036,8 @@ export macro signedPda(call: Node, pda: Node, seeds: Node): Node {
 	if (shape != null && shape.kind === NodeKind.TypeFunction && shape.typExprParams.length > 0) {
 		const last = shape.typExprParams[shape.typExprParams.length - 1];
 		if (last.kind === NodeKind.TypeArray) {
-			const element = last.typExprElement;
-			takesSigners = element.kind === NodeKind.TypeObject &&
+			const element = getTypeImpl(last.typExprElement);
+			takesSigners = element != null && element.kind === NodeKind.TypeObject &&
 				element.typExprTypeName == "SignerSeeds";
 		}
 	}

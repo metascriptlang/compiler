@@ -1,6 +1,6 @@
 import {
 	Node, NodeKind, createNodeAt, ClassDeclData, ActorDeclData, PropertyDeclData, BlockStmtData,
-	ExportDeclData, DecoratedDeclData, ExprStmtData, ProgramData, Symbol, SymbolFlag,
+	ExportDeclData, DecoratedDeclData, ExprStmtData, ProgramData, SymbolFlag,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkExpandBlocks } from "../walker";
@@ -14,22 +14,14 @@ function isDataInitLiteral(init: Node): boolean {
 		|| init.kind == NodeKind.StringLiteral
 		|| init.kind == NodeKind.BooleanLiteral;
 }
-function isInlinedReadonlyScalar(declNode: Node, ownerName: string, member: Node): boolean {
+function isInlinedReadonlyScalar(member: Node): boolean {
 	if (member.kind != NodeKind.PropertyDecl) return false;
 	const d = member.data as PropertyDeclData;
 	if (!d.propIsStatic || !d.propIsReadonly || d.propInitializer == null) return false;
-	const sym = staticFieldSym(declNode.resolvedSym, ownerName + "." + d.propName);
-	if (sym == null || sym.symFlags.has(SymbolFlag.Mutable)) return false;
+	const sym = member.resolvedSym;
+	if (sym == null || !sym.symFlags.has(SymbolFlag.Static)) throw new Error(`internal: static field '${d.propName}' has no declaration symbol`);
+	if (sym.symFlags.has(SymbolFlag.Mutable)) return false;
 	return literalTakesType(d.propInitializer, member.nodeType);
-}
-
-
-function staticFieldSym(ownerSym: Symbol | null, qualifiedName: string): Symbol {
-	if (ownerSym == null) return null as unknown as Symbol;
-	for (const sf of ownerSym!.staticFields) {
-		if (sf.name == qualifiedName) return sf;
-	}
-	return null as unknown as Symbol;
 }
 
 function staticFieldAssignment(declNode: Node, ownerName: string, member: Node): Node {
@@ -43,7 +35,9 @@ function staticFieldAssignment(declNode: Node, ownerName: string, member: Node):
 	}
 	const receiver = makeIdentResolved(ownerSym, member.location);
 	const target = makeMember(receiver, pd.propName, member.location);
-	target.resolvedSym = staticFieldSym(ownerSym, ownerName + "." + pd.propName);
+	const fieldSym = member.resolvedSym;
+	if (fieldSym == null || !fieldSym.symFlags.has(SymbolFlag.Static)) throw new Error(`internal: static field '${ownerName}.${pd.propName}' has no declaration symbol`);
+	target.resolvedSym = fieldSym;
 	if (member.nodeType != null) { target.nodeType = member.nodeType; }
 	const assign = makeAssign(target, pd.propInitializer, member.location);
 	pd.propInitializer = null as unknown as Node;
@@ -71,7 +65,7 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 			continue;
 		}
 		const member = bareMember(m);
-		if (m.kind == NodeKind.PropertyDecl && isInlinedReadonlyScalar(declNode, ownerName, member)) continue;
+		if (m.kind == NodeKind.PropertyDecl && isInlinedReadonlyScalar(member)) continue;
 		body[write] = m;
 		write += 1;
 		if (member.kind != NodeKind.PropertyDecl) continue;
