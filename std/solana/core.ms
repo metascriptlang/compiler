@@ -1,5 +1,3 @@
-@include("runtime/solana/solana.h");
-
 import {
 	msSolAccountAt,
 	msSolAccountCount,
@@ -30,7 +28,6 @@ import {
 	msSolLoadU32,
 	msSolLoadU64,
 	msSolLoadU8,
-	msSolPointer,
 	msSolProgramId,
 	msSolSeedsAddress,
 	msSolSpanAddress,
@@ -88,7 +85,13 @@ export {
 	putU8,
 } from "./buffer";
 
-extern function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 from "msSolSpanAddress";
+when (js) {
+	import { msSolMetasAddress } from "./memory";
+} else {
+	import { msSolPointer } from "./memory";
+
+	extern function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 from "msSolSpanAddress";
+}
 
 const MAX_RETURN_DATA: uint64 = 1024;
 
@@ -195,8 +198,14 @@ export function failWith(error: ProgramError): void {
 }
 
 function loadPubkey(address: uint64): Pubkey {
-	const at = msSolPointer(address) as Ptr<Pubkey>;
-	return at[];
+	when (js) {
+		let key = Pubkey.zero();
+		msSolCopy(msSolSpanAddress(key.bytes), address, 32);
+		return key;
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		return at[];
+	}
 }
 
 export function programId(): Pubkey {

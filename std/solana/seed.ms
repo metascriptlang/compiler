@@ -1,5 +1,3 @@
-@include("runtime/solana/solana.h");
-
 import { Pubkey } from "./pubkey";
 import { ProgramError } from "./error";
 import { ProgramAddress } from "./pda";

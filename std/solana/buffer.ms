@@ -1,12 +1,20 @@
 import { Pubkey } from "./pubkey";
 import { Bytes } from "./bytes";
-import { msSolCopy, msSolPointer, msSolSpanAddress, msSolStoreU16, msSolStoreU32, msSolStoreU64, msSolStoreU8 } from "./memory";
+import { msSolCopy, msSolSpanAddress, msSolStoreU16, msSolStoreU32, msSolStoreU64, msSolStoreU8 } from "./memory";
 
 export { Bytes } from "./bytes";
 
+when (!js) {
+	import { msSolPointer } from "./memory";
+}
+
 export function storePubkey(key: Pubkey, address: uint64): void {
-	const at = msSolPointer(address) as Ptr<Pubkey>;
-	at[] = key;
+	when (js) {
+		msSolCopy(address, msSolSpanAddress(key.bytes), 32);
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		at[] = key;
+	}
 }
 
 function fits(storage: Span<uint8>, at: uint64, width: uint64): boolean {
