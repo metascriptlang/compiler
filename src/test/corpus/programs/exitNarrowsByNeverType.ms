@@ -10,11 +10,14 @@ function get(n: int32): Got {
 	return n > 0 ? { ok: true, value: n } : { ok: false, err: "negative" };
 }
 
-const r = get(5);
-if (!r.ok) {
-	exit(1);
+let head = "";
+{
+	const r = get(5);
+	if (!r.ok) {
+		exit(1);
+	}
+	head = `ok ${r.value}`;
 }
-const head = `ok ${r.value}`;
 
 function checked(n: int32): int32 {
 	const g = get(n);
