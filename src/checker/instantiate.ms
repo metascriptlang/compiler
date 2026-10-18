@@ -6,7 +6,7 @@
 
 import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, VariableDeclData, ForOfStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
@@ -732,19 +732,6 @@ function collectDeclaredSyms(node: Node, into: Symbol[]): void {
 	if (binds && node.resolvedSym != null) into.push(node.resolvedSym);
 	if (node.paramSyms != null) for (const p of node.paramSyms) into.push(p);
 	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredSyms(child, into); });
-}
-
-export function collectDeclaredNames(node: Node, into: string[]): void {
-	match (node.kind) {
-		NodeKind.VariableDecl => { into.push((node.data as VariableDeclData).declName); },
-		NodeKind.ForOfStmt => { into.push((node.data as ForOfStmtData).forOfBinding); },
-		NodeKind.TryCatchStmt => { into.push((node.data as TryCatchStmtData).catchName); },
-		NodeKind.ArrowFunction => { for (const p of (node.data as ArrowFunctionData).arrowParams) into.push(p); },
-		NodeKind.FunctionExpr => { for (const p of (node.data as FunctionExprData).funcExprParams) into.push(p); },
-		NodeKind.FunctionDecl => { for (const p of (node.data as FunctionDeclData).params) into.push(p); },
-		_ => {},
-	}
-	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredNames(child, into); });
 }
 
 function bindsInto(node: Node, redeclared: Symbol[]): boolean {
