@@ -71,7 +71,7 @@ function bitsOf(t: Ty): int32 {
 	};
 }
 
-function trapsOnOverflow(t: Ty): boolean { return t == Ty.Int32 || t == Ty.Int64; }
+function trapsOnOverflow(t: Ty): boolean { return isSigned(t); }
 
 function posMax(t: Ty): uint64 {
 	return match (t) {
@@ -403,8 +403,7 @@ class Gen {
 		const a = this.expr(t, depth + 1);
 		if (isFloat(t)) { return "(-" + a + ")"; }
 		if (!isSigned(t) || this.rng.chance(40)) { return "(~" + a + ")"; }
-		if (trapsOnOverflow(t)) { return this.negHelper(t) + "(" + a + ")"; }
-		return "(-" + a + ")";
+		return this.negHelper(t) + "(" + a + ")";
 	}
 
 	convert(t: Ty, depth: int32): string {
@@ -1672,8 +1671,8 @@ test "a top-level block declares no function inside a block" {
 }
 
 test "default weights keep the pinned stream" {
-	const sizes = [21703, 13475, 18941, 17328];
-	const closureSizes = [11356, 11418, 13350, 9328];
+	const sizes = [23008, 14006, 27999, 14767];
+	const closureSizes = [12836, 12148, 16450, 17808];
 	const closure = withWeights("fams=closure top=0 w.closure.routine=0");
 	for (let i = 0; i < 4; i++) {
 		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic top=0 w.closure.routine=0")).replace(" top=0", "").replace(" w.closure.routine=0", "").byteLength == sizes[i];
@@ -1710,6 +1709,23 @@ test "a zero expression weight keeps its construct out of every expression" {
 		const text = g.expr(Ty.Int32, 0);
 		assert !text.contains(" ? ") && !text.contains("f0(") && !text.contains("(~") && !text.contains("conv") && !text.contains("wrap") && !text.contains("safeNeg");
 		assert !text.contains("(q");
+	}
+}
+
+test "every signed width adds, subtracts, multiplies and negates through a guarded helper" {
+	const g = new Gen();
+	g.exprMax = 0;
+	g.costCap = TOP_COST_CAP;
+	for (const t of [Ty.Int8, Ty.Int16, Ty.Int32, Ty.Int64]) {
+		g.tys = [t];
+		for (let seed = 1; seed <= 100; seed++) {
+			g.rng = Rng.seeded(seed as uint64);
+			g.nodesLeft = GEN_NODE_CAP;
+			const sum = g.binary(t, 0);
+			assert sum.startsWith("safe") || (!sum.contains(" + ") && !sum.contains(" - ") && !sum.contains(" * "));
+			const neg = g.unary(t, 0);
+			assert neg.startsWith("safeNeg") || neg.startsWith("(~");
+		}
 	}
 }
 
