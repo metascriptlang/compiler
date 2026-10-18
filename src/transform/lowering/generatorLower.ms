@@ -893,7 +893,11 @@ export function hasExcLanding(sc: StateCollector): boolean {
 export function wrapExcRouting(dispatch: Node, sc: StateCollector, ctx: TransformContext, loc: SourceLocation): Node {
 	if (!hasExcLanding(sc)) return dispatch;
 	const caughtSym = makeCatchSym(ctx, "$excCaught");
-	return makeTryCatch(dispatch, caughtSym, buildExcRouting(sc, caughtSym, loc), null as unknown as Node, loc);
+	const excType = sc.excType;
+	if (excType != null) caughtSym.symbolType = excType;
+	const routing = makeTryCatch(dispatch, caughtSym, buildExcRouting(sc, caughtSym, loc), null as unknown as Node, loc);
+	routing.nodeType = sc.excType;
+	return routing;
 }
 
 export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
