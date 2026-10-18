@@ -33,6 +33,7 @@ enum EntKind {
 	StrVar,
 	OwnVar,
 	HeldVar,
+	IterFn,
 }
 
 struct Ent {
@@ -578,6 +579,7 @@ class Gen {
 		if (fam == Fam.Coll) { return this.collExpr(t, depth); }
 		if (fam == Fam.Str) { return this.strExpr(t, depth); }
 		if (fam == Fam.Own) { return this.ownExpr(t, depth); }
+		if (fam == Fam.Iter) { return this.iterExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1185,7 +1187,7 @@ class Gen {
 		return { text: name, cost: next.cost };
 	}
 
-	famStatement(indent: string): string {
+	famStatement(indent: string, depth: int32): string {
 		if (this.famTotal() == 0) { return ""; }
 		const fam = this.pickFam();
 		const t = this.pickTy();
@@ -1244,6 +1246,7 @@ class Gen {
 		if (fam == Fam.Coll) { return this.collStatement(t, indent); }
 		if (fam == Fam.Str) { return this.strStatement(indent); }
 		if (fam == Fam.Own) { return this.ownStatement(t, indent); }
+		if (fam == Fam.Iter) { return this.iterStatement(t, indent, depth); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -1267,6 +1270,174 @@ class Gen {
 		const text = indent + "const " + name + " = new BoxG<" + T + ">(" + this.expr(t, 0) + ");\n";
 		this.ents.push({ kind: EntKind.BoxVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
 		return text;
+	}
+
+	iterHelpers(): void {
+		this.useHelper("nthI", "function nthI<T>(it: Iterator<T>, n: int32, d: T): T {\n" +
+			"\tlet i: int32 = 0;\n" +
+			"\tfor (const v of it) {\n" +
+			"\t\tif (i == n) { return v; }\n" +
+			"\t\ti++;\n" +
+			"\t}\n" +
+			"\treturn d;\n}\n");
+		this.useHelper("lastI", "function lastI<T>(it: Iterator<T>, d: T): T {\n" +
+			"\tlet r = d;\n" +
+			"\tfor (const v of it) { r = v; }\n" +
+			"\treturn r;\n}\n");
+	}
+
+	iterExpr(t: Ty, depth: int32): string {
+		const gens = this.entsOf(EntKind.IterFn, t);
+		if (gens.length == 0) { return ""; }
+		const g = this.pickEnt(gens);
+		if (!this.reserve(g.cost + (1 as int64))) { return ""; }
+		this.iterHelpers();
+		const call = g.name + "(" + this.smallInt(depth) + ")";
+		if (this.pickW(W.IterNth, W.IterLast) == 0) {
+			return "nthI(" + call + ", " + this.smallInt(depth) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		return "lastI(" + call + ", " + this.expr(t, depth + 1) + ")";
+	}
+
+	iterStatement(t: Ty, indent: string, depth: int32): string {
+		const gens = this.entsOf(EntKind.IterFn, t);
+		const k = this.pickW(W.IterDecl, W.IterManual);
+		if (k == 1 && gens.length > 0) { return this.iterDrain(t, gens, indent); }
+		if (k == 2 && gens.length > 0) { return this.iterManual(t, gens, indent); }
+		if (depth > 0 || this.atTop) { return ""; }
+		return this.iterDecl(t, indent);
+	}
+
+	iterDecl(t: Ty, indent: string): string {
+		const T = tyName(t);
+		const name = this.entName("y");
+		const q = this.entName("q");
+		const acc = this.entName("a");
+		const trips = this.rng.between(1, this.tripMax);
+		const cap = FN_COST_CAP / ((4 * trips + 4) as int64);
+		const u = this.pickTy();
+		const outer = this.visible(u, true);
+		const inner = this.entsAny(EntKind.IterFn);
+		const saved = this.scope.length;
+		const savedEnts = this.ents.length;
+		this.scope.push({ name: q, ty: Ty.Int32, writable: false });
+		const init = this.routine(t, 1, cap);
+		this.scope.push({ name: acc, ty: t, writable: true });
+		let pre = "";
+		let cost = init.cost + (2 as int64);
+		if (this.rng.chance(50)) {
+			const c = this.entName("c");
+			const d = this.entName("q");
+			this.scope.push({ name: d, ty: t, writable: false });
+			const body = this.routine(t, 1, cap);
+			this.scope.pop();
+			this.ents.push({ kind: EntKind.Callable, name: c, ty: t, params: [t], len: 0, cost: body.cost + (1 as int64) });
+			pre = indent + "\tconst " + c + " = (" + d + ": " + T + "): " + T + " => { " + acc + " = " + body.text + "; return " + acc + "; };\n";
+		}
+		const i = "i" + String(this.loopCount);
+		this.loopCount = this.loopCount + 1;
+		this.scope.push({ name: i, ty: Ty.Int32, writable: false });
+		const value = this.routine(t, 1, cap);
+		let each = value.cost + (2 as int64);
+		let body = indent + "\t\tyield " + value.text + ";\n";
+		if (this.rng.chance(50)) {
+			const step = this.routine(t, 1, cap);
+			each = each + step.cost + (1 as int64);
+			const line = indent + "\t\t" + acc + " = " + step.text + ";\n";
+			body = this.rng.chance(50) ? line + body : body + line;
+		}
+		if (outer.length > 0 && this.rng.chance(50)) {
+			const v = outer[this.rng.below(outer.length)];
+			const write = this.routine(u, 1, cap);
+			each = each + write.cost + (1 as int64);
+			body += indent + "\t\t" + v.name + " = " + write.text + ";\n";
+		}
+		if (inner.length > 0 && this.rng.chance(50)) {
+			const m = this.pickEnt(inner);
+			const x = this.entName("x");
+			this.scope.push({ name: x, ty: m.ty, writable: false });
+			const fold = this.routine(t, 1, cap);
+			this.scope.pop();
+			const drain = m.cost + (m.len as int64) * (fold.cost + (1 as int64));
+			if (drain <= cap * (4 as int64)) {
+				each = each + drain;
+				body += indent + "\t\tfor (const " + x + " of " + m.name + "(" + i + ")) { " + acc + " = " + fold.text + "; }\n";
+			}
+		}
+		while (this.scope.length > saved) { this.scope.pop(); }
+		while (this.ents.length > savedEnts) { this.ents.pop(); }
+		cost = cost + (trips as int64) * each;
+		this.ents.push({ kind: EntKind.IterFn, name: name, ty: t, params: [Ty.Int32], len: trips + 1, cost: cost });
+		return indent + "function* " + name + "(" + q + ": int32): Iterator<" + T + "> {\n" +
+			indent + "\tlet " + acc + ": " + T + " = " + init.text + ";\n" +
+			pre +
+			indent + "\tfor (let " + i + ": int32 = 0; " + i + " < " + q + " && " + i + " < " + String(trips) + "; " + i + "++) {\n" +
+			body +
+			indent + "\t}\n" +
+			indent + "\tyield " + acc + ";\n" +
+			indent + "}\n";
+	}
+
+	iterDrain(t: Ty, gens: Ent[], indent: string): string {
+		const g = this.pickEnt(gens);
+		if (!this.reserve(g.cost + (1 as int64))) { return ""; }
+		const T = tyName(t);
+		const arg = this.smallInt(0);
+		const vars = this.visible(t, true);
+		let head = "";
+		let target = "";
+		if (vars.length > 0 && this.rng.chance(50)) {
+			target = vars[this.rng.below(vars.length)].name;
+		} else {
+			const init = this.expr(t, 0);
+			target = this.newLocal(t);
+			head = indent + "let " + target + ": " + T + " = " + init + ";\n";
+		}
+		const x = this.entName("x");
+		const savedMult = this.mult;
+		this.mult = this.mult * (g.len as int64);
+		this.scope.push({ name: x, ty: t, writable: false });
+		const value = this.expr(t, 1);
+		const stop = this.rng.chance(50) ? indent + "\tif " + this.cond(1) + " { break; }\n" : "";
+		this.scope.pop();
+		this.mult = savedMult;
+		return head + indent + "for (const " + x + " of " + g.name + "(" + arg + ")) {\n" +
+			indent + "\t" + target + " = " + value + ";\n" +
+			stop +
+			indent + "}\n";
+	}
+
+	iterManual(t: Ty, gens: Ent[], indent: string): string {
+		const a = this.pickEnt(gens);
+		const b = this.pickEnt(gens);
+		if (!this.reserve(a.cost + b.cost + (2 as int64))) { return ""; }
+		const T = tyName(t);
+		const ia = this.entName("t");
+		const ib = this.entName("t");
+		const ra = this.entName("r");
+		const rb = this.entName("r");
+		const head = indent + "const " + ia + " = " + a.name + "(" + this.smallInt(0) + ");\n" +
+			indent + "const " + ib + " = " + b.name + "(" + this.smallInt(0) + ");\n";
+		const init = this.expr(t, 0);
+		const target = this.newLocal(t);
+		const savedMult = this.mult;
+		this.mult = this.mult * (a.len as int64);
+		this.scope.push({ name: ra + ".value", ty: t, writable: false });
+		const fa = this.expr(t, 1);
+		this.scope.pop();
+		this.mult = savedMult * (b.len as int64);
+		this.scope.push({ name: rb + ".value", ty: t, writable: false });
+		const fb = this.expr(t, 1);
+		this.scope.pop();
+		this.mult = savedMult;
+		return head +
+			indent + "let " + target + ": " + T + " = " + init + ";\n" +
+			indent + "let " + ra + " = " + ia + ".next();\n" +
+			indent + "let " + rb + " = " + ib + ".next();\n" +
+			indent + "while (!" + ra + ".done || !" + rb + ".done) {\n" +
+			indent + "\tif (!" + ra + ".done) { " + target + " = " + fa + "; " + ra + " = " + ia + ".next(); }\n" +
+			indent + "\tif (!" + rb + ".done) { " + target + " = " + fb + "; " + rb + " = " + ib + ".next(); }\n" +
+			indent + "}\n";
 	}
 
 	routineDecl(t: Ty, indent: string): string {
@@ -1334,7 +1505,7 @@ class Gen {
 		this.nodesLeft--;
 		if (!this.reserve(1 as int64)) { return ""; }
 		if (this.fams.length > 0 && this.rng.chance(this.wt(W.StmtFam))) {
-			const fam = this.famStatement(indent);
+			const fam = this.famStatement(indent, depth);
 			if (fam != "") { return fam; }
 		}
 		const nested = depth < this.depthMax;
@@ -2183,4 +2354,48 @@ test "a deferred closure body keeps its own budget" {
 		assert g.cost == (0 as int64) && g.costCap == (0 as int64) && g.mult == (1 as int64);
 	}
 	assert shaped;
+}
+
+test "the iter family alone reaches each of its shapes" {
+	const f = withWeights("fams=iter types=int32,uint64,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	const shapes = ["\tfunction* y", "): Iterator<uint64> {", "): Iterator<float64> {", " => { a", "\t\tyield ", "\t\tfor (const x", "\tyield a",
+		"for (const x", "{ break; }", ".next();", ".done || !r", ".value", "nthI(y", "lastI(y"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "a generator is declared only at a function's top level and its loop body holds no statement" {
+	const f = withWeights("fams=iter stmts=8 w.stmt.fam=80 w.expr.fam=40 w.iter.decl=6");
+	let gens = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("finally") && !text.contains("toItems");
+		const lines = text.split("\n");
+		for (let i = 0; i < lines.length; i++) {
+			if (!lines[i].contains("function*")) { continue; }
+			assert lines[i].startsWith("\tfunction* y");
+			gens++;
+			let j = i + 1;
+			while (!lines[j].startsWith("\t\tfor (let i")) { j++; }
+			for (j = j + 1; lines[j] != "\t\t}"; j++) {
+				const t = lines[j].trim();
+				assert t.startsWith("yield ") || t.startsWith("for (const x") || (t.contains(" = ") && !t.startsWith("let ") && !t.startsWith("const "));
+			}
+		}
+	}
+	assert gens > 20;
+}
+
+test "w.fam.iter=0 keeps the stream of the other families" {
+	const off = withWeights("w.fam.iter=0");
+	const without = withWeights("fams=closure,union,generic,agg,coll,str,own");
+	for (let seed = 1; seed <= 20; seed++) {
+		const a = generate(seed as uint64, off);
+		const b = generate(seed as uint64, without);
+		assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
+	}
 }

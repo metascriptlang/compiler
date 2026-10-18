@@ -20,6 +20,7 @@ export enum Fam {
 	Coll,
 	Str,
 	Own,
+	Iter,
 }
 
 export enum W {
@@ -44,6 +45,7 @@ export enum W {
 	FamColl,
 	FamStr,
 	FamOwn,
+	FamIter,
 	ClosureNamed,
 	ClosureArray,
 	ClosureIife,
@@ -102,6 +104,11 @@ export enum W {
 	OwnRef,
 	OwnOut,
 	OwnSink,
+	IterNth,
+	IterLast,
+	IterDecl,
+	IterDrain,
+	IterManual,
 	ExprFam,
 	StmtFam,
 	StmtElse,
@@ -130,6 +137,7 @@ export const W_KEYS: string[] = [
 	"w.fam.coll",
 	"w.fam.str",
 	"w.fam.own",
+	"w.fam.iter",
 	"w.closure.named",
 	"w.closure.array",
 	"w.closure.iife",
@@ -188,6 +196,11 @@ export const W_KEYS: string[] = [
 	"w.own.ref",
 	"w.own.out",
 	"w.own.sink",
+	"w.iter.nth",
+	"w.iter.last",
+	"w.iter.decl",
+	"w.iter.drain",
+	"w.iter.manual",
 	"w.expr.fam",
 	"w.stmt.fam",
 	"w.stmt.else",
@@ -197,7 +210,7 @@ export const W_KEYS: string[] = [
 export const W_DEFAULTS: int32[] = [
 	25, 30, 8, 10, 8, 19,
 	25, 25, 8, 12, 12, 6, 6, 6,
-	1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 2,
@@ -210,13 +223,15 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1, 1, 1, 1,
 	1, 1,
 	1, 1, 1, 1, 1, 1,
+	1, 1,
+	1, 1, 1,
 	20, 20, 50, 30,
 ];
 
 const W_GROUPS: W[][] = [
 	[W.ExprLeaf, W.ExprCall],
 	[W.StmtLet, W.StmtReturn],
-	[W.FamClosure, W.FamOwn],
+	[W.FamClosure, W.FamIter],
 	[W.ClosureNamed, W.ClosureIife],
 	[W.ClosureDecl, W.ClosureRoutine],
 	[W.GenericId, W.GenericBox],
@@ -229,6 +244,8 @@ const W_GROUPS: W[][] = [
 	[W.StrConcat, W.StrEdit],
 	[W.OwnField, W.OwnHeld],
 	[W.OwnDecl, W.OwnSink],
+	[W.IterNth, W.IterLast],
+	[W.IterDecl, W.IterManual],
 ];
 
 export enum Plant {
@@ -265,7 +282,7 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
-export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own];
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter];
 
 export function famName(f: Fam): string {
 	return match (f) {
@@ -276,6 +293,7 @@ export function famName(f: Fam): string {
 		Fam.Coll => "coll",
 		Fam.Str => "str",
 		Fam.Own => "own",
+		Fam.Iter => "iter",
 	};
 }
 
@@ -283,7 +301,7 @@ function famFromName(name: string): Result<Fam, string> {
 	for (const f of ALL_FAMS) {
 		if (famName(f) == name) { return Result.ok(f); }
 	}
-	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, none)");
+	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, none)");
 }
 
 export function tyName(t: Ty): string {
@@ -552,7 +570,7 @@ test "an unknown weight, a bad value and an all-zero group are refused" {
 	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
-	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0").ok;
 }
 
 test "swarm keeps the weights of its base" {
