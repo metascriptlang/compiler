@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
@@ -610,12 +610,7 @@ export function emitMemberExpr(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	emitPostfixBase(gen, d.object);
-	if (d.isOptional) {
-		emit(gen, "?.");
-	} else {
-		emit(gen, ".");
-	}
-	emit(gen, d.property);
+	emit(gen, jsPropertyAccess(d.property, d.isOptional));
 }
 
 function namespaceMemberName(gen: JSGenerator, sym: Symbol, text: string): string {
@@ -660,7 +655,7 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 			emitNode(gen, d.properties[i]);
 			continue;
 		}
-		emit(gen, d.keys[i]);
+		emit(gen, jsPropertyKey(d.keys[i]));
 		emit(gen, ": ");
 		if (i < d.properties.length) {
 			emitCopyOnRead(gen, d.properties[i]);
@@ -684,7 +679,7 @@ function omittedFieldZeros(node: Node, d: ObjectLiteralData): string[] {
 		const name = t.typeNames[i];
 		if (name.startsWith("__") || d.keys.includes(name) || spreadMayProvide(d, name)) continue;
 		const zero = jsDefaultValue(t.typeChildren[i]);
-		if (zero != "") out.push(`${name}: ${zero}`);
+		if (zero != "") out.push(`${jsPropertyKey(name)}: ${zero}`);
 	}
 	return out;
 }
