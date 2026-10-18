@@ -1,5 +1,5 @@
 import { Rng, seeded } from "./rng";
-import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, W, W_DEFAULTS, tyName, format } from "./features";
+import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, W, W_DEFAULTS, famName, tyName, format } from "./features";
 
 const FN_COST_CAP: int64 = 20000 as int64;
 const ROUTINE_FRAMES: int32 = 4;
@@ -43,6 +43,7 @@ enum EntKind {
 	PairVar,
 	StackVar,
 	ItemVar,
+	EnumVar,
 }
 
 struct Ent {
@@ -170,6 +171,45 @@ const CMP_OPS: string[] = ["==", "!=", "<", "<=", ">", ">="];
 const STR_CHARS: string[] = ["a", "b", "Z", " ", "é", "ÿ", "中", "-", "0", "\\n", "\\t", "\\\"", "\\\\"];
 const STR_TESTS: string[] = [" == ", " != ", " < ", " > ", ".includes(", ".startsWith(", ".endsWith("];
 
+enum EShape {
+	Numeric,
+	Match,
+	Bitset,
+	Alias,
+	Distinct,
+	Literal,
+	Disc,
+	Unknown,
+	Never,
+}
+
+const E_SHAPES: EShape[] = [
+	EShape.Numeric,
+	EShape.Match,
+	EShape.Bitset,
+	EShape.Alias,
+	EShape.Distinct,
+	EShape.Literal,
+	EShape.Disc,
+	EShape.Unknown,
+	EShape.Never,
+];
+
+struct ETy {
+	id: int32;
+	shape: EShape;
+	name: string;
+	ann: string;
+	n: int32;
+	lits: string[];
+}
+
+const FLAG_COUNTS: int32[] = [3, 8, 9, 17, 33, 65];
+const LIT_SETS: string[] = ["n,e,s,w", "red,green,blue", "on,off", "lo,mid,hi,max"];
+const BIT_OPS: string[] = ["&", "|", "^"];
+
+function quoted(s: string): string { return "\"" + s + "\""; }
+
 class Gen {
 	rng: Rng = new Rng();
 	tys: Ty[] = [];
@@ -202,6 +242,7 @@ class Gen {
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
 	directives: string[] = [];
+	eTypes: ETy[] = [];
 
 	wt(k: W): int32 { return this.w[k as int32]; }
 
@@ -592,6 +633,7 @@ class Gen {
 		if (fam == Fam.Iter) { return this.iterExpr(t, depth); }
 		if (fam == Fam.Seq) { return this.seqExpr(t, depth); }
 		if (fam == Fam.Gcls) { return this.gclsExpr(t, depth); }
+		if (fam == Fam.Enum) { return this.enumExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1261,6 +1303,7 @@ class Gen {
 		if (fam == Fam.Iter) { return this.iterStatement(t, indent, depth); }
 		if (fam == Fam.Seq) { return this.seqStatement(t, indent); }
 		if (fam == Fam.Gcls) { return this.gclsStatement(t, indent); }
+		if (fam == Fam.Enum) { return this.enumStatement(t, indent, depth); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -2261,6 +2304,457 @@ class Gen {
 			indent + "let " + name + ": " + T + " = " + r + ".v;\n";
 	}
 
+	hasHelper(name: string): boolean {
+		for (const n of this.helperNames) { if (n == name) { return true; } }
+		return false;
+	}
+
+	lift(x: string, t: Ty): string {
+		if (t == Ty.Int32) { return x; }
+		if (!isFloat(t) && !isSigned(t)) { return this.wrapHelper(Ty.Int32, t) + "(" + x + ")"; }
+		if (fitsRaw(Ty.Int32, t)) { return "(" + x + " as " + tyName(t) + ")"; }
+		return this.convHelper(Ty.Int32, t) + "(" + x + ")";
+	}
+
+	member(et: ETy): string { return et.name + ".M" + String(this.rng.below(et.n)); }
+
+	members(et: ETy, from: int32, to: int32): string {
+		let out = "";
+		for (let j = from; j < to; j++) { out += (out == "" ? "" : " | ") + et.name + ".M" + String(j); }
+		return out;
+	}
+
+	enumVars(et: ETy): Ent[] {
+		const out: Ent[] = [];
+		for (const e of this.ents) { if (e.kind == EntKind.EnumVar && e.len == et.id) { out.push(e); } }
+		return out;
+	}
+
+	enumType(shape: EShape): ETy {
+		const pool: ETy[] = [];
+		for (const e of this.eTypes) { if (e.shape == shape) { pool.push(e); } }
+		if (pool.length >= 3 || (pool.length > 0 && this.rng.chance(60))) { return pool[this.rng.below(pool.length)]; }
+		this.ixHelper();
+		const id = this.eTypes.length;
+		if (shape == EShape.Bitset) { return this.flagType(id, pool.length); }
+		if (shape == EShape.Literal) { return this.literalType(id, pool.length); }
+		return this.numericType(id, pool.length);
+	}
+
+	numericType(id: int32, k: int32): ETy {
+		const name = "En" + String(k);
+		const n = this.rng.between(2, 6);
+		const vals: int32[] = [];
+		let expected = 0;
+		for (let j = 0; j < n; j++) {
+			let v = expected;
+			if (j == 0 && this.rng.chance(25)) {
+				v = this.rng.between(-6, -1);
+			} else if (this.rng.chance(35)) {
+				v = expected + this.rng.between(1, 5);
+			}
+			vals.push(v);
+			expected = v + 1;
+		}
+		const shuffled = n >= 3 && this.rng.chance(25);
+		if (shuffled) {
+			const tmp = vals[0];
+			vals[0] = vals[n - 1];
+			vals[n - 1] = tmp;
+		}
+		let members = "";
+		expected = 0;
+		for (let j = 0; j < n; j++) {
+			const implicit = !shuffled && vals[j] == expected;
+			members += "\tM" + String(j) + (implicit ? "" : " = " + String(vals[j])) + ",\n";
+			expected = vals[j] + 1;
+		}
+		let at = "function at" + name + "(i: int32): " + name + " {\n\tconst r = ixI(i, " + String(n) + ");\n";
+		for (let j = 0; j < n - 1; j++) { at += "\tif (r == " + String(j) + ") { return " + name + ".M" + String(j) + "; }\n"; }
+		at += "\treturn " + name + ".M" + String(n - 1) + ";\n}\n";
+		this.useHelper(name, "enum " + name + " {\n" + members + "}\n" + at);
+		const et: ETy = { id: id, shape: EShape.Numeric, name: name, ann: name, n: n, lits: [] };
+		this.eTypes.push(et);
+		return et;
+	}
+
+	flagType(id: int32, k: int32): ETy {
+		const name = "Fg" + String(k);
+		const n = FLAG_COUNTS[this.rng.below(FLAG_COUNTS.length)];
+		let members = "";
+		for (let j = 0; j < n; j++) { members += (j == 0 ? "" : ", ") + "M" + String(j); }
+		const B = "BitSet<" + name + ">";
+		const last = name + ".M" + String(n - 1);
+		let raw = "\treturn m.size() as int32;\n";
+		if (n <= 32) {
+			raw = "\treturn ((m as uint32) % (251 as uint32)) as int32;\n";
+		} else if (n <= 64) {
+			raw = "\treturn ((m as uint64) % (251 as uint64)) as int32;\n";
+		}
+		this.useHelper(name, "enum " + name + " { " + members + " }\n" +
+			"function bs" + name + "(a: " + B + ", b: " + B + ", f: int32): int32 {\n" +
+			"\tconst m = a | b;\n" +
+			"\tif (f == 0) { return (a & b).size() as int32; }\n" +
+			"\tif (f == 1) { return m.size() as int32; }\n" +
+			"\tif (f == 2) { return (a ^ b).size() as int32; }\n" +
+			"\tif (f == 3) { return a.difference(b).size() as int32; }\n" +
+			"\tif (f == 4) {\n" +
+			"\t\tif (a.isSubsetOf(b)) { return 1; }\n" +
+			"\t\tif (a.isDisjointFrom(b)) { return 2; }\n" +
+			"\t\treturn 3;\n" +
+			"\t}\n" +
+			"\tif (f == 5) {\n" +
+			"\t\tif (a == b) { return 4; }\n" +
+			"\t\tif (a.has(" + name + ".M0)) { return 5; }\n" +
+			"\t\tif (b.has(" + name + ".M0)) { return 6; }\n" +
+			"\t\treturn 7;\n" +
+			"\t}\n" +
+			"\tif (f == 6) {\n" +
+			"\t\tlet s: int32 = 0;\n" +
+			"\t\tfor (const x of m) { s += x as int32; }\n" +
+			"\t\treturn s;\n" +
+			"\t}\n" +
+			"\tif (f == 7) { return (a.excl(" + name + ".M0).size() as int32) * 100 + (b.incl(" + last + ").size() as int32); }\n" +
+			raw + "}\n");
+		const et: ETy = { id: id, shape: EShape.Bitset, name: name, ann: B, n: n, lits: [] };
+		this.eTypes.push(et);
+		return et;
+	}
+
+	literalType(id: int32, k: int32): ETy {
+		const name = "Lt" + String(k);
+		const lits = LIT_SETS[k].split(",");
+		const n = lits.length;
+		let union = "";
+		for (let j = 0; j < n; j++) { union += (j == 0 ? "" : " | ") + quoted(lits[j]); }
+		let at = "function at" + name + "(i: int32): " + name + " {\n\tconst r = ixI(i, " + String(n) + ");\n";
+		let next = "function next" + name + "(d: " + name + "): " + name + " {\n";
+		let ifc = "function if" + name + "(d: " + name + ", a: int32, b: int32): int32 {\n";
+		let mx = "function mx" + name + "(d: " + name + ", a: int32, b: int32): int32 {\n\treturn match (d) {\n";
+		for (let j = 0; j < n; j++) {
+			const pick = j % 2 == 0 ? "a" : "b";
+			if (j < n - 1) {
+				at += "\tif (r == " + String(j) + ") { return " + quoted(lits[j]) + "; }\n";
+				next += "\tif (d == " + quoted(lits[j]) + ") { return " + quoted(lits[j + 1]) + "; }\n";
+				ifc += "\tif (d " + (j % 2 == 0 ? "===" : "==") + " " + quoted(lits[j]) + ") { return " + pick + "; }\n";
+			}
+			mx += "\t\t" + quoted(lits[j]) + " => " + pick + ",\n";
+		}
+		at += "\treturn " + quoted(lits[n - 1]) + ";\n}\n";
+		next += "\treturn " + quoted(lits[0]) + ";\n}\n";
+		ifc += "\treturn b;\n}\n";
+		mx += "\t};\n}\n";
+		const mw = "function mw" + name + "(d: " + name + ", a: int32, b: int32): int32 {\n\treturn match (d) {\n\t\t" + quoted(lits[0]) + " => a,\n\t\t_ => b,\n\t};\n}\n";
+		const cmp = "function cmp" + name + "(d: " + name + ", e: " + name + ", form: int32): int32 {\n" +
+			"\tif (form == 0) { if (d == " + quoted(lits[0]) + ") { return 1; } return 2; }\n" +
+			"\tif (form == 1) { if (d != " + quoted(lits[1]) + ") { return 3; } return 4; }\n" +
+			"\tif (form == 2) { if (d === " + quoted(lits[n - 1]) + ") { return 5; } return 6; }\n" +
+			"\tconst s: string = d;\n" +
+			"\tconst u: string = e;\n" +
+			"\tif (s == u) { return s.length; }\n" +
+			"\treturn u.length + 10;\n}\n";
+		this.useHelper(name, "type " + name + " = " + union + ";\n" + at + next + ifc + mx + mw + cmp);
+		const et: ETy = { id: id, shape: EShape.Literal, name: name, ann: name, n: n, lits: lits };
+		this.eTypes.push(et);
+		return et;
+	}
+
+	enumKit(shape: EShape, variant: int32): ETy {
+		for (const e of this.eTypes) { if (e.shape == shape && e.n == variant) { return e; } }
+		this.ixHelper();
+		const id = this.eTypes.length;
+		if (shape == EShape.Distinct) { return this.distinctKit(id, variant); }
+		if (shape == EShape.Disc) { return this.discKit(id, variant); }
+		return this.unknownKit(id);
+	}
+
+	distinctKit(id: int32, variant: int32): ETy {
+		const isInt = variant == 0;
+		const name = isInt ? "DsI" : "DsF";
+		const s = isInt ? "I" : "F";
+		const ctor = isInt ? "(ixI(i, 2000) - 1000) as DsI" : "((ixI(i, 2000) - 1000) as float64 * 0.5) as DsF";
+		const tail = isInt ? "\treturn (x as int32) + n;\n" : "\treturn (((x as float64) * 2.0) as int32) + n;\n";
+		this.useHelper(name, "type " + name + " = distinct " + (isInt ? "int32" : "float64") + ";\n" +
+			"function ds" + s + "(i: int32): " + name + " { return " + ctor + "; }\n" +
+			"function dsRank" + s + "(xs: " + name + "[], x: " + name + ", f: int32): int32 {\n" +
+			"\tlet n: int32 = 0;\n" +
+			"\tfor (const v of xs) { if (v < x) { n += 1; } }\n" +
+			"\tif (f == 0) { if (xs.includes(x)) { return n + 10; } return n; }\n" +
+			"\tif (f == 1) { return n + (xs.indexOf(x) as int32) * 100; }\n" +
+			"\tif (f == 2) { if (x == xs[0]) { return n + 1; } if (x != xs[xs.length - 1]) { return n + 2; } return n + 3; }\n" +
+			"\tif (f == 3) { if (x >= xs[0]) { return n + 4; } if (x > xs[0]) { return n + 5; } if (x <= xs[0]) { return n + 6; } return n + 7; }\n" +
+			tail + "}\n");
+		const et: ETy = { id: id, shape: EShape.Distinct, name: name, ann: name, n: variant, lits: [] };
+		this.eTypes.push(et);
+		return et;
+	}
+
+	discKit(id: int32, variant: int32): ETy {
+		let name = "Dk0";
+		let lits: string[] = ["ifDk0", "mxDk0", "elDk0"];
+		let text = "";
+		if (variant == 0) {
+			text = "type Dk0 =\n\t| { kind: \"c\", r: int32 }\n\t| { kind: \"s\", a: int32, b: int32 }\n\t| { kind: \"t\", x: int32 };\n" +
+				"function mkDk0(k: int32, n: int32): Dk0 {\n\tconst m = n % 1000;\n\tconst r = k % 3;\n" +
+				"\tif (r == 0) { return { kind: \"c\", r: m }; }\n" +
+				"\tif (r == 1 || r == -1) { return { kind: \"s\", a: m, b: m + 1 }; }\n" +
+				"\treturn { kind: \"t\", x: m * 2 };\n}\n" +
+				"function ifDk0(d: Dk0): int32 {\n\tif (d.kind === \"c\") { return d.r; }\n\tif (d.kind === \"s\") { return d.a + d.b; }\n\treturn d.x;\n}\n" +
+				"function mxDk0(d: Dk0): int32 {\n\treturn match (d.kind) {\n\t\t\"c\" => d.r,\n\t\t\"s\" => d.a * 10 + d.b,\n\t\t\"t\" => d.x - 1,\n\t};\n}\n" +
+				"function elDk0(d: Dk0): int32 {\n\tif (d.kind === \"c\") { return 1; }\n\telse if (d.kind === \"s\") { return d.a; }\n\telse { return d.x; }\n}\n" +
+				"function nvDk0(d: Dk0): int32 {\n\tif (d.kind === \"c\") { return d.r; }\n\tif (d.kind === \"s\") { return d.a; }\n\tif (d.kind === \"t\") { return d.x; }\n\tconst x: never = d;\n\treturn 0;\n}\n";
+		} else if (variant == 1) {
+			name = "Dm0";
+			lits = ["ifDm0", "mxDm0"];
+			text = "enum Kd0 { Num, Str, Bin }\n" +
+				"type Dm0 = match (kind: Kd0) {\n\tKd0.Num => { value: int32 },\n\tKd0.Str => { text: float64 },\n\tKd0.Bin => { l: int32, r: int32 },\n};\n" +
+				"function mkDm0(k: int32, n: int32): Dm0 {\n\tconst m = n % 1000;\n\tconst r = k % 3;\n" +
+				"\tif (r == 0) { return { kind: Kd0.Num, value: m }; }\n" +
+				"\tif (r == 1 || r == -1) { return { kind: Kd0.Str, text: m as float64 * 0.5 }; }\n" +
+				"\treturn { kind: Kd0.Bin, l: m, r: m + 1 };\n}\n" +
+				"function ifDm0(d: Dm0): int32 {\n\tif (d.kind === Kd0.Num) { return d.value; }\n\tif (d.kind === Kd0.Str) { return (d.text * 2.0) as int32; }\n\treturn d.l + d.r;\n}\n" +
+				"function mxDm0(d: Dm0): int32 {\n\treturn match (d.kind) {\n\t\tKd0.Num => d.value,\n\t\tKd0.Str => (d.text * 4.0) as int32,\n\t\tKd0.Bin => d.l * 100 + d.r,\n\t};\n}\n";
+		} else {
+			name = "Db0";
+			lits = ["ifDb0"];
+			text = "type Db0 = match (ok: boolean) {\n\ttrue => { value: float64 },\n\tfalse => { err: int32 },\n};\n" +
+				"function mkDb0(k: int32, n: int32): Db0 {\n\tconst m = n % 1000;\n" +
+				"\tif (k % 2 == 0) { return { ok: true, value: m as float64 }; }\n" +
+				"\treturn { ok: false, err: m };\n}\n" +
+				"function ifDb0(d: Db0): int32 {\n\tif (d.ok) { return d.value as int32; }\n\treturn d.err;\n}\n";
+		}
+		this.useHelper(name, text);
+		const et: ETy = { id: id, shape: EShape.Disc, name: name, ann: name, n: variant, lits: lits };
+		this.eTypes.push(et);
+		return et;
+	}
+
+	unknownKit(id: int32): ETy {
+		this.useHelper("Cx", "class Cx0 { v: int32; constructor(v: int32) { this.v = v; } }\n" +
+			"class Cx1 { w: float64; constructor(w: float64) { this.w = w; } }\n" +
+			"class Cx2 extends Cx0 { z: int32 = 5; constructor(v: int32) { super(v); } }\n" +
+			"function mkCx(k: int32, n: int32): unknown {\n\tconst m = n % 1000;\n\tconst r = k % 3;\n" +
+			"\tif (r == 0) { return new Cx0(m); }\n" +
+			"\tif (r == 1 || r == -1) { return new Cx1(m as float64 + 0.5); }\n" +
+			"\treturn new Cx2(m);\n}\n" +
+			"function scoreCx(u: unknown): int32 {\n\tif (u instanceof Cx2) { return u.v + u.z; }\n\tif (u instanceof Cx0) { return u.v; }\n\tif (u instanceof Cx1) { return (u.w * 2.0) as int32; }\n\treturn -1;\n}\n" +
+			"function kindCx(u: unknown): int32 {\n\treturn u instanceof Cx1 ? 1 : u instanceof Cx0 ? 2 : 0;\n}\n" +
+			"function castCx(u: unknown): int32 {\n\tif (u instanceof Cx1) { const c = u as Cx1; return (c.w as int32) + 100; }\n\treturn 0;\n}\n");
+		const et: ETy = { id: id, shape: EShape.Unknown, name: "Cx", ann: "unknown", n: 0, lits: ["scoreCx", "kindCx", "castCx"] };
+		this.eTypes.push(et);
+		return et;
+	}
+
+	neverHelpers(): void {
+		this.useHelper("failN", "function failN(code: int32): never { throw new Error(\"fail\" + String(code)); }\n" +
+			"function evenN(i: int32): int32 { return i - i % 2; }\n" +
+			"function pickN(i: int32): int32 | null {\n\tif (i % 2 == 0) { return i; }\n\treturn null;\n}\n" +
+			"function pickF(i: int32): float64 | null {\n\tif (i % 2 == 0) { return i as float64 * 0.5; }\n\treturn null;\n}\n" +
+			"function mustN(x: int32 | null): int32 {\n\tif (x === null) { failN(1); }\n\treturn x;\n}\n" +
+			"function mustF(x: float64 | null, k: int32): int32 {\n\tif (x === null) { return failN(k); }\n\treturn (x * 2.0) as int32;\n}\n" +
+			"function mustE(x: int32 | string): int32 {\n\tif (typeof x === \"string\") { failN(3); }\n\treturn x;\n}\n");
+	}
+
+	aliasKit(t: Ty): string {
+		const X = tyTitle(t);
+		const T = tyName(t);
+		this.ixHelper();
+		if (this.hasHelper("Als" + X)) { return X; }
+		this.useHelper("Als" + X, "type Als" + X + " = " + T + ";\n" +
+			"type Alc" + X + " = Als" + X + ";\n" +
+			"type Ala" + X + " = Alc" + X + "[];\n" +
+			"type Alf" + X + " = (x: Alc" + X + ") => Als" + X + ";\n" +
+			"type Alp" + X + " = { a: Alc" + X + ", b: Als" + X + " };\n" +
+			"type Alb" + X + "<V> = { v: V };\n" +
+			"function alsId" + X + "(x: Alc" + X + "): Als" + X + " { return x; }\n" +
+			"function alsAt" + X + "(xs: Ala" + X + ", i: int32, d: Alc" + X + "): Als" + X + " {\n" +
+			"\tif (xs.length == 0) { return d; }\n" +
+			"\treturn xs[ixI(i, xs.length)];\n}\n" +
+			"function alsApp" + X + "(f: Alf" + X + ", x: Als" + X + "): Alc" + X + " { return f(x); }\n" +
+			"function alsPair" + X + "(p: Alp" + X + ", q: { a: " + T + ", b: " + T + " }): Als" + X + " {\n" +
+			"\tif (p.a == q.a) { return p.b; }\n" +
+			"\treturn q.b;\n}\n" +
+			"function alsBox" + X + "(b: Alb" + X + "<Als" + X + ">, c: Alb" + X + "<" + T + ">): Alc" + X + " {\n" +
+			"\tif (b.v == c.v) { return b.v; }\n" +
+			"\treturn c.v;\n}\n");
+		return X;
+	}
+
+	selHelper(et: ETy, t: Ty): string {
+		const name = "sel" + et.name + tyTitle(t);
+		if (this.hasHelper(name)) { return name; }
+		const T = tyName(t);
+		const E = et.name;
+		return this.useHelper(name, "function " + name + "(e: " + E + ", f: " + E + ", form: int32, x: " + T + ", y: " + T + "): " + T + " {\n" +
+			"\tif (form == 0) { if (e == f) { return x; } return y; }\n" +
+			"\tif (form == 1) { if (e != f) { return x; } return y; }\n" +
+			"\tif (form == 2) { if (e === f) { return x; } return y; }\n" +
+			"\tif ((e as int32) < (f as int32)) { return x; }\n" +
+			"\treturn y;\n}\n");
+	}
+
+	matchHelper(et: ETy, t: Ty): string {
+		const name = "m" + et.name + tyTitle(t);
+		if (this.hasHelper(name)) { return name; }
+		const T = tyName(t);
+		const n = et.n;
+		const c1 = this.rng.between(1, n - 1);
+		const c2 = this.rng.between(c1, n - 1);
+		let arms = "\t\t" + this.members(et, 0, c1) + " => a,\n";
+		if (c2 > c1) {
+			if (this.rng.chance(40)) { arms += "\t\t" + this.members(et, c1, c2) + " when a < c => c,\n"; }
+			arms += "\t\t" + this.members(et, c1, c2) + " => b,\n";
+		}
+		if (this.rng.chance(30)) {
+			arms += "\t\t" + this.members(et, c2, n) + " => c,\n";
+		} else {
+			arms += "\t\t_ => c,\n";
+		}
+		return this.useHelper(name, "function " + name + "(e: " + et.name + ", a: " + T + ", b: " + T + ", c: " + T + "): " + T + " {\n" +
+			"\treturn match (e) {\n" + arms + "\t};\n}\n");
+	}
+
+	eValue(et: ETy, depth: int32): string {
+		const vars = this.enumVars(et);
+		if (vars.length > 0 && this.rng.chance(40)) { return this.pickEnt(vars).name; }
+		if (et.shape == EShape.Bitset) { return this.maskExpr(et, 0); }
+		if (et.shape == EShape.Numeric && this.rng.chance(40)) { return this.member(et); }
+		if (et.shape == EShape.Literal && this.rng.chance(30)) { return quoted(et.lits[this.rng.below(et.n)]); }
+		const s = this.smallInt(depth);
+		if (et.shape == EShape.Numeric || et.shape == EShape.Literal) { return "at" + et.name + "(" + s + ")"; }
+		if (et.shape == EShape.Distinct) { return "ds" + et.name.slice(2, et.name.length) + "(" + s + ")"; }
+		return "mk" + et.name + "(" + s + ", " + this.smallInt(depth) + ")";
+	}
+
+	maskExpr(et: ETy, depth: int32): string {
+		const vars = this.enumVars(et);
+		if (vars.length > 0 && this.rng.chance(40)) { return this.pickEnt(vars).name; }
+		let s = "(0 as " + et.ann + ")";
+		const m = this.rng.between(0, 3);
+		for (let j = 0; j < m; j++) { s += ".incl(" + this.member(et) + ")"; }
+		if (depth < 2 && this.rng.chance(30)) { return "(" + s + " " + this.pickOp(BIT_OPS) + " " + this.maskExpr(et, depth + 1) + ")"; }
+		return s;
+	}
+
+	maskUpdate(et: ETy, v: string, indent: string): string {
+		const k = this.rng.below(5);
+		if (k == 0) { return indent + v + " |= " + this.member(et) + ";\n"; }
+		if (k == 1) { return indent + v + " &= " + this.maskExpr(et, 0) + ";\n"; }
+		if (k == 2) { return indent + v + " ^= " + this.maskExpr(et, 0) + ";\n"; }
+		if (k == 3) { return indent + v + " = " + v + ".excl(" + this.member(et) + ");\n"; }
+		return indent + v + " = " + v + ".incl(" + this.member(et) + ").union(" + this.maskExpr(et, 0) + ");\n";
+	}
+
+	shapeType(shape: EShape): ETy {
+		if (shape == EShape.Bitset) { return this.enumType(EShape.Bitset); }
+		if (shape == EShape.Literal) { return this.enumType(EShape.Literal); }
+		if (shape == EShape.Distinct) { return this.enumKit(EShape.Distinct, this.rng.below(2)); }
+		if (shape == EShape.Disc) { return this.enumKit(EShape.Disc, this.rng.below(3)); }
+		if (shape == EShape.Unknown) { return this.enumKit(EShape.Unknown, 0); }
+		return this.enumType(EShape.Numeric);
+	}
+
+	enumExpr(t: Ty, depth: int32): string {
+		const shape = E_SHAPES[this.pickW(W.EnumNumeric, W.EnumNever)];
+		if (shape == EShape.Alias) { return this.aliasExpr(t, depth); }
+		if (shape == EShape.Never) { return this.neverExpr(t, depth); }
+		if (!this.reserve(6 as int64)) { return ""; }
+		const et = this.shapeType(shape);
+		if (shape == EShape.Numeric) {
+			const a = this.eValue(et, depth + 1);
+			if (this.rng.chance(50)) { return this.lift("(" + a + " as int32)", t); }
+			const sel = this.selHelper(et, t);
+			const b = this.eValue(et, depth + 1);
+			return sel + "(" + a + ", " + b + ", " + String(this.rng.below(4)) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (shape == EShape.Match) {
+			const m = this.matchHelper(et, t);
+			const e = this.eValue(et, depth + 1);
+			return m + "(" + e + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (shape == EShape.Bitset) {
+			if (!this.reserve(et.n as int64)) { return ""; }
+			const a = this.maskExpr(et, 0);
+			const b = this.maskExpr(et, 0);
+			return this.lift("bs" + et.name + "(" + a + ", " + b + ", " + String(this.rng.below(9)) + ")", t);
+		}
+		if (shape == EShape.Distinct) {
+			const s = et.name.slice(2, et.name.length);
+			const m = this.rng.between(1, 3);
+			let xs = "";
+			for (let j = 0; j < m; j++) { xs += (j == 0 ? "" : ", ") + this.eValue(et, depth + 1); }
+			const x = this.eValue(et, depth + 1);
+			return this.lift("dsRank" + s + "([" + xs + "], " + x + ", " + String(this.rng.below(5)) + ")", t);
+		}
+		if (shape == EShape.Literal) {
+			const d = this.eValue(et, depth + 1);
+			const k = this.rng.below(4);
+			if (k == 3) { return this.lift("cmp" + et.name + "(" + d + ", " + this.eValue(et, depth + 1) + ", " + String(this.rng.below(4)) + ")", t); }
+			const f = k == 0 ? "if" : k == 1 ? "mw" : "mx";
+			return this.lift(f + et.name + "(" + d + ", " + String(this.rng.between(-9, 9)) + ", " + String(this.rng.between(-9, 9)) + ")", t);
+		}
+		return this.lift(et.lits[this.rng.below(et.lits.length)] + "(" + this.eValue(et, depth + 1) + ")", t);
+	}
+
+	aliasExpr(t: Ty, depth: int32): string {
+		if (!this.reserve(6 as int64)) { return ""; }
+		const X = this.aliasKit(t);
+		const k = this.rng.below(5);
+		if (k == 0) { return "alsId" + X + "(" + this.expr(t, depth + 1) + ")"; }
+		if (k == 1) {
+			const xs = "[" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + "]";
+			return "alsAt" + X + "(" + xs + ", " + this.smallInt(depth) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (k == 2) {
+			const f = this.lambda([t], t, depth, this.spare(1 as int64));
+			if (!this.reserve(f.cost)) { return ""; }
+			return "alsApp" + X + "(" + f.text + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (k == 3) {
+			const p = "{ a: " + this.expr(t, depth + 1) + ", b: " + this.expr(t, depth + 1) + " }";
+			return "alsPair" + X + "(" + p + ", { a: " + this.expr(t, depth + 1) + ", b: " + this.expr(t, depth + 1) + " })";
+		}
+		return "alsBox" + X + "({ v: " + this.expr(t, depth + 1) + " }, { v: " + this.expr(t, depth + 1) + " })";
+	}
+
+	neverExpr(t: Ty, depth: int32): string {
+		if (!this.reserve(6 as int64)) { return ""; }
+		this.neverHelpers();
+		const k = this.rng.below(4);
+		const s = this.smallInt(depth + 1);
+		if (k == 0) { return this.lift("mustN(pickN(evenN(" + s + ")))", t); }
+		if (k == 1) { return this.lift("mustE(" + s + ")", t); }
+		if (k == 2) { return this.lift("mustF(pickF(evenN(" + s + ")), " + String(this.rng.below(9)) + ")", t); }
+		const et = this.enumKit(EShape.Disc, 0);
+		return this.lift("nvDk0(" + this.eValue(et, depth + 1) + ")", t);
+	}
+
+	enumStatement(t: Ty, indent: string, depth: int32): string {
+		const shape = E_SHAPES[this.pickW(W.EnumNumeric, W.EnumNever)];
+		if (shape == EShape.Alias) {
+			const X = this.aliasKit(t);
+			const value = this.expr(t, 0);
+			return indent + "let " + this.newLocal(t) + ": Alc" + X + " = " + value + ";\n";
+		}
+		if (shape == EShape.Never) {
+			const value = this.neverExpr(t, 0);
+			if (value == "") { return ""; }
+			return indent + "let " + this.newLocal(t) + ": " + tyName(t) + " = " + value + ";\n";
+		}
+		const et = this.shapeType(shape);
+		const vars = this.enumVars(et);
+		if (vars.length > 0 && this.rng.chance(60)) {
+			const v = this.pickEnt(vars).name;
+			if (et.shape == EShape.Bitset) { return this.maskUpdate(et, v, indent); }
+			if (et.shape == EShape.Literal && this.rng.chance(50)) { return indent + v + " = next" + et.name + "(" + v + ");\n"; }
+			return indent + v + " = " + this.eValue(et, 0) + ";\n";
+		}
+		const value = this.eValue(et, 0);
+		const name = this.entName("z");
+		this.ents.push({ kind: EntKind.EnumVar, name: name, ty: Ty.Int32, params: [], len: et.id, cost: 0 as int64 });
+		return indent + "let " + name + ": " + et.ann + " = " + value + ";\n";
+	}
+
 	routineDecl(t: Ty, indent: string): string {
 		const outer: Var[] = [];
 		for (const v of this.scope) {
@@ -3214,16 +3708,6 @@ test "a generator is declared only at a function's top level and its loop body h
 	assert gens > 20;
 }
 
-test "w.fam.iter=0 keeps the stream of the other families" {
-	const off = withWeights("w.fam.iter=0 w.fam.seq=0 w.fam.gcls=0");
-	const without = withWeights("fams=closure,union,generic,agg,coll,str,own");
-	for (let seed = 1; seed <= 20; seed++) {
-		const a = generate(seed as uint64, off);
-		const b = generate(seed as uint64, without);
-		assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
-	}
-}
-
 function seqFeatures(extra: string): Features {
 	return withWeights("fams=seq stmts=8 w.stmt.fam=80 w.expr.fam=40 " + extra);
 }
@@ -3269,36 +3753,6 @@ test "the gcls family alone reaches each of its shapes" {
 	assert reached(broad, shapes) == 0;
 	const same = textOver(gclsFeatures("types=int32 w.gcls.decl=8 w.gcls.ref=8"), 60);
 	assert reached(same, ["bestQ(", "swapQ<int32>(c", "swapQ<CellQ<"]) == 0;
-}
-
-test "w.fam.seq=0 keeps the stream of the other families" {
-	const off = withWeights("w.fam.seq=0");
-	const without = withWeights("fams=closure,union,generic,agg,coll,str,own,iter,gcls");
-	for (let seed = 1; seed <= 20; seed++) {
-		const a = generate(seed as uint64, off);
-		const b = generate(seed as uint64, without);
-		assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
-	}
-}
-
-test "w.fam.gcls=0 keeps the stream of the other families" {
-	const off = withWeights("w.fam.gcls=0");
-	const without = withWeights("fams=closure,union,generic,agg,coll,str,own,iter,seq");
-	for (let seed = 1; seed <= 20; seed++) {
-		const a = generate(seed as uint64, off);
-		const b = generate(seed as uint64, without);
-		assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
-	}
-}
-
-test "the two new families at weight zero keep the eight-family stream" {
-	const off = withWeights("w.fam.seq=0 w.fam.gcls=0");
-	const eight = withWeights("fams=closure,union,generic,agg,coll,str,own,iter");
-	for (let seed = 1; seed <= 20; seed++) {
-		const a = generate(seed as uint64, off);
-		const b = generate(seed as uint64, eight);
-		assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
-	}
 }
 
 test "a zero shape weight keeps its construct out of the program" {
@@ -3527,4 +3981,126 @@ test "a borrow argument is always a variable, a field or an element" {
 		at = text.indexOf("readG<", at + 6);
 	}
 	assert borrows > 20;
+}
+
+test "the enum family alone reaches each of its shapes" {
+	const f = withWeights("fams=enum types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	const shapes = [
+		"enum En", "selEn0", "mEn0",
+		"BitSet<Fg", "bsFg0", ": BitSet<Fg0> = ", ".union(",
+		"type Als", "alsId", "alsAt", "({ a: ", "({ v: ", "((q", ": Alc",
+		"= distinct int32", "= distinct float64", "dsRankI([", "dsRankF([", ": DsI = ", ": DsF = ",
+		"type Lt0 = \"", "cmpLt0(", "ifLt0(", "mwLt0(", "mxLt0(", ": Lt0 = ", " = nextLt0(",
+		"type Dk0 =", "type Dm0 = match (kind: Kd0)", "type Db0 = match (ok: boolean)", "mkDk0(", ": Dk0 = ", ": Dm0 = ", ": Db0 = ",
+		"): unknown {", ": unknown = mkCx(", "scoreCx(",
+		"): never {", "const x: never = d;", "mustN(", "mustE(", "mustF(", "nvDk0(",
+	];
+	const floor = [1, 2, 2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 2, 2, 2];
+	assert shapes.length == floor.length;
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 61; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (countOf(text, shapes[i]) >= floor[i]) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "an enum never repeats a value, so no match repeats a case label" {
+	for (let seed = 1; seed <= 200; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.numericType(0, 0);
+		const seen: int32[] = [];
+		let expected = 0;
+		for (const line of g.helperText.split("\n")) {
+			if (!line.startsWith("\tM")) { continue; }
+			const body = line.slice(0, line.length - 1);
+			const eq = body.indexOf(" = ");
+			const value = eq < 0 ? expected : parseInt(body.slice(eq + 3, body.length)) as int32;
+			for (const v of seen) { assert v != value; }
+			seen.push(value);
+			expected = value + 1;
+		}
+		assert seen.length >= 2;
+	}
+}
+
+test "match arms hold identical or disjoint pattern sets" {
+	let helpers = 0;
+	for (let seed = 1; seed <= 60; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32];
+		const et = g.enumType(EShape.Numeric);
+		g.matchHelper(et, Ty.Int32);
+		helpers++;
+		const sets: string[][] = [];
+		for (const line of g.helperText.split("\n")) {
+			if (!line.startsWith("\t\t") || !line.contains(" => ") || line.startsWith("\t\t_")) { continue; }
+			let head = line.slice(2, line.indexOf(" => "));
+			if (head.contains(" when ")) { head = head.slice(0, head.indexOf(" when ")); }
+			sets.push(head.split(" | "));
+		}
+		for (const a of sets) {
+			for (const b of sets) {
+				let shared = 0;
+				for (const x of a) { if (b.includes(x)) { shared++; } }
+				assert shared == 0 || (shared == a.length && shared == b.length);
+			}
+		}
+	}
+	assert helpers == 60;
+}
+
+test "the enum family emits no shape a compiler card parks" {
+	const f = withWeights("fams=enum stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	for (const set of LIT_SETS) {
+		for (const lit of set.split(",")) { assert lit.length > 0 && !"-0123456789".includes(lit.slice(0, 1)); }
+	}
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("distinct string") && !text.contains("Map<Ds") && !text.contains("Set<Ds");
+		assert !text.contains("Lt0[]") && !text.contains("Lt1[]") && !text.contains("Lt2[]");
+		assert !text.contains("assertNever") && countOf(text, ": never = ") == countOf(text, "const x: never = d;");
+		assert countOf(text, "const x: never = d;") <= countOf(text, "function nvDk0(d: Dk0)");
+		assert !text.contains("(d == e)") && !text.contains("(d != e)") && !text.contains("(d === e)") && !text.contains("d.length");
+	}
+	const g = new Gen();
+	g.rng = Rng.seeded(1 as uint64);
+	g.enumKit(EShape.Distinct, 0);
+	g.enumKit(EShape.Distinct, 1);
+	for (const line of g.helperText.split("\n")) {
+		const bare = line.replaceAll("(x as int32)", "").replaceAll("(x as float64)", "");
+		for (const op of [" + x", "x + ", " - x", "x - ", " * x", "x * ", " / x", "x / ", " % x", "x % "]) { assert !bare.contains(op); }
+	}
+}
+
+test "a family at weight zero keeps the stream of the others" {
+	for (const f of ALL_FAMS) {
+		const others: string[] = [];
+		for (const o of ALL_FAMS) { if (o != f) { others.push(famName(o)); } }
+		const off = withWeights("w.fam." + famName(f) + "=0");
+		const without = withWeights("fams=" + others.join(","));
+		for (let seed = 1; seed <= 8; seed++) {
+			const a = generate(seed as uint64, off);
+			const b = generate(seed as uint64, without);
+			assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
+		}
+	}
+}
+
+test "the families added after own keep the seven-family stream at weight zero" {
+	let zero = "";
+	const first: string[] = [];
+	for (const f of ALL_FAMS) {
+		if (first.length < 7) { first.push(famName(f)); } else { zero += " w.fam." + famName(f) + "=0"; }
+	}
+	assert first[6] == "own";
+	const off = withWeights(zero.trim());
+	const without = withWeights("fams=" + first.join(","));
+	for (let seed = 1; seed <= 20; seed++) {
+		const a = generate(seed as uint64, off);
+		const b = generate(seed as uint64, without);
+		assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
+	}
 }
