@@ -42,12 +42,13 @@ export interface RaiserCallFrame {
 	returnIp: int32;
 	returnReg: int32;
 	baseReg: int32;
-	funcName: string;
-	safePoints: number[];   // the caller's pending try handlers, restored on return
+	spBase: int32;   // safePoints length where the callee's own handlers begin
 }
 
+// items[0..depth) are the live frames; a popped record stays for the next call to rewrite.
 export interface RaiserCallFrames {
 	items: RaiserCallFrame[];
+	depth: number;
 }
 
 // A strand is one independent line of execution: its own register file, its
@@ -303,7 +304,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	ensureSlots(regs, entryReserve);
 	const nilVal = raiserNil();
 	const callFrames: RaiserCallFrame[] = [];
-	const callStack: RaiserCallFrames = { items: callFrames };
+	const callStack: RaiserCallFrames = { items: callFrames, depth: 0 };
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const mainResult = raiserNil();
@@ -468,7 +469,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.exitValue = raiserNil();
 	vm.diagMessage = "";
 	vm.loopCount = 0;
-	vm.callStack.items.length = 0;
+	vm.callStack.depth = 0;
 	resetStrands(vm, funcIdx);
 	ensureSlots(vm.regs, vm.baseReg + callee.maxRegs);
 	let i = 0;
@@ -500,7 +501,7 @@ function suspendRun(vm: RaiserVM): void {
 		safePoints: vm.safePoints, currentException: vm.currentException, unwinding: vm.unwinding, savedIp: vm.savedIp,
 	});
 	const frames: RaiserCallFrame[] = [];
-	vm.callStack = { items: frames };
+	vm.callStack = { items: frames, depth: 0 };
 	const strandItems: RaiserStrand[] = [];
 	const futureItems: RaiserFuture[] = [];
 	const timerItems: RaiserTimer[] = [];
@@ -674,9 +675,14 @@ export function vmOrphanFailures(vm: RaiserVM): string[] {
 // A per-frame stack of safepoints, each holding the ip of the handler metadata
 // its `Try` registered, plus one in-flight exception.
 
+function safePointBase(vm: RaiserVM): number {
+	const depth = vm.callStack.depth;
+	return depth == 0 ? 0 : vm.callStack.items[depth - 1].spBase;
+}
+
 function popSafePoint(vm: RaiserVM): number {
 	const n = vm.safePoints.length;
-	if (n == 0) return -1;
+	if (n == safePointBase(vm)) return -1;
 	const top = vm.safePoints[n - 1];
 	vm.safePoints.length = n - 1;
 	return top;
@@ -685,13 +691,13 @@ function popSafePoint(vm: RaiserVM): number {
 // Pop one call frame without delivering a return value: the call is being
 // abandoned by an exception.
 function unwindFrame(vm: RaiserVM): void {
-	const len = vm.callStack.items.length;
-	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.shrink(len - 1);
+	const depth = vm.callStack.depth - 1;
+	const frame = vm.callStack.items[depth];
+	vm.callStack.depth = depth;
+	vm.safePoints.length = frame.spBase;
 	vm.funcIdx = frame.funcIdx;
 	vm.ip = frame.returnIp;
 	vm.baseReg = frame.baseReg;
-	vm.safePoints = frame.safePoints;
 }
 
 function unhandledException(vm: RaiserVM): void {
@@ -731,7 +737,7 @@ function unhandledException(vm: RaiserVM): void {
 // back through FinallyEnd. Out of frames means nobody handled it.
 function unwindStep(vm: RaiserVM): void {
 	while (true) {
-		while (vm.safePoints.length > 0) {
+		while (vm.safePoints.length > safePointBase(vm)) {
 			const sp = popSafePoint(vm);
 			const func = getModuleFunc(vm.mod, vm.funcIdx);
 			if (sp < 0 || sp >= getFuncCodeLen(func)) {
@@ -756,7 +762,7 @@ function unwindStep(vm: RaiserVM): void {
 			vmError(vm, `safepoint ${sp} does not point at a handler`);
 			return;
 		}
-		if (vm.callStack.items.length == 0) {
+		if (vm.callStack.depth == 0) {
 			unhandledException(vm);
 			return;
 		}
@@ -769,7 +775,7 @@ function unwindStep(vm: RaiserVM): void {
 // that can own the next finally to run; re-executing the Ret finds the next.
 function cleanUpOnReturn(vm: RaiserVM): number {
 	const n = vm.safePoints.length;
-	if (n == 0) return -1;
+	if (n == safePointBase(vm)) return -1;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	let sp = vm.safePoints[n - 1];
 	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
@@ -948,7 +954,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const regs: RaiserRegFile = { slots };
 	ensureSlots(regs, callee.maxRegs);
 	const frames: RaiserCallFrame[] = [];
-	const callStack: RaiserCallFrames = { items: frames };
+	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
 	const result = raiserNil();
@@ -994,7 +1000,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 		copyValueInto(regs.slots[0], envSlot);
 	}
 	const frames: RaiserCallFrame[] = [];
-	const callStack: RaiserCallFrames = { items: frames };
+	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
 	const fut = newFuture(vm);
@@ -1122,7 +1128,7 @@ function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
 	const frames: RaiserCallFrame[] = [];
-	const callStack: RaiserCallFrames = { items: frames };
+	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
@@ -1174,7 +1180,7 @@ function moduleFail(vm: RaiserVM, error: RaiserValue): void {
 function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
 	const body = getModuleFunc(vm.mod, funcIdx);
 	ensureSlots(vm.regs, body.maxRegs);
-	vm.callStack.items.length = 0;
+	vm.callStack.depth = 0;
 	const sp: number[] = [];
 	vm.safePoints = sp;
 	vm.unwinding = false;
@@ -1825,46 +1831,47 @@ function runStrandSlice(vm: RaiserVM): void {
 
 // --- Call/Ret handlers ---
 
-function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
-	if (vm.callStack.items.length >= MAX_CALL_DEPTH) {
-		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
-	}
-	const destReg = inst.a;
-	const calleeFuncIdx = inst.b;
-	const argCount = inst.c;
-
-	// Validate callee function index
-	if (calleeFuncIdx < 0 || calleeFuncIdx >= vm.mod.functions.length) {
-		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
-	}
-
+function enterCallee(vm: RaiserVM, destReg: number, calleeFuncIdx: number): void {
 	// Reserve the callee's frame: starting at newBase, up to its maxRegs.
-	// Without this pre-allocation, the first opcode in the callee that
-	// accesses a register beyond the current slots length would crash with
-	// `index N out of bounds (length M)` from the runtime array bounds
-	// check — there's no per-opcode guard.
+	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1]).
 	const newBase = vm.baseReg + destReg + 1;
-	const callee = getModuleFunc(vm.mod, calleeFuncIdx as number);
+	const callee = getModuleFunc(vm.mod, calleeFuncIdx);
 	ensureSlots(vm.regs, newBase + callee.maxRegs);
 
-	// Push caller's frame (save current function name for stack traces)
-	const callerFunc = getModuleFunc(vm.mod, vm.funcIdx);
-	const frame: RaiserCallFrame = {
-		funcIdx: vm.funcIdx,
-		returnIp: vm.ip,
-		returnReg: (vm.baseReg + destReg) as int32,
-		baseReg: vm.baseReg,
-		funcName: callerFunc.name,
-		safePoints: vm.safePoints,
-	};
-	vm.callStack.items.push(frame);
-	const calleeSafePoints: number[] = [];
-	vm.safePoints = calleeSafePoints;
+	const stack = vm.callStack;
+	const depth = stack.depth;
+	if (depth < stack.items.length) {
+		const frame = stack.items[depth];
+		frame.funcIdx = vm.funcIdx;
+		frame.returnIp = vm.ip;
+		frame.returnReg = (vm.baseReg + destReg) as int32;
+		frame.baseReg = vm.baseReg;
+		frame.spBase = vm.safePoints.length as int32;
+	} else {
+		stack.items.push({
+			funcIdx: vm.funcIdx,
+			returnIp: vm.ip,
+			returnReg: (vm.baseReg + destReg) as int32,
+			baseReg: vm.baseReg,
+			spBase: vm.safePoints.length as int32,
+		});
+	}
+	stack.depth = depth + 1;
 
-	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
 	vm.baseReg = newBase as int32;
 	vm.funcIdx = calleeFuncIdx as int32;
 	vm.ip = 0;
+}
+
+function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (vm.callStack.depth >= MAX_CALL_DEPTH) {
+		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
+	}
+	const calleeFuncIdx = inst.b;
+	if (calleeFuncIdx < 0 || calleeFuncIdx >= vm.mod.functions.length) {
+		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
+	}
+	enterCallee(vm, inst.a, calleeFuncIdx as number);
 }
 
 function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
@@ -1875,19 +1882,19 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 		vm.ip = finIp as int32;
 		return;
 	}
-	if (vm.callStack.items.length == 0 && vm.current == vm.sched.modules.strand) {
+	if (vm.callStack.depth == 0 && vm.current == vm.sched.modules.strand) {
 		const at = vm.sched.modules.execBody;
 		vm.sched.modules.execBody = -1;
 		if (at >= 0) moduleExecBodyFulfilled(vm, at);
 		moduleTaskContinue(vm);
 		return;
 	}
-	const body = vm.callStack.items.length == 0 ? moduleBodyOf(vm, vm.current) : -1;
+	const body = vm.callStack.depth == 0 ? moduleBodyOf(vm, vm.current) : -1;
 	if (body >= 0) {
 		moduleBodyFinish(vm, body, RaiserModuleJobKind.Fulfilled, raiserNil());
 		return;
 	}
-	if (vm.callStack.items.length == 0) {
+	if (vm.callStack.depth == 0) {
 		// Top-level return — the strand is finished; the main one ends the
 		// program, but only once the remaining strands have drained.
 		const retVal = getReg(vm, vm.baseReg + inst.a);
@@ -1899,10 +1906,10 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 		return;
 	}
 
-	// Pop frame
-	const len = vm.callStack.items.length;
-	const frame = vm.callStack.items[len - 1];
-	vm.callStack.items.shrink(len - 1);
+	const depth = vm.callStack.depth - 1;
+	const frame = vm.callStack.items[depth];
+	vm.callStack.depth = depth;
+	vm.safePoints.length = frame.spBase;
 
 	setReg(vm, frame.returnReg, getReg(vm, vm.baseReg + inst.a));
 
@@ -1912,53 +1919,24 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	// Reclamation instead happens lazily via setReg's decref-on-overwrite when the
 	// slot is next written (frame reuse). Residual: a never-reused slot's ref lingers.
 
-	// Restore caller state
 	vm.funcIdx = frame.funcIdx;
 	vm.baseReg = frame.baseReg;
 	vm.ip = frame.returnIp;
-	vm.safePoints = frame.safePoints;
 }
 
 function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
-	if (vm.callStack.items.length >= MAX_CALL_DEPTH) {
+	if (vm.callStack.depth >= MAX_CALL_DEPTH) {
 		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
 	}
-	const destReg = inst.a;
 	const funcIdxReg = getReg(vm, vm.baseReg + inst.b);
 	if (funcIdxReg.kind != RaiserValueKind.Int) {
 		vmError(vm, "indirect call target is not a function"); return;
 	}
 	const calleeFuncIdx = funcIdxReg.intVal;
-	const argCount = inst.c;
-
-	// Validate callee function index
 	if (calleeFuncIdx < 0 || calleeFuncIdx >= vm.mod.functions.length) {
 		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
 	}
-
-	// Reserve the callee's frame (same rationale as vmHandleCall).
-	const newBase = vm.baseReg + destReg + 1;
-	const callee = getModuleFunc(vm.mod, calleeFuncIdx as number);
-	ensureSlots(vm.regs, newBase + callee.maxRegs);
-
-	// Push caller's frame
-	const callerFunc = getModuleFunc(vm.mod, vm.funcIdx);
-	const frame: RaiserCallFrame = {
-		funcIdx: vm.funcIdx,
-		returnIp: vm.ip,
-		returnReg: (vm.baseReg + destReg) as int32,
-		baseReg: vm.baseReg,
-		funcName: callerFunc.name,
-		safePoints: vm.safePoints,
-	};
-	vm.callStack.items.push(frame);
-	const calleeSafePoints: number[] = [];
-	vm.safePoints = calleeSafePoints;
-
-	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
-	vm.baseReg = newBase as int32;
-	vm.funcIdx = calleeFuncIdx as int32;
-	vm.ip = 0;
+	enterCallee(vm, inst.a, calleeFuncIdx as number);
 }
 
 // --- Array opcode handlers ---
@@ -2583,8 +2561,9 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	const args: RaiserValue[] = [];
 	let i = 0;
 	while (i < inst.c) {
-		const argVal = getReg(vm, base + inst.a + 1 + i);
-		args.push(argVal);
+		const argBox = raiserNil();
+		copyValueInto(argBox, getReg(vm, base + inst.a + 1 + i));
+		args.push(argBox);
 		i = i + 1;
 	}
 
@@ -2635,15 +2614,15 @@ export function vmDumpStack(vm: RaiserVM): string {
 	let trace = "Trace:";
 	// Walk call stack from bottom (oldest) to top (newest)
 	let i = 0;
-	while (i < vm.callStack.items.length) {
+	while (i < vm.callStack.depth) {
 		const frame = vm.callStack.items[i];
 		const func = getModuleFunc(vm.mod, frame.funcIdx);
 		const inst = getFuncInst(func, frame.returnIp > 0 ? frame.returnIp - 1 : 0);
 		const ln = inst.line;
 		if (ln > 0) {
-			trace = `${trace}\n  line ${ln} in ${frame.funcName}`;
+			trace = `${trace}\n  line ${ln} in ${func.name}`;
 		} else {
-			trace = `${trace}\n  ${frame.funcName}`;
+			trace = `${trace}\n  ${func.name}`;
 		}
 		i = i + 1;
 	}
@@ -4591,6 +4570,33 @@ test "a throw unwinds out of the callee into the caller's catch" {
 	// The statement after the throwing call must not run.
 	assert vm.output == "42\n";
 	assert vm.exitValue.intVal == 42;
+}
+
+test "a returning callee leaves no handler behind and its frame record is reused" {
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.Call, 1, 1, 0),
+		raiserABC(RaiserOpcode.Call, 1, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	];
+	const guardedCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 3),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABx(RaiserOpcode.Catch, 1, 2),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const fMain = createRaiserFunction("main", mainCode, [], 0, 0, 4);
+	const fGuarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4);
+	const funcs: RaiserFunction[] = [fMain, fGuarded];
+	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
+	assert vm.error == "";
+	assert vm.exitValue.intVal == 7;
+	assert vm.safePoints.length == 0;
+	assert vm.callStack.depth == 0;
+	assert vm.callStack.items.length == 1;
 }
 
 test "a finally on the way out runs before the outer catch sees the throw" {
