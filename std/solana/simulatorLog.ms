@@ -1,4 +1,4 @@
-import { msSolHostRaise, msSolLoadU8, msSolStoreU8, msSolStoreU64 } from "./memory";
+import { msSolHostFaultCodeOf, msSolHostRaise, msSolLoadU8, msSolProgramId, msSolStoreU8, msSolStoreU64 } from "./memory";
 import {
 	LogBook,
 	OPENING_LINE_BYTES,
@@ -9,10 +9,6 @@ import {
 	recordLine,
 	words,
 } from "./simulatorLogCore";
-
-@include("runtime/solana/solana.h");
-extern function msSolProgramId(): uint64;
-extern function msSolHostFaultCodeOf(): uint64;
 
 const REFUSED: uint64 = 0xffffffffffffffff;
 const COMPUTE_BUDGET: uint64 = 200000;

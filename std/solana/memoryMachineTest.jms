@@ -11,7 +11,7 @@ import {
 	msSolLoadU8,
 	msSolMemoryAllocate,
 	msSolMemoryClearFault,
-	msSolMemoryFaultCode,
+	msSolHostFaultCodeOf,
 	msSolMemoryFaultText,
 	msSolMemoryMap,
 	msSolMemoryRelease,
@@ -108,14 +108,14 @@ test "the first fault wins and carries the text cut to 159 bytes" {
 	msSolMemoryClearFault();
 	msSolHostRaise(7, "first");
 	msSolHostRaise(9, "second");
-	assert msSolMemoryFaultCode() == 7 && msSolMemoryFaultText() == "first";
+	assert msSolHostFaultCodeOf() == 7 && msSolMemoryFaultText() == "first";
 	msSolMemoryClearFault();
 	let long = "";
 	for (let i = 0; i < 200; i++) { long += "x"; }
 	msSolHostRaise(1, long);
 	assert msSolMemoryFaultText().length == 159;
 	msSolMemoryClearFault();
-	assert msSolMemoryFaultCode() == 0 && msSolMemoryFaultText() == "";
+	assert msSolHostFaultCodeOf() == 0 && msSolMemoryFaultText() == "";
 }
 
 test "an overlapping copy faults the run and copies nothing" {
@@ -123,12 +123,12 @@ test "an overlapping copy faults the run and copies nothing" {
 	let buffer: uint8[16] = [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0];
 	const at = addressOf(buffer);
 	msSolCopy(at + 4, at, 8);
-	assert msSolMemoryFaultCode() == 0xffffffffffffffff;
+	assert msSolHostFaultCodeOf() == 0xffffffffffffffff;
 	assert msSolMemoryFaultText() == "ProgramFailedToComplete: sol_memcpy_: Overlapping copy";
 	assert buffer[4] == 5 && buffer[8] == 0;
 	msSolMemoryClearFault();
 	msSolCopy(at + 8, at, 8);
-	assert buffer[8] == 1 && buffer[15] == 8 && msSolMemoryFaultCode() == 0;
+	assert buffer[8] == 1 && buffer[15] == 8 && msSolHostFaultCodeOf() == 0;
 }
 
 test "the data room is the gap to the next record, ported over the account table" {
@@ -139,7 +139,7 @@ test "the data room is the gap to the next record, ported over the account table
 	msSolStoreU64(table, input + 8);
 	msSolStoreU64(table + 8, input + 1024);
 	msSolStoreU64(input + 2048 + 8, 0);
-	msSolMemorySetAccounts(table, 2, input + 2048 + 8, input);
+	msSolMemorySetAccounts(table, 2, input + 2048 + 8, input, input);
 	assert msSolDataRoom(input + 8) == 920;
 	assert msSolDataRoom(input + 1024) == 928;
 	assert msSolDataRoom(input + 16) == 0;

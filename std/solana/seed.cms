@@ -3,9 +3,9 @@
 import { Pubkey } from "./pubkey";
 import { ProgramError } from "./error";
 import { ProgramAddress } from "./pda";
-import { msSolDeriveAddress, msSolFindAddress, msSolFindCanonicalAddress, msSolFindCanonicalStaged, msSolFindExpectedAddress, msSolFindExpectedStaged, msSolHashIsStaged, msSolProgramId, msSolSeedStageInPlace } from "./kernel";
+import { msSolDeriveAddress, msSolFindAddress, msSolFindCanonicalAddress, msSolFindCanonicalStaged, msSolFindExpectedAddress, msSolFindExpectedStaged, msSolHashIsStaged, msSolSeedStageInPlace } from "./kernel";
 import { SeedSlice, SignerSeeds } from "./addressTables";
-import { msSolCopy, msSolLoadU64, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
+import { msSolCopy, msSolLoadU64, msSolProgramId, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
 
 export { SeedSlice, SignerSeeds } from "./addressTables";
 

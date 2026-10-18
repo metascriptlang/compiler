@@ -24,3 +24,5 @@ export extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): 
 export extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
 export extern function msSolDataRoom(record: uint64): uint64;
 export extern function msSolHostRaise(code: uint64, text: string): void;
+export extern function msSolHostFaultCodeOf(): uint64;
+export extern function msSolProgramId(): uint64;

@@ -13,7 +13,7 @@ let msSolMemRegions = [];
 let msSolMemKeys = new WeakMap();
 let msSolMemTexts = new Map();
 let msSolMemNext = 0x100000000n;
-let msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n };
+let msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n, programId: 0n };
 let msSolMemFaultCode = 0n;
 let msSolMemFaultText = "";
 
@@ -292,7 +292,7 @@ function msSolMemRelease() {
   msSolMemKeys = new WeakMap();
   msSolMemTexts = new Map();
   msSolMemNext = 0x100000000n;
-  msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n };
+  msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n, programId: 0n };
 }
 `);
 
@@ -412,11 +412,17 @@ export function msSolMemoryRelease(): void {
 	@emit(`msSolMemRelease();`);
 }
 
-export function msSolMemorySetAccounts(table: uint64, count: uint64, instructionData: uint64, input: uint64): void {
-	@emit(`msSolMemContext = { table: ${table}, count: ${count}, instructionData: ${instructionData}, input: ${input} };`);
+export function msSolMemorySetAccounts(table: uint64, count: uint64, instructionData: uint64, input: uint64, programId: uint64): void {
+	@emit(`msSolMemContext = { table: ${table}, count: ${count}, instructionData: ${instructionData}, input: ${input}, programId: ${programId} };`);
 }
 
-export function msSolMemoryFaultCode(): uint64 {
+export function msSolProgramId(): uint64 {
+	@emit(`if (msSolMemContext.programId === 0n) msSolMemFail("the program id was read before the simulator entered a program");
+  return msSolMemContext.programId;`);
+	unreachable;
+}
+
+export function msSolHostFaultCodeOf(): uint64 {
 	@emit(`return msSolMemFaultCode;`);
 	unreachable;
 }

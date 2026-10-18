@@ -21,7 +21,6 @@ export extern function msSolAccountAt(index: uint64): uint64;
 export extern function msSolAccountSlot(index: uint64): uint64;
 export extern function msSolInstructionData(): uint64;
 export extern function msSolInstructionDataLength(): uint64;
-export extern function msSolProgramId(): uint64;
 export extern function msSolSetResult(code: uint64): void;
 export extern function msSolScratch(size: uint64): uint64;
 export extern function msSolResult(): uint64;
