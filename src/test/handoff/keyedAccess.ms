@@ -40,3 +40,9 @@ test "an element access with a literal key is the property it names" {
 	assert hasError(TODO + "t[\"owner\"];", "'\"owner\"' is not a key of 'Todo'");
 	assert hasError(TODO + "const k: string = \"title\";\nt[k];", "has no '[]' operator");
 }
+
+test "a literal key reads a property of an inferred object type, a non-identifier name too" {
+	const o = "const o = { plain: \"p\", \"data-probe\": \"d\" };\n";
+	assert strictErrorCount(o + "const a: string = o[\"plain\"];\nconst b: string = o[\"data-probe\"];") == 0;
+	assert hasError(o + "o[\"data-prob\"];", "'\"data-prob\"' is not a key of");
+}
