@@ -274,11 +274,22 @@ function isIdentChar(c: string): boolean {
 
 // A prelude routine is named by its declaring module in a JS module, which carries the
 // absolute path of the checkout; a test that pins the call shape reads it without that suffix.
+function moduleSuffixAt(js: string, from: int32): int32 {
+	let at = js.indexOf("__", from);
+	while (at >= 0) {
+		const lead = js.charAt(at + 2);
+		const next = js.charAt(at + 3);
+		if (lead == "Z" || (lead == "M" && next >= "0" && next <= "9")) return at;
+		at = js.indexOf("__", at + 2);
+	}
+	return -1;
+}
+
 function stripRuntimeMangle(js: string): string {
 	let out = "";
 	let i = 0;
 	while (i < js.length) {
-		const at = js.indexOf("__Z", i);
+		const at = moduleSuffixAt(js, i);
 		if (at < 0) {
 			out = out + js.slice(i, js.length);
 			break;
