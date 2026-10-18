@@ -12,8 +12,6 @@
 #define MS_SOL_MAX_SEEDS 16
 #define MS_SOL_MAX_SIGNERS 16
 #define MS_SOL_MAX_SEED_LEN 32
-#define MS_SOL_MAX_RETURN_DATA 1024
-#define MS_SOL_HOST_LOG_BUDGET 10000
 #define MS_SOL_HOST_REFUSED UINT64_MAX
 #define MS_SOL_HOST_NOT_SIMULATED (UINT64_MAX - 1)
 
@@ -26,11 +24,6 @@ typedef struct {
     uint64_t signerCount;
     uint8_t* signerSeeds;
 } msSolHostInvocation;
-
-typedef struct {
-    char* text;
-    size_t length;
-} msSolHostLogLine;
 
 typedef struct {
     uint8_t* record;
@@ -50,20 +43,14 @@ static uint64_t msSolHostAccounts[MS_SOL_MAX_ACCOUNTS];
 static uint8_t* msSolHostInputBuffer;
 static uint64_t msSolHostFaultCode;
 static char msSolHostFaultText[160];
-static msSolHostLogLine* msSolHostLogLines;
-static uint64_t msSolHostLogCount;
-static uint64_t msSolHostLogBytes;
-static int msSolHostLogTruncated;
 static msSolHostInvocation* msSolHostInvocations;
 static uint64_t msSolHostInvocationCount;
-static uint64_t msSolHostRentReadCount;
-static uint8_t msSolHostReturnData[MS_SOL_MAX_RETURN_DATA];
-static uint64_t msSolHostReturnLength;
-static uint8_t msSolHostReturnProgram[32];
-static uint64_t msSolHostClock[5];
 static msSolHostHeld msSolHostHolds[MS_SOL_MAX_ACCOUNTS];
 static uint64_t msSolHostHoldCount;
 static void msSolHostHoldAccounts(void);
+void msSolHostResetSimulator(void);
+void msSolHostClearReturnData(void);
+void msSolHostSetReturnDataAt(uint64_t data, uint64_t length);
 
 msSolanaContext* msSolHostContext(void) {
     if (msSolHostState.input == 0) {
@@ -99,12 +86,7 @@ uint64_t msSolHostScratch(uint64_t size) {
 }
 
 static void msSolHostForget(void) {
-    for (uint64_t index = 0; index < msSolHostLogCount; index++) free(msSolHostLogLines[index].text);
-    free(msSolHostLogLines);
-    msSolHostLogLines = NULL;
-    msSolHostLogCount = 0;
-    msSolHostLogBytes = 0;
-    msSolHostLogTruncated = 0;
+    msSolHostResetSimulator();
     for (uint64_t index = 0; index < msSolHostInvocationCount; index++) {
         free(msSolHostInvocations[index].metas);
         free(msSolHostInvocations[index].data);
@@ -125,11 +107,8 @@ void msSolHostEnter(uint64_t input) {
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
     msSolParse(msSolHostAccounts);
     msSolHostHoldAccounts();
-    msSolHostRentReadCount = 0;
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
-    msSolHostReturnLength = 0;
-    memset(msSolHostReturnProgram, 0, sizeof(msSolHostReturnProgram));
 }
 
 uint64_t msSolHostInput(uint64_t size) {
@@ -142,144 +121,11 @@ uint64_t msSolHostInput(uint64_t size) {
 uint64_t msSolHostResult(void) { return msSolHostState.result; }
 uint64_t msSolHostFaultCodeOf(void) { return msSolHostFaultCode; }
 msString msSolHostFaultMessage(void) { return msStringNew(msSolHostFaultText, (int64_t)strlen(msSolHostFaultText)); }
-uint64_t msSolHostLogTotal(void) { return msSolHostLogCount; }
-
-msString msSolHostLogAt(uint64_t index) {
-    if (index >= msSolHostLogCount) return msStringNew("", 0);
-    return msStringNew(msSolHostLogLines[index].text, (int64_t)msSolHostLogLines[index].length);
-}
 
 uint64_t msSolHostInvocationTotal(void) { return msSolHostInvocationCount; }
-uint64_t msSolHostRentReadTotal(void) { return msSolHostRentReadCount; }
 
 uint64_t msSolHostInvocationAt(uint64_t index) {
     return index < msSolHostInvocationCount ? (uint64_t)&msSolHostInvocations[index] : 0;
-}
-
-void msSolHostSetClock(uint64_t slot, uint64_t epochStart, uint64_t epoch, uint64_t leaderEpoch, uint64_t unixTime) {
-    msSolHostClock[0] = slot;
-    msSolHostClock[1] = epochStart;
-    msSolHostClock[2] = epoch;
-    msSolHostClock[3] = leaderEpoch;
-    msSolHostClock[4] = unixTime;
-}
-
-static void msSolHostBase58(const uint8_t* key, char* out) {
-    static const char alphabet[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    uint8_t digits[64];
-    size_t digitCount = 0;
-    for (size_t index = 0; index < 32; index++) {
-        uint32_t carry = key[index];
-        for (size_t digit = 0; digit < digitCount; digit++) {
-            carry += (uint32_t)digits[digit] << 8;
-            digits[digit] = (uint8_t)(carry % 58);
-            carry /= 58;
-        }
-        while (carry > 0) {
-            digits[digitCount++] = (uint8_t)(carry % 58);
-            carry /= 58;
-        }
-    }
-    size_t length = 0;
-    for (size_t index = 0; index < 32 && key[index] == 0; index++) out[length++] = '1';
-    while (digitCount > 0) out[length++] = alphabet[digits[--digitCount]];
-    out[length] = 0;
-}
-
-static void msSolHostRecordLog(const char* text, size_t length) {
-    if (msSolHostFaultCode != 0) return;
-    if (msSolHostLogBytes == 0) {
-        char program[64];
-        msSolHostBase58((const uint8_t*)msSolHostContext()->programId, program);
-        msSolHostLogBytes = strlen("Program  invoke [1]") + strlen(program);
-    }
-    if (msSolHostLogBytes + length >= MS_SOL_HOST_LOG_BUDGET) {
-        if (msSolHostLogTruncated) return;
-        msSolHostLogTruncated = 1;
-        text = "Log truncated";
-        length = strlen(text);
-    } else {
-        msSolHostLogBytes += length;
-    }
-    msSolHostLogLine* grown = (msSolHostLogLine*)realloc(msSolHostLogLines, (size_t)(msSolHostLogCount + 1) * sizeof(msSolHostLogLine));
-    char* copy = (char*)malloc(length + 1);
-    if (grown == NULL || copy == NULL) abort();
-    memcpy(copy, text, length);
-    copy[length] = 0;
-    msSolHostLogLines = grown;
-    msSolHostLogLines[msSolHostLogCount++] = (msSolHostLogLine){copy, length};
-}
-
-static int msSolHostIsUtf8(const uint8_t* bytes, uint64_t length) {
-    static const uint32_t smallest[4] = {0, 0x80, 0x800, 0x10000};
-    for (uint64_t at = 0; at < length;) {
-        uint8_t lead = bytes[at];
-        uint32_t extra = lead < 0x80 ? 0 : (lead & 0xe0) == 0xc0 ? 1 : (lead & 0xf0) == 0xe0 ? 2 : (lead & 0xf8) == 0xf0 ? 3 : 4;
-        if (extra == 4 || extra >= length - at) return 0;
-        uint32_t point = extra == 0 ? lead : lead & (0x3fu >> extra);
-        for (uint32_t index = 1; index <= extra; index++) {
-            if ((bytes[at + index] & 0xc0) != 0x80) return 0;
-            point = (point << 6) | (bytes[at + index] & 0x3f);
-        }
-        if (point < smallest[extra] || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) return 0;
-        at += extra + 1;
-    }
-    return 1;
-}
-
-void msSolHostLog(uint64_t address, uint64_t length) {
-    if (!msSolHostIsUtf8((const uint8_t*)address, length)) {
-        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_log_: the line is not valid UTF-8");
-        return;
-    }
-    char* line = (char*)malloc((size_t)length + 13);
-    if (line == NULL) abort();
-    memcpy(line, "Program log: ", 13);
-    memcpy(line + 13, (const void*)address, (size_t)length);
-    msSolHostRecordLog(line, (size_t)length + 13);
-    free(line);
-}
-
-void msSolHostLog64(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
-    char line[160];
-    snprintf(line, sizeof(line), "Program log: 0x%llx, 0x%llx, 0x%llx, 0x%llx, 0x%llx",
-        (unsigned long long)a, (unsigned long long)b, (unsigned long long)c, (unsigned long long)d, (unsigned long long)e);
-    msSolHostRecordLog(line, strlen(line));
-}
-
-void msSolHostLogPubkey(uint64_t address) {
-    char encoded[64];
-    char line[96];
-    msSolHostBase58((const uint8_t*)address, encoded);
-    snprintf(line, sizeof(line), "Program log: %s", encoded);
-    msSolHostRecordLog(line, strlen(line));
-}
-
-void msSolHostLogData(uint64_t address, uint64_t length) {
-    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    const uint8_t* bytes = (const uint8_t*)address;
-    size_t encodedLength = (size_t)((length + 2) / 3 * 4);
-    char* line = (char*)malloc(encodedLength + 15);
-    if (line == NULL) abort();
-    memcpy(line, "Program data: ", 14);
-    size_t at = 14;
-    for (uint64_t index = 0; index < length; index += 3) {
-        uint32_t group = (uint32_t)bytes[index] << 16;
-        if (index + 1 < length) group |= (uint32_t)bytes[index + 1] << 8;
-        if (index + 2 < length) group |= bytes[index + 2];
-        line[at++] = alphabet[(group >> 18) & 63];
-        line[at++] = alphabet[(group >> 12) & 63];
-        line[at++] = index + 1 < length ? alphabet[(group >> 6) & 63] : '=';
-        line[at++] = index + 2 < length ? alphabet[group & 63] : '=';
-    }
-    msSolHostRecordLog(line, at);
-    free(line);
-}
-
-void msSolHostLogComputeUnits(void) {
-    char line[96];
-    snprintf(line, sizeof(line), "Program consumption: %llu units remaining", (unsigned long long)MS_SOL_HOST_COMPUTE_BUDGET);
-    msSolHostRecordLog(line, strlen(line));
 }
 
 uint64_t msSolHostRemainingComputeUnits(void) { return MS_SOL_HOST_COMPUTE_BUDGET; }
@@ -327,8 +173,6 @@ uint64_t msSolHostResizeRecord(uint64_t record, uint64_t space);
 uint64_t msSolHostAnyByteIn(uint64_t bytes, uint64_t from, uint64_t to);
 uint64_t msSolHostSystemInvoke(uint64_t header);
 
-#define MS_SOL_HOST_LAMPORTS_PER_BYTE_YEAR 3480ULL
-#define MS_SOL_HOST_RENT_EXEMPTION_YEARS 2
 
 static uint8_t* msSolHostRecordOf(const uint64_t* header, uint64_t index) {
     return (uint8_t*)(uintptr_t)msSolHostRecordAddress((uint64_t)(uintptr_t)header, index);
@@ -1234,7 +1078,7 @@ static uint64_t msSolHostInvoked(const uint64_t* header, uint64_t signers, uint6
     record->signerSeeds = (uint8_t*)malloc((size_t)signerBytes + 1);
     if (record->signerSeeds == NULL) abort();
     msSolHostRecordSigners(record->signerSeeds, signers, signerCount);
-    msSolHostReturnLength = 0;
+    msSolHostClearReturnData();
     const uint8_t* callee = (const uint8_t*)header[0];
     uint64_t status = 0;
     if (memcmp(callee, msSolHostSystemProgram, 32) == 0) status = msSolHostSystem(header);
@@ -1288,47 +1132,8 @@ void msSolHostLeave(void) {
     }
 }
 
-static uint64_t msSolHostSysvarStatus;
-
-void msSolHostSetSysvarStatus(uint64_t status) { msSolHostSysvarStatus = status; }
-
-uint64_t msSolHostGetClock(uint64_t out) {
-    if (msSolHostSysvarStatus != 0) return msSolHostSysvarStatus;
-    memcpy((void*)out, msSolHostClock, sizeof(msSolHostClock));
-    return 0;
-}
-
-uint64_t msSolHostGetRent(uint64_t out) {
-    msSolHostRentReadCount++;
-    if (msSolHostSysvarStatus != 0) return msSolHostSysvarStatus;
-    uint8_t* rent = (uint8_t*)out;
-    uint64_t lamportsPerByteYear = MS_SOL_HOST_LAMPORTS_PER_BYTE_YEAR;
-    double exemptionThreshold = MS_SOL_HOST_RENT_EXEMPTION_YEARS;
-    memset(rent, 0, 17);
-    memcpy(rent, &lamportsPerByteYear, 8);
-    memcpy(rent + 8, &exemptionThreshold, 8);
-    rent[16] = 50;
-    return 0;
-}
-
 void msSolHostSetReturnData(const uint8_t* data, int64_t length) {
-    if (msSolHostFaultCode != 0) return;
-    if (length < 0 || length > MS_SOL_MAX_RETURN_DATA) {
-        msSolHostFault(MS_SOL_HOST_REFUSED, "ProgramFailedToComplete: sol_set_return_data: Return data too large, more than 1024 bytes");
-        return;
-    }
-    memcpy(msSolHostReturnData, data, (size_t)length);
-    msSolHostReturnLength = (uint64_t)length;
-    memcpy(msSolHostReturnProgram, (const void*)msSolHostContext()->programId, 32);
-}
-
-uint64_t msSolHostGetReturnData(uint64_t data, uint64_t length, uint64_t programId) {
-    uint64_t copied = length < msSolHostReturnLength ? length : msSolHostReturnLength;
-    if (copied != 0) {
-        memcpy((void*)data, msSolHostReturnData, (size_t)copied);
-        memcpy((void*)programId, msSolHostReturnProgram, 32);
-    }
-    return msSolHostReturnLength;
+    msSolHostSetReturnDataAt((uint64_t)data, (uint64_t)length);
 }
 
 #endif

@@ -3,6 +3,7 @@
 
 when (!solana) {
 	import "./simulatorCrypto";
+	import "./simulatorLog";
 	import "./simulatorPrograms";
 }
 
