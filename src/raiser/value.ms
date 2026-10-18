@@ -493,24 +493,30 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: 
 // heaps are threaded through. Destroy is generic (the heap object is self-describing).
 
 export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
-	const val = heldHandle(held);
-	if (val.kind == RaiserValueKind.Array) {
-		arrHeap.arrays[val.intVal].rc = arrHeap.arrays[val.intVal].rc + 1;
-	} else if (val.kind == RaiserValueKind.Object) {
-		objHeap.objects[val.intVal].rc = objHeap.objects[val.intVal].rc + 1;
-	}
+	rcIncrefHandle(arrHeap, objHeap, held.kind, held.intVal);
 }
 
 export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
-	const val = heldHandle(held);
-	if (val.kind == RaiserValueKind.Array) {
-		const data = arrHeap.arrays[val.intVal];
+	rcDecrefHandle(arrHeap, objHeap, held.kind, held.intVal);
+}
+
+export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, kind: RaiserValueKind, handle: int64): void {
+	if (kind == RaiserValueKind.Array || kind == RaiserValueKind.ElemAddr) {
+		arrHeap.arrays[handle].rc = arrHeap.arrays[handle].rc + 1;
+	} else if (kind == RaiserValueKind.Object || kind == RaiserValueKind.FieldAddr) {
+		objHeap.objects[handle].rc = objHeap.objects[handle].rc + 1;
+	}
+}
+
+export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, kind: RaiserValueKind, handle: int64): void {
+	if (kind == RaiserValueKind.Array || kind == RaiserValueKind.ElemAddr) {
+		const data = arrHeap.arrays[handle];
 		data.rc = data.rc - 1;
-		if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, val.intVal); }
-	} else if (val.kind == RaiserValueKind.Object) {
-		const data = objHeap.objects[val.intVal];
+		if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, handle); }
+	} else if (kind == RaiserValueKind.Object || kind == RaiserValueKind.FieldAddr) {
+		const data = objHeap.objects[handle];
 		data.rc = data.rc - 1;
-		if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, val.intVal); }
+		if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, handle); }
 	}
 }
 
