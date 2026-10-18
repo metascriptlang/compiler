@@ -184,12 +184,12 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 				const pd = member.data as PropertyDeclData;
 				if (pd.propIsStatic) {
 					emitStaticPropertyDecl(gen, member);
-				} else if (gen.inActorDecl) {
+				} else if (gen.actorHandle != null) {
 					// Actor instance fields emit as JS class fields, in
 					// declaration order, running before any constructor body —
 					// the same defaults-then-ctor order as the C runtime.
 					emitIndent(gen);
-					if (pd.propName == "pid" && pd.propInitializer == null) {
+					if (member == gen.actorHandle) {
 						// Synthetic registration field (see emitActorDecl).
 						// Self-bootstrapping: a program may use actors WITHOUT
 						// importing std/actor, so the registrar installs itself
@@ -318,10 +318,10 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 		nameLocation: d.nameLocation,
 	} as ClassDeclData, node.location);
 	cls.resolvedSym = node.resolvedSym;
-	gen.inActorDecl = true;
+	gen.actorHandle = pidField;
 	emitIndent(gen);
 	emitClassDeclInner(gen, cls);
-	gen.inActorDecl = false;
+	gen.actorHandle = null;
 }
 
 // ===== Method Declaration =====
