@@ -372,6 +372,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			patchAllHere(ctx, tryInfo.raisePatches);
 			if (d.catchBody != null) {
 				const forkIdx = emitFork(ctx);
+				if (node.resolvedSym == ctx.rootSym) emitDef(ctx, makeIdentResolved(ctx.rootSym, node.location));
 				walkStmt(d.catchBody, ctx);
 				patchDest(ctx, forkIdx, ctx.cfg.length);
 			}
@@ -769,6 +770,12 @@ test "loop use is not last read" {
 	assert !isLastReadCfgNode(cfg, use.n);
 }
 
+test "a catch binding is defined afresh each time its handler runs" {
+	assert firstUseIsLastRead("while (c) { try { boom(); } catch (e) { use(e); } }", "e");
+	assert firstUseIsLastRead("for (const k of ks) { try { boom(); } catch (e) { use(e); } }", "e");
+	assert !firstUseIsLastRead("while (c) { try { boom(); } catch (e) { use(e); use(e); } }", "e");
+}
+
 // ===== Field-Level Tests (Phase B: alias-aware BFS) =====
 
 function makeTestSym(name: string): Symbol {
@@ -786,6 +793,9 @@ function attachSymAll(node: Node, name: string, sym: Symbol): void {
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		if ((node.data as VariableDeclData).declName == name) node.resolvedSym = sym;
+	}
+	if (node.kind == NodeKind.TryCatchStmt) {
+		if ((node.data as TryCatchStmtData).catchName == name) node.resolvedSym = sym;
 	}
 	if (node.kind == NodeKind.FunctionDecl
 		|| node.kind == NodeKind.ArrowFunction
