@@ -173,6 +173,14 @@ test "suspensionControl: then with a named function receives the fulfilled value
 	assert fulfilledValueSeen == 14;
 }
 
+test "suspensionControl: then on a void promise reads a captured local" {
+	let order = "";
+	sleepAsync(0).then((): void => { order += "a"; });
+	await sleepAsync(5);
+	await sleepAsync(0).then((v: void): void => { order += "b"; }).then((): void => { order += "c"; });
+	assert order == "abc", order;
+}
+
 test "suspensionControl: a spawn handle passed to a function keeps its binding" {
 	assert spawnBindingPassed() == 1;
 }

@@ -281,7 +281,11 @@ static void msFutureThenCb(void* raw) {
 		else ((void(*)(msString))fn)(sval);
 		break;
 	}
-	default: /* PTR or VOID — pass void* directly */
+	case MS_TYPETAG_VOID:
+		if (env) ((void(*)(void*))fn)(env);
+		else ((void(*)(void))fn)();
+		break;
+	default: /* PTR — pass void* directly */
 		if (env) ((void(*)(void*, void*))fn)(val, env);
 		else ((void(*)(void*))fn)(val);
 		break;
