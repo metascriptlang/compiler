@@ -1,4 +1,4 @@
-import { Node, NodeFlag, NodeKind, bindSym, createNodeAt, define, getType, getTypeImpl, readFile, sameType, stringValue } from "std/meta";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, readFile, sameType, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator, snakeCase } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
@@ -27,6 +27,7 @@ import {
 	scratchAddress,
 } from "./core";
 when (js) {
+	import { createNodeAt } from "std/meta";
 	import { accountLayoutText } from "./accountCodecMacro";
 	import { msSolArrayAt } from "./memory";
 }
