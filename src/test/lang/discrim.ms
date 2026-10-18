@@ -251,7 +251,7 @@ test "Either err + Result err with identical shape coexist" {
 // `MyData__T_E*` (mono) typedef references.
 
 enum DBodyK { Ok, Err }
-type DBody<T, E> = match (kind: DBodyK) {
+struct DBody<T, E> = match (kind: DBodyK) {
 	DBodyK.Ok => { value: T },
 	DBodyK.Err => { error: E },
 };

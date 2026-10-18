@@ -21,7 +21,7 @@
 
 enum VKind { Null, Bool }
 
-type VData = match (kind: VKind) {
+struct VData = match (kind: VKind) {
 	VKind.Null => {},
 	VKind.Bool => { boolVal: boolean },
 };

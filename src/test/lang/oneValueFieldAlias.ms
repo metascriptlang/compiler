@@ -10,9 +10,9 @@ type WideNo = { ok: boolean; e: string };
 type NarrowEnum = { kind: K.A; r: string };
 type WideEnum = { kind: K; r: string };
 type Tagged = { ok: true; v: string } | { ok: false; e: string };
-type Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };
-type Shape = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };
-type Key = match (kind: K) { K.A => { id: int32 }, K.B => { name: string } };
+struct Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };
+struct Shape = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };
+struct Key = match (kind: K) { K.A => { id: int32 }, K.B => { name: string } };
 
 function setV(x: Wide): void { x.v = "p"; }
 function showWide(x: Wide): string { return `${x.ok}:${x.v}`; }

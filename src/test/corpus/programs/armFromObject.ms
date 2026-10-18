@@ -11,9 +11,9 @@
 
 enum K { A, B }
 
-type Flag = match (ok: boolean) { true => {}, false => { error: string } };
-type Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };
-type Shape = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };
+struct Flag = match (ok: boolean) { true => {}, false => { error: string } };
+struct Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };
+struct Shape = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };
 
 type Failure = { ok: false; error: string };
 

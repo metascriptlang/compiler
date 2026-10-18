@@ -6,8 +6,8 @@
 // @stdout: pv kept
 // note: the arm built from an object owns its own copy of every stored field, and the object stays alive: writing the object's string after the conversion leaves the arm's string alone, and both are released once under the DRC ledger. The unions are the by-value `match` shapes and `Result`; the conversion into each reads the object through a copy of its field, never a shared pointer.
 
-type Flag = match (ok: boolean) { true => {}, false => { error: string } };
-type Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };
+struct Flag = match (ok: boolean) { true => {}, false => { error: string } };
+struct Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };
 
 function mk(g: boolean): Flag { return g ? { ok: true } : { ok: false, error: "no" }; }
 function errorOf(r: Result<int32, string>): string { return r.ok ? "none" : r.error; }

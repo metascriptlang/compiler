@@ -9,7 +9,7 @@
 import { parseJson, JsonValue } from "std/serialize/json";
 
 enum K { A, B }
-type UData = match (kind: K) {
+struct UData = match (kind: K) {
 	K.A => { s: string },
 	K.B => { n: int32 },
 };

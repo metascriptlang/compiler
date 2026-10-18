@@ -2,7 +2,7 @@
 
 import { compileToC } from "../helpers";
 
-const strRes = "type StrRes = match (ok: boolean) { true => { value: string }, false => { error: string } };\nfunction make(s: string): StrRes { return { ok: true, value: s }; }\nconst r = make(\"a\");\n";
+const strRes = "struct StrRes = match (ok: boolean) { true => { value: string }, false => { error: string } };\nfunction make(s: string): StrRes { return { ok: true, value: s }; }\nconst r = make(\"a\");\n";
 
 function contentElement(c: string): string {
 	const at = c.indexOf("__Content { int64_t cap; ");

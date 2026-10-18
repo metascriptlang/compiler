@@ -416,7 +416,7 @@ test "copy of a narrowed Result returns as the Result, other payload types" {
 
 enum CopyKind { A, B }
 
-type CopyVariantData = match (kind: CopyKind) {
+struct CopyVariantData = match (kind: CopyKind) {
 	CopyKind.A => {},
 	CopyKind.B => { flag: boolean },
 };

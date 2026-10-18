@@ -2,7 +2,7 @@
 
 import { compileToC } from "../helpers";
 
-const pair = "type Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };\n";
+const pair = "struct Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };\n";
 
 test "an object with a boolean-literal field stores it" {
 	const result = compileToC("const o: { ok: true; value: string } = { ok: true, value: \"x\" };\nconsole.log(o.ok);");
@@ -25,7 +25,7 @@ test "an object and an arm of one shape get their own C structs" {
 }
 
 test "an arm of an enum match union stores no enum discriminator beside the tag" {
-	const result = compileToC("enum K { A, B }\ntype S = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };\nconst s: S = { kind: K.A, r: \"x\" };\nconsole.log(s.kind == K.A);");
+	const result = compileToC("enum K { A, B }\nstruct S = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };\nconst s: S = { kind: K.A, r: \"x\" };\nconsole.log(s.kind == K.A);");
 	assert result.ok;
 	assert result.value.contains("typedef struct {\n  msString r;\n} S");
 	assert result.value.contains("typedef struct {\n  int32_t n;\n} S");
@@ -39,7 +39,7 @@ test "an object converted into an arm is rebuilt by a routine, not by the emitte
 }
 
 test "an arm that holds only its discriminator is built from the object too" {
-	const result = compileToC("type Flag = match (ok: boolean) { true => {}, false => { error: string } };\nconst o: { ok: true } = { ok: true };\nconst f: Flag = o;\nconsole.log(f.ok);");
+	const result = compileToC("struct Flag = match (ok: boolean) { true => {}, false => { error: string } };\nconst o: { ok: true } = { ok: true };\nconst f: Flag = o;\nconsole.log(f.ok);");
 	assert result.ok;
 	assert result.value.contains("msArmConv_");
 	assert !result.value.contains("_arm1_");

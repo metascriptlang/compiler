@@ -51,7 +51,7 @@ test "a union of named structs keeps their discriminator field, which each struc
 }
 
 test "an arm of a match union stores a field of one boolean value nowhere and reads it as that value" {
-	const result = compileToC("type Lone = match (ok: boolean) { true => { n: int32 }, false => { m: int32 } };\nconst a: Lone = { ok: true, n: 3 };\nconsole.log(a.ok);");
+	const result = compileToC("struct Lone = match (ok: boolean) { true => { n: int32 }, false => { m: int32 } };\nconst a: Lone = { ok: true, n: 3 };\nconsole.log(a.ok);");
 	assert result.ok;
 	assert !result.value.contains("MS_BOOL ok;");
 	assert result.value.contains("typedef struct {\n  int32_t n;\n} Lone");
@@ -65,7 +65,7 @@ test "an object with a field of one boolean value stores it beside an object wit
 }
 
 test "a union asserts its checker size to C on 64-bit and 32-bit targets" {
-	const source = "type Word = match (ok: boolean) { true => { text: string }, false => { code: int32 } };\nconst w: int32 = sizeof(Word);\nconsole.log(w);";
+	const source = "struct Word = match (ok: boolean) { true => { text: string }, false => { code: int32 } };\nconst w: int32 = sizeof(Word);\nconsole.log(w);";
 	const host = compileToC(source);
 	assert host.ok;
 	assert host.value.contains("== 24, \"struct Word");
