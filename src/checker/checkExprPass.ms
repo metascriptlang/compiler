@@ -210,7 +210,9 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 
 function literalDiscriminantOwner(md: MemberExprData): Type | null {
 	let obj = md.object;
-	while (obj.kind == NodeKind.HiddenDeref) obj = (obj.data as HiddenDerefData).expr;
+	while (obj.kind == NodeKind.HiddenDeref || obj.kind == NodeKind.HiddenSubConv || obj.kind == NodeKind.HiddenStdConv) {
+		obj = obj.kind == NodeKind.HiddenDeref ? (obj.data as HiddenDerefData).expr : (obj.data as HiddenStdConvData).convExpr;
+	}
 	const declared = obj.resolvedSym != null && (obj.kind == NodeKind.Identifier || obj.kind == NodeKind.MemberExpr) ? obj.resolvedSym.symbolType : obj.nodeType;
 	const u = peelToStructOrUnion(declared);
 	if (u == null || u.kind != TypeKind.Union) return null;
@@ -1070,6 +1072,8 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 	}
 	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
+	const savedDefinite = ctx.initTracker.definiteTarget;
+	if (d.operator == "=" || d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") ctx.initTracker.definiteTarget = d.left;
 	if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
 		if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 		checkAssignTarget(ctx, d.left);
@@ -1077,6 +1081,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
 	}
 	ctx.initTracker.assignTarget = null;
+	ctx.initTracker.definiteTarget = savedDefinite;
 	let leftType = d.left.nodeType;
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
@@ -2691,7 +2696,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (readType != null && (readType.kind == TypeKind.Var || readType.kind == TypeKind.Borrow) && readType.typeReturn != null) {
 		readType = readType.typeReturn;
 	}
-	if (ctx.initTracker.leftPartOfAsgn > 0) {
+	if (node == ctx.initTracker.definiteTarget) {
 		node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
 	}
 	const flowType = getFlowTypeOfReference(node, readType);

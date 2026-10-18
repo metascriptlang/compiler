@@ -4925,10 +4925,10 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// Without this, accessing fields on a checked-non-null member-expr fails
 		// with "Property 'foo' does not exist on type 'T | null'".
 		// Assignment LHS: the declared type, not the flow-narrowed one — the
-		// identifier arm's leftPartOfAsgn rule, applied to the member write.
+		// identifier arm's definiteTarget rule, applied to the member write.
 		// Inside `if (x.f === null) { x.f = [] }` the RHS otherwise gets `null`
 		// as its contextual type and the literal never finds its donor.
-		if (ctx.initTracker.leftPartOfAsgn > 0) {
+		if (node == ctx.initTracker.definiteTarget) {
 			return propType;
 		}
 		const narrowed = getFlowTypeOfReference(node, propType);
