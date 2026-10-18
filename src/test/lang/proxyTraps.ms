@@ -166,6 +166,8 @@ test "Reflect on an array appends at its length, shrinks it, and refuses a hole"
 	let message = "";
 	try { Reflect.set(xs, 5, 9); } catch (e) { message = (e as Error).message; }
 	assert message == "a write at index 5 would leave a hole in an array of length 1", message;
+	try { Reflect.set(xs, "length", 4); } catch (e) { message = (e as Error).message; }
+	assert message == "a length of 4 would leave a hole in an array of length 1", message;
 }
 
 test "a set trap that returns false fails the write" {
