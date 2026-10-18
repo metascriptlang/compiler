@@ -3701,10 +3701,12 @@ export function createGraphPreludeContext(): CheckerContext {
 
 export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
 	const imps = defaultGlobalImports();
+	const outerGensym = beginGensymUnit();
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
 	for (const imp of imps) loadPreludeOne(ctx, imp, stdPath, backendExt);
 	forgetInstances(ctx);
+	rewindTemplateGensym(outerGensym);
 	return ctx;
 }
 
@@ -6006,9 +6008,16 @@ test "a module numbers its template locals in its own context, whatever was chec
 test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
 	env.set("MSC_NO_PRELUDE_PACK", "1");
 	try {
-		const ctx = buildPreludeContext(join(resolveRuntimeDir(), "std"));
-		assert ctx.generatedInstances.length == 0;
-		assert ctx.procInstCache.size == 0 && ctx.typeInstCache.size == 0;
+		for (const ext of [".rms", ".cms"]) {
+			const outer = templateGensymMark();
+			rewindTemplateGensym(41);
+			const ctx = buildPreludeContext(join(resolveRuntimeDir(), "std"), ext);
+			const left = templateGensymMark();
+			rewindTemplateGensym(outer);
+			assert left == 41;
+			assert ctx.generatedInstances.length == 0;
+			assert ctx.procInstCache.size == 0 && ctx.typeInstCache.size == 0;
+		}
 	} finally {
 		env.delete("MSC_NO_PRELUDE_PACK");
 	}
