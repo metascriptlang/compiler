@@ -50,3 +50,9 @@ test "an object that is already the arm's own struct is not rebuilt" {
 	assert result.ok;
 	assert !result.value.contains("msArmConv_");
 }
+
+test "an enum discriminator read passes as a call argument on a union of objects" {
+	const result = compileToC("enum Q { Open, Shut }\ntype G = { kind: Q.Open; n: int32 } | { kind: Q.Shut; why: string };\nfunction name(q: Q): int32 { return q == Q.Open ? 1 : 2; }\nconst gs: G[] = [{ kind: Q.Open, n: 1 }, { kind: Q.Shut, why: \"w\" }];\nconsole.log(name(gs[1].kind));");
+	assert result.ok;
+	assert !result.value.contains("*(msArrayAccess");
+}

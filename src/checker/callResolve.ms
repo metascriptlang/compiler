@@ -4469,14 +4469,16 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			let mi = 0;
 			for (const mName of resolvedObjType.typeNames) {
 				if (mName == d.property) {
-					const synthSym = makeSymbol(mName, SymbolKind.Property, resolvedObjType.typeChildren[mi], false);
+					const isUnionMeta = resolvedObjType.kind == TypeKind.Union;
+					const symTy = isUnionMeta ? propType : resolvedObjType.typeChildren[mi];
+					const synthSym = makeSymbol(mName, SymbolKind.Property, symTy, false);
 					synthSym.state = SymbolState.Shaped;
-					if (resolvedObjType.typeChildren[mi].typeName != "") {
-						synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
+					if (!isUnionMeta && symTy.typeName != "") {
+						synthSym.nativeName = symTy.typeName;
 					}
 					inheritContainerInfo(synthSym, ctx, resolvedObjType.typeName);
 					node.resolvedSym = synthSym;
-					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + mName.length, synthSym, resolvedObjType.typeChildren[mi], SymbolKind.Property, mName, resolvedObjType.typeName, false);
+					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + mName.length, synthSym, symTy, SymbolKind.Property, mName, resolvedObjType.typeName, false);
 					break;
 				}
 				mi = mi + 1;
