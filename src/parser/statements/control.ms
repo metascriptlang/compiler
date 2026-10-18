@@ -619,7 +619,7 @@ test "unreachable msg" { assert programOk("unreachable(\"should not reach\");");
 
 test "a statement followed on its line by another expression is refused" { assert !programOk("unreachable \"why\";"); assert !programOk("const x = 1 x;"); }
 
-test "a line break, a closing brace or a do-while ends a statement" { assert programOk("unreachable\n\"why\";"); assert programOk("{ unreachable }"); assert programOk("do { } while (x) y;"); }
+test "a line break, a closing brace or a do-while ends a statement" { assert programOk("unreachable\n\"why\";"); assert programOk("{ unreachable }"); assert programOk("do { } while (x) y;"); assert programOk("match (b) { true => { y(); }, } z;"); }
 // Test declaration
 test "test decl basic" { assert programOk("test \"basic\" { const x = 1; }"); }
 
