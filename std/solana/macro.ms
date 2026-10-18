@@ -1,9 +1,8 @@
-import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, sameType, stringValue } from "std/meta";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, readFile, sameType, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator, snakeCase } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
-import { readFile } from "std/fs";
 import { SEED_LIST_REQUIRED, seedTable, slottedTable } from "./accountSeeds";
 import {
 	argBool,
@@ -69,7 +68,8 @@ export macro instruction(): Node {
 		if (named == "") return;
 		const root = define("projectDir");
 		const path = named.startsWith("/") || root == "" ? named : root + "/" + named;
-		const text = try readFile(path) catch "";
+		let text = "";
+		try { text = readFile(path); } catch (e) { text = ""; }
 		if (text == "") { error("the build names programKeypair '" + path + "', which cannot be read", at); }
 		const numbers: uint8[] = [];
 		let value = -1;
