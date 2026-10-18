@@ -20,7 +20,7 @@ import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
-import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
+import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
@@ -132,7 +132,6 @@ export function evalASTFull(program: Node): RaiserContext {
 interface ComptimeEngine {
 	image: RaiserModule;
 	funcMap: RaiserFuncMap;
-	enumMap: RaiserEnumMap;
 	vm: RaiserVM;
 	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
 }
@@ -149,11 +148,10 @@ function freshEngine(): ComptimeEngine {
 	const functions: RaiserFunction[] = [entryFn];
 	const image = createRaiserModule("comptime-engine", functions, 0);
 	const funcMap = createFuncMap();
-	const enumMap: RaiserEnumMap = { items: [] };
 	const vm = createVM(image, "arena");
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
-	return { image, funcMap, enumMap, vm, bodyCtxs };
+	return { image, funcMap, vm, bodyCtxs };
 }
 
 function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMethod[] {
@@ -263,7 +261,7 @@ function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: Extensio
 	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
 	// program's own check errors so the caller reads them, not the last helper's (bug053).
 	const ownErrors = _lastEngineCheckErrors;
-	const idx = appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, wantFn, wantSym);
+	const idx = appendProgramToImage(_engine.image, _engine.funcMap, transformed, wantFn, wantSym);
 	_lastEngineCheckErrors = ownErrors;
 	return idx;
 }
