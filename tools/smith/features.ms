@@ -21,6 +21,8 @@ export enum Fam {
 	Str,
 	Own,
 	Iter,
+	Seq,
+	Gcls,
 }
 
 export enum W {
@@ -46,6 +48,8 @@ export enum W {
 	FamStr,
 	FamOwn,
 	FamIter,
+	FamSeq,
+	FamGcls,
 	ClosureNamed,
 	ClosureArray,
 	ClosureIife,
@@ -109,6 +113,32 @@ export enum W {
 	IterDecl,
 	IterDrain,
 	IterManual,
+	SeqElem,
+	SeqSize,
+	SeqSpan,
+	SeqBorrow,
+	SeqTuple,
+	SeqTupleEdit,
+	SeqVec,
+	SeqVecEdit,
+	SeqSpread,
+	SeqDestruct,
+	SeqRest,
+	SeqSpanSet,
+	SeqRef,
+	SeqMove,
+	SeqLoop,
+	GclsCell,
+	GclsMap,
+	GclsNest,
+	GclsPair,
+	GclsStack,
+	GclsBest,
+	GclsWrap,
+	GclsDecl,
+	GclsSet,
+	GclsRef,
+	GclsOwn,
 	ExprFam,
 	StmtFam,
 	StmtElse,
@@ -138,6 +168,8 @@ export const W_KEYS: string[] = [
 	"w.fam.str",
 	"w.fam.own",
 	"w.fam.iter",
+	"w.fam.seq",
+	"w.fam.gcls",
 	"w.closure.named",
 	"w.closure.array",
 	"w.closure.iife",
@@ -201,6 +233,32 @@ export const W_KEYS: string[] = [
 	"w.iter.decl",
 	"w.iter.drain",
 	"w.iter.manual",
+	"w.seq.elem",
+	"w.seq.size",
+	"w.seq.span",
+	"w.seq.borrow",
+	"w.seq.tuple",
+	"w.seq.tupleEdit",
+	"w.seq.vec",
+	"w.seq.vecEdit",
+	"w.seq.spread",
+	"w.seq.destruct",
+	"w.seq.rest",
+	"w.seq.spanSet",
+	"w.seq.ref",
+	"w.seq.move",
+	"w.seq.loop",
+	"w.gcls.cell",
+	"w.gcls.map",
+	"w.gcls.nest",
+	"w.gcls.pair",
+	"w.gcls.stack",
+	"w.gcls.best",
+	"w.gcls.wrap",
+	"w.gcls.decl",
+	"w.gcls.set",
+	"w.gcls.ref",
+	"w.gcls.own",
 	"w.expr.fam",
 	"w.stmt.fam",
 	"w.stmt.else",
@@ -210,7 +268,7 @@ export const W_KEYS: string[] = [
 export const W_DEFAULTS: int32[] = [
 	25, 30, 8, 10, 8, 19,
 	25, 25, 8, 12, 12, 6, 6, 6,
-	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 2,
@@ -225,13 +283,17 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1, 1, 1, 1,
 	1, 1,
 	1, 1, 1,
+	1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1,
 	20, 20, 50, 30,
 ];
 
 const W_GROUPS: W[][] = [
 	[W.ExprLeaf, W.ExprCall],
 	[W.StmtLet, W.StmtReturn],
-	[W.FamClosure, W.FamIter],
+	[W.FamClosure, W.FamGcls],
 	[W.ClosureNamed, W.ClosureIife],
 	[W.ClosureDecl, W.ClosureRoutine],
 	[W.GenericId, W.GenericBox],
@@ -246,6 +308,10 @@ const W_GROUPS: W[][] = [
 	[W.OwnDecl, W.OwnSink],
 	[W.IterNth, W.IterLast],
 	[W.IterDecl, W.IterManual],
+	[W.SeqElem, W.SeqBorrow],
+	[W.SeqTuple, W.SeqLoop],
+	[W.GclsCell, W.GclsWrap],
+	[W.GclsDecl, W.GclsOwn],
 ];
 
 export enum Plant {
@@ -282,7 +348,7 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
-export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter];
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls];
 
 export function famName(f: Fam): string {
 	return match (f) {
@@ -294,6 +360,8 @@ export function famName(f: Fam): string {
 		Fam.Str => "str",
 		Fam.Own => "own",
 		Fam.Iter => "iter",
+		Fam.Seq => "seq",
+		Fam.Gcls => "gcls",
 	};
 }
 
@@ -301,7 +369,7 @@ function famFromName(name: string): Result<Fam, string> {
 	for (const f of ALL_FAMS) {
 		if (famName(f) == name) { return Result.ok(f); }
 	}
-	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, none)");
+	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, none)");
 }
 
 export function tyName(t: Ty): string {
@@ -570,7 +638,7 @@ test "an unknown weight, a bad value and an all-zero group are refused" {
 	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
-	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0 w.fam.seq=0 w.fam.gcls=0").ok;
 }
 
 test "swarm keeps the weights of its base" {
@@ -635,8 +703,9 @@ test "swarm samples one density per vector, not a fixed coin per feature" {
 		if (f.fams == base.fams) { all++; }
 		if (f.fams.isEmpty()) { none++; }
 	}
-	assert all > 409 && all < 614;
-	assert none > 409 && none < 614;
+	const expected = 4096 / (ALL_FAMS.length + 1);
+	assert all > expected * 9 / 10 && all < expected * 135 / 100;
+	assert none > expected * 9 / 10 && none < expected * 135 / 100;
 }
 
 test "swarm density also correlates a restricted two-family vector" {
@@ -666,4 +735,18 @@ test "swarm is a function of seed and base, keeps a type, and stays inside the b
 			assert !a.fams.has(Fam.Closure);
 		}
 	}
+}
+
+test "seq and gcls parse by name and their weights round-trip" {
+	const r = Features.defaults().overlay("fams=seq,gcls w.seq.rest=0 w.seq.tupleEdit=7 w.gcls.own=3 w.fam.seq=5");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.fams.has(Fam.Seq) && r.value.fams.has(Fam.Gcls) && !r.value.fams.has(Fam.Closure);
+		assert r.value.format().contains(" fams=seq,gcls ");
+		const back = Features.defaults().overlay(r.value.format());
+		assert back.ok;
+		if (back.ok) { assert back.value.format() == r.value.format(); }
+	}
+	assert !Features.defaults().overlay("w.seq.elem=0 w.seq.size=0 w.seq.span=0 w.seq.borrow=0").ok;
+	assert !Features.defaults().overlay("w.gcls.decl=0 w.gcls.set=0 w.gcls.ref=0 w.gcls.own=0").ok;
 }
