@@ -540,28 +540,49 @@ function skipsInstructions(op: RaiserOpcode): boolean {
 	};
 }
 
+// A width check that rewrites `reg` where it stands: the range stop of a narrow integer, or the
+// float32 rounding of an arithmetic result.
+function isInPlaceWidth(inst: RaiserInstruction, reg: int32): boolean {
+	if (inst.a != reg) return false;
+	return inst.op == RaiserOpcode.NarrowS || inst.op == RaiserOpcode.NarrowU
+		|| (inst.op == RaiserOpcode.Conv && inst.b == reg);
+}
+
+function writesRegAfterReading(inst: RaiserInstruction, reg: int32): boolean {
+	return inst.a == reg && writesResultAfterReading(inst.op);
+}
+
 // The code from `startPc` computed `reg` and nothing else is read of it afterwards, so the
-// instruction that wrote it can write `target` instead when it is the last one, reads its operands
-// before writing, and no jump of the expression lands past it (a merge of branches has several writers).
-function lastWriteMayRetarget(s: RaiserCompState, startPc: int32, reg: int32): boolean {
+// instruction that wrote it can write `target` instead when it is the last one (or the last but the
+// width check that follows it), reads its operands before writing, and no jump of the expression lands
+// past it (a merge of branches has several writers). Returns how many trailing instructions move, 0 for none.
+function lastWriteTail(s: RaiserCompState, startPc: int32, reg: int32): int32 {
 	const end = s.code.length;
-	if (end <= startPc) return false;
-	const last = s.code[end - 1];
-	if (last.a != reg || !writesResultAfterReading(last.op)) return false;
-	for (let i = startPc; i < end - 1; i = i + 1) {
+	if (end <= startPc) return 0;
+	let tail: int32 = 1;
+	if (end - 1 > startPc && isInPlaceWidth(s.code[end - 1], reg) && writesRegAfterReading(s.code[end - 2], reg)) tail = 2;
+	else if (!writesRegAfterReading(s.code[end - 1], reg)) return 0;
+	const pastWriter = end - tail + 1;
+	for (let i = startPc; i < end - tail; i = i + 1) {
 		const inst = s.code[i];
-		if (inst.op == RaiserOpcode.Jump && i + 1 + getSignedAx(inst) >= end) return false;
-		if (skipsInstructions(inst.op) && i + 1 + inst.c >= end) return false;
+		if (inst.op == RaiserOpcode.Jump && i + 1 + getSignedAx(inst) >= pastWriter) return 0;
+		if (skipsInstructions(inst.op) && i + 1 + inst.c >= pastWriter) return 0;
 	}
-	return true;
+	return tail;
 }
 
 // `reg` is where an expression compiled from `startPc` left its value, `firstTemp` the first register
 // that expression could allocate: the value is moved to `target` unless its writer can aim there.
 export function landResult(s: RaiserCompState, target: number, startPc: int32, firstTemp: int32, reg: int32): void {
 	if (reg == target) return;
-	if (reg >= firstTemp && lastWriteMayRetarget(s, startPc, reg)) {
-		s.code[s.code.length - 1].a = target;
+	const tail = reg >= firstTemp ? lastWriteTail(s, startPc, reg) : 0;
+	if (tail > 0) {
+		const end = s.code.length;
+		s.code[end - tail].a = target;
+		if (tail == 2) {
+			s.code[end - 1].a = target;
+			if (s.code[end - 1].op == RaiserOpcode.Conv) s.code[end - 1].b = target;
+		}
 		return;
 	}
 	emitInst(s, raiserABC(RaiserOpcode.Move, target, reg, 0));
