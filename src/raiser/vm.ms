@@ -2280,10 +2280,7 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 		const nameVal = getFuncConst(func, ic);
 		if (fields[idx].name == nameVal.strVal) {
 			// Cache hit — O(1) access
-			const dstHit = getReg(vm, vm.baseReg + ia);
-			vmIncref(vm, fields[idx].value);
-			vmDecref(vm, dstHit);
-			copyValueInto(dstHit, fields[idx].value);
+			setReg(vm, vm.baseReg + ia, fields[idx].value);
 			return;
 		}
 	}
@@ -2295,10 +2292,7 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 	while (fi < fields.length) {
 		if (fields[fi].name == fieldName) {
 			func.fieldCache[pc] = fi;
-			const dstMiss = getReg(vm, vm.baseReg + ia);
-			vmIncref(vm, fields[fi].value);
-			vmDecref(vm, dstMiss);
-			copyValueInto(dstMiss, fields[fi].value);
+			setReg(vm, vm.baseReg + ia, fields[fi].value);
 			return;
 		}
 		fi = fi + 1;
