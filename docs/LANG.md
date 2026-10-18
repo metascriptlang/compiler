@@ -594,9 +594,7 @@ written, a bare `return;` is accepted when that type holds `null` (it gives `nul
 needs a value (`'f' returns 'int32', and a bare 'return;' gives no value: return a value, or write the
 return type as 'int32 | null'`). Measured 2026-10-18 on C drc, orc, danger, JS and ESM (corpus
 `bareReturnBesideValueReturn`: int32, string, a class, either order, nested in a loop, an arrow,
-async through `await` and `.then`; checker3pass `bareReturnInValueFunction`). Before, the bare return
-was dropped from the join: C read `0` or stopped at clang, JS printed `undefined`, and a bare return
-under a written `int32 | null` crashed the C compile. Not measured: the Raiser, and a bare return in a
+async through `await` and `.then`; checker3pass `bareReturnInValueFunction`). Not measured: the Raiser, and a bare return in a
 function typed `unknown`.
 
 A call to a function or method declared `never` ends the flow as `throw` does, so a guard
