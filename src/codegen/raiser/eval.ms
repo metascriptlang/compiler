@@ -1717,3 +1717,17 @@ test "engine: a destination the expression reads, or a merge of branches, keeps 
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "3 -1 2 4 true 1 132 189\n7 1 6 6 true 4 474 311\n346 3.75\n", ctx.output;
 }
+
+test "engine: a body ending in return has no second return, one a jump can reach keeps it" {
+	const plain = compiledFunc("function f(a: int64): int64 { return a + 1; } console.log(`${f(1)}`);", "f");
+	assert plain.code[plain.code.length - 1].op == RaiserOpcode.Ret && countOp(plain, RaiserOpcode.Ret) == 1, disasmFunc(plain);
+	const early = compiledFunc("function f(a: int64): int64 { if (a < 0) { return 0; } return a; } console.log(`${f(1)}`);", "f");
+	assert countOp(early, RaiserOpcode.Ret) == 2, disasmFunc(early);
+	const ctx = evalOrcVM("function loopy(a: int64): int64 { while (a < 10) { if (a == 7) { return a; } a = a + 1; } return -1; }"
+		+ " function onElse(a: int64): int64 { if (a > 0) { return 1; } else { return 2; } }"
+		+ " function noRet(a: int64): void { if (a > 0) { console.log('pos'); } }"
+		+ " function tried(a: int64): int64 { try { return a; } catch (e) { return -2; } }"
+		+ " console.log(`${loopy(1)} ${loopy(8)} ${onElse(1)} ${onElse(-1)} ${tried(5)}`); noRet(1); noRet(-1);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7 -1 1 2 5\npos\n", ctx.output;
+}

@@ -566,3 +566,25 @@ export function landResult(s: RaiserCompState, target: number, startPc: int32, f
 	}
 	emitInst(s, raiserABC(RaiserOpcode.Move, target, reg, 0));
 }
+
+// A body that cannot fall off its end returns nil only where the code says so: its last instruction
+// is a Ret, no jump or skip lands past it, and no handler (whose offsets are not scanned) exists.
+function endIsUnreachable(s: RaiserCompState): boolean {
+	const end = s.code.length;
+	if (end == 0 || s.code[end - 1].op != RaiserOpcode.Ret) return false;
+	for (let i = 0; i < end; i = i + 1) {
+		const inst = s.code[i];
+		if (inst.op == RaiserOpcode.Jump && i + 1 + getSignedAx(inst) >= end) return false;
+		if (skipsInstructions(inst.op) && i + 1 + inst.c >= end) return false;
+		if (inst.op == RaiserOpcode.Try || inst.op == RaiserOpcode.Catch || inst.op == RaiserOpcode.Finally
+			|| inst.op == RaiserOpcode.FinallyEnd) return false;
+	}
+	return true;
+}
+
+export function emitImplicitReturn(s: RaiserCompState): void {
+	if (endIsUnreachable(s)) return;
+	const nilReg = allocReg(s);
+	emitLoadConst(s, nilReg, raiserNil());
+	emitRet(s, nilReg);
+}
