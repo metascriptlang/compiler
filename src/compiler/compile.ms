@@ -21,7 +21,7 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -3166,18 +3166,17 @@ resetLiftedOps();
 
 	const tD = performance.now();
 
-	// Emscripten: a wait from sync code suspends the wasm stack only while a timer is
-	// pending (spawn runs inline here), so JSPI is linked exactly when a timer is alive;
-	// a JSPI build does not load where the browser lacks JSPI.
+	// Emscripten: a wait from sync code suspends the wasm stack only through a sleep or a
+	// pending timer (spawn runs inline here), so JSPI is linked exactly when one of those
+	// runtime entries is reachable; a JSPI build does not load where the browser lacks JSPI.
 	if (opts.targetOs == "emcc" && aliveSet.computed) {
-		let hasTimer = false;
-		for (const mp of aliveModules) {
-			if (mp.endsWith("promise/index.cms") && aliveSetHasNamed(aliveSet, mp, "sleepAsync")) hasTimer = true;
-			if (mp.endsWith("core/system/index.ms") && (aliveSetHasNamed(aliveSet, mp, "setTimeout") || aliveSetHasNamed(aliveSet, mp, "setInterval"))) hasTimer = true;
+		let suspends = false;
+		for (const entry of ["msSleepMs", "msSleepAsync", "msSetTimeout", "msSetInterval"]) {
+			if (aliveSetImportsC(aliveSet, entry)) suspends = true;
 		}
-		if (hasTimer) {
+		if (suspends) {
 			linkFlags = appendFlag(linkFlags, "-sJSPI");
-			if (opts.verbose) verboseLog("  timer alive → enabling JSPI");
+			if (opts.verbose) verboseLog("  sleep or timer reachable → enabling JSPI");
 		}
 	}
 
