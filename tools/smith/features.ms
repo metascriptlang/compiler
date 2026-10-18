@@ -490,6 +490,7 @@ export const ALL_TYS: Ty[] = [
 ];
 
 export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls, Fam.Enum, Fam.Exc, Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race];
+export const OPT_IN_FAMS: Fam[] = [Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race];
 
 export function famName(f: Fam): string {
 	return match (f) {
@@ -566,6 +567,7 @@ export function defaults(this typeof Features): Features {
 	for (const t of ALL_TYS) { types = types.incl(t); }
 	let fams = 0 as BitSet<Fam>;
 	for (const f of ALL_FAMS) { fams = fams.incl(f); }
+	for (const f of OPT_IN_FAMS) { fams = fams.excl(f); }
 	return {
 		types: types,
 		fams: fams,
@@ -852,7 +854,7 @@ test "swarm samples one density per vector, not a fixed coin per feature" {
 		if (f.fams == base.fams) { all++; }
 		if (f.fams.isEmpty()) { none++; }
 	}
-	const expected = 4096 / (ALL_FAMS.length + 1);
+	const expected = 4096 / (ALL_FAMS.length - OPT_IN_FAMS.length + 1);
 	assert all > expected * 9 / 10 && all < expected * 135 / 100;
 	assert none > expected * 9 / 10 && none < expected * 135 / 100;
 }
@@ -926,4 +928,17 @@ test "the task families parse by name and each shape group refuses an all-zero r
 	assert !Features.defaults().overlay("w.spawn.fan=0 w.spawn.all=0 w.spawn.move=0 w.spawn.share=0 w.spawn.locked=0 w.spawn.arc=0 w.spawn.nest=0 w.spawn.fail=0 w.spawn.timed=0").ok;
 	assert !Features.defaults().overlay("w.actor.state=0 w.actor.call=0 w.actor.chain=0 w.actor.many=0 w.actor.spawn=0 w.actor.stop=0").ok;
 	assert !Features.defaults().overlay("w.race.first=0 w.race.tie=0 w.race.any=0 w.race.fail=0 w.race.abort=0 w.race.timer=0").ok;
+}
+
+test "the default vector leaves out the families that skip a lane or serialize the run" {
+	const base = Features.defaults();
+	for (const f of OPT_IN_FAMS) { assert !base.fams.has(f); }
+	for (const f of ALL_FAMS) {
+		let optIn = false;
+		for (const o of OPT_IN_FAMS) { if (o == f) { optIn = true; } }
+		assert base.fams.has(f) != optIn;
+	}
+	const r = base.overlay("fams=native,spawn");
+	assert r.ok;
+	if (r.ok) { assert r.value.fams.has(Fam.Native) && r.value.fams.has(Fam.Spawn); }
 }

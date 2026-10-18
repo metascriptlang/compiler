@@ -6290,8 +6290,12 @@ test "the enum family emits no shape a compiler card parks" {
 test "a family at weight zero keeps the stream of the others" {
 	for (const f of ALL_FAMS) {
 		const others: string[] = [];
-		for (const o of ALL_FAMS) { if (o != f) { others.push(famName(o)); } }
-		const off = withWeights("w.fam." + famName(f) + "=0");
+		const all: string[] = [];
+		for (const o of ALL_FAMS) {
+			all.push(famName(o));
+			if (o != f) { others.push(famName(o)); }
+		}
+		const off = withWeights("fams=" + all.join(",") + " w.fam." + famName(f) + "=0");
 		const without = withWeights("fams=" + others.join(","));
 		for (let seed = 1; seed <= 8; seed++) {
 			const a = generate(seed as uint64, off);
@@ -6958,4 +6962,11 @@ test "no two actors of a program declare a method of the same name" {
 		}
 	}
 	assert actors > 40;
+}
+
+test "a default program keeps the JS lane and runs in parallel" {
+	for (let seed = 1; seed <= 30; seed++) {
+		const text = generate(seed as uint64, Features.defaults());
+		assert !text.contains("// @skip-js") && !text.contains("// @serial");
+	}
 }
