@@ -55,6 +55,8 @@ enum EntKind {
 	NatRef,
 	ClsObj,
 	ClsIfv,
+	ConvS,
+	ConvC,
 }
 
 struct Ent {
@@ -868,6 +870,7 @@ class Gen {
 		if (fam == Fam.Exc) { return this.excExpr(t, depth); }
 		if (fam == Fam.Native) { return this.nativeExpr(t, depth); }
 		if (fam == Fam.Cls) { return this.clsExpr(t, depth); }
+		if (fam == Fam.Conv) { return this.convExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1453,6 +1456,537 @@ class Gen {
 		const name = this.entName("o");
 		this.ents.push({ kind: EntKind.OwnVar, name: name, ty: t, params: [], len: this.blockId, cost: 0 as int64 });
 		return indent + "let " + name + ": " + O + " = " + value + ";\n";
+	}
+
+	hasTy(t: Ty): boolean {
+		for (const x of this.tys) { if (x == t) { return true; } }
+		return false;
+	}
+
+	cvSeal(text: string, shape: Shape): string {
+		this.famShape = shape;
+		return text;
+	}
+
+	cvOp(op: string, t: Ty, a: string, b: string): string {
+		if (isFloat(t) || !trapsOnOverflow(t)) { return "(" + a + " " + op + " " + b + ")"; }
+		return this.arithHelper(op, t) + "(" + a + ", " + b + ")";
+	}
+
+	cvCore(t: Ty): void {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const S = "CvS" + X;
+		const C = "CvC" + X;
+		this.useHelper("cvCore" + X,
+			"struct " + S + " { v: " + T + "; w: " + T + "; }\n" +
+			"type CvA" + X + " = " + S + ";\n" +
+			"class " + C + " {\n" +
+			"\tv: " + T + ";\n" +
+			"\tw: " + T + ";\n" +
+			"\tconstructor(v: " + T + ", w: " + T + ") { this.v = v; this.w = w; }\n" +
+			"}\n" +
+			"function cvOf(this typeof " + S + ", v: " + T + ", w: " + T + "): " + S + " { return { v: v, w: w }; }\n" +
+			"function cvOf(this typeof " + C + ", v: " + T + ", w: " + T + "): " + C + " { return new " + C + "(v, w); }\n" +
+			"function cvZero(this typeof " + S + "): " + T + " { return " + zero(t) + "; }\n" +
+			"function cvSum(this s: " + S + "): " + T + " { return " + this.cvOp("+", t, "s.v", "s.w") + "; }\n" +
+			"function cvSum(this c: " + C + "): " + T + " { return " + this.cvOp("+", t, "c.v", "c.w") + "; }\n" +
+			"function cvStep(this x: " + T + ", k: " + T + "): " + T + " { return " + this.cvOp("+", t, "x", "k") + "; }\n" +
+			"function cvBump(this ref n: " + T + ", k: " + T + "): void { n = " + this.cvOp("-", t, "n", "k") + "; }\n" +
+			"function cvShift(this ref s: " + S + ", k: " + T + "): void { s.v = " + this.cvOp("+", t, "s.v", "k") + "; s.w = " + this.cvOp("-", t, "s.w", "k") + "; }\n" +
+			"function cvSwap(this ref s: " + S + "): void { const t = s.v; s.v = s.w; s.w = t; }\n" +
+			"function cvShift(this c: " + C + ", k: " + T + "): " + C + " { c.v = " + this.cvOp("+", t, "c.v", "k") + "; return c; }\n" +
+			"function cvPick(this s: string, a: " + T + ", b: " + T + "): " + T + " { return s.length > 2 ? a : b; }\n");
+	}
+
+	cvItems(t: Ty): void {
+		this.cvCore(t);
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const S = "CvS" + X;
+		this.useHelper("cvItems" + X,
+			"function toItems(this s: " + S + "): " + T + "[] { return [s.v, s.w, " + this.cvOp("+", t, "s.v", "s.w") + "]; }\n" +
+			"function cvFoldS" + X + "(s: " + S + ", d: " + T + "): " + T + " {\n" +
+			"\tlet r: " + T + " = d;\n" +
+			"\tfor (const x of s) { r = " + this.cvOp("-", t, "x", "r") + "; }\n" +
+			"\treturn r;\n}\n");
+	}
+
+	cvItemsClass(t: Ty): boolean {
+		const name = "cvItemsC" + tyTitle(t);
+		for (const n of this.helperNames) { if (n.startsWith("cvItemsC") && n != name) { return false; } }
+		this.cvCore(t);
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const C = "CvC" + X;
+		this.useHelper(name,
+			"function* toItems(this c: " + C + "): Iterator<" + T + "> { yield c.v; yield c.w; }\n" +
+			"function cvFoldC" + X + "(c: " + C + ", d: " + T + "): " + T + " {\n" +
+			"\tlet r: " + T + " = d;\n" +
+			"\tfor (const x of c) { r = " + this.cvOp("+", t, "x", "r") + "; }\n" +
+			"\treturn r;\n}\n");
+		return true;
+	}
+
+	cvText(t: Ty): void {
+		this.cvCore(t);
+		const X = tyTitle(t);
+		this.useHelper("cvText" + X, "function toString(this s: CvS" + X + "): string { return String(s.v) + \"|\" + String(s.w); }\n");
+	}
+
+	cvProto(t: Ty): void {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		this.useHelper("cvProto" + X,
+			"struct CvV" + X + " { v: " + T + "; }\n" +
+			"struct CvK" + X + " { v: " + T + "; }\n" +
+			"struct CvD" + X + " { v: " + T + "; }\n" +
+			"function valueOf(this s: CvV" + X + "): " + T + " { return s.v; }\n" +
+			"converter cvConv" + X + "(k: CvK" + X + "): " + T + " { return k.v; }\n" +
+			"function getDynamicField(this d: CvD" + X + ", key: string): " + T + " { return " + this.cvOp("+", t, "d.v", "(key.length as " + T + ")") + "; }\n" +
+			"function cvTake" + X + "(x: " + T + "): " + T + " { return x; }\n" +
+			"function cvMkV" + X + "(x: " + T + "): CvV" + X + " { return { v: x }; }\n" +
+			"function cvMkK" + X + "(x: " + T + "): CvK" + X + " { return { v: x }; }\n" +
+			"function cvMkD" + X + "(x: " + T + "): CvD" + X + " { return { v: x }; }\n");
+	}
+
+	cvOps(t: Ty): void {
+		this.cvCore(t);
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const S = "CvS" + X;
+		let text = "function `+`(this a: " + S + ", b: " + S + "): " + S + " { return { v: " + this.cvOp("+", t, "a.v", "b.v") + ", w: " + this.cvOp("+", t, "a.w", "b.w") + " }; }\n" +
+			"function `-`(this a: " + S + ", b: " + S + "): " + S + " { return { v: " + this.cvOp("-", t, "a.v", "b.v") + ", w: " + this.cvOp("-", t, "a.w", "b.w") + " }; }\n" +
+			"function `-`(this a: " + S + "): " + S + " { return { v: " + this.cvOp("-", t, zero(t), "a.v") + ", w: " + this.cvOp("-", t, zero(t), "a.w") + " }; }\n" +
+			"function `<`(this a: " + S + ", b: " + S + "): boolean { return a.v < b.v; }\n" +
+			"function `==`(this a: " + S + ", b: " + S + "): boolean { return a.v == b.v && a.w == b.w; }\n" +
+			"function `**`(this a: " + T + ", b: " + T + "): " + T + " { return " + this.cvOp("-", t, this.cvOp("+", t, "a", "a"), "b") + "; }\n" +
+			"function `**=`(this ref a: " + T + ", b: " + T + "): void { a = " + this.cvOp("-", t, "b", "a") + "; }\n";
+		if (!isFloat(t)) {
+			text += "function `*`(this a: " + S + ", k: " + T + "): " + S + " { return { v: " + this.cvOp("*", t, "a.v", "k") + ", w: " + this.cvOp("*", t, "a.w", "k") + " }; }\n" +
+				"function `*`(this k: " + T + ", a: " + S + "): " + S + " { return { v: " + this.cvOp("*", t, "k", "a.v") + ", w: " + this.cvOp("*", t, "k", "a.w") + " }; }\n";
+		}
+		this.useHelper("cvOps" + X, text);
+	}
+
+	cvRun(t: Ty, variant: int32): string {
+		this.cvCore(t);
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const S = "CvS" + X;
+		const C = "CvC" + X;
+		const name = "cvRun" + String(variant) + X;
+		let body = "";
+		if (variant == 0) {
+			body = "\tlet s: " + S + " = { v: a, w: b };\n\ts.cvShift(k);\n\ts.cvSwap();\n\treturn s.cvSum();\n";
+		} else if (variant == 1) {
+			body = "\tlet s: " + S + " = { v: a, w: b };\n\tlet q: " + S + " = s;\n\tq.cvShift(k);\n\treturn " + this.cvOp("+", t, "s.cvSum()", "q.v") + ";\n";
+		} else if (variant == 2) {
+			body = "\tlet n: " + T + " = a;\n\tn.cvBump(k);\n\tn.cvBump(b);\n\treturn n;\n";
+		} else if (variant == 3) {
+			body = "\tconst xs: " + T + "[] = [a, b];\n\txs[1].cvBump(k);\n\txs[0].cvBump(xs[1]);\n\treturn xs[0];\n";
+		} else if (variant == 4) {
+			body = "\tlet s: " + S + " = { v: a, w: b };\n\ts.v.cvBump(k);\n\ts.w.cvBump(s.v);\n\treturn s.cvSum();\n";
+		} else {
+			body = "\tconst c = " + C + ".cvOf(a, b);\n\tc.v.cvBump(k);\n\tc.cvShift(k);\n\treturn c.cvSum();\n";
+		}
+		return this.useHelper(name, "function " + name + "(a: " + T + ", b: " + T + ", k: " + T + "): " + T + " {\n" + body + "}\n");
+	}
+
+	cvArg(t: Ty, depth: int32): string {
+		const text = this.expr(t, depth + 1);
+		return this.shape == Shape.Ternary ? this.leaf(t) : text;
+	}
+
+	cvRefArg(t: Ty): string { return this.leaf(t); }
+
+	cvInt32To(text: string, t: Ty): string {
+		if (t == Ty.Int32) { return text; }
+		if (fitsRaw(Ty.Int32, t)) { return "(" + text + " as " + tyName(t) + ")"; }
+		return this.convHelper(Ty.Int32, t) + "(" + text + ")";
+	}
+
+	cvInt64To(text: string, t: Ty): string {
+		if (t == Ty.Int64) { return text; }
+		if (fitsRaw(Ty.Int64, t)) { return "(" + text + " as " + tyName(t) + ")"; }
+		return this.convHelper(Ty.Int64, t) + "(" + text + ")";
+	}
+
+	cvStruct(t: Ty, depth: int32): string {
+		const vars = this.entsOf(EntKind.ConvS, t);
+		if (vars.length > 0 && this.rng.chance(60)) { return this.pickEnt(vars).name; }
+		return "CvS" + tyTitle(t) + ".cvOf(" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+	}
+
+	cvViaClass(t: Ty, kind: int32, depth: int32): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const name = "cvVia" + String(kind) + X;
+		const wide = kind == 3;
+		const params = "a: " + T + ", b: " + T + (wide ? ", c: " + T + ", d: " + T : "");
+		const tails = [".cvSum()", ".v", ".w", ".cvShift(c).cvShift(d).cvSum()"];
+		this.useHelper(name, "function " + name + "(" + params + "): " + T + " {\n\treturn CvC" + X + ".cvOf(a, b)" + tails[kind] + ";\n}\n");
+		const a = this.expr(t, depth + 1);
+		const b = this.expr(t, depth + 1);
+		if (!wide) { return name + "(" + a + ", " + b + ")"; }
+		const c = this.expr(t, depth + 1);
+		const d = this.expr(t, depth + 1);
+		return name + "(" + a + ", " + b + ", " + c + ", " + d + ")";
+	}
+
+	convExpr(t: Ty, depth: int32): string {
+		const k = this.pickW(W.ConvCast, W.ConvOp);
+		if (k == 0) { return this.convCast(t, depth); }
+		if (k == 1) { return this.convFrac(t, depth); }
+		if (k == 2) { return this.convText(t, depth); }
+		if (k == 3) { return this.convExt(t, depth); }
+		if (k == 4) { return this.convRef(t, depth); }
+		if (k == 5) { return this.convStatic(t, depth); }
+		if (k == 6) { return this.convProto(t, depth); }
+		return this.convOp(t, depth);
+	}
+
+	convCast(t: Ty, depth: int32): string {
+		if (this.tys.length < 2) { return ""; }
+		const steps = this.rng.between(2, 3);
+		const path: Ty[] = [t];
+		for (let i = 0; i < steps; i++) {
+			const alternatives: Ty[] = [];
+			for (const x of this.tys) { if (x != path[i]) { alternatives.push(x); } }
+			path.push(alternatives[this.rng.below(alternatives.length)]);
+		}
+		let text = this.expr(path[steps], depth + 1);
+		let constant = this.shape != Shape.Other;
+		for (let j = steps - 1; j >= 0; j--) {
+			const from = path[j + 1];
+			const to = path[j];
+			if (constant && isSigned(from) && !isSigned(to) && !isFloat(to)) {
+				text = this.wrapHelper(from, to) + "(" + text + ")";
+				constant = false;
+			} else if (fitsRaw(from, to)) {
+				text = "(" + text + " as " + tyName(to) + ")";
+			} else {
+				text = this.convHelper(from, to) + "(" + text + ")";
+				constant = false;
+			}
+		}
+		return this.cvSeal(text, constant ? Shape.Literal : Shape.Other);
+	}
+
+	convFrac(t: Ty, depth: int32): string {
+		if (isFloat(t)) { return ""; }
+		if (this.rng.chance(25)) {
+			const negative = isSigned(t) && this.rng.chance(50);
+			const magnitude = String(this.rng.below(101)) + "." + ["25", "5", "75", "99", "01"][this.rng.below(5)];
+			return this.cvSeal("(" + (negative ? "(-" + magnitude + ")" : magnitude) + " as " + tyName(t) + ")", Shape.Literal);
+		}
+		const exact: Ty[] = [];
+		for (const s of this.tys) { if (!isFloat(s) && bitsOf(s) <= 32) { exact.push(s); } }
+		const floats = this.hasTy(Ty.Float64);
+		if (exact.length == 0 && !floats) { return ""; }
+		if (!this.reserve(4 as int64)) { return ""; }
+		let source = "";
+		if (exact.length > 0 && (!floats || this.rng.chance(70))) {
+			const s = exact[this.rng.below(exact.length)];
+			const base = "(" + this.expr(s, depth + 1) + " as float64)";
+			const scaled = this.rng.chance(50) ? "(" + base + " / " + ["2.0", "4.0", "8.0"][this.rng.below(3)] + ")" : base;
+			source = "(" + scaled + (this.rng.chance(50) ? " + " : " - ") + ["0.25", "0.5", "0.75", "1.5", "2.5"][this.rng.below(5)] + ")";
+		} else {
+			source = this.expr(Ty.Float64, depth + 1);
+		}
+		return this.cvSeal(this.convHelper(Ty.Float64, t) + "(" + source + ")", Shape.Other);
+	}
+
+	convText(t: Ty, depth: int32): string {
+		if (!this.reserve(4 as int64)) { return ""; }
+		const ints = this.intTys();
+		const parseable: Ty[] = [];
+		for (const s of ints) { if (s != Ty.Uint64) { parseable.push(s); } }
+		const hasFloat = this.hasTy(Ty.Float64);
+		let text = "";
+		if (isFloat(t)) {
+			const form = this.rng.below(ints.length > 0 ? 6 : 4);
+			if (form < 4) {
+				const f = this.expr(t, depth + 1);
+				if (form == 0) { text = "(parseFloat(String(" + f + ")) as float64)"; }
+				else if (form == 1) { text = "(Number(String(" + f + ")) as float64)"; }
+				else if (form == 2) { text = "(String(" + f + ").parseFloat() as float64)"; }
+				else { text = "(Number((" + f + ").toString()) as float64)"; }
+			} else {
+				const s = ints[this.rng.below(ints.length)];
+				const i = this.expr(s, depth + 1);
+				if (form == 4) { text = "(Number(" + i + ") as float64)"; }
+				else if (this.rng.chance(50)) { text = "(Number(String(" + i + ")) as float64)"; }
+				else { text = "(String(" + i + ").parseFloat() as float64)"; }
+			}
+			return this.cvSeal(text, Shape.Other);
+		}
+		const form = this.rng.below(4);
+		if (form == 0 && parseable.length > 0 && t != Ty.Uint64) {
+			const s = parseable[this.rng.below(parseable.length)];
+			const i = this.expr(s, depth + 1);
+			const k = this.rng.below(3);
+			const parsed = k == 0 ? "parseInt(String(" + i + "))" : k == 1 ? "String(" + i + ").parseInt()" : "(" + i + ").toString().parseInt()";
+			text = this.cvInt64To(parsed, t);
+		} else if (form == 1 || (form == 0 && t == Ty.Uint64)) {
+			const s = this.pickTy();
+			const x = this.expr(s, depth + 1);
+			let shown = "String(" + x + ")";
+			if (!isFloat(s) && this.rng.chance(50)) { shown = "(" + x + ").toString(" + String([2, 8, 16, 36][this.rng.below(4)]) + ")"; }
+			text = this.cvInt32To(shown + ".length", t);
+		} else if (ints.length > 0) {
+			const s = ints[this.rng.below(ints.length)];
+			const i = this.expr(s, depth + 1);
+			text = this.convHelper(Ty.Float64, t) + "(" + (this.rng.chance(50) ? "(Number(" + i + ") as float64)" : "(Number(String(" + i + ")) as float64)") + ")";
+		} else if (hasFloat) {
+			text = this.convHelper(Ty.Float64, t) + "((parseFloat(String(" + this.expr(Ty.Float64, depth + 1) + ")) as float64))";
+		} else {
+			return "";
+		}
+		return this.cvSeal(text, Shape.Other);
+	}
+
+	convExt(t: Ty, depth: int32): string {
+		if (!this.reserve(4 as int64)) { return ""; }
+		this.cvCore(t);
+		const form = this.rng.below(5);
+		let text = "";
+		if (form == 0) {
+			text = "(" + this.expr(t, depth + 1) + ").cvStep(" + this.cvArg(t, depth) + ")";
+			if (this.rng.chance(40)) { text += ".cvStep(" + this.cvArg(t, depth) + ")"; }
+		} else if (form == 1) {
+			const s = this.strText(depth + 1);
+			text = (s.startsWith("\"") ? "(" + s + " as string)" : "(" + s + ")") + ".cvPick(" + this.cvArg(t, depth) + ", " + this.cvArg(t, depth) + ")";
+		} else if (form == 2) {
+			text = this.cvStruct(t, depth) + ".cvSum()";
+		} else if (form == 3) {
+			text = this.cvViaClass(t, this.rng.below(3), depth);
+		} else {
+			text = this.cvViaClass(t, 3, depth);
+		}
+		return this.cvSeal(text, Shape.Other);
+	}
+
+	convRef(t: Ty, depth: int32): string {
+		if (!this.reserve(8 as int64)) { return ""; }
+		const name = this.cvRun(t, this.rng.below(6));
+		return this.cvSeal(name + "(" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")", Shape.Other);
+	}
+
+	convStatic(t: Ty, depth: int32): string {
+		if (!this.reserve(4 as int64)) { return ""; }
+		this.cvCore(t);
+		const X = tyTitle(t);
+		const form = this.rng.below(4);
+		let text = "";
+		if (form == 3) {
+			const inElse = this.elseArms > 0;
+			if (inElse) { this.arithInElse++; }
+			text = this.cvOp("+", t, "CvS" + X + ".cvZero()", this.expr(t, depth + 1));
+			if (inElse) { this.arithInElse--; }
+			return this.cvSeal(text, Shape.Other);
+		}
+		if (form == 1) { return this.cvSeal(this.cvViaClass(t, this.rng.chance(50) ? 0 : 2, depth), Shape.Other); }
+		const a = this.expr(t, depth + 1);
+		const b = this.expr(t, depth + 1);
+		if (form == 0) {
+			text = "CvS" + X + ".cvOf(" + a + ", " + b + ")" + (this.rng.chance(50) ? ".cvSum()" : ".v");
+		} else {
+			text = "CvA" + X + ".cvOf(" + a + ", " + b + ").w";
+		}
+		return this.cvSeal(text, Shape.Other);
+	}
+
+	convProto(t: Ty, depth: int32): string {
+		if (!this.reserve(6 as int64)) { return ""; }
+		this.cvCore(t);
+		const X = tyTitle(t);
+		const form = this.rng.below(6);
+		let text = "";
+		if (form == 0) {
+			this.cvText(t);
+			const shown = this.cvStruct(t, depth);
+			const name = this.rng.chance(50) ? "String(" + shown + ")" : shown + ".toString()";
+			if (isFloat(t)) { text = "(" + name + ".parseFloat() as float64)"; }
+			else if (t == Ty.Uint64) { text = this.cvInt32To(name + ".length", t); }
+			else { text = this.cvInt64To(name + ".parseInt()", t); }
+		} else if (form == 1) {
+			this.cvItems(t);
+			const d = this.expr(t, depth + 1);
+			const held = this.entsOf(EntKind.ConvC, t);
+			if (held.length > 0 && this.rng.chance(50) && this.cvItemsClass(t)) {
+				text = "cvFoldC" + X + "(" + this.pickEnt(held).name + ", " + d + ")";
+			} else {
+				text = "cvFoldS" + X + "(" + this.cvStruct(t, depth) + ", " + d + ")";
+			}
+		} else if (form == 2) {
+			this.cvProto(t);
+			const made = "cvMkV" + X + "(" + this.expr(t, depth + 1) + ")";
+			text = this.rng.chance(50) ? "cvTake" + X + "(" + made + ")" : "(" + made + " as " + tyName(t) + ")";
+		} else if (form == 3) {
+			this.cvProto(t);
+			const made = "cvMkK" + X + "(" + this.expr(t, depth + 1) + ")";
+			text = this.rng.chance(50) ? "cvTake" + X + "(" + made + ")" : "(" + made + " as " + tyName(t) + ")";
+		} else {
+			this.cvProto(t);
+			text = "cvMkD" + X + "(" + this.expr(t, depth + 1) + ")." + ["p", "qq", "rrr", "ssss", "ttttt"][this.rng.below(5)];
+		}
+		return this.cvSeal(text, Shape.Other);
+	}
+
+	convOp(t: Ty, depth: int32): string {
+		if (!this.reserve(5 as int64)) { return ""; }
+		this.cvOps(t);
+		const form = this.rng.below(isFloat(t) ? 5 : 6);
+		if (form == 3) {
+			const left = this.cvStruct(t, depth);
+			const right = this.cvStruct(t, depth);
+			const text = "(" + left + (this.rng.chance(50) ? " < " : " == ") + right + " ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
+			return this.ternary(text);
+		}
+		const inElse = this.elseArms > 0;
+		if (inElse) { this.arithInElse++; }
+		const text = this.cvOpText(t, depth, form);
+		if (inElse) { this.arithInElse--; }
+		return this.cvSeal(text, Shape.Other);
+	}
+
+	cvOpText(t: Ty, depth: int32, form: int32): string {
+		const field = this.rng.chance(50) ? ".v" : ".w";
+		if (form == 4) {
+			const a = this.expr(t, depth + 1);
+			return "(" + a + " ** " + this.expr(t, depth + 1) + ")";
+		}
+		const left = this.cvStruct(t, depth);
+		if (form == 5) {
+			const k = this.expr(t, depth + 1);
+			return this.rng.chance(50) ? "(" + left + " * " + k + ")" + field : "(" + k + " * " + left + ")" + field;
+		}
+		const right = this.cvStruct(t, depth);
+		if (form == 0) { return "(" + left + " + " + right + ")" + field; }
+		if (form == 1) { return "(" + left + " - " + right + ")" + field; }
+		return "((-" + left + ") + " + right + ")" + field;
+	}
+
+	cvDeclStruct(t: Ty, indent: string, viaStatic: boolean): string {
+		const X = tyTitle(t);
+		const structs = this.entsOf(EntKind.ConvS, t);
+		let value = "";
+		if (structs.length > 0 && this.rng.chance(30)) {
+			value = this.pickEnt(structs).name;
+		} else if (viaStatic) {
+			value = "CvS" + X + ".cvOf(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ")";
+		} else {
+			value = "{ v: " + this.expr(t, 0) + ", w: " + this.expr(t, 0) + " }";
+		}
+		const name = this.entName("z");
+		this.ents.push({ kind: EntKind.ConvS, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return indent + "let " + name + ": CvS" + X + " = " + value + ";\n";
+	}
+
+	cvDeclObject(t: Ty, indent: string, viaStatic: boolean): string {
+		const X = tyTitle(t);
+		const objects = this.entsOf(EntKind.ConvC, t);
+		let value = "";
+		if (objects.length > 0 && this.rng.chance(30)) {
+			value = this.pickEnt(objects).name;
+		} else if (viaStatic) {
+			value = "CvC" + X + ".cvOf(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ")";
+		} else {
+			value = "new CvC" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ")";
+		}
+		const name = this.entName("v");
+		this.ents.push({ kind: EntKind.ConvC, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return indent + "const " + name + " = " + value + ";\n";
+	}
+
+	convStatement(t: Ty, indent: string): string {
+		const k = this.pickW(W.ConvCast, W.ConvOp);
+		if (k < 3 || !this.reserve(6 as int64)) { return ""; }
+		this.cvCore(t);
+		if (k == 3 || k == 5) {
+			if (this.rng.chance(60)) { return this.cvDeclStruct(t, indent, k == 5); }
+			return this.cvDeclObject(t, indent, k == 5);
+		}
+		if (k == 4) { return this.cvRefStatement(t, indent); }
+		if (k == 6) { return this.cvDrain(t, indent); }
+		return this.cvOpStatement(t, indent);
+	}
+
+	cvRefStatement(t: Ty, indent: string): string {
+		const k = this.rng.below(6);
+		let head = "";
+		if ((k <= 2) && this.entsOf(EntKind.ConvS, t).length == 0) { head = this.cvDeclStruct(t, indent, false); }
+		if ((k == 3 || k == 4) && this.entsOf(EntKind.ConvC, t).length == 0) { head = this.cvDeclObject(t, indent, false); }
+		if (k <= 2) {
+			const z = this.pickEnt(this.entsOf(EntKind.ConvS, t)).name;
+			if (k == 0) { return head + indent + z + ".cvShift(" + this.cvRefArg(t) + ");\n"; }
+			if (k == 1) { return head + indent + z + ".cvSwap();\n"; }
+			return head + indent + z + (this.rng.chance(50) ? ".v" : ".w") + ".cvBump(" + this.cvRefArg(t) + ");\n";
+		}
+		if (k <= 4) {
+			const v = this.pickEnt(this.entsOf(EntKind.ConvC, t)).name;
+			if (k == 3) { return head + indent + v + ".cvShift(" + this.expr(t, 0) + ");\n"; }
+			return head + indent + v + (this.rng.chance(50) ? ".v" : ".w") + ".cvBump(" + this.cvRefArg(t) + ");\n";
+		}
+		const arrays = this.entsOf(EntKind.ArrayVar, t);
+		if (arrays.length > 0 && this.rng.chance(50)) {
+			this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+			const a = this.pickEnt(arrays).name;
+			return indent + "if (" + a + ".length > 0) { " + a + "[ixI(" + this.smallInt(0) + ", " + a + ".length)].cvBump(" + this.cvRefArg(t) + "); }\n";
+		}
+		const vars = this.visible(t, true);
+		if (vars.length == 0) { return ""; }
+		return indent + vars[this.rng.below(vars.length)].name + ".cvBump(" + this.cvRefArg(t) + ");\n";
+	}
+
+	cvDrain(t: Ty, indent: string): string {
+		this.cvItems(t);
+		const T = tyName(t);
+		const wantObject = this.rng.chance(40);
+		const useObject = wantObject && this.cvItemsClass(t);
+		let head = "";
+		if (useObject && this.entsOf(EntKind.ConvC, t).length == 0) { head = this.cvDeclObject(t, indent, false); }
+		if (!useObject && this.entsOf(EntKind.ConvS, t).length == 0) { head = this.cvDeclStruct(t, indent, false); }
+		const source = this.pickEnt(this.entsOf(useObject ? EntKind.ConvC : EntKind.ConvS, t)).name;
+		const trips = useObject ? 2 : 3;
+		if (!this.reserve((2 * trips) as int64)) { return head; }
+		const init = this.expr(t, 0);
+		const acc = this.newLocal(t);
+		const x = this.entName("x");
+		const savedMult = this.mult;
+		this.mult = this.mult * (trips as int64);
+		this.scope.push({ name: x, ty: t, writable: false });
+		const value = this.expr(t, 1);
+		const stop = this.rng.chance(40) ? indent + "\tif " + this.cond(1) + " { break; }\n" : "";
+		this.scope.pop();
+		this.mult = savedMult;
+		return head + indent + "let " + acc + ": " + T + " = " + init + ";\n" +
+			indent + "for (const " + x + " of " + source + ") {\n" +
+			indent + "\t" + acc + " = " + value + ";\n" +
+			stop +
+			indent + "}\n";
+	}
+
+	cvOpStatement(t: Ty, indent: string): string {
+		this.cvOps(t);
+		const k = this.rng.below(isFloat(t) ? 4 : 5);
+		if (k == 3) {
+			const vars = this.visible(t, true);
+			if (vars.length == 0) { return ""; }
+			const v = vars[this.rng.below(vars.length)].name;
+			if (this.rng.chance(50)) { return indent + v + " **= " + this.cvRefArg(t) + ";\n"; }
+			return indent + v + " = (" + v + " ** " + this.expr(t, 0) + ");\n";
+		}
+		let head = "";
+		if (this.entsOf(EntKind.ConvS, t).length == 0) { head = this.cvDeclStruct(t, indent, false); }
+		const structs = this.entsOf(EntKind.ConvS, t);
+		const z = this.pickEnt(structs).name;
+		const other = this.pickEnt(structs).name;
+		if (k == 0) { return head + indent + z + " = " + z + " + " + other + ";\n"; }
+		if (k == 1) { return head + indent + z + " = -" + other + ";\n"; }
+		if (k == 2) { return head + indent + z + " = " + other + " - " + z + ";\n"; }
+		return head + indent + z + " = " + z + " * " + this.expr(t, 0) + ";\n";
 	}
 
 	maker(t: Ty): Routine {
@@ -2126,6 +2660,7 @@ class Gen {
 		if (fam == Fam.Exc) { return this.excStatement(t, indent, depth); }
 		if (fam == Fam.Native) { return this.nativeStatement(t, indent, depth); }
 		if (fam == Fam.Cls) { return this.clsStatement(indent); }
+		if (fam == Fam.Conv) { return this.convStatement(t, indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -8031,4 +8566,260 @@ test "a new temporary is read only at the root of an expression, never under a t
 		}
 	}
 	assert tern > 0;
+}
+
+const CONV_SHAPES: string[] = ["cast", "frac", "text", "ext", "ref", "static", "proto", "op"];
+
+function onlyConv(shape: string, fams: string): Features {
+	let text = "fams=" + fams + " types=int8,int32,int64,uint8,uint64,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.expr.convert=0";
+	for (const k of CONV_SHAPES) { text += " w.conv." + k + "=" + (k == shape ? "50" : "0"); }
+	return withWeights(text);
+}
+
+function seenIn(text: string, alt: string): boolean {
+	if (!alt.startsWith("^")) { return text.contains(alt); }
+	const cut = alt.indexOf("~");
+	const prefix = alt.slice(1, cut);
+	const needle = alt.slice(cut + 1, alt.length);
+	for (const line of text.split("\n")) {
+		const t = line.trim();
+		if (t.startsWith(prefix) && t.contains(needle)) { return true; }
+	}
+	return false;
+}
+
+function seenAny(text: string, alts: string): boolean {
+	for (const alt of alts.split("|")) { if (seenIn(text, alt)) { return true; } }
+	return false;
+}
+
+test "the conv family alone reaches each of its shapes" {
+	const names = ["int8", "int32", "int64", "uint8", "uint64", "float64"];
+	let nested = "";
+	for (const a of names) {
+		for (const b of names) { nested += (nested == "" ? "" : "|") + " as " + a + ") as " + b + ")"; }
+	}
+	const entries: string[] = [
+		"cast=" + nested,
+		"frac=convFloat64To",
+		"frac=.25 as |.5 as |.75 as |.99 as |.01 as ",
+		"text=parseInt(|.parseInt()",
+		"text=parseFloat(|.parseFloat()",
+		"text=Number(",
+		"text=.toString(",
+		"text=).length",
+		"ext=.cvStep(",
+		"ext=.cvPick(",
+		"ext=).cvShift(",
+		"ext=^let z~: CvS|^const v~new CvC",
+		"ref=cvRun0",
+		"ref=cvRun1",
+		"ref=cvRun2",
+		"ref=cvRun3",
+		"ref=cvRun4",
+		"ref=cvRun5",
+		"ref=^z~.cvSwap();",
+		"ref=^z~.cvShift(",
+		"ref=^z~.cvBump(",
+		"ref=^v~.cvBump(",
+		"ref=^l~.cvBump(|^g~.cvBump(",
+		"ref=^if (a~].cvBump(",
+		"static=.cvOf(",
+		"static=CvA",
+		"static=.cvZero()",
+		"static=^let z~.cvOf(|^const v~.cvOf(",
+		"proto=toString(this s: CvS",
+		"proto=cvFoldS",
+		"proto=cvFoldC",
+		"proto=cvMkV",
+		"proto=cvMkK",
+		"proto=cvMkD",
+		"proto=^for (const x~ of z|^for (const x~ of v",
+		"op= ** ",
+		"op=(-CvS|((-z",
+		"op=) + CvS",
+		"op=) - CvS",
+		"op= == CvS|< CvS",
+		"op=^z~ = -z",
+		"op=^z~ = z",
+		"op=^l~ **= |^g~ **= ",
+		"op=^l~ = (l|^g~ = (g",
+	];
+	for (const shape of CONV_SHAPES) {
+		const f = onlyConv(shape, shape == "ref" ? "conv,coll" : "conv");
+		const texts: string[] = [];
+		for (let seed = 1; seed < 25; seed++) { texts.push(generate(seed as uint64, f)); }
+		for (const entry of entries) {
+			const eq = entry.indexOf("=");
+			if (entry.slice(0, eq) != shape) { continue; }
+			const alts = entry.slice(eq + 1, entry.length);
+			let seen = false;
+			for (const text of texts) { if (seenAny(text, alts)) { seen = true; } }
+			assert seen;
+		}
+	}
+}
+
+test "conv weights stay capped and restore their scope" {
+	for (let seed = 1; seed < 13; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Uint64, Ty.Float64];
+		g.stmtMax = 32;
+		g.depthMax = 8;
+		g.exprMax = 8;
+		g.tripMax = 64;
+		g.fams = [Fam.Conv];
+		g.fn(0);
+		assert g.cost <= FN_COST_CAP;
+		assert g.fns[0].cost <= FN_COST_CAP;
+		assert g.mult == (1 as int64);
+		assert g.scope.length == g.fns[0].params.length;
+		assert g.ents.length == 0;
+	}
+}
+
+function callsAFunction(text: string): boolean {
+	for (let i = 1; i < text.length; i++) {
+		if (text[i] != "(") { continue; }
+		const before = text.charCodeAt(i - 1);
+		if ((before >= 48 && before <= 57) || (before >= 65 && before <= 90) || (before >= 97 && before <= 122) || before == 95) { return true; }
+	}
+	return false;
+}
+
+test "a ref receiver is never followed by an argument that calls a function" {
+	const f = onlyConv("ref", "conv,coll");
+	let refs = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			const t = line.trim();
+			if (t.startsWith("function ")) { continue; }
+			for (const open of [".cvBump(", ".cvSwap(", " **= "]) {
+				const at = t.indexOf(open);
+				if (at < 0) { continue; }
+				const from = at + open.length;
+				const end = open == " **= " ? t.indexOf(";", from) : t.indexOf(");", from);
+				refs++;
+				assert !callsAFunction(t.slice(from, end));
+			}
+			if (t.startsWith("z") && t.contains(".cvShift(")) {
+				const from = t.indexOf(".cvShift(") + 9;
+				refs++;
+				assert !callsAFunction(t.slice(from, t.indexOf(");", from)));
+			}
+		}
+	}
+	assert refs > 40;
+}
+
+test "an argument of an extension with numeric overloads is never a ternary" {
+	const parsed = withWeights("fams=none types=int32 expr=4 w.expr.leaf=1 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.call=0 w.expr.ternary=99");
+	const g = new Gen();
+	g.rng = Rng.seeded(1 as uint64);
+	g.tys = [Ty.Int32];
+	g.exprMax = 4;
+	g.w = parsed.w;
+	let ternaries = 0;
+	for (let i = 0; i < 40; i++) {
+		g.cost = 0 as int64;
+		g.costCap = FN_COST_CAP;
+		if (g.expr(Ty.Int32, 0).contains(" ? ")) { ternaries++; }
+		g.cost = 0 as int64;
+		assert !g.cvArg(Ty.Int32, 0).contains(" ? ");
+	}
+	assert ternaries > 10;
+}
+
+function callArgs(text: string, from: int32): string[] {
+	const out: string[] = [];
+	let depth = 0;
+	let start = from;
+	for (let i = from; i < text.length; i++) {
+		const c = text[i];
+		if (c == "(") { depth++; }
+		if (c == ")") {
+			if (depth == 0) {
+				out.push(text.slice(start, i));
+				return out;
+			}
+			depth--;
+		}
+		if (c == "," && depth == 0) {
+			out.push(text.slice(start, i));
+			start = i + 1;
+		}
+	}
+	return out;
+}
+
+function isTernary(arg: string): boolean {
+	const a = arg.trim();
+	if (!a.startsWith("(")) { return false; }
+	let depth = 0;
+	let found = false;
+	for (let i = 0; i < a.length; i++) {
+		const c = a[i];
+		if (c == "(") { depth++; }
+		if (c == ")") {
+			depth--;
+			if (depth == 0 && i < a.length - 1) { return false; }
+		}
+		if (depth == 1 && a.slice(i, i + 3) == " ? ") { found = true; }
+	}
+	return found;
+}
+
+test "no extension call over numeric overloads takes a ternary argument" {
+	const f = onlyConv("ext", "conv,str,coll");
+	let calls = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("function ")) { continue; }
+			for (const open of [".cvStep(", ".cvPick("]) {
+				let at = line.indexOf(open);
+				while (at >= 0) {
+					calls++;
+					for (const arg of callArgs(line, at + open.length)) { assert !isTernary(arg); }
+					at = line.indexOf(open, at + open.length);
+				}
+			}
+		}
+	}
+	assert calls > 40;
+}
+
+test "a program declares the class generator toItems for one element type only" {
+	const f = onlyConv("proto", "conv");
+	let declared = 0;
+	let structs = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		const generators = countOf(text, "function* toItems(");
+		assert generators <= 1;
+		declared += generators;
+		if (countOf(text, "function toItems(this s: CvS") > 1) { structs++; }
+	}
+	assert declared > 5 && structs > 5;
+}
+
+test "a class temporary is held by a declaration or a helper, never inside a larger expression" {
+	let temps = 0;
+	for (const shape of ["ext", "static", "proto"]) {
+		const f = onlyConv(shape, "conv");
+		for (let seed = 1; seed < 41; seed++) {
+			for (const line of generate(seed as uint64, f).split("\n")) {
+				const text = line.trim();
+				if (text.startsWith("function ") || text.startsWith("class ") || text.startsWith("type ")) { continue; }
+				let at = line.indexOf("CvC");
+				while (at >= 0) {
+					const before = line.slice(0, at);
+					if (before.endsWith("= ") || before.endsWith("= new ") || before.endsWith("return ")) { temps++; }
+					else if (!text.startsWith("constructor") && text.indexOf(": CvC") < 0) { assert false; }
+					at = line.indexOf("CvC", at + 3);
+				}
+			}
+		}
+	}
+	assert temps > 40;
 }

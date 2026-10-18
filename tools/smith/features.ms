@@ -30,6 +30,7 @@ export enum Fam {
 	Actor,
 	Race,
 	Cls,
+	Conv,
 }
 
 export enum W {
@@ -64,6 +65,7 @@ export enum W {
 	FamActor,
 	FamRace,
 	FamCls,
+	FamConv,
 	ClosureNamed,
 	ClosureArray,
 	ClosureIife,
@@ -222,6 +224,14 @@ export enum W {
 	ClsDeclStatic,
 	ClsDeclImplements,
 	ClsDeclVisible,
+	ConvCast,
+	ConvFrac,
+	ConvText,
+	ConvExt,
+	ConvRef,
+	ConvStatic,
+	ConvProto,
+	ConvOp,
 	ExprFam,
 	StmtFam,
 	StmtElse,
@@ -260,6 +270,7 @@ export const W_KEYS: string[] = [
 	"w.fam.actor",
 	"w.fam.race",
 	"w.fam.cls",
+	"w.fam.conv",
 	"w.closure.named",
 	"w.closure.array",
 	"w.closure.iife",
@@ -418,6 +429,14 @@ export const W_KEYS: string[] = [
 	"w.cls.decl.static",
 	"w.cls.decl.implements",
 	"w.cls.decl.visible",
+	"w.conv.cast",
+	"w.conv.frac",
+	"w.conv.text",
+	"w.conv.ext",
+	"w.conv.ref",
+	"w.conv.static",
+	"w.conv.proto",
+	"w.conv.op",
 	"w.expr.fam",
 	"w.stmt.fam",
 	"w.stmt.else",
@@ -427,7 +446,7 @@ export const W_KEYS: string[] = [
 export const W_DEFAULTS: int32[] = [
 	25, 30, 8, 10, 8, 19,
 	25, 25, 8, 12, 12, 6, 6, 6,
-	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 2,
@@ -455,13 +474,14 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
 	20, 20, 50, 30,
 ];
 
 const W_GROUPS: W[][] = [
 	[W.ExprLeaf, W.ExprCall],
 	[W.StmtLet, W.StmtReturn],
-	[W.FamClosure, W.FamCls],
+	[W.FamClosure, W.FamConv],
 	[W.ClosureNamed, W.ClosureIife],
 	[W.ClosureDecl, W.ClosureRoutine],
 	[W.GenericId, W.GenericBox],
@@ -491,6 +511,7 @@ const W_GROUPS: W[][] = [
 	[W.ClsField, W.ClsIs],
 	[W.ClsNew, W.ClsLiteral],
 	[W.ClsDeclPlain, W.ClsDeclVisible],
+	[W.ConvCast, W.ConvOp],
 ];
 
 export enum Plant {
@@ -528,7 +549,7 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
-export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls, Fam.Enum, Fam.Exc, Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race, Fam.Cls];
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls, Fam.Enum, Fam.Exc, Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race, Fam.Cls, Fam.Conv];
 export const OPT_IN_FAMS: Fam[] = [Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race];
 
 export function famName(f: Fam): string {
@@ -550,6 +571,7 @@ export function famName(f: Fam): string {
 		Fam.Actor => "actor",
 		Fam.Race => "race",
 		Fam.Cls => "cls",
+		Fam.Conv => "conv",
 	};
 }
 
@@ -557,7 +579,7 @@ function famFromName(name: string): Result<Fam, string> {
 	for (const f of ALL_FAMS) {
 		if (famName(f) == name) { return Result.ok(f); }
 	}
-	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, enum, exc, native, spawn, actor, race, cls, none)");
+	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, enum, exc, native, spawn, actor, race, cls, conv, none)");
 }
 
 export function tyName(t: Ty): string {
@@ -829,7 +851,7 @@ test "an unknown weight, a bad value and an all-zero group are refused" {
 	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
-	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0 w.fam.seq=0 w.fam.gcls=0 w.fam.enum=0 w.fam.exc=0 w.fam.native=0 w.fam.spawn=0 w.fam.actor=0 w.fam.race=0 w.fam.cls=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0 w.fam.seq=0 w.fam.gcls=0 w.fam.enum=0 w.fam.exc=0 w.fam.native=0 w.fam.spawn=0 w.fam.actor=0 w.fam.race=0 w.fam.cls=0 w.fam.conv=0").ok;
 }
 
 test "swarm keeps the weights of its base" {
