@@ -45,6 +45,9 @@ function refuseObjectModelTraps(ctx: CheckerContext, handler: Type, loc: SourceL
 		if (!classDeclares(handler, trap)) continue;
 		addError(ctx, `'${typeDisplayName(handler)}' declares the '${trap}' trap: it belongs to JavaScript's object model of property descriptors, prototypes and callable objects, which MetaScript objects do not have`, loc.line, loc.column);
 	}
+	if (classDeclares(handler, "ownKeys")) {
+		addError(ctx, `'${typeDisplayName(handler)}' declares the 'ownKeys' trap: no operation lists the keys of a Proxy, so it would never run`, loc.line, loc.column);
+	}
 }
 
 // The position of the first parameter or the return of an extern that holds a Proxy, "" when none.
