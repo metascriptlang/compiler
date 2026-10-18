@@ -368,17 +368,18 @@ function vmMaybeCollect(vm: RaiserVM): void {
 // write goes into that box and no other location ever holds it, so a value
 // leaves a register only by being copied out.
 function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
-	const dst = getReg(vm, idx);
+	if (idx >= vm.regs.slots.length) throw slotOutside(idx);
 	if (vm.orc) {
+		// Kinds below Array hold no heap handle, so a scalar move skips both counters.
 		// incref-before-decref: safe under self-assignment (setReg(i, slots[i]))
-		rcIncref(vm.arrayHeap, vm.objectHeap, val);
-		const oldKind = dst.kind;
-		const oldHandle = dst.intVal;
-		copyValueInto(dst, val);
-		rcDecrefHandle(vm.arrayHeap, vm.objectHeap, oldKind, oldHandle);
+		if (val.kind >= RaiserValueKind.Array) rcIncref(vm.arrayHeap, vm.objectHeap, val);
+		const oldKind = vm.regs.slots[idx].kind;
+		const oldHandle = vm.regs.slots[idx].intVal;
+		copyValueInto(vm.regs.slots[idx], val);
+		if (oldKind >= RaiserValueKind.Array) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, oldKind, oldHandle);
 		return;
 	}
-	copyValueInto(dst, val);
+	copyValueInto(vm.regs.slots[idx], val);
 }
 
 function setRegScalar(vm: RaiserVM, idx: number, kind: RaiserValueKind, intVal: int64, floatVal: number): void {
@@ -1510,9 +1511,9 @@ function runStrandSlice(vm: RaiserVM): void {
 	while (!vm.halted && !vm.yielded) {
 		if (vm.funcIdx != funcIdx) {
 			funcIdx = vm.funcIdx;
-			func = getModuleFunc(mod, funcIdx);
-			assertPacked(func);
+			func = mod.functions[funcIdx];
 			code = func.packed;
+			if (code.length != func.code.length) assertPacked(func);
 		}
 		if (vm.regs != regs) {
 			regs = vm.regs;

@@ -87,11 +87,15 @@ export function heldHandle(v: RaiserValue): RaiserValue {
 
 // --- Deep copy (avoids pointer aliasing) ---
 
+// strVal is non-empty only in a String or FieldAddr value, so a copy between
+// two other kinds has no text to move.
 export function copyValueInto(dst: RaiserValue, src: RaiserValue): void {
+	const carriesText = src.kind == RaiserValueKind.String || src.kind == RaiserValueKind.FieldAddr
+		|| dst.kind == RaiserValueKind.String || dst.kind == RaiserValueKind.FieldAddr;
 	dst.kind = src.kind;
 	dst.intVal = src.intVal;
 	dst.floatVal = src.floatVal;
-	dst.strVal = src.strVal;
+	if (carriesText) dst.strVal = src.strVal;
 }
 
 // --- Accessors ---
