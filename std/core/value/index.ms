@@ -28,6 +28,15 @@ export function resultEquals<T, E>(a: Result<T, E>, b: Result<T, E>): boolean {
 	return a.error == b.error;
 }
 
+@compilerFunc
+export function vecEquals<T>(a: Vec<T>, b: Vec<T>): boolean {
+	if (a.length != b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i] != b[i]) return false;
+	}
+	return true;
+}
+
 function nullText(color: boolean): string {
 	return color ? "\x1b[2mnull\x1b[0m" : "null";
 }

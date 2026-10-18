@@ -297,6 +297,7 @@ function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
 		return equalityOperandsOk(carrier.typeReturn, other) ? "nullableEquals" : "";
 	}
 	if (isResult(a) && isResult(b)) return sameType(a, b) ? "resultEquals" : "";
+	if (a.kind == TypeKind.Array && b.kind == TypeKind.Array) return sameType(a, b) ? "vecEquals" : "";
 	if (comparedByFields(a) && comparedByFields(b)) {
 		if (sameType(a, b)) return "valueEquals";
 		if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct && (isAssignable(a, b) || isAssignable(b, a))) return "valueEquals";

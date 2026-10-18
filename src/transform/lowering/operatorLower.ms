@@ -137,7 +137,7 @@ function comparedByValue(left: Type, right: Type | null): boolean {
 	const shapes = [left, other];
 	for (const t of shapes) {
 		if (t == null) continue;
-		if (hasValueEq(t) || t.kind == TypeKind.Tuple || isMaybeType(t) || isResult(t)) return true;
+		if (hasValueEq(t) || t.kind == TypeKind.Tuple || t.kind == TypeKind.Array || isMaybeType(t) || isResult(t)) return true;
 	}
 	return false;
 }
