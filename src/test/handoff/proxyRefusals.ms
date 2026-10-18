@@ -38,6 +38,11 @@ test "a handler trap of JavaScript's object model is refused by name" {
 	assert hasError(src, "'Bad' declares the 'construct' trap");
 }
 
+test "an ownKeys trap is refused, since nothing lists a Proxy's keys" {
+	const src = "interface Todo { title: string; }\nclass Keys { ownKeys(target: Todo): string[] { return [\"title\"]; } }\nconst p = new Proxy({ title: \"a\" } as Todo, new Keys());";
+	assert hasError(src, "'Keys' declares the 'ownKeys' trap: no operation lists the keys of a Proxy");
+}
+
 test "a Proxy does not cross an extern boundary" {
 	const head = "interface Todo { title: string; }\nclass T { get<K extends keyof Todo>(target: Todo, key: K): Todo[K] { return target[key]; } }\n";
 	assert hasError(head + "extern function show(n: int32, p: Proxy<Todo, T>): void;", "extern 'show' parameter 2: a Proxy crosses into foreign code");
