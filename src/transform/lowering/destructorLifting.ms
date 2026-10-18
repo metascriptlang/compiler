@@ -26,7 +26,7 @@ import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, 
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, storesNothing } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
-import { genericParamsOf, symGenericParams, classParentOf, createUnionInOrder } from "../../checker/types";
+import { genericParamsOf, classParentOf, createUnionInOrder } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
@@ -2485,11 +2485,6 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
 }
 
-function isInstanceBody(t: Type, lctx: LiftCtx): boolean {
-	if (lctx.checkerCtx == null) return false;
-	return symGenericParams(lookupSymbol(lctx.checkerCtx.table, t.typeName)) != "";
-}
-
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) { liftTypeOps(nullableRef, lctx, loc); return; }
@@ -2513,7 +2508,6 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 			ensureHooks(anonTypeName(t.typeReturn), t.typeReturn, t, t.typeReturn, false, lctx, loc);
 		} else if (t.kind == TypeKind.Union && t.typeName != ""
 			&& hasAsgnFlag(t)
-			&& !isInstanceBody(t, lctx)
 			&& !isAllStringLiteralUnion(t)
 			&& unwrapRefNullUnion(t) == null) {
 			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);

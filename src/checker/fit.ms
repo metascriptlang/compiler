@@ -1899,6 +1899,11 @@ function declaredInstanceOf(expr: Node): Type | null {
 	return walk == null ? null : declaredTypeOfLocation(walk);
 }
 
+function keepInstance(expr: Node, body: Type): Type {
+	const held = declaredInstanceOf(expr);
+	return held != null && matchUnionBehindInstance(held) == body ? held : body;
+}
+
 export function declaredTagUnionOf(expr: Node): Type | null {
 	const t = declaredInstanceOf(expr);
 	if (t == null) return null;
@@ -2120,7 +2125,7 @@ export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
 	const projected = projectTagUnionMember(expr, declared, exprType);
-	if (projected != null as unknown as Node && expr.kind == NodeKind.Identifier) expr.nodeType = declared;
+	if (projected != null as unknown as Node && expr.kind == NodeKind.Identifier) expr.nodeType = keepInstance(expr, declared);
 	return projected;
 }
 
@@ -2154,11 +2159,11 @@ export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type
 	const holders = objectPathHolders(declared, exprType);
 	if (holders.length > 0) {
 		const k = vi >= 0 && holders.indexOf(vi) >= 0 ? vi : holders[0];
-		expr.nodeType = declared;
+		expr.nodeType = keepInstance(expr, declared);
 		return objectMemberConversion(hiddenSlotConv(expr, declared.typeChildren[k], k), declared, exprType, holders, convert);
 	}
 	if (vi < 0) return null as unknown as Node;
-	expr.nodeType = declared;
+	expr.nodeType = keepInstance(expr, declared);
 	return hiddenSlotConv(expr, isStringLike(exprType) || isLiteralSet(exprType) ? exprType : declared.typeChildren[vi], vi);
 }
 
