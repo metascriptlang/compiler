@@ -408,5 +408,5 @@ export function cloneIfPure(node: Node): Node | null {
 // observe, so a checked read stays clonable while its own operands are.
 function isCompilerCheckCall(node: Node): boolean {
 	return isRuntimeProcCall(node, "msChkIndex") || isRuntimeProcCall(node, "msChkArray")
-		|| isRuntimeProcCall(node, "msArrayAt") || isRuntimeProcCall(node, "msSpanAt");
+		|| isRuntimeProcCall(node, "msArrayAt") || isRuntimeProcCall(node, "msSpanAt") || isRuntimeProcCall(node, "msMaybeGet");
 }
