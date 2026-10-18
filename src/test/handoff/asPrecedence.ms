@@ -41,7 +41,7 @@ test "asPrecedence: a comparison before as is a boolean, which converts to no nu
 
 test "asPrecedence: an operator after a + b as T that would have taken b is a syntax error" {
 	const r = compileToC("const a: int32 = 1;\nconst b: int32 = 2;\nconst c: int32 = 3;\nconst d = a + b as int64 * c;\nconsole.log(`${d}`);");
-	assert !r.ok && r.error.includes("Unexpected token: *"), r.ok ? "accepted" : r.error;
+	assert !r.ok && r.error.includes("';' expected before '*'"), r.ok ? "accepted" : r.error;
 }
 
 test "asPrecedence: a < after an as type that never closes is a syntax error, not a swallowed statement" {
