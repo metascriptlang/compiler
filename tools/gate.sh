@@ -1833,7 +1833,7 @@ solana_replays() {
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.cms std/solana/vrf.ms \
+  for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.ms std/solana/vrf.ms \
     std/solana/idlTest.ms std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/simulatorContextTest.ms \
     std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
     std/solana/simulatorProgramsTest.ms std/solana/simulatorTokenTest.ms std/solana/simulatorInvokeTest.ms \
