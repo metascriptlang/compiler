@@ -1,0 +1,2 @@
+@include("runtime/solana/solana.h");
+@compile("runtime/solana/host.c");

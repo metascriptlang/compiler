@@ -1,0 +1,18 @@
+@include("runtime/solana/solana.h");
+@compile("runtime/solana/host.c");
+
+export extern function msSolPointer(address: uint64): Ptr<void>;
+export extern function msSolLoadU8(address: uint64): uint8;
+export extern function msSolLoadU16(address: uint64): uint16;
+export extern function msSolLoadU32(address: uint64): uint32;
+export extern function msSolLoadU64(address: uint64): uint64;
+export extern function msSolStoreU8(address: uint64, value: uint8): void;
+export extern function msSolStoreU16(address: uint64, value: uint16): void;
+export extern function msSolStoreU32(address: uint64, value: uint32): void;
+export extern function msSolStoreU64(address: uint64, value: uint64): void;
+export extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
+export extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
+export extern function msSolCompare(left: uint64, right: uint64, length: uint64): int32;
+export extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+export extern function msSolStringAddress(text: string): uint64;
+export extern function msSolStringLength(text: string): uint64;

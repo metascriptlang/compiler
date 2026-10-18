@@ -1,6 +1,8 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
+import "./kernel";
+
 import {
 	ASSOCIATED_TOKEN_PROGRAM_ID,
 	SYSTEM_PROGRAM_ID,
