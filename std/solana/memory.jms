@@ -312,6 +312,163 @@ function msSolMemRelease() {
   msSolMemNext = 0x100000000n;
   msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n, programId: 0n };
 }
+
+const msSolViewDescriptors = new Map();
+const msSolViewScratch = new DataView(new ArrayBuffer(8));
+const msSolViewTyped = { uint8: Uint8Array, int8: Int8Array, uint16: Uint16Array, int16: Int16Array, uint32: Uint32Array, int32: Int32Array, uint64: BigUint64Array, int64: BigInt64Array, float32: Float32Array, float64: Float64Array, number: Float64Array };
+
+function msSolViewDescriptor(text) {
+  let descriptor = msSolViewDescriptors.get(text);
+  if (descriptor === undefined) {
+    descriptor = JSON.parse(text);
+    msSolViewDescriptors.set(text, descriptor);
+  }
+  return descriptor;
+}
+
+function msSolViewExtend(value, width, signed) {
+  if (!signed) return value;
+  const shift = 32 - width * 8;
+  return (value << shift) >> shift;
+}
+
+function msSolViewRead(d, at) {
+  switch (d.k) {
+    case "uint8": case "uint16": case "uint32": case "uint64": return msSolMemLoad(at, d.z);
+    case "int8": case "int16": case "int32": return msSolViewExtend(msSolMemLoad(at, d.z), d.z, true);
+    case "int64": return BigInt.asIntN(64, msSolMemLoad(at, 8));
+    case "float32": msSolViewScratch.setUint32(0, msSolMemLoad(at, 4)); return msSolViewScratch.getFloat32(0);
+    case "float64": case "number": msSolViewScratch.setBigUint64(0, msSolMemLoad(at, 8)); return msSolViewScratch.getFloat64(0);
+    case "boolean": return msSolMemLoad(at, d.z) !== 0;
+    case "enum": return msSolViewExtend(msSolMemLoad(at, d.z), d.z, d.s === 1);
+    case "bitset":
+      if (d.z === 1 || d.z === 2 || d.z === 4 || d.z === 8) return msSolMemLoad(at, d.z);
+      return msSolViewBytes(at, d.z);
+  }
+  msSolMemFail("view of kind " + d.k + " is not a scalar");
+}
+
+function msSolViewWrite(d, at, value) {
+  switch (d.k) {
+    case "uint8": case "uint16": case "uint32": case "uint64":
+    case "int8": case "int16": case "int32": case "enum": msSolMemStore(at, d.z, value); return;
+    case "int64": msSolMemStore(at, 8, BigInt.asUintN(64, value)); return;
+    case "float32": msSolViewScratch.setFloat32(0, value); msSolMemStore(at, 4, msSolViewScratch.getUint32(0)); return;
+    case "float64": case "number": msSolViewScratch.setFloat64(0, value); msSolMemStore(at, 8, msSolViewScratch.getBigUint64(0)); return;
+    case "boolean": msSolMemStore(at, d.z, value ? 1 : 0); return;
+    case "bitset":
+      if (d.z === 1 || d.z === 2 || d.z === 4 || d.z === 8) { msSolMemStore(at, d.z, value); return; }
+      msSolViewBytes(at, d.z).set(value); return;
+  }
+  msSolMemFail("view of kind " + d.k + " is not a scalar");
+}
+
+function msSolViewBytes(at, length) {
+  const found = msSolMemFind(at, length, "view");
+  if (found.region.kind !== "bytes") msSolMemFail("a byte array view needs a byte region; " + msSolMemHex(at) + " is in an array region");
+  return found.region.bytes.subarray(found.offset, found.offset + length);
+}
+
+function msSolViewSnapshot(d, at) {
+  if (d.k === "struct") {
+    const copy = {};
+    for (const [name, offset, child] of d.f) copy[name] = msSolViewSnapshot(child, at + BigInt(offset));
+    return copy;
+  }
+  if (d.k === "array") {
+    const stride = BigInt(d.e.z);
+    const typed = msSolViewTyped[d.e.k];
+    if (d.e.k === "uint8") return msSolViewBytes(at, d.n).slice();
+    const out = typed === undefined ? new Array(d.n) : new typed(d.n);
+    for (let i = 0; i < d.n; i++) out[i] = msSolViewSnapshot(d.e, at + BigInt(i) * stride);
+    return out;
+  }
+  const value = msSolViewRead(d, at);
+  return value instanceof Uint8Array ? value.slice() : value;
+}
+
+function msSolViewAssign(d, at, value) {
+  if (d.k === "struct") {
+    for (const [name, offset, child] of d.f) msSolViewAssign(child, at + BigInt(offset), value[name]);
+    return;
+  }
+  if (d.k === "array") {
+    if (value.length !== d.n) msSolMemFail("cannot assign " + value.length + " element(s) to an array of " + d.n);
+    if (d.e.k === "uint8") { msSolViewBytes(at, d.n).set(value); return; }
+    const stride = BigInt(d.e.z);
+    for (let i = 0; i < d.n; i++) msSolViewAssign(d.e, at + BigInt(i) * stride, value[i]);
+    return;
+  }
+  msSolViewWrite(d, at, value);
+}
+
+function msSolViewArray(d, at) {
+  const stride = BigInt(d.e.z);
+  const elements = new Array(d.n);
+  const index = function (key) {
+    const i = typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) ? Number(key) : -1;
+    if (i >= d.n) msSolMemFail("index " + key + " is outside an array of " + d.n);
+    return i;
+  };
+  const element = function (i) {
+    if (d.e.k === "struct" || d.e.k === "array") return elements[i] === undefined ? (elements[i] = msSolViewValue(d.e, at + BigInt(i) * stride)) : elements[i];
+    return msSolViewRead(d.e, at + BigInt(i) * stride);
+  };
+  const members = {
+    length: d.n,
+    slice: function () { return msSolViewSnapshot(d, at); },
+    map: function (f) { return Array.from({ length: d.n }, function (_, i) { return f(element(i), i); }); },
+    forEach: function (f) { for (let i = 0; i < d.n; i++) f(element(i), i); },
+    set: function (source, from) { msSolViewAssign({ k: "array", n: source.length, e: d.e }, at + BigInt(from || 0) * stride, source); },
+    fill: function (value) { for (let i = 0; i < d.n; i++) msSolViewAssign(d.e, at + BigInt(i) * stride, value); },
+  };
+  members[Symbol.iterator] = function* () { for (let i = 0; i < d.n; i++) yield element(i); };
+  return new Proxy({}, {
+    get: function (_, key) {
+      const i = index(key);
+      if (i >= 0) return element(i);
+      if (key in members) return members[key];
+      if (typeof key === "symbol") return undefined;
+      return msSolMemFail("an array view has no member " + key);
+    },
+    set: function (_, key, value) {
+      if (key === "length" && value === d.n) return true;
+      const i = index(key);
+      if (i < 0) msSolMemFail("an array view has no writable member " + String(key) + (key === "length" ? ": a fixed array cannot change length" : ""));
+      msSolViewAssign(d.e, at + BigInt(i) * stride, value);
+      return true;
+    },
+  });
+}
+
+function msSolViewValue(d, at) {
+  if (d.k === "struct") return msSolViewStruct(d, at);
+  if (d.k === "array") return d.e.k === "uint8" ? msSolViewBytes(at, d.n) : msSolViewArray(d, at);
+  return msSolViewRead(d, at);
+}
+
+function msSolViewStruct(d, origin) {
+  const view = {};
+  for (const [name, offset, child] of d.f) {
+    const at = origin + BigInt(offset);
+    if (child.k === "struct" || (child.k === "array" && child.e.k !== "uint8")) {
+      let held;
+      Object.defineProperty(view, name, { enumerable: true, get() { return held === undefined ? (held = msSolViewValue(child, at)) : held; }, set(v) { msSolViewAssign(child, at, v); } });
+    } else if (child.k === "array") {
+      Object.defineProperty(view, name, { enumerable: true, get() { return msSolViewBytes(at, child.n); }, set(v) { msSolViewAssign(child, at, v); } });
+    } else {
+      Object.defineProperty(view, name, { enumerable: true, get() { return msSolViewRead(child, at); }, set(v) { msSolViewWrite(child, at, v); } });
+    }
+  }
+  return view;
+}
+
+function msSolMemView(text, address) {
+  const d = msSolViewDescriptor(text);
+  if (d.k !== "struct") msSolMemFail("a view needs a struct layout, got " + d.k);
+  if (d.z > 0) msSolMemFind(address, d.z, "view");
+  return msSolViewStruct(d, address);
+}
 `);
 
 export function msSolPointer(address: uint64): Ptr<void> {
@@ -460,4 +617,9 @@ export function msSolMemoryFaultText(): string {
 
 export function msSolMemoryClearFault(): void {
 	@emit(`msSolMemFaultCode = 0n; msSolMemFaultText = "";`);
+}
+
+export function msSolViewAt<T>(layout: string, address: uint64): Ptr<T> {
+	@emit(`return [{ v: msSolMemView(${layout}, ${address}) }, "v"];`);
+	unreachable;
 }
