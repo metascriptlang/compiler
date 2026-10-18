@@ -188,8 +188,40 @@ only in `src/compiler/meta/bridge.ms`), Apple clang 21, generator `5f48a6efb` cl
 
 Wall time ran beside other sessions' jobs (load average 12–36), so it is not throughput.
 `generatorLower` reaches the same branches under every vector: Smith generates no
-generator, so that count is what any program reaches. Not measured: the coverage of an
-empty program (the floor to subtract), batches above 20, Linux or Windows hosts.
+generator, so that count is what any program reaches. A one-line program
+(`console.log`) reaches 4,762 `lambdaLifting`, 1,513 `generatorLower` and 4,583 `inject`
+branches on the same instrumented compiler. That floor comes from the prelude, so subtract
+it before reading a vector's gain. Not measured: Linux or Windows hosts.
+
+Strategist (G5), 2026-10-15..18. The aimed pass was `lambdaLifting`. Reading its unreached
+functions gave two closure shapes:
+
+- `routineDecl` in `gen.ms`: a nested routine that calls itself, is bounded by
+  `ROUTINE_FRAMES`, and may read an enclosing variable. It is bound by `function` or by a
+  `const` arrow. Its weight is `w.closure.routine`, default 1.
+- statement blocks at module top level: the `top` field, default 1.
+
+Setting either to 0 regenerates the previous stream byte for byte. At top level a
+`function` inside a block is parked (inbox
+`2026-10-14-function-declared-in-a-static-block-is-undefined.md`), so only the arrow form
+is emitted there. On 40 seeds, `fams=closure` reached 6,519 `lambdaLifting` branches with
+routines only and 6,657 with top-level blocks. Raising `w.closure.routine` to 4 lowered it
+to 6,435, so the aimed arm keeps the default weights.
+
+The A/B ran seeds 1..100 per arm. Findings were judged on the installed `msc` (BUILD
+`9029133ef`, generator `90a37a6cd`, `MSCORPUS_JOBS=4`). Coverage came from the `d8835e9d3`
+instrumented compiler:
+
+| arm | CPU user+sys | findings | distinct causes | causes / CPU-hour | `lambdaLifting` | `inject` | pipeline |
+|---|---|---|---|---|---|---|---|
+| `--swarm` | 538 s | 5 | 2: ternary hoist ×3, JS double negation ×2 | 13.4 | 6,540 | 4,852 | 140,358 |
+| `fams=closure` | 540 s | 2 | 1: C compound assignment reads its target late ×2 | 6.7 | 6,871 | 4,811 | 132,349 |
+
+Every cause already had an inbox card. The aimed arm reached 331 more `lambdaLifting`
+branches (+5 %), but it found half the distinct causes per CPU-hour, and swarm covered more
+of the pipeline. One run of two and one causes cannot rank the arms on findings. What it
+does show is that aiming at one pass's coverage did not buy findings. The condition for G6,
+an aimed arm that wins, is therefore not met.
 
 ### Debt — workarounds to repay
 
@@ -274,6 +306,7 @@ wrapped on every lane and were emitted raw. Measured cases:
 `int32`/`int64` under danger were not re-measured on this build. Negating a compile-time constant minimum skips the check on C and JS
 (inbox `2026-10-18-negating-a-constant-minimum-skips-the-overflow-check.md`). The
 generator never emits that case: every signed negation goes through `safeNeg<T>`.
+Compound `+= -= *=` is emitted on unsigned types only, because signed overflow stops.
 
 Not measured: the Raiser and SAN lanes, `--release`, Windows, Linux/gcc,
 `float32`, `int64` → `float64` rounding at the 2^53 edge.
