@@ -3166,16 +3166,18 @@ resetLiftedOps();
 
 	const tD = performance.now();
 
-	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module or a timer alive)
+	// Emscripten: a wait from sync code suspends the wasm stack only while a timer is
+	// pending (spawn runs inline here), so JSPI is linked exactly when a timer is alive;
+	// a JSPI build does not load where the browser lacks JSPI.
 	if (opts.targetOs == "emcc" && aliveSet.computed) {
-		let hasAsync = false;
+		let hasTimer = false;
 		for (const mp of aliveModules) {
-			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
-			if (mp.endsWith("core/system/index.ms") && (aliveSetHasNamed(aliveSet, mp, "setTimeout") || aliveSetHasNamed(aliveSet, mp, "setInterval"))) hasAsync = true;
+			if (mp.endsWith("promise/index.cms") && aliveSetHasNamed(aliveSet, mp, "sleepAsync")) hasTimer = true;
+			if (mp.endsWith("core/system/index.ms") && (aliveSetHasNamed(aliveSet, mp, "setTimeout") || aliveSetHasNamed(aliveSet, mp, "setInterval"))) hasTimer = true;
 		}
-		if (hasAsync) {
-			linkFlags = appendFlag(linkFlags, "-sASYNCIFY");
-			if (opts.verbose) verboseLog("  async detected → enabling Asyncify");
+		if (hasTimer) {
+			linkFlags = appendFlag(linkFlags, "-sJSPI");
+			if (opts.verbose) verboseLog("  timer alive → enabling JSPI");
 		}
 	}
 

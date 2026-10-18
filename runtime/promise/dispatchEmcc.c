@@ -1,8 +1,8 @@
 /*
  * MetaScript Async Dispatcher — Emscripten (browser WASM)
  *
- * Single-threaded, Asyncify-based. No pthreads, no selector, no wake pipe.
- * msWaitFor yields to JS event loop via emscripten_sleep.
+ * Single-threaded. No pthreads, no selector, no wake pipe.
+ * msWaitFor yields to the JS event loop via emscripten_sleep, which JSPI suspends.
  * Timer heap + callback deque: same logic as desktop, no threading.
  */
 #ifdef MSOS_EMCC
