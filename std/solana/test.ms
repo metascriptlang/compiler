@@ -5270,3 +5270,24 @@ test "std/solana gives a native program the Borsh writer and reader its clients 
 	assert back.ok;
 	if (back.ok) { assert back.value == 7; }
 }
+
+let scratchScalarsSeen = "";
+
+function scratchScalarsStep(): Result<uint64, ProgramError> {
+	const words = scratch<uint64>(3);
+	words[0] = 0xffffffffffffff01;
+	words[2] = 7;
+	const flags = scratch<boolean>(2);
+	flags[1] = true;
+	const halves = scratch<int16>(2);
+	halves[0] = -3;
+	scratchScalarsSeen = `${words[0]} ${words[1]} ${words[2]} ${flags[0]} ${flags[1]} ${halves[0]} ${halves[1]}`;
+	return Result.ok(0);
+}
+
+function scratchScalarsEntry(): void { codeOf(scratchScalarsStep()); }
+
+test "scratch of uint64, boolean and int16 reads back what was stored, zero elsewhere" {
+	assert run(programKey(), [], [], scratchScalarsEntry).result == 0;
+	assert scratchScalarsSeen == "18446744073709551361 0 7 false true -3 0";
+}
