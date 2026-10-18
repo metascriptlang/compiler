@@ -144,6 +144,15 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	return t;
 }
 
+// Names an anonymous struct from the shape of every anonymous struct inside its field types.
+// typeKey leaves them as one "Struct" so the canonical order of a union's members stays what it was.
+function structuralTypeKey(t: Type): string {
+	_keyStructFields = true;
+	const k = typeKey(t);
+	_keyStructFields = false;
+	return k;
+}
+
 // Generate a deterministic name for an anonymous struct from its field names and types.
 // Format: __anon<count>__<field1><suffix>__<field2><suffix>
 // Count prefix + double-underscore separators prevent collisions between
@@ -160,7 +169,7 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 			TypeKind.Float32 => "f",
 			TypeKind.String => "s",
 			TypeKind.Boolean => "b",
-			_ => "x" + _stdHashToBase36(typeKey(ft)),
+			_ => "x" + _stdHashToBase36(structuralTypeKey(ft)),
 		};
 		name = name + "__" + fieldNames[i] + suffix;
 		i = i + 1;
@@ -2878,6 +2887,8 @@ export function tupleTypeName(t: Type | null): string {
 
 // Structural key for tuple naming. tupleTypeName is the SINGLE source of the
 // msTuple_<hash> name, so this key need only be internally stable.
+let _keyStructFields = false;
+
 function typeKey(t: Type): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
@@ -2935,6 +2946,16 @@ function typeKey(t: Type): string {
 				i += 1;
 			}
 			return k + ")";
+		},
+		TypeKind.Struct => {
+			if (!_keyStructFields) return t.kind.toString();
+			let k = "struct{";
+			let i = 0;
+			while (i < t.typeNames.length) {
+				k = k + t.typeNames[i] + ":" + (i < t.typeChildren.length && t.typeChildren[i] != null ? typeKey(t.typeChildren[i]) : "any") + ";";
+				i += 1;
+			}
+			return k + "}";
 		},
 		TypeKind.Span => {
 			return "Span(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
