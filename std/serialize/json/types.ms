@@ -14,7 +14,7 @@ export enum JsonKind {
 	Int,
 }
 
-export type JsonValueData = match (kind: JsonKind) {
+export struct JsonValueData = match (kind: JsonKind) {
 	JsonKind.Null   => {},
 	JsonKind.Bool   => { boolVal: boolean },
 	JsonKind.Number => { numVal: number },
