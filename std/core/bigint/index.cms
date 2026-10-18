@@ -139,10 +139,12 @@ when (!bare && !solana) {
 		return b != 0n;
 	}
 
-	@compilerFunc
-	function msBigIntDebugText(b: bigint | null): string {
-		if (b == null) return "null";
-		return msBigIntToDebugString(b);
+	when (mscDeclaresRuntime) {
+		@compilerFunc
+		function msBigIntDebugText(b: bigint | null): string {
+			if (b == null) return "null";
+			return msBigIntToDebugString(b);
+		}
 	}
 
 	@compilerFunc
