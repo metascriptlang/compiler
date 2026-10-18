@@ -1,6 +1,10 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
+when (!solana) {
+	import "./simulatorCrypto";
+}
+
 export extern function msSolInvokeMetas(
 	program: uint64,
 	metas: uint64,
