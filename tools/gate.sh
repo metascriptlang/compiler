@@ -1411,7 +1411,7 @@ src/codegen/js/expressions.ms|build corpus suite tests
 std/crypto/sha256.ms|build corpus solana suite tests
 runtime/manual.h|boundary build corpus guard san solana suite tests
 runtime/solana/host.c|boundary build corpus guard solana suite tests
-std/solana/core.cms|build corpus guard solana suite tests
+std/solana/core.ms|build corpus guard solana suite tests
 std/solana/test.cms|build corpus guard solana suite tests
 runtime/solana/solana.h|boundary build corpus guard solana suite tests
 runtime/freestanding/musl/pow.c|boundary build corpus solana suite tests
@@ -1834,11 +1834,16 @@ run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
   for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.cms std/solana/vrf.ms \
-    std/solana/idlTest.ms std/solana/accountCodecTest.ms \
+    std/solana/idlTest.ms std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/simulatorContextTest.ms \
+    std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
+    std/solana/simulatorProgramsTest.ms std/solana/simulatorTokenTest.ms std/solana/simulatorInvokeTest.ms \
     examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done
-  solana_host_test std/solana/accountCodecTest.ms --target=js || rc=1
+  for entry in std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/memoryMachineTest.jms std/solana/kernelTest.jms \
+    std/solana/simulatorContextTest.ms std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms; do
+    solana_host_test "$entry" --target=js || rc=1
+  done
   if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"; then
     solana_replays "$dir" || rc=1
   fi
