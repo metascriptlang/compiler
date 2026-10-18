@@ -1741,3 +1741,18 @@ test "engine: a body ending in return has no second return, one a jump can reach
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "7 -1 1 2 5\npos\n", ctx.output;
 }
+
+// --- A load whose destination holds the last reference to its source ---
+
+test "engine: a field load into the register holding the only reference to its object reads the field first" {
+	const link = "class Link { v: int32; next: Link | null = null; constructor(v: int32) { this.v = v; } } function chain(): Link { const a = new Link(1); const b = new Link(2); b.next = new Link(3); a.next = b; return a; }";
+	const moved = evalOrcVM(`${link} function walk(): int32 { let cur: Link | null = chain(); let seen: int32 = 0; while (cur != null) { seen = seen * 10 + cur.v; cur = move cur.next; } return seen; } console.log(\`\${walk()}\`);`);
+	assert moved.error == "" && moved.output == "123\n", `${moved.error} ${moved.output}`;
+	const plain = evalOrcVM(`${link} function walk(): int32 { let cur: Link | null = chain(); let seen: int32 = 0; while (cur != null) { seen = seen * 10 + cur.v; cur = cur.next; } return seen; } console.log(\`\${walk()}\`);`);
+	assert plain.error == "" && plain.output == "123\n", `${plain.error} ${plain.output}`;
+}
+
+test "engine: an element load into the register holding the only reference to its array reads the element first" {
+	const ctx = evalOrcVM("function inner(): int64 { let a: int64[][] = [[7, 8]]; let b: int64[] = a[0]; return b[1]; } function nest(): number { let g: number[][][] = [[[5]]]; let h: number[][] = g[0]; let k: number[] = h[0]; return k[0]; } console.log(`${inner()} ${nest()}`);");
+	assert ctx.error == "" && ctx.output == "8 5\n", `${ctx.error} ${ctx.output}`;
+}
