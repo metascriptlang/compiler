@@ -179,6 +179,18 @@ export enum RaiserOpcode {
 	BleI64Imm,        // ABC: if R[A] <= the immediate in B skip C instructions
 	BgtI64Imm,        // ABC: if R[A] >  the immediate in B skip C instructions
 	BgeI64Imm,        // ABC: if R[A] >= the immediate in B skip C instructions
+	BrEqI64,          // ABC: if R[A] == R[B] pc += branchOffset(C)
+	BrNeI64,          // ABC: if R[A] != R[B] pc += branchOffset(C)
+	BrLtI64,          // ABC: if R[A] <  R[B] pc += branchOffset(C)
+	BrLeI64,          // ABC: if R[A] <= R[B] pc += branchOffset(C)
+	BrGtI64,          // ABC: if R[A] >  R[B] pc += branchOffset(C)
+	BrGeI64,          // ABC: if R[A] >= R[B] pc += branchOffset(C)
+	BrEqI64Imm,       // ABC: if R[A] == the immediate in B pc += branchOffset(C)
+	BrNeI64Imm,       // ABC: if R[A] != the immediate in B pc += branchOffset(C)
+	BrLtI64Imm,       // ABC: if R[A] <  the immediate in B pc += branchOffset(C)
+	BrLeI64Imm,       // ABC: if R[A] <= the immediate in B pc += branchOffset(C)
+	BrGtI64Imm,       // ABC: if R[A] >  the immediate in B pc += branchOffset(C)
+	BrGeI64Imm,       // ABC: if R[A] >= the immediate in B pc += branchOffset(C)
 }
 
 export enum RaiserConvClass {
@@ -296,13 +308,34 @@ export function immValue(field: number): int64 {
 	return (field as int64) - IMM_EXCESS;
 }
 
-// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each.
-const PACKED_FIELD_LIMIT = 65536;
+const BRANCH_EXCESS = 8388608;
 
-function packedField(inst: RaiserInstruction, v: number, name: string): int64 {
+export function isBranchI64(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
+			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm
+			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => true,
+		_ => false,
+	};
+}
+
+export function branchField(offset: int64): number {
+	if (offset < -BRANCH_EXCESS || offset >= BRANCH_EXCESS) throw new Error(`internal: branch offset ${offset} does not fit the 24-bit branch field`);
+	return (offset + BRANCH_EXCESS) as number;
+}
+
+export function branchOffset(field: number): int64 {
+	return (field as int64) - BRANCH_EXCESS;
+}
+
+// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's c takes the 24 bits from bit 40 up.
+const PACKED_FIELD_LIMIT = 65536;
+const PACKED_BRANCH_LIMIT = 16777216;
+
+function packedField(inst: RaiserInstruction, v: number, name: string, limit: int64, bits: int32): int64 {
 	const whole = v as int64;
-	if ((whole as number) != v || whole < 0 || whole >= PACKED_FIELD_LIMIT) {
-		throw new Error(`internal: operand ${name} = ${v} of opcode ${inst.op} does not fit the packed 16-bit field`);
+	if ((whole as number) != v || whole < 0 || whole >= limit) {
+		throw new Error(`internal: operand ${name} = ${v} of opcode ${inst.op} does not fit the packed ${bits}-bit field`);
 	}
 	return whole;
 }
@@ -319,10 +352,15 @@ export function packedBx(word: int64): number {
 	return (((word >> 24) & 65535) * 256 + ((word >> 40) & 65535)) as number;
 }
 
+export function packedBranch(word: int64): int32 {
+	return (((word >> 40) & 16777215) - BRANCH_EXCESS) as int32;
+}
+
 export function packInstruction(inst: RaiserInstruction): int64 {
 	const op = inst.op as int64;
 	if (op < 0 || op > 255) throw new Error(`internal: opcode ${inst.op} does not fit the packed 8-bit field`);
-	return op | (packedField(inst, inst.a, "a") << 8) | (packedField(inst, inst.b, "b") << 24) | (packedField(inst, inst.c, "c") << 40);
+	const c = isBranchI64(inst.op) ? packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16);
+	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | (c << 40);
 }
 
 // --- Tests ---
@@ -444,4 +482,26 @@ test "an immediate keeps its value across the field and stops one past each end"
 		message = (e as Error).message;
 	}
 	assert message.includes("does not fit the 16-bit operand field");
+}
+
+test "a branch offset keeps its sign across the 24-bit packed field and stops one past each end" {
+	for (const offset of [0, 1, -1, 32768, -32769, 8388607, -8388608]) {
+		const inst = raiserABC(RaiserOpcode.BrLtI64, 3, 4, branchField(offset));
+		assert packedBranch(packInstruction(inst)) == offset;
+		assert packedA(packInstruction(inst)) == 3;
+	}
+	let message = "";
+	try {
+		branchField(8388608);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("does not fit the 24-bit branch field");
+	let wide = "";
+	try {
+		packInstruction(raiserABC(RaiserOpcode.BltI64, 0, 0, 65536));
+	} catch (e) {
+		wide = (e as Error).message;
+	}
+	assert wide.includes("does not fit the packed 16-bit field");
 }

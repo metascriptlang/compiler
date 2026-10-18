@@ -3,7 +3,7 @@
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx,
-	packedOp, packedA, packedBx, immValue, immField
+	packedOp, packedA, packedBx, packedBranch, immValue, immField, branchField
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
@@ -1500,6 +1500,15 @@ function execStrandLoop(vm: RaiserVM): void {
 	}
 }
 
+function vmBackEdgeOverBudget(vm: RaiserVM): boolean {
+	vm.loopCount = vm.loopCount + 1;
+	return vm.loopCount > vm.loopLimit;
+}
+
+function vmLoopLimitMessage(vm: RaiserVM): string {
+	return `interpretation requires too many iterations (limit ${vm.loopLimit}); if you are sure this is not a bug in your code, raise it with --max-vm-iterations=<n>`;
+}
+
 function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const mod = vm.mod;
@@ -1561,13 +1570,93 @@ function runStrandSlice(vm: RaiserVM): void {
 					// MAX_CALL_DEPTH, so back-edges are the only unbounded source
 					// worth budgeting (reference: handleJmpBack decrements
 					// loopIterations only on backward jumps).
-					vm.loopCount = vm.loopCount + 1;
-					if (vm.loopCount > vm.loopLimit) {
-						vm.ip = ip; vmError(vm, `interpretation requires too many iterations (limit ${vm.loopLimit}); if you are sure this is not a bug in your code, raise it with --max-vm-iterations=<n>`);
-						break;
-					}
+					if (vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 				}
 				ip = ip + (offset as int32);
+			},
+			RaiserOpcode.BrEqI64 => {
+				if (slots[base + ia].intVal == slots[base + ib].intVal) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrNeI64 => {
+				if (slots[base + ia].intVal != slots[base + ib].intVal) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrLtI64 => {
+				if (slots[base + ia].intVal < slots[base + ib].intVal) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrLeI64 => {
+				if (slots[base + ia].intVal <= slots[base + ib].intVal) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrGtI64 => {
+				if (slots[base + ia].intVal > slots[base + ib].intVal) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrGeI64 => {
+				if (slots[base + ia].intVal >= slots[base + ib].intVal) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrEqI64Imm => {
+				if (slots[base + ia].intVal == immValue(ib)) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrNeI64Imm => {
+				if (slots[base + ia].intVal != immValue(ib)) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrLtI64Imm => {
+				if (slots[base + ia].intVal < immValue(ib)) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrLeI64Imm => {
+				if (slots[base + ia].intVal <= immValue(ib)) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrGtI64Imm => {
+				if (slots[base + ia].intVal > immValue(ib)) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrGeI64Imm => {
+				if (slots[base + ia].intVal >= immValue(ib)) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
 			},
 			RaiserOpcode.LoadInt => {
 				setRegInt(vm, base + ia, immValue(ib));
@@ -5060,4 +5149,57 @@ test "the immediate compare-and-skip forms compare a register with the immediate
 	assert immCompareTaken(RaiserOpcode.BleI64Imm, 32767, 32767) && !immCompareTaken(RaiserOpcode.BleI64Imm, 32768, 32767);
 	assert immCompareTaken(RaiserOpcode.BgtI64Imm, 32768, 32767) && !immCompareTaken(RaiserOpcode.BgtI64Imm, 32767, 32767);
 	assert immCompareTaken(RaiserOpcode.BgeI64Imm, -32768, -32768) && !immCompareTaken(RaiserOpcode.BgeI64Imm, -32769, -32768);
+}
+
+function branchTaken(op: RaiserOpcode, a: int64, b: int64, immediate: boolean): boolean {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.LoadInt, 2, immField(1), 0),
+			raiserABC(op, 0, immediate ? immField(b) : 1, branchField(1)),
+			raiserABC(RaiserOpcode.LoadInt, 2, immField(0), 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(a), raiserInt(b)]
+	));
+	return vm.exitValue.intVal == 1;
+}
+
+test "the compare-and-branch forms jump over the next instruction exactly when their comparison holds" {
+	const regs = [RaiserOpcode.BrEqI64, RaiserOpcode.BrNeI64, RaiserOpcode.BrLtI64, RaiserOpcode.BrLeI64, RaiserOpcode.BrGtI64, RaiserOpcode.BrGeI64];
+	const imms = [RaiserOpcode.BrEqI64Imm, RaiserOpcode.BrNeI64Imm, RaiserOpcode.BrLtI64Imm, RaiserOpcode.BrLeI64Imm, RaiserOpcode.BrGtI64Imm, RaiserOpcode.BrGeI64Imm];
+	const pairs = [[1, 2], [2, 2], [3, 2], [-32768, -32768], [32767, 32766]];
+	for (let k = 0; k < 6; k = k + 1) {
+		for (const p of pairs) {
+			const a = p[0] as int64;
+			const b = p[1] as int64;
+			const want = match (k) {
+				0 => a == b,
+				1 => a != b,
+				2 => a < b,
+				3 => a <= b,
+				4 => a > b,
+				_ => a >= b,
+			};
+			assert branchTaken(regs[k], a, b, false) == want, `${regs[k]} ${a} ${b}`;
+			assert branchTaken(imms[k], a, b, true) == want, `${imms[k]} ${a} ${b}`;
+		}
+	}
+}
+
+test "a compare-and-branch that jumps backward spends the loop budget and a forward one does not" {
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.LoadInt, 0, immField(0), 0),
+		raiserABC(RaiserOpcode.BrEqI64Imm, 0, immField(0), branchField(-2)),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const mod = createRaiserModule("test", [createRaiserFunction("loop", code, [], 0, 0, 1)], 0);
+	const vm = createVM(mod);
+	vm.loopLimit = 100;
+	execLoop(vm);
+	assert vm.halted;
+	assert vm.error.indexOf("too many iterations") >= 0;
+	assert vm.loopCount == 101;
+	assert branchTaken(RaiserOpcode.BrEqI64Imm, 5, 5, true);
 }
