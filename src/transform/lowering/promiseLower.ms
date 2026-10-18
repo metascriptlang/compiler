@@ -22,11 +22,11 @@
 // — shared by asyncBridge, builtinLower, and promiseLower. Keeping it in any one
 // of them would create a circular import.
 
-import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
-import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
-import { TransformContext } from "../context";
-import { promisePendingAlloc } from "./asyncBridge";
-import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn } from "../util";
+import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
+import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName } from "../../checker/types";
+import { TransformContext, mintSym } from "../context";
+import { promisePendingAlloc, makeRetFutAlloc, ownedCompletion } from "./asyncBridge";
+import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn, makeLocalDecl, makeReturn, makeBlock, makeFnDecl, generatedFnCount, addGeneratedFn } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -123,21 +123,6 @@ function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: S
 	return call;
 }
 
-// Box a value for void* storage in msFuture (Promise.resolve, spawn return).
-// Primitives get packed into the void* bits via msBox*; struct/string values
-// pass through unchanged (caller uses typed inline storage instead).
-function boxValueForFuture(node: Node, loc: SourceLocation): Node {
-	if (node == null) return makeNull(loc);
-	if (node.nodeType == null) return node;
-	return match (node.nodeType.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(runtimeRef("msBoxDouble", loc), [node], loc),
-		TypeKind.Boolean => makeCall(runtimeRef("msBoxBool", loc), [node], loc),
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 |
-		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(runtimeRef("msBoxInt32", loc), [node], loc),
-		_ => node,
-	};
-}
-
 // ===== Builtin handlers =====
 
 // Promise.then/catch/finally — rewrite to typed C runtime calls.
@@ -180,13 +165,32 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 	};
 }
 
-function lowerPromiseResolve(node: Node, loc: SourceLocation): Node {
+// Promise.resolve(value): a generated top-level function creates the future for T and
+// completes it through ownedCompletion, so the future owns the string, struct, array,
+// object or closure it was resolved with (Amendment O) like an async return does.
+function lowerPromiseResolve(node: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1) return node;
-	const boxed = boxValueForFuture(cd.arguments[0], loc);
-	const resolveCall = makeCall(runtimeRef("msPromiseResolve", loc), [boxed], loc);
-	resolveCall.nodeType = node.nodeType;
-	return resolveCall;
+	const promiseType = node.nodeType!;
+	const held = awaitedType(promiseType);
+	if (held == null || held.kind == TypeKind.Void) return node;
+
+	const valueSym = mintSym(ctx, SymbolKind.Parameter, "value", held);
+	const futSym = mintSym(ctx, SymbolKind.Variable, "$fut", promiseType);
+	const stmts: Node[] = [makeLocalDecl(futSym, makeRetFutAlloc(held, loc), promiseType, loc)];
+	for (const s of ownedCompletion(futSym, held, makeTypedIdentResolved(valueSym, held, loc), promiseType, loc, ctx)) stmts.push(s);
+	stmts.push(makeReturn(makeTypedIdentResolved(futSym, promiseType, loc), loc));
+
+	const fnSym = mintSym(ctx, SymbolKind.Function, "$resolved" + generatedFnCount().toString(), null);
+	const fnNode = makeFnDecl(fnSym.name, [valueSym], [typeDisplayName(held)], makeBlock(stmts, loc), "", "", loc);
+	fnNode.nodeType = createFunction([held], ["value"], promiseType);
+	fnSym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = fnSym;
+	addGeneratedFn(fnNode);
+
+	const call = makeCall(makeTypedIdentResolved(fnSym, fnNode.nodeType, loc), [cd.arguments[0]], loc);
+	call.nodeType = promiseType;
+	return call;
 }
 
 // spawn(fn) lowering:
@@ -255,7 +259,7 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 	if (builtinKind == "PromiseThen" || builtinKind == "PromiseCatch" || builtinKind == "PromiseFinally") {
 		return lowerPromiseThenCatchFinally(node, builtinKind, loc);
 	}
-	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc);
+	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc, ctx);
 	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
 	if (builtinKind == "PromisePending") return promisePendingAlloc(node);
