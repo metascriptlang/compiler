@@ -16,14 +16,14 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, BinaryExprData, ExprStmtData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag } from "../../ast/node";
 import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
 import { walkNode, hasEffect } from "../walker";
 import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { resolveOperatorCall, ExtensionMethod, getExtFnType } from "../../checker/context";
+import { resolveOperatorCall, ExtensionMethod, getExtFnType, findAllExtensionsByName, hasConcreteReceiver, isReceiverMatch } from "../../checker/context";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
 // lowering unbound calls a prelude or extension operator, the same one in every scope.
@@ -462,6 +462,48 @@ export function lowerUserOperators(program: Node, ctx: TransformContext): Node {
 		return node.flags.has(NodeFlag.UserOp) ? lowerOperatorNode(node, ctx) : node;
 	});
 }
+
+function constructedCollectionKey(node: Node): Type | null {
+	const called = (node.data as NewExprData).newCallee.resolvedSym;
+	const sym = called != null && called.instantiatedFrom != null ? called.instantiatedFrom : called;
+	if (sym == null || !isStdCollectionKind(sym.builtinKind)) return null;
+	let t = node.nodeType;
+	if (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null) t = t.typeReturn;
+	return t != null && t.kind == TypeKind.GenericInstance && t.typeChildren.length > 0 ? t.typeChildren[0] : null;
+}
+
+function declaredKeyHash(ctx: TransformContext, keyType: Type): Symbol | null {
+	for (const ext of findAllExtensionsByName(ctx.checkerCtx.extensionRegistry, "hash")) {
+		if (ext.sym != null && hasConcreteReceiver(ext) && isReceiverMatch(ext, keyType)) return ext.sym;
+	}
+	return null;
+}
+
+function keyOpRef(sym: Symbol | null, loc: SourceLocation): Node {
+	return sym != null ? makeTypedIdentResolved(sym, sym.symbolType, loc) : makeNull(loc);
+}
+
+export function bindCollectionKeyOps(program: Node, ctx: TransformContext): Node {
+	if (ctx.checkerCtx == null || ctx.checkerCtx.extensionRegistry == null) return program;
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.NewExpr || node.flags.has(NodeFlag.KeyOps)) return node;
+		const keyType = constructedCollectionKey(node);
+		if (keyType == null) return node;
+		const peeled = peelThrough(keyType, PEEL_ALIAS);
+		if (peeled == null) return node;
+		const shape = peelTransparentInstance(peeled);
+		if (!hasValueEq(shape) && shape.kind != TypeKind.Tuple) return node;
+		const eq = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, "==", [keyType, keyType]);
+		const hash = declaredKeyHash(ctx, keyType);
+		if (eq == null && hash == null) return node;
+		const d = node.data as NewExprData;
+		const loc = node.location;
+		d.newArguments = [d.newArguments.length > 0 ? d.newArguments[0] : makeNull(loc), keyOpRef(hash, loc), keyOpRef(eq != null ? eq.sym : null, loc)];
+		node.flags = node.flags.incl(NodeFlag.KeyOps);
+		return node;
+	});
+}
+
 // ===== Tests =====
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";

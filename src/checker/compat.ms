@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember } from "./types";
+import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -2472,6 +2472,15 @@ test "two sets relate as their element types do, and below a generic match they 
 	assert typeRelation(createBitSet(createGenericParam("E")), createBitSet(color)) == TypeRelation.Generic;
 	assert typeRelation(createBitSet(shade), createBitSet(color)) == TypeRelation.None;
 	assert typeRelation(createBitSet(numberType()), createBitSet(createPrimitive(TypeKind.Int32))) == TypeRelation.None;
+}
+
+test "a rejected promise fits a promise of any payload, as an empty container does" {
+	const int32T = createPrimitive(TypeKind.Int32);
+	assert isAssignable(createPromise(neverType()), createPromise(int32T));
+	assert isAssignable(createPromise(neverType()), createPromise(stringType()));
+	assert typeRelation(createPromise(int32T), createPromise(neverType())) == TypeRelation.Exact;
+	assert !isAssignable(createPromise(int32T), createPromise(stringType()));
+	assert !isAssignable(createPromise(int32T), createPromise(neverType()));
 }
 
 export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): int32 {

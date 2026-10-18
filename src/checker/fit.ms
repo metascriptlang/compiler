@@ -6,7 +6,7 @@ import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, I
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, extDeclaresReceiver, isGeneratorFlags } from "./context";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, isGeneratorFlags } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
@@ -345,8 +345,8 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	const loc = node.location;
 	if (ctx.extensionRegistry != null) {
 		const pair = [leftType, rightType];
-		const declaredNe = negated ? resolveOperatorCall(ctx.table, ctx.extensionRegistry, "!=", pair) : null as unknown as ExtensionMethod;
-		const declaredEq = resolveOperatorCall(ctx.table, ctx.extensionRegistry, "==", pair);
+		const declaredNe = negated ? resolveUserOperator(ctx, "!=", pair) : null as unknown as ExtensionMethod;
+		const declaredEq = resolveUserOperator(ctx, "==", pair);
 		const declared = declaredNe != null ? declaredNe : declaredEq;
 		if (declared != null && declared.sym != null) {
 			const direct = boundCallOf(declared.sym, [d.left, d.right], loc);
@@ -911,7 +911,6 @@ export function rejectCharUnary(ctx: CheckerContext, op: string, t: Type | null,
 export function textlessValue(t: Type | null): string {
 	if (t == null) return "";
 	if (t.kind == TypeKind.Void) return "a 'void' value has no text — a void call produces no value; call it on its own line";
-	if (t.kind == TypeKind.Never) return "a 'never' value has no text — the expression never produces a value";
 	return "";
 }
 
@@ -1461,9 +1460,7 @@ export function wideOperandLiteralSlot(operand: Node): Type | null {
 }
 
 export function intLiteralExactInFloat(lit: Node, target: Type): boolean {
-	const d = lit.data as NumberLiteralData;
-	const bits = d.intVal as uint64;
-	return intExactInMantissa(d.value < 0 ? 0 - bits : bits, mantissaBitsOf(target));
+	return intExactInMantissa(constIntMagnitude(lit), mantissaBitsOf(target));
 }
 
 export function literalAdoptsFloat32(lit: Node): boolean {

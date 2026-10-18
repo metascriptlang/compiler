@@ -327,6 +327,14 @@ test "isAnalysableFieldAccess: field of a global = false" {
 	assert !isAnalysableFieldAccess(n);
 }
 
+test "isAnalysableFieldAccess: static of a class or member of a namespace = false" {
+	for (const kind of [SymbolKind.Class, SymbolKind.Module]) {
+		const n = getExpr("x.f;");
+		attachSymToNodeAlias(n, "x", makeSymbol("x", kind, noneType(), false));
+		assert !isAnalysableFieldAccess(n);
+	}
+}
+
 test "isAnalysableFieldAccess: field of a cursor = false" {
 	const n = getExpr("x.f;");
 	const sym = makeTestSym("x");

@@ -392,8 +392,17 @@ function isSelectableAfterMonomorphization(sym: Symbol): boolean {
 	return !hasGenericParams(sym.symbolType);
 }
 
-function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol): void {
+function addPlainOperatorCandidates(cands: ExtensionMethod[], table: SymbolTable | null, methodName: string, exportedOnly: boolean): void {
+	if (table == null) return;
+	const sym = lookupSymbol(table, methodName);
+	if (sym == null) return;
+	addPlainOperatorCandidate(cands, sym, exportedOnly);
+	for (const ov of sym.overloads) addPlainOperatorCandidate(cands, ov, exportedOnly);
+}
+
+function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol, exportedOnly: boolean): void {
 	if (!isSelectableAfterMonomorphization(sym)) return;
+	if (exportedOnly && !hasFlag(sym, SymbolFlag.Exported)) return;
 	let i = 0;
 	while (i < cands.length) {
 		if (cands[i].sym == sym) return;
@@ -424,6 +433,15 @@ function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): 
 }
 
 export function resolveOperatorCall(table: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
+	return resolveOperatorCallAt(table, null, registry, methodName, argTypes);
+}
+
+export function resolveUserOperator(ctx: CheckerContext, op: string, argTypes: Type[]): ExtensionMethod {
+	const instantiation = ctx.instantiatingCtx != null ? ctx.instantiatingCtx.table : null;
+	return resolveOperatorCallAt(ctx.table, instantiation, ctx.extensionRegistry, op, argTypes);
+}
+
+export function resolveOperatorCallAt(table: SymbolTable | null, instantiation: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
 	const cands: ExtensionMethod[] = [];
 	if (registry != null) {
 		const exts = findAllExtensionsByName(registry, methodName);
@@ -433,17 +451,8 @@ export function resolveOperatorCall(table: SymbolTable | null, registry: Extensi
 			i = i + 1;
 		}
 	}
-	if (table != null) {
-		const sym = lookupSymbol(table, methodName);
-		if (sym != null) {
-			addPlainOperatorCandidate(cands, sym);
-			let j = 0;
-			while (j < sym.overloads.length) {
-				addPlainOperatorCandidate(cands, sym.overloads[j]);
-				j = j + 1;
-			}
-		}
-	}
+	addPlainOperatorCandidates(cands, table, methodName, false);
+	if (instantiation != null && instantiation != table) addPlainOperatorCandidates(cands, instantiation, methodName, true);
 	const best = pickBestOperatorCandidate(cands, argTypes);
 	return best != null && builtinOperatorBeats(best, methodName, argTypes) ? null as unknown as ExtensionMethod : best;
 }
@@ -665,15 +674,25 @@ export function findAccessor(ctx: CheckerContext, objType: Type, routineName: st
 	return findFirstMatchingExt(exts, objType);
 }
 
+export function hasConcreteReceiver(ext: ExtensionMethod): boolean {
+	if (ext.isStatic) return true;
+	const fnType = getExtFnType(ext);
+	if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) return false;
+	const receiver = fnType.typeChildren[0];
+	return !isUnresolvedType(receiver) && receiver.kind != TypeKind.Unknown && receiver.kind != TypeKind.GenericParam;
+}
+
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
 	let cur: Type | null = objType;
 	let depth = 0;
 	while (cur != null && depth < 64) {
-		let i = 0;
-		while (i < exts.length) {
-			if (isReceiverMatch(exts[i], cur)) return exts[i];
-			i = i + 1;
+		let catchAll: ExtensionMethod | null = null;
+		for (const ext of exts) {
+			if (!isReceiverMatch(ext, cur)) continue;
+			if (hasConcreteReceiver(ext)) return ext;
+			if (catchAll == null) catchAll = ext;
 		}
+		if (catchAll != null) return catchAll;
 		cur = classBaseStruct(cur);
 		depth += 1;
 	}

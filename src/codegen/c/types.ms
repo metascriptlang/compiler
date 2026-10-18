@@ -2053,8 +2053,8 @@ export function genFutureType(g: CGen, t: Type): string {
 	const innerType = awaitedType(t);
 	const key = typeKey(t);
 
-	// Promise<void> → msFuture_void* (typedef of msFutureBase, predefined in future.h)
-	if (innerType == null || innerType.kind == TypeKind.Void) {
+	// Promise<void> and Promise<never> → msFuture_void* (typedef of msFutureBase, predefined in future.h)
+	if (innerType == null || innerType.kind == TypeKind.Void || innerType.kind == TypeKind.Never) {
 		typeCacheSet(g.typeCache, key, "msFuture_void*");
 		return "msFuture_void*";
 	}

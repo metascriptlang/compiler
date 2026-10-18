@@ -257,11 +257,19 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 	return text;
 }
 
-// Consume optional trailing semicolon
+function hasPrecedingLineBreak(state: ParserState): boolean {
+	let pos = state.position - 1;
+	while (pos >= 0 && state.tokens[pos].kind == TokenKind.Comment) pos -= 1;
+	return pos < 0 || current(state).line > state.tokens[pos].line;
+}
+
 export function consumeSemicolon(state: ParserState): void {
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 		advance(state);
+		return;
 	}
+	if (isAtEnd(state) || current(state).kind == TokenKind.RBrace || hasPrecedingLineBreak(state)) return;
+	addError(state, `';' expected before '${current(state).value}' at line ${current(state).line}`);
 }
 
 export function expectCloser(state: ParserState, open: Token, close: TokenKind): void {
