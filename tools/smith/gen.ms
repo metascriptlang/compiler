@@ -6,6 +6,8 @@ const ROUTINE_FRAMES: int32 = 4;
 const TOP_COST_CAP: int64 = 200000 as int64;
 const GEN_NODE_CAP: int32 = 4096;
 const SEQ_LEN_CAP: int32 = 512;
+const SKIP_JS: string = "// @skip-js: pointer arithmetic and C externs have no JS form: the checker refuses the first on JS and an extern has no C linkage there";
+const SKIP_RAISER: string = "// @skip-raiser: the raiser refuses pointer arithmetic and has no host bridge for libc externs";
 
 enum Shape {
 	Literal,
@@ -44,6 +46,10 @@ enum EntKind {
 	StackVar,
 	ItemVar,
 	EnumVar,
+	NatRec,
+	NatRecPtr,
+	NatPtr,
+	NatRef,
 }
 
 struct Ent {
@@ -58,6 +64,11 @@ struct Ent {
 struct Routine {
 	text: string;
 	cost: int64;
+}
+
+struct NatText {
+	text: string;
+	bytes: int32;
 }
 
 struct Fn {
@@ -242,6 +253,47 @@ const EXC_BASE: string = "class ExcErr extends Error {\n" +
 	"\texcLog = h;\n}\n" +
 	"function excFold(tr: string[]): void { excMix(tr.join(\",\")); }\n" +
 	"function excErrText(e: ExcFail): string { return e == ExcFail.Neg ? \"neg\" : e == ExcFail.Big ? \"big\" : \"odd\"; }\n";
+
+function utf8Bytes(piece: string): int32 {
+	return piece == "é" || piece == "ÿ" ? 2 : piece == "中" ? 3 : 1;
+}
+
+function natCheckAt(indent: string, cond: string, what: string): string {
+	return indent + "natCheck(" + cond + ", \"" + what + "\");\n";
+}
+
+function natSame(t: Ty, a: string, b: string): string {
+	return isFloat(t) ? "natSameF64(" + a + ", " + b + ")" : "(" + a + " == " + b + ")";
+}
+
+function natVal(t: Ty, j: string): string { return "((" + j + " * 3 + 1) as " + tyName(t) + ")"; }
+
+function natLoop(indent: string, j: string, from: int32, to: int32, body: string): string {
+	return indent + "for (let " + j + ": int32 = " + String(from) + "; " + j + " < " + String(to) + "; " + j + "++) { " + body + " }\n";
+}
+
+function natBytes(count: int32, T: string): string { return "((" + String(count) + " * sizeof " + T + ") as uint64)"; }
+
+const NAT_EXTERNS: string[] = [
+	"natMalloc", "stdlib.h", "(n: uint64): Ptr<void>", "malloc",
+	"natCalloc", "stdlib.h", "(c: uint64, n: uint64): Ptr<void>", "calloc",
+	"natRealloc", "stdlib.h", "(p: Ptr<void>, n: uint64): Ptr<void>", "realloc",
+	"natFree", "stdlib.h", "(p: Ptr<void>): void", "free",
+	"natFreeSink", "stdlib.h", "(sink p: Ptr<void>): void", "free",
+	"natAtoi", "stdlib.h", "(s: cstring): int32", "atoi",
+	"natRandR", "stdlib.h", "(ref seed: uint32): int32", "rand_r",
+	"natMemcpy", "string.h", "(d: Ptr<void>, s: Ptr<void>, n: uint64): Ptr<void>", "memcpy",
+	"natMemmove", "string.h", "(d: Ptr<void>, s: Ptr<void>, n: uint64): Ptr<void>", "memmove",
+	"natMemset", "string.h", "(p: Ptr<void>, c: int32, n: uint64): Ptr<void>", "memset",
+	"natMemcmp", "string.h", "(a: Ptr<void>, b: Ptr<void>, n: uint64): int32", "memcmp",
+	"natStrlen", "string.h", "(s: cstring): uint64", "strlen",
+	"natStrcmp", "string.h", "(a: cstring, b: cstring): int32", "strcmp",
+	"natModf", "math.h", "(x: float64, out ip: float64): float64", "modf",
+	"natFrexp", "math.h", "(x: float64, out e: int32): float64", "frexp",
+	"natFrexpRef", "math.h", "(x: float64, ref e: int32): float64", "frexp",
+	"natLdexp", "math.h", "(x: float64, e: int32): float64", "ldexp",
+	"natPushS", "", "(this arr: string[], sink value: string): void", "&msStringArrayPush",
+];
 
 class Gen {
 	rng: Rng = new Rng();
@@ -671,6 +723,7 @@ class Gen {
 		if (fam == Fam.Gcls) { return this.gclsExpr(t, depth); }
 		if (fam == Fam.Enum) { return this.enumExpr(t, depth); }
 		if (fam == Fam.Exc) { return this.excExpr(t, depth); }
+		if (fam == Fam.Native) { return this.nativeExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1342,6 +1395,7 @@ class Gen {
 		if (fam == Fam.Gcls) { return this.gclsStatement(t, indent); }
 		if (fam == Fam.Enum) { return this.enumStatement(t, indent, depth); }
 		if (fam == Fam.Exc) { return this.excStatement(t, indent, depth); }
+		if (fam == Fam.Native) { return this.nativeStatement(t, indent, depth); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -1538,6 +1592,600 @@ class Gen {
 	directive(line: string): void {
 		for (const d of this.directives) { if (d == line) { return; } }
 		this.directives.push(line);
+	}
+
+	skipHostLanes(): void {
+		this.directive(SKIP_JS);
+		this.directive(SKIP_RAISER);
+	}
+
+	natExtern(name: string): string {
+		for (let i = 0; i < NAT_EXTERNS.length; i += 4) {
+			if (NAT_EXTERNS[i] != name) { continue; }
+			const header = NAT_EXTERNS[i + 1];
+			if (header != "") { this.useHelper("natInclude" + header, "@include(\"" + header + "\")\n"); }
+			return this.useHelper(name, "extern function " + name + NAT_EXTERNS[i + 2] + " from \"" + NAT_EXTERNS[i + 3] + "\";\n");
+		}
+		unreachable;
+	}
+
+	natHelpers(): void {
+		this.useHelper("natCheck", "function natCheck(ok: boolean, what: string): void { if (!ok) { throw new Error(\"native invariant \" + what); } }\n" +
+			"function natSameF64(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }\n");
+	}
+
+	natStructs(t: Ty): string {
+		this.natHelpers();
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const S = "NatS" + X;
+		this.useHelper(S, "struct " + S + " { n: " + T + "; k: uint8; m: " + T + "; }\n" +
+			"struct NatO" + X + " { head: " + S + "; tail: " + S + "; }\n" +
+			"function natPut" + X + "(p: Ptr<" + S + ">, a: " + T + ", b: " + T + "): void { p.n = a; p[].m = b; }\n" +
+			"function natGet" + X + "(p: Ptr<" + S + ">, second: boolean): " + T + " { return second ? p[].m : p.n; }\n" +
+			"function natBorrow" + X + "(b: Borrow<" + S + ">): " + T + " { return b.n; }\n" +
+			"function natCursor" + X + "(c: Cursor<" + S + ">): " + T + " { return c.m; }\n" +
+			"function natRef" + X + "(r: Ref<" + S + ">, a: " + T + "): void { r.n = a; }\n");
+		return X;
+	}
+
+	natIx(): void {
+		this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+	}
+
+	natSign(): void {
+		this.useHelper("natSign", "function natSign(x: int32): int32 { return x < 0 ? -1 : x > 0 ? 1 : 0; }\n");
+	}
+
+	natLen(): void {
+		this.natExtern("natStrlen");
+		this.useHelper("natLen", "function natLen(c: cstring): int32 { return natStrlen(c) as int32; }\n");
+	}
+
+	natCast(from: Ty, to: Ty, text: string): string {
+		if (from == to) { return text; }
+		if (fitsRaw(from, to)) { return "(" + text + " as " + tyName(to) + ")"; }
+		return this.convHelper(from, to) + "(" + text + ")";
+	}
+
+	natResult(t: Ty, from: Ty, value: string, indent: string): string {
+		const text = this.natCast(from, t, value);
+		return indent + "let " + this.newLocal(t) + ": " + tyName(t) + " = " + text + ";\n";
+	}
+
+	natByte(): string { return "(" + String(this.rng.below(256)) + " as uint8)"; }
+
+	natRecord(t: Ty): string {
+		return "{ n: " + this.expr(t, 0) + ", k: " + this.natByte() + ", m: " + this.expr(t, 0) + " }";
+	}
+
+	natLits(t: Ty, count: int32): string[] {
+		const out: string[] = [];
+		for (let i = 0; i < count; i++) { out.push(this.literal(t)); }
+		return out;
+	}
+
+	natArray(t: Ty, lits: string[], xs: string, p: string, indent: string): string {
+		const T = tyName(t);
+		const list = lits.join(", ");
+		if (this.rng.chance(50)) {
+			return indent + "let " + xs + ": " + T + "[" + String(lits.length) + "] = [" + list + "];\n" +
+				indent + "const " + p + " = " + xs + " as Ptr<" + T + ">;\n";
+		}
+		return indent + "let " + xs + ": " + T + "[] = [" + list + "];\n" +
+			indent + "const " + p + " = " + xs + " as Span<" + T + "> as Ptr<" + T + ">;\n";
+	}
+
+	natFloat(): string {
+		for (const u of this.tys) { if (u == Ty.Float64) { return this.expr(Ty.Float64, 0); } }
+		return this.floatLit();
+	}
+
+	natString(): NatText {
+		let text = "";
+		let bytes = 0;
+		const n = this.rng.between(0, 4);
+		for (let i = 0; i < n; i++) {
+			const piece = STR_CHARS[this.rng.below(STR_CHARS.length)];
+			text += piece;
+			bytes += utf8Bytes(piece);
+		}
+		return { text: text, bytes: bytes };
+	}
+
+	nativeExpr(t: Ty, depth: int32): string {
+		const k = this.pickW(W.NativeRead, W.NativeView);
+		if (k == 1) { return this.natSize(t); }
+		if (this.bodyDepth > 0) { return ""; }
+		return k == 0 ? this.natRead(t, depth) : this.natView(t);
+	}
+
+	natSize(t: Ty): string {
+		if (!this.reserve(1 as int64)) { return ""; }
+		const u = this.pickTy();
+		const k = this.rng.below(3);
+		if (k == 0) { return "(sizeof " + tyName(u) + " as " + tyName(t) + ")"; }
+		const X = this.natStructs(u);
+		return "(sizeof " + (k == 1 ? "NatS" : "NatO") + X + " as " + tyName(t) + ")";
+	}
+
+	natRead(t: Ty, depth: int32): string {
+		if (t == Ty.Uint8 && this.rng.chance(30)) {
+			const owners = this.entsAny(EntKind.NatRec).concat(this.entsAny(EntKind.NatRecPtr));
+			if (owners.length > 0 && this.reserve(1 as int64)) { return this.pickEnt(owners).name + ".k"; }
+		}
+		const pool = this.entsOf(EntKind.NatRec, t).concat(this.entsOf(EntKind.NatRef, t)).concat(this.entsOf(EntKind.NatRecPtr, t)).concat(this.entsOf(EntKind.NatPtr, t));
+		if (pool.length == 0 || !this.reserve(1 as int64)) { return ""; }
+		const e = this.pickEnt(pool);
+		if (e.kind == EntKind.NatPtr) {
+			const behind = e.cost as int32;
+			if (this.rng.chance(50)) { return e.name + "[" + String(this.rng.between(-behind, e.len - 1)) + "]"; }
+			this.natIx();
+			return e.name + "[ixI(" + this.smallInt(depth) + ", " + String(e.len + behind) + ") - " + String(behind) + "]";
+		}
+		if (e.kind == EntKind.NatRecPtr) { return e.name + (this.rng.chance(50) ? ".n" : "[].m"); }
+		return e.name + (this.rng.chance(50) ? ".n" : ".m");
+	}
+
+	natView(t: Ty): string {
+		const recs = this.entsOf(EntKind.NatRec, t);
+		const ptrs = this.entsOf(EntKind.NatRecPtr, t);
+		if (recs.length + ptrs.length == 0 || !this.reserve(2 as int64)) { return ""; }
+		const X = tyTitle(t);
+		const k = this.rng.below(recs.length + ptrs.length);
+		if (k >= recs.length) { return "natGet" + X + "(" + ptrs[k - recs.length].name + ", " + (this.rng.chance(50) ? "true" : "false") + ")"; }
+		const r = recs[k].name;
+		return this.rng.chance(50) ? "natBorrow" + X + "(" + r + ")" : "natCursor" + X + "(" + r + " as Cursor<NatS" + X + ">)";
+	}
+
+	nativeStatement(t: Ty, indent: string, depth: int32): string {
+		const k = this.pickW(W.NativePtr, W.NativeSink);
+		if (k == 0) { return this.natPtr(t, indent, depth); }
+		if (k == 1) { return this.natRef(t, indent, depth); }
+		if (k == 2) { return this.natArith(t, indent, depth); }
+		if (k == 3) { return this.natHeap(t, indent); }
+		if (k == 4) { return this.natLibc(t, indent, depth); }
+		if (k == 5) { return this.natCstr(t, indent); }
+		if (k == 6) { return this.natOut(t, indent); }
+		return this.natSink(t, indent, depth);
+	}
+
+	natPtr(t: Ty, indent: string, depth: int32): string {
+		const form = this.rng.below(this.atTop && depth == 0 ? 2 : 3);
+		if (!this.reserve(14 as int64)) { return ""; }
+		const X = this.natStructs(t);
+		const S = "NatS" + X;
+		const T = tyName(t);
+		const n = this.entName("n");
+		const z = this.entName("z");
+		const a = this.entName("v");
+		const b = this.entName("v");
+		const through = this.rng.chance(50) ? z + "." : z + "[].";
+		const flag = this.rng.chance(50);
+		let text = "";
+		let owner = n;
+		let result = "";
+		if (form == 0) {
+			const record = this.natRecord(t);
+			const kt = this.natByte();
+			const av = this.expr(t, 0);
+			const bv = this.expr(t, 0);
+			text = indent + "let " + n + ": " + S + " = " + record + ";\n" +
+				indent + "const " + z + " = " + n + " as Ptr<" + S + ">;\n" +
+				indent + "const " + a + ": " + T + " = " + av + ";\n" +
+				indent + "const " + b + ": " + T + " = " + bv + ";\n" +
+				indent + through + "n = " + a + ";\n" +
+				natCheckAt(indent, natSame(t, n + ".n", a), "ptr write") +
+				indent + n + ".m = " + b + ";\n" +
+				natCheckAt(indent, natSame(t, z + "[].m", b), "ptr owner write") +
+				indent + z + ".k = " + kt + ";\n" +
+				natCheckAt(indent, n + ".k == " + kt, "ptr byte") +
+				natCheckAt(indent, "(sizeof " + S + ") == (3 * sizeof " + T + ")", "ptr layout");
+			result = z + "[].m";
+		} else if (form == 1) {
+			const side = this.rng.chance(50) ? "tail" : "head";
+			const other = side == "tail" ? "head" : "tail";
+			const h = this.entName("v");
+			const hv = this.expr(t, 0);
+			const keep = "{ n: " + h + ", k: " + this.natByte() + ", m: " + this.expr(t, 0) + " }";
+			const edit = this.natRecord(t);
+			const literal = side == "tail" ? "{ head: " + keep + ", tail: " + edit + " }" : "{ head: " + edit + ", tail: " + keep + " }";
+			const av = this.expr(t, 0);
+			const bv = this.expr(t, 0);
+			text = indent + "const " + h + ": " + T + " = " + hv + ";\n" +
+				indent + "let " + n + ": NatO" + X + " = " + literal + ";\n" +
+				indent + "const " + z + " = " + n + "." + side + " as Ptr<" + S + ">;\n" +
+				indent + "const " + a + ": " + T + " = " + av + ";\n" +
+				indent + "const " + b + ": " + T + " = " + bv + ";\n" +
+				indent + "natPut" + X + "(" + z + ", " + a + ", " + b + ");\n" +
+				natCheckAt(indent, natSame(t, n + "." + side + ".n", a), "ptr field") +
+				natCheckAt(indent, natSame(t, n + "." + side + ".m", b), "ptr field") +
+				natCheckAt(indent, natSame(t, n + "." + other + ".n", h), "ptr neighbour");
+			owner = n + "." + side;
+			result = "natGet" + X + "(" + z + ", " + (flag ? "true" : "false") + ")";
+		} else {
+			const count = this.rng.between(2, 3);
+			const at = this.rng.below(count);
+			const next = (at + 1) % count;
+			const h = this.entName("v");
+			const hv = this.expr(t, 0);
+			let items = "";
+			for (let i = 0; i < count; i++) {
+				const record = i == next ? "{ n: " + this.expr(t, 0) + ", k: " + this.natByte() + ", m: " + h + " }" : this.natRecord(t);
+				items = items == "" ? record : items + ", " + record;
+			}
+			const av = this.expr(t, 0);
+			const bv = this.expr(t, 0);
+			const slot = n + "[" + String(at) + "]";
+			text = indent + "const " + h + ": " + T + " = " + hv + ";\n" +
+				indent + "let " + n + ": " + S + "[] = [" + items + "];\n" +
+				indent + "const " + z + " = " + slot + " as Ptr<" + S + ">;\n" +
+				indent + "const " + a + ": " + T + " = " + av + ";\n" +
+				indent + "const " + b + ": " + T + " = " + bv + ";\n" +
+				indent + through + "n = " + a + ";\n" +
+				indent + z + "[].m = " + b + ";\n" +
+				natCheckAt(indent, natSame(t, slot + ".n", a), "ptr element") +
+				natCheckAt(indent, natSame(t, slot + ".m", b), "ptr element") +
+				natCheckAt(indent, natSame(t, n + "[" + String(next) + "].m", h), "ptr neighbour");
+			owner = slot;
+			result = z + ".n";
+		}
+		this.ents.push({ kind: EntKind.NatRec, name: owner, ty: t, params: [], len: 0, cost: 0 as int64 });
+		this.ents.push({ kind: EntKind.NatRecPtr, name: z, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return text + this.natResult(t, t, result, indent);
+	}
+
+	natRef(t: Ty, indent: string, depth: int32): string {
+		if (!this.reserve(12 as int64)) { return ""; }
+		const X = this.natStructs(t);
+		const S = "NatS" + X;
+		const T = tyName(t);
+		const n = this.entName("n");
+		const m = this.entName("n");
+		const a = this.entName("v");
+		const b = this.entName("v");
+		const record = this.natRecord(t);
+		const av = this.expr(t, 0);
+		const bv = this.expr(t, 0);
+		let text = indent + "const " + n + ": Ref<" + S + "> = " + record + ";\n" +
+			indent + "const " + m + " = " + n + ";\n" +
+			indent + "const " + a + ": " + T + " = " + av + ";\n" +
+			indent + "const " + b + ": " + T + " = " + bv + ";\n" +
+			indent + m + ".n = " + a + ";\n" +
+			natCheckAt(indent, natSame(t, n + ".n", a), "ref alias") +
+			indent + "natRef" + X + "(" + n + ", " + b + ");\n" +
+			natCheckAt(indent, natSame(t, m + ".n", b), "ref param") +
+			natCheckAt(indent, n + " == " + m, "ref identity");
+		if (!(this.atTop && depth == 0)) {
+			const r = this.entName("n");
+			const c = this.entName("v");
+			const cv = this.expr(t, 0);
+			text += indent + "const " + c + ": " + T + " = " + cv + ";\n" +
+				indent + "let " + r + ": Ref<" + S + ">[] = [" + n + ", " + this.natRecord(t) + "];\n" +
+				indent + r + "[1].m = " + c + ";\n" +
+				natCheckAt(indent, natSame(t, r + "[1].m", c), "ref element") +
+				natCheckAt(indent, "(" + r + "[0] == " + n + ") && (" + r + "[1] != " + n + ")", "ref identity");
+		}
+		this.ents.push({ kind: EntKind.NatRef, name: n, ty: t, params: [], len: 0, cost: 0 as int64 });
+		this.ents.push({ kind: EntKind.NatRef, name: m, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return text + this.natResult(t, t, m + ".m", indent);
+	}
+
+	natArith(t: Ty, indent: string, depth: int32): string {
+		if (this.atTop && depth == 0) { return ""; }
+		const count = this.rng.between(3, 6);
+		const form = this.rng.below(4);
+		if (!this.reserve((2 * count + 14) as int64)) { return ""; }
+		const T = tyName(t);
+		const xs = this.entName("d");
+		const p = this.entName("z");
+		const q = this.entName("z");
+		const v = this.entName("v");
+		let text = "";
+		let result = "";
+		if (form == 3) {
+			const X = this.natStructs(t);
+			const S = "NatS" + X;
+			const first = this.entName("n");
+			const second = this.entName("n");
+			const ps = this.entName("d");
+			const w = this.entName("v");
+			const r1 = this.natRecord(t);
+			const r2 = this.natRecord(t);
+			const av = this.expr(t, 0);
+			const bv = this.expr(t, 0);
+			text = indent + "let " + first + ": " + S + " = " + r1 + ";\n" +
+				indent + "let " + second + ": " + S + " = " + r2 + ";\n" +
+				indent + "let " + ps + ": Ptr<" + S + ">[] = [" + first + " as Ptr<" + S + ">, " + second + " as Ptr<" + S + ">];\n" +
+				indent + "const " + p + " = " + ps + " as Span<Ptr<" + S + ">> as Ptr<Ptr<" + S + ">>;\n" +
+				indent + "const " + v + ": " + T + " = " + av + ";\n" +
+				indent + "const " + w + ": " + T + " = " + bv + ";\n" +
+				indent + p + "[1][].n = " + v + ";\n" +
+				indent + "(" + p + " + 1)[0].m = " + w + ";\n" +
+				natCheckAt(indent, natSame(t, second + ".n", v), "arith pointer array") +
+				natCheckAt(indent, natSame(t, second + ".m", w), "arith pointer array") +
+				natCheckAt(indent, "((" + p + " + 1) - " + p + ") == 1", "arith pointer array");
+			result = second + ".m";
+		} else if (form == 0) {
+			const k = this.rng.below(count);
+			const last = count - 1;
+			const lits = this.natLits(t, count);
+			const w = this.entName("z");
+			const bv = this.expr(t, 0);
+			text = this.natArray(t, lits, xs, p, indent) +
+				indent + "const " + q + " = " + p + " + " + String(k) + ";\n" +
+				natCheckAt(indent, "(" + q + " - " + p + ") == " + String(k), "arith distance") +
+				natCheckAt(indent, k > 0 ? p + " < " + q : p + " == " + q, "arith order") +
+				natCheckAt(indent, natSame(t, q + "[0]", xs + "[" + String(k) + "]"), "arith read") +
+				natCheckAt(indent, natSame(t, "(" + p + " + " + String(last) + ")[0]", xs + "[" + String(last) + "]"), "arith last") +
+				(k > 0 ? natCheckAt(indent, natSame(t, q + "[-1]", xs + "[" + String(k - 1) + "]"), "arith back") : "") +
+				indent + "let " + w + " = " + p + ";\n" +
+				indent + w + " += " + String(k) + ";\n" +
+				natCheckAt(indent, w + " == " + q, "arith step") +
+				indent + "const " + v + ": " + T + " = " + bv + ";\n" +
+				indent + q + "[0] = " + v + ";\n" +
+				natCheckAt(indent, natSame(t, xs + "[" + String(k) + "]", v), "arith write");
+			this.ents.push({ kind: EntKind.NatPtr, name: p, ty: t, params: [], len: count, cost: 0 as int64 });
+			this.ents.push({ kind: EntKind.NatPtr, name: q, ty: t, params: [], len: count - k, cost: k as int64 });
+			result = q + "[0]";
+		} else if (form == 1) {
+			this.natIx();
+			const k = this.entName("v");
+			const lits = this.natLits(t, count);
+			const kv = this.smallInt(0);
+			const bv = this.expr(t, 0);
+			text = this.natArray(t, lits, xs, p, indent) +
+				indent + "const " + k + ": int32 = ixI(" + kv + ", " + String(count) + ");\n" +
+				indent + "const " + q + " = " + p + " + " + k + ";\n" +
+				natCheckAt(indent, "(" + q + " - " + p + ") == " + k, "arith distance") +
+				natCheckAt(indent, "(" + p + " < " + q + ") == (" + k + " > 0)", "arith order") +
+				natCheckAt(indent, natSame(t, q + "[0]", xs + "[" + k + "]"), "arith read") +
+				natCheckAt(indent, natSame(t, p + "[" + k + "]", xs + "[" + k + "]"), "arith index") +
+				indent + "if (" + k + " > 0) { natCheck(" + natSame(t, q + "[-1]", xs + "[" + k + " - 1]") + ", \"arith back\"); }\n" +
+				indent + "const " + v + ": " + T + " = " + bv + ";\n" +
+				indent + q + "[0] = " + v + ";\n" +
+				natCheckAt(indent, natSame(t, xs + "[" + k + "]", v), "arith write");
+			result = q + "[0]";
+		} else {
+			const j = this.entName("j");
+			const lits = this.natLits(t, count);
+			text = this.natArray(t, lits, xs, p, indent) +
+				indent + "let " + q + " = " + p + ";\n" +
+				indent + "for (let " + j + ": int32 = 0; " + j + " < " + String(count) + "; " + j + "++) {\n" +
+				indent + "\tnatCheck(" + natSame(t, q + "[0]", xs + "[" + j + "]") + ", \"arith walk\");\n" +
+				indent + "\t" + q + " += 1;\n" +
+				indent + "}\n" +
+				natCheckAt(indent, "(" + q + " - " + p + ") == " + String(count), "arith walk");
+			result = p + "[" + String(count - 1) + "]";
+		}
+		this.skipHostLanes();
+		return text + this.natResult(t, t, result, indent);
+	}
+
+	natHeap(t: Ty, indent: string): string {
+		const count = this.rng.between(2, 5);
+		const form = this.rng.below(3);
+		if (!this.reserve((8 * count + 14) as int64)) { return ""; }
+		const T = tyName(t);
+		this.natHelpers();
+		this.natExtern("natMalloc");
+		this.natExtern("natFree");
+		const raw = this.entName("n");
+		const z = this.entName("z");
+		const j = this.entName("j");
+		let owner = raw;
+		let view = z;
+		let size = count;
+		let text = "";
+		if (form == 1) {
+			this.natExtern("natCalloc");
+			text = indent + "const " + raw + " = natCalloc(" + String(count) + " as uint64, (sizeof " + T + ") as uint64);\n" +
+				indent + "const " + z + " = " + raw + " as Ptr<" + T + ">;\n" +
+				natLoop(indent, j, 0, count, "natCheck(" + natSame(t, z + "[" + j + "]", zero(t)) + ", \"heap zeroed\");");
+		} else {
+			text = indent + "const " + raw + " = natMalloc(" + natBytes(count, T) + ");\n" +
+				indent + "const " + z + " = " + raw + " as Ptr<" + T + ">;\n";
+		}
+		text += natLoop(indent, j, 0, count, z + "[" + j + "] = " + natVal(t, j) + ";") +
+			natLoop(indent, j, 0, count, "natCheck(" + natSame(t, z + "[" + j + "]", natVal(t, j)) + ", \"heap fill\");");
+		if (form == 2) {
+			this.natExtern("natRealloc");
+			const grown = this.entName("n");
+			const y = this.entName("z");
+			text += indent + "const " + grown + " = natRealloc(" + raw + ", " + natBytes(2 * count, T) + ");\n" +
+				indent + "const " + y + " = " + grown + " as Ptr<" + T + ">;\n" +
+				natLoop(indent, j, 0, count, "natCheck(" + natSame(t, y + "[" + j + "]", natVal(t, j)) + ", \"heap kept\");") +
+				natLoop(indent, j, count, 2 * count, y + "[" + j + "] = " + natVal(t, j) + ";") +
+				natLoop(indent, j, 0, 2 * count, "natCheck(" + natSame(t, y + "[" + j + "]", natVal(t, j)) + ", \"heap grown\");");
+			owner = grown;
+			view = y;
+			size = 2 * count;
+		}
+		this.skipHostLanes();
+		return text + this.natResult(t, t, view + "[" + String(size - 1) + "]", indent) + indent + "natFree(" + owner + ");\n";
+	}
+
+	natLibc(t: Ty, indent: string, depth: int32): string {
+		if (this.atTop && depth == 0) { return ""; }
+		const count = this.rng.between(2, 5);
+		const form = this.rng.below(4);
+		if (!this.reserve((4 * count + 14) as int64)) { return ""; }
+		const T = tyName(t);
+		this.natHelpers();
+		const bytes = natBytes(count, T);
+		const lits = this.natLits(t, count);
+		const xs = this.entName("d");
+		const p = this.entName("z");
+		const ys = this.entName("d");
+		const q = this.entName("z");
+		let text = "";
+		let result = xs + "[0]";
+		if (form == 0) {
+			this.natExtern("natMemcpy");
+			this.natExtern("natMemcmp");
+			const zeros: string[] = [];
+			for (let i = 0; i < count; i++) { zeros.push(zero(t)); }
+			text = this.natArray(t, lits, xs, p, indent) + this.natArray(t, zeros, ys, q, indent) +
+				indent + "natMemcpy(" + q + " as Ptr<void>, " + p + " as Ptr<void>, " + bytes + ");\n";
+			for (let i = 0; i < count; i++) { text += natCheckAt(indent, natSame(t, ys + "[" + String(i) + "]", lits[i]), "libc memcpy"); }
+			text += natCheckAt(indent, "natMemcmp(" + q + " as Ptr<void>, " + p + " as Ptr<void>, " + bytes + ") == 0", "libc memcmp");
+			result = ys + "[" + String(count - 1) + "]";
+		} else if (form == 1) {
+			this.natExtern("natMemmove");
+			const up = this.rng.chance(50);
+			const moved = natBytes(count - 1, T);
+			text = this.natArray(t, lits, xs, p, indent) +
+				indent + (up ? "natMemmove((" + p + " + 1) as Ptr<void>, " + p + " as Ptr<void>, " + moved + ");\n" : "natMemmove(" + p + " as Ptr<void>, (" + p + " + 1) as Ptr<void>, " + moved + ");\n");
+			for (let i = 0; i < count; i++) {
+				const src = up ? (i == 0 ? 0 : i - 1) : (i == count - 1 ? i : i + 1);
+				text += natCheckAt(indent, natSame(t, xs + "[" + String(i) + "]", lits[src]), "libc memmove");
+			}
+		} else if (form == 2) {
+			this.natExtern("natMemset");
+			const ones = !isFloat(t) && this.rng.chance(50);
+			const expected = !ones ? zero(t) : isSigned(t) ? intLiteral(t, true, 1 as uint64) : maxLiteral(t);
+			text = this.natArray(t, lits, xs, p, indent) +
+				indent + "natMemset(" + p + " as Ptr<void>, " + (ones ? "255" : "0") + ", " + bytes + ");\n";
+			for (let i = 0; i < count; i++) { text += natCheckAt(indent, natSame(t, xs + "[" + String(i) + "]", expected), "libc memset"); }
+		} else {
+			this.natExtern("natMemcmp");
+			this.natSign();
+			const at = this.rng.below(count);
+			const flip = isFloat(t) ? "(-" + lits[at] + ")" : "(~" + lits[at] + ")";
+			const ab = "natMemcmp(" + p + " as Ptr<void>, " + q + " as Ptr<void>, " + bytes + ")";
+			const ba = "natMemcmp(" + q + " as Ptr<void>, " + p + " as Ptr<void>, " + bytes + ")";
+			text = this.natArray(t, lits, xs, p, indent) + this.natArray(t, lits, ys, q, indent) +
+				natCheckAt(indent, ab + " == 0", "libc memcmp equal") +
+				indent + q + "[" + String(at) + "] = " + flip + ";\n" +
+				natCheckAt(indent, ab + " != 0", "libc memcmp differs") +
+				natCheckAt(indent, "natSign(" + ab + ") == (-natSign(" + ba + "))", "libc memcmp antisymmetric");
+		}
+		this.skipHostLanes();
+		return text + this.natResult(t, t, result, indent);
+	}
+
+	natCstr(t: Ty, indent: string): string {
+		const form = this.rng.below(4);
+		if (!this.reserve(12 as int64)) { return ""; }
+		this.natHelpers();
+		this.natLen();
+		const c = this.entName("n");
+		const s = this.entName("n");
+		const piece = this.natString();
+		const literal = "\"" + piece.text + "\"";
+		let text = "";
+		let result = "natLen(" + c + ")";
+		if (form == 0) {
+			text = indent + "const " + c + ": cstring = " + literal + ";\n" +
+				natCheckAt(indent, "natStrlen(" + c + ") == (" + String(piece.bytes) + " as uint64)", "cstr strlen") +
+				natCheckAt(indent, "natLen(" + c + ") == " + String(piece.bytes), "cstr param");
+		} else if (form == 1) {
+			const digits = String(this.rng.below(100000));
+			const joined = this.rng.chance(50);
+			const value = joined ? literal + " + String(" + digits + ")" : literal;
+			const bytes = joined ? piece.bytes + digits.length : piece.bytes;
+			text = indent + "const " + s + ": string = " + value + ";\n" +
+				indent + "const " + c + ": cstring = " + s + ";\n" +
+				natCheckAt(indent, "natLen(" + s + ") == " + String(bytes), "cstr string") +
+				natCheckAt(indent, "(" + c + " as string) == " + s, "cstr back");
+		} else if (form == 2) {
+			this.natExtern("natAtoi");
+			const v = this.entName("v");
+			const small = this.smallInt(0);
+			text = indent + "const " + v + ": int32 = " + small + " % 100000;\n" +
+				indent + "const " + s + ": string = String(" + v + ");\n" +
+				natCheckAt(indent, "natAtoi(" + s + ") == " + v, "cstr atoi");
+			result = "natAtoi(" + s + ")";
+		} else {
+			this.natExtern("natStrcmp");
+			this.natSign();
+			const other = this.natString();
+			const o = this.entName("n");
+			text = indent + "const " + s + ": string = " + literal + ";\n" +
+				indent + "const " + o + ": string = \"" + other.text + "\";\n" +
+				natCheckAt(indent, "(natStrcmp(" + s + ", " + o + ") == 0) == (" + s + " == " + o + ")", "cstr strcmp equal") +
+				natCheckAt(indent, "natSign(natStrcmp(" + s + ", " + o + ")) == (-natSign(natStrcmp(" + o + ", " + s + ")))", "cstr strcmp antisymmetric") +
+				natCheckAt(indent, "natStrcmp(" + s + ", " + s + ") == 0", "cstr strcmp self");
+			result = "natSign(natStrcmp(" + s + ", " + o + "))";
+		}
+		this.skipHostLanes();
+		return text + this.natResult(t, Ty.Int32, result, indent);
+	}
+
+	natOut(t: Ty, indent: string): string {
+		const form = this.rng.below(4);
+		if (!this.reserve(14 as int64)) { return ""; }
+		this.natHelpers();
+		const x = this.entName("v");
+		const a = this.entName("v");
+		const b = this.entName("v");
+		const e = this.entName("v");
+		let text = "";
+		let result = "";
+		let kind = Ty.Float64;
+		if (form == 3) {
+			this.natExtern("natRandR");
+			const seed = "(" + String(this.rng.below(1000)) + " as uint32)";
+			text = indent + "let " + x + ": uint32 = " + seed + ";\n" +
+				indent + "let " + e + ": uint32 = " + seed + ";\n" +
+				indent + "const " + a + " = natRandR(" + x + ");\n" +
+				indent + "const " + b + " = natRandR(" + e + ");\n" +
+				natCheckAt(indent, "(" + a + " == " + b + ") && (" + x + " == " + e + ") && (" + a + " >= 0)", "out rand_r") +
+				natCheckAt(indent, "natRandR(" + x + ") == natRandR(" + e + ")", "out rand_r again");
+			result = a;
+			kind = Ty.Int32;
+		} else {
+			const source = this.natFloat();
+			text = indent + "const " + x + ": float64 = " + source + ";\n";
+			if (form == 0) {
+				this.natExtern("natModf");
+				text += indent + "let " + e + ": float64 = 0.0;\n" +
+					indent + "const " + a + " = natModf(" + x + ", " + e + ");\n" +
+					natCheckAt(indent, "natSameF64(" + a + " + " + e + ", " + x + ")", "out modf");
+			} else {
+				this.natExtern("natLdexp");
+				this.natExtern(form == 1 ? "natFrexp" : "natFrexpRef");
+				text += indent + "let " + e + ": int32 = " + (form == 1 ? "0" : "3") + ";\n" +
+					indent + "const " + a + " = " + (form == 1 ? "natFrexp(" : "natFrexpRef(") + x + ", " + e + ");\n" +
+					indent + "if ((" + x + " == " + x + ") && ((" + x + " - " + x + ") == 0.0)) { natCheck(natSameF64(natLdexp(" + a + ", " + e + "), " + x + "), \"out frexp\"); }\n";
+			}
+			result = a;
+		}
+		this.skipHostLanes();
+		return text + this.natResult(t, kind, result, indent);
+	}
+
+	natSink(t: Ty, indent: string, depth: int32): string {
+		const form = this.atTop && depth == 0 ? 0 : this.rng.below(2);
+		if (!this.reserve(12 as int64)) { return ""; }
+		this.natHelpers();
+		const n = this.entName("n");
+		if (form == 0) {
+			const T = tyName(t);
+			const z = this.entName("z");
+			const lit = this.literal(t);
+			this.natExtern("natMalloc");
+			this.natExtern("natFreeSink");
+			const text = indent + "const " + n + " = natMalloc(" + natBytes(1, T) + ");\n" +
+				indent + "const " + z + " = " + n + " as Ptr<" + T + ">;\n" +
+				indent + z + "[0] = " + lit + ";\n" +
+				natCheckAt(indent, natSame(t, z + "[0]", lit), "sink heap") +
+				this.natResult(t, t, z + "[0]", indent) +
+				indent + "natFreeSink(" + n + ");\n";
+			this.skipHostLanes();
+			return text;
+		}
+		this.natExtern("natPushS");
+		const piece = this.natString();
+		const s = this.entName("n");
+		const text = indent + "let " + n + ": string[] = [];\n" +
+			indent + "const " + s + ": string = \"" + piece.text + "\";\n" +
+			indent + n + ".natPushS(" + s + ");\n" +
+			indent + n + ".natPushS(\"x\" + String(" + n + ".length));\n" +
+			natCheckAt(indent, n + ".length == 2", "sink push") +
+			natCheckAt(indent, "(" + n + "[0] == \"" + piece.text + "\") && (" + n + "[1] == \"x1\")", "sink push");
+		this.skipHostLanes();
+		return text + this.natResult(t, Ty.Int32, n + ".length", indent);
 	}
 
 	pushEnt(kind: EntKind, name: string, t: Ty, params: Ty[], len: int32, cost: int64): void {
@@ -4989,4 +5637,163 @@ test "exc statements restore scope, ents, the cost multiplier and the match-arm 
 		if (g.hasHelper("excBase")) { helpers++; }
 	}
 	assert helpers > 8;
+}
+
+test "the native family alone reaches each of its shapes" {
+	const f = withWeights("fams=native types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	const shapes = [": NatSInt32 = { n: ", ": NatOUint8 = { head: ", ": NatSFloat64[] = [", " as Ptr<NatSInt32>;", "natPutInt32(", "\"ptr layout\"", "\"ptr neighbour\"", "\"ptr element\"",
+		": Ref<NatSInt32> = { n: ", "natRefUint8(", ": Ref<NatSFloat64>[] = [", "\"ref identity\"",
+		" as Span<int32> as Ptr<int32>;", ": Ptr<NatSInt32>[] = [", " += 1;", "\"arith distance\"", "\"arith back\"", "\"arith walk\"", "\"arith pointer array\"", ") - 0]",
+		"natMalloc(", "natCalloc(", "natRealloc(", "natFree(", "\"heap kept\"", "\"heap zeroed\"",
+		"natMemcpy(", "natMemmove(", "natMemset(", "\"libc memcmp differs\"",
+		": cstring = \"", "natStrlen(", "natAtoi(", "natStrcmp(", " as string) == ", "\"cstr string\"",
+		"natModf(", "natFrexp(", "natFrexpRef(", "natRandR(", "natLdexp(",
+		"natFreeSink(", "natPushS(",
+		"(sizeof NatSInt32 as ", "(sizeof NatOUint8 as ", "(sizeof int32 as ", "natBorrowInt32(", "natCursorUint8(", "natGetFloat64(", "[].m", "\"sink heap\""];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 61; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+function usesHostShape(text: string): boolean {
+	for (const tag of ["\"arith ", "\"heap ", "\"libc ", "\"cstr ", "\"out ", "\"sink "]) { if (text.contains(tag)) { return true; } }
+	return false;
+}
+
+test "a program carries both host-lane skips right after its head exactly when it uses a shape those lanes cannot run" {
+	const f = withWeights("fams=native types=int32,uint8,float64 stmts=6 w.stmt.fam=60");
+	const hostFree = withWeights("fams=native types=int32,uint8,float64 stmts=6 w.stmt.fam=60 w.native.arith=0 w.native.heap=0 w.native.libc=0 w.native.cstr=0 w.native.out=0 w.native.sink=0");
+	let skipped = 0;
+	for (let seed = 1; seed <= 40; seed++) {
+		const text = generate(seed as uint64, f);
+		const lines = text.split("\n");
+		assert usesHostShape(text);
+		assert lines[1].startsWith("// @skip-js: ") && lines[2].startsWith("// @skip-raiser: ");
+		assert countOf(text, "// @skip-js") == 1 && countOf(text, "// @skip-raiser") == 1;
+		skipped++;
+		const free = generate(seed as uint64, hostFree);
+		assert !usesHostShape(free) && !free.contains("// @skip") && free.contains("natCheck(");
+	}
+	assert skipped == 40;
+}
+
+test "a program without the native family carries no host-lane skip and a directive is written once" {
+	const f = withWeights("w.fam.native=0 stmts=6 w.stmt.fam=60");
+	for (let seed = 1; seed <= 20; seed++) { const text = generate(seed as uint64, f); assert !text.contains(SKIP_JS) && !text.contains(SKIP_RAISER); }
+	const g = new Gen();
+	g.directive(SKIP_JS);
+	g.directive(SKIP_JS);
+	g.skipHostLanes();
+	assert g.directives.length == 2 && g.directives[0] == SKIP_JS && g.directives[1] == SKIP_RAISER;
+}
+
+function nativeCorpus(): string[] {
+	const f = withWeights("fams=native types=int32,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	const out: string[] = [];
+	for (let seed = 1; seed <= 40; seed++) { out.push(generate(seed as uint64, f)); }
+	return out;
+}
+
+test "parked: console.log never receives a cstring (inbox 2026-10-19-console-log-of-a-cstring-prints-object-on-c-and-js)" {
+	let prints = 0;
+	for (const text of nativeCorpus()) {
+		for (const line of text.split("\n")) {
+			if (!line.contains("console.log(")) { continue; }
+			assert line.startsWith("console.log(\"g") || line.startsWith("console.log(\"e");
+			prints++;
+		}
+	}
+	assert prints > 100;
+}
+
+test "parked: no extern takes a function, which fails at clang (inbox 2026-10-19-a-function-passed-to-a-c-function-pointer-fails-at-clang)" {
+	let externs = 0;
+	for (const text of nativeCorpus()) {
+		for (const line of text.split("\n")) {
+			if (!line.startsWith("extern function ")) { continue; }
+			assert !line.contains("=>");
+			externs++;
+		}
+	}
+	assert externs > 20;
+}
+
+test "parked: no program imports a header, which needs a project fixture" {
+	for (const text of nativeCorpus()) { assert !text.contains("cimport") && !text.contains("import "); }
+}
+
+test "parked: a cstring is bound only to a literal or a named string (inbox 2026-10-19-a-cstring-reassigned-from-a-temporary-string-reads-freed-memory)" {
+	let cstrings = 0;
+	for (const text of nativeCorpus()) {
+		for (const line of text.split("\n")) {
+			const at = line.indexOf(": cstring = ");
+			if (at < 0) { continue; }
+			const rest = line.slice(at + ": cstring = ".length, line.length);
+			assert line.trim().startsWith("const ") && (rest.startsWith("\"") || (!rest.contains("(") && !rest.contains("+"))) && rest.endsWith(";");
+			cstrings++;
+		}
+	}
+	assert cstrings > 10;
+}
+
+test "a module-level native statement borrows no array" {
+	const f = withWeights("fams=native types=int32,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	let nested = 0;
+	for (let seed = 1; seed <= 40; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (!line.startsWith("\t") && !line.startsWith("function ") && !line.startsWith("struct ")) { assert !line.contains(" as Span<") && !line.contains("] = ["); }
+			if (line.startsWith("\t") && line.contains(" as Span<")) { nested++; }
+		}
+	}
+	assert nested > 0;
+}
+
+test "no native read or view reaches a closure body" {
+	const names = ["n0", "z0", "z1", "n1"];
+	let sizeofs = 0;
+	let reads = 0;
+	for (let seed = 1; seed <= 40; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32];
+		g.exprMax = 4;
+		g.fams = [Fam.Native];
+		g.costCap = FN_COST_CAP;
+		g.ents = [
+			{ kind: EntKind.NatRec, name: "n0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+			{ kind: EntKind.NatRecPtr, name: "z0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+			{ kind: EntKind.NatPtr, name: "z1", ty: Ty.Int32, params: [], len: 4, cost: 1 as int64 },
+			{ kind: EntKind.NatRef, name: "n1", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+		];
+		const body = g.lambda([Ty.Int32], Ty.Int32, 0, FN_COST_CAP).text;
+		for (const name of names) { assert !body.contains(name + "."); assert !body.contains(name + "["); assert !body.contains("(" + name + ","); assert !body.contains("(" + name + ")"); }
+		if (body.contains("(sizeof ")) { sizeofs++; }
+		const open = g.famExpr(Ty.Int32, 0);
+		for (const name of names) { if (open.contains(name)) { reads++; } }
+	}
+	assert sizeofs > 0 && reads > 0;
+}
+
+test "a native pointer read stays inside the elements its provenance holds" {
+	for (let seed = 1; seed <= 200; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32];
+		g.exprMax = 2;
+		g.costCap = FN_COST_CAP;
+		g.ents = [{ kind: EntKind.NatPtr, name: "z1", ty: Ty.Int32, params: [], len: 4, cost: 2 as int64 }];
+		const text = g.natRead(Ty.Int32, 0);
+		if (text == "") { continue; }
+		assert text.startsWith("z1[") && text.endsWith("]");
+		const index = text.slice(3, text.length - 1);
+		if (index.startsWith("ixI(")) {
+			assert index.endsWith(", 6) - 2");
+		} else {
+			const i = index.parseInt() as int32;
+			assert i >= -2 && i <= 3;
+		}
+	}
 }
