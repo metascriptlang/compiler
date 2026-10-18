@@ -27,7 +27,12 @@ import {
 	msSolHostSetClock,
 	msSolHostSetSysvarStatus,
 } from "./kernel";
-import { msSolCopy, msSolLoadU8, msSolLoadU64, msSolPointer, msSolSpanAddress, msSolStoreU8, msSolStoreU64 } from "./memory";
+import { msSolLoadU8, msSolLoadU64, msSolStoreU8, msSolStoreU64 } from "./memory";
+when (js) {
+	import { msSolCopy, msSolSpanAddress } from "./memory";
+} else {
+	import { msSolPointer } from "./memory";
+}
 import { Pubkey } from "./pubkey";
 
 export struct HostAccount {
