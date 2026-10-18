@@ -287,6 +287,24 @@ function msSolMemDataRoom(record) {
   return BigInt.asUintN(64, end - 8n * (next - index) - (record + msSolMemHeaderSize));
 }
 
+function msSolMemKeepOnly(address) {
+  msSolMemRegions = msSolMemRegions.filter(function (region) { return region.start <= address && address < region.start + region.extent; });
+  msSolMemKeys = new WeakMap();
+  for (const region of msSolMemRegions) if (region.backing !== null) msSolMemKeys.set(region.backing, region);
+  msSolMemTexts = new Map();
+  msSolMemNext = 0x100000000n;
+  msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n, programId: 0n };
+}
+
+function msSolMemUnmap(start) {
+  const dropped = msSolMemRegions.filter(function (region) { return region.start === start; });
+  msSolMemRegions = msSolMemRegions.filter(function (region) { return region.start !== start; });
+  for (const region of dropped) {
+    if (region.backing !== null) msSolMemKeys.delete(region.backing);
+    for (const [text, held] of msSolMemTexts) if (held === region) msSolMemTexts.delete(text);
+  }
+}
+
 function msSolMemRelease() {
   msSolMemRegions = [];
   msSolMemKeys = new WeakMap();
@@ -406,6 +424,14 @@ export function msSolMemoryMap(start: uint64, size: uint64): void {
 export function msSolMemoryAllocate(size: uint64): uint64 {
 	@emit(`return msSolMemAllocate(${size}).start;`);
 	unreachable;
+}
+
+export function msSolMemoryKeepOnly(address: uint64): void {
+	@emit(`msSolMemKeepOnly(${address});`);
+}
+
+export function msSolMemoryUnmap(start: uint64): void {
+	@emit(`msSolMemUnmap(${start});`);
 }
 
 export function msSolMemoryRelease(): void {
