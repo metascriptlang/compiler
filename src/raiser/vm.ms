@@ -38,10 +38,10 @@ export interface RaiserRegFile {
 }
 
 export interface RaiserCallFrame {
-	funcIdx: number;
-	returnIp: number;
-	returnReg: number;
-	baseReg: number;
+	funcIdx: int32;
+	returnIp: int32;
+	returnReg: int32;
+	baseReg: int32;
 	funcName: string;
 	safePoints: number[];   // the caller's pending try handlers, restored on return
 }
@@ -71,9 +71,9 @@ export interface RaiserStrand {
 	callStack: RaiserCallFrames;
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
-	ip: number;
-	funcIdx: number;
-	baseReg: number;
+	ip: int32;
+	funcIdx: int32;
+	baseReg: int32;
 	loopCount: number;
 	status: RaiserStrandStatus;
 	result: RaiserValue;
@@ -193,13 +193,13 @@ export interface RaiserVM {
 	mod: RaiserModule;
 	globals: RaiserValue[];
 	regs: RaiserRegFile;
-	ip: number;
+	ip: int32;
 	halted: boolean;
 	exitValue: RaiserValue;
 	output: string;
 	printSink: RaiserPrintSink | null;
-	funcIdx: number;
-	baseReg: number;
+	funcIdx: int32;
+	baseReg: int32;
 	callStack: RaiserCallFrames;
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
@@ -207,6 +207,7 @@ export interface RaiserVM {
 	loopLimit: number;   // max loop iterations before the VM refuses (reference: maxLoopIterationsVM)
 	error: string;    // Non-empty when VM stopped due to error
 	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
+	orc: boolean;     // gcMode == "orc", decided once in createVM
 	gcThreshold: number;  // live-object count that triggers a cycle collection (orc)
 	sched: RaiserSched;
 	current: number;      // index into sched.strands.items of the running strand
@@ -291,6 +292,7 @@ export function setDefaultLoopLimit(n: number): void {
 }
 
 export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM {
+	if (gcMode != "arena" && gcMode != "orc") throw new Error(`internal: unknown Raiser gcMode "${gcMode}"`);
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
 	// Reserve the entry function's frame up-front (and at least the initial
@@ -308,7 +310,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const mainSafePoints: number[] = [];
 	const globals: RaiserValue[] = [];
 	for (let i = 0; i < mod.globalCount; i += 1) globals.push(raiserNil());
-	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
@@ -317,30 +319,31 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, frameFloor: 0, suspendedRuns: [] };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, orc: gcMode == "orc", gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, frameFloor: 0, suspendedRuns: [] };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
 
-// Slot accessors. Pre-condition: every Call/CallIndirect calls
-// ensureSlots(regs, baseReg + callee.maxRegs) before transferring control,
-// so any in-frame reg access fits in the array. A defensive grow here
-// guards against codegen bugs (e.g. a function whose maxRegs metadata
-// underestimates its actual usage) — better to allocate one nil than
-// crash with a low-level array bounds error from the runtime.
+// Slot accessors. Every Call/CallIndirect/spawn reserves baseReg + callee.maxRegs
+// slots before control transfers, so an access past the file is a codegen bug
+// (maxRegs underestimating its function), reported by name.
+function slotOutside(idx: number): Error {
+	return new Error(`internal: register ${idx} is outside the reserved register file`);
+}
+
 function getReg(vm: RaiserVM, idx: number): RaiserValue {
-	if (idx >= vm.regs.slots.length) ensureSlots(vm.regs, idx + 1);
+	if (idx >= vm.regs.slots.length) throw slotOutside(idx);
 	return vm.regs.slots[idx];
 }
 
 // --- ORC refcount helpers (gated on gcMode; no-op in arena mode) ---
 
 function vmIncref(vm: RaiserVM, val: RaiserValue): void {
-	if (vm.gcMode == "orc") rcIncref(vm.arrayHeap, vm.objectHeap, val);
+	if (vm.orc) rcIncref(vm.arrayHeap, vm.objectHeap, val);
 }
 
 function vmDecref(vm: RaiserVM, val: RaiserValue): void {
-	if (vm.gcMode == "orc") rcDecref(vm.arrayHeap, vm.objectHeap, val);
+	if (vm.orc) rcDecref(vm.arrayHeap, vm.objectHeap, val);
 }
 
 // Adaptive cycle collection: when the live (allocated minus recycled) heap object
@@ -353,7 +356,7 @@ function vmLiveCount(vm: RaiserVM): number {
 }
 
 function vmMaybeCollect(vm: RaiserVM): void {
-	if (vm.gcMode != "orc") return;
+	if (!vm.orc) return;
 	if (vmLiveCount(vm) <= vm.gcThreshold) return;
 	orcCollectCycles(vm.arrayHeap, vm.objectHeap);
 	let next = vmLiveCount(vm) * 2;
@@ -362,8 +365,8 @@ function vmMaybeCollect(vm: RaiserVM): void {
 }
 
 function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
-	if (idx >= vm.regs.slots.length) ensureSlots(vm.regs, idx + 1);
-	if (vm.gcMode == "orc") {
+	if (idx >= vm.regs.slots.length) throw slotOutside(idx);
+	if (vm.orc) {
 		// incref-before-decref: safe under self-assignment (setReg(i, slots[i]))
 		const old = vm.regs.slots[idx];
 		rcIncref(vm.arrayHeap, vm.objectHeap, val);
@@ -407,7 +410,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx);
 	if (vm.frameFloor > 0 && !runSuspendedAt(vm, vm.frameFloor)) suspendRun(vm);
-	vm.funcIdx = funcIdx;
+	vm.funcIdx = funcIdx as int32;
 	vm.baseReg = vm.frameFloor;
 	vm.ip = 0;
 	vm.halted = false;
@@ -495,7 +498,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.savedIp = -1;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
-	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
+	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.sched.nextStrandId = 1;
@@ -581,7 +584,7 @@ function vmWaitForTimer(vm: RaiserVM): void {
 }
 
 function vmHandleSleep(vm: RaiserVM, inst: RaiserInstruction): void {
-	if (vm.gcMode != "orc") {
+	if (!vm.orc) {
 		vmError(vm, "sleepAsync is not available in compile-time evaluation: a timer would make its result depend on wall-clock time");
 		return;
 	}
@@ -697,11 +700,11 @@ function unwindStep(vm: RaiserVM): void {
 				const bound = raiserNil();
 				copyValueInto(bound, vm.currentException);
 				setReg(vm, vm.baseReg + meta.a, bound);
-				vm.ip = sp + 1;
+				vm.ip = (sp + 1) as int32;
 				return;
 			}
 			if (meta.op == RaiserOpcode.Finally) {
-				vm.ip = sp + 1;
+				vm.ip = (sp + 1) as int32;
 				return;
 			}
 			vmError(vm, `safepoint ${sp} does not point at a handler`);
@@ -881,7 +884,7 @@ function copyStrandGlobals(
 	map.destGlobals = globals;
 	for (const value of vm.globals) {
 		const copied = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrays, objects, value, map);
-		if (vm.gcMode == "orc") rcIncref(arrays, objects, copied);
+		if (vm.orc) rcIncref(arrays, objects, copied);
 		const slot = raiserNil();
 		copyValueInto(slot, copied);
 		globals.push(slot);
@@ -907,7 +910,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return id;
 }
@@ -951,7 +954,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as number, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return fut;
 }
@@ -1450,9 +1453,22 @@ function execStrandLoop(vm: RaiserVM): void {
 
 function runStrandSlice(vm: RaiserVM): void {
 	const mod = vm.mod;
+	let funcIdx = vm.funcIdx;
+	let func = getModuleFunc(mod, funcIdx);
+	let code = func.code;
+	let regs = vm.regs;
+	let slots = regs.slots;
 	while (!vm.halted && !vm.yielded) {
-		const func = getModuleFunc(mod, vm.funcIdx);
-		const inst = getFuncInst(func, vm.ip);
+		if (vm.funcIdx != funcIdx) {
+			funcIdx = vm.funcIdx;
+			func = getModuleFunc(mod, funcIdx);
+			code = func.code;
+		}
+		if (vm.regs != regs) {
+			regs = vm.regs;
+			slots = regs.slots;
+		}
+		const inst = code[vm.ip];
 		vm.ip = vm.ip + 1;
 		const op = inst.op;
 		const base = vm.baseReg;
@@ -1471,7 +1487,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			}
 		} else if (op == RaiserOpcode.Move) {
 			// Copy to avoid aliasing between registers
-			const src = getReg(vm, base + inst.b);
+			const src = slots[base + inst.b];
 			const copy = raiserNil();
 			copyValueInto(copy, src);
 			setReg(vm, base + inst.a, copy);
@@ -1480,20 +1496,20 @@ function runStrandSlice(vm: RaiserVM): void {
 			copyValueInto(copied, vm.globals[inst.b]);
 			setReg(vm, base + inst.a, copied);
 		} else if (op == RaiserOpcode.StoreGlobal) {
-			const source = getReg(vm, base + inst.a);
+			const source = slots[base + inst.a];
 			vmIncref(vm, source);
 			vmDecref(vm, vm.globals[inst.b]);
 			copyValueInto(vm.globals[inst.b], source);
 		} else if (op == RaiserOpcode.CopyValue) {
-			const source = getReg(vm, base + inst.b);
+			const source = slots[base + inst.b];
 			const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source,
-				func.copyPlans, inst.c as int32, vm.gcMode == "orc");
+				func.copyPlans, inst.c as int32, vm.orc);
 			setReg(vm, base + inst.a, copied);
 			vmMaybeCollect(vm);
 		} else if (op == RaiserOpcode.LoadNil) {
 			setReg(vm, base + inst.a, raiserNil());
 		} else if (op == RaiserOpcode.Halt) {
-			const haltVal = getReg(vm, base + inst.a);
+			const haltVal = slots[base + inst.a];
 			if (inst.b != 1 && strandFinish(vm, haltVal)) {
 				vm.yielded = true;
 			} else {
@@ -1513,68 +1529,56 @@ function runStrandSlice(vm: RaiserVM): void {
 					break;
 				}
 			}
-			vm.ip = vm.ip + offset;
+			vm.ip = vm.ip + (offset as int32);
 		// --- i64 arithmetic ---
 		} else if (op == RaiserOpcode.AddI64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
+			const lhs = slots[base + inst.b];
+			const rhs = slots[base + inst.c];
 			const sum = int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64));
 			if ((sum ^ lhs.intVal) >= 0 || (sum ^ rhs.intVal) >= 0) { setReg(vm, base + inst.a, raiserInt(sum));
 			} else { vmError(vm, "over- or underflow"); }
 		} else if (op == RaiserOpcode.SubI64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
+			const lhs = slots[base + inst.b];
+			const rhs = slots[base + inst.c];
 			const diff = int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64));
 			if ((diff ^ lhs.intVal) >= 0 || (diff ^ ~rhs.intVal) >= 0) { setReg(vm, base + inst.a, raiserInt(diff));
 			} else { vmError(vm, "over- or underflow"); }
 		} else if (op == RaiserOpcode.MulI64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
+			const lhs = slots[base + inst.b];
+			const rhs = slots[base + inst.c];
 			if (mulOverflowsI64(lhs.intVal, rhs.intVal)) { vmError(vm, "over- or underflow");
 			} else { setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64)))); }
 		} else if (op == RaiserOpcode.DivI64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
+			const lhs = slots[base + inst.b];
+			const rhs = slots[base + inst.c];
 			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
 			} else if (rhs.intVal == -1) {
 				if (lhs.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
 				} else { setReg(vm, base + inst.a, raiserInt(-lhs.intVal)); }
 			} else {
-				setReg(vm, base + inst.a, raiserInt(lhs.intVal / rhs.intVal));
+				setReg(vm, base + inst.a, raiserInt(slots[base + inst.b].intVal / slots[base + inst.c].intVal));
 			}
 		} else if (op == RaiserOpcode.ModI64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			if (rhs.intVal == 0) { vmError(vm, "integer modulo by zero");
+			if (slots[base + inst.c].intVal == 0) { vmError(vm, "integer modulo by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(rhs.intVal == -1 ? 0 : lhs.intVal % rhs.intVal));
+				setReg(vm, base + inst.a, raiserInt(slots[base + inst.c].intVal == -1 ? 0 : slots[base + inst.b].intVal % slots[base + inst.c].intVal));
 			}
 		} else if (op == RaiserOpcode.DivU64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
+			if (slots[base + inst.c].intVal == 0) { vmError(vm, "integer division by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) / (rhs.intVal as uint64))));
+				setReg(vm, base + inst.a, raiserInt(int64Bits((slots[base + inst.b].intVal as uint64) / (slots[base + inst.c].intVal as uint64))));
 			}
 		} else if (op == RaiserOpcode.ModU64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			if (rhs.intVal == 0) { vmError(vm, "integer modulo by zero");
+			if (slots[base + inst.c].intVal == 0) { vmError(vm, "integer modulo by zero");
 			} else {
-				setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) % (rhs.intVal as uint64))));
+				setReg(vm, base + inst.a, raiserInt(int64Bits((slots[base + inst.b].intVal as uint64) % (slots[base + inst.c].intVal as uint64))));
 			}
 		} else if (op == RaiserOpcode.AddU64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64))));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((slots[base + inst.b].intVal as uint64) + (slots[base + inst.c].intVal as uint64))));
 		} else if (op == RaiserOpcode.SubU64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64))));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((slots[base + inst.b].intVal as uint64) - (slots[base + inst.c].intVal as uint64))));
 		} else if (op == RaiserOpcode.MulU64) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64))));
+			setReg(vm, base + inst.a, raiserInt(int64Bits((slots[base + inst.b].intVal as uint64) * (slots[base + inst.c].intVal as uint64))));
 		} else if (op == RaiserOpcode.AddrReg) {
 			setReg(vm, base + inst.a, raiserRegAddr((base + inst.b) as int64));
 		} else if (op == RaiserOpcode.AddrGlobal) {
@@ -1583,17 +1587,17 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleAddrIndex(vm, inst);
 		} else if (op == RaiserOpcode.AddrField) {
 			const handle = vmHeapOperand(vm, getReg(vm, base + inst.b), RaiserValueKind.Object, "an object");
-			if (!vm.halted) setReg(vm, base + inst.a, raiserFieldAddr(handle, getFuncConst(getModuleFunc(mod, vm.funcIdx), inst.c).strVal));
+			if (!vm.halted) setReg(vm, base + inst.a, raiserFieldAddr(handle, getFuncConst(func, inst.c).strVal));
 		} else if (op == RaiserOpcode.LoadDeref) {
 			vmHandleLoadDeref(vm, inst);
 		} else if (op == RaiserOpcode.StoreDeref) {
 			vmHandleStoreDeref(vm, inst);
 		} else if (op == RaiserOpcode.InstanceOf) {
-			const held = getReg(vm, base + inst.b);
+			const held = slots[base + inst.b];
 			const key = getFuncConst(func, inst.c).strVal;
 			setReg(vm, base + inst.a, raiserBool(held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[held.intVal].classType, key)));
 		} else if (op == RaiserOpcode.ObjConv) {
-			const held = getReg(vm, base + inst.a);
+			const held = slots[base + inst.a];
 			if (held.kind != RaiserValueKind.Nil) {
 				const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[held.intVal].classType : RAISER_NO_CLASS;
 				if (!raiserIsInstance(classType, getFuncConst(func, inst.b).strVal)) {
@@ -1601,75 +1605,49 @@ function runStrandSlice(vm: RaiserVM): void {
 				}
 			}
 		} else if (op == RaiserOpcode.SameLoc) {
-			const l = getReg(vm, base + inst.b);
-			const r = getReg(vm, base + inst.c);
+			const l = slots[base + inst.b];
+			const r = slots[base + inst.c];
 			setReg(vm, base + inst.a, raiserBool(l.kind == r.kind && l.intVal == r.intVal && l.floatVal == r.floatVal && l.strVal == r.strVal));
 		} else if (op == RaiserOpcode.NegI64) {
-			const val = getReg(vm, base + inst.b);
+			const val = slots[base + inst.b];
 			if (val.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
 			} else { setReg(vm, base + inst.a, raiserInt(-val.intVal)); }
 		// --- i64 compare-branch ---
 		} else if (op == RaiserOpcode.BeqI64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal == rhs.intVal) vm.ip = vm.ip + inst.c;
+			if (slots[base + inst.a].intVal == slots[base + inst.b].intVal) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BneI64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal != rhs.intVal) vm.ip = vm.ip + inst.c;
+			if (slots[base + inst.a].intVal != slots[base + inst.b].intVal) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BTruthy) {
-			if (raiserToBool(getReg(vm, base + inst.a))) vm.ip = vm.ip + inst.c;
+			if (raiserToBool(slots[base + inst.a])) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BltI64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal < rhs.intVal) vm.ip = vm.ip + inst.c;
+			if (slots[base + inst.a].intVal < slots[base + inst.b].intVal) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BleI64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal <= rhs.intVal) vm.ip = vm.ip + inst.c;
+			if (slots[base + inst.a].intVal <= slots[base + inst.b].intVal) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BltU64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if ((lhs.intVal as uint64) < (rhs.intVal as uint64)) vm.ip = vm.ip + inst.c;
+			if ((slots[base + inst.a].intVal as uint64) < (slots[base + inst.b].intVal as uint64)) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BleU64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if ((lhs.intVal as uint64) <= (rhs.intVal as uint64)) vm.ip = vm.ip + inst.c;
+			if ((slots[base + inst.a].intVal as uint64) <= (slots[base + inst.b].intVal as uint64)) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BgtI64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal > rhs.intVal) vm.ip = vm.ip + inst.c;
+			if (slots[base + inst.a].intVal > slots[base + inst.b].intVal) vm.ip = vm.ip + (inst.c as int32);
 		} else if (op == RaiserOpcode.BgeI64) {
-			const lhs = getReg(vm, base + inst.a);
-			const rhs = getReg(vm, base + inst.b);
-			if (lhs.intVal >= rhs.intVal) vm.ip = vm.ip + inst.c;
+			if (slots[base + inst.a].intVal >= slots[base + inst.b].intVal) vm.ip = vm.ip + (inst.c as int32);
 		// --- Bitwise ---
 		} else if (op == RaiserOpcode.BitAnd) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal & rhs.intVal));
+			setReg(vm, base + inst.a, raiserInt(slots[base + inst.b].intVal & slots[base + inst.c].intVal));
 		} else if (op == RaiserOpcode.BitOr) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal | rhs.intVal));
+			setReg(vm, base + inst.a, raiserInt(slots[base + inst.b].intVal | slots[base + inst.c].intVal));
 		} else if (op == RaiserOpcode.BitXor) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal ^ rhs.intVal));
+			setReg(vm, base + inst.a, raiserInt(slots[base + inst.b].intVal ^ slots[base + inst.c].intVal));
 		} else if (op == RaiserOpcode.BitNot) {
-			const val = getReg(vm, base + inst.b);
+			const val = slots[base + inst.b];
 			setReg(vm, base + inst.a, raiserInt(~val.intVal));
 		} else if (op == RaiserOpcode.ShiftLeft) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			const count = (rhs.intVal & 63) as uint64;
-			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) << count)));
+			const count = (slots[base + inst.c].intVal & 63) as uint64;
+			setReg(vm, base + inst.a, raiserInt(int64Bits((slots[base + inst.b].intVal as uint64) << count)));
 		} else if (op == RaiserOpcode.ShiftRight) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal >> (rhs.intVal & 63)));
+			setReg(vm, base + inst.a, raiserInt(slots[base + inst.b].intVal >> (slots[base + inst.c].intVal & 63)));
 		} else if (op == RaiserOpcode.NarrowU) {
-			const val = getReg(vm, base + inst.a);
+			const val = slots[base + inst.a];
 			const width = inst.b as int64;
 			setReg(vm, base + inst.a, raiserInt(val.intVal & (((1 as int64) << width) - 1)));
 		} else if (op == RaiserOpcode.NarrowS) {
@@ -1678,20 +1656,18 @@ function runStrandSlice(vm: RaiserVM): void {
 			const low = inst.c == 1 ? 0 : -half;
 			if (val.intVal < low || val.intVal >= low + 2 * half) vmError(vm, "over- or underflow");
 		} else if (op == RaiserOpcode.SignExtend) {
-			const val = getReg(vm, base + inst.a);
+			const val = slots[base + inst.a];
 			const imm = 64 - (inst.b as int64);
 			const raised = int64Bits((val.intVal as uint64) << (imm as uint64));
 			setReg(vm, base + inst.a, raiserInt(raised >> imm));
 		} else if (op == RaiserOpcode.ShiftRightU) {
-			const lhs = getReg(vm, base + inst.b);
-			const rhs = getReg(vm, base + inst.c);
-			const count = (rhs.intVal & 63) as uint64;
-			setReg(vm, base + inst.a, raiserInt(int64Bits((lhs.intVal as uint64) >> count)));
+			const count = (slots[base + inst.c].intVal & 63) as uint64;
+			setReg(vm, base + inst.a, raiserInt(int64Bits((slots[base + inst.b].intVal as uint64) >> count)));
 		} else if (op == RaiserOpcode.Conv) {
 			vmHandleConv(vm, inst);
 		// --- Complex ops (previously handled in MetaScript fallback) ---
 		} else if (op == RaiserOpcode.Print) {
-			const val = getReg(vm, base + inst.a);
+			const val = slots[base + inst.a];
 			const s = raiserToString(val);
 			vm.output = `${vm.output}${s}\n`;
 			const sink = vm.printSink;
@@ -1766,7 +1742,7 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.CallHost) {
 			vmHandleCallHost(vm, inst);
 		} else if (op == RaiserOpcode.IsKind) {
-			const v = getReg(vm, base + inst.b);
+			const v = slots[base + inst.b];
 			setReg(vm, base + inst.a, raiserBool((v.kind as number) == inst.c));
 		} else if (op == RaiserOpcode.Yield) {
 			vm.yielded = true;
@@ -1797,7 +1773,7 @@ function runStrandSlice(vm: RaiserVM): void {
 				vm.savedIp = -1;
 				unwindStep(vm);
 			} else if (vm.savedIp >= 0) {
-				vm.ip = vm.savedIp;
+				vm.ip = vm.savedIp as int32;
 				vm.savedIp = -1;
 			}
 		} else if (op == RaiserOpcode.Throw) {
@@ -1841,7 +1817,7 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 	const frame: RaiserCallFrame = {
 		funcIdx: vm.funcIdx,
 		returnIp: vm.ip,
-		returnReg: vm.baseReg + destReg,
+		returnReg: (vm.baseReg + destReg) as int32,
 		baseReg: vm.baseReg,
 		funcName: callerFunc.name,
 		safePoints: vm.safePoints,
@@ -1851,8 +1827,8 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 	vm.safePoints = calleeSafePoints;
 
 	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
-	vm.baseReg = newBase;
-	vm.funcIdx = calleeFuncIdx;
+	vm.baseReg = newBase as int32;
+	vm.funcIdx = calleeFuncIdx as int32;
 	vm.ip = 0;
 }
 
@@ -1861,7 +1837,7 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	const finIp = cleanUpOnReturn(vm);
 	if (finIp >= 0) {
 		vm.savedIp = vm.ip - 1;
-		vm.ip = finIp;
+		vm.ip = finIp as int32;
 		return;
 	}
 	if (vm.callStack.items.length == 0 && vm.current == vm.sched.modules.strand) {
@@ -1938,7 +1914,7 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 	const frame: RaiserCallFrame = {
 		funcIdx: vm.funcIdx,
 		returnIp: vm.ip,
-		returnReg: vm.baseReg + destReg,
+		returnReg: (vm.baseReg + destReg) as int32,
 		baseReg: vm.baseReg,
 		funcName: callerFunc.name,
 		safePoints: vm.safePoints,
@@ -1948,8 +1924,8 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 	vm.safePoints = calleeSafePoints;
 
 	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
-	vm.baseReg = newBase;
-	vm.funcIdx = calleeFuncIdx as number;
+	vm.baseReg = newBase as int32;
+	vm.funcIdx = calleeFuncIdx as int32;
 	vm.ip = 0;
 }
 
@@ -2289,7 +2265,7 @@ function vmHandleEqStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.a);
 	const rhs = getReg(vm, vm.baseReg + inst.b);
 	if (lhs.strVal == rhs.strVal) {
-		vm.ip = vm.ip + inst.c;
+		vm.ip = vm.ip + (inst.c as int32);
 	}
 }
 
@@ -2297,7 +2273,7 @@ function vmHandleNeStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.a);
 	const rhs = getReg(vm, vm.baseReg + inst.b);
 	if (lhs.strVal != rhs.strVal) {
-		vm.ip = vm.ip + inst.c;
+		vm.ip = vm.ip + (inst.c as int32);
 	}
 }
 
@@ -2305,7 +2281,7 @@ function vmHandleLtStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.a);
 	const rhs = getReg(vm, vm.baseReg + inst.b);
 	if (lhs.strVal < rhs.strVal) {
-		vm.ip = vm.ip + inst.c;
+		vm.ip = vm.ip + (inst.c as int32);
 	}
 }
 
@@ -2313,7 +2289,7 @@ function vmHandleLeStr(vm: RaiserVM, inst: RaiserInstruction): void {
 	const lhs = getReg(vm, vm.baseReg + inst.a);
 	const rhs = getReg(vm, vm.baseReg + inst.b);
 	if (lhs.strVal <= rhs.strVal) {
-		vm.ip = vm.ip + inst.c;
+		vm.ip = vm.ip + (inst.c as int32);
 	}
 }
 
@@ -2541,7 +2517,7 @@ function vmCmpBranchF64(vm: RaiserVM, inst: RaiserInstruction, cmpOp: number): v
 	else if (cmpOp == 3) { cond = l <= r; }
 	else if (cmpOp == 4) { cond = l > r; }
 	else if (cmpOp == 5) { cond = l >= r; }
-	if (cond) { vm.ip = vm.ip + inst.c; }
+	if (cond) { vm.ip = vm.ip + (inst.c as int32); }
 }
 
 // --- Bitwise handlers ---
@@ -4689,4 +4665,33 @@ test "indirect call on a non-function value fails loud" {
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
 	assert vm.error == "indirect call target is not a function";
+}
+
+test "createVM refuses an unknown gcMode" {
+	const mod = makeTestModule([raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserNil()]);
+	let refused = "";
+	try {
+		createVM(mod, "bogus");
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused == "internal: unknown Raiser gcMode \"bogus\"";
+}
+
+test "a register write past the reserved file is an internal error" {
+	const main = createRaiserFunction("main", [
+		raiserABC(RaiserOpcode.Call, 0, 1, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserNil()], 0, 0, 8);
+	const wild = createRaiserFunction("wild", [
+		raiserABC(RaiserOpcode.LoadNil, 255, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	], [raiserNil()], 0, 0, 1);
+	let refused = "";
+	try {
+		execModule(createRaiserModule("t", [main, wild], 0), "arena");
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused == "internal: register 256 is outside the reserved register file";
 }
