@@ -814,6 +814,9 @@ when (mscDeclaresRuntime) {
 	extern function msBoxInt32(v: int32): Ptr<void>;
 
 	@compilerFunc
+	extern function msBoxInt64(v: int64): Ptr<void>;
+
+	@compilerFunc
 	extern function msBoxBool(v: boolean): Ptr<void>;
 
 	@compilerFunc
