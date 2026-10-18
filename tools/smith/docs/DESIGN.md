@@ -245,10 +245,10 @@ may be emitted raw was measured one case per program, built
 
 | case | C debug | C danger | JS | generator |
 |---|---|---|---|---|
-| `int32`/`int64` `+ - *` and unary `-` overflow | panic | wraps | unwrapped value (`2147483648`) | `safeAdd/Sub/Mul/Neg<T>` |
-| `int8`/`int16`/unsigned `+ - *` overflow | wraps | wraps | wraps | raw |
+| signed `+ - *` and unary `-` overflow | stops `over- or underflow` | wraps | stops `over- or underflow` | `safeAdd/Sub/Mul/Neg<T>` |
+| unsigned `+ - *` overflow | wraps | wraps | wraps | raw |
 | integer `/` `%` by zero | panic | garbage (`0`, `-7`, `5.4707704e-315`) | throws | `safeDiv/Mod<T>` |
-| `int32`/`int64` `MIN / -1` | panic | wraps | throws | guarded in `safeDiv<T>` |
+| signed `MIN / -1` | stops `over- or underflow` | wraps | stops | guarded in `safeDiv<T>` |
 | `int32` `MIN % -1` | `0` | `0` | `0` | zero guard only |
 | `<<` `>>` with count ≥ width or negative | masked (`1 << 32` = 1, `1 << -1` = MIN) | same | same | raw |
 | to a narrower signed type out of range, `uint32` → `int32` | panic `not in range` | truncates | throws | `conv<S>To<T>` |
@@ -259,6 +259,21 @@ may be emitted raw was measured one case per program, built
 | `String(float64)`: `0.1+0.2`, `1e21`, `5e-324`, NaN, ±Infinity, `-0` | shortest round trip, JS spelling | same | same | raw |
 | operands and arguments with side effects | left to right | same | same | raw — no effect discipline |
 | `int32 < uint32` (implicit mixed signedness) | `false` | `false` | `true` | never emitted: the reference refuses it (inbox `2026-10-01-mixed-signedness-comparison-passes-the-checker.md`) |
+
+The signed rows were re-measured on 2026-10-18 against BUILD `9029133ef`, after
+signed overflow began to stop on C and JS. Before that, `int8` and `int16`
+wrapped on every lane and were emitted raw. Measured cases:
+
+- `int8` `100 * 100`;
+- `int16` `+ - *` near the bounds;
+- `int8` `-128 / -1` and `-128 - 1`;
+- `-x` on an `int8`, `int16` or `int32` parameter or `let`;
+- `int8` `-128 % -1`, which still gives `0` on C and JS;
+- the danger build: `int16` `30000 + 30000` gives `-5536`, `-(-128)` on `int8` gives `-128`.
+
+`int32`/`int64` under danger were not re-measured on this build. Negating a compile-time constant minimum skips the check on C and JS
+(inbox `2026-10-18-negating-a-constant-minimum-skips-the-overflow-check.md`). The
+generator never emits that case: every signed negation goes through `safeNeg<T>`.
 
 Not measured: the Raiser and SAN lanes, `--release`, Windows, Linux/gcc,
 `float32`, `int64` → `float64` rounding at the 2^53 edge.
