@@ -367,7 +367,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		engineName = "$comptime:helper";
 		(clone.data as FunctionDeclData).fnName = engineName;
 	}
-	callComptimeHelperPreparer(clone);
+	callComptimeHelperPreparer(clone, seedCtx != null ? seedCtx : _engineToken);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym);

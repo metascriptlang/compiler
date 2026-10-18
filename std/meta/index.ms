@@ -14,8 +14,15 @@ export * from "./decorator";
 extern function currentFile(): string;
 extern function currentLine(): number;
 extern function exec(cmd: string): string;
-extern function error(msg: string, loc: SourceLocation): never;
-extern function warning(msg: string, loc: SourceLocation): void;
+@builtin("MetaError")
+export extern function error(msg: string, loc: Node | SourceLocation | null = null): never;
+@builtin("MetaWarning")
+export extern function warning(msg: string, loc: Node | SourceLocation | null = null): void;
+
+@builtin("MetaSplice")
+export extern function splice(n: Node): Node;
+@builtin("MetaGetTypeArg")
+export extern function getTypeArg(): Node;
 
 // Node child access by index over the macro VM's flat wire — the Nim
 // n[i]/n.len analog. Flat field names (n.object, n.left, ...) resolve only

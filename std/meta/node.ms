@@ -309,10 +309,12 @@ export enum NodeFlag {
 	UserOpStores,  // checker: this compound assignment calls its base operator's declared routine and stores the result in its target
 	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
 	ValueUnion,    // parser: this TypeAliasDecl is a discriminated union written `struct X = match`
+	QuoteSplice,   // parser: this call is a quote's `${ }` interpolation, a splice by syntax whatever `splice` names in scope
 }
 
 // ===== Node Kind Enum =====
 
+@builtin("MetaNodeKind")
 export enum NodeKind {
 	// Literals
 	NumberLiteral, StringLiteral, BooleanLiteral, NullLiteral, BigIntLiteral, RegexLiteral,
@@ -373,12 +375,14 @@ export enum NodeKind {
 
 // ===== Declaration Kind Enum =====
 
+@builtin("MetaDeclKind")
 export enum DeclKind {
 	Const,
 	Let,
 	Var,
 }
 
+@builtin("MetaExternKind")
 export enum ExternKind {
 	Invalid,
 	Function,
@@ -760,6 +764,7 @@ export type ComputedPropertyData = { computedKey: Node, computedValue: Node };
 
 // ===== Constructors =====
 
+@builtin("MetaCreateNode")
 export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	return {
 		kind,
@@ -792,6 +797,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 // wide NodeData union, then scoring picks the specific overload.
 
 // Literals
+@builtin("MetaCreateNodeAt")
 export function createNodeAt(kind: NodeKind.NumberLiteral, data: NumberLiteralData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.StringLiteral, data: StringLiteralData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.BooleanLiteral, data: BooleanLiteralData, loc: SourceLocation): Node;
@@ -899,6 +905,7 @@ export function createNodeAt(kind: NodeKind.ComputedProperty, data: ComputedProp
 // This is the body; all overload signatures above delegate here via the checker's
 // overload resolution. It also serves as the fallback for callers that pass a
 // runtime (non-literal) NodeKind or a NodeData value that isn't known to narrow.
+@builtin("MetaCreateNodeAt")
 export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation): Node {
 	return {
 		kind,
