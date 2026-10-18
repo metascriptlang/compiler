@@ -1702,6 +1702,7 @@ class Gen {
 		const bodyDepth = this.bodyDepth;
 		const elseArms = this.elseArms;
 		const arithInElse = this.arithInElse;
+		const asyncCtx = this.asyncCtx;
 		this.scope = params.map((v: Var): Var => v);
 		this.ents = [];
 		this.globals = [];
@@ -1714,6 +1715,7 @@ class Gen {
 		this.bodyDepth = 0;
 		this.elseArms = 0;
 		this.arithInElse = 0;
+		this.asyncCtx = false;
 		const body = this.block(0, "\t", false, ret, true);
 		this.ents = [];
 		const tail = "\treturn " + this.expr(ret, 0) + ";\n";
@@ -1730,6 +1732,7 @@ class Gen {
 		this.bodyDepth = bodyDepth;
 		this.elseArms = elseArms;
 		this.arithInElse = arithInElse;
+		this.asyncCtx = asyncCtx;
 		return { text: body + tail, cost: spent };
 	}
 
@@ -11645,4 +11648,18 @@ test "a bigint or null local never starts as a plain null" {
 		}
 	}
 	assert seen > 3;
+}
+
+test "a comptime routine holds no await and no async trace" {
+	const f = withWeights("fams=meta,async");
+	let routines = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		let inside = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("@comptime function ")) { inside = true; routines++; continue; }
+			if (inside && line.startsWith("}")) { inside = false; }
+			if (inside) { assert !line.contains("await ") && !line.contains("atrace +="); }
+		}
+	}
+	assert routines > 5;
 }
