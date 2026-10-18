@@ -1,12 +1,6 @@
-@include("runtime/solana/solana.h");
-
 import { Node, NodeKind, bindSym } from "std/meta";
 import { AccountLayout, accountLayout, requireZeroAccountLayout } from "./accountLayout";
-
-extern function msSolLoadU8(address: uint64): uint8;
-extern function msSolLoadU16(address: uint64): uint16;
-extern function msSolLoadU32(address: uint64): uint32;
-extern function msSolLoadU64(address: uint64): uint64;
+import { msSolLoadU16, msSolLoadU32, msSolLoadU64, msSolLoadU8 } from "./memory";
 
 @inline function accountByteBias8(address: uint64, bias: uint64): uint64 {
 	const word = msSolLoadU64(address);

@@ -1,27 +1,14 @@
 @include("runtime/solana/solana.h");
-@compile("runtime/solana/host.c");
 
 import { Pubkey } from "./pubkey";
 import { ProgramError } from "./error";
 import { ProgramAddress } from "./pda";
+import { msSolDeriveAddress, msSolFindAddress, msSolFindCanonicalAddress, msSolFindCanonicalStaged, msSolFindExpectedAddress, msSolFindExpectedStaged, msSolHashIsStaged, msSolProgramId, msSolSeedStageInPlace } from "./kernel";
+import { msSolCopy, msSolLoadU64, msSolSpanAddress, msSolStringAddress, msSolStringLength } from "./memory";
 
-extern function msSolProgramId(): uint64;
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolStringAddress(text: string): uint64;
-extern function msSolStringLength(text: string): uint64;
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
 extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
 extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
-extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
-extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
-extern function msSolFindCanonicalAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
-extern function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
-extern function msSolSeedStageInPlace(table: uint64, count: uint64, bump: uint64, program: uint64): uint64;
-extern function msSolFindExpectedStaged(table: uint64, used: uint64, expected: uint64): uint64;
-extern function msSolFindCanonicalStaged(table: uint64, used: uint64, expected: uint64): uint64;
-extern function msSolHashIsStaged(table: uint64, used: uint64, bump: uint64, expected: uint64): uint64;
 
 const MAX_SEEDS: uint64 = 16;
 const MAX_SEED_LENGTH: uint64 = 32;

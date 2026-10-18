@@ -1,17 +1,8 @@
-@include("runtime/solana/solana.h");
-@compile("runtime/solana/host.c");
-
 import { Pubkey } from "./pubkey";
 import { Bytes } from "./bytes";
-export { Bytes } from "./bytes";
+import { msSolCopy, msSolPointer, msSolSpanAddress, msSolStoreU16, msSolStoreU32, msSolStoreU64, msSolStoreU8 } from "./memory";
 
-extern function msSolPointer(address: uint64): Ptr<void>;
-extern function msSolStoreU8(address: uint64, value: uint8): void;
-extern function msSolStoreU16(address: uint64, value: uint16): void;
-extern function msSolStoreU32(address: uint64, value: uint32): void;
-extern function msSolStoreU64(address: uint64, value: uint64): void;
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+export { Bytes } from "./bytes";
 
 export function storePubkey(key: Pubkey, address: uint64): void {
 	const at = msSolPointer(address) as Ptr<Pubkey>;
