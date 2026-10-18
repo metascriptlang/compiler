@@ -15,7 +15,7 @@ import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
@@ -1528,12 +1528,12 @@ function backJumpSpan(f: RaiserFunction): number {
 test "engine: a for loop tests its bound with one compare-and-skip and keeps no old value of i++" {
 	const sum = compiledFunc("function sum(n: int64): int64 { let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { s += i; } return s; } console.log(`${sum(10)}`);", "sum");
 	const text = disasmFunc(sum);
-	assert backJumpSpan(sum) == 5, text;
+	assert backJumpSpan(sum) == 4, text;
 	assert !text.includes("; true") && !text.includes("; false"), text;
 	const fl = compiledFunc("function sum(n: float64): float64 { let s: float64 = 0.0; for (let i: float64 = 0.0; i < n; i++) { s += i; } return s; } console.log(`${sum(10.0)}`);", "sum");
 	assert backJumpSpan(fl) == 6, disasmFunc(fl);
 	const wh = compiledFunc("function f(n: int64): int64 { let i: int64 = 0; while (i < n) { i++; } return i; } console.log(`${f(3)}`);", "f");
-	assert backJumpSpan(wh) == 4, disasmFunc(wh);
+	assert backJumpSpan(wh) == 3, disasmFunc(wh);
 	const st = compiledFunc("function f(a: string, b: string): int64 { let i: int64 = 0; while (a < b && i < 3) { i++; } return i; } console.log(`${f('a', 'b')}`);", "f");
 	assert !disasmFunc(st).includes("; true"), disasmFunc(st);
 }
@@ -1541,7 +1541,7 @@ test "engine: a for loop tests its bound with one compare-and-skip and keeps no 
 test "engine: an if on a comparison emits no bool constant and no compare against zero" {
 	const f = compiledFunc("function f(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${f(1, 2)}`);", "f");
 	const text = disasmFunc(f);
-	assert f.code[0].op == RaiserOpcode.BltI64 && f.code[1].op == RaiserOpcode.Jump, text;
+	assert opName(f.code[0].op) == "BrGeI64" && countNamed(f, "Jump") == 0 && countNamed(f, "LoadConst") == 0, text;
 }
 
 function condForms(op: string, ty: string, a: string, b: string): string {
@@ -1769,14 +1769,14 @@ function countNamed(f: RaiserFunction, name: string): number {
 
 test "engine: fib, a counting loop and a while on zero use the immediate forms" {
 	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
-	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BltI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
-	assert fib.code.length == 9, disasmFunc(fib);
+	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
+	assert fib.code.length == 8, disasmFunc(fib);
 	const run = compiledFunc("function run(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 5000000; i = i + 1) { s = s + i; } return s; } console.log(`${run()}`);", "run");
 	assert countNamed(run, "LoadInt") == 2 && countNamed(run, "AddI64Imm") == 1, disasmFunc(run);
-	assert countNamed(run, "LoadConst") == 1 && countNamed(run, "BltI64") == 1, disasmFunc(run);
+	assert countNamed(run, "LoadConst") == 1 && countNamed(run, "BrGeI64") == 1, disasmFunc(run);
 	const wh = compiledFunc("function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${w(3)}`);", "w");
-	assert countNamed(wh, "LoadConst") == 0 && countNamed(wh, "BneI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);
-	assert backJumpSpan(wh) == 5, disasmFunc(wh);
+	assert countNamed(wh, "LoadConst") == 0 && countNamed(wh, "BrEqI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);
+	assert backJumpSpan(wh) == 4, disasmFunc(wh);
 	const ctx = evalOrcVM("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }"
 		+ " function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${fib(15)} ${w(7)}`);");
 	assert ctx.error == "" && ctx.output == "610 7\n", `${ctx.error} ${ctx.output}`;
@@ -1786,7 +1786,7 @@ test "engine: an immediate at the field bound is kept and one past it falls back
 	const f = compiledFunc("function f(y: int64): int64 { return (y + 32767) + (y + 32768) + (y - -32768) + (y - -32769); } console.log(`${f(1)}`);", "f");
 	assert countNamed(f, "AddI64Imm") == 1 && countNamed(f, "SubI64Imm") == 1 && countNamed(f, "AddI64") == 4 && countNamed(f, "SubI64") == 1, disasmFunc(f);
 	const c = compiledFunc("function c(x: int64): int64 { let r: int64 = 0; if (x == 32767) r += 1; if (x == 32768) r += 2; if (x > -32768) r += 4; if (x > -32769) r += 8; return r; } console.log(`${c(1)}`);", "c");
-	assert countNamed(c, "BeqI64Imm") == 1 && countNamed(c, "BeqI64") == 1 && countNamed(c, "BgtI64Imm") == 1 && countNamed(c, "BgtI64") == 1, disasmFunc(c);
+	assert countNamed(c, "BrNeI64Imm") == 1 && countNamed(c, "BrNeI64") == 1 && countNamed(c, "BrLeI64Imm") == 1 && countNamed(c, "BrLeI64") == 1, disasmFunc(c);
 	const ctx = evalOrcVM("function f(y: int64): int64 { return (y + 32767) + (y + 32768) + (y - -32768) + (y - -32769); }"
 		+ " function c(x: int64): int64 { let r: int64 = 0; if (x == 32767) r += 1; if (x == 32768) r += 2; if (x > -32768) r += 4; if (x > -32769) r += 8; return r; }"
 		+ " console.log(`${f(1)} ${c(32767)} ${c(32768)} ${c(-32768)} ${c(-32769)} ${c(-32770)}`);");
@@ -1820,4 +1820,35 @@ test "engine: an unsigned operand keeps its wrapping add and its unsigned compar
 	const ctx = evalOrcVM("function lt(x: uint64): boolean { return x < 5; } function wrap(y: uint32): uint32 { return y + 1; } function zero(x: uint64): boolean { return x == 0; }"
 		+ " console.log(`${lt(18446744073709551615)} ${lt(4)} ${wrap(4294967295)} ${zero(0)} ${zero(18446744073709551615)}`);");
 	assert ctx.error == "" && ctx.output == "false true 0 true false\n", `${ctx.error} ${ctx.output}`;
+}
+
+// --- Compare-and-branch: an integer condition is one instruction carrying its jump target ---
+
+test "engine: an integer condition branches in one instruction and a float one keeps its skip and jump" {
+	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
+	assert countNamed(fib, "Jump") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "BltI64Imm") == 0, disasmFunc(fib);
+	assert fib.code.length == 8, disasmFunc(fib);
+	const g = compiledFunc("function g(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${g(1, 2)}`);", "g");
+	assert opName(g.code[0].op) == "BrGeI64" && countNamed(g, "Jump") == 0, disasmFunc(g);
+	const dw = compiledFunc("function f(): int64 { let n: int64 = 0; do { n++; } while (n < 10); return n; } console.log(`${f()}`);", "f");
+	assert countNamed(dw, "BrLtI64Imm") == 1 && countNamed(dw, "Jump") == 0, disasmFunc(dw);
+	const mix = compiledFunc("function f(a: int64, b: int64, c: int64): int64 { if (a < b || c == 3) { return 1; } return 2; } console.log(`${f(1, 2, 3)}`);", "f");
+	assert countNamed(mix, "Jump") == 0, disasmFunc(mix);
+	const val = compiledFunc("function f(a: int64, b: int64): boolean { return a < b; } console.log(`${f(1, 2)}`);", "f");
+	assert countNamed(val, "BltI64") == 1 && countNamed(val, "BrGeI64") == 0, disasmFunc(val);
+	const fl = compiledFunc("function f(a: float64, b: float64): int64 { if (a < b) { return 1; } return 2; } console.log(`${f(1.0, 2.0)}`);", "f");
+	assert countNamed(fl, "BltF64") == 1 && countNamed(fl, "Jump") == 1, disasmFunc(fl);
+}
+
+test "engine: a branch over more than 32768 instructions keeps its target and a do-while branches back" {
+	const source = "function f(x: int64): int64 { let s: int64 = 0; if (x < 5) { const a: int64[] = [" + "0,".repeat(20000) + "0]; s = s + a.length; } return s; }"
+		+ " function g(): int64 { let n: int64 = 0; do { n++; } while (n < 20); return n; } console.log(`${f(1)} ${f(9)} ${g()}`);";
+	const f = compiledFunc(source, "f");
+	let span: int64 = 0;
+	for (const inst of f.code) {
+		if (opName(inst.op) == "BrGeI64Imm") span = branchOffset(inst.c);
+	}
+	assert span > 32768, `${span}`;
+	const ctx = evalOrcVM(source);
+	assert ctx.error == "" && ctx.output == "20001 0 20\n", `${ctx.error} ${ctx.output}`;
 }

@@ -14,7 +14,7 @@ import {
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData,
 	createNodeAt
 } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, convOperand, fitsImm, immField } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
@@ -903,6 +903,25 @@ function jumpAfterSkip(s: RaiserCompState, whenTrue: boolean): int32[] {
 	return [taken];
 }
 
+// An integer compare-and-skip as one branch taken when the comparison equals `whenTrue`; any other opcode comes back unchanged.
+function branchOpcode(test: RaiserOpcode, whenTrue: boolean): RaiserOpcode {
+	return match (test) {
+		RaiserOpcode.BeqI64 => whenTrue ? RaiserOpcode.BrEqI64 : RaiserOpcode.BrNeI64,
+		RaiserOpcode.BneI64 => whenTrue ? RaiserOpcode.BrNeI64 : RaiserOpcode.BrEqI64,
+		RaiserOpcode.BltI64 => whenTrue ? RaiserOpcode.BrLtI64 : RaiserOpcode.BrGeI64,
+		RaiserOpcode.BleI64 => whenTrue ? RaiserOpcode.BrLeI64 : RaiserOpcode.BrGtI64,
+		RaiserOpcode.BgtI64 => whenTrue ? RaiserOpcode.BrGtI64 : RaiserOpcode.BrLeI64,
+		RaiserOpcode.BgeI64 => whenTrue ? RaiserOpcode.BrGeI64 : RaiserOpcode.BrLtI64,
+		RaiserOpcode.BeqI64Imm => whenTrue ? RaiserOpcode.BrEqI64Imm : RaiserOpcode.BrNeI64Imm,
+		RaiserOpcode.BneI64Imm => whenTrue ? RaiserOpcode.BrNeI64Imm : RaiserOpcode.BrEqI64Imm,
+		RaiserOpcode.BltI64Imm => whenTrue ? RaiserOpcode.BrLtI64Imm : RaiserOpcode.BrGeI64Imm,
+		RaiserOpcode.BleI64Imm => whenTrue ? RaiserOpcode.BrLeI64Imm : RaiserOpcode.BrGtI64Imm,
+		RaiserOpcode.BgtI64Imm => whenTrue ? RaiserOpcode.BrGtI64Imm : RaiserOpcode.BrLeI64Imm,
+		RaiserOpcode.BgeI64Imm => whenTrue ? RaiserOpcode.BrGeI64Imm : RaiserOpcode.BrLtI64Imm,
+		_ => test,
+	};
+}
+
 function jumpIfValue(s: RaiserCompState, reg: int32, whenTrue: boolean): int32[] {
 	emitInst(s, raiserABC(RaiserOpcode.BTruthy, reg, 0, 1));
 	return jumpAfterSkip(s, whenTrue);
@@ -948,6 +967,11 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 			}
 			const test = compileCompareTest(s, node);
 			if (test == null) throw new Error("internal: a comparison operator without a compare-and-skip opcode");
+			const branch = branchOpcode(test.op, whenTrue);
+			if (branch != test.op) {
+				emitInst(s, raiserABC(branch, test.a, test.b, branchField(0)));
+				return [codeLen(s) - 1];
+			}
 			emitInst(s, test);
 			return jumpAfterSkip(s, whenTrue);
 		}

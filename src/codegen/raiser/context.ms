@@ -3,7 +3,7 @@
 
 import {
 	RaiserOpcode, RaiserInstruction,
-	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField
+	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
@@ -296,6 +296,11 @@ export function emitJumpPlaceholder(s: RaiserCompState): int32 {
 
 export function patchJumpTo(s: RaiserCompState, idx: int32, target: int32): void {
 	const offset = target - idx - 1;
+	const placed = s.code[idx];
+	if (isBranchI64(placed.op)) {
+		placed.c = branchField(offset);
+		return;
+	}
 	s.code[idx] = raiserAx(RaiserOpcode.Jump, offset);
 }
 
@@ -546,6 +551,12 @@ function skipsInstructions(op: RaiserOpcode): boolean {
 	};
 }
 
+function landsPast(inst: RaiserInstruction, at: int32, limit: int32): boolean {
+	if (inst.op == RaiserOpcode.Jump) return at + 1 + getSignedAx(inst) >= limit;
+	if (isBranchI64(inst.op)) return at + 1 + (branchOffset(inst.c) as int32) >= limit;
+	return skipsInstructions(inst.op) && at + 1 + inst.c >= limit;
+}
+
 // A width check that rewrites `reg` where it stands: the range stop of a narrow integer, or the
 // float32 rounding of an arithmetic result.
 function isInPlaceWidth(inst: RaiserInstruction, reg: int32): boolean {
@@ -571,8 +582,7 @@ function lastWriteTail(s: RaiserCompState, startPc: int32, reg: int32): int32 {
 	const pastWriter = end - tail + 1;
 	for (let i = startPc; i < end - tail; i = i + 1) {
 		const inst = s.code[i];
-		if (inst.op == RaiserOpcode.Jump && i + 1 + getSignedAx(inst) >= pastWriter) return 0;
-		if (skipsInstructions(inst.op) && i + 1 + inst.c >= pastWriter) return 0;
+		if (landsPast(inst, i, pastWriter)) return 0;
 	}
 	return tail;
 }
@@ -601,8 +611,7 @@ function endIsUnreachable(s: RaiserCompState): boolean {
 	if (end == 0 || s.code[end - 1].op != RaiserOpcode.Ret) return false;
 	for (let i = 0; i < end; i = i + 1) {
 		const inst = s.code[i];
-		if (inst.op == RaiserOpcode.Jump && i + 1 + getSignedAx(inst) >= end) return false;
-		if (skipsInstructions(inst.op) && i + 1 + inst.c >= end) return false;
+		if (landsPast(inst, i, end)) return false;
 		if (inst.op == RaiserOpcode.Try || inst.op == RaiserOpcode.Catch || inst.op == RaiserOpcode.Finally
 			|| inst.op == RaiserOpcode.FinallyEnd) return false;
 	}
