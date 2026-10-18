@@ -3,6 +3,7 @@
 
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
+import { mangleProperty } from "../codegen/c/names";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
@@ -157,7 +158,7 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 			TypeKind.Boolean => "b",
 			_ => "x" + _stdHashToBase36(typeKey(ft)),
 		};
-		name = name + "__" + fieldNames[i] + suffix;
+		name = name + "__" + mangleProperty(fieldNames[i]) + suffix;
 		i = i + 1;
 	}
 	return name;
@@ -5495,4 +5496,11 @@ test "a named type has identity only from its symbol or the Spelled flag" {
 	assert nominalTypeKey(spelled(anon)) == "__anon1__xn";
 	assert hasTypeIdentity(createMaybeType(stringType()));
 	assert hasTypeIdentity(createLockedCell(numberType()));
+}
+
+test "an anonymous struct name spells every key as a distinct C identifier" {
+	assert anonStructName(["x", "$y"], [numberType(), stringType()]) == "__anon2__xn__dollary_s";
+	assert anonStructName(["data-probe"], [stringType()]) == "__anon1__X_dataX2Dprobes";
+	assert anonStructName(["é"], [numberType()]) != anonStructName(["è"], [numberType()]);
+	assert anonStructName(["a-b"], [numberType()]) != anonStructName(["aminusb_"], [numberType()]);
 }
