@@ -170,6 +170,15 @@ export enum RaiserOpcode {
 	FutureNew,        // ABC: R[A] = a pending future
 	FutureSettle,     // ABC: complete future R[A] with R[B] unless it is already settled
 	FutureFail,       // ABC: fail future R[A] with exception R[B] unless it is already settled
+	LoadInt,          // ABC: R[A] = the immediate in B
+	AddI64Imm,        // ABC: R[A] = R[B] + the immediate in C, stopping on overflow as AddI64 does
+	SubI64Imm,        // ABC: R[A] = R[B] - the immediate in C, stopping on overflow as SubI64 does
+	BeqI64Imm,        // ABC: if R[A] == the immediate in B skip C instructions
+	BneI64Imm,        // ABC: if R[A] != the immediate in B skip C instructions
+	BltI64Imm,        // ABC: if R[A] <  the immediate in B skip C instructions
+	BleI64Imm,        // ABC: if R[A] <= the immediate in B skip C instructions
+	BgtI64Imm,        // ABC: if R[A] >  the immediate in B skip C instructions
+	BgeI64Imm,        // ABC: if R[A] >= the immediate in B skip C instructions
 }
 
 export enum RaiserConvClass {
@@ -270,6 +279,21 @@ export function getSignedAx(inst: RaiserInstruction): number {
 	const raw = inst.a * 65536 + inst.b * 256 + inst.c;
 	if (raw >= 8388608) return raw - 16777216;
 	return raw;
+}
+
+const IMM_EXCESS = 32768;
+
+export function fitsImm(v: int64): boolean {
+	return v >= -IMM_EXCESS && v < IMM_EXCESS;
+}
+
+export function immField(v: int64): number {
+	if (!fitsImm(v)) throw new Error(`internal: immediate ${v} does not fit the 16-bit operand field`);
+	return (v + IMM_EXCESS) as number;
+}
+
+export function immValue(field: number): int64 {
+	return (field as int64) - IMM_EXCESS;
 }
 
 // Packed word: opcode in bits 0-7, then a, b and c in 16 bits each.
@@ -405,4 +429,19 @@ test "an operand outside 16 bits stops the pack" {
 		message = (e as Error).message;
 	}
 	assert message.includes("does not fit the packed 16-bit field");
+}
+
+test "an immediate keeps its value across the field and stops one past each end" {
+	assert immValue(immField(-32768)) == -32768;
+	assert immValue(immField(32767)) == 32767;
+	assert immValue(immField(0)) == 0;
+	assert immField(-32768) == 0 && immField(32767) == 65535;
+	assert fitsImm(32767) && fitsImm(-32768) && !fitsImm(32768) && !fitsImm(-32769);
+	let message = "";
+	try {
+		immField(32768);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("does not fit the 16-bit operand field");
 }

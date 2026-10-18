@@ -3,7 +3,7 @@
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx,
-	packedOp, packedA, packedBx
+	packedOp, packedA, packedBx, immValue, immField
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
@@ -1569,6 +1569,23 @@ function runStrandSlice(vm: RaiserVM): void {
 				}
 				ip = ip + (offset as int32);
 			},
+			RaiserOpcode.LoadInt => {
+				setRegInt(vm, base + ia, immValue(ib));
+			},
+			RaiserOpcode.AddI64Imm => {
+				const lhs = slots[base + ib].intVal;
+				const imm = immValue(ic);
+				const sum = int64Bits((lhs as uint64) + (imm as uint64));
+				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { setRegInt(vm, base + ia, sum);
+				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
+			},
+			RaiserOpcode.SubI64Imm => {
+				const lhs = slots[base + ib].intVal;
+				const imm = immValue(ic);
+				const diff = int64Bits((lhs as uint64) - (imm as uint64));
+				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { setRegInt(vm, base + ia, diff);
+				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
+			},
 			RaiserOpcode.AddI64 => {
 				const lhs = slots[base + ib];
 				const rhs = slots[base + ic];
@@ -1662,6 +1679,24 @@ function runStrandSlice(vm: RaiserVM): void {
 			},
 			RaiserOpcode.BneI64 => {
 				if (slots[base + ia].intVal != slots[base + ib].intVal) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BeqI64Imm => {
+				if (slots[base + ia].intVal == immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BneI64Imm => {
+				if (slots[base + ia].intVal != immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BltI64Imm => {
+				if (slots[base + ia].intVal < immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BleI64Imm => {
+				if (slots[base + ia].intVal <= immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgtI64Imm => {
+				if (slots[base + ia].intVal > immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgeI64Imm => {
+				if (slots[base + ia].intVal >= immValue(ib)) ip = ip + (ic as int32);
 			},
 			RaiserOpcode.BTruthy => {
 				if (raiserToBool(slots[base + ia])) ip = ip + (ic as int32);
@@ -4967,4 +5002,62 @@ test "a runtime error after a call reports the caller's line and the caller's re
 	const vm = execModule(createRaiserModule("test", funcs, 1));
 	assert vm.error == "integer division by zero";
 	assert vmDumpStack(vm).endsWith("line 12 in main (current)");
+}
+
+function execImmArith(op: RaiserOpcode, a: int64, imm: int64): RaiserVM {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(op, 2, 0, immField(imm)),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(a)]
+	));
+}
+
+function immCompareTaken(op: RaiserOpcode, a: int64, imm: int64): boolean {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.LoadInt, 2, immField(1), 0),
+			raiserABC(op, 0, immField(imm), 1),
+			raiserABC(RaiserOpcode.LoadInt, 2, immField(0), 0),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(a)]
+	));
+	return vm.exitValue.intVal == 1;
+}
+
+test "LoadInt loads its immediate across the field, negatives included" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.LoadInt, 0, immField(-32768), 0),
+			raiserABC(RaiserOpcode.LoadInt, 1, immField(32767), 0),
+			raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(0)]
+	));
+	assert vm.exitValue.intVal == -1;
+}
+
+test "AddI64Imm and SubI64Imm take a negative immediate and stop on overflow as the register forms do" {
+	assert execImmArith(RaiserOpcode.AddI64Imm, 5, -3).exitValue.intVal == 2;
+	assert execImmArith(RaiserOpcode.SubI64Imm, 5, -3).exitValue.intVal == 8;
+	assert execImmArith(RaiserOpcode.AddI64Imm, 9223372036854775807, -32768).exitValue.intVal == 9223372036854743039;
+	assert execImmArith(RaiserOpcode.SubI64Imm, -9223372036854775807 - 1, -32768).exitValue.intVal == -9223372036854743040;
+	assert execImmArith(RaiserOpcode.AddI64Imm, 9223372036854775807, 1).error == "over- or underflow";
+	assert execImmArith(RaiserOpcode.AddI64Imm, -9223372036854775807 - 1, -1).error == "over- or underflow";
+	assert execImmArith(RaiserOpcode.SubI64Imm, -9223372036854775807 - 1, 1).error == "over- or underflow";
+	assert execImmArith(RaiserOpcode.SubI64Imm, 9223372036854775807, -1).error == "over- or underflow";
+}
+
+test "the immediate compare-and-skip forms compare a register with the immediate, at the field bounds too" {
+	assert immCompareTaken(RaiserOpcode.BeqI64Imm, 7, 7) && !immCompareTaken(RaiserOpcode.BeqI64Imm, 7, 8);
+	assert immCompareTaken(RaiserOpcode.BneI64Imm, 7, 8) && !immCompareTaken(RaiserOpcode.BneI64Imm, 7, 7);
+	assert immCompareTaken(RaiserOpcode.BltI64Imm, -32769, -32768) && !immCompareTaken(RaiserOpcode.BltI64Imm, -32768, -32768);
+	assert immCompareTaken(RaiserOpcode.BleI64Imm, 32767, 32767) && !immCompareTaken(RaiserOpcode.BleI64Imm, 32768, 32767);
+	assert immCompareTaken(RaiserOpcode.BgtI64Imm, 32768, 32767) && !immCompareTaken(RaiserOpcode.BgtI64Imm, 32767, 32767);
+	assert immCompareTaken(RaiserOpcode.BgeI64Imm, -32768, -32768) && !immCompareTaken(RaiserOpcode.BgeI64Imm, -32769, -32768);
 }

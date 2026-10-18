@@ -1,7 +1,7 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedAx } from "./bytecode";
+import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue } from "./bytecode";
 import { raiserInt, raiserToString } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -110,6 +110,15 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Finally => "Finally",
 		RaiserOpcode.FinallyEnd => "FinallyEnd",
 		RaiserOpcode.Throw => "Throw",
+		RaiserOpcode.LoadInt => "LoadInt",
+		RaiserOpcode.AddI64Imm => "AddI64Imm",
+		RaiserOpcode.SubI64Imm => "SubI64Imm",
+		RaiserOpcode.BeqI64Imm => "BeqI64Imm",
+		RaiserOpcode.BneI64Imm => "BneI64Imm",
+		RaiserOpcode.BltI64Imm => "BltI64Imm",
+		RaiserOpcode.BleI64Imm => "BleI64Imm",
+		RaiserOpcode.BgtI64Imm => "BgtI64Imm",
+		RaiserOpcode.BgeI64Imm => "BgeI64Imm",
 	};
 }
 
@@ -119,12 +128,20 @@ function isABxOp(op: RaiserOpcode): boolean {
 	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch || op == RaiserOpcode.ModuleImport;
 }
 
+function isImmCompare(op: RaiserOpcode): boolean {
+	return op == RaiserOpcode.BeqI64Imm || op == RaiserOpcode.BneI64Imm || op == RaiserOpcode.BltI64Imm
+		|| op == RaiserOpcode.BleI64Imm || op == RaiserOpcode.BgtI64Imm || op == RaiserOpcode.BgeI64Imm;
+}
+
 function isAxOp(op: RaiserOpcode): boolean {
 	return op == RaiserOpcode.Jump;
 }
 
 export function disasmInst(inst: RaiserInstruction): string {
 	if (isAxOp(inst.op)) return `${opName(inst.op)} ${getSignedAx(inst)}`;
+	if (inst.op == RaiserOpcode.LoadInt) return `${opName(inst.op)} R${inst.a} #${immValue(inst.b)}`;
+	if (inst.op == RaiserOpcode.AddI64Imm || inst.op == RaiserOpcode.SubI64Imm) return `${opName(inst.op)} R${inst.a} R${inst.b} #${immValue(inst.c)}`;
+	if (isImmCompare(inst.op)) return `${opName(inst.op)} R${inst.a} #${immValue(inst.b)} R${inst.c}`;
 	if (isABxOp(inst.op)) return `${opName(inst.op)} R${inst.a} K${getBx(inst)}`;
 	return `${opName(inst.op)} R${inst.a} R${inst.b} R${inst.c}`;
 }
@@ -188,4 +205,10 @@ test "disasmFunc includes constant annotations" {
 	const s = disasmFunc(entry);
 	assert s.length > 0;
 	// Should contain "LoadConst" and the constant value annotation
+}
+
+test "immediate operands print as numbers" {
+	assert disasmInst(raiserABC(RaiserOpcode.LoadInt, 1, immField(-7), 0)) == "LoadInt R1 #-7";
+	assert disasmInst(raiserABC(RaiserOpcode.AddI64Imm, 2, 0, immField(32767))) == "AddI64Imm R2 R0 #32767";
+	assert disasmInst(raiserABC(RaiserOpcode.BltI64Imm, 0, immField(2), 1)) == "BltI64Imm R0 #2 R1";
 }
