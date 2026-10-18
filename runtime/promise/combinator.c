@@ -19,7 +19,7 @@ static void msPromiseAllCb(void* env) {
 	if (!s->failed) {
 		if (f->base.failed || f->base.cancelled) {
 			s->failed = true;
-			msFutureFail(s->result, f->base.error);
+			msFutureFailShared(s->result, f->base.error);
 		} else {
 			s->values[idx] = f->value;
 		}
@@ -35,6 +35,7 @@ static void msPromiseAllCb(void* env) {
 		} else {
 			free(s->values);
 		}
+		msDecref(s->result);
 		free(s->inputs);
 		free(s);
 	}
@@ -56,6 +57,7 @@ void* msPromiseAll(msRefArray* arr) {
 
 	msPromiseAllState* state = (msPromiseAllState*)calloc(1, sizeof(msPromiseAllState));
 	state->result = result;
+	msIncref(result);
 	state->inputs = inputsCopy;
 	state->values = (void**)calloc(count, sizeof(void*));
 	state->count = count;
@@ -85,7 +87,7 @@ static void msPromiseRaceCb(void* env) {
 	if (!s->settled) {
 		s->settled = true;
 		if (f->base.failed || f->base.cancelled) {
-			msFutureFail(s->result, f->base.error);
+			msFutureFailShared(s->result, f->base.error);
 		} else {
 			msFutureComplete(s->result, f->value);
 		}
@@ -95,7 +97,10 @@ static void msPromiseRaceCb(void* env) {
 
 	/* Last callback frees state */
 	s->remaining--;
-	if (s->remaining == 0) free(s);
+	if (s->remaining == 0) {
+		msDecref(s->result);
+		free(s);
+	}
 }
 
 void* msPromiseRace(msRefArray* arr) {
@@ -107,6 +112,7 @@ void* msPromiseRace(msRefArray* arr) {
 
 	msPromiseRaceState* state = (msPromiseRaceState*)calloc(1, sizeof(msPromiseRaceState));
 	state->result = result;
+	msIncref(result);
 	state->remaining = count;
 
 	for (int i = 0; i < count; i++) {
@@ -135,6 +141,7 @@ static void msPromiseAllSettledCb(void* env) {
 	s->remaining--;
 	if (s->remaining == 0) {
 		msFutureComplete(s->result, NULL);
+		msDecref(s->result);
 		free(s->inputs);
 		free(s);
 	}
@@ -156,6 +163,7 @@ void* msPromiseAllSettled(msRefArray* arr) {
 
 	msPromiseAllSettledState* state = (msPromiseAllSettledState*)calloc(1, sizeof(msPromiseAllSettledState));
 	state->result = result;
+	msIncref(result);
 	state->inputs = inputsCopy;
 	state->count = count;
 	state->remaining = count;
@@ -188,7 +196,7 @@ static void msPromiseAnyCb(void* env) {
 		} else {
 			s->rejected++;
 			if (s->rejected == s->count) {
-				msFutureFail(s->result, (void*)"All promises were rejected");
+				msFutureFail(s->result, msMakeError(msStringFromCStr("All promises were rejected")));
 			}
 		}
 	}
@@ -197,7 +205,10 @@ static void msPromiseAnyCb(void* env) {
 
 	/* Last callback frees state */
 	s->remaining--;
-	if (s->remaining == 0) free(s);
+	if (s->remaining == 0) {
+		msDecref(s->result);
+		free(s);
+	}
 }
 
 void* msPromiseAny(msRefArray* arr) {
@@ -206,12 +217,13 @@ void* msPromiseAny(msRefArray* arr) {
 	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) {
-		msFutureFail(result, (void*)"All promises were rejected");
+		msFutureFail(result, msMakeError(msStringFromCStr("All promises were rejected")));
 		return result;
 	}
 
 	msPromiseAnyState* state = (msPromiseAnyState*)calloc(1, sizeof(msPromiseAnyState));
 	state->result = result;
+	msIncref(result);
 	state->count = count;
 	state->remaining = count;
 
@@ -236,7 +248,7 @@ void* msPromiseAny(msRefArray* arr) {
 static void msFutureThenCb(void* raw) {
 	msFutureThenEnv* e = (msFutureThenEnv*)raw;
 	if (e->input->base.failed || e->input->base.cancelled) {
-		msFutureFail(e->output, e->input->base.error);
+		msFutureFailShared(e->output, e->input->base.error);
 		msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled);
 		free(e);
 		return;
@@ -302,8 +314,7 @@ void* msFutureThenTyped(void* input, msClosure onFulfilled, int typeTag) {
 static void msFutureCatchCb(void* raw) {
 	msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
 	if (e->input->base.failed || e->input->base.cancelled) {
-		void* err = e->input->base.error;
-		e->input->base.error = NULL;  /* consumed — prevent double-free */
+		void* err = e->input->base.error;  /* lent: the input keeps its count */
 		void* fn = (void*)e->onRejected.fn;
 		void* env = e->onRejected.env;
 		/* Error is always a string (msString*) in MetaScript */
@@ -354,7 +365,7 @@ static void msFutureFinallyCb(void* raw) {
 		((void(*)(void))e->onSettled.fn)();
 	}
 	if (e->input->base.failed || e->input->base.cancelled) {
-		msFutureFail(e->output, e->input->base.error);
+		msFutureFailShared(e->output, e->input->base.error);
 	} else {
 		msFutureComplete(e->output, e->input->value);
 	}

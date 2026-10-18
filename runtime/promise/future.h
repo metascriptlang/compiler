@@ -210,6 +210,8 @@ static inline void* msFutureCreate(void) {
 /* Alias for combinator code clarity */
 #define msFutureCreateUntyped msFutureCreate
 
+void msFutureDropError(msFutureBase* f);
+
 /* Destroy future — clean up value (if destructor set), callbacks, free via ARC header.
  * Works generically on any future type via msFutureBase* cast.
  * valueDestructor is set by combinators (Promise.all) to free the values array. */
@@ -222,6 +224,7 @@ static inline void msFutureDestroyInner(void* fp) {
 		if (val != NULL) f->valueDestructor(val);
 	}
 	if (f->valueDrop != NULL) f->valueDrop(fp);
+	msFutureDropError(f);
 	msFutureCb* cb = f->callbacks;
 	while (cb) {
 		msFutureCb* next = cb->next;
@@ -270,7 +273,8 @@ static inline void msFutureFireCallbacks(msFutureBase* f) {
 }
 
 /* Standard reference fail(fut, err) parity — sets error + fires callbacks.
- * Works on any future type via msFutureBase*. */
+ * Stores the count the caller hands over and the destroy drops it: an error another
+ * owner still holds goes through msFutureFailShared. */
 static inline void msFutureFail(void* fp, void* err) {
 	msFutureBase* f = (msFutureBase*)fp;
 	if (atomic_load_explicit(&f->finished, memory_order_acquire)) return;
@@ -278,6 +282,21 @@ static inline void msFutureFail(void* fp, void* err) {
 	f->failed = true;
 	atomic_store_explicit(&f->finished, true, memory_order_release);
 	msFutureFireCallbacks(f);
+}
+
+static inline void msFutureFailShared(void* fp, void* err) {
+	if (atomic_load_explicit(&((msFutureBase*)fp)->finished, memory_order_acquire)) return;
+	msIncRef(err);
+	msFutureFail(fp, err);
+}
+
+/* The actor chain's source completes on a worker: moving its error keeps every
+ * count of it on one thread (I17); a shared count would be dropped by two. */
+static inline void msFutureFailTaken(void* fp, msFutureBase* src) {
+	if (atomic_load_explicit(&((msFutureBase*)fp)->finished, memory_order_acquire)) return;
+	void* err = src->error;
+	src->error = NULL;
+	msFutureFail(fp, err);
 }
 
 /* Cancel a pending future — clears callbacks without firing, marks finished+cancelled. */
@@ -401,7 +420,7 @@ static inline void msFutureChainCb(void* raw, ...) {
     msFutureChainPair* pair = (msFutureChainPair*)raw;
     msFutureBase* src = (msFutureBase*)pair->src;
     if (src->failed) {
-        msFutureFail(pair->dst, src->error);
+        msFutureFailTaken(pair->dst, src);
     } else {
         void* val = ((msFuture*)pair->src)->value;
         msFutureComplete(pair->dst, val);
@@ -430,7 +449,7 @@ static inline void name##_cb(void* raw, ...) { \
     msFutureChainPair* pair = (msFutureChainPair*)raw; \
     msFutureBase* srcBase = (msFutureBase*)pair->src; \
     if (srcBase->failed) { \
-        msFutureFail(pair->dst, srcBase->error); \
+        msFutureFailTaken(pair->dst, srcBase); \
     } else { \
         fut_type* srcT = (fut_type*)pair->src; \
         fut_type* dstT = (fut_type*)pair->dst; \
@@ -463,8 +482,9 @@ MS_TLS_EXTERN(void*, msErrPayload);
 /* Failed/cancelled future read surfaces the caught exception object on
  * msCurrException so an enclosing catch binds it (await re-raise). A NULL error
  * payload (cancel / noproc) synthesizes a real Error so the catch-var deref is
- * always safe. Ownership moves out of the future — the awaiting catch destroys
- * it exactly once. Defined in system.c (needs the exception object types). */
+ * always safe. The catch gets a count of its own; a future completed across
+ * threads keeps Amendment O's take read. Defined in system.c (needs the
+ * exception object types). */
 void msFutureRaiseFrom(msFutureBase* f);
 
 /* Check error status on a future base (used before typed read) */

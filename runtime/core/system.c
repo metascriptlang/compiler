@@ -136,8 +136,15 @@ void msFutureRaiseFrom(msFutureBase* f) {
 		msClearOrphanFailure(f);
 	}
 	void* err = (f != NULL) ? f->error : NULL;
-	if (f != NULL) f->error = NULL;
+	if (f != NULL && f->crossThreadPublished) f->error = NULL;
+	else msIncRef(err);
 	msRaiseAwaitedError(err);
+}
+
+void msFutureDropError(msFutureBase* f) {
+	void* err = f->error;
+	f->error = NULL;
+	msDecref(err);
 }
 
 void (*msFatalTrap)(void) = NULL;

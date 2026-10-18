@@ -172,7 +172,7 @@ void* msFutureFinally(void* input, msClosure onSettled);
 static inline void name##_cb(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureFail(e->output, e->input->base.error); \
+        msFutureFailShared(e->output, e->input->base.error); \
         msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
         return; \
     } \
@@ -211,7 +211,7 @@ static inline void* name(void* input, msClosure onFulfilled) { \
 static void name##_cb(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureFail(e->output, e->input->base.error); \
+        msFutureFailShared(e->output, e->input->base.error); \
         msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
         return; \
     } \
@@ -253,7 +253,7 @@ static inline void name##_cb(void* raw) { \
         ((void(*)(void))e->onSettled.fn)(); \
     } \
     if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureFail(e->output, e->input->base.error); \
+        msFutureFailShared(e->output, e->input->base.error); \
     } else { \
         fut_type* srcT = (fut_type*)e->input; \
         fut_type* dstT = (fut_type*)e->output; \
@@ -277,7 +277,6 @@ static inline void name##_cb(void* raw) { \
     msFutureCatchEnv* e = (msFutureCatchEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
         void* err = e->input->base.error; \
-        e->input->base.error = NULL; \
         void* fn = (void*)e->onRejected.fn; \
         void* env = e->onRejected.env; \
         msString sval = err ? *(msString*)err : MS_EMPTY_STRING; \
@@ -396,7 +395,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
             if (f->base.failed || f->base.cancelled) { \
                 /* Exchange: only the first caller to see `failed == false` runs msFutureFail. */ \
                 bool prev = atomic_exchange_explicit(&s->failed, true, memory_order_acq_rel); \
-                if (!prev) msFutureFail(s->result, f->base.error); \
+                if (!prev) msFutureFailShared(s->result, f->base.error); \
             } else if (f->base.valueDrop != NULL && s->share.fn != NULL) { \
                 ((void (*)(void*, void*))s->share.fn)((void*)(&s->arr->p->data[idx]), (void*)f); \
             } else { \
@@ -416,6 +415,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
             } else { \
                 msDecref(s->arr); \
             } \
+            msDecref(s->result); \
             free(s->inputs); \
             free(s); \
         } \
@@ -443,6 +443,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); } \
         elemFutType##_allState* state = (elemFutType##_allState*)calloc(1, sizeof(elemFutType##_allState)); \
         state->result = result; \
+        msIncref(result); \
         state->inputs = inputsCopy; \
         state->arr = resultArr; \
         state->share = share; \
