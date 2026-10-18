@@ -29,7 +29,7 @@ import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { isOutParam, unionHasMemberOfKind, isArrayType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
-import { checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
+import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
 // Used by `resolveGenericNewExpr` to read concrete type args from a contextual
@@ -1494,6 +1494,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	ctx.calleeExpr = d.callee;
 	callCheckExpr(ctx, d.callee, null);
 	ctx.calleeExpr = prevCallee;
+	if (callThroughProxy(ctx, node, expectedType)) return node.nodeType ?? errorType();
 	if (d.callee.kind == NodeKind.Identifier
 			&& (d.callee.data as IdentifierData).name == "super"
 			&& d.callee.resolvedSym != null) {
@@ -4656,7 +4657,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 	const proxyParts = proxyPartsOf(ctx, objType);
-	if (proxyParts != null) return readThroughProxy(ctx, node, proxyParts, expectedType);
+	if (proxyParts != null) return ctx.calleeExpr == node ? inferredType() : readThroughProxy(ctx, node, proxyParts, expectedType);
 	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
 	// reference: skip pointer types → lookup field → make dereference
 	const nullablePtr = objType.kind == TypeKind.Union ? unwrapRefNullUnion(objType) : null;
