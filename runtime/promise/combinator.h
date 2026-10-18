@@ -111,14 +111,16 @@ static inline void msFutureOwnResult(msFuture* out, msClosure drop) {
 /* ===== Promise.then / .catch / .finally ===== */
 
 /* Type tags for typed callback dispatch.
- * 0 = void/pointer (pass void* directly)
+ * 0 = pointer (pass void* directly)
  * 1 = int (pass void* directly — lower bits are the int value)
  * 2 = double (val is double*, dereference + free)
- * 3 = string (val is msString*, dereference + free) */
+ * 3 = string (val is msString*, dereference + free)
+ * 4 = void (no value slot: a void parameter has no runtime slot, so only env is passed) */
 #define MS_TYPETAG_PTR    0
 #define MS_TYPETAG_INT    1
 #define MS_TYPETAG_DOUBLE 2
 #define MS_TYPETAG_STRING 3
+#define MS_TYPETAG_VOID   4
 
 typedef struct {
 	msFuture* output;

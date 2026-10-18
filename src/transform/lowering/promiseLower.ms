@@ -31,11 +31,11 @@ import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeR
 // ===== Type-tag dispatch =====
 
 // Runtime type-tag for msFutureThenTyped / msFutureCatchTyped. Matches
-// MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string).
+// MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string, 4=void).
 function typeTagFor(t: Type | null): number {
 	if (t == null) return 0;
 	return match (t.kind) {
-		TypeKind.Void => 0,
+		TypeKind.Void => 4,
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
 		TypeKind.String => 3,
 		TypeKind.Struct | TypeKind.Ref | TypeKind.Ptr | TypeKind.Array => 0,
