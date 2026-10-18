@@ -21,3 +21,4 @@ import "./structFieldDecorators";
 import "./collectionIdentity";
 import "./byteViews";
 import "./externPattern";
+import "./propertyNames";
