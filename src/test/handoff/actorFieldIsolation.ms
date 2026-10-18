@@ -72,3 +72,32 @@ actor Counter {
 	const messages = checkProjectDiagnostics(entries, "src/main.ms");
 	assert occurrences(messages, refusal) == 1, messages.join("\n");
 }
+
+const handleName = "cannot declare a member named 'pid'";
+
+test "actorFieldIsolation: an actor field named pid is refused because pid reads the handle" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/main.ms", entrySource: `actor Clash {
+	pid: int32 = 7;
+	get(): int32 { return this.pid; }
+}
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/main.ms");
+	assert occurrences(messages, handleName) == 1, messages.join("\n");
+}
+
+test "actorFieldIsolation: an actor method named pid is refused, a static one is not" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/main.ms", entrySource: `actor Clash {
+	n: int32 = 0;
+	pid(): int32 { return 1; }
+}
+actor Fine {
+	static pid(): int32 { return 2; }
+}
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/main.ms");
+	assert occurrences(messages, handleName) == 1, messages.join("\n");
+}

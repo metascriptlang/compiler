@@ -2715,6 +2715,11 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	node.nodeType = sym.symbolType;
 }
 
+function refuseActorHandleName(ctx: CheckerContext, actorName: string, memberName: string, member: Node): void {
+	if (memberName != "pid") return;
+	addError(ctx, `actor '${actorName}' cannot declare a member named 'pid': 'pid' reads the actor's handle`, member.location.line, member.location.column);
+}
+
 export function resolveActor(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
 	const sym = lookupSymbol(ctx.table, d.actorName);
@@ -2747,6 +2752,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 		}
 		if (member.kind == NodeKind.MethodDecl) {
 			const md = member.data as MethodDeclData;
+			if (!md.methodIsStatic) refuseActorHandleName(ctx, d.actorName, md.methodName, member);
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			if (hasMethodGenerics) {
@@ -2794,6 +2800,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				}
 				continue;
 			}
+			refuseActorHandleName(ctx, d.actorName, pd.propName, member);
 			memberNames.push(pd.propName);
 			if (pd.propType != "") {
 				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
