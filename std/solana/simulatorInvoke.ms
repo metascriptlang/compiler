@@ -281,7 +281,7 @@ function recordSigners(out: uint64, signers: uint64, signerCount: uint64): void 
 	}
 }
 
-// host.c msSolHostInvoked: the record is laid out as host.cms reads it (program, metas, data, signer seeds)
+// host.c msSolHostInvoked: the record is laid out as host.ms reads it (program, metas, data, signer seeds)
 function recordInvocation(header: uint64, signers: uint64, signerCount: uint64): void {
 	const metaCount = msSolLoadU64(header + 16);
 	const dataLength = msSolLoadU64(header + 32);

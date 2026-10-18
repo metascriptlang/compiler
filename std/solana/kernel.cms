@@ -9,6 +9,25 @@ when (!solana) {
 	import "./simulatorToken";
 }
 
+export { msSolHostFaultCodeOf } from "./memory";
+export extern function msSolHostInput(size: uint64): uint64;
+export extern function msSolHostEnter(input: uint64): void;
+export extern function msSolHostLeave(): void;
+export extern function msSolHostResult(): uint64;
+export extern function msSolHostFaultMessage(): string;
+export extern function msSolHostLogTotal(): uint64;
+export extern function msSolHostLogAt(index: uint64): string;
+export extern function msSolHostInvocationTotal(): uint64;
+export extern function msSolHostInvocationAt(index: uint64): uint64;
+export extern function msSolHostRentReadTotal(): uint64;
+export extern function msSolHostSetClock(
+	slot: uint64,
+	epochStart: uint64,
+	epoch: uint64,
+	leaderEpoch: uint64,
+	unixTime: uint64,
+): void;
+export extern function msSolHostSetSysvarStatus(status: uint64): void;
 export extern function msSolInvokeMetas(
 	program: uint64,
 	metas: uint64,
@@ -37,6 +56,8 @@ export extern function msSolRentAddress(): uint64;
 export extern function msSolCurveValidatePoint(curve: uint64, point: uint64, result: uint64): uint64;
 export extern function msSolSetReturnData(data: Readonly<Span<uint8>>): void;
 export extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
+export extern function msSolCreateProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64): uint64;
+export extern function msSolTryFindProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64, bump: uint64): uint64;
 export extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
 export extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
 export extern function msSolFindCanonicalAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;

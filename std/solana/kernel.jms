@@ -40,7 +40,7 @@ import {
 	setReturnData,
 	setSysvarStatus,
 } from "./simulatorLog";
-import { msSolHostCurveValidatePoint } from "./simulatorCrypto";
+import { msSolHostCreateProgramAddress, msSolHostCurveValidatePoint, msSolHostTryFindProgramAddress } from "./simulatorCrypto";
 import { holdAccounts, invocationAt, invocationTotal, invokeSigned, resetDispatcher, settle } from "./simulatorInvoke";
 import { invokeMetas } from "./simulatorMetas";
 import {
@@ -275,6 +275,15 @@ export function msSolSetReturnData(data: Readonly<Span<uint8>>): void {
 
 export function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64 {
 	return getReturnData(data, length, programId);
+}
+
+// solana.h msSolCreateProgramAddress, msSolTryFindProgramAddress
+export function msSolCreateProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64): uint64 {
+	return msSolHostCreateProgramAddress(seeds, count, program, out);
+}
+
+export function msSolTryFindProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64, bump: uint64): uint64 {
+	return msSolHostTryFindProgramAddress(seeds, count, program, out, bump);
 }
 
 export function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64 {

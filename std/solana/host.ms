@@ -1,5 +1,3 @@
-@include("runtime/solana/solana.h");
-
 import {
 	AccountMeta,
 	Clock,
@@ -14,32 +12,23 @@ import {
 	recordAddress,
 } from "./core";
 import { ProgramError } from "./error";
+import {
+	msSolHostEnter,
+	msSolHostFaultCodeOf,
+	msSolHostFaultMessage,
+	msSolHostInput,
+	msSolHostInvocationAt,
+	msSolHostInvocationTotal,
+	msSolHostLeave,
+	msSolHostLogAt,
+	msSolHostLogTotal,
+	msSolHostRentReadTotal,
+	msSolHostResult,
+	msSolHostSetClock,
+	msSolHostSetSysvarStatus,
+} from "./kernel";
+import { msSolCopy, msSolLoadU8, msSolLoadU64, msSolPointer, msSolSpanAddress, msSolStoreU8, msSolStoreU64 } from "./memory";
 import { Pubkey } from "./pubkey";
-
-extern function msSolHostInput(size: uint64): uint64;
-extern function msSolHostEnter(input: uint64): void;
-extern function msSolHostLeave(): void;
-extern function msSolHostResult(): uint64;
-extern function msSolHostFaultCodeOf(): uint64;
-extern function msSolHostFaultMessage(): string;
-extern function msSolHostLogTotal(): uint64;
-extern function msSolHostLogAt(index: uint64): string;
-extern function msSolHostInvocationTotal(): uint64;
-extern function msSolHostRentReadTotal(): uint64;
-extern function msSolHostInvocationAt(index: uint64): uint64;
-extern function msSolHostSetClock(
-	slot: uint64,
-	epochStart: uint64,
-	epoch: uint64,
-	leaderEpoch: uint64,
-	unixTime: uint64,
-): void;
-extern function msSolHostSetSysvarStatus(status: uint64): void;
-extern function msSolPointer(address: uint64): Ptr<void>;
-extern function msSolLoadU8(address: uint64): uint8;
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolStoreU8(address: uint64, value: uint8): void;
-extern function msSolStoreU64(address: uint64, value: uint64): void;
 
 export struct HostAccount {
 	key: Pubkey;
@@ -70,13 +59,23 @@ export struct HostInvocation {
 }
 
 function storeKey(address: uint64, key: Pubkey): void {
-	const at = msSolPointer(address) as Ptr<Pubkey>;
-	at[] = key;
+	when (js) {
+		msSolCopy(address, msSolSpanAddress(key.bytes), 32);
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		at[] = key;
+	}
 }
 
 function loadKey(address: uint64): Pubkey {
-	const at = msSolPointer(address) as Ptr<Pubkey>;
-	return at[];
+	when (js) {
+		let key = Pubkey.zero();
+		msSolCopy(msSolSpanAddress(key.bytes), address, 32);
+		return key;
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		return at[];
+	}
 }
 
 function flag(value: boolean): uint8 {
