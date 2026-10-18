@@ -4185,6 +4185,48 @@ test "vmCallFunction: a host call that runs the VM again resumes the run that ma
 	assert vm.frameFloor == 0;
 }
 
+test "vmCallFunction: a host call made two frames deep returns through the frames it left" {
+	_resetHostRegistryForTests();
+	const addOne = createRaiserFunction("addOne", [
+		raiserABx(RaiserOpcode.LoadConst, 1, 0),
+		raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	], [raiserInt(1)], 1, 0, 4);
+	const addTwo = createRaiserFunction("addTwo", [
+		raiserABC(RaiserOpcode.Move, 2, 0, 0),
+		raiserABC(RaiserOpcode.Call, 1, 0, 1),
+		raiserABC(RaiserOpcode.Move, 2, 1, 0),
+		raiserABC(RaiserOpcode.Call, 1, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+	], [], 1, 0, 8);
+	const hosted = createRaiserFunction("hosted", [
+		raiserABx(RaiserOpcode.LoadConst, 1, 1),
+		raiserABC(RaiserOpcode.Move, 3, 0, 0),
+		raiserABC(RaiserOpcode.CallHost, 2, 0, 1),
+		raiserABC(RaiserOpcode.AddI64, 4, 1, 2),
+		raiserABC(RaiserOpcode.Ret, 4, 0, 0),
+	], [raiserString("reenter"), raiserInt(7)], 1, 0, 8);
+	const top = createRaiserFunction("top", [
+		raiserABC(RaiserOpcode.Move, 2, 0, 0),
+		raiserABC(RaiserOpcode.Call, 1, 2, 1),
+		raiserABC(RaiserOpcode.Move, 2, 1, 0),
+		raiserABC(RaiserOpcode.Call, 1, 0, 1),
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+	], [], 1, 0, 8);
+	const vm = createVM(createRaiserModule("t", [addOne, addTwo, hosted, top], 0), "arena");
+	registerHostFn("reenter", (args: RaiserValue[]): RaiserValue => {
+		const first = vmCallFunction(vm, 1, [raiserInt(args[0].intVal)]);
+		const second = vmCallFunction(vm, 1, [raiserInt(args[0].intVal + 1)]);
+		return raiserInt(first.intVal + second.intVal);
+	});
+	const r = vmCallFunction(vm, 3, [raiserInt(5)]);
+	assert vm.error == "";
+	assert r.intVal == 23;
+	assert vm.callStack.depth == 0;
+	assert vm.suspendedRuns.length == 0;
+	assert vm.frameFloor == 0;
+}
+
 // --- Strand scheduling ---
 
 test "global slots remain independent across strand heaps" {
