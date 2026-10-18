@@ -102,7 +102,7 @@ Read `<mangled>` out of the generated `_dispatch.c` (`out/<mode>/.cache/_dispatc
 #### Two other costs
 
 1. **WASI imports appear and must be shimmed.** Rooting the runtime pulls `wasi_snapshot_preview1.{proc_exit, fd_close, fd_write, fd_seek}`. Defining `__wasi_*` in a `@compile`-ed `.c` resolves them internally and the imports disappear — verified, back to exactly the host imports you declared. Same strategy as `spacetimedb-bindings-cpp/src/abi/wasi_shims.cpp` (~190 LOC, nearly all stubs returning success; `fd_write` forwards to the host log).
-2. **`-sASYNCIFY` is auto-enabled and cannot be turned off.** `compile.ms:1366-1375` appends it whenever `promise/index.cms` survives DCE — which it does even for a module that never awaits. Costs size plus five `asyncify_*` exports. There is no override flag.
+2. **`-sJSPI` is linked when a timer survives DCE** (`setTimeout`, `setInterval` or `sleepAsync`), and nothing else is: a wait from sync code suspends the wasm stack only while a timer is pending, because `spawn` runs inline on emcc. A JSPI build does not load in a host without JSPI (Chrome/Edge 137, Firefox 153, Safari 27 and later have it; node 24.1 needs `--experimental-wasm-jspi`). Measured 2026-10-18 by `src/test/nativeBuildBoundary.ms` group `emcc-jspi`: an awaited `new Promise` plus a `spawn` links neither JSPI nor Asyncify and prints `49`; six sync waits on `setTimeout` link JSPI and print `total=21`. Not measured for this `--app=lib` custom-host build.
 
 **`--gc=manual` is not usable here yet**: it fails to compile three prelude modules (`std/core/websocket/state.ms`, `std/net/index.cms`, `std/core/websocket/client.cms`). Underlying C error not yet captured. Until that is fixed, custom-host wasm runs on the default GC.
 
