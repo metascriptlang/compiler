@@ -99,6 +99,9 @@ extern function msFutureCheckErr(fut: Ptr<void>): boolean from "msFutureCheckErr
 extern function msFutureRead(fut: Ptr<void>): Ptr<void> from "msFutureRead";
 
 @compilerFunc @throws
+extern function msWaitFor(fut: Ptr<void>): Ptr<void> from "msWaitFor";
+
+@compilerFunc @throws
 extern function msFutureReadDouble(fut: Ptr<void>): number from "msFutureReadDouble";
 
 @compilerFunc @throws

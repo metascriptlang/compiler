@@ -184,3 +184,83 @@ test "suspensionControl: a spawn handle awaited in an async function keeps its b
 test "suspensionControl: a spawn handle awaited in its own function still works across a nested closure" {
 	assert spawnBindingAwaitOnly() == 5;
 }
+
+interface RejectedReply { status: string; }
+struct RejectedPoint { x: int32; }
+class RejectedBox { n: int32 = 0; }
+
+async function rejectedInt(): Promise<int32> { throw new Error("int"); }
+async function rejectedPoint(): Promise<RejectedPoint> { throw new Error("point"); }
+async function rejectedBox(): Promise<RejectedBox> { throw new Error("box"); }
+async function rejectedReply(): Promise<RejectedReply> { throw new Error("reply"); }
+async function rejectedVoid(): Promise<void> { throw new Error("void"); }
+async function rejectedNullable(): Promise<string | null> { throw new Error("nullable"); }
+async function rejectedNullableBox(): Promise<RejectedBox | null> { throw new Error("nullable box"); }
+
+function rejectedHostRead(key: string): string | null {
+	if (key !== "") { throw new Error("no host for " + key); }
+	return null;
+}
+
+class RejectedStore {
+	static async getItem(key: string): Promise<string | null> {
+		const value = rejectedHostRead(key);
+		return value;
+	}
+}
+
+function rejectedInSyncFunction(): string {
+	try {
+		const r = await rejectedReply();
+		return "continued " + r.status;
+	} catch (e) {
+		return "caught " + e.message;
+	}
+}
+
+test "suspensionControl: a rejected await of a pointer payload in a test body raises at the await" {
+	let seen = "";
+	try { const r = await rejectedReply(); seen += "continued " + r.status; } catch (e) { seen += e.message; }
+	assert seen == "reply", seen;
+	seen = "";
+	try { const b = await rejectedBox(); seen += `continued ${b.n}`; } catch (e) { seen += e.message; }
+	assert seen == "box", seen;
+}
+
+test "suspensionControl: a rejected await of a struct payload in a test body raises at the await" {
+	let seen = "";
+	try { const p = await rejectedPoint(); seen += `continued ${p.x}`; } catch (e) { seen += e.message; }
+	assert seen == "point", seen;
+	seen = "";
+	try { await rejectedPoint(); seen += "continued"; } catch (e) { seen += e.message; }
+	assert seen == "point", seen;
+}
+
+test "suspensionControl: a rejected await of a void or nullable payload in a test body raises at the await" {
+	let seen = "";
+	try { await rejectedVoid(); seen += "continued"; } catch (e) { seen += e.message; }
+	assert seen == "void", seen;
+	seen = "";
+	try { const s = await rejectedNullable(); seen += s === null ? "continued null" : "continued"; } catch (e) { seen += e.message; }
+	assert seen == "nullable", seen;
+	seen = "";
+	try { const b = await rejectedNullableBox(); seen += b === null ? "continued null" : "continued"; } catch (e) { seen += e.message; }
+	assert seen == "nullable box", seen;
+	seen = "";
+	try { await RejectedStore.getItem("k"); seen += "continued"; } catch (e) { seen += (e as Error).message; }
+	assert seen == "no host for k", seen;
+}
+
+test "suspensionControl: a stored rejected promise awaited in a test body raises at the await" {
+	const pending = rejectedReply();
+	let seen = "";
+	try { await pending; seen += "continued"; } catch (e) { seen += e.message; }
+	assert seen == "reply", seen;
+}
+
+test "suspensionControl: a rejected await in a sync function raises at the await" {
+	assert rejectedInSyncFunction() == "caught reply", rejectedInSyncFunction();
+	let seen = "";
+	try { const n = await rejectedInt(); seen += `continued ${n}`; } catch (e) { seen += e.message; }
+	assert seen == "int", seen;
+}
