@@ -568,8 +568,8 @@ both produced **7,928 B** and completed the merge. Their compute units were not 
   modules adds a callee's frame to its caller's: before the marks below, the magicblock core
   `scheduled` overflowed by 896 bytes in `solanaAccountLists`, `solanaCpiFrame` and
   `solanaOverloadedAggregateReturn`, and `entrypoint` by 64 in `solanaMemBuiltins`. The std cores
-  that build a CPI or an event on the stack are `@noinline` (`invokeList` in `std/solana/cpi.cms`,
-  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`). The
+  that build a CPI or an event on the stack are `@noinline` (`invokeList` in `std/solana/core.ms`,
+  `logEvent` in `core.ms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`). The
   emitted `MsMain` was `__attribute__((noinline))` under `--os=solana`, so the entry's frame was
   the account table alone (the escrow's `entrypoint` the same 11 instructions with and without
   LTO: the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). It is now inlined
