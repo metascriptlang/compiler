@@ -6,7 +6,7 @@ import { interesting, reduceInput } from "./reduce";
 import { coverSeeds } from "./cov";
 
 function usage(): int32 {
-	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt|san] [--swarm]");
+	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt|san|model] [--swarm]");
 	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...] [--swarm] [--san]");
 	console.log("       msc run tools/smith/main.ms cov <firstSeed> <count> --msc=<instrumented msc> [--features=...] [--swarm]");
 	console.log("       msc run tools/smith/main.ms rerun <bundleDir>");

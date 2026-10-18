@@ -142,6 +142,7 @@ function plantKeep(bundle: string): string {
 	const meta = readFile(bundle + "/meta.txt");
 	if (!meta.ok) { return ""; }
 	for (const line of meta.value.split("\n")) {
+		if (line.startsWith("features: ") && line.contains("plant=model")) { return "modelDelta"; }
 		if (line.startsWith("features: ") && line.contains("plant=") && !line.contains("plant=none")) { return "plantDelta"; }
 	}
 	return "";

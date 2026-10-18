@@ -295,6 +295,88 @@ const NAT_EXTERNS: string[] = [
 	"natPushS", "", "(this arr: string[], sink value: string): void", "&msStringArrayPush",
 ];
 
+const TASK_SALT: uint64 = 0x5441534B53414C54 as uint64;
+const TASK_COST_CAP: int64 = 100000 as int64;
+const WORKER_COST_CAP: int64 = 2000 as int64;
+const TASK_NODE_CAP: int32 = 256;
+const MAX_TASKS: int32 = 6;
+const TICK_CAP: int32 = 6;
+
+struct Worker {
+	name: string;
+	text: string;
+	cost: int64;
+}
+
+function isTaskFam(f: Fam): boolean { return f == Fam.Spawn || f == Fam.Actor || f == Fam.Race; }
+
+function wireSafe(t: Ty): boolean { return t != Ty.Int64 && t != Ty.Uint64; }
+
+function joinSafe(t: Ty): boolean { return t == Ty.Int32 || t == Ty.Float64; }
+
+const RACE_TYS: string[] = ["int32", "float64", "boolean"];
+
+const TASK_CHECK: string = "function taskCheck(name: string, par: string, seq: string): void {\n" +
+	"\tif (par != seq) { throw new Error(name + \" mismatch \" + par + \" | \" + seq); }\n" +
+	"\tconsole.log(name + \" \" + par);\n" +
+	"}\n";
+
+function stepName(t: Ty): string { return "step_" + tyName(t); }
+
+function stepText(t: Ty): string {
+	const T = tyName(t);
+	const head = "function " + stepName(t) + "(s: " + T + ", v: int32): " + T + " {\n";
+	if (t == Ty.Int32) { return head + "\treturn (s * 3 + v) % 1000003;\n}\n"; }
+	if (isFloat(t)) { return head + "\treturn s * 0.5 + (v as float64);\n}\n"; }
+	return head + "\treturn s ^ (v as " + T + ");\n}\n";
+}
+
+function foldName(t: Ty): string { return "fold_" + tyName(t); }
+
+function foldText(t: Ty): string {
+	const T = tyName(t);
+	return "function " + foldName(t) + "(a: Readonly<" + T + "[]>): int32 {\n" +
+		"\tlet s: int64 = 7;\n" +
+		"\tfor (let i: int32 = 0; i < a.length; i++) { s = (s * 31 + (a[i] as int64)) % 1000003; }\n" +
+		"\treturn s as int32;\n" +
+		"}\n";
+}
+
+function ticksName(t: string): string { return "ticks_" + t; }
+
+function ticksText(t: string): string {
+	return "async function " + ticksName(t) + "(v: " + t + ", n: int32): Promise<" + t + "> {\n" +
+		"\tfor (let i: int32 = 0; i < n; i++) { await Promise.resolve(0); }\n" +
+		"\treturn v;\n" +
+		"}\n";
+}
+
+function failName(t: string): string { return "fail_" + t; }
+
+function failText(t: string): string {
+	return "async function " + failName(t) + "(n: int32, id: int32): Promise<" + t + "> {\n" +
+		"\tfor (let i: int32 = 0; i < n; i++) { await Promise.resolve(0); }\n" +
+		"\tthrow new Error(\"f\" + String(id));\n" +
+		"}\n";
+}
+
+function lateName(t: string): string { return "late_" + t; }
+
+function lateText(t: string): string {
+	return "async function " + lateName(t) + "(v: " + t + ", ms: int32): Promise<" + t + "> {\n" +
+		"\tawait sleepAsync(ms);\n" +
+		"\treturn v;\n" +
+		"}\n";
+}
+
+const SKIP_RAISER_ALL: string = "// @skip-raiser: Promise.all has no host bridge on the Raiser (docs/RAISER.md Status table, row Promise.all: msPromiseAll is unbridged)";
+const SKIP_RAISER_RACE: string = "// @skip-raiser: Promise.race and Promise.any have no host bridge on the Raiser (docs/RAISER.md std access: an extern with no bridge fails with Unknown host function; msPromiseRace and msPromiseAny measured 2026-10-19)";
+const SKIP_RAISER_CELLS: string = "// @skip-raiser: Locked and Arc have no Raiser constructor and their msLocked externs have no host bridge (docs/RAISER.md std access: an extern with no bridge fails with Unknown host function)";
+const SKIP_RAISER_ACTOR: string = "// @skip-raiser: an actor has no Raiser constructor (cannot compile 'new' here: no matching constructor in the Raiser function table; corpus actorSendCallValues.ms line 2 carries the same xfail)";
+const SKIP_RAISER_TIMED: string = "// @skip-raiser: a timed spawn has no host bridge on the Raiser (msSpawn is unbridged; docs/RAISER.md std access)";
+const SKIP_JS_LOCKED: string = "// @skip-js: Locked<T> is a C-only synchronization cell (docs/KNOWN-ISSUES.md L44)";
+const SKIP_JS_ARC: string = "// @skip-js: Arc<T> has no js binding (atomic-rc box is C-only; corpus 414-arcPodPointee.ms line 2)";
+
 class Gen {
 	rng: Rng = new Rng();
 	tys: Ty[] = [];
@@ -327,6 +409,14 @@ class Gen {
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
 	directives: string[] = [];
+	imports: string[] = [];
+	taskFams: Fam[] = [];
+	taskText: string = "";
+	taskCalls: string = "";
+	taskHelperNames: string[] = [];
+	taskCount: int32 = 0;
+	workCount: int32 = 0;
+	taskPlant: boolean = false;
 	eTypes: ETy[] = [];
 	excCount: int32 = 0;
 	matchArms: int32 = 0;
@@ -1592,6 +1682,775 @@ class Gen {
 	directive(line: string): void {
 		for (const d of this.directives) { if (d == line) { return; } }
 		this.directives.push(line);
+	}
+
+	importLine(line: string): void {
+		for (const d of this.imports) { if (d == line) { return; } }
+		this.imports.push(line);
+	}
+
+	taskHelper(name: string, text: string): string {
+		for (const n of this.taskHelperNames) { if (n == name) { return name; } }
+		this.taskHelperNames.push(name);
+		this.taskText += text;
+		return name;
+	}
+
+	taskId(): string {
+		const id = String(this.taskCount);
+		this.taskCount++;
+		return id;
+	}
+
+	pickOf(tys: Ty[]): Ty { return tys[this.rng.below(tys.length)]; }
+
+	wireTys(): Ty[] {
+		const out: Ty[] = [];
+		for (const t of this.tys) { if (wireSafe(t)) { out.push(t); } }
+		if (out.length == 0) { out.push(Ty.Int32); }
+		return out;
+	}
+
+	joinTys(): Ty[] {
+		const out: Ty[] = [];
+		for (const t of this.tys) { if (joinSafe(t)) { out.push(t); } }
+		if (out.length == 0) { out.push(Ty.Int32); }
+		return out;
+	}
+
+	intWireTys(): Ty[] {
+		const out: Ty[] = [];
+		for (const t of this.wireTys()) { if (!isFloat(t)) { out.push(t); } }
+		if (out.length == 0) { out.push(Ty.Int32); }
+		return out;
+	}
+
+	smallLit(t: Ty): string {
+		if (isFloat(t)) { return ["0.25", "1.5", "3.0", "0.125"][this.rng.below(4)]; }
+		return intLiteral(t, isSigned(t) && this.rng.chance(30), this.rng.below(100) as uint64);
+	}
+
+	unsignedLit(t: Ty): string { return intLiteral(t, false, this.rng.below(100) as uint64); }
+
+	litList(t: Ty, n: int32, small: boolean): string {
+		let out = "";
+		for (let i = 0; i < n; i++) { out += (i == 0 ? "" : ", ") + (small ? this.smallLit(t) : this.literal(t)); }
+		return out;
+	}
+
+	worker(ret: Ty, params: Ty[]): Worker {
+		const savedScope = this.scope;
+		const savedEnts = this.ents;
+		const savedGlobals = this.globals;
+		const savedFns = this.fns;
+		const savedFams = this.fams;
+		const savedNodes = this.nodesLeft;
+		const savedCost = this.cost;
+		const savedCap = this.costCap;
+		const savedMult = this.mult;
+		this.scope = [];
+		this.ents = [];
+		this.globals = [];
+		this.fns = [];
+		this.fams = [];
+		this.nodesLeft = TASK_NODE_CAP;
+		this.entCount = 0;
+		this.localCount = 0;
+		this.loopCount = 0;
+		this.cost = 0 as int64;
+		this.costCap = WORKER_COST_CAP;
+		this.mult = 1 as int64;
+		let sig = "";
+		for (let p = 0; p < params.length; p++) {
+			const name = "p" + String(p);
+			this.scope.push({ name: name, ty: params[p], writable: false });
+			sig = sig == "" ? name + ": " + tyName(params[p]) : sig + ", " + name + ": " + tyName(params[p]);
+		}
+		const body = this.block(0, "\t", false, ret, true);
+		this.ents = [];
+		const tail = "\treturn " + this.expr(ret, 0) + ";\n";
+		const cost = this.cost;
+		const name = "work" + String(this.workCount);
+		this.workCount++;
+		this.scope = savedScope;
+		this.ents = savedEnts;
+		this.globals = savedGlobals;
+		this.fns = savedFns;
+		this.fams = savedFams;
+		this.nodesLeft = savedNodes;
+		this.cost = savedCost;
+		this.costCap = savedCap;
+		this.mult = savedMult;
+		return { name: name, text: "function " + name + "(" + sig + "): " + tyName(ret) + " {\n" + body + tail + "}\n", cost: cost };
+	}
+
+	checkLine(id: string, par: string, seq: string): string {
+		this.taskHelper("taskCheck", TASK_CHECK);
+		const model = this.taskPlant ? " + String(modelDelta())" : "";
+		return "\ttaskCheck(\"task" + id + "\", " + par + ", " + seq + model + ");\n";
+	}
+
+	addScenario(id: string, decls: string, body: string): boolean {
+		this.taskText += decls + "async function task" + id + "(): Promise<void> {\n" + body + "}\n";
+		this.taskCalls += "await task" + id + "();\n";
+		return true;
+	}
+
+	spawnFan(all: boolean): boolean {
+		const n = this.rng.between(2, MAX_TASKS);
+		const ret = this.pickOf(all ? this.joinTys() : this.wireTys());
+		const params: Ty[] = [ret];
+		if (this.rng.chance(50)) { params.push(this.pickOf(this.wireTys())); }
+		const w = this.worker(ret, params);
+		if (!this.reserve(((2 * n) as int64) * (w.cost + (4 as int64)))) { return false; }
+		if (all) { this.directive(SKIP_RAISER_ALL); }
+		const id = this.taskId();
+		const N = String(n);
+		let body = "";
+		let args = "";
+		let seqArgs = "";
+		for (let p = 0; p < params.length; p++) {
+			const k = String(p);
+			body += "\tconst xs" + k + ": " + tyName(params[p]) + "[] = [" + this.litList(params[p], n, false) + "];\n";
+			args += (p == 0 ? "" : ", ") + "a" + k;
+			seqArgs += (p == 0 ? "" : ", ") + "xs" + k + "[i]";
+		}
+		body += "\tconst hs: Promise<" + tyName(ret) + ">[] = [];\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n";
+		for (let p = 0; p < params.length; p++) { body += "\t\tconst a" + String(p) + " = xs" + String(p) + "[i];\n"; }
+		body += "\t\ths.push(spawn(() => " + w.name + "(" + args + ")));\n";
+		body += "\t}\n";
+		body += "\tlet par = \"\";\n";
+		if (all) {
+			body += "\tconst rs = await Promise.all(hs);\n";
+			body += "\tfor (let i: int32 = 0; i < " + N + "; i++) { par = par + String(rs[i]) + \",\"; }\n";
+		} else {
+			body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n\t\tconst r = await hs[i];\n\t\tpar = par + String(r) + \",\";\n\t}\n";
+		}
+		body += "\tlet seq = \"\";\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) { seq = seq + String(" + w.name + "(" + seqArgs + ")) + \",\"; }\n";
+		body += this.checkLine(id, "par", "seq");
+		return this.addScenario(id, w.text, body);
+	}
+
+	spawnMove(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		const id = this.taskId();
+		let decls = "";
+		let body = "";
+		if (this.rng.chance(50)) {
+			const t = this.pickOf(this.intWireTys());
+			const T = tyName(t);
+			const n = this.rng.between(2, 6);
+			const lits = this.litList(t, n, true);
+			const extra = this.smallLit(t);
+			this.taskHelper(foldName(t), foldText(t));
+			body += "\tconst arr: " + T + "[] = [" + lits + "];\n";
+			body += "\tconst h = spawn(() => { arr.push(" + extra + "); return " + foldName(t) + "(arr); }, { move: [arr] });\n";
+			body += "\tconst par = String(await h);\n";
+			body += "\tconst ref: " + T + "[] = [" + lits + "];\n";
+			body += "\tref.push(" + extra + ");\n";
+			body += "\tconst seq = String(" + foldName(t) + "(ref));\n";
+		} else {
+			const shape = "Cnt" + id;
+			const bump = "bump" + id;
+			const start = String(this.rng.between(0, 99));
+			const by = String(this.rng.between(1, 9));
+			decls = "interface " + shape + " { n: int32; }\n" +
+				"function " + bump + "(c: " + shape + "): int32 { c.n = c.n + " + by + "; return c.n; }\n";
+			body += "\tconst c: " + shape + " = { n: " + start + " };\n";
+			body += "\tconst h = spawn(() => " + bump + "(c), { move: [c] });\n";
+			body += "\tconst par = String(await h);\n";
+			body += "\tconst d: " + shape + " = { n: " + start + " };\n";
+			body += "\tconst seq = String(" + bump + "(d));\n";
+		}
+		body += this.checkLine(id, "par", "seq");
+		return this.addScenario(id, decls, body);
+	}
+
+	spawnShare(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		const id = this.taskId();
+		const t = this.pickOf(this.intWireTys());
+		const T = tyName(t);
+		const m = this.rng.between(2, 4);
+		this.taskHelper(foldName(t), foldText(t));
+		let body = "\tconst ro: " + T + "[] = [" + this.litList(t, this.rng.between(2, 8), true) + "];\n";
+		for (let j = 0; j < m; j++) {
+			body += "\tconst h" + String(j) + " = spawn(() => " + foldName(t) + "(ro) + " + String(j) + ");\n";
+		}
+		let par = "";
+		let seq = "";
+		for (let j = 0; j < m; j++) {
+			body += "\tconst r" + String(j) + " = await h" + String(j) + ";\n";
+			par += (j == 0 ? "" : " + \",\" + ") + "String(r" + String(j) + ")";
+			seq += (j == 0 ? "" : " + \",\" + ") + "String(" + foldName(t) + "(ro) + " + String(j) + ")";
+		}
+		body += this.checkLine(id, par, seq);
+		return this.addScenario(id, "", body);
+	}
+
+	spawnLocked(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		this.directive(SKIP_JS_LOCKED);
+		this.directive(SKIP_RAISER_CELLS);
+		this.importLine("import { lockedUpdate, lockedRead } from \"std/core/promise\";");
+		const id = this.taskId();
+		const xor = this.rng.chance(40);
+		const t = xor ? Ty.Uint32 : Ty.Int32;
+		const T = tyName(t);
+		const n = this.rng.between(2, MAX_TASKS);
+		const bump = "lock" + (xor ? "Xor" : "Add") + id;
+		const decls = "function " + bump + "(s: Locked<" + T + ">, by: " + T + "): " + T + " {\n" +
+			"\tlockedUpdate(s, (v: " + T + "): " + T + " => v " + (xor ? "^" : "+") + " by);\n" +
+			"\treturn by;\n" +
+			"}\n";
+		const N = String(n);
+		let body = "\tconst cell: Locked<" + T + "> = new Locked(" + zero(t) + ");\n";
+		let lits = "";
+		for (let i = 0; i < n; i++) { lits += (i == 0 ? "" : ", ") + this.unsignedLit(t); }
+		body += "\tconst xs: " + T + "[] = [" + lits + "];\n";
+		body += "\tconst hs: Promise<" + T + ">[] = [];\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n\t\tconst v = xs[i];\n\t\ths.push(spawn(() => " + bump + "(cell, v)));\n\t}\n";
+		body += "\tfor (const h of hs) { await h; }\n";
+		body += "\tconst par = String(lockedRead(cell, (v: " + T + "): " + T + " => v));\n";
+		body += "\tlet seq: " + T + " = " + zero(t) + ";\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) { seq = seq " + (xor ? "^" : "+") + " xs[i]; }\n";
+		body += this.checkLine(id, "par", "String(seq)");
+		return this.addScenario(id, decls, body);
+	}
+
+	spawnArc(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		this.directive(SKIP_JS_ARC);
+		this.directive(SKIP_RAISER_CELLS);
+		const id = this.taskId();
+		const n = this.rng.between(2, MAX_TASKS);
+		const shape = "Payload" + id;
+		const mix = "mix" + id;
+		const weigh = "weigh" + id;
+		const a = this.smallLit(Ty.Int32);
+		const b = this.smallLit(Ty.Int32);
+		const decls = "struct " + shape + " { n: int32; m: int32; }\n" +
+			"function " + mix + "(n: int32, m: int32): int32 { return n * 3 + m; }\n" +
+			"function " + weigh + "(a: Arc<" + shape + ">): int32 { return " + mix + "(a.n, a.m); }\n";
+		const N = String(n);
+		let body = "\tconst a: Arc<" + shape + "> = new Arc({ n: " + a + ", m: " + b + " });\n";
+		body += "\tconst hs: Promise<int32>[] = [];\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) { hs.push(spawn(() => " + weigh + "(a))); }\n";
+		body += "\tlet par: int32 = 0;\n";
+		body += "\tfor (const h of hs) { par = par + await h; }\n";
+		body += "\tlet seq: int32 = 0;\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) { seq = seq + " + mix + "(" + a + ", " + b + "); }\n";
+		body += this.checkLine(id, "String(par)", "String(seq)");
+		return this.addScenario(id, decls, body);
+	}
+
+	spawnNest(): boolean {
+		const n = this.rng.between(2, MAX_TASKS);
+		const params: Ty[] = [Ty.Int32];
+		const w = this.worker(Ty.Int32, params);
+		if (!this.reserve(((2 * n) as int64) * (w.cost + (6 as int64)))) { return false; }
+		const id = this.taskId();
+		const N = String(n);
+		const by = String(this.rng.between(1, 9));
+		let body = "\tconst xs: int32[] = [" + this.litList(Ty.Int32, n, false) + "];\n";
+		body += "\tconst hs: Promise<int32>[] = [];\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n";
+		body += "\t\tconst a = xs[i];\n";
+		body += "\t\ths.push(spawn(() => {\n\t\t\tconst g = spawn(() => " + w.name + "(a));\n\t\t\treturn (await g) ^ " + by + ";\n\t\t}));\n";
+		body += "\t}\n";
+		body += "\tlet par = \"\";\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n\t\tconst r = await hs[i];\n\t\tpar = par + String(r) + \",\";\n\t}\n";
+		body += "\tlet seq = \"\";\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) { seq = seq + String(" + w.name + "(xs[i]) ^ " + by + ") + \",\"; }\n";
+		body += this.checkLine(id, "par", "seq");
+		return this.addScenario(id, w.text, body);
+	}
+
+	spawnFail(): boolean {
+		const n = this.rng.between(2, MAX_TASKS);
+		const w = this.worker(Ty.Int32, [Ty.Int32]);
+		if (!this.reserve(((2 * n) as int64) * (w.cost + (6 as int64)))) { return false; }
+		const id = this.taskId();
+		const N = String(n);
+		const every = String(this.rng.between(2, 4));
+		const fail = "fail" + id;
+		const decls = w.text + "function " + fail + "(a: int32): int32 {\n" +
+			"\tif (a % " + every + " == 0) { throw new Error(\"bad\"); }\n" +
+			"\treturn " + w.name + "(a);\n" +
+			"}\n";
+		let xs = "";
+		for (let i = 0; i < n; i++) { xs += (i == 0 ? "" : ", ") + String(this.rng.between(0, 12)); }
+		let body = "\tconst xs: int32[] = [" + xs + "];\n";
+		body += "\tconst hs: Promise<int32>[] = [];\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n\t\tconst a = xs[i];\n\t\ths.push(spawn(() => " + fail + "(a)));\n\t}\n";
+		body += "\tlet ok: int32 = 0;\n\tlet bad: int32 = 0;\n\tlet sum: int64 = 0;\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n";
+		body += "\t\ttry {\n\t\t\tconst v = await hs[i];\n\t\t\tok++;\n\t\t\tsum = sum + (v as int64);\n\t\t} catch (e) {\n\t\t\tbad++;\n\t\t}\n\t}\n";
+		body += "\tlet okSeq: int32 = 0;\n\tlet badSeq: int32 = 0;\n\tlet sumSeq: int64 = 0;\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) {\n";
+		body += "\t\ttry {\n\t\t\tconst v = " + fail + "(xs[i]);\n\t\t\tokSeq++;\n\t\t\tsumSeq = sumSeq + (v as int64);\n\t\t} catch (e) {\n\t\t\tbadSeq++;\n\t\t}\n\t}\n";
+		body += this.checkLine(id, "String(ok) + \"/\" + String(bad) + \"/\" + String(sum)", "String(okSeq) + \"/\" + String(badSeq) + \"/\" + String(sumSeq)");
+		return this.addScenario(id, decls, body);
+	}
+
+	spawnTimed(): boolean {
+		const n = this.rng.between(1, 3);
+		const ret = this.pickOf(this.wireTys());
+		const params: Ty[] = [ret];
+		const w = this.worker(ret, params);
+		if (!this.reserve(((2 * n) as int64) * (w.cost + (4 as int64)))) { return false; }
+		this.directive(SKIP_RAISER_TIMED);
+		const id = this.taskId();
+		let body = "{\n";
+		let par = "";
+		let seq = "";
+		for (let i = 0; i < n; i++) {
+			const k = String(i);
+			const lit = this.literal(params[0]);
+			body += "\tconst a" + k + ": " + tyName(params[0]) + " = " + lit + ";\n";
+			body += "\tconst v" + k + " = await spawn(() => " + w.name + "(a" + k + "), { timeout: 60000 });\n";
+			par += (i == 0 ? "" : " + \",\" + ") + "String(v" + k + ")";
+			seq += (i == 0 ? "" : " + \",\" + ") + "String(" + w.name + "(a" + k + "))";
+		}
+		body += this.checkLine(id, par, seq);
+		body += "}\n";
+		this.taskText += w.text;
+		this.taskCalls += body;
+		return true;
+	}
+
+	spawnScenario(): boolean {
+		const k = this.pickW(W.SpawnFan, W.SpawnTimed);
+		if (k == 0) { return this.spawnFan(false); }
+		if (k == 1) { return this.spawnFan(true); }
+		if (k == 2) { return this.spawnMove(); }
+		if (k == 3) { return this.spawnShare(); }
+		if (k == 4) { return this.spawnLocked(); }
+		if (k == 5) { return this.spawnArc(); }
+		if (k == 6) { return this.spawnNest(); }
+		if (k == 7) { return this.spawnFail(); }
+		return this.spawnTimed();
+	}
+
+	actorMethod(name: string, id: string): string { return name + "_" + id; }
+
+	actorScenario(mode: int32, many: boolean): boolean {
+		const fields = this.rng.between(1, 3);
+		const tys: Ty[] = [];
+		const inits: string[] = [];
+		for (let f = 0; f < fields; f++) {
+			tys.push(this.pickOf(this.wireTys()));
+			inits.push(this.smallLit(tys[f]));
+		}
+		const withText = this.rng.chance(50);
+		const actors = many ? this.rng.between(2, 3) : 1;
+		const n = this.rng.between(2, MAX_TASKS);
+		if (!this.reserve(((actors * n * 2) as int64) * (10 as int64))) { return false; }
+		this.directive(SKIP_RAISER_ACTOR);
+		for (const t of tys) { this.taskHelper(stepName(t), stepText(t)); }
+		const id = this.taskId();
+		const A = "Act" + id;
+		let decls = "actor " + A + " {\n";
+		for (let f = 0; f < fields; f++) { decls += "\tst" + String(f) + ": " + tyName(tys[f]) + " = " + inits[f] + ";\n"; }
+		if (withText) { decls += "\ttxt: string = \"\";\n"; }
+		decls += "\t" + this.actorMethod("add", id) + "(v: int32): void {\n";
+		for (let f = 0; f < fields; f++) {
+			const s = "this.st" + String(f);
+			decls += "\t\t" + s + " = " + stepName(tys[f]) + "(" + s + ", v);\n";
+		}
+		if (withText) { decls += "\t\tthis.txt = this.txt + String(v) + \",\";\n"; }
+		decls += "\t}\n";
+		decls += "\t" + this.actorMethod("bump", id) + "(v: int32): " + tyName(tys[0]) + " {\n\t\tthis.st0 = " + stepName(tys[0]) + "(this.st0, v);\n\t\treturn this.st0;\n\t}\n";
+		for (let f = 0; f < fields; f++) {
+			decls += "\t" + this.actorMethod("get" + String(f), id) + "(): " + tyName(tys[f]) + " { return this.st" + String(f) + "; }\n";
+		}
+		if (withText) { decls += "\t" + this.actorMethod("getTxt", id) + "(): string { return this.txt; }\n"; }
+		decls += "}\n";
+		let vs = "";
+		for (let i = 0; i < n; i++) { vs += (i == 0 ? "" : ", ") + String(this.rng.between(0, 99)); }
+		let body = "";
+		for (let k = 0; k < actors; k++) {
+			const ak = String(k);
+			body += "\tconst a" + ak + " = new " + A + "();\n";
+			for (let f = 0; f < fields; f++) { body += "\tlet m" + ak + "_" + String(f) + ": " + tyName(tys[f]) + " = " + inits[f] + ";\n"; }
+			if (withText) { body += "\tlet mt" + ak + " = \"\";\n"; }
+		}
+		body += "\tlet rep = \"\";\n\tlet rsq = \"\";\n";
+		body += "\tconst vs: int32[] = [" + vs + "];\n";
+		body += "\tfor (let i: int32 = 0; i < " + String(n) + "; i++) {\n\t\tconst v = vs[i];\n";
+		for (let k = 0; k < actors; k++) {
+			const ak = String(k);
+			const arg = k == 0 ? "v" : "v + " + ak;
+			body += "\t\ta" + ak + "." + this.actorMethod("add", id) + "(" + arg + ");\n";
+			for (let f = 0; f < fields; f++) {
+				const m = "m" + ak + "_" + String(f);
+				body += "\t\t" + m + " = " + stepName(tys[f]) + "(" + m + ", " + arg + ");\n";
+			}
+			if (withText) { body += "\t\tmt" + ak + " = mt" + ak + " + String(" + arg + ") + \",\";\n"; }
+		}
+		if (mode == 1) {
+			body += "\t\tif (i % 2 == 1) {\n";
+			body += "\t\t\tconst r = await a0." + this.actorMethod("bump", id) + "(i);\n";
+			body += "\t\t\tm0_0 = " + stepName(tys[0]) + "(m0_0, i);\n";
+			body += "\t\t\trep = rep + String(r) + \",\";\n";
+			body += "\t\t\trsq = rsq + String(m0_0) + \",\";\n";
+			body += "\t\t}\n";
+		}
+		body += "\t}\n";
+		let par = "";
+		let seq = "";
+		for (let k = 0; k < actors; k++) {
+			const ak = String(k);
+			for (let f = 0; f < fields; f++) {
+				body += "\tconst q" + ak + "_" + String(f) + " = await a" + ak + "." + this.actorMethod("get" + String(f), id) + "();\n";
+				par += (par == "" ? "" : " + \",\" + ") + "String(q" + ak + "_" + String(f) + ")";
+				seq += (seq == "" ? "" : " + \",\" + ") + "String(m" + ak + "_" + String(f) + ")";
+			}
+			if (withText) {
+				body += "\tconst qt" + ak + " = await a" + ak + "." + this.actorMethod("getTxt", id) + "();\n";
+				par += " + \";\" + qt" + ak;
+				seq += " + \";\" + mt" + ak;
+			}
+		}
+		body += this.checkLine(id, par + " + \"|\" + rep", seq + " + \"|\" + rsq");
+		if (mode == 2) {
+			this.importLine("import { stop, ExitReason } from \"std/actor\";");
+			for (let k = 0; k < actors; k++) { body += "\tstop(a" + String(k) + ".pid, ExitReason.Normal);\n"; }
+		}
+		return this.addScenario(id, decls, body);
+	}
+
+	actorChain(): boolean {
+		if (!this.reserve(300 as int64)) { return false; }
+		this.directive(SKIP_RAISER_ACTOR);
+		this.taskHelper(stepName(Ty.Int32), stepText(Ty.Int32));
+		const id = this.taskId();
+		const n = this.rng.between(2, 8);
+		const who = this.rng.between(1, 9);
+		const pt = "Pt" + id;
+		const area = "area" + id;
+		const sink = "Sink" + id;
+		const prod = "Prod" + id;
+		const put = this.actorMethod("put", id);
+		const putPt = this.actorMethod("putPt", id);
+		const total = this.actorMethod("total", id);
+		const seen = this.actorMethod("seen", id);
+		const psum = this.actorMethod("psum", id);
+		const run = this.actorMethod("run", id);
+		const ping = this.actorMethod("ping", id);
+		const decls = "struct " + pt + " { x: int32; y: int32; }\n" +
+			"function " + area + "(p: " + pt + "): int32 { return p.x * p.y; }\n" +
+			"actor " + sink + " {\n" +
+			"\tacc: int32 = 1;\n\tcount: int32 = 0;\n\tpts: int32 = 0;\n" +
+			"\t" + put + "(v: int32): void { this.acc = step_int32(this.acc, v); this.count = this.count + 1; }\n" +
+			"\t" + putPt + "(p: " + pt + "): void { this.pts = (this.pts + " + area + "(p)) % 100003; }\n" +
+			"\t" + total + "(): int32 { return this.acc; }\n" +
+			"\t" + seen + "(): int32 { return this.count; }\n" +
+			"\t" + psum + "(): int32 { return this.pts; }\n" +
+			"}\n" +
+			"actor " + prod + " {\n" +
+			"\tsink: " + sink + ";\n\tid: int32;\n" +
+			"\tconstructor(sink: " + sink + ", id: int32) { this.sink = sink; this.id = id; }\n" +
+			"\t" + run + "(n: int32): void { for (let i: int32 = 0; i < n; i++) { this.sink." + put + "(this.id * 100 + i); } }\n" +
+			"\t" + ping + "(): int32 { return this.id; }\n" +
+			"}\n";
+		const N = String(n);
+		const p1 = "{ x: " + String(this.rng.between(1, 30)) + ", y: " + String(this.rng.between(1, 30)) + " }";
+		const p2 = "{ x: " + String(this.rng.between(1, 30)) + ", y: " + String(this.rng.between(1, 30)) + " }";
+		let body = "\tconst sink = new " + sink + "();\n";
+		body += "\tconst prod = new " + prod + "(sink, " + String(who) + ");\n";
+		body += "\tprod." + run + "(" + N + ");\n";
+		body += "\tconst pong = await prod." + ping + "();\n";
+		body += "\tconst pa: " + pt + " = " + p1 + ";\n\tconst pb: " + pt + " = " + p2 + ";\n";
+		body += "\tsink." + putPt + "(pa);\n\tsink." + putPt + "(pb);\n";
+		body += "\tconst total = await sink." + total + "();\n\tconst seen = await sink." + seen + "();\n\tconst psum = await sink." + psum + "();\n";
+		body += "\tlet m: int32 = 1;\n";
+		body += "\tfor (let i: int32 = 0; i < " + N + "; i++) { m = step_int32(m, " + String(who) + " * 100 + i); }\n";
+		body += "\tconst ma: " + pt + " = " + p1 + ";\n\tconst mb: " + pt + " = " + p2 + ";\n";
+		body += this.checkLine(id, "String(pong) + \",\" + String(total) + \",\" + String(seen) + \",\" + String(psum)",
+			"String(" + String(who) + ") + \",\" + String(m) + \",\" + String(" + N + ") + \",\" + String((" + area + "(ma) + " + area + "(mb)) % 100003)");
+		return this.addScenario(id, decls, body);
+	}
+
+	actorSpawn(): boolean {
+		if (!this.reserve(300 as int64)) { return false; }
+		this.directive(SKIP_RAISER_ACTOR);
+		this.taskHelper(foldName(Ty.Int32), foldText(Ty.Int32));
+		const id = this.taskId();
+		const n = this.rng.between(2, 8);
+		const vault = "Vault" + id;
+		const put = this.actorMethod("put", id);
+		const par = this.actorMethod("par", id);
+		const size = this.actorMethod("size", id);
+		const decls = "actor " + vault + " {\n" +
+			"\tvals: int32[] = [];\n" +
+			"\t" + put + "(v: int32): void { this.vals.push(v); }\n" +
+			"\t" + par + "(): int32 {\n\t\tconst h = spawn(() => " + foldName(Ty.Int32) + "(this.vals));\n\t\treturn await h;\n\t}\n" +
+			"\t" + size + "(): int32 { return this.vals.length; }\n" +
+			"}\n";
+		let vs = "";
+		for (let i = 0; i < n; i++) { vs += (i == 0 ? "" : ", ") + String(this.rng.between(-50, 99)); }
+		let body = "\tconst a = new " + vault + "();\n";
+		body += "\tconst mirror: int32[] = [];\n";
+		body += "\tconst vs: int32[] = [" + vs + "];\n";
+		body += "\tfor (let i: int32 = 0; i < " + String(n) + "; i++) {\n\t\ta." + put + "(vs[i]);\n\t\tmirror.push(vs[i]);\n\t}\n";
+		body += "\tconst folded = await a." + par + "();\n\tconst size = await a." + size + "();\n";
+		body += this.checkLine(id, "String(folded) + \",\" + String(size)", "String(" + foldName(Ty.Int32) + "(mirror)) + \",\" + String(mirror.length)");
+		return this.addScenario(id, decls, body);
+	}
+
+	actorShape(): boolean {
+		const k = this.pickW(W.ActorState, W.ActorStop);
+		if (k == 0) { return this.actorScenario(0, false); }
+		if (k == 1) { return this.actorScenario(1, false); }
+		if (k == 2) { return this.actorChain(); }
+		if (k == 3) { return this.actorScenario(0, true); }
+		if (k == 4) { return this.actorSpawn(); }
+		return this.actorScenario(2, this.rng.chance(30));
+	}
+
+	raceTy(): string { return RACE_TYS[this.rng.below(RACE_TYS.length)]; }
+
+	raceLit(t: string): string {
+		if (t == "boolean") { return this.rng.chance(50) ? "true" : "false"; }
+		if (t == "float64") { return ["0.5", "1.25", "2.0", "(-3.5)", "100.0"][this.rng.below(5)]; }
+		return String(this.rng.between(0, 99));
+	}
+
+	distinctTicks(m: int32): int32[] {
+		const pool: int32[] = [];
+		for (let i = 1; i <= TICK_CAP; i++) { pool.push(i); }
+		const out: int32[] = [];
+		for (let i = 0; i < m; i++) {
+			const k = this.rng.below(pool.length);
+			out.push(pool[k]);
+			pool[k] = pool[pool.length - 1];
+			pool.pop();
+		}
+		return out;
+	}
+
+	raceFirst(tie: boolean): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		this.directive(SKIP_RAISER_RACE);
+		const id = this.taskId();
+		const t = this.raceTy();
+		this.taskHelper(ticksName(t), ticksText(t));
+		const m = this.rng.between(2, 4);
+		let ns: int32[] = [];
+		if (tie) {
+			const same = this.rng.between(1, 3);
+			for (let i = 0; i < m; i++) { ns.push(same); }
+		} else {
+			ns = this.distinctTicks(m);
+		}
+		let vs = "";
+		let nsText = "";
+		let calls = "";
+		for (let i = 0; i < m; i++) {
+			const k = String(i);
+			vs += (i == 0 ? "" : ", ") + this.raceLit(t);
+			nsText += (i == 0 ? "" : ", ") + String(ns[i]);
+			calls += (i == 0 ? "" : ", ") + ticksName(t) + "(vs[" + k + "], ns[" + k + "])";
+		}
+		let body = "\tconst vs: " + t + "[] = [" + vs + "];\n";
+		body += "\tconst ns: int32[] = [" + nsText + "];\n";
+		body += "\tlet best: int32 = 0;\n";
+		body += "\tfor (let i: int32 = 1; i < " + String(m) + "; i++) { if (ns[i] < ns[best]) { best = i; } }\n";
+		body += "\tconst win = await Promise.race([" + calls + "]);\n";
+		body += this.checkLine(id, "String(win)", "String(vs[best])");
+		return this.addScenario(id, "", body);
+	}
+
+	raceAny(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		this.directive(SKIP_RAISER_RACE);
+		const id = this.taskId();
+		const t = this.raceTy();
+		this.taskHelper(ticksName(t), ticksText(t));
+		this.taskHelper(failName(t), failText(t));
+		const m = this.rng.between(2, 4);
+		const ns = this.distinctTicks(m);
+		const allFail = this.rng.chance(25);
+		const oks: boolean[] = [];
+		let okCount = 0;
+		for (let i = 0; i < m; i++) {
+			const ok = !allFail && this.rng.chance(50);
+			oks.push(ok);
+			if (ok) { okCount++; }
+		}
+		if (!allFail && okCount == 0) { oks[this.rng.below(m)] = true; }
+		let vs = "";
+		let nsText = "";
+		let okText = "";
+		let calls = "";
+		for (let i = 0; i < m; i++) {
+			const k = String(i);
+			vs += (i == 0 ? "" : ", ") + this.raceLit(t);
+			nsText += (i == 0 ? "" : ", ") + String(ns[i]);
+			okText += (i == 0 ? "" : ", ") + (oks[i] ? "true" : "false");
+			calls += (i == 0 ? "" : ", ") + (oks[i] ? ticksName(t) + "(vs[" + k + "], ns[" + k + "])" : failName(t) + "(ns[" + k + "], " + k + ")");
+		}
+		let body = "\tconst vs: " + t + "[] = [" + vs + "];\n";
+		body += "\tconst ns: int32[] = [" + nsText + "];\n";
+		body += "\tconst oks: boolean[] = [" + okText + "];\n";
+		body += "\tlet best: int32 = -1;\n";
+		body += "\tfor (let i: int32 = 0; i < " + String(m) + "; i++) { if (oks[i] && (best < 0 || ns[i] < ns[best])) { best = i; } }\n";
+		if (allFail) {
+			body += "\tlet par = \"resolved\";\n";
+			body += "\ttry {\n\t\tawait Promise.any([" + calls + "]);\n\t} catch (e) {\n\t\tpar = \"rejected\";\n\t}\n";
+			body += this.checkLine(id, "par", "(best < 0 ? \"rejected\" : \"resolved\")");
+		} else {
+			body += "\tconst win = await Promise.any([" + calls + "]);\n";
+			body += this.checkLine(id, "String(win)", "String(vs[best])");
+		}
+		return this.addScenario(id, "", body);
+	}
+
+	raceFail(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		this.directive(SKIP_RAISER_RACE);
+		const id = this.taskId();
+		const all = this.rng.chance(40);
+		const t = all ? tyName(this.pickOf(this.joinTys())) : this.raceTy();
+		this.taskHelper(ticksName(t), ticksText(t));
+		this.taskHelper(failName(t), failText(t));
+		const m = all ? this.rng.between(2, 4) : this.rng.between(2, 3);
+		const ns = this.distinctTicks(m);
+		const fails: boolean[] = [];
+		let failCount = 0;
+		for (let i = 0; i < m; i++) {
+			const fail = this.rng.chance(50);
+			fails.push(fail);
+			if (fail) { failCount++; }
+		}
+		if (failCount == 0) { fails[this.rng.below(m)] = true; }
+		let vs = "";
+		let nsText = "";
+		let failFlags = "";
+		let calls = "";
+		for (let i = 0; i < m; i++) {
+			const k = String(i);
+			vs += (i == 0 ? "" : ", ") + this.raceLit(t);
+			nsText += (i == 0 ? "" : ", ") + String(ns[i]);
+			failFlags += (i == 0 ? "" : ", ") + (fails[i] ? "true" : "false");
+			calls += (i == 0 ? "" : ", ") + (fails[i] ? failName(t) + "(ns[" + k + "], " + k + ")" : ticksName(t) + "(vs[" + k + "], ns[" + k + "])");
+		}
+		let body = "\tconst vs: " + t + "[] = [" + vs + "];\n";
+		body += "\tconst ns: int32[] = [" + nsText + "];\n";
+		body += "\tconst fails: boolean[] = [" + failFlags + "];\n";
+		body += "\tlet par = \"\";\n";
+		if (all) {
+			body += "\ttry {\n\t\tawait Promise.all([" + calls + "]);\n\t\tpar = \"resolved\";\n\t} catch (e) {\n\t\tpar = (e as Error).message;\n\t}\n";
+			body += "\tlet best: int32 = -1;\n";
+			body += "\tfor (let i: int32 = 0; i < " + String(m) + "; i++) { if (fails[i] && (best < 0 || ns[i] < ns[best])) { best = i; } }\n";
+			body += this.checkLine(id, "par", "\"f\" + String(best)");
+		} else {
+			body += "\ttry {\n\t\tpar = \"v\" + String(await Promise.race([" + calls + "]));\n\t} catch (e) {\n\t\tpar = (e as Error).message;\n\t}\n";
+			body += "\tlet best: int32 = 0;\n";
+			body += "\tfor (let i: int32 = 1; i < " + String(m) + "; i++) { if (ns[i] < ns[best]) { best = i; } }\n";
+			body += this.checkLine(id, "par", "(fails[best] ? \"f\" + String(best) : \"v\" + String(vs[best]))");
+		}
+		return this.addScenario(id, "", body);
+	}
+
+	raceAbort(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		const id = this.taskId();
+		const m = this.rng.between(2, 5);
+		const guard = "guard" + id;
+		const decls = "function " + guard + "(s: AbortSignal, v: int32): int32 { return s.aborted ? -1 : v; }\n";
+		let plan = "";
+		let vs = "";
+		for (let i = 0; i < m; i++) {
+			plan += (i == 0 ? "" : ", ") + (this.rng.chance(50) ? "true" : "false");
+			vs += (i == 0 ? "" : ", ") + String(this.rng.between(0, 99));
+		}
+		const M = String(m);
+		let body = "\tconst plan: boolean[] = [" + plan + "];\n";
+		body += "\tconst vs: int32[] = [" + vs + "];\n";
+		body += "\tconst cs: AbortController[] = [];\n";
+		body += "\tfor (let i: int32 = 0; i < " + M + "; i++) { cs.push(new AbortController()); }\n";
+		body += "\tfor (let i: int32 = 0; i < " + M + "; i++) {\n\t\tif (plan[i]) {\n\t\t\tconst c = cs[i];\n\t\t\tc.abort(\"stop\");\n\t\t}\n\t}\n";
+		body += "\tlet par = \"\";\n\tlet seq = \"\";\n";
+		body += "\tfor (let i: int32 = 0; i < " + M + "; i++) {\n";
+		body += "\t\tpar = par + String(cs[i].signal.aborted) + String(" + guard + "(cs[i].signal, vs[i])) + \",\";\n";
+		body += "\t\tseq = seq + String(plan[i]) + String(plan[i] ? -1 : vs[i]) + \",\";\n";
+		body += "\t}\n";
+		body += "\tconst pre = AbortSignal.abort(\"done\");\n";
+		body += "\tpar = par + String(pre.aborted);\n";
+		body += "\tseq = seq + \"true\";\n";
+		body += this.checkLine(id, "par", "seq");
+		return this.addScenario(id, decls, body);
+	}
+
+	raceTimer(): boolean {
+		if (!this.reserve(200 as int64)) { return false; }
+		this.directive(SKIP_RAISER_RACE);
+		const id = this.taskId();
+		const t = this.raceTy();
+		this.taskHelper(ticksName(t), ticksText(t));
+		this.taskHelper(lateName(t), lateText(t));
+		const quick = this.raceLit(t);
+		const slow = this.raceLit(t);
+		const ticks = String(this.rng.between(1, 3));
+		const ms = String(this.rng.between(100, 150));
+		let body = "";
+		if (this.rng.chance(50)) {
+			body += "\tconst win = await Promise.race([" + ticksName(t) + "(" + quick + ", " + ticks + "), " + lateName(t) + "(" + slow + ", " + ms + ")]);\n";
+			body += this.checkLine(id, "String(win)", "String(" + quick + ")");
+		} else {
+			this.taskHelper(failName(t), failText(t));
+			body += "\tconst win = await Promise.any([" + failName(t) + "(" + ticks + ", 7), " + lateName(t) + "(" + slow + ", " + ms + ")]);\n";
+			body += this.checkLine(id, "String(win)", "String(" + slow + ")");
+		}
+		return this.addScenario(id, "", body);
+	}
+
+	raceScenario(): boolean {
+		const k = this.pickW(W.RaceFirst, W.RaceTimer);
+		if (k == 0) { return this.raceFirst(false); }
+		if (k == 1) { return this.raceFirst(true); }
+		if (k == 2) { return this.raceAny(); }
+		if (k == 3) { return this.raceFail(); }
+		if (k == 4) { return this.raceAbort(); }
+		return this.raceTimer();
+	}
+
+	taskFamPick(): Fam {
+		let total = 0;
+		for (const f of this.taskFams) { total += this.w[(W.FamClosure as int32) + (f as int32)]; }
+		let k = this.rng.below(total);
+		for (const f of this.taskFams) {
+			const n = this.w[(W.FamClosure as int32) + (f as int32)];
+			if (k < n) { return f; }
+			k -= n;
+		}
+		unreachable;
+	}
+
+	taskScenarios(forced: boolean): void {
+		this.directive("// @serial");
+		this.cost = 0 as int64;
+		this.costCap = TASK_COST_CAP;
+		this.mult = 1 as int64;
+		if (forced) {
+			this.spawnFan(false);
+			return;
+		}
+		const count = this.rng.between(1, 3);
+		for (let s = 0; s < count; s++) {
+			const fam = this.taskFamPick();
+			if (fam == Fam.Spawn) {
+				this.spawnScenario();
+			} else if (fam == Fam.Actor) {
+				this.actorShape();
+			} else {
+				this.raceScenario();
+			}
+		}
 	}
 
 	skipHostLanes(): void {
@@ -4277,6 +5136,7 @@ class Gen {
 
 function plantDecls(plant: Plant): string {
 	if (plant == Plant.None) { return ""; }
+	if (plant == Plant.Model) { return "function modelDelta(): int32 { return 1; }\n"; }
 	if (plant == Plant.San) {
 		return "@include(\"stdlib.h\")\n" +
 			"extern function malloc(size: uint64): Ptr<void>;\n" +
@@ -4303,7 +5163,14 @@ export function generate(seed: uint64, f: Features): string {
 	const g = new Gen();
 	g.rng = Rng.seeded(seed);
 	for (const t of ALL_TYS) { if (f.types.has(t)) { g.tys.push(t); } }
-	for (const m of ALL_FAMS) { if (f.fams.has(m)) { g.fams.push(m); } }
+	for (const m of ALL_FAMS) {
+		if (!f.fams.has(m)) { continue; }
+		if (!isTaskFam(m)) {
+			g.fams.push(m);
+		} else if (f.w[(W.FamClosure as int32) + (m as int32)] > 0) {
+			g.taskFams.push(m);
+		}
+	}
 	g.stmtMax = f.stmts;
 	g.depthMax = f.depth;
 	g.exprMax = f.exprDepth;
@@ -4346,8 +5213,15 @@ export function generate(seed: uint64, f: Features): string {
 		entries += "console.log(\"e" + String(e) + " \" + String(" + value + "));\n";
 	}
 
+	const forced = f.plant == Plant.Model && g.taskFams.length == 0;
+	g.taskPlant = f.plant == Plant.Model;
+	if (g.taskFams.length > 0 || forced) {
+		g.rng = Rng.seeded(seed ^ TASK_SALT);
+		g.taskScenarios(forced);
+	}
+
 	let plantSite = "";
-	if (f.plant != Plant.None) {
+	if (f.plant != Plant.None && f.plant != Plant.Model) {
 		for (const v of g.globals) {
 			if (plantSite == "" && !isFloat(v.ty)) {
 				plantSite = v.name + " = " + v.name + " ^ (plantDelta() as " + tyName(v.ty) + ");\n";
@@ -4362,7 +5236,8 @@ export function generate(seed: uint64, f: Features): string {
 	if (g.hasHelper("excBase")) { prints += "console.log(\"excLog \" + String(excLog));\n"; }
 	let head = "// smith seed=" + String(seed) + " features=" + f.format() + "\n";
 	for (const d of g.directives) { head += d + "\n"; }
-	return head + g.helperText + plantDecls(f.plant) + globals + "\n" + fns + top + entries + plantSite + prints;
+	for (const line of g.imports) { head += line + "\n"; }
+	return head + g.helperText + plantDecls(f.plant) + globals + "\n" + fns + g.taskText + top + entries + g.taskCalls + plantSite + prints;
 }
 
 test "the same seed and features give the same program" {
@@ -5796,4 +6671,291 @@ test "a native pointer read stays inside the elements its provenance holds" {
 			assert i >= -2 && i <= 3;
 		}
 	}
+}
+
+const SPAWN_KEYS: string[] = ["fan", "all", "move", "share", "locked", "arc", "nest", "fail", "timed"];
+const SPAWN_MARKS: string[] = ["\t\ths.push(spawn(() => work", "await Promise.all(hs)", "{ move: [", "const ro: ", "new Locked(", "new Arc(",
+	"const g = spawn(() => work", "throw new Error(\"bad\")", "{ timeout: 60000 }"];
+const ACTOR_KEYS: string[] = ["state", "call", "chain", "many", "spawn", "stop"];
+const ACTOR_MARKS: string[] = ["await a0.get0_", "await a0.bump_", "actor Sink", "const a1 = new Act", "actor Vault", "stop(a0.pid, ExitReason.Normal);"];
+const RACE_KEYS: string[] = ["first", "tie", "any", "fail", "abort", "timer"];
+const RACE_MARKS: string[] = ["const win = await Promise.race([ticks_", "const ns: int32[] = [", "Promise.any([", "(e as Error).message", "new AbortController()", "await sleepAsync("];
+
+function onlyShape(fam: string, keys: string[], i: int32): Features {
+	let text = "fams=" + fam;
+	for (let k = 0; k < keys.length; k++) {
+		if (k != i) { text += " w." + fam + "." + keys[k] + "=0"; }
+	}
+	return withWeights(text);
+}
+
+function reachesShapes(fam: string, keys: string[], marks: string[]): boolean {
+	const all = withWeights("fams=" + fam);
+	const seen: boolean[] = marks.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, all);
+		for (let i = 0; i < marks.length; i++) { if (text.contains(marks[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < marks.length; i++) { if (!seen[i]) { return false; } }
+	for (let i = 0; i < keys.length; i++) {
+		const f = onlyShape(fam, keys, i);
+		let found = false;
+		for (let seed = 1; seed < 13; seed++) { if (generate(seed as uint64, f).contains(marks[i])) { found = true; } }
+		if (!found) { return false; }
+	}
+	return true;
+}
+
+function entryLines(text: string): string {
+	let out = "";
+	for (const line of text.split("\n")) {
+		if (line.startsWith("console.log(\"e")) { out += line + "\n"; }
+	}
+	return out;
+}
+
+function tiedTicks(text: string): boolean {
+	for (const line of text.split("\n")) {
+		if (!line.startsWith("\tconst ns: int32[] = [")) { continue; }
+		const items = line.slice(line.indexOf("= [") + 3, line.lastIndexOf("]")).split(", ");
+		if (items.length >= 2 && items[0] == items[1]) { return true; }
+	}
+	return false;
+}
+
+test "the spawn family alone reaches each of its shapes" {
+	assert reachesShapes("spawn", SPAWN_KEYS, SPAWN_MARKS);
+}
+
+test "the actor family alone reaches each of its shapes" {
+	assert reachesShapes("actor", ACTOR_KEYS, ACTOR_MARKS);
+}
+
+test "the race family alone reaches each of its shapes" {
+	assert reachesShapes("race", RACE_KEYS, RACE_MARKS);
+	const tie = onlyShape("race", RACE_KEYS, 1);
+	let tied = false;
+	for (let seed = 1; seed < 13; seed++) { if (tiedTicks(generate(seed as uint64, tie))) { tied = true; } }
+	assert tied;
+}
+
+test "the statement families keep their stream whether or not a task family is on" {
+	const on = withWeights("fams=closure,union,generic,agg,coll,str,own,iter,spawn,actor,race");
+	const off = withWeights("fams=closure,union,generic,agg,coll,str,own,iter");
+	for (let seed = 1; seed <= 20; seed++) {
+		const a = generate(seed as uint64, on);
+		const b = generate(seed as uint64, off);
+		const aEnd = a.indexOf("\n}\n", a.indexOf("\nfunction f4(")) + 3;
+		const bEnd = b.indexOf("\n}\n", b.indexOf("\nfunction f4(")) + 3;
+		assert aEnd > 3 && bEnd > 3;
+		assert a.slice(a.indexOf("\nlet g0"), aEnd) == b.slice(b.indexOf("\nlet g0"), bEnd);
+		assert entryLines(a) == entryLines(b);
+	}
+}
+
+test "a program of a task family has // @serial on its second line and no other program has it" {
+	for (const fam of ["spawn", "actor", "race"]) {
+		const f = withWeights("fams=" + fam);
+		for (let seed = 1; seed <= 20; seed++) {
+			const lines = generate(seed as uint64, f).split("\n");
+			assert lines[1] == "// @serial";
+		}
+	}
+	const plain = withWeights("fams=closure,agg");
+	for (let seed = 1; seed <= 20; seed++) { assert !generate(seed as uint64, plain).contains("@serial"); }
+}
+
+test "a directive is emitted once and a skip names what the lane cannot run" {
+	const g = new Gen();
+	g.directive("// @serial");
+	g.directive("// @serial");
+	g.directive("// @skip-js: x");
+	assert g.directives.length == 2;
+	let locked = false;
+	let actor = false;
+	for (let seed = 1; seed < 41; seed++) {
+		const spawn = generate(seed as uint64, onlyShape("spawn", SPAWN_KEYS, 4));
+		if (spawn.contains("new Locked(")) { locked = true; assert spawn.contains("\n// @skip-js: Locked<T>") && spawn.contains("\n// @skip-raiser: "); }
+		const act = generate(seed as uint64, onlyShape("actor", ACTOR_KEYS, 0));
+		if (act.contains("actor Act")) { actor = true; assert act.contains("\n// @skip-raiser: ") && !act.contains("@skip-js"); }
+	}
+	assert locked && actor;
+}
+
+test "a task family keeps a task body to one printed summary after its comparison" {
+	const f = withWeights("fams=spawn,actor,race");
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		const lines = text.split("\n");
+		let inTask = false;
+		for (const line of lines) {
+			if (line.startsWith("async function task")) { inTask = true; }
+			if (inTask) { assert !line.contains("console.log"); }
+			if (line == "}") { inTask = false; }
+			if (line.contains("console.log(") && line.startsWith("\t")) { assert line == "\tconsole.log(name + \" \" + par);"; }
+		}
+		assert countOf(text, "function taskCheck(") == 1;
+	}
+}
+
+test "a 64-bit type never crosses a future or an actor reply" {
+	const f = withWeights("fams=spawn,actor,race types=int64,uint64,int8");
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("Promise<int64>") && !text.contains("Promise<uint64>");
+		assert !text.contains("): int64 { return this.st") && !text.contains("): uint64 { return this.st");
+		assert !text.contains("st0: int64") && !text.contains("st0: uint64") && !text.contains("st1: int64") && !text.contains("st1: uint64");
+		assert !text.contains("function work0(p0: int64") && !text.contains("function work0(p0: uint64");
+	}
+}
+
+test "Promise.all joins only int32 and float64 results" {
+	const f = withWeights("fams=spawn types=int8,uint8,int16,uint16,uint32 w.spawn.fan=0 w.spawn.move=0 w.spawn.share=0 w.spawn.locked=0 w.spawn.arc=0 w.spawn.nest=0 w.spawn.fail=0 w.spawn.timed=0");
+	let joined = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		joined += countOf(text, "await Promise.all(hs)");
+		assert !text.contains("const hs: Promise<int8>[]") && !text.contains("const hs: Promise<uint8>[]");
+		assert !text.contains("const hs: Promise<int16>[]") && !text.contains("const hs: Promise<uint16>[]") && !text.contains("const hs: Promise<uint32>[]");
+	}
+	assert joined > 20;
+}
+
+test "a move is straight-line and its source is not read again" {
+	let moves = 0;
+	const f = onlyShape("spawn", SPAWN_KEYS, 2);
+	for (let seed = 1; seed < 41; seed++) {
+		const lines = generate(seed as uint64, f).split("\n");
+		for (let i = 0; i < lines.length; i++) {
+			if (!lines[i].contains("move: [")) { continue; }
+			moves++;
+			assert lines[i].startsWith("\tconst h = spawn(");
+			const source = lines[i].contains("move: [arr]") ? "arr" : "c";
+			for (let j = i + 1; lines[j] != "}"; j++) { assert !lines[j].contains(" " + source + ")") && !lines[j].contains("(" + source + ")") && !lines[j].contains(source + "."); }
+		}
+	}
+	assert moves > 10;
+}
+
+test "a scenario function never returns early and a spawn handle is awaited on every path" {
+	const f = withWeights("fams=spawn");
+	for (let seed = 1; seed < 41; seed++) {
+		let inTask = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("async function task")) { inTask = true; }
+			if (inTask) { assert !line.startsWith("\treturn ") && !line.startsWith("\t\treturn ") || line.contains("spawn("); }
+			if (line == "}") { inTask = false; }
+		}
+	}
+}
+
+test "a timed spawn is fused with its await at the top level and never sits in async code" {
+	let timed = 0;
+	const f = onlyShape("spawn", SPAWN_KEYS, 8);
+	for (let seed = 1; seed < 41; seed++) {
+		let inTask = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("async function task")) { inTask = true; }
+			if (line.contains("timeout:")) {
+				timed++;
+				assert !inTask;
+				assert line.startsWith("\tconst v") && line.contains(" = await spawn(");
+			}
+			if (line == "}") { inTask = false; }
+		}
+	}
+	assert timed > 10;
+}
+
+test "an actor is neither created in a thunk nor captured by one nor messaged after stop" {
+	const f = withWeights("fams=actor,spawn");
+	for (let seed = 1; seed < 41; seed++) {
+		const lines = generate(seed as uint64, f).split("\n");
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (line.contains("spawn(")) {
+				assert !line.contains("new Act") && !line.contains("new Sink") && !line.contains("new Prod") && !line.contains("new Vault");
+				assert !line.contains(".add_") && !line.contains(".put_") && !line.contains(".bump_") && !line.contains(".get0_") && !line.contains(".run_");
+			}
+			if (line.startsWith("\tstop(a")) {
+				for (let j = i + 1; lines[j] != "}"; j++) { assert lines[j].startsWith("\tstop(a"); }
+			}
+		}
+	}
+}
+
+test "an Arc payload is a plain numeric struct" {
+	let arcs = 0;
+	const f = onlyShape("spawn", SPAWN_KEYS, 5);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		arcs += countOf(text, "new Arc(");
+		for (const line of text.split("\n")) {
+			if (line.startsWith("struct Payload")) { assert line.endsWith(" { n: int32; m: int32; }"); }
+		}
+	}
+	assert arcs > 10;
+}
+
+test "no program asks for what the compiler cannot yet do" {
+	const f = withWeights("fams=spawn,actor,race");
+	for (let seed = 1; seed < 81; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("allSettled") && !text.contains("throwIfAborted") && !text.contains("Promise<string>");
+		assert !text.contains("Promise<boolean>[]") && !text.contains("Promise<void>[]");
+		assert !text.contains("generic actor") && !text.contains("actor Box<");
+	}
+}
+
+test "the planted model differs from the real one by one term in every comparison" {
+	const f = withWeights("fams=spawn,actor,race plant=model");
+	const real = withWeights("fams=spawn,actor,race");
+	for (let seed = 1; seed <= 20; seed++) {
+		const planted = generate(seed as uint64, f);
+		const text = generate(seed as uint64, real);
+		assert planted.contains("function modelDelta(): int32 { return 1; }");
+		assert !text.contains("modelDelta");
+		let checks = 0;
+		for (const line of planted.split("\n")) {
+			if (line.startsWith("\ttaskCheck(")) {
+				checks++;
+				assert line.endsWith(" + String(modelDelta()));");
+			}
+		}
+		assert checks > 0;
+		assert countOf(planted, "taskCheck(\"task") == checks;
+		assert !planted.contains("plantDelta");
+	}
+}
+
+test "a planted model forces one scenario when no task family is on" {
+	const f = withWeights("fams=none plant=model");
+	for (let seed = 1; seed <= 5; seed++) {
+		const text = generate(seed as uint64, f);
+		assert text.split("\n")[1] == "// @serial";
+		assert text.contains("async function task0()") && text.contains("+ String(modelDelta()));") && text.contains("await task0();");
+	}
+	const spawnOff = withWeights("w.fam.spawn=0 w.fam.actor=0 w.fam.race=0 plant=model");
+	assert generate(3 as uint64, spawnOff).contains("await task0();");
+}
+
+test "no two actors of a program declare a method of the same name" {
+	const f = withWeights("fams=actor");
+	let actors = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const seen: string[] = [];
+		let inActor = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("actor ")) { inActor = true; actors++; }
+			if (line == "}") { inActor = false; }
+			if (!inActor || !line.startsWith("\t") || line.startsWith("\t\t") || line.startsWith("\tconstructor")) { continue; }
+			const open = line.indexOf("(");
+			if (open < 0) { continue; }
+			const name = line.slice(1, open);
+			if (name.contains(":")) { continue; }
+			assert !seen.includes(name);
+			seen.push(name);
+		}
+	}
+	assert actors > 40;
 }
