@@ -443,6 +443,16 @@ export function jsPropertyAccess(name: string, optional: boolean = false): strin
 	return (optional ? "?.[" : "[") + jsPropertyKey(name) + "]";
 }
 
+export function identFromKey(key: string): string {
+	let out = "";
+	for (let i = 0; i < key.byteLength; i += 1) {
+		const b = key.byteAt(i);
+		const isAlnum = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
+		out = isAlnum ? out + key.byteSlice(i, i + 1) : out + "_" + b.toString(16).padStart(2, "0");
+	}
+	return out;
+}
+
 // ===== Import Path Conversion =====
 
 export function convertImportPath(path: string): string {
@@ -506,6 +516,12 @@ test "jsPropertyAccess brackets a name that is not an identifier" {
 	assert jsPropertyAccess("plain", true) == "?.plain";
 	assert jsPropertyAccess("aria-label") == "[\"aria-label\"]";
 	assert jsPropertyAccess("aria-label", true) == "?.[\"aria-label\"]";
+}
+
+test "identFromKey spells every byte below 0x10 with two hex digits" {
+	assert identFromKey("a:b") == "a_3ab";
+	assert identFromKey("\x01" + "f") == "_01f";
+	assert identFromKey("\x01" + "f") != identFromKey("\x1f");
 }
 
 test "convertImportPath" {
