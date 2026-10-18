@@ -151,6 +151,11 @@ export function mangleProperty(name: string): string {
 	return keepsMangledSpelling(name) ? mangle(name) : escapedPropertyName(name);
 }
 
+export function mangleSeparatedProperty(name: string): string {
+	const kept = mangleProperty(name);
+	return kept.indexOf("__") >= 0 ? escapedPropertyName(name) : kept;
+}
+
 // ===== Character Ordinal =====
 // Mangles uppercase, underscore, and special chars to decimal ASCII ordinals.
 // Prevents clashes with Z (path sep) and O (dot) special meanings.
@@ -622,6 +627,14 @@ function distinctSpellings(names: string[], spell: (name: string) => string): bo
 		}
 	}
 	return true;
+}
+
+test "a separated property name never holds the separator" {
+	assert mangleSeparatedProperty("s__y") == "X_sX5FX5Fy";
+	assert mangleSeparatedProperty("$__x") == "X_X24X5FX5Fx";
+	assert mangleSeparatedProperty("_q") == "_q";
+	assert mangleSeparatedProperty("a_") == "a_";
+	assert mangleSeparatedProperty("data-probe") == "X_dataX2Dprobe";
 }
 
 test "property names mangle merges get distinct spellings" {
