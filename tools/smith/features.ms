@@ -10,6 +10,10 @@ export enum Ty {
 	Uint32,
 	Uint64,
 	Float64,
+	Float32,
+	Char,
+	BigInt,
+	Bool,
 }
 
 export enum Fam {
@@ -260,6 +264,26 @@ export enum W {
 	StmtFam,
 	StmtElse,
 	UnionLen,
+	CoreExpr,
+	CoreStmt,
+	CoreFn,
+	CorePow,
+	CoreNullish,
+	CoreCvt,
+	CoreCmp,
+	CoreWhile,
+	CoreDo,
+	CoreSwitch,
+	CoreMatch,
+	CoreCompound,
+	CoreCell,
+	CoreIncDec,
+	CoreDefault,
+	CoreRest,
+	CoreOverload,
+	CoreRecurse,
+	CoreFnValue,
+	CoreZero,
 }
 
 export const W_KEYS: string[] = [
@@ -487,6 +511,26 @@ export const W_KEYS: string[] = [
 	"w.stmt.fam",
 	"w.stmt.else",
 	"w.union.len",
+	"w.core.expr",
+	"w.core.stmt",
+	"w.core.fn",
+	"w.core.pow",
+	"w.core.nullish",
+	"w.core.cvt",
+	"w.core.cmp",
+	"w.core.while",
+	"w.core.do",
+	"w.core.switch",
+	"w.core.match",
+	"w.core.compound",
+	"w.core.cell",
+	"w.core.incdec",
+	"w.core.default",
+	"w.core.rest",
+	"w.core.overload",
+	"w.core.recurse",
+	"w.core.fnvalue",
+	"w.core.zero",
 ];
 
 export const W_DEFAULTS: int32[] = [
@@ -524,6 +568,9 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	20, 20, 50, 30,
+	25, 25, 25, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1,
 ];
 
 const W_GROUPS: W[][] = [
@@ -602,6 +649,24 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
+export const NEW_TYS: Ty[] = [Ty.Float32, Ty.Char, Ty.BigInt, Ty.Bool];
+
+const LISTED_TYS: Ty[] = [
+	Ty.Int8,
+	Ty.Int16,
+	Ty.Int32,
+	Ty.Int64,
+	Ty.Uint8,
+	Ty.Uint16,
+	Ty.Uint32,
+	Ty.Uint64,
+	Ty.Float64,
+	Ty.Float32,
+	Ty.Char,
+	Ty.BigInt,
+	Ty.Bool,
+];
+
 export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls, Fam.Enum, Fam.Exc, Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race, Fam.Cls, Fam.Conv, Fam.Meta, Fam.Async];
 export const OPT_IN_FAMS: Fam[] = [Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race, Fam.Async];
 
@@ -648,11 +713,15 @@ export function tyName(t: Ty): string {
 		Ty.Uint32 => "uint32",
 		Ty.Uint64 => "uint64",
 		Ty.Float64 => "float64",
+		Ty.Float32 => "float32",
+		Ty.Char => "char",
+		Ty.BigInt => "bigint",
+		Ty.Bool => "boolean",
 	};
 }
 
 function tyFromName(name: string): Result<Ty, string> {
-	for (const t of ALL_TYS) {
+	for (const t of LISTED_TYS) {
 		if (tyName(t) == name) { return Result.ok(t); }
 	}
 	return Result.err("unknown type '" + name + "'");
@@ -705,7 +774,7 @@ export function defaults(this typeof Features): Features {
 
 export function format(this f: Features): string {
 	let types = "";
-	for (const t of ALL_TYS) {
+	for (const t of LISTED_TYS) {
 		if (f.types.has(t)) { types = types == "" ? tyName(t) : types + "," + tyName(t); }
 	}
 	let fams = "";
@@ -784,16 +853,22 @@ function parseFams(text: string): Result<BitSet<Fam>, string> {
 	return Result.ok(fams);
 }
 
+function hasLegacy(types: BitSet<Ty>): boolean {
+	for (const t of ALL_TYS) { if (types.has(t)) { return true; } }
+	return false;
+}
+
 export function swarm(this base: Features, seed: uint64): Features {
 	const r = Rng.seeded(seed ^ (0x5357524D53574152 as uint64));
 	const density = r.next();
 	let types = 0 as BitSet<Ty>;
-	for (const t of ALL_TYS) {
+	for (const t of LISTED_TYS) {
 		if (base.types.has(t) && r.next() < density) { types = types.incl(t); }
 	}
-	if (types.isEmpty()) {
+	const legacyBase = hasLegacy(base.types);
+	if (legacyBase ? !hasLegacy(types) : types.isEmpty()) {
 		const kept: Ty[] = [];
-		for (const t of ALL_TYS) { if (base.types.has(t)) { kept.push(t); } }
+		for (const t of legacyBase ? ALL_TYS : LISTED_TYS) { if (base.types.has(t)) { kept.push(t); } }
 		types = types.incl(kept[r.below(kept.length)]);
 	}
 	let fams = 0 as BitSet<Fam>;
@@ -846,6 +921,9 @@ export function overlay(this base: Features, text: string): Result<Features, str
 	}
 	const sound = weightsSound(f.w);
 	if (!sound.ok) { return Result.err(sound.error); }
+	if (!f.fams.isEmpty() && !hasLegacy(f.types)) {
+		return Result.err("fams need one of int8 .. float64 in types=; write fams=none for a vector of float32, char, bigint and boolean only");
+	}
 	return Result.ok(f);
 }
 
@@ -921,9 +999,66 @@ test "swarm keeps the weights of its base" {
 
 test "weight keys and defaults line up with the enum" {
 	assert W_KEYS.length == W_DEFAULTS.length;
-	assert W_KEYS.length == (W.UnionLen as int32) + 1;
+	assert W_KEYS.length == (W.CoreZero as int32) + 1;
 	assert W_KEYS[W.StmtBreak as int32] == "w.stmt.break";
 	assert W_KEYS[W.GenericBox as int32] == "w.generic.box";
+}
+
+test "each core weight key sits at its enum position with its default" {
+	const keys = [
+		"w.core.expr", "w.core.stmt", "w.core.fn", "w.core.pow", "w.core.nullish", "w.core.cvt", "w.core.cmp",
+		"w.core.while", "w.core.do", "w.core.switch", "w.core.match", "w.core.compound", "w.core.cell", "w.core.incdec",
+		"w.core.default", "w.core.rest", "w.core.overload", "w.core.recurse", "w.core.fnvalue", "w.core.zero",
+	];
+	for (let i = 0; i < keys.length; i++) {
+		assert W_KEYS[(W.CoreExpr as int32) + i] == keys[i];
+		assert W_DEFAULTS[(W.CoreExpr as int32) + i] == (i < 3 ? 25 : 1);
+	}
+	assert keys.length == (W.CoreZero as int32) - (W.CoreExpr as int32) + 1;
+}
+
+test "the new types are named, parse back, and stay out of the default vector" {
+	const base = Features.defaults();
+	for (const t of NEW_TYS) { assert !base.types.has(t); }
+	assert !base.format().contains("float32") && !base.format().contains("boolean");
+	const r = base.overlay("types=int32,float32,char,bigint,boolean");
+	assert r.ok;
+	if (r.ok) {
+		for (const t of NEW_TYS) { assert r.value.types.has(t); }
+		assert r.value.format().contains(" types=int32,float32,char,bigint,boolean ") || r.value.format().startsWith("types=int32,float32,char,bigint,boolean ");
+		const back = base.overlay(r.value.format());
+		assert back.ok;
+		if (back.ok) { assert back.value.format() == r.value.format(); }
+	}
+}
+
+test "a family vector needs a legacy type and a type-only vector says so" {
+	assert !Features.defaults().overlay("types=float32,char").ok;
+	assert !Features.defaults().overlay("types=bigint fams=closure").ok;
+	assert Features.defaults().overlay("types=float32,char,boolean fams=none").ok;
+	assert Features.defaults().overlay("fams=none types=bigint").ok;
+	assert Features.defaults().overlay("types=int8,boolean").ok;
+}
+
+test "swarm keeps a legacy type whenever its base has one and stays inside the base for new types" {
+	const base = Features.defaults().overlay("types=int8,int32,float32,char,bigint,boolean");
+	assert base.ok;
+	if (base.ok) {
+		for (let s = 0; s < 128; s++) {
+			const f = base.value.swarm(s as uint64);
+			assert f.types.has(Ty.Int8) || f.types.has(Ty.Int32);
+			assert !f.types.has(Ty.Int64) && !f.types.has(Ty.Float64);
+			assert Features.defaults().overlay(f.format()).ok;
+		}
+	}
+	const only = Features.defaults().overlay("types=float32,char fams=none");
+	assert only.ok;
+	if (only.ok) {
+		for (let s = 0; s < 32; s++) {
+			const f = only.value.swarm(s as uint64);
+			assert !f.types.isEmpty() && !f.types.has(Ty.Int32);
+		}
+	}
 }
 
 test "the weight groups tile the grouped keys and each holds one prefix" {
