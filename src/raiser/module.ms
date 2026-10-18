@@ -1,6 +1,6 @@
 // Raiser VM — Module and Function structures
 
-import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx } from "./bytecode";
+import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx, packInstruction } from "./bytecode";
 import { RaiserValue, RaiserClassType, raiserInt } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 
@@ -9,12 +9,34 @@ import { RaiserCopyPlan } from "./valueCopy";
 export interface RaiserFunction {
 	name: string;
 	code: RaiserInstruction[];
+	packed: int64[];      // code, packed for the VM by packFunction
+	lines: int32[];       // source line per instruction, 0 = unknown
+	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
 	arity: number;
 	localsCount: number;
 	maxRegs: number;
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
+}
+
+// Codegen may still edit `code` while it builds a function, so packing waits for
+// the first run of that function.
+export function packFunction(func: RaiserFunction): void {
+	const n = func.code.length;
+	if (func.packed.length == n) return;
+	const packed: int64[] = [];
+	const lines: int32[] = [];
+	const cache: int32[] = [];
+	for (let i = 0; i < n; i += 1) {
+		const inst = func.code[i];
+		packed.push(packInstruction(inst));
+		lines.push(inst.line as int32);
+		cache.push(-1);
+	}
+	func.packed = packed;
+	func.lines = lines;
+	func.fieldCache = cache;
 }
 
 // --- Module ---
@@ -37,7 +59,7 @@ export interface RaiserModule {
 // --- Constructors ---
 
 export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number): RaiserFunction {
-	return { name, code, constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
+	return { name, code, packed: [], lines: [], fieldCache: [], constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {

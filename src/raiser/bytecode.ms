@@ -219,28 +219,27 @@ export function convClassSigned(cls: RaiserConvClass): boolean {
 }
 
 // --- Instruction ---
-// Flat interface — no bit packing needed until .msb serialization (Layer 5+).
-// Fields a/b/c are 0-255 (u8 range).
+// The record codegen builds and the disassembler reads. The VM runs the packed
+// form of it (packInstruction).
 
 export interface RaiserInstruction {
 	op: RaiserOpcode;
 	a: number;
 	b: number;
 	c: number;
-	cachedIdx: number;  // MIC: cached field index for LoadField/StoreField (-1 = miss)
 	line: number;       // Source line number for diagnostics (0 = unknown)
 }
 
 // --- Constructors ---
 
 export function raiserABC(op: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
-	return { op, a, b, c, cachedIdx: -1, line: 0 };
+	return { op, a, b, c, line: 0 };
 }
 
 export function raiserABx(op: RaiserOpcode, a: number, bx: number): RaiserInstruction {
 	const bHigh: int32 = (bx as int32 / 256) | 0;
 	const bLow = bx - (bHigh as number) * 256;
-	return { op, a, b: bHigh as number, c: bLow, cachedIdx: -1, line: 0 };
+	return { op, a, b: bHigh as number, c: bLow, line: 0 };
 }
 
 export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
@@ -252,7 +251,7 @@ export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
 	const rem = raw - (aHigh as number) * 65536;
 	const bMid: int32 = (rem as int32 / 256) | 0;
 	const cLow = rem - (bMid as number) * 256;
-	return { op, a: aHigh as number, b: bMid as number, c: cLow, cachedIdx: -1, line: 0 };
+	return { op, a: aHigh as number, b: bMid as number, c: cLow, line: 0 };
 }
 
 // --- Decoders ---
@@ -271,6 +270,23 @@ export function getSignedAx(inst: RaiserInstruction): number {
 	const raw = inst.a * 65536 + inst.b * 256 + inst.c;
 	if (raw >= 8388608) return raw - 16777216;
 	return raw;
+}
+
+// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each.
+const PACKED_FIELD_LIMIT = 65536;
+
+function packedField(inst: RaiserInstruction, v: number, name: string): int64 {
+	const whole = v as int64;
+	if ((whole as number) != v || whole < 0 || whole >= PACKED_FIELD_LIMIT) {
+		throw new Error(`internal: operand ${name} = ${v} of opcode ${inst.op} does not fit the packed 16-bit field`);
+	}
+	return whole;
+}
+
+export function packInstruction(inst: RaiserInstruction): int64 {
+	const op = inst.op as int64;
+	if (op < 0 || op > 255) throw new Error(`internal: opcode ${inst.op} does not fit the packed 8-bit field`);
+	return op | (packedField(inst, inst.a, "a") << 8) | (packedField(inst, inst.b, "b") << 24) | (packedField(inst, inst.c, "c") << 40);
 }
 
 // --- Tests ---
@@ -350,4 +366,31 @@ test "CallHost zero args" {
 	const inst = raiserABC(RaiserOpcode.CallHost, 0, 0, 0);
 	assert inst.op == RaiserOpcode.CallHost;
 	assert inst.c == 0;
+}
+
+test "packed word holds op, a, b and c" {
+	const w = packInstruction(raiserABC(RaiserOpcode.Jump, 65535, 1000, 7));
+	assert (w & 255) == (RaiserOpcode.Jump as int64);
+	assert ((w >> 8) & 65535) == 65535;
+	assert ((w >> 24) & 65535) == 1000;
+	assert ((w >> 40) & 65535) == 7;
+}
+
+test "packed word keeps a negative jump's three bytes" {
+	const inst = raiserAx(RaiserOpcode.Jump, -5);
+	const w = packInstruction(inst);
+	const a = ((w >> 8) & 65535) as int32;
+	const b = ((w >> 24) & 65535) as int32;
+	const c = ((w >> 40) & 65535) as int32;
+	assert a * 65536 + b * 256 + c == 16777211;
+}
+
+test "an operand outside 16 bits stops the pack" {
+	let message = "";
+	try {
+		packInstruction(raiserABC(RaiserOpcode.Move, 65536, 0, 0));
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("does not fit the packed 16-bit field");
 }
