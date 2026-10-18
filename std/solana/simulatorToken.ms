@@ -52,12 +52,12 @@ const MINT_LENGTH: uint64 = 82;
 const MULTISIG_LENGTH: uint64 = 355;
 const UINT64_MAX: uint64 = 0xffffffffffffffff;
 
-const TOKEN_PROGRAM: uint64[] = [0x93a165d7e1f6dd06, 0xac79ebce46e1cbd9, 0x91375b5fed85b41c, 0xa900ff7e85f58c3a];
-const TOKEN_2022_PROGRAM: uint64[] = [0xde8f75eee1f6dd06, 0xdacd6ce4bc5d4218, 0x270db9834dfc1ab6, 0xfc8ba1d828f9bdfe];
-const ASSOCIATED_PROGRAM: uint64[] = [0xf189244e8f25978c, 0x830d8e1429103dbb, 0x8410ffda99135a0b, 0x59f8e9dbd87b8e04];
+export const TOKEN_PROGRAM: uint64[] = [0x93a165d7e1f6dd06, 0xac79ebce46e1cbd9, 0x91375b5fed85b41c, 0xa900ff7e85f58c3a];
+export const TOKEN_2022_PROGRAM: uint64[] = [0xde8f75eee1f6dd06, 0xdacd6ce4bc5d4218, 0x270db9834dfc1ab6, 0xfc8ba1d828f9bdfe];
+export const ASSOCIATED_PROGRAM: uint64[] = [0xf189244e8f25978c, 0x830d8e1429103dbb, 0x8410ffda99135a0b, 0x59f8e9dbd87b8e04];
 const NATIVE_MINT: uint64[] = [0x8481abfe57889b06, 0x35c01846637f68fb, 0x553beb1adc39c4da, 0x0100000000f0a098];
 const NATIVE_MINT_2022: uint64[] = [0xb8e65fde9ffc0d83, 0x8a1ee976a4047caa, 0x19fa90ad4a26bbc6, 0x5e5b3e5cd849dfc9];
-const INCINERATOR: uint64[] = [0x6011348d72903300, 0xdb00ffbf11c9bd79, 0xa69cf7cccd2e4dd4, 0x00000000e13800e1];
+export const INCINERATOR: uint64[] = [0x6011348d72903300, 0xdb00ffbf11c9bd79, 0xa69cf7cccd2e4dd4, 0x00000000e13800e1];
 
 interface Call {
 	header: uint64;
@@ -80,7 +80,7 @@ function callOf(header: uint64): Call {
 	};
 }
 
-function isKey(address: uint64, words: uint64[]): boolean {
+export function isKey(address: uint64, words: uint64[]): boolean {
 	return msSolLoadU64(address) == words[0] && msSolLoadU64(address + 8) == words[1]
 		&& msSolLoadU64(address + 16) == words[2] && msSolLoadU64(address + 24) == words[3];
 }
@@ -646,7 +646,6 @@ function extensionNotSimulated(call: Call): boolean {
 }
 
 // host.c msSolHostToken
-@exportName("msSolHostTokenInvoke")
 export function tokenInvoke(header: uint64): uint64 {
 	const call = callOf(header);
 	if (call.length < 1) { return INVALID_INSTRUCTION; }
@@ -670,7 +669,6 @@ export function tokenInvoke(header: uint64): uint64 {
 }
 
 // host.c msSolHostAssociated
-@exportName("msSolHostAssociatedInvoke")
 export function associatedInvoke(header: uint64): uint64 {
 	const call = callOf(header);
 	const tag = call.length >= 1 ? msSolLoadU8(call.data) : 0;

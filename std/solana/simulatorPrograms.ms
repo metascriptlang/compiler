@@ -28,7 +28,7 @@ const LAMPORTS_AT: uint64 = 72;
 export const LENGTH_AT: uint64 = 80;
 export const DATA_AT: uint64 = 88;
 export const META_SIZE: uint64 = 16;
-const META_WRITABLE_AT: uint64 = 8;
+export const META_WRITABLE_AT: uint64 = 8;
 export const META_SIGNER_AT: uint64 = 9;
 
 interface SystemAccount {
@@ -55,14 +55,12 @@ export function notSimulated(program: string, instruction: uint32, status: uint6
 }
 
 // host.c msSolHostRecordOf
-@exportName("msSolHostRecordAddress")
 export function recordAddress(header: uint64, index: uint64): uint64 {
 	if (index >= msSolLoadU64(header + 16)) { return 0; }
 	return msSolLoadU64(msSolLoadU64(header + 8) + index * META_SIZE) - 8;
 }
 
 // host.c msSolHostLamports
-@exportName("msSolHostLamportsOf")
 export function lamportsOf(record: uint64): uint64 {
 	return msSolLoadU64(record + LAMPORTS_AT);
 }
@@ -74,7 +72,6 @@ export function setLamportsOf(record: uint64, value: uint64): void {
 }
 
 // host.c msSolHostRentExempt
-@exportName("msSolHostRentExemptFor")
 export function rentExemptFor(length: uint64): uint64 {
 	return (length + ACCOUNT_STORAGE_OVERHEAD) * LAMPORTS_PER_BYTE_YEAR * RENT_EXEMPTION_YEARS;
 }
@@ -92,7 +89,6 @@ export function resizeRecord(record: uint64, space: uint64): uint64 {
 }
 
 // host.c msSolHostAnyByte
-@exportName("msSolHostAnyByteIn")
 export function anyByteIn(bytes: uint64, from: uint64, to: uint64): boolean {
 	for (let index = from; index < to; index++) {
 		if (msSolLoadU8(bytes + index) != 0) { return true; }
@@ -182,7 +178,6 @@ function systemDataLength(tag: uint32): uint64 {
 }
 
 // host.c msSolHostSystem
-@exportName("msSolHostSystemInvoke")
 export function systemInvoke(header: uint64): uint64 {
 	const dataLength = msSolLoadU64(header + 32);
 	if (dataLength < 4) { return INVALID_INSTRUCTION_DATA; }
