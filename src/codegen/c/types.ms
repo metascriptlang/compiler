@@ -2107,16 +2107,17 @@ function genTupleType(g: CGen, t: Type): string {
 	typeCacheSet(g.typeCache, key, name);
 	ensureForwardDecl(g, name);
 
-	// Emit struct: fields named _0, _1, ...
+	const fieldDescs: string[] = [];
+	for (const child of t.typeChildren) fieldDescs.push(getTypeDesc(g, child));
+
 	const b = sec(g, CSection.Types);
 	addLine(b, `#ifndef ${name}_DEFINED`);
 	addLine(b, `#define ${name}_DEFINED`);
 	addLine(b, `struct ${name} {`);
 	b.indent += 1;
 	let i = 0;
-	while (i < t.typeChildren.length) {
-		const ft = getTypeDesc(g, t.typeChildren[i]);
-		addLine(b, `${ft} _${i};`);
+	while (i < fieldDescs.length) {
+		addLine(b, `${fieldDescs[i]} _${i};`);
 		i += 1;
 	}
 	b.indent -= 1;
@@ -2382,6 +2383,21 @@ test "tuple type desc emits struct" {
 	assert name != "void*";
 	assert name.length > 8; // "msTuple_" + hash
 	assert types.length > 0;
+}
+
+test "a tuple's element types are defined before the tuple struct opens" {
+	const g = createCGen(null as unknown as CheckerContext, "");
+	const face = createEnum("Face", ["None", "Back"]);
+	face.sym = makeSymbol("Face", SymbolKind.Enum, face, false);
+	const t = createTuple([createTuple([face, createPrimitive(TypeKind.Int32)]), createPrimitive(TypeKind.Int32)]);
+	const outer = getTypeDesc(g, t);
+	const inner = getTypeDesc(g, t.typeChildren[0]);
+	const types = extract(sec(g, CSection.Types));
+	const enumAt = types.indexOf("typedef uint8_t Face");
+	const innerAt = types.indexOf(`struct ${inner} {`);
+	const outerAt = types.indexOf(`struct ${outer} {`);
+	assert enumAt >= 0 && enumAt < innerAt;
+	assert types.indexOf("};", innerAt) < outerAt;
 }
 
 test "tuple needsRC with string element" {
