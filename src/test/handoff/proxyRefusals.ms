@@ -44,3 +44,21 @@ test "a Proxy does not cross an extern boundary" {
 	assert hasError(head + "extern function make(): Proxy<Todo, T>;", "extern 'make' return type: a Proxy crosses into foreign code");
 	assert strictErrorCount(head + "extern function show(t: Todo): void;") == 0;
 }
+
+const ARRAY = "class Bare {}\nconst xs: int32[] = [1];\nconst q = new Proxy(xs, new Bare());\n";
+
+test "a Proxy of an array has no keys but its indices and \"length\"" {
+	assert hasError(ARRAY + "q.size;", "'size' is not a key of 'int32[]'");
+	assert hasError(ARRAY + "q[0] = \"a\";", "got string, expected int32");
+}
+
+test "a method through a Proxy with no steps in std and no handler override is an error naming it" {
+	assert hasError(ARRAY + "q.count();", "'count' with 0 argument(s) has no trap form on a Proxy of an array: declare 'count' in 'Bare' to override it, or call it on proxyTarget(p)");
+	assert hasError(ARRAY + "q.splice(0, 1, 2);", "'splice' with 3 argument(s) has no trap form");
+	assert hasError(HEAD + "p.toString();", "a Proxy calls no method of its target");
+}
+
+test "'in' on a Proxy and for-of over a Proxy of an object are refused" {
+	assert hasError(HEAD + "console.log(\"title\" in p);", "'in' on a Proxy<Todo, Traps> would skip its 'has' trap");
+	assert hasError(HEAD + "for (const x of p) {}", "for-of over a Proxy needs an array target; 'Todo' is not one");
+}
