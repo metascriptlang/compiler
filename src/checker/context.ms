@@ -676,6 +676,19 @@ export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): Ex
 	return null as unknown as ExtensionMethod;
 }
 
+export function findDeclaredExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
+	let cur: Type | null = objType;
+	let depth = 0;
+	while (cur != null && depth < 64) {
+		for (const ext of exts) {
+			if (extDeclaresReceiver(ext, cur) && isReceiverMatch(ext, cur)) return ext;
+		}
+		cur = classBaseStruct(cur);
+		depth += 1;
+	}
+	return null as unknown as ExtensionMethod;
+}
+
 function classBaseStruct(t: Type): Type | null {
 	const parent = classParentOf(t);
 	if (parent == null) return null;
@@ -1257,6 +1270,7 @@ export class CheckerContext {
 	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
+	tryGuardedFunction: Symbol | null; // function whose body is inside a try that has a catch or finally
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
 	procInstCache: HashMap<Symbol, CheckedInstantiation[]>;
@@ -1346,6 +1360,7 @@ export function createContext(): CheckerContext {
 		affineTracker: createAffineTracker(),
 		strictNullChecks: false,
 		inTryExpr: false,
+		tryGuardedFunction: null,
 		genericInstDepth: 0,
 		generatedInstances: [],
 		procInstCache: new HashMap<Symbol, CheckedInstantiation[]>(),

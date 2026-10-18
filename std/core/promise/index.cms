@@ -53,6 +53,19 @@ export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, r
 	return promise;
 }
 
+export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+	const promise = msPromisePending<T>();
+	const nextJob: Promise<int32> = Promise.resolve(0);
+	nextJob.then((ready: int32): void => {
+		try {
+			callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+		} catch (e) {
+			msPromiseFail(promise, e);
+		}
+	});
+	return promise;
+}
+
 // Standalone async utilities
 @builtin("PromiseSpawn")
 export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";

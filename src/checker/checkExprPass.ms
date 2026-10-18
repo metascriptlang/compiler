@@ -944,6 +944,7 @@ function checkConditionalExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as AwaitExprData;
 	checkExpr(ctx, d.awaitArg, null);
+	adoptAwaitedThenable(ctx, d);
 	const argType = d.awaitArg.nodeType;
 	if (argType != null && isAwaitable(argType)) {
 		const promiseInner = awaitedType(argType);
@@ -3062,6 +3063,11 @@ function yieldsInferred(sym: Symbol | null): boolean {
 	return sym != null && isSyncGeneratorFlags(routineFlags(sym.declNode));
 }
 
+export function returnsFromAsyncBody(ctx: CheckerContext): boolean {
+	const fn = ctx.currentFunction;
+	return fn != null && hasFlag(fn, SymbolFlag.Async) && routineFlags(fn.declNode).indexOf("generator") < 0;
+}
+
 function declaredReturnOf(sym: Symbol): Type | null {
 	return sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeReturn : sym.symbolType;
 }
@@ -3252,12 +3258,17 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		}
 		const hoistMark = ctx.pendingHoisted.length;
 		checkExpr(ctx, body, bodyExpected);
-		const exprType = body.nodeType;
+		let result = body;
+		if (fnNode.kind == NodeKind.ArrowFunction && returnsFromAsyncBody(ctx)) {
+			result = awaitReturnedThenable(ctx, body);
+			(fnNode.data as ArrowFunctionData).arrowBody = result;
+		}
+		const exprType = result.nodeType;
 		if (ctx.inferredReturn.kind == TypeKind.Inferred && exprType != null) {
 			ctx.inferredReturn = exprType;
 		}
 		const temps = takeDefaultArgTemps(ctx, hoistMark);
-		if (temps.length > 0) bodyIntoBlock(body, temps);
+		if (temps.length > 0) bodyIntoBlock(result, temps);
 	}
 	if (suspends) refuseUsedSuspendingViewParams(ctx, paramSyms, paramValueTypes, paramLocs, fnNode.location);
 	if (invoked) _invokedScopes.pop();
@@ -3544,7 +3555,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass } from "./instantiate";
-import { adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps } from "./callResolve";
+import { adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, awaitReturnedThenable } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);

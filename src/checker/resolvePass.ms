@@ -8,10 +8,10 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar } from "./types";
+import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
@@ -852,14 +852,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
 		if (builtinHead == "Promise" && args.length == 1) {
-			const inner = resolveAnnotation(args[0], ctx, line, col);
-			if (isAwaitable(inner)) {
-				const value = awaitedType(inner);
-				const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
-				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
-				return value != null ? createPromise(value) : errorType();
-			}
-			return createPromise(inner);
+			return promiseAnnotationOf(ctx, resolveAnnotation(args[0], ctx, line, col), line, col);
 		}
 		if (builtinHead == "Iterator" && args.length == 1) {
 			return createIterator(resolveAnnotation(args[0], ctx, line, col));
@@ -1271,6 +1264,46 @@ export function fillForwardSymbol(ctx: CheckerContext, sym: Symbol): void {
 	else if (decl.kind == NodeKind.ActorDecl) fillActor(ctx, decl);
 	else return;
 	if (hasFlag(sym, SymbolFlag.Exported)) markDeclMethodsExported(ctx, decl);
+}
+
+function promiseAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
+	if (isAwaitable(inner)) {
+		const value = awaitedType(inner);
+		const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
+		addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
+		return value != null ? createPromise(value) : errorType();
+	}
+	const delivered = thenablePromised(ctx, inner);
+	if (delivered != null) {
+		addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so write 'Promise<${typeDisplayName(delivered)}>'`, line, col);
+		return createPromise(delivered);
+	}
+	return createPromise(inner);
+}
+
+export function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
+	if (isPrimitiveKind(t.kind) || isStringLike(t)) return null;
+	const field = functionSlotOf(getProperty(t, "then"));
+	if (field != null) return field;
+	if (ctx.extensionRegistry == null) return null;
+	const receiver = withoutReadonlyView(t);
+	const ext = findDeclaredExt(findAllExtensionsByName(ctx.extensionRegistry, "then"), receiver);
+	if (ext == null || ext.isStatic) return null;
+	if (ext.sym != null) ensureShaped(ext.sym, ctx);
+	const method = getExtFnType(ext);
+	if (method.kind != TypeKind.Function || method.typeChildren.length == 0) return null;
+	const bindings = createUnifyBindings();
+	unifyType(method.typeChildren[0], receiver, bindings);
+	return stripReceiverParam(bindings.names.length > 0 ? instantiateGeneric(method, bindings.names, bindings.types) : method);
+}
+
+export function thenablePromised(ctx: CheckerContext, t: Type | null): Type | null {
+	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return null;
+	const then = thenSignatureOf(ctx, t);
+	if (then == null) return null;
+	const onFulfilled = then.typeChildren.length > 0 ? functionSlotOf(then.typeChildren[0]) : null;
+	if (onFulfilled == null) return null;
+	return onFulfilled.typeChildren.length > 0 ? onFulfilled.typeChildren[0] : voidType();
 }
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {

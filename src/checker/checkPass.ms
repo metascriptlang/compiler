@@ -35,8 +35,9 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut } from "./callResolve";
+import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable } from "./callResolve";
+import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
@@ -2467,6 +2468,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		checkExpr(ctx, d.argument, null);
 	} else {
 		checkExpr(ctx, d.argument, ctx.matchExprDepth > 0 ? ctx.matchArmExpected : returnExpected);
+		if (ctx.matchExprDepth == 0 && returnsFromAsyncBody(ctx)) d.argument = awaitReturnedThenable(ctx, d.argument);
 	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
 	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.
@@ -2534,9 +2536,12 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 	const oldState = saveInitState(ctx.initTracker);
 	const oldAffine = saveConsumeState(ctx.affineTracker);
 	const oldInTry = ctx.inTryExpr;
+	const oldGuarded = ctx.tryGuardedFunction;
 	if (d.catchBody != null) ctx.inTryExpr = true;
+	if (d.catchBody != null || d.finallyBody != null) ctx.tryGuardedFunction = ctx.currentFunction;
 	checkStmt(ctx, d.tryBody);
 	ctx.inTryExpr = oldInTry;
+	ctx.tryGuardedFunction = oldGuarded;
 	const branchInits: string[][] = [collectNewInits(ctx.initTracker, oldState)];
 	const branchConsumes: string[][] = [collectNewConsumes(ctx.affineTracker, oldAffine)];
 	const branchBreaks: BreakState[] = [breaksBlock(d.tryBody)];
@@ -2556,7 +2561,9 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 			markInitialized(ctx.initTracker, d.catchName);
 			sgRecordSym(ctx, d.catchBindingLocation.line, d.catchBindingLocation.column, d.catchBindingLocation.column + d.catchName.length, catchSym, catchType, SymbolKind.Variable, d.catchName, "", true);
 		}
+		if (d.finallyBody != null) ctx.tryGuardedFunction = ctx.currentFunction;
 		checkStmt(ctx, d.catchBody);
+		ctx.tryGuardedFunction = oldGuarded;
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		branchBreaks.push(breaksBlock(d.catchBody));
