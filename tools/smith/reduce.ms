@@ -1,6 +1,6 @@
 import { execFileResult } from "std/process";
 import { ensureDir, exists, isDir, readFile, remove, removeAll, writeFile } from "std/fs";
-import { subjectMsc } from "./drive";
+import { isProjectBundle, subjectMsc } from "./drive";
 import {
 	Identity, firstDiff, firstCompilerError, forbidOf, formatIdentity, hasLine, missingKeep, onlyCompilerError, parseIdentity, presentForbidden, sanLine, throwLine,
 } from "./identity";
@@ -148,7 +148,16 @@ function plantKeep(bundle: string): string {
 	return "";
 }
 
+function projectBundle(input: string): boolean {
+	if (!isDir(input)) { return false; }
+	const meta = readFile(input + "/meta.txt");
+	return meta.ok && isProjectBundle(meta.value);
+}
+
 export function reduceInput(root: string, input: string, identityPath: string, jobs: int32, capSeconds: int32): int32 {
+	if (projectBundle(input)) {
+		return fail(input + " is a project bundle: Smith does not reduce module trees. Its files are under " + input + "/project; the same seed with modules=0 gives a single file that reduce accepts when the failure does not depend on the split.");
+	}
 	const source = isDir(input) ? input + "/program.ms" : input;
 	const original = readFile(source);
 	if (!original.ok) { return fail("cannot read " + source); }

@@ -39,6 +39,15 @@ export enum Fam {
 	Async,
 }
 
+export enum Mod {
+	Alias,
+	Namespace,
+	Reexport,
+	Star,
+	Cycle,
+	Init,
+}
+
 export enum W {
 	ExprLeaf,
 	ExprBinary,
@@ -634,6 +643,8 @@ export struct Features {
 	entries: int32;
 	top: int32;
 	plant: Plant;
+	modules: int32;
+	shapes: BitSet<Mod>;
 	w: int32[];
 }
 
@@ -702,6 +713,26 @@ function famFromName(name: string): Result<Fam, string> {
 	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, enum, exc, native, spawn, actor, race, cls, conv, meta, async, none)");
 }
 
+export const ALL_MODS: Mod[] = [Mod.Alias, Mod.Namespace, Mod.Reexport, Mod.Star, Mod.Cycle, Mod.Init];
+
+export function modName(m: Mod): string {
+	return match (m) {
+		Mod.Alias => "alias",
+		Mod.Namespace => "ns",
+		Mod.Reexport => "reexport",
+		Mod.Star => "star",
+		Mod.Cycle => "cycle",
+		Mod.Init => "init",
+	};
+}
+
+function modFromName(name: string): Result<Mod, string> {
+	for (const m of ALL_MODS) {
+		if (modName(m) == name) { return Result.ok(m); }
+	}
+	return Result.err("unknown module shape '" + name + "' (alias, ns, reexport, star, cycle, init, none)");
+}
+
 export function tyName(t: Ty): string {
 	return match (t) {
 		Ty.Int8 => "int8",
@@ -755,6 +786,8 @@ export function defaults(this typeof Features): Features {
 	for (const t of ALL_TYS) { types = types.incl(t); }
 	let fams = 0 as BitSet<Fam>;
 	for (const f of ALL_FAMS) { fams = fams.incl(f); }
+	let shapes = 0 as BitSet<Mod>;
+	for (const m of ALL_MODS) { shapes = shapes.incl(m); }
 	for (const f of OPT_IN_FAMS) { fams = fams.excl(f); }
 	return {
 		types: types,
@@ -768,6 +801,8 @@ export function defaults(this typeof Features): Features {
 		entries: 4,
 		top: 1,
 		plant: Plant.None,
+		modules: 0,
+		shapes: shapes,
 		w: W_DEFAULTS.map((n: int32): int32 => n),
 	};
 }
@@ -791,7 +826,16 @@ export function format(this f: Features): string {
 		" trips=" + String(f.trips) +
 		" entries=" + String(f.entries) +
 		" top=" + String(f.top) +
-		" plant=" + plantName(f.plant) + weightText(f.w);
+		" plant=" + plantName(f.plant) + moduleText(f) + weightText(f.w);
+}
+
+function moduleText(f: Features): string {
+	if (f.modules == 0) { return ""; }
+	let shapes = "";
+	for (const m of ALL_MODS) {
+		if (f.shapes.has(m)) { shapes = shapes == "" ? modName(m) : shapes + "," + modName(m); }
+	}
+	return " modules=" + String(f.modules) + " modshapes=" + (shapes == "" ? "none" : shapes);
 }
 
 function weightText(w: int32[]): string {
@@ -858,6 +902,16 @@ function hasLegacy(types: BitSet<Ty>): boolean {
 	return false;
 }
 
+function parseShapes(text: string): Result<BitSet<Mod>, string> {
+	let shapes = 0 as BitSet<Mod>;
+	if (text == "none") { return Result.ok(shapes); }
+	for (const name of text.split(",")) {
+		const m = try modFromName(name);
+		shapes = shapes.incl(m);
+	}
+	return Result.ok(shapes);
+}
+
 export function swarm(this base: Features, seed: uint64): Features {
 	const r = Rng.seeded(seed ^ (0x5357524D53574152 as uint64));
 	const density = r.next();
@@ -875,7 +929,14 @@ export function swarm(this base: Features, seed: uint64): Features {
 	for (const f of ALL_FAMS) {
 		if (base.fams.has(f) && r.next() < density) { fams = fams.incl(f); }
 	}
-	return { ...base, types: types, fams: fams };
+	let shapes = base.shapes;
+	if (base.modules > 0) {
+		shapes = 0 as BitSet<Mod>;
+		for (const m of ALL_MODS) {
+			if (base.shapes.has(m) && r.next() < density) { shapes = shapes.incl(m); }
+		}
+	}
+	return { ...base, types: types, fams: fams, shapes: shapes };
 }
 
 export function overlay(this base: Features, text: string): Result<Features, string> {
@@ -892,6 +953,10 @@ export function overlay(this base: Features, text: string): Result<Features, str
 			f = { ...f, fams: try parseFams(value) };
 		} else if (key == "plant") {
 			f = { ...f, plant: try plantFromName(value) };
+		} else if (key == "modules") {
+			f = { ...f, modules: try boundedInt(key, value, 0, 8) };
+		} else if (key == "modshapes") {
+			f = { ...f, shapes: try parseShapes(value) };
 		} else if (key == "funcs") {
 			f = { ...f, funcs: try boundedInt(key, value, 1, 64) };
 		} else if (key == "globals") {
@@ -1210,4 +1275,36 @@ test "fams=meta selects the meta family alone and plant=meta round trips" {
 	assert !Features.defaults().overlay("plant=metal").ok;
 	assert Features.defaults().overlay("w.meta.when=0 w.meta.inline=0 w.meta.decor=0").ok;
 	assert !Features.defaults().overlay("w.meta.block=0 w.meta.fn=0 w.meta.macro=0 w.meta.jsx=0 w.meta.when=0 w.meta.inline=0 w.meta.decor=0").ok;
+}
+
+test "modules=0 prints no module key and a project vector parses back to itself" {
+	assert !Features.defaults().format().contains("modules");
+	const r = Features.defaults().overlay("modules=3 modshapes=ns,star");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.format().contains(" plant=none modules=3 modshapes=ns,star");
+		const again = Features.defaults().overlay(r.value.format());
+		assert again.ok;
+		if (again.ok) { assert again.value.format() == r.value.format(); }
+	}
+}
+
+test "an unknown module shape and more than eight modules are refused" {
+	assert !Features.defaults().overlay("modshapes=alias,mixin").ok;
+	assert !Features.defaults().overlay("modules=9").ok;
+	const none = Features.defaults().overlay("modules=2 modshapes=none");
+	assert none.ok;
+	if (none.ok) { assert none.value.format().contains(" modshapes=none"); }
+}
+
+test "swarm draws module shapes only for a project" {
+	const single = Features.defaults();
+	const project = Features.defaults().overlay("modules=3");
+	assert project.ok;
+	let drawn = false;
+	for (let seed = 0; seed < 256; seed++) {
+		assert single.swarm(seed as uint64).shapes == single.shapes;
+		if (project.ok && project.value.swarm(seed as uint64).shapes != project.value.shapes) { drawn = true; }
+	}
+	assert drawn;
 }

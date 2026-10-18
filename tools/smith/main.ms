@@ -1,12 +1,15 @@
 import { argv, cwd } from "std/process";
+import { ensureDir, exists, readDir, writeFile } from "std/fs";
 import { Features, Plant, defaults, overlay, swarm } from "./features";
 import { generate } from "./gen";
+import { generateProject } from "./proj";
 import { rerunBundle, runSeeds } from "./drive";
 import { interesting, reduceInput } from "./reduce";
 import { coverSeeds } from "./cov";
 
 function usage(): int32 {
-	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt|san|model|meta] [--swarm]");
+	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt|san|model|meta] [--swarm] [--out=<new or empty dir>]");
+	console.log("       (modules=N in --features splits the program into main.ms and m0.ms..; it needs --out)");
 	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...] [--swarm] [--san]");
 	console.log("       msc run tools/smith/main.ms cov <firstSeed> <count> --msc=<instrumented msc> [--features=...] [--swarm]");
 	console.log("       msc run tools/smith/main.ms rerun <bundleDir>");
@@ -40,6 +43,7 @@ function main(): int32 {
 	let san = false;
 	let identityPath = "";
 	let covMsc = "";
+	let outDir = "";
 	let jobs = 4;
 	let cap = 2700;
 	for (let i = 1; i < argv.length; i++) {
@@ -50,6 +54,8 @@ function main(): int32 {
 			overlayText += " plant=" + a.slice("--plant=".length, a.length);
 		} else if (a.startsWith("--msc=")) {
 			covMsc = a.slice("--msc=".length, a.length);
+		} else if (a.startsWith("--out=")) {
+			outDir = a.slice("--out=".length, a.length);
 		} else if (a.startsWith("--identity=")) {
 			identityPath = a.slice("--identity=".length, a.length);
 		} else if (a.startsWith("--jobs=") || a.startsWith("--cap=")) {
@@ -83,7 +89,27 @@ function main(): int32 {
 			console.log("smith: " + seed.error);
 			return 2;
 		}
-		console.log(generate(seed.value, swarmed ? f.swarm(seed.value) : f));
+		const g = swarmed ? f.swarm(seed.value) : f;
+		if (g.modules == 0 && outDir == "") {
+			console.log(generate(seed.value, g));
+			return 0;
+		}
+		if (g.modules == 0 || outDir == "") {
+			console.log("smith: --out and modules=N go together: a project is several files and needs a directory");
+			return 2;
+		}
+		if (exists(outDir) && readDir(outDir).length > 0) {
+			console.log("smith: " + outDir + " is not empty");
+			return 2;
+		}
+		const made = generateProject(seed.value, g);
+		if (!made.ok) {
+			console.log("smith: " + made.error);
+			return 2;
+		}
+		ensureDir(outDir);
+		for (const file of made.value) { writeFile(outDir + "/" + file.name, file.text); }
+		console.log("smith: wrote " + String(made.value.length) + " files to " + outDir);
 		return 0;
 	}
 	if (positional.length == 3 && positional[0] == "run") {
@@ -112,6 +138,10 @@ function main(): int32 {
 		}
 		if (!n.ok || n.value < 1) {
 			console.log("smith: count must be at least 1");
+			return 2;
+		}
+		if (f.modules > 0) {
+			console.log("smith: cov measures single-file programs; drop modules=");
 			return 2;
 		}
 		if (covMsc == "" || san) {

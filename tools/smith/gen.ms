@@ -8259,7 +8259,22 @@ function plantDecls(plant: Plant): string {
 		"}\n";
 }
 
+export struct Parts {
+	head: string;
+	helpers: string;
+	plant: string;
+	globals: string;
+	fns: string;
+	top: string;
+	tail: string;
+}
+
 export function generate(seed: uint64, f: Features): string {
+	const p = generateParts(seed, f);
+	return p.head + p.helpers + p.plant + p.globals + p.fns + p.top + p.tail;
+}
+
+export function generateParts(seed: uint64, f: Features): Parts {
 	const g = new Gen();
 	g.rng = Rng.seeded(seed);
 	for (const t of ALL_TYS) { if (f.types.has(t)) { g.tys.push(t); } }
@@ -8361,7 +8376,15 @@ export function generate(seed: uint64, f: Features): string {
 	let head = "// smith seed=" + String(seed) + " features=" + f.format() + "\n";
 	for (const d of g.directives) { head += d + "\n"; }
 	for (const line of g.imports) { head += line + "\n"; }
-	return head + body;
+	return {
+		head: head,
+		helpers: g.helperText,
+		plant: plantDecls(f.plant),
+		globals: globals + "\n",
+		fns: fns + asyncDecls + g.taskText,
+		top: top,
+		tail: entries + asyncTail + g.taskCalls + plantSite + prints,
+	};
 }
 
 const CORE_OFF: string = "w.core.expr=0 w.core.stmt=0 w.core.fn=0 w.core.pow=0 w.core.nullish=0 w.core.cvt=0 w.core.cmp=0 w.core.while=0 w.core.do=0 w.core.switch=0 w.core.match=0 w.core.compound=0 w.core.cell=0 w.core.incdec=0 w.core.default=0 w.core.rest=0 w.core.overload=0 w.core.recurse=0 w.core.fnvalue=0 w.core.zero=0";
