@@ -2897,6 +2897,11 @@ export function isStructType(t: Type | null): boolean {
 	return t.typeFlags.has(TypeFlag.IsStruct);
 }
 
+// The actor's handle: the member resolveActor appends after the declared state.
+export function actorHandleIndex(t: Type): int32 {
+	return t.sym != null && t.sym.symbolKind == SymbolKind.Actor && t.typeNames.length > 0 ? t.typeNames.length - 1 : -1;
+}
+
 export function isMaybeType(t: Type | null): boolean {
 	if (t == null) return false;
 	return t.typeFlags.has(TypeFlag.IsMaybe);

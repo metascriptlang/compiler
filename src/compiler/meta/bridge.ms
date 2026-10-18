@@ -24,7 +24,7 @@ import {
 	// Type system (for mapTypeToAst — Phase A1 SERIALIZE)
 	Type, TypeKind, TypeFlag, CallingConvention,
 	// Symbol — Day 9 SERIALIZE: surface name + kind to macro VM
-	Symbol, SymbolKind, SymbolState, NodeFlag,
+	Symbol, SymbolKind, SymbolState, NodeFlag, noFieldDecorators,
 	// Literals
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
@@ -62,7 +62,7 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
+import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
 import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner, isFrameValue } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
@@ -236,12 +236,13 @@ function collectFieldDecorators(t: Type): Node[][] {
 // a type without one (interface, anon struct) gets empty arrays.
 function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
+	const handle = actorHandleIndex(t);
 	const node = createNodeAt(NodeKind.TypeObject, {
-		typExprFieldNames: t.typeNames,
-		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited, impl),
+		typExprFieldNames: handle >= 0 ? [t.typeNames[handle]] : t.typeNames,
+		typExprFieldTypes: mapTypes(handle >= 0 ? [t.typeChildren[handle]] : t.typeChildren, loc, visited, impl),
 		typExprIndexKey: null as unknown as Node,
 		typExprIndexValue: null as unknown as Node,
-		typExprFieldDecorators: collectFieldDecorators(t),
+		typExprFieldDecorators: handle >= 0 ? noFieldDecorators(1) : collectFieldDecorators(t),
 		typExprTypeName: t.typeName,
 	}, loc);
 	if (t.sym != null) {
