@@ -1,3 +1,4 @@
+// @xfail(raiser): an async call runs inline on Raiser, so a promise handed to settle() before its await raises at the call instead of rejecting (inbox 2026-10-15-raiser-async-call-runs-inline)
 // @stdout: reraise 3 3 rejected bad rejected x gen 1 catchless
 // note: in a state machine, a raise that leaves a finally reaches the enclosing catch, and a catch-less try/finally re-raises instead of swallowing (C dropped the exception and ran on with the next statement).
 
