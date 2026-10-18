@@ -8,6 +8,9 @@ const GEN_NODE_CAP: int32 = 4096;
 const SEQ_LEN_CAP: int32 = 512;
 const SKIP_JS: string = "// @skip-js: pointer arithmetic and C externs have no JS form: the checker refuses the first on JS and an extern has no C linkage there";
 const SKIP_RAISER: string = "// @skip-raiser: the raiser refuses pointer arithmetic and has no host bridge for libc externs";
+const CLS_CAP: int64 = 60 as int64;
+const CLS_MAX: int32 = 5;
+const CLS_DEPTH_MAX: int32 = 2;
 
 enum Shape {
 	Literal,
@@ -50,6 +53,8 @@ enum EntKind {
 	NatRecPtr,
 	NatPtr,
 	NatRef,
+	ClsObj,
+	ClsIfv,
 }
 
 struct Ent {
@@ -77,6 +82,44 @@ struct Fn {
 	params: Ty[];
 	cost: int64;
 }
+
+struct ClsMember {
+	name: string;
+	ty: Ty;
+	params: Ty[];
+	cost: int64;
+	owner: int32;
+	id: int32;
+	vis: int32;
+	writable: boolean;
+}
+
+class ClsDef {
+	name: string = "";
+	index: int32 = 0;
+	parent: int32 = -1;
+	iface: int32 = -1;
+	fields: ClsMember[] = [];
+	props: ClsMember[] = [];
+	methods: ClsMember[] = [];
+	statics: ClsMember[] = [];
+	smeths: ClsMember[] = [];
+	ctor: Ty[] = [];
+	ctorCost: int64 = 0 as int64;
+}
+
+struct ClsIface {
+	name: string;
+	fields: ClsMember[];
+	ap: ClsMember[];
+}
+
+struct ClsRecv {
+	text: string;
+	cls: int32;
+}
+
+function clsMods(vis: int32): string { return vis == 2 ? "private " : vis == 1 ? "protected " : ""; }
 
 function isFloat(t: Ty): boolean { return t == Ty.Float64; }
 
@@ -409,6 +452,14 @@ class Gen {
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
 	directives: string[] = [];
+	classes: ClsDef[] = [];
+	ifaces: ClsIface[] = [];
+	clsSelf: ClsDef = new ClsDef();
+	clsBuilding: int32 = 0;
+	clsLimit: int32 = 0;
+	clsNames: int32 = 0;
+	arrowDepth: int32 = 0;
+	clsStatics: int32 = -1;
 	imports: string[] = [];
 	taskFams: Fam[] = [];
 	taskText: string = "";
@@ -787,7 +838,9 @@ class Gen {
 			this.scope.push({ name: name, ty: p, writable: false });
 			sig = sig == "" ? name + ": " + tyName(p) : sig + ", " + name + ": " + tyName(p);
 		}
+		this.arrowDepth++;
 		const body = this.routine(ret, depth + 1, cap);
+		this.arrowDepth--;
 		while (this.scope.length > saved) { this.scope.pop(); }
 		return { text: "(" + sig + "): " + tyName(ret) + " => " + body.text, cost: body.cost };
 	}
@@ -800,7 +853,7 @@ class Gen {
 	}
 
 	famExpr(t: Ty, depth: int32): string {
-		if (this.famTotal() == 0) { return ""; }
+		if (this.famTotal() == 0 || (this.clsBuilding > 0 && this.arrowDepth > 0)) { return ""; }
 		const fam = this.pickFam();
 		if (fam == Fam.Closure) { return this.closureExpr(t, depth); }
 		if (fam == Fam.Union) { return this.unionExpr(t, depth); }
@@ -814,6 +867,7 @@ class Gen {
 		if (fam == Fam.Enum) { return this.enumExpr(t, depth); }
 		if (fam == Fam.Exc) { return this.excExpr(t, depth); }
 		if (fam == Fam.Native) { return this.nativeExpr(t, depth); }
+		if (fam == Fam.Cls) { return this.clsExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1421,6 +1475,591 @@ class Gen {
 		return { text: name, cost: next.cost };
 	}
 
+	directive(line: string): void {
+		for (const d of this.directives) { if (d == line) { return; } }
+		this.directives.push(line);
+	}
+
+	clsName(prefix: string): string {
+		const name = prefix + String(this.clsNames);
+		this.clsNames = this.clsNames + 1;
+		return name;
+	}
+
+	clsFlag(primary: int32, index: int32, key: W): boolean {
+		return primary == index || (this.wt(key) > 0 && this.rng.chance(30));
+	}
+
+	clsAt(i: int32): ClsDef { return i < 0 ? this.clsSelf : this.classes[i]; }
+
+	clsThis(): Ent { return { kind: EntKind.ClsObj, name: "this", ty: Ty.Int32, params: [], len: -1, cost: 0 as int64 }; }
+
+	clsDepth(c: int32): int32 {
+		let depth = 0;
+		let k = this.classes[c].parent;
+		while (k >= 0) {
+			depth++;
+			k = this.classes[k].parent;
+		}
+		return depth;
+	}
+
+	clsBelow(c: int32, s: int32): boolean {
+		let k = c;
+		while (k >= 0) {
+			if (k == s) { return true; }
+			k = this.classes[k].parent;
+		}
+		return false;
+	}
+
+	clsParams(params: Ty[]): Var[] {
+		const out: Var[] = [];
+		for (let i = 0; i < params.length; i++) { out.push({ name: "p" + String(i), ty: params[i], writable: false }); }
+		return out;
+	}
+
+	clsScope(cls: ClsDef, params: Ty[]): Var[] {
+		const out = this.clsParams(params);
+		for (const f of cls.fields) {
+			if (f.vis <= 1 || f.owner == cls.index) { out.push({ name: "this." + f.name, ty: f.ty, writable: false }); }
+		}
+		return out;
+	}
+
+	clsBody(scope: Var[], ents: Ent[], t: Ty, cap: int64, limit: int32): Routine {
+		const savedScope = this.scope;
+		const savedEnts = this.ents;
+		this.scope = scope;
+		this.ents = ents;
+		this.clsLimit = limit;
+		this.clsBuilding++;
+		const body = this.routine(t, 1, cap);
+		this.clsBuilding--;
+		this.scope = savedScope;
+		this.ents = savedEnts;
+		return body;
+	}
+
+	clsArrow(t: Ty): Routine {
+		const savedScope = this.scope;
+		const savedEnts = this.ents;
+		this.scope = [];
+		this.ents = [];
+		this.clsBuilding++;
+		const f = this.lambda([t], t, 0, CLS_CAP);
+		this.clsBuilding--;
+		this.scope = savedScope;
+		this.ents = savedEnts;
+		return f;
+	}
+
+	clsMembers(cls: ClsDef, methods: boolean, t: Ty, inside: boolean): ClsMember[] {
+		const out: ClsMember[] = [];
+		const list = methods ? cls.methods : cls.fields;
+		for (const m of list) {
+			if (m.ty != t || (methods && m.writable)) { continue; }
+			if (inside ? (m.vis <= 1 || m.owner == cls.index) && (!methods || m.id < this.clsLimit) : m.vis == 0) { out.push(m); }
+		}
+		if (!methods && !inside) {
+			for (const p of cls.props) { if (p.ty == t) { out.push(p); } }
+		}
+		return out;
+	}
+
+	clsPick(ms: ClsMember[]): ClsMember { return ms[this.rng.below(ms.length)]; }
+
+	clsRecv(methods: boolean, t: Ty, depth: int32): ClsRecv {
+		const objs: Ent[] = [];
+		for (const e of this.entsAny(EntKind.ClsObj)) {
+			if (this.bodyDepth > 0 && (e.cost as int32) >= 2) { continue; }
+			if (this.clsMembers(this.clsAt(e.len), methods, t, e.len < 0).length > 0) { objs.push(e); }
+		}
+		const fresh: int32[] = [];
+		for (let i = 0; depth == 0 && i < this.classes.length; i++) {
+			if (this.clsMembers(this.classes[i], methods, t, false).length > 0) { fresh.push(i); }
+		}
+		if (objs.length > 0 && (fresh.length == 0 || this.rng.chance(70))) {
+			const o = this.pickEnt(objs);
+			return { text: o.name, cls: o.len };
+		}
+		if (fresh.length == 0) { return { text: "", cls: 0 }; }
+		const c = fresh[this.rng.below(fresh.length)];
+		const cls = this.classes[c];
+		if (!this.reserve(cls.ctorCost + (1 as int64))) { return { text: "", cls: 0 }; }
+		return { text: "new " + cls.name + "(" + this.args(cls.ctor, depth) + ")", cls: c };
+	}
+
+	clsExpr(t: Ty, depth: int32): string {
+		if (this.clsBuilding == 0 && this.classes.length < CLS_MAX && (this.classes.length == 0 || this.rng.chance(10))) { this.clsDecl(t); }
+		this.famShape = Shape.Other;
+		const first = this.pickW(W.ClsField, W.ClsIs);
+		for (let i = 0; i < 5; i++) {
+			const k = (first + i) % 5;
+			if (this.w[(W.ClsField as int32) + k] == 0) { continue; }
+			let text = "";
+			if (k == 0) { text = this.clsFieldExpr(t, depth); }
+			if (k == 1) { text = this.clsCallExpr(t, depth); }
+			if (k == 2) { text = this.clsStaticExpr(t, depth); }
+			if (k == 3) { text = this.clsIfaceExpr(t, depth); }
+			if (k == 4) { text = this.clsIsExpr(t, depth); }
+			if (text != "") { return text; }
+		}
+		return "";
+	}
+
+	clsFieldExpr(t: Ty, depth: int32): string {
+		const r = this.clsRecv(false, t, depth);
+		if (r.text == "") { return ""; }
+		const m = this.clsPick(this.clsMembers(this.clsAt(r.cls), false, t, r.cls < 0));
+		if (m.cost > (0 as int64) && !this.reserve(m.cost)) { return ""; }
+		return r.text + "." + m.name;
+	}
+
+	clsCallExpr(t: Ty, depth: int32): string {
+		const r = this.clsRecv(true, t, depth);
+		if (r.text == "") { return ""; }
+		const m = this.clsPick(this.clsMembers(this.clsAt(r.cls), true, t, r.cls < 0));
+		if (!this.reserve(m.cost + (1 as int64))) { return ""; }
+		return r.text + "." + m.name + "(" + this.args(m.params, depth) + ")";
+	}
+
+	clsStaticExpr(t: Ty, depth: int32): string {
+		const reads: ClsMember[] = [];
+		const calls: ClsMember[] = [];
+		for (const c of this.classes) {
+			for (const s of c.statics) { if (s.ty == t) { reads.push(s); } }
+			for (const s of c.smeths) { if (s.ty == t) { calls.push(s); } }
+		}
+		if (reads.length + calls.length == 0) { return ""; }
+		const k = this.rng.below(reads.length + calls.length);
+		if (k < reads.length) { return this.classes[reads[k].owner].name + "." + reads[k].name; }
+		const m = calls[k - reads.length];
+		if (!this.reserve(m.cost + (1 as int64))) { return ""; }
+		return this.classes[m.owner].name + "." + m.name + "(" + this.args(m.params, depth) + ")";
+	}
+
+	clsIfaceExpr(t: Ty, depth: int32): string {
+		const reads: string[] = [];
+		const calls: string[] = [];
+		for (const v of this.entsAny(EntKind.ClsIfv)) {
+			const ifc = this.ifaces[v.len];
+			for (const f of ifc.fields) { if (f.ty == t) { reads.push(v.name + "." + f.name); } }
+			for (const f of ifc.ap) { if (f.ty == t) { calls.push(v.name + "." + f.name); } }
+		}
+		if (reads.length + calls.length == 0) { return ""; }
+		const k = this.rng.below(reads.length + calls.length);
+		if (k < reads.length) { return reads[k]; }
+		if (!this.reserve(CLS_CAP + (2 as int64))) { return ""; }
+		return calls[k - reads.length] + "(" + this.expr(t, depth + 1) + ")";
+	}
+
+	clsIsExpr(t: Ty, depth: int32): string {
+		if (this.bodyDepth > 0) { return ""; }
+		const sites: string[] = [];
+		for (const o of this.entsAny(EntKind.ClsObj)) {
+			if (o.len < 0 || (o.cost as int32) < 2) { continue; }
+			for (let d = 0; d < this.classes.length; d++) {
+				if (d == o.len || !this.clsBelow(d, o.len)) { continue; }
+				for (const f of this.classes[d].fields) {
+					if (f.ty == t && f.vis == 0 && f.owner != o.len && this.clsBelow(f.owner, o.len)) {
+						sites.push("(" + o.name + " instanceof " + this.classes[d].name + " ? " + o.name + "." + f.name + " : ");
+					}
+				}
+			}
+		}
+		if (sites.length == 0) { return ""; }
+		const site = sites[this.rng.below(sites.length)];
+		return this.ternary(site + this.elseExpr(t, depth) + ")");
+	}
+
+	clsStatement(indent: string): string {
+		if (this.classes.length == 0 || (this.classes.length < CLS_MAX && this.rng.chance(15))) { this.clsDecl(this.pickTy()); }
+		const k = this.pickW(W.ClsNew, W.ClsLiteral);
+		let text = "";
+		if (k == 1) { text = this.clsMutate(this.rng.below(6), indent); }
+		if (k == 2) { text = this.clsAlias(indent); }
+		if (k == 3) { text = this.clsLoop(indent); }
+		if (k == 4) { text = this.clsLiteral(indent); }
+		if (text != "" || this.wt(W.ClsNew) == 0) { return text; }
+		return this.clsNew(indent);
+	}
+
+	clsNew(indent: string): string {
+		const cls = this.classes[this.rng.below(this.classes.length)];
+		if (!this.reserve(cls.ctorCost + (1 as int64))) { return ""; }
+		const value = "new " + cls.name + "(" + this.args(cls.ctor, 0) + ")";
+		const name = this.entName("o");
+		if (cls.iface >= 0 && this.rng.chance(30)) {
+			this.ents.push({ kind: EntKind.ClsIfv, name: name, ty: Ty.Int32, params: [], len: cls.iface, cost: 0 as int64 });
+			return indent + "const " + name + ": " + this.ifaces[cls.iface].name + " = " + value + ";\n";
+		}
+		let s = cls.index;
+		while (this.classes[s].parent >= 0 && this.rng.chance(50)) { s = this.classes[s].parent; }
+		const again = this.rng.chance(40);
+		const pure = this.wt(W.ClsIs) > 0 && this.rng.chance(50);
+		this.ents.push({ kind: EntKind.ClsObj, name: name, ty: Ty.Int32, params: [], len: s, cost: ((again ? 1 : 0) + (pure ? 2 : 0)) as int64 });
+		const typed = s != cls.index || this.rng.chance(50);
+		return indent + (again ? "let " : "const ") + name + (typed ? ": " + this.classes[s].name : "") + " = " + value + ";\n";
+	}
+
+	clsMutate(form: int32, indent: string): string {
+		const objs = this.entsAny(EntKind.ClsObj);
+		const views = this.entsAny(EntKind.ClsIfv);
+		for (let i = 0; i < 6; i++) {
+			const k = (form + i) % 6;
+			if (k < 3 && objs.length > 0) {
+				const o = this.pickEnt(objs);
+				const cls = this.classes[o.len];
+				const calls: ClsMember[] = [];
+				const sets: ClsMember[] = [];
+				for (const m of cls.methods) { if (m.vis == 0) { calls.push(m); } }
+				for (const f of cls.fields) { if (f.vis == 0 && f.writable) { sets.push(f); } }
+				for (const p of cls.props) { sets.push(p); }
+				if (k == 0 && calls.length > 0) {
+					const m = this.clsPick(calls);
+					if (!this.reserve(m.cost + (1 as int64))) { continue; }
+					return indent + o.name + "." + m.name + "(" + this.args(m.params, -1) + ");\n";
+				}
+				if (k == 1 && sets.length > 0) {
+					const f = this.clsPick(sets);
+					if (f.cost > (0 as int64) && !this.reserve(f.cost)) { continue; }
+					return indent + o.name + "." + f.name + " = " + this.expr(f.ty, 0) + ";\n";
+				}
+				if (k == 2 && (o.cost as int32) % 2 == 1) {
+					const subs: int32[] = [];
+					for (let d = 0; d < this.classes.length; d++) { if (this.clsBelow(d, o.len)) { subs.push(d); } }
+					const d = this.classes[subs[this.rng.below(subs.length)]];
+					if (!this.reserve(d.ctorCost + (1 as int64))) { continue; }
+					return indent + o.name + " = new " + d.name + "(" + this.args(d.ctor, 0) + ");\n";
+				}
+			}
+			if (k == 3) {
+				const sets: ClsMember[] = [];
+				for (const c of this.classes) { for (const s of c.statics) { sets.push(s); } }
+				if (sets.length == 0) { continue; }
+				const s = this.clsPick(sets);
+				return indent + this.classes[s.owner].name + "." + s.name + " = " + this.expr(s.ty, 0) + ";\n";
+			}
+			if (k == 4 && views.length > 0) {
+				const v = this.pickEnt(views);
+				const f = this.clsPick(this.ifaces[v.len].fields);
+				return indent + v.name + "." + f.name + " = " + this.expr(f.ty, 0) + ";\n";
+			}
+			if (k == 5) {
+				const calls: ClsMember[] = [];
+				for (const c of this.classes) { for (const s of c.smeths) { calls.push(s); } }
+				if (calls.length == 0) { continue; }
+				const m = this.clsPick(calls);
+				if (!this.reserve(m.cost + (1 as int64))) { continue; }
+				return indent + this.classes[m.owner].name + "." + m.name + "(" + this.args(m.params, -1) + ");\n";
+			}
+		}
+		return "";
+	}
+
+	clsAlias(indent: string): string {
+		const objs = this.entsAny(EntKind.ClsObj);
+		if (objs.length == 0) { return ""; }
+		const o = this.pickEnt(objs);
+		const cls = this.classes[o.len];
+		const sets: ClsMember[] = [];
+		for (const f of cls.fields) { if (f.vis == 0 && f.writable) { sets.push(f); } }
+		if (sets.length == 0 || !this.reserve(2 as int64)) { return ""; }
+		const alias = this.entName("o");
+		let target = this.clsPick(sets);
+		let decl = indent + "const " + alias + " = " + o.name + ";\n";
+		if (cls.iface >= 0 && this.rng.chance(40)) {
+			const ifc = this.ifaces[cls.iface];
+			target = this.clsPick(ifc.fields);
+			decl = indent + "const " + alias + ": " + ifc.name + " = " + o.name + ";\n";
+			this.ents.push({ kind: EntKind.ClsIfv, name: alias, ty: Ty.Int32, params: [], len: cls.iface, cost: 0 as int64 });
+		} else {
+			this.ents.push({ kind: EntKind.ClsObj, name: alias, ty: Ty.Int32, params: [], len: o.len, cost: 0 as int64 });
+		}
+		const write = this.expr(target.ty, 0);
+		const seen = this.newLocal(target.ty);
+		return decl +
+			indent + alias + "." + target.name + " = " + write + ";\n" +
+			indent + "let " + seen + ": " + tyName(target.ty) + " = " + o.name + "." + target.name + ";\n";
+	}
+
+	clsLoop(indent: string): string {
+		const s = this.rng.below(this.classes.length);
+		const calls: ClsMember[] = [];
+		for (const m of this.classes[s].methods) { if (m.vis == 0) { calls.push(m); } }
+		if (calls.length == 0) { return ""; }
+		const m = this.clsPick(calls);
+		const sets: ClsMember[] = [];
+		for (const f of this.classes[s].fields) { if (f.vis == 0 && f.writable) { sets.push(f); } }
+		const subs: int32[] = [];
+		for (let d = 0; d < this.classes.length; d++) { if (this.clsBelow(d, s)) { subs.push(d); } }
+		const n = this.rng.between(2, 4);
+		const kinds: int32[] = [];
+		let made = (n as int64) * (m.cost + (2 as int64)) + (2 as int64);
+		for (let i = 0; i < n; i++) {
+			const d = subs[this.rng.below(subs.length)];
+			kinds.push(d);
+			made = made + this.classes[d].ctorCost + (1 as int64);
+		}
+		if (!this.reserve(made)) { return ""; }
+		const items: string[] = [];
+		for (const d of kinds) { items.push("new " + this.classes[d].name + "(" + this.args(this.classes[d].ctor, 0) + ")"); }
+		const list = this.entName("z");
+		const x = this.entName("x");
+		const init = this.expr(m.ty, 0);
+		const acc = this.newLocal(m.ty);
+		const savedMult = this.mult;
+		this.mult = this.mult * (n as int64);
+		this.ents.push({ kind: EntKind.ClsObj, name: x, ty: Ty.Int32, params: [], len: s, cost: 0 as int64 });
+		let body = "";
+		if (sets.length > 0 && this.rng.chance(50)) {
+			const f = this.clsPick(sets);
+			body = indent + "\t" + x + "." + f.name + " = " + this.expr(f.ty, 1) + ";\n";
+		}
+		body += indent + "\t" + acc + " = " + x + "." + m.name + "(" + this.args(m.params, 0) + ");\n";
+		this.ents.pop();
+		this.mult = savedMult;
+		for (let i = 0; i < n; i++) {
+			this.ents.push({ kind: EntKind.ClsObj, name: list + "[" + String(i) + "]", ty: Ty.Int32, params: [], len: s, cost: 0 as int64 });
+		}
+		return indent + "const " + list + ": " + this.classes[s].name + "[] = [" + items.join(", ") + "];\n" +
+			indent + "let " + acc + ": " + tyName(m.ty) + " = " + init + ";\n" +
+			indent + "for (const " + x + " of " + list + ") {\n" + body + indent + "}\n";
+	}
+
+	clsLiteral(indent: string): string {
+		const i = this.clsIfaceFor(this.pickTy());
+		const ifc = this.ifaces[i];
+		const parts: string[] = [];
+		for (const f of ifc.fields) { parts.push(f.name + ": " + this.expr(f.ty, 0)); }
+		for (const f of ifc.ap) {
+			const body = this.lambda([f.ty], f.ty, 0, CLS_CAP);
+			parts.push(f.name + ": " + body.text);
+		}
+		const name = this.entName("o");
+		this.ents.push({ kind: EntKind.ClsIfv, name: name, ty: Ty.Int32, params: [], len: i, cost: 0 as int64 });
+		return indent + "const " + name + ": " + ifc.name + " = { " + parts.join(", ") + " };\n";
+	}
+
+	clsIfaceFor(want: Ty): int32 {
+		if (this.ifaces.length > 0 && this.rng.chance(40)) { return this.rng.below(this.ifaces.length); }
+		const name = "Ifc" + String(this.ifaces.length);
+		const fields: ClsMember[] = [];
+		const ap: ClsMember[] = [];
+		let text = "interface " + name + " {\n";
+		const n = this.rng.between(1, 3);
+		for (let i = 0; i < n; i++) {
+			const t = i == 0 ? want : this.pickTy();
+			const f: ClsMember = { name: this.clsName("u"), ty: t, params: [], cost: 0 as int64, owner: -1, id: 0, vis: 0, writable: true };
+			fields.push(f);
+			text += "\t" + f.name + ": " + tyName(t) + ";\n";
+		}
+		if (this.rng.chance(50)) {
+			const t = this.pickTy();
+			const f: ClsMember = { name: this.clsName("ap"), ty: t, params: [t], cost: CLS_CAP, owner: -1, id: 0, vis: 0, writable: true };
+			ap.push(f);
+			text += "\t" + f.name + ": (x: " + tyName(t) + ") => " + tyName(t) + ";\n";
+		}
+		this.ifaces.push({ name: name, fields: fields, ap: ap });
+		this.useHelper(name, text + "}\n");
+		return this.ifaces.length - 1;
+	}
+
+	clsMethod(cls: ClsDef, slot: int32, ret0: Ty, hide: boolean, mutable: boolean): string {
+		let name = "";
+		let params: Ty[] = [];
+		let ret = ret0;
+		let vis = 0;
+		let mutator = false;
+		let id = cls.methods.length;
+		if (slot >= 0) {
+			const old = cls.methods[slot];
+			name = old.name;
+			params = old.params;
+			ret = old.ty;
+			mutator = old.writable;
+			id = old.id;
+		} else {
+			name = this.clsName("m");
+			const n = this.rng.below(3);
+			for (let i = 0; i < n; i++) { params.push(this.pickTy()); }
+			if (hide) { vis = [0, 0, 1, 2][this.rng.below(4)]; }
+			mutator = mutable && this.rng.chance(35);
+		}
+		const sets: ClsMember[] = [];
+		if (mutator) {
+			for (const f of cls.fields) {
+				if (f.writable && (f.vis <= 1 || f.owner == cls.index) && (slot < 0 || f.ty == ret)) { sets.push(f); }
+			}
+		}
+		if (slot < 0) { mutator = sets.length > 0; }
+		const scope = this.clsScope(cls, params);
+		const bound = CLS_CAP * ((id + 1) as int64);
+		let body = "";
+		if (sets.length > 0) {
+			const f = this.clsPick(sets);
+			ret = f.ty;
+			const v = this.clsBody(scope, [this.clsThis()], f.ty, bound, id);
+			body = "this." + f.name + " = " + v.text + "; return this." + f.name + ";";
+		} else {
+			const v = this.clsBody(scope, [this.clsThis()], ret, bound, id);
+			body = "return " + v.text + ";";
+		}
+		const m: ClsMember = { name: name, ty: ret, params: params, cost: bound, owner: cls.index, id: id, vis: vis, writable: mutator };
+		if (slot >= 0) { cls.methods[slot] = m; } else { cls.methods.push(m); }
+		let sig = "";
+		for (let i = 0; i < params.length; i++) { sig += (i > 0 ? ", " : "") + "p" + String(i) + ": " + tyName(params[i]); }
+		return "\t" + clsMods(vis) + name + "(" + sig + "): " + tyName(ret) + " { " + body + " }\n";
+	}
+
+	clsDecl(want: Ty): void {
+		if (this.clsStatics < 0) { this.clsStatics = this.wt(W.ClsDeclStatic) > 0 && this.rng.chance(40) ? 1 : 0; }
+		const primary = this.pickW(W.ClsDeclPlain, W.ClsDeclVisible);
+		const cls = new ClsDef();
+		cls.index = this.classes.length;
+		cls.name = "Cls" + String(cls.index);
+		let head = "class " + cls.name;
+		const open: int32[] = [];
+		if (this.clsFlag(primary, 1, W.ClsDeclInherit)) {
+			for (let i = 0; i < this.classes.length; i++) { if (this.clsDepth(i) < CLS_DEPTH_MAX) { open.push(i); } }
+		}
+		if (open.length > 0) {
+			const base = this.classes[open[this.rng.below(open.length)]];
+			cls.parent = base.index;
+			cls.iface = base.iface;
+			cls.ctor = base.ctor;
+			cls.ctorCost = base.ctorCost;
+			for (const f of base.fields) { cls.fields.push(f); }
+			for (const p of base.props) { cls.props.push(p); }
+			for (const m of base.methods) { cls.methods.push(m); }
+			head += " extends " + base.name;
+		}
+		const hide = this.clsFlag(primary, 5, W.ClsDeclVisible);
+		if (cls.parent < 0 && this.clsFlag(primary, 4, W.ClsDeclImplements)) {
+			cls.iface = this.clsIfaceFor(want);
+			head += " implements " + this.ifaces[cls.iface].name;
+		}
+		this.clsSelf = cls;
+		const own: ClsMember[] = [];
+		const assigned: boolean[] = [];
+		let arrows = "";
+		if (cls.parent < 0 && cls.iface >= 0) {
+			const ifc = this.ifaces[cls.iface];
+			for (const f of ifc.fields) {
+				own.push({ name: f.name, ty: f.ty, params: [], cost: 0 as int64, owner: cls.index, id: 0, vis: 0, writable: true });
+				assigned.push(this.rng.chance(50));
+			}
+			for (const f of ifc.ap) { arrows += "\t" + f.name + ": (x: " + tyName(f.ty) + ") => " + tyName(f.ty) + " = " + this.clsArrow(f.ty).text + ";\n"; }
+		}
+		const prefix = own.length;
+		const count = this.rng.between(1, 3);
+		for (let i = 0; i < count; i++) {
+			const inCtor = this.rng.chance(60);
+			const vis = hide && i > 0 ? [0, 0, 1, 2][this.rng.below(4)] : 0;
+			const writable = !(hide && inCtor && this.rng.chance(25));
+			own.push({ name: this.clsName("v"), ty: i == 0 ? want : this.pickTy(), params: [], cost: 0 as int64, owner: cls.index, id: 0, vis: vis, writable: writable });
+			assigned.push(inCtor);
+		}
+		let fieldText = "";
+		const ctorFields: ClsMember[] = [];
+		for (let i = 0; i < own.length; i++) {
+			const f = own[i];
+			if (i == prefix) { fieldText += arrows; }
+			cls.fields.push(f);
+			if (assigned[i]) { ctorFields.push(f); }
+			fieldText += "\t" + clsMods(f.vis) + (f.writable ? "" : "readonly ") + f.name + ": " + tyName(f.ty) + (assigned[i] ? "" : " = " + this.literal(f.ty)) + ";\n";
+		}
+		let ctorText = "";
+		if (ctorFields.length > 0) {
+			const params: Ty[] = [];
+			let sig = "";
+			for (let i = 0; i < ctorFields.length; i++) {
+				params.push(ctorFields[i].ty);
+				sig += (i > 0 ? ", " : "") + "p" + String(i) + ": " + tyName(ctorFields[i].ty);
+			}
+			const scope = this.clsParams(params);
+			let body = "";
+			let cost = 1 as int64;
+			if (cls.parent >= 0) {
+				const base = this.classes[cls.parent];
+				const supers: string[] = [];
+				for (const t of base.ctor) {
+					const a = this.clsBody(scope, [], t, CLS_CAP, -1);
+					supers.push(a.text);
+					cost = cost + a.cost;
+				}
+				body += "\t\tsuper(" + supers.join(", ") + ");\n";
+				cost = cost + base.ctorCost;
+			}
+			for (const f of ctorFields) {
+				const v = this.clsBody(scope, [], f.ty, CLS_CAP, -1);
+				body += "\t\tthis." + f.name + " = " + v.text + ";\n";
+				cost = cost + v.cost + (1 as int64);
+			}
+			ctorText = "\tconstructor(" + sig + ") {\n" + body + "\t}\n";
+			cls.ctor = params;
+			cls.ctorCost = cost;
+		}
+		let propText = "";
+		if (this.clsFlag(primary, 2, W.ClsDeclAccessor)) {
+			const bt = this.pickTy();
+			const back: ClsMember = { name: this.clsName("v"), ty: bt, params: [], cost: 0 as int64, owner: cls.index, id: 0, vis: 2, writable: true };
+			cls.fields.push(back);
+			const pt = this.pickTy();
+			const name = this.clsName("pr");
+			const get = this.clsBody(this.clsScope(cls, []), [this.clsThis()], pt, CLS_CAP, cls.methods.length);
+			const put = this.clsBody(this.clsScope(cls, [pt]), [this.clsThis()], bt, CLS_CAP, cls.methods.length);
+			cls.props.push({ name: name, ty: pt, params: [], cost: (get.cost > put.cost ? get.cost : put.cost) + (1 as int64), owner: cls.index, id: 0, vis: 0, writable: true });
+			propText = "\tprivate " + back.name + ": " + tyName(bt) + " = " + this.literal(bt) + ";\n" +
+				"\tget " + name + "(): " + tyName(pt) + " { return " + get.text + "; }\n" +
+				"\tset " + name + "(p0: " + tyName(pt) + ") { this." + back.name + " = " + put.text + "; }\n";
+		}
+		let methodText = "";
+		const methods = this.rng.between(1, 3);
+		for (let i = 0; i < methods; i++) { methodText += this.clsMethod(cls, -1, i == 0 ? want : this.pickTy(), hide && i > 0, i > 0); }
+		const over: int32[] = [];
+		if (cls.parent >= 0) {
+			for (let i = 0; i < cls.methods.length; i++) {
+				if (cls.methods[i].vis == 0 && cls.methods[i].owner != cls.index) { over.push(i); }
+			}
+		}
+		if (over.length > 0 && this.rng.chance(70)) { methodText += this.clsMethod(cls, over[this.rng.below(over.length)], want, false, false); }
+		let staticText = "";
+		if (this.clsStatics == 1 && this.clsFlag(primary, 3, W.ClsDeclStatic)) {
+			const n = this.rng.between(1, 2);
+			for (let i = 0; i < n; i++) {
+				const t = this.pickTy();
+				const s: ClsMember = { name: this.clsName("s"), ty: t, params: [], cost: 0 as int64, owner: cls.index, id: 0, vis: 0, writable: true };
+				cls.statics.push(s);
+				staticText += "\tstatic " + s.name + ": " + tyName(t) + " = " + this.literal(t) + ";\n";
+			}
+			const params: Ty[] = [];
+			const pn = this.rng.below(3);
+			let sig = "";
+			for (let i = 0; i < pn; i++) {
+				params.push(this.pickTy());
+				sig += (i > 0 ? ", " : "") + "p" + String(i) + ": " + tyName(params[i]);
+			}
+			const t = this.pickTy();
+			const v = this.clsBody(this.clsParams(params), [], t, CLS_CAP, -1);
+			const m: ClsMember = { name: this.clsName("sm"), ty: t, params: params, cost: v.cost + (1 as int64), owner: cls.index, id: 0, vis: 0, writable: false };
+			cls.smeths.push(m);
+			staticText += "\tstatic " + m.name + "(" + sig + "): " + tyName(t) + " { return " + v.text + "; }\n";
+			this.directive("// @skip-raiser: a static class member cannot be read on the Raiser, inbox 2026-10-09-raiser-cannot-read-a-static-class-field");
+		}
+		this.classes.push(cls);
+		this.useHelper(cls.name, head + " {\n" + fieldText + ctorText + propText + methodText + staticText + "}\n");
+	}
+
+	clsPrints(): string {
+		let out = "";
+		for (const c of this.classes) {
+			for (const s of c.statics) { out += "console.log(\"" + c.name + "." + s.name + " \" + String(" + c.name + "." + s.name + "));\n"; }
+		}
+		return out;
+	}
+
 	famStatement(indent: string, depth: int32): string {
 		if (this.famTotal() == 0) { return ""; }
 		const fam = this.pickFam();
@@ -1486,6 +2125,7 @@ class Gen {
 		if (fam == Fam.Enum) { return this.enumStatement(t, indent, depth); }
 		if (fam == Fam.Exc) { return this.excStatement(t, indent, depth); }
 		if (fam == Fam.Native) { return this.nativeStatement(t, indent, depth); }
+		if (fam == Fam.Cls) { return this.clsStatement(indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -1677,11 +2317,6 @@ class Gen {
 			indent + "\tif (!" + ra + ".done) { " + target + " = " + fa + "; " + ra + " = " + ia + ".next(); }\n" +
 			indent + "\tif (!" + rb + ".done) { " + target + " = " + fb + "; " + rb + " = " + ib + ".next(); }\n" +
 			indent + "}\n";
-	}
-
-	directive(line: string): void {
-		for (const d of this.directives) { if (d == line) { return; } }
-		this.directives.push(line);
 	}
 
 	importLine(line: string): void {
@@ -5232,6 +5867,7 @@ export function generate(seed: uint64, f: Features): string {
 
 	let prints = "";
 	for (const v of g.globals) { prints += "console.log(\"" + v.name + " \" + String(" + v.name + "));\n"; }
+	prints += g.clsPrints();
 
 	if (g.hasHelper("excBase")) { prints += "console.log(\"excLog \" + String(excLog));\n"; }
 	let head = "// smith seed=" + String(seed) + " features=" + f.format() + "\n";
@@ -6969,4 +7605,430 @@ test "a default program keeps the JS lane and runs in parallel" {
 		const text = generate(seed as uint64, Features.defaults());
 		assert !text.contains("// @skip-js") && !text.contains("// @serial");
 	}
+}
+
+const CLS_VECTOR = "fams=cls types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40";
+
+function clsShapeOf(t: string, i: int32): boolean {
+	const stmt = t.startsWith("o") || t.startsWith("Cls");
+	return match (i) {
+		0 => t.startsWith("class Cls") && !t.contains(" extends ") && !t.contains(" implements "),
+		1 => t.contains(" extends Cls"),
+		2 => t.startsWith("super("),
+		3 => t.startsWith("get pr"),
+		4 => t.startsWith("set pr"),
+		5 => t.startsWith("static s") && !t.startsWith("static sm"),
+		6 => t.startsWith("static sm"),
+		7 => t.startsWith("interface Ifc"),
+		8 => t.contains(" implements Ifc"),
+		9 => t.startsWith("private ") && t.contains("(") && !t.startsWith("private v"),
+		10 => t.startsWith("protected "),
+		11 => t.contains("readonly "),
+		12 => t.contains(" instanceof Cls"),
+		13 => t.startsWith("const o") && t.contains(": Ifc") && t.contains(" = new Cls"),
+		14 => t.startsWith("const o") && t.contains(": Ifc") && t.contains(" = { "),
+		15 => t.startsWith("const o") && t.contains(": Ifc") && !t.contains("new ") && !t.contains("{"),
+		16 => t.startsWith("const o") && !t.contains(":") && !t.contains("new "),
+		17 => t.startsWith("const z") && t.contains("[] = [new Cls"),
+		18 => t.startsWith("for (const x") && t.contains(" of z"),
+		19 => t.startsWith("Cls") && t.contains(".s") && t.contains(" = ") && !t.contains(".sm"),
+		20 => t.startsWith("Cls") && t.contains(".sm") && t.endsWith(");"),
+		21 => t.startsWith("o") && !t.startsWith("const") && t.contains(" = new Cls"),
+		22 => stmt && t.contains(".v") && t.contains(" = ") && t.indexOf(".v") < t.indexOf(" = ") && t.indexOf(".v") < 8,
+		23 => stmt && t.contains(".m") && t.endsWith(");") && !t.contains(" = ") && t.indexOf(".m") < 8,
+		24 => stmt && t.contains(".pr") && t.contains(" = ") && t.indexOf(".pr") < t.indexOf(" = "),
+		25 => stmt && t.contains(".u") && t.contains(" = ") && t.indexOf(".u") < t.indexOf(" = ") && t.indexOf(".u") < 8,
+		26 => t.startsWith("ap") && t.contains(" => ") && t.contains(" = ("),
+		27 => t.contains(".ap") && t.contains("(") && !t.startsWith("ap"),
+		28 => t.contains("= new Cls") && t.contains(").v"),
+		29 => t.contains(".pr") && t.contains("new Cls"),
+		_ => false,
+	};
+}
+
+const CLS_SHAPES: int32 = 30;
+
+test "the cls family alone reaches each of its shapes" {
+	const f = withWeights(CLS_VECTOR);
+	const seen: boolean[] = [];
+	for (let i = 0; i < CLS_SHAPES; i++) { seen.push(false); }
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			const t = line.trim();
+			for (let i = 0; i < CLS_SHAPES; i++) { if (clsShapeOf(t, i)) { seen[i] = true; } }
+		}
+	}
+	for (let i = 0; i < CLS_SHAPES; i++) { assert seen[i]; }
+}
+
+function digitsAt(text: string, at: int32): int32 {
+	let n = -1;
+	for (let i = at; i < text.length; i++) {
+		const c = text.charCodeAt(i);
+		if (c < 48 || c > 57) { break; }
+		n = (n < 0 ? 0 : n) * 10 + (c - 48);
+	}
+	return n;
+}
+
+function clsLines(text: string): string[] {
+	const out: string[] = [];
+	let inside = false;
+	for (const line of text.split("\n")) {
+		if (line.startsWith("class Cls")) { inside = true; }
+		if (inside) { out.push(line); }
+		if (line == "}") { inside = false; }
+	}
+	return out;
+}
+
+test "a zero cls weight keeps its construct out of every program" {
+	const keys = ["w.cls.decl.inherit", "w.cls.decl.implements", "w.cls.decl.static", "w.cls.new", "w.cls.is", "w.cls.loop", "w.cls.literal", "w.cls.alias"];
+	const needles = [" extends ", " implements ", "static ", " = new Cls", " instanceof ", "for (const x", " = { ", "const o"];
+	for (let k = 0; k < keys.length; k++) {
+		const f = withWeights(CLS_VECTOR + " " + keys[k] + "=0");
+		for (let seed = 1; seed < 21; seed++) {
+			const text = generate(seed as uint64, f);
+			if (k == 3) {
+				for (const line of text.split("\n")) { assert !line.trim().startsWith("const o") || !line.contains(" = new Cls"); }
+			} else if (k == 7) {
+				for (const line of text.split("\n")) {
+					const t = line.trim();
+					assert !(t.startsWith("const o") && !t.contains("new ") && !t.contains("{"));
+				}
+			} else if (k == 6) {
+				for (const line of text.split("\n")) { assert !(line.trim().startsWith("const o") && line.contains(" = { ")); }
+			} else {
+				assert !text.contains(needles[k]);
+			}
+		}
+	}
+}
+
+test "a program with a static class member skips the Raiser lane and no other program does" {
+	const f = withWeights(CLS_VECTOR);
+	let skipped = 0;
+	let kept = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		const lines = text.split("\n");
+		const marked = lines[1].startsWith("// @skip-raiser: ");
+		assert marked == text.contains("\n\tstatic ");
+		assert countOf(text, "@skip-raiser") == (marked ? 1 : 0);
+		if (marked) { skipped++; } else { kept++; }
+	}
+	assert skipped > 5 && kept > 5;
+	const none = withWeights("fams=none");
+	assert !generate(1 as uint64, none).contains("@skip-");
+}
+
+test "a parked class construct never reaches a program" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.inherit=6 w.cls.decl.implements=6 w.cls.decl.accessor=6 w.cls.decl.static=6 w.cls.decl.visible=6");
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("super.") && !text.contains("override ") && !text.contains("abstract ");
+		assert !text.contains("constructor(public") && !text.contains("constructor(private") && !text.contains("constructor(protected") && !text.contains("constructor(readonly");
+		assert !text.contains(" | null") && !text.contains("ref ") && !text.contains("move ") && !text.contains("out ");
+		assert !text.contains("<T>") && !text.contains("function*") && !text.contains("this.constructor");
+		for (const line of text.split("\n")) {
+			if (line.trim().startsWith("class Cls")) { assert line.startsWith("class Cls"); }
+			assert !line.trim().startsWith("function ") || line.startsWith("function ");
+		}
+	}
+}
+
+test "an interface holds fields and function-typed fields and never a method signature" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.implements=6 w.cls.literal=6");
+	let members = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		let inside = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("interface Ifc")) { inside = true; continue; }
+			if (line == "}") { inside = false; }
+			if (!inside) { continue; }
+			const t = line.trim();
+			const colon = t.indexOf(": ");
+			assert colon > 0 && (t.indexOf("(") < 0 || t.indexOf("(") > colon) && t.endsWith(";");
+			members++;
+		}
+	}
+	assert members > 40;
+}
+
+test "an implementing class opens with its interface fields in the interface order" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.implements=6");
+	let checked = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const lines = generate(seed as uint64, f).split("\n");
+		for (let i = 0; i < lines.length; i++) {
+			if (!lines[i].startsWith("interface Ifc")) { continue; }
+			const name = lines[i].slice("interface ".length, lines[i].length - 2);
+			const fields: string[] = [];
+			for (let j = i + 1; lines[j] != "}"; j++) { fields.push(lines[j].trim().slice(0, lines[j].trim().indexOf(":"))); }
+			for (let c = 0; c < lines.length; c++) {
+				if (!lines[c].startsWith("class Cls") || !lines[c].endsWith(" implements " + name + " {")) { continue; }
+				for (let k = 0; k < fields.length; k++) { assert lines[c + 1 + k].trim().startsWith(fields[k] + ":"); }
+				checked++;
+			}
+		}
+	}
+	assert checked > 5;
+}
+
+test "a static member is a scalar with a literal initializer" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.static=6");
+	let statics = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (!line.startsWith("\tstatic s") || line.startsWith("\tstatic sm")) { continue; }
+			const t = line.trim();
+			const kind = t.slice(t.indexOf(": ") + 2, t.indexOf(" = "));
+			assert kind == "int32" || kind == "uint8" || kind == "float64";
+			const init = t.slice(t.indexOf(" = ") + 3, t.length);
+			assert !init.contains("new ") && !init.contains("Cls") && !init.contains("g0") && !init.contains("this");
+			statics++;
+		}
+	}
+	assert statics > 20;
+}
+
+test "a constructor starts with super, reads neither this nor a field, and holds no arrow over this" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.inherit=6 w.cls.decl.visible=6");
+	let ctors = 0;
+	let supers = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const lines = clsLines(generate(seed as uint64, f));
+		for (let i = 0; i < lines.length; i++) {
+			if (!lines[i].startsWith("\tconstructor(")) { continue; }
+			ctors++;
+			if (lines[i + 1].trim().startsWith("super(")) { supers++; }
+			for (let j = i + 1; lines[j] != "\t}"; j++) {
+				const t = lines[j].trim();
+				const at = t.startsWith("this.") ? t.indexOf(" = ") : 0;
+				assert !t.slice(at, t.length).contains("this");
+				if (t.contains("=> ")) { assert !t.contains("this"); }
+			}
+		}
+		for (let i = 0; i < lines.length; i++) {
+			if (lines[i].startsWith("class Cls") && lines[i].contains(" extends ")) {
+				for (let j = i + 1; lines[j] != "}"; j++) {
+					if (lines[j].startsWith("\tconstructor(")) { assert lines[j + 1].trim().startsWith("super("); }
+				}
+			}
+		}
+	}
+	assert ctors > 20 && supers > 5;
+}
+
+function nestedArrow(line: string): boolean {
+	const t = line.startsWith("ap") ? line.slice(line.indexOf(" = ") + 3, line.length) : line;
+	let at = t.indexOf(" => ");
+	while (at >= 0) {
+		let depth = 0;
+		for (let i = at + 4; i < t.length; i++) {
+			const c = t.slice(i, i + 1);
+			if (c == "(") { depth++; }
+			if (c == ")") {
+				if (depth == 0) { break; }
+				depth--;
+			}
+			if (c == "," && depth == 0) { break; }
+			if (t.slice(i, i + 4) == " => ") { return true; }
+		}
+		at = t.indexOf(" => ", at + 4);
+	}
+	return false;
+}
+
+test "a member body holds at most one arrow level" {
+	const f = withWeights("fams=cls,closure,generic,coll types=int32,uint8,float64 stmts=8 expr=5 w.stmt.fam=80 w.expr.fam=60 w.fam.closure=40 w.fam.generic=40 w.fam.coll=20 w.cls.decl.accessor=6");
+	let arrows = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of clsLines(generate(seed as uint64, f))) {
+			const t = line.trim();
+			assert !nestedArrow(t);
+			arrows += countOf(t, " => ");
+		}
+	}
+	assert arrows > 0;
+}
+
+test "a method calls only methods declared before it and reads one only through a call" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.inherit=6 w.cls.call=6");
+	let calls = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (const line of clsLines(text)) {
+			const t = line.trim();
+			const own = t.startsWith("private m") || t.startsWith("protected m") ? t.indexOf("m") : 0;
+			if (!t.slice(own, own + 1).startsWith("m") || digitsAt(t, own + 1) < 0) { continue; }
+			const id = digitsAt(t, own + 1);
+			let at = t.indexOf("this.m", own + 1);
+			while (at >= 0) {
+				const callee = digitsAt(t, at + 6);
+				assert callee >= 0 && callee < id;
+				calls++;
+				at = t.indexOf("this.m", at + 6);
+			}
+		}
+		let at = text.indexOf(".m");
+		while (at >= 0) {
+			const n = digitsAt(text, at + 2);
+			if (n >= 0) { assert text.slice(at + 2 + String(n).length, at + 3 + String(n).length) == "("; }
+			at = text.indexOf(".m", at + 2);
+		}
+	}
+	assert calls > 5;
+}
+
+test "an instanceof narrows only the true branch of a ternary" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.inherit=6 w.cls.is=6");
+	let tests = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		let at = text.indexOf(" instanceof Cls");
+		while (at >= 0) {
+			const after = at + " instanceof Cls".length;
+			const n = digitsAt(text, after);
+			assert n >= 0 && text.slice(after + String(n).length, after + String(n).length + 3) == " ? ";
+			let from = at - 1;
+			while (from > 0 && text.slice(from - 1, from) != "(") { from--; }
+			assert text.slice(from - 1, from) == "(" && text.slice(from - 2, from - 1) != "!";
+			tests++;
+			at = text.indexOf(" instanceof Cls", after);
+		}
+	}
+	assert tests > 10;
+}
+
+test "a class member keeps its id and its charged bound across an override" {
+	let derived = 0;
+	for (let seed = 1; seed <= 12; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32, Ty.Float64];
+		g.stmtMax = 8;
+		g.depthMax = 3;
+		g.exprMax = 4;
+		g.tripMax = 4;
+		g.fams = [Fam.Cls];
+		g.w = withWeights("w.cls.decl.inherit=6").w;
+		g.fn(0);
+		g.fn(1);
+		if (g.classes.length > 1) { derived++; }
+		for (const c of g.classes) {
+			for (let i = 0; i < c.methods.length; i++) {
+				assert c.methods[i].id == i && c.methods[i].cost == CLS_CAP * ((i + 1) as int64);
+			}
+		}
+		assert g.clsBuilding == 0 && g.arrowDepth == 0 && g.mult == (1 as int64) && g.cost <= FN_COST_CAP;
+		assert g.scope.length == g.fns[1].params.length && g.ents.length == 0;
+	}
+	assert derived > 0;
+}
+
+test "an object read by an instanceof test is never named inside a closure or nested routine body" {
+	const g = new Gen();
+	g.tys = [Ty.Int32, Ty.Uint8];
+	g.fams = [Fam.Cls];
+	g.exprMax = 3;
+	g.costCap = TOP_COST_CAP;
+	g.w = withWeights("w.cls.decl.inherit=100").w;
+	for (let seed = 1; seed <= 6; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.clsDecl(Ty.Int32);
+	}
+	assert g.classes.length > 2;
+	g.ents = [{ kind: EntKind.ClsObj, name: "o0", ty: Ty.Int32, params: [], len: 0, cost: 2 as int64 }];
+	let outside = 0;
+	let named = 0;
+	for (let seed = 1; seed <= 200; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.nodesLeft = GEN_NODE_CAP;
+		g.bodyDepth = 0;
+		if (g.clsIsExpr(Ty.Int32, 0).contains(" instanceof ")) { outside++; }
+		if (g.clsRecv(false, Ty.Int32, 0).text == "o0") { named++; }
+		g.bodyDepth = 1;
+		assert g.clsIsExpr(Ty.Int32, 0) == "";
+		assert g.clsRecv(false, Ty.Int32, 0).text != "o0";
+	}
+	assert outside > 0 && named > 0;
+}
+
+function ternaryAtTop(line: string, from: int32, to: int32): boolean {
+	let depth = 0;
+	for (let i = from; i < to; i++) {
+		const c = line.slice(i, i + 1);
+		if (c == "(") { depth++; }
+		if (c == ")") { depth--; }
+		if (depth == 0 && line.slice(i, i + 3) == " ? ") { return true; }
+	}
+	return false;
+}
+
+function groupEnd(line: string, open: int32): int32 {
+	let depth = 0;
+	for (let i = open; i < line.length; i++) {
+		const c = line.slice(i, i + 1);
+		if (c == "(") { depth++; }
+		if (c == ")") {
+			depth--;
+			if (depth == 0) { return i; }
+		}
+	}
+	return line.length;
+}
+
+function freshReceiverUnderTernary(line: string): boolean {
+	let at = line.indexOf("new Cls");
+	while (at >= 0) {
+		const ctorEnd = groupEnd(line, line.indexOf("(", at));
+		if (line.slice(ctorEnd + 1, ctorEnd + 2) == ".") {
+			const opens: int32[] = [];
+			for (let i = 0; i < at; i++) {
+				const c = line.slice(i, i + 1);
+				if (c == "(") { opens.push(i); }
+				if (c == ")") { opens.pop(); }
+			}
+			if (ternaryAtTop(line, 0, line.length)) { return true; }
+			for (const o of opens) {
+				if (ternaryAtTop(line, o + 1, groupEnd(line, o))) { return true; }
+			}
+		}
+		at = line.indexOf("new Cls", at + 7);
+	}
+	return false;
+}
+
+test "a new temporary is read only at the root of an expression, never under a ternary" {
+	const g = new Gen();
+	g.tys = [Ty.Int32, Ty.Uint8];
+	g.fams = [Fam.Cls];
+	g.exprMax = 3;
+	g.costCap = TOP_COST_CAP;
+	for (let seed = 1; seed <= 4; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.clsDecl(Ty.Int32);
+	}
+	g.ents = [];
+	let roots = 0;
+	for (let seed = 1; seed <= 100; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.nodesLeft = GEN_NODE_CAP;
+		assert g.clsRecv(false, Ty.Int32, 1).text == "";
+		assert g.clsRecv(true, Ty.Int32, 2).text == "";
+		if (g.clsRecv(false, Ty.Int32, 0).text.startsWith("new Cls")) { roots++; }
+	}
+	assert roots > 0;
+	const f = withWeights("fams=cls types=int32,uint8 stmts=8 expr=5 w.stmt.fam=80 w.expr.fam=60");
+	let tern = 0;
+	for (let seed = 1; seed <= 40; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.contains(" ? ")) {
+				tern++;
+				assert !freshReceiverUnderTernary(line);
+			}
+		}
+	}
+	assert tern > 0;
 }
