@@ -99,7 +99,13 @@ double msFsIsDir(msString path) {
 double msFsIsExecutable(msString path) {
 	/* POSIX: access(X_OK) checks if current UID/GID has execute permission.
 	 * Matches Bun.which's isExecutableFilePath and shutil.which behaviour. */
+#if defined(__wasi__)
+	/* WASI has no execute permission: access(X_OK) only tests existence. */
+	(void)path;
+	return 0.0;
+#else
 	return (access(msStringToCString(path), X_OK) == 0) ? 1.0 : 0.0;
+#endif
 }
 
 double msFsFileSize(msString path) {

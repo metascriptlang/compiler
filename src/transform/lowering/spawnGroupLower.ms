@@ -14,8 +14,8 @@
 //   [$r0, ..., $rN]  // replacement array
 //
 // Async context:
-//   Same setup, but instead of msAwaitGroupBlocking:
-//   msAwaitGroupSetDoneFut($ag, msFutureCreate());
+//   msAwaitGroupSetDoneFut($ag, msFutureCreate()) before the first submit,
+//   then instead of msAwaitGroupBlocking:
 //   await msAwaitGroupGetDoneFut($ag);  // asyncDesugar → yield → cooperative
 //   ... read results + free ...
 
@@ -90,6 +90,17 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		VOID_PTR_TYPE, loc);
 	stmts.push(ag.decl);
 
+	// The last slot completes doneFut only if it is set when that slot finishes.
+	let doneFut: { decl: Node, ident: Node } | null = null;
+	if (isAsync) {
+		doneFut = makeTempDecl(ctx, "doneFut",
+			makeCall(runtimeRef("msFutureCreate", loc), [], loc),
+			VOID_PTR_TYPE, loc);
+		stmts.push(doneFut.decl);
+		stmts.push(makeExprStmt(
+			makeCall(runtimeRef("msAwaitGroupSetDoneFut", loc), [ag.ident, doneFut.ident], loc), loc));
+	}
+
 	// 2. Inject cancel safe-points + submit tasks
 	let groupTimeout: Node | null = null;
 	let si = 0;
@@ -147,14 +158,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	}
 
 	// 3. Wait
-	if (isAsync) {
-		// Async: set doneFut, then emit await on it (asyncDesugar will convert to yield)
-		const doneFut = makeTempDecl(ctx, "doneFut",
-			makeCall(runtimeRef("msFutureCreate", loc), [], loc),
-			VOID_PTR_TYPE, loc);
-		stmts.push(doneFut.decl);
-		stmts.push(makeExprStmt(
-			makeCall(runtimeRef("msAwaitGroupSetDoneFut", loc), [ag.ident, doneFut.ident], loc), loc));
+	if (doneFut != null) {
 		// Emit: await $doneFut — asyncDesugar converts to yield, stepper handles cooperatively
 		const awaitData: NodeData = { awaitArg: doneFut.ident };
 		const awaitNode = createNodeAt(NodeKind.AwaitExpr, awaitData, loc);

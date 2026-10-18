@@ -1,4 +1,4 @@
-#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+#ifndef MSOS_BARE
 /*
  * MetaScript Promise Combinators — Promise.all / Promise.race
  */
@@ -381,4 +381,4 @@ void* msFutureFinally(void* input, msClosure onSettled) {
 	return output;
 }
 
-#endif /* !MSOS_BARE && !MSOS_WASM */
+#endif /* !MSOS_BARE */

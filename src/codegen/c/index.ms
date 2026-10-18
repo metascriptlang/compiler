@@ -412,7 +412,9 @@ export function genProjectDispatcher(
 		},
 		"wasm" => {
 			// WASI crt1 provides _start which calls main().
-			addLine(b, "int main(void) {");
+			addLine(b, "int main(int argc, char** argv) {");
+			addLine(b, "  cmdLine = argv;");
+			addLine(b, "  cmdCount = argc;");
 			addLine(b, "  MsMain();");
 			addLine(b, "  msDrainUntilIdle();");
 			addLine(b, "  if (msReportOrphanFailures()) msProgramResult = 1;");
