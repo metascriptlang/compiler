@@ -5,6 +5,7 @@ when (!solana) {
 	import "./simulatorCrypto";
 	import "./simulatorLog";
 	import "./simulatorPrograms";
+	import "./simulatorToken";
 }
 
 export extern function msSolInvokeMetas(

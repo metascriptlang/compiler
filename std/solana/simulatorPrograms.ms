@@ -8,11 +8,11 @@ import {
 	msSolStoreU64,
 } from "./memory";
 
-const REFUSED: uint64 = 0xffffffffffffffff;
-const NOT_SIMULATED: uint64 = 0xfffffffffffffffe;
-const INVALID_ARGUMENT: uint64 = 0x200000000;
-const INVALID_INSTRUCTION_DATA: uint64 = 0x300000000;
-const MISSING_REQUIRED_SIGNATURE: uint64 = 0x800000000;
+export const REFUSED: uint64 = 0xffffffffffffffff;
+export const NOT_SIMULATED: uint64 = 0xfffffffffffffffe;
+export const INVALID_ARGUMENT: uint64 = 0x200000000;
+export const INVALID_INSTRUCTION_DATA: uint64 = 0x300000000;
+export const MISSING_REQUIRED_SIGNATURE: uint64 = 0x800000000;
 const ACCOUNT_DATA_TOO_SMALL: uint64 = 0x1400000000;
 const ARITHMETIC_OVERFLOW: uint64 = 0x1800000000;
 const SYSTEM_ALREADY_IN_USE: uint64 = 0x100000000;
@@ -23,13 +23,13 @@ const LAMPORTS_PER_BYTE_YEAR: uint64 = 3480;
 const RENT_EXEMPTION_YEARS: uint64 = 2;
 const ACCOUNT_STORAGE_OVERHEAD: uint64 = 128;
 
-const OWNER_AT: uint64 = 40;
+export const OWNER_AT: uint64 = 40;
 const LAMPORTS_AT: uint64 = 72;
-const LENGTH_AT: uint64 = 80;
-const DATA_AT: uint64 = 88;
-const META_SIZE: uint64 = 16;
+export const LENGTH_AT: uint64 = 80;
+export const DATA_AT: uint64 = 88;
+export const META_SIZE: uint64 = 16;
 const META_WRITABLE_AT: uint64 = 8;
-const META_SIGNER_AT: uint64 = 9;
+export const META_SIGNER_AT: uint64 = 9;
 
 interface SystemAccount {
 	record: uint64;
@@ -40,16 +40,16 @@ interface SystemAccount {
 	writable: boolean;
 }
 
-function fault(result: uint64, text: string): void {
+export function fault(result: uint64, text: string): void {
 	msSolHostRaise(result, text);
 }
 
-function refuses(text: string): uint64 {
+export function refuses(text: string): uint64 {
 	fault(REFUSED, text);
 	return REFUSED;
 }
 
-function notSimulated(program: string, instruction: uint32, status: uint64): uint64 {
+export function notSimulated(program: string, instruction: uint32, status: uint64): uint64 {
 	fault(NOT_SIMULATED, `sol_invoke_signed: ${program} program instruction ${instruction} is not simulated`);
 	return status;
 }
@@ -100,16 +100,16 @@ export function anyByteIn(bytes: uint64, from: uint64, to: uint64): boolean {
 	return false;
 }
 
-function isZeroKey(key: uint64): boolean {
+export function isZeroKey(key: uint64): boolean {
 	return msSolLoadU64(key) == 0 && msSolLoadU64(key + 8) == 0 && msSolLoadU64(key + 16) == 0 && msSolLoadU64(key + 24) == 0;
 }
 
-function sameKey(left: uint64, right: uint64): boolean {
+export function sameKey(left: uint64, right: uint64): boolean {
 	return msSolLoadU64(left) == msSolLoadU64(right) && msSolLoadU64(left + 8) == msSolLoadU64(right + 8)
 		&& msSolLoadU64(left + 16) == msSolLoadU64(right + 16) && msSolLoadU64(left + 24) == msSolLoadU64(right + 24);
 }
 
-function copyKey(destination: uint64, source: uint64): void {
+export function copyKey(destination: uint64, source: uint64): void {
 	for (let at: uint64 = 0; at < 32; at += 8) { msSolStoreU64(destination + at, msSolLoadU64(source + at)); }
 }
 
