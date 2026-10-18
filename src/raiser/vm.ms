@@ -1938,31 +1938,22 @@ function runStrandSlice(vm: RaiserVM): void {
 // --- Call/Ret handlers ---
 
 function enterCallee(vm: RaiserVM, destReg: number, calleeFuncIdx: number): void {
-	// Reserve the callee's frame: starting at newBase, up to its maxRegs.
-	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1]).
+	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1]),
+	// so the arguments are never copied; only the frame record is written.
 	const newBase = vm.baseReg + destReg + 1;
-	const callee = getModuleFunc(vm.mod, calleeFuncIdx);
-	ensureSlots(vm.regs, newBase + callee.maxRegs);
+	const reserve = newBase + vm.mod.functions[calleeFuncIdx].maxRegs;
+	if (vm.regs.slots.length < reserve) ensureSlots(vm.regs, reserve);
 
-	const stack = vm.callStack;
-	const depth = stack.depth;
-	if (depth < stack.items.length) {
-		const frame = stack.items[depth];
-		frame.funcIdx = vm.funcIdx;
-		frame.returnIp = vm.ip;
-		frame.returnReg = (vm.baseReg + destReg) as int32;
-		frame.baseReg = vm.baseReg;
-		frame.spBase = vm.safePoints.length as int32;
-	} else {
-		stack.items.push({
-			funcIdx: vm.funcIdx,
-			returnIp: vm.ip,
-			returnReg: (vm.baseReg + destReg) as int32,
-			baseReg: vm.baseReg,
-			spBase: vm.safePoints.length as int32,
-		});
+	const depth = vm.callStack.depth;
+	if (depth == vm.callStack.items.length) {
+		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnReg: 0, baseReg: 0, spBase: 0 });
 	}
-	stack.depth = depth + 1;
+	vm.callStack.items[depth].funcIdx = vm.funcIdx;
+	vm.callStack.items[depth].returnIp = vm.ip;
+	vm.callStack.items[depth].returnReg = (vm.baseReg + destReg) as int32;
+	vm.callStack.items[depth].baseReg = vm.baseReg;
+	vm.callStack.items[depth].spBase = vm.safePoints.length as int32;
+	vm.callStack.depth = depth + 1;
 
 	vm.baseReg = newBase as int32;
 	vm.funcIdx = calleeFuncIdx as int32;
@@ -1980,44 +1971,55 @@ function vmHandleCall(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	enterCallee(vm, ia, calleeFuncIdx as number);
 }
 
-function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+// Returning from the entry function of a strand or a module body ends that
+// strand's work; a return inside a guarded region runs its `finally` first.
+// True when this Ret was handled here, false when it pops an ordinary frame.
+function vmRetSpecial(vm: RaiserVM, ia: int32): boolean {
 	// Leaving a guarded region: its finally runs first and comes back here.
 	const finIp = cleanUpOnReturn(vm);
 	if (finIp >= 0) {
 		vm.savedIp = vm.ip - 1;
 		vm.ip = finIp as int32;
-		return;
+		return true;
 	}
-	if (vm.callStack.depth == 0 && vm.current == vm.sched.modules.strand) {
+	if (vm.callStack.depth > 0) return false;
+	if (vm.current == vm.sched.modules.strand) {
 		const at = vm.sched.modules.execBody;
 		vm.sched.modules.execBody = -1;
 		if (at >= 0) moduleExecBodyFulfilled(vm, at);
 		moduleTaskContinue(vm);
-		return;
+		return true;
 	}
-	const body = vm.callStack.depth == 0 ? moduleBodyOf(vm, vm.current) : -1;
+	const body = moduleBodyOf(vm, vm.current);
 	if (body >= 0) {
 		moduleBodyFinish(vm, body, RaiserModuleJobKind.Fulfilled, raiserNil());
-		return;
+		return true;
 	}
-	if (vm.callStack.depth == 0) {
-		// Top-level return — the strand is finished; the main one ends the
-		// program, but only once the remaining strands have drained.
-		const retVal = getReg(vm, vm.baseReg + ia);
-		if (strandFinish(vm, retVal)) {
-			vm.yielded = true;
-			return;
-		}
-		finishProgram(vm, retVal, false);
-		return;
+	// Top-level return — the strand is finished; the main one ends the
+	// program, but only once the remaining strands have drained.
+	const retVal = getReg(vm, vm.baseReg + ia);
+	if (strandFinish(vm, retVal)) {
+		vm.yielded = true;
+		return true;
+	}
+	finishProgram(vm, retVal, false);
+	return true;
+}
+
+function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const depth = vm.callStack.depth;
+	// A frame with no handler of its own open returns without any bookkeeping.
+	if (depth == 0 || vm.safePoints.length != vm.callStack.items[depth - 1].spBase) {
+		if (vmRetSpecial(vm, ia)) return;
 	}
 
-	const depth = vm.callStack.depth - 1;
-	const frame = vm.callStack.items[depth];
-	vm.callStack.depth = depth;
-	vm.safePoints.length = frame.spBase;
+	vm.callStack.depth = depth - 1;
+	if (vm.safePoints.length != vm.callStack.items[depth - 1].spBase) {
+		vm.safePoints.length = vm.callStack.items[depth - 1].spBase;
+	}
 
-	setReg(vm, frame.returnReg, getReg(vm, vm.baseReg + ia));
+	if (vm.baseReg + ia >= vm.regs.slots.length) throw slotOutside(vm.baseReg + ia);
+	setReg(vm, vm.callStack.items[depth - 1].returnReg, vm.regs.slots[vm.baseReg + ia]);
 
 	// No blanket frame-exit decref: the global register file is reused across
 	// calls, so a callee slot may hold a stale handle from a prior frame that this
@@ -2025,9 +2027,9 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	// Reclamation instead happens lazily via setReg's decref-on-overwrite when the
 	// slot is next written (frame reuse). Residual: a never-reused slot's ref lingers.
 
-	vm.funcIdx = frame.funcIdx;
-	vm.baseReg = frame.baseReg;
-	vm.ip = frame.returnIp;
+	vm.funcIdx = vm.callStack.items[depth - 1].funcIdx;
+	vm.baseReg = vm.callStack.items[depth - 1].baseReg;
+	vm.ip = vm.callStack.items[depth - 1].returnIp;
 }
 
 function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
