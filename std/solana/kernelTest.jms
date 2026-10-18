@@ -1,0 +1,247 @@
+import { SeedSlice } from "./addressTables";
+import {
+	msSolAccountAt,
+	msSolAccountCount,
+	msSolAccountSlot,
+	msSolCurveValidatePoint,
+	msSolDeriveAddress,
+	msSolFindAddress,
+	msSolFindCanonicalAddress,
+	msSolFindCanonicalStaged,
+	msSolFindExpectedAddress,
+	msSolFindExpectedStaged,
+	msSolGetClock,
+	msSolGetReturnData,
+	msSolHashIsStaged,
+	msSolHostEnter,
+	msSolHostFaultMessage,
+	msSolHostInput,
+	msSolHostInvocationAt,
+	msSolHostInvocationTotal,
+	msSolHostLeave,
+	msSolHostLogAt,
+	msSolHostLogTotal,
+	msSolHostRentReadTotal,
+	msSolHostResult,
+	msSolHostSetClock,
+	msSolHostSetSysvarStatus,
+	msSolInstructionData,
+	msSolInstructionDataLength,
+	msSolInvokeMetas,
+	msSolLog,
+	msSolLog64,
+	msSolLogComputeUnits,
+	msSolLogData,
+	msSolLogPubkey,
+	msSolRemainingComputeUnits,
+	msSolRentAddress,
+	msSolResult,
+	msSolScratch,
+	msSolSeedStageInPlace,
+	msSolSetResult,
+	msSolSetReturnData,
+} from "./kernel";
+import {
+	msSolHostFaultCodeOf,
+	msSolLoadU64,
+	msSolLoadU8,
+	msSolProgramId,
+	msSolSpanAddress,
+	msSolStoreU64,
+	msSolStoreU8,
+	msSolStringAddress,
+	msSolStringLength,
+	msSolTableAddress,
+} from "./memory";
+import { findAddress } from "./simulatorCryptoCore";
+import { serializeInput } from "./simulatorContextFixture";
+
+function faultOf(run: () => void): string {
+	@emit(`try { ${run}(); } catch (error) { return error.message; }
+	return "";`);
+	unreachable;
+}
+
+function serialize(firsts: int32[], dataLengths: int32[], data: uint8[], program: uint8): uint64 {
+	const bytes = serializeInput(firsts, dataLengths, data, program);
+	const input = msSolHostInput(bytes.length as uint64);
+	for (let at = 0; at < bytes.length; at++) { msSolStoreU8(input + (at as uint64), bytes[at]); }
+	return input;
+}
+
+function enterThree(): uint64 {
+	const input = serialize([0, 1, 0], [5, 12, 5], [9, 8, 7], 0x77);
+	msSolHostEnter(input);
+	return input;
+}
+
+test "an entered input fills the account table, the duplicate slot, the instruction data and the program id" {
+	const input = enterThree();
+	assert msSolAccountCount() == 3;
+	const first = msSolAccountAt(0);
+	const second = msSolAccountAt(1);
+	assert first == input + 8;
+	assert msSolAccountAt(2) == first && msSolAccountSlot(2) == first && msSolAccountSlot(1) == second;
+	assert msSolAccountAt(3) == 0;
+	assert msSolLoadU8(first + 4) == 2 && msSolLoadU8(second + 4) == 0;
+	assert msSolLoadU64(second + 72) == 1001 && msSolLoadU64(second + 80) == 12;
+	assert msSolInstructionDataLength() == 3;
+	const data = msSolInstructionData();
+	assert msSolLoadU8(data) == 9 && msSolLoadU8(data + 1) == 8 && msSolLoadU8(data + 2) == 7;
+	assert msSolLoadU8(msSolProgramId()) == 0x77 && msSolProgramId() == data + 3;
+}
+
+test "entering again drops the earlier run's result, logs and fault, and an input with no accounts parses" {
+	enterThree();
+	msSolSetResult(42);
+	assert msSolResult() == 42 && msSolHostResult() == 42;
+	msSolLog(msSolStringAddress("once"), msSolStringLength("once"));
+	assert msSolHostLogTotal() == 1;
+	const input = serialize([], [], [], 0x11);
+	msSolHostEnter(input);
+	assert msSolResult() == 0 && msSolHostLogTotal() == 0 && msSolHostFaultCodeOf() == 0;
+	assert msSolAccountCount() == 0 && msSolAccountAt(0) == 0 && msSolInstructionDataLength() == 0;
+	assert msSolLoadU8(msSolProgramId()) == 0x11;
+}
+
+test "entering with no input reads the empty input" {
+	msSolHostEnter(0);
+	assert msSolAccountCount() == 0 && msSolInstructionDataLength() == 0;
+	assert msSolLoadU64(msSolProgramId()) == 0;
+}
+
+test "an input of more than 255 accounts is refused by name" {
+	const input = msSolHostInput(64);
+	msSolStoreU64(input, 256);
+	assert faultOf(() => { msSolHostEnter(input); }) == "solana kernel: solana input: the loader refuses more than 255 accounts";
+}
+
+test "a line, a word line, a key and data are logged through the kernel and read back" {
+	const input = enterThree();
+	msSolLog(msSolStringAddress("hello"), msSolStringLength("hello"));
+	msSolLog64(1, 2, 3, 4, 5);
+	msSolLogPubkey(msSolAccountAt(1) + 8);
+	msSolLogData(msSolStringAddress("abc"), 3);
+	msSolLogComputeUnits();
+	assert msSolHostLogTotal() == 5;
+	assert msSolHostLogAt(0) == "Program log: hello";
+	assert msSolHostLogAt(1) == "Program log: 0x1, 0x2, 0x3, 0x4, 0x5";
+	assert msSolHostLogAt(3) == "Program data: YWJj";
+	assert msSolHostLogAt(4) == "Program consumption: 200000 units remaining";
+	assert msSolHostLogAt(9) == "";
+	assert msSolRemainingComputeUnits() == 200000;
+	assert input != 0;
+}
+
+test "return data set by the program reads back with its program id, and a short buffer gets the stored length" {
+	enterThree();
+	const bytes: uint8[] = [1, 2, 3, 4, 5];
+	msSolSetReturnData(bytes);
+	let out: uint8[8] = [];
+	let program: uint8[32] = [];
+	const stored = msSolGetReturnData(msSolSpanAddress(out), 3, msSolSpanAddress(program));
+	assert stored == 5 && out[0] == 1 && out[2] == 3 && out[3] == 0 && program[0] == 0x77 && program[31] == 0x77;
+	const empty: uint8[] = [];
+	msSolSetReturnData(empty);
+	assert msSolGetReturnData(msSolSpanAddress(out), 8, msSolSpanAddress(program)) == 0;
+}
+
+test "the scratch heap bumps by eight, starts after the context and answers zero past its 32 KiB limit" {
+	enterThree();
+	const first = msSolScratch(1);
+	assert first == 0x300000000 + 96;
+	assert msSolScratch(9) == first + 8;
+	assert msSolScratch(0) == first + 24;
+	assert msSolLoadU64(first) == 0;
+	msSolStoreU64(first, 0x0102030405060708);
+	assert msSolLoadU8(first + 7) == 1;
+	const left = 32768 - 96 - 24;
+	assert msSolScratch(left as uint64 + 1) == 0;
+	assert msSolScratch(left as uint64) == first + 24;
+	assert msSolScratch(1) == 0 && msSolScratch(0) == first + 24 + (left as uint64);
+	enterThree();
+	assert msSolScratch(1) == first && msSolLoadU64(first) == 0;
+}
+
+test "the rent sysvar is read once per run, the clock is the one set, and a sysvar status refuses both" {
+	enterThree();
+	const rent = msSolRentAddress();
+	assert rent != 0 && msSolLoadU64(rent) == 3480 && msSolHostRentReadTotal() == 1;
+	assert msSolRentAddress() == rent && msSolHostRentReadTotal() == 1;
+	msSolHostSetClock(11, 22, 33, 44, 55);
+	const out = msSolScratch(40);
+	assert msSolGetClock(out) == 0 && msSolLoadU64(out) == 11 && msSolLoadU64(out + 32) == 55;
+	msSolHostSetSysvarStatus(7);
+	assert msSolGetClock(out) == 7;
+	enterThree();
+	assert msSolRentAddress() == 0;
+	msSolHostSetSysvarStatus(0);
+}
+
+test "a program address derives, and the bump walks agree with the simulator's own walk" {
+	enterThree();
+	const program = msSolProgramId();
+	let table: SeedSlice[2] = [{ address: msSolStringAddress("vault"), length: 5 }, { address: msSolStringAddress("abc"), length: 3 }];
+	const at = msSolTableAddress(table);
+	let found: uint8[32] = [];
+	let bump: uint8[1] = [];
+	assert msSolFindAddress(at, 2, program, msSolSpanAddress(found), msSolSpanAddress(bump)) == 0;
+	let programBytes: uint8[] = [];
+	for (let k = 0; k < 32; k++) { programBytes.push(0x77); }
+	const want = findAddress([118, 97, 117, 108, 116, 97, 98, 99], programBytes);
+	assert want.found && bump[0] == want.bump;
+	for (let k = 0; k < 32; k++) { assert found[k] == want.digest.bytes[k]; }
+	let derived: uint8[32] = [];
+	assert msSolDeriveAddress(at, 2, bump[0] as uint64, program, msSolSpanAddress(derived)) == 0;
+	for (let k = 0; k < 32; k++) { assert derived[k] == found[k]; }
+	assert msSolFindCanonicalAddress(at, 2, program, msSolSpanAddress(found), msSolSpanAddress(bump)) == 0;
+	assert msSolFindExpectedAddress(at, 2, program, msSolSpanAddress(found), msSolSpanAddress(bump)) == 0;
+	let other: uint8[32] = [];
+	assert msSolDeriveAddress(at, 17, 256, program, msSolSpanAddress(derived)) == 2;
+	assert msSolDeriveAddress(at, 2, 0, program, msSolSpanAddress(other)) != 2;
+	assert msSolFindCanonicalAddress(at, 2, program, msSolSpanAddress(other), msSolSpanAddress(bump)) == 3;
+	assert msSolFindAddress(at, 16, program, msSolSpanAddress(found), msSolSpanAddress(bump)) == 2;
+}
+
+test "a table staged in place finds, canonicalises and hashes against the same address" {
+	enterThree();
+	const program = msSolProgramId();
+	let table: SeedSlice[5] = [
+		{ address: msSolStringAddress("vault"), length: 5 },
+		{ address: msSolStringAddress("abc"), length: 3 },
+		{ address: 0, length: 0 },
+		{ address: 0, length: 0 },
+		{ address: 0, length: 0 },
+	];
+	const at = msSolTableAddress(table);
+	let found: uint8[32] = [];
+	let bump: uint8[1] = [];
+	assert msSolFindAddress(at, 2, program, msSolSpanAddress(found), msSolSpanAddress(bump)) == 0;
+	const expected = msSolSpanAddress(found);
+	let bumpByte: uint8[1] = [0];
+	assert msSolSeedStageInPlace(at, 5, msSolSpanAddress(bumpByte), program) == 2;
+	assert table[2].address == msSolSpanAddress(bumpByte) && table[2].length == 1 && table[3].address == program && table[3].length == 32 && table[4].length == 21;
+	assert msSolFindExpectedStaged(at, 2, expected) == 0 && bumpByte[0] == bump[0];
+	assert msSolFindCanonicalStaged(at, 2, expected) == 0;
+	assert msSolHashIsStaged(at, 2, bump[0] as uint64, expected) == 0;
+	assert msSolHashIsStaged(at, 2, (bump[0] - 1) as uint64, expected) == 3;
+	assert msSolSeedStageInPlace(at, 2, msSolSpanAddress(bumpByte), program) == 16;
+	assert msSolFindExpectedStaged(at, 16, expected) == 2 && msSolFindCanonicalStaged(at, 16, expected) == 2 && msSolHashIsStaged(at, 16, 0, expected) == 2;
+}
+
+test "the curve check refuses what it does not simulate and accepts a point on the curve" {
+	enterThree();
+	const base: uint8[] = [0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66];
+	assert msSolCurveValidatePoint(0, msSolSpanAddress(base), 0) == 0;
+	assert msSolHostFaultCodeOf() == 0;
+	assert msSolCurveValidatePoint(1, msSolSpanAddress(base), 0) == 1;
+	assert msSolHostFaultCodeOf() != 0 && msSolHostFaultMessage() != "";
+}
+
+test "the invoke family names what it waits for" {
+	enterThree();
+	assert faultOf(() => { msSolHostLeave(); }) == "solana kernel: msSolHostLeave waits for simulatorInvoke";
+	assert faultOf(() => { msSolHostInvocationTotal(); }) == "solana kernel: msSolHostInvocationTotal waits for simulatorInvoke";
+	assert faultOf(() => { msSolHostInvocationAt(0); }) == "solana kernel: msSolHostInvocationAt waits for simulatorInvoke";
+	assert faultOf(() => { msSolInvokeMetas(0, 0, 0, 0, 0, 0, 0); }) == "solana kernel: msSolInvokeMetas waits for simulatorInvoke";
+}
