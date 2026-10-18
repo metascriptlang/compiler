@@ -2462,15 +2462,33 @@ export function createIndexedAccessType(objectType: Type, indexType: Type): Type
 // literals; the deferred type while either side is generic; null when a key names no property.
 export function indexedAccessOf(objectType: Type, indexType: Type): Type | null {
 	if (hasGenericParams(objectType) || hasGenericParams(indexType)) return createIndexedAccessType(objectType, indexType);
-	if (indexType.kind == TypeKind.StringLiteral) return findFieldInVariant(objectType, indexType.typeName);
-	if (indexType.kind != TypeKind.Union || !isAllStringLiteralUnion(indexType)) return null;
+	if (indexType.kind != TypeKind.Union) return memberOfKey(objectType, indexType);
+	if (!isKeyUnion(indexType)) return null;
 	const members: Type[] = [];
 	for (const key of indexType.typeChildren) {
-		const member = findFieldInVariant(objectType, key.typeName);
+		const member = memberOfKey(objectType, key);
 		if (member == null) return null;
-		members.push(member);
+		if (members.indexOf(member) < 0) members.push(member);
 	}
 	return members.length == 1 ? members[0] : createUnion(members);
+}
+
+function arrayOf(t: Type): Type | null {
+	const peeled = skipModifier(t);
+	const array = peeled != null ? unwrapRef(peeled) : null;
+	return array != null && array.kind == TypeKind.Array ? array : null;
+}
+
+export function isArrayType(t: Type): boolean { return arrayOf(t) != null; }
+
+// E[][number] is E and E[]["length"] is number; a struct's key is the field it names.
+function memberOfKey(objectType: Type, key: Type): Type | null {
+	const array = arrayOf(objectType);
+	if (array != null) {
+		if (isNumeric(key)) return array.typeReturn;
+		return key.kind == TypeKind.StringLiteral && key.typeName == "length" ? numberType() : null;
+	}
+	return key.kind == TypeKind.StringLiteral ? findFieldInVariant(objectType, key.typeName) : null;
 }
 
 export function evaluateIndexedAccessType(t: Type): Type {
@@ -2495,11 +2513,22 @@ export function evaluateKeyOfType(t: Type): Type {
 
 // A constraint that holds only property names: a string literal, a union of them, or keyof T.
 export function isKeyConstraint(t: Type | null): boolean {
-	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.KeyOf || isAllStringLiteralUnion(t));
+	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.KeyOf || isAllStringLiteralUnion(t) || isKeyUnion(t));
 }
 
-// keyof T for an object type: the union of its property names as string literal types.
+// A union of property names, with `number` for the indices of an array (keyof E[]).
+function isKeyUnion(t: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren.length == 0) return false;
+	for (const child of t.typeChildren) {
+		if (child == null || (child.kind != TypeKind.StringLiteral && !isNumeric(child))) return false;
+	}
+	return true;
+}
+
+// keyof T for an object type: the union of its property names as string literal types;
+// keyof E[] is `number | "length"`, an array's methods being no keys in MetaScript.
 export function keyOfType(objectType: Type): Type | null {
+	if (arrayOf(objectType) != null) return createUnionInOrder([numberType(), createStringLiteral("length")]);
 	const s = peelToStruct(objectType);
 	if (s == null || s.typeNames == null || s.typeNames.length == 0) return null;
 	const keys: Type[] = [];

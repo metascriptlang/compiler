@@ -16,7 +16,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, refuseProxyComparison, updateThroughProxy, writeThroughProxy } from "./proxy";
-import { distinctNumericBase, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
+import { distinctNumericBase, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -2522,6 +2522,7 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 		node.nodeType = rewriteAsMethodCall(ctx, node, d.array, "[]", sargs); return;
 	}
 	if (subscriptRecv != null && subscriptRecv.kind == TypeKind.Struct && accessByKey(ctx, node, d, subscriptRecv, expectedType)) return;
+	if (isArrayType(arrType) && accessByKey(ctx, node, d, arrType, expectedType)) return;
 	if (subscriptRecv != null && !hasGenericParams(subscriptRecv)
 			&& (subscriptRecv.kind == TypeKind.Struct || subscriptRecv.kind == TypeKind.Boolean || isNumeric(subscriptRecv))) {
 		addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
@@ -3000,7 +3001,7 @@ function accessByKey(ctx: CheckerContext, node: Node, d: ArrayAccessData, recv: 
 	const key = keyType.kind == TypeKind.StringLiteral ? keyType.typeName
 		: d.index.kind == NodeKind.StringLiteral ? (d.index.data as StringLiteralData).value : null;
 	if (key == null) return false;
-	if (findFieldInVariant(recv, key) == null) {
+	if (findFieldInVariant(recv, key) == null && !(key == "length" && isArrayType(recv))) {
 		addError(ctx, `'"${key}"' is not a key of '${typeDisplayName(recv)}'`, node.location.line, node.location.column);
 		node.nodeType = errorType();
 		return true;
