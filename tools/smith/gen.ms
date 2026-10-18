@@ -11633,3 +11633,16 @@ test "a negation is refused over a negation and over a ternary" {
 	g.shape = Shape.Ternary;
 	assert g.negated("(a ? b : c)") == "";
 }
+
+test "a bigint or null local never starts as a plain null" {
+	const f = withWeights(CORE_ALL);
+	let seen = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (!line.contains(": bigint | null = ")) { continue; }
+			seen++;
+			assert !line.endsWith(": bigint | null = null;");
+		}
+	}
+	assert seen > 3;
+}
