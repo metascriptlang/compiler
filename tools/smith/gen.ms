@@ -5,6 +5,13 @@ const FN_COST_CAP: int64 = 20000 as int64;
 const ROUTINE_FRAMES: int32 = 4;
 const TOP_COST_CAP: int64 = 200000 as int64;
 const GEN_NODE_CAP: int32 = 4096;
+const ASYNC_STMT_PCT: int32 = 50;
+const ASYNC_FN_CAP: int32 = 8;
+const ASYNC_MAINS: int32 = 2;
+const ASYNC_MAIN_STMTS: int32 = 8;
+const ASYNC_NAME_FIRST: int32 = 10;
+const ASYNC_NAME_LAST: int32 = 90;
+const SKIP_RAISER_INLINE = "// @skip-raiser: a started async call runs to its end before the caller continues, so the trace order differs (inbox 2026-10-15-raiser-async-call-runs-inline)";
 const SEQ_LEN_CAP: int32 = 512;
 const SKIP_JS: string = "// @skip-js: pointer arithmetic and C externs have no JS form: the checker refuses the first on JS and an extern has no C linkage there";
 const SKIP_RAISER: string = "// @skip-raiser: the raiser refuses pointer arithmetic and has no host bridge for libc externs";
@@ -82,6 +89,24 @@ struct Fn {
 	name: string;
 	ret: Ty;
 	params: Ty[];
+	cost: int64;
+}
+
+enum AK {
+	Int,
+	Float,
+	Str,
+	Bool,
+	Cell,
+	Pt,
+	Arr,
+}
+
+struct Afn {
+	name: string;
+	kind: AK;
+	ty: Ty;
+	fails: boolean;
 	cost: int64;
 }
 
@@ -484,6 +509,11 @@ class Gen {
 	clsStatics: int32 = -1;
 	metaCount: int32 = 0;
 	metaSites: int32 = 0;
+	afns: Afn[] = [];
+	asyncCtx: boolean = false;
+	concurrent: boolean = false;
+	noStringIndex: boolean = false;
+	asyncCount: int32 = 0;
 	imports: string[] = [];
 	taskFams: Fam[] = [];
 	taskText: string = "";
@@ -894,6 +924,7 @@ class Gen {
 		if (fam == Fam.Cls) { return this.clsExpr(t, depth); }
 		if (fam == Fam.Conv) { return this.convExpr(t, depth); }
 		if (fam == Fam.Meta) { return this.metaExpr(t, depth); }
+		if (fam == Fam.Async) { return this.asyncExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1201,9 +1232,14 @@ class Gen {
 			this.scope.push({ name: x, ty: t, writable: false });
 			head = "for (const " + x + " of " + a + ") {\n";
 		}
+		const keptDirectives = this.directives.length;
 		const body = this.expr(t, 1);
 		this.mult = savedMult;
 		while (this.scope.length > saved) { this.scope.pop(); }
+		if (this.loopTangled(body)) {
+			this.directives.length = keptDirectives;
+			return "";
+		}
 		const tail = form == 1 ? "" : indent + "\t" + j + "++;\n" + indent + "\tif (" + j + " >= " + String(trips) + ") { break; }\n";
 		return indent + "let " + acc + ": " + tyName(t) + " = " + init + ";\n" +
 			(form == 1 ? "" : indent + "let " + j + ": int32 = 0;\n") +
@@ -1335,7 +1371,7 @@ class Gen {
 		}
 		const s = "(" + this.strText(depth + 1) + ")";
 		if (k == 2) {
-			const form = this.rng.below(4);
+			const form = this.rng.below(this.noStringIndex ? 3 : 4);
 			const from = String(this.rng.below(5));
 			const to = String(this.rng.below(7));
 			if (form == 0) { return s + ".slice(" + from + (this.rng.chance(50) ? ", " + to : "") + ")"; }
@@ -3436,6 +3472,7 @@ class Gen {
 		if (fam == Fam.Cls) { return this.clsStatement(indent); }
 		if (fam == Fam.Conv) { return this.convStatement(t, indent); }
 		if (fam == Fam.Meta) { return this.metaStatement(t, indent); }
+		if (fam == Fam.Async) { return this.asyncStatement(indent, depth); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -3493,7 +3530,7 @@ class Gen {
 		const k = this.pickW(W.IterDecl, W.IterManual);
 		if (k == 1 && gens.length > 0) { return this.iterDrain(t, gens, indent); }
 		if (k == 2 && gens.length > 0) { return this.iterManual(t, gens, indent); }
-		if (depth > 0 || this.atTop) { return ""; }
+		if (depth > 0 || this.atTop || this.asyncCtx) { return ""; }
 		return this.iterDecl(t, indent);
 	}
 
@@ -3594,6 +3631,429 @@ class Gen {
 			indent + "\t" + target + " = " + value + ";\n" +
 			stop +
 			indent + "}\n";
+	}
+
+	loopTangled(body: string): boolean {
+		return this.asyncCtx && body.contains("await ") && (body.contains("=>") || body.contains("function "));
+	}
+
+	awaitOk(): boolean { return this.asyncCtx && this.bodyDepth == 0; }
+
+	namesLeft(): boolean {
+		return !this.asyncCtx || (this.localCount < ASYNC_NAME_LAST && this.entCount < ASYNC_NAME_LAST && this.loopCount < ASYNC_NAME_LAST);
+	}
+
+	payloadTys(): Ty[] {
+		const out: Ty[] = [];
+		for (const t of this.tys) { if (t != Ty.Int64 && t != Ty.Uint64) { out.push(t); } }
+		return out;
+	}
+
+	pickPayload(): Ty {
+		const ok = this.payloadTys();
+		return ok.length > 0 ? ok[this.rng.below(ok.length)] : Ty.Int32;
+	}
+
+	asyncKinds(): AK[] {
+		const out: AK[] = [];
+		if (this.hasTy(Ty.Int32)) { out.push(AK.Int); }
+		if (this.hasTy(Ty.Float64)) { out.push(AK.Float); }
+		out.push(AK.Str);
+		out.push(AK.Bool);
+		if (this.payloadTys().length > 0) {
+			out.push(AK.Cell);
+			out.push(AK.Pt);
+			out.push(AK.Arr);
+		}
+		return out;
+	}
+
+	afnsOf(k: AK): Afn[] {
+		const out: Afn[] = [];
+		for (const a of this.afns) { if (a.kind == k && !a.fails) { out.push(a); } }
+		return out;
+	}
+
+	afnsPlain(): Afn[] {
+		const out: Afn[] = [];
+		for (const a of this.afns) { if (!a.fails) { out.push(a); } }
+		return out;
+	}
+
+	afnsFailing(): Afn[] {
+		const out: Afn[] = [];
+		for (const a of this.afns) { if (a.fails) { out.push(a); } }
+		return out;
+	}
+
+	pickAfn(list: Afn[]): Afn { return list[this.rng.below(list.length)]; }
+
+	akType(k: AK, t: Ty): string {
+		return match (k) {
+			AK.Int => "int32",
+			AK.Float => "float64",
+			AK.Str => "string",
+			AK.Bool => "boolean",
+			AK.Cell => "CellC" + tyTitle(t),
+			AK.Pt => "PtS" + tyTitle(t),
+			AK.Arr => tyName(t) + "[]",
+		};
+	}
+
+	akValue(k: AK, t: Ty, depth: int32, minItems: int32): string {
+		if (k == AK.Int) { return this.expr(Ty.Int32, depth); }
+		if (k == AK.Float) { return this.expr(Ty.Float64, depth); }
+		if (k == AK.Str) { return this.strText(depth); }
+		if (k == AK.Bool) { return this.cond(depth); }
+		if (k == AK.Cell) {
+			this.aggHelpers(t);
+			return "new CellC" + tyTitle(t) + "(" + this.expr(t, depth + 1) + ")";
+		}
+		if (k == AK.Pt) {
+			this.aggHelpers(t);
+			return "mkS" + tyTitle(t) + "(" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		return "[" + this.items(t, depth, this.rng.between(minItems, 3)) + "]";
+	}
+
+	akShow(k: AK, v: string): string {
+		return match (k) {
+			AK.Int | AK.Float => "String(" + v + ")",
+			AK.Str => v,
+			AK.Bool => "(" + v + " ? \"T\" : \"F\")",
+			AK.Cell => "String(" + v + ".v) + String(" + v + ".p.n.c)",
+			AK.Pt => "String(" + v + ".a) + String(" + v + ".n.d)",
+			AK.Arr => "String(" + v + ".length) + \":\" + (" + v + ".length > 0 ? String(" + v + "[" + v + ".length - 1]) : \"\")",
+		};
+	}
+
+	asyncCall(a: Afn, depth: int32): string {
+		return a.name + "(" + this.smallInt(depth) + ", " + this.strText(depth) + ")";
+	}
+
+	note(indent: string, text: string): string { return indent + "atrace += " + text + " + \",\";\n"; }
+
+	akBind(k: AK, t: Ty, rhs: string, indent: string): string {
+		const T = this.akType(k, t);
+		let name = "";
+		let decl = "";
+		if (k == AK.Int || k == AK.Float) {
+			name = this.newLocal(k == AK.Int ? Ty.Int32 : Ty.Float64);
+			decl = "let " + name + ": " + T + " = " + rhs + ";\n";
+		} else if (k == AK.Str) {
+			name = this.entName("s");
+			this.ents.push({ kind: EntKind.StrVar, name: name, ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 });
+			decl = "let " + name + ": string = " + rhs + ";\n";
+		} else if (k == AK.Bool) {
+			name = this.entName("b");
+			decl = "const " + name + ": boolean = " + rhs + ";\n";
+		} else if (k == AK.Cell) {
+			name = this.entName("k");
+			this.ents.push({ kind: EntKind.ClassVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+			decl = "const " + name + ": " + T + " = " + rhs + ";\n";
+		} else if (k == AK.Pt) {
+			name = this.entName("s");
+			this.ents.push({ kind: EntKind.StructVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+			decl = "let " + name + ": " + T + " = " + rhs + ";\n";
+		} else {
+			name = this.entName("a");
+			this.ents.push({ kind: EntKind.ArrayVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+			decl = "let " + name + ": " + T + " = " + rhs + ";\n";
+		}
+		return indent + decl + this.note(indent, this.akShow(k, name));
+	}
+
+	asyncExpr(t: Ty, depth: int32): string {
+		if (!this.awaitOk() || (t != Ty.Int32 && t != Ty.Float64)) { return ""; }
+		if (this.pickW(W.AsyncAwait, W.AsyncImmediate) == 1) {
+			if (!this.reserve(2 as int64)) { return ""; }
+			return "(await Promise.resolve(" + this.expr(t, depth + 1) + "))";
+		}
+		const fns = this.afnsOf(t == Ty.Int32 ? AK.Int : AK.Float);
+		if (fns.length == 0) { return ""; }
+		const a = this.pickAfn(fns);
+		if (!this.reserve(a.cost + (2 as int64))) { return ""; }
+		return "(await " + this.asyncCall(a, depth) + ")";
+	}
+
+	asyncStatement(indent: string, depth: int32): string {
+		if (!this.awaitOk()) { return ""; }
+		const k = this.pickW(W.AsyncSeq, W.AsyncLocal);
+		if (k == 0) { return this.asyncSeq(indent); }
+		if (k == 1) { return this.asyncTick(indent); }
+		if (k == 2) { return this.asyncResolve(indent); }
+		if (k == 3) { return this.asyncInterleave(indent); }
+		if (k == 4) { return this.asyncAll(indent); }
+		if (k == 5) { return this.asyncCatch(indent); }
+		if (k == 6) { return this.asyncHold(indent); }
+		return this.asyncLocal(indent);
+	}
+
+	asyncSeq(indent: string): string {
+		const fns = this.afnsPlain();
+		if (fns.length == 0) { return ""; }
+		const a = this.pickAfn(fns);
+		if (!this.reserve(a.cost + (3 as int64))) { return ""; }
+		return this.akBind(a.kind, a.ty, "await " + this.asyncCall(a, 0), indent);
+	}
+
+	asyncTick(indent: string): string {
+		if (!this.reserve(2 as int64)) { return ""; }
+		return this.note(indent, "\"" + this.entName("t") + "\"") + indent + "await Promise.resolve(0);\n";
+	}
+
+	asyncResolve(indent: string): string {
+		if (!this.reserve(3 as int64)) { return ""; }
+		const kinds = this.asyncKinds();
+		const k = kinds[this.rng.below(kinds.length)];
+		const t = this.pickPayload();
+		return this.akBind(k, t, "await Promise.resolve(" + this.akValue(k, t, 0, 1) + ")", indent);
+	}
+
+	asyncInterleave(indent: string): string {
+		const fns = this.afnsPlain();
+		if (fns.length == 0 || !this.concurrent || this.atTop) { return ""; }
+		const n = this.rng.between(2, 3);
+		const picked: Afn[] = [];
+		let cost = (n + 3) as int64;
+		for (let i = 0; i < n; i++) {
+			const a = this.pickAfn(fns);
+			picked.push(a);
+			cost = cost + a.cost;
+		}
+		if (!this.reserve(cost)) { return ""; }
+		this.directive(SKIP_RAISER_INLINE);
+		const names: string[] = [];
+		let out = "";
+		for (const a of picked) {
+			const w = this.entName("pr");
+			names.push(w);
+			out += indent + "const " + w + " = " + this.asyncCall(a, 0) + ";\n";
+		}
+		out += this.note(indent, "\"" + this.entName("m") + "\"");
+		if (this.rng.chance(50)) { out += indent + "await Promise.resolve(0);\n"; }
+		const reverse = this.rng.chance(50);
+		for (let i = 0; i < n; i++) {
+			const at = reverse ? n - 1 - i : i;
+			const r = this.entName("r");
+			out += indent + "const " + r + " = await " + names[at] + ";\n";
+			out += this.note(indent, this.akShow(picked[at].kind, r));
+		}
+		return out;
+	}
+
+	asyncAll(indent: string): string {
+		if (!this.concurrent || this.atTop) { return ""; }
+		const joinable: Afn[] = [];
+		for (const a of this.afnsPlain()) { if (a.kind != AK.Bool) { joinable.push(a); } }
+		if (joinable.length == 0) { return ""; }
+		const first = this.pickAfn(joinable);
+		const fns: Afn[] = [];
+		for (const a of joinable) { if (a.kind == first.kind && a.ty == first.ty) { fns.push(a); } }
+		const k = first.kind;
+		const n = this.rng.between(2, 3);
+		let cost = (n + 4) as int64;
+		const picked: Afn[] = [];
+		for (let i = 0; i < n; i++) {
+			const a = this.pickAfn(fns);
+			picked.push(a);
+			cost = cost + a.cost;
+		}
+		if (!this.reserve(cost)) { return ""; }
+		this.directive(SKIP_RAISER_ALL);
+		let calls = "";
+		for (const a of picked) {
+			const c = this.asyncCall(a, 0);
+			calls = calls == "" ? c : calls + ", " + c;
+		}
+		const rs = this.entName("r");
+		const x = this.entName("x");
+		return indent + "const " + rs + " = await Promise.all([" + calls + "]);\n" +
+			this.note(indent, "\"" + this.entName("m") + "\" + String(" + rs + ".length)") +
+			indent + "for (const " + x + " of " + rs + ") { atrace += " + this.akShow(k, x) + " + \",\"; }\n";
+	}
+
+	asyncCatch(indent: string): string {
+		const failing = this.afnsFailing();
+		const form = this.rng.below(failing.length > 0 ? 4 : 1);
+		const z = this.entName("z");
+		const caught = indent + "} catch (" + z + ") {\n" +
+			this.note(indent + "\t", "\"c:\" + (" + z + " as Error).message");
+		if (form == 0) {
+			if (!this.reserve(4 as int64)) { return ""; }
+			const kinds = this.asyncKinds();
+			const k = kinds[this.rng.below(kinds.length)];
+			const t = this.pickPayload();
+			return indent + "try {\n" +
+				indent + "\tawait Promise.reject<" + this.akType(k, t) + ">(new Error(\"" + this.entName("j") + "\"));\n" +
+				this.note(indent + "\t", "\"no\"") +
+				caught + indent + "}\n";
+		}
+		const a = this.pickAfn(failing);
+		if (!this.reserve(a.cost + (6 as int64))) { return ""; }
+		const r = this.entName("r");
+		const attempt = indent + "\tconst " + r + " = await " + this.asyncCall(a, 0) + ";\n" +
+			this.note(indent + "\t", "\"ok\" + " + this.akShow(a.kind, r));
+		if (form == 1) { return indent + "try {\n" + attempt + caught + indent + "}\n"; }
+		if (form == 2) {
+			const z2 = this.entName("z");
+			return indent + "try {\n" +
+				indent + "\ttry {\n" + attempt.split("\n").map((l: string): string => l == "" ? l : "\t" + l).join("\n") +
+				indent + "\t} catch (" + z2 + ") {\n" +
+				this.note(indent + "\t\t", "\"i:\" + (" + z2 + " as Error).message") +
+				indent + "\t\tthrow new Error(\"re:\" + (" + z2 + " as Error).message);\n" +
+				indent + "\t}\n" +
+				this.note(indent + "\t", "\"k\"") +
+				caught + indent + "}\n";
+		}
+		return indent + "try {\n" + attempt + caught + indent + "\tawait Promise.resolve(0);\n" + this.note(indent + "\t", "\"after\"") + indent + "}\n";
+	}
+
+	asyncHold(indent: string): string {
+		if (!this.reserve(8 as int64)) { return ""; }
+		const t = this.pickTy();
+		const T = tyName(t);
+		const X = tyTitle(t);
+		this.aggHelpers(t);
+		const mask = 1 + this.rng.below(15);
+		let out = "";
+		let after = "";
+		const seen: string[] = [];
+		if ((mask & 1) != 0) {
+			const s = this.entName("s");
+			out += indent + "let " + s + ": string = " + this.strText(0) + ";\n";
+			this.ents.push({ kind: EntKind.StrVar, name: s, ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 });
+			after += indent + s + " = " + s + " + \"" + this.strLiteral(1) + "\";\n";
+			seen.push(s);
+		}
+		if ((mask & 2) != 0) {
+			const a = this.entName("a");
+			out += indent + "let " + a + ": " + T + "[] = [" + this.items(t, 0, this.rng.below(4)) + "];\n";
+			this.ents.push({ kind: EntKind.ArrayVar, name: a, ty: t, params: [], len: 0, cost: 0 as int64 });
+			after += indent + a + ".push(" + this.expr(t, 0) + ");\n";
+			seen.push("String(" + a + ".length)");
+		}
+		if ((mask & 4) != 0) {
+			const k = this.entName("k");
+			out += indent + "const " + k + " = new CellC" + X + "(" + this.expr(t, 0) + ");\n";
+			this.ents.push({ kind: EntKind.ClassVar, name: k, ty: t, params: [], len: 0, cost: 0 as int64 });
+			after += indent + k + ".v = " + this.expr(t, 0) + ";\n";
+			seen.push("String(" + k + ".v)");
+		}
+		if ((mask & 8) != 0) {
+			const r = this.entName("s");
+			out += indent + "let " + r + ": PtS" + X + " = mkS" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ");\n";
+			this.ents.push({ kind: EntKind.StructVar, name: r, ty: t, params: [], len: 0, cost: 0 as int64 });
+			after += indent + r + ".n.d = " + this.expr(t, 0) + ";\n";
+			seen.push("String(" + r + ".a) + String(" + r + ".n.d)");
+		}
+		const plain = this.afnsPlain();
+		if (plain.length > 0 && this.rng.chance(50)) {
+			const a = this.pickAfn(plain);
+			if (this.reserve(a.cost + (2 as int64))) { out += indent + "await " + this.asyncCall(a, 0) + ";\n"; }
+		} else {
+			out += indent + "await Promise.resolve(0);\n";
+		}
+		let line = "";
+		for (const v of seen) { line = line == "" ? v : line + " + " + v; }
+		return out + after + this.note(indent, line);
+	}
+
+	asyncLocal(indent: string): string {
+		if (!this.hasTy(Ty.Int32)) { return ""; }
+		const cap = this.spare(3 as int64);
+		const name = this.entName("c");
+		const q = this.entName("q");
+		const outer = this.visible(Ty.Int32, true);
+		this.scope.push({ name: q, ty: Ty.Int32, writable: false });
+		const body = this.routine(Ty.Int32, 1, cap);
+		let write = "";
+		let cost = body.cost + (4 as int64);
+		if (outer.length > 0 && this.rng.chance(60)) {
+			const w = this.routine(Ty.Int32, 1, cap);
+			write = indent + "\t" + outer[this.rng.below(outer.length)].name + " = " + w.text + ";\n";
+			cost = cost + w.cost;
+		}
+		this.scope.pop();
+		if (!this.reserve(cost)) { return ""; }
+		const call = "await " + name + "(" + this.smallInt(0) + ")";
+		const result = this.newLocal(Ty.Int32);
+		return indent + "const " + name + " = async (" + q + ": int32): Promise<int32> => {\n" +
+			this.note(indent + "\t", "\"" + name + "\"") +
+			indent + "\tawait Promise.resolve(0);\n" +
+			write +
+			indent + "\treturn " + body.text + ";\n" +
+			indent + "};\n" +
+			indent + "let " + result + ": int32 = " + call + ";\n";
+	}
+
+	asyncBody(pad: string, ret: AK, t: Ty, name: string, fails: boolean, params: boolean): string {
+		this.scope = params ? [{ name: "p0", ty: Ty.Int32, writable: false }] : [];
+		this.ents = [];
+		this.entCount = ASYNC_NAME_FIRST;
+		this.localCount = ASYNC_NAME_FIRST;
+		this.loopCount = ASYNC_NAME_FIRST;
+		this.cost = 0 as int64;
+		this.costCap = FN_COST_CAP;
+		this.mult = 1 as int64;
+		this.asyncCtx = true;
+		let head = "";
+		if (params) {
+			const held = this.entName("h");
+			this.ents.push({ kind: EntKind.StrVar, name: held, ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 });
+			head = this.note(pad, "\"" + name + ":\" + String(p0)") + pad + "let " + held + ": string = p1;\n";
+		}
+		let early = "";
+		let late = "";
+		if (fails) {
+			const check = pad + "if (p0 % 3 != 0) { throw new Error(\"" + name + ":\" + String(p0)); }\n";
+			const when = this.rng.below(3);
+			if (when == 0) { early = check; }
+			if (when == 1) { early = pad + "await Promise.resolve(0);\n" + check; }
+			if (when == 2) { late = check; }
+		}
+		const body = this.block(0, pad, false, Ty.Int32, false);
+		return head + early + body + late;
+	}
+
+	asyncFn(): string {
+		const kinds = this.asyncKinds();
+		const k = kinds[this.rng.below(kinds.length)];
+		const t = k == AK.Cell || k == AK.Pt || k == AK.Arr ? this.pickPayload() : Ty.Int32;
+		const fails = this.rng.chance(30);
+		const form = this.pickW(W.AsyncFunc, W.AsyncMethod);
+		const index = this.asyncCount;
+		this.asyncCount++;
+		const name = (fails ? "af" : "av") + String(index);
+		const R = this.akType(k, t);
+		this.useHelper("atrace", "let atrace: string = \"\";\n");
+		const pad = form == 2 ? "\t\t" : "\t";
+		const body = this.asyncBody(pad, k, t, name, fails, true);
+		const tail = this.note(pad, "\"" + name + ".e\"") + pad + "return " + this.akValue(k, t, 0, 0) + ";\n";
+		const sig = "(p0: int32, p1: string): Promise<" + R + ">";
+		let callee = name;
+		let text = "";
+		if (form == 0) { text = "async function " + name + sig + " {\n" + body + tail + "}\n"; }
+		if (form == 1) { text = "const " + name + " = async " + sig + " => {\n" + body + tail + "};\n"; }
+		if (form == 2) {
+			const cls = "AObj" + String(index);
+			callee = "ao" + String(index);
+			text = "class " + cls + " {\n\tk: int32 = " + String(this.rng.below(9)) + ";\n\tasync m" + sig + " {\n" + body + tail + "\t}\n}\n" +
+				"const " + callee + " = new " + cls + "();\n";
+			callee = callee + ".m";
+		}
+		this.afns.push({ name: callee, kind: k, ty: t, fails: fails, cost: this.cost + (4 as int64) });
+		this.asyncCtx = false;
+		return text;
+	}
+
+	asyncMain(index: int32): string {
+		const savedMax = this.stmtMax;
+		this.stmtMax = this.stmtMax < ASYNC_MAIN_STMTS ? ASYNC_MAIN_STMTS : this.stmtMax;
+		const body = this.asyncBody("\t", AK.Int, Ty.Int32, "am" + String(index), false, false);
+		this.stmtMax = savedMax;
+		this.asyncCtx = false;
+		return "async function am" + String(index) + "(): Promise<void> {\n" + body + "\tconsole.log(\"a" + String(index) + " \" + atrace);\n}\n";
 	}
 
 	iterManual(t: Ty, gens: Ent[], indent: string): string {
@@ -6959,6 +7419,10 @@ class Gen {
 	statement(depth: int32, indent: string, inLoop: boolean, ret: Ty, inFn: boolean): string {
 		this.nodesLeft--;
 		if (!this.reserve(1 as int64)) { return ""; }
+		if (this.awaitOk() && this.wt(W.StmtFam) > 0 && this.rng.chance(ASYNC_STMT_PCT)) {
+			const awaited = this.asyncStatement(indent, depth);
+			if (awaited != "") { return awaited; }
+		}
 		if (this.fams.length > 0 && this.rng.chance(this.wt(W.StmtFam))) {
 			const fam = this.famStatement(indent, depth);
 			if (fam != "") { return fam; }
@@ -7011,9 +7475,14 @@ class Gen {
 			const savedMult = this.mult;
 			this.mult = this.mult * (trips as int64);
 			this.scope.push({ name: name, ty: Ty.Int32, writable: false });
+			const keptDirectives = this.directives.length;
 			const body = this.block(depth + 1, indent + "\t", true, ret, inFn);
 			this.scope.pop();
 			this.mult = savedMult;
+			if (this.loopTangled(body)) {
+				this.directives.length = keptDirectives;
+				return "";
+			}
 			return indent + "for (let " + name + ": int32 = 0; " + name + " < " + String(trips) + "; " + name + "++) {\n" +
 				body + indent + "}\n";
 		}
@@ -7041,7 +7510,7 @@ class Gen {
 		this.blockId = this.blockCount;
 		let out = "";
 		for (let i = 0; i < n; i++) {
-			if (this.nodesLeft == 0 || this.cost + this.mult > this.costCap) { break; }
+			if (this.nodesLeft == 0 || this.cost + this.mult > this.costCap || !this.namesLeft()) { break; }
 			out += this.statement(depth, indent, inLoop, ret, inFn);
 		}
 		while (this.scope.length > saved) { this.scope.pop(); }
@@ -7124,6 +7593,9 @@ export function generate(seed: uint64, f: Features): string {
 	g.tripMax = f.trips;
 	g.w = f.w;
 
+	const asyncOn = g.has(Fam.Async) && g.wt(W.FamAsync) > 0;
+	g.noStringIndex = asyncOn;
+
 	let globals = "";
 	for (let i = 0; i < f.globals; i++) {
 		const t = g.pickTy();
@@ -7135,6 +7607,19 @@ export function generate(seed: uint64, f: Features): string {
 	let fns = "";
 	for (let i = 0; i < f.funcs; i++) { fns += g.fn(i) + "\n"; }
 
+	let asyncDecls = "";
+	let asyncTail = "";
+	if (asyncOn) {
+		g.concurrent = g.rng.chance(50);
+		const count = g.rng.between(2, ASYNC_FN_CAP);
+		for (let i = 0; i < count; i++) { asyncDecls += g.asyncFn() + "\n"; }
+		for (let i = 0; i < ASYNC_MAINS; i++) {
+			asyncDecls += g.asyncMain(i) + "\n";
+			asyncTail += "await am" + String(i) + "();\n";
+		}
+		asyncTail += "console.log(\"at \" + atrace);\n";
+	}
+
 	let top = "";
 	for (let b = 0; b < f.top; b++) {
 		g.scope = [];
@@ -7143,7 +7628,9 @@ export function generate(seed: uint64, f: Features): string {
 		g.costCap = FN_COST_CAP;
 		g.mult = 1 as int64;
 		g.atTop = true;
+		g.asyncCtx = asyncOn;
 		top += g.block(0, "", false, Ty.Int32, false);
+		g.asyncCtx = false;
 		g.atTop = false;
 	}
 
@@ -7187,7 +7674,7 @@ export function generate(seed: uint64, f: Features): string {
 	let head = "// smith seed=" + String(seed) + " features=" + f.format() + "\n";
 	for (const d of g.directives) { head += d + "\n"; }
 	for (const line of g.imports) { head += line + "\n"; }
-	return head + g.helperText + plantDecls(f.plant) + globals + "\n" + fns + g.taskText + top + entries + g.taskCalls + plantSite + prints;
+	return head + g.helperText + plantDecls(f.plant) + globals + "\n" + fns + asyncDecls + g.taskText + top + entries + asyncTail + g.taskCalls + plantSite + prints;
 }
 
 test "the same seed and features give the same program" {
@@ -9843,4 +10330,225 @@ test "a quote splices a whole call argument nowhere" {
 		}
 	}
 	assert splices > 50;
+}
+
+test "the async family alone reaches each of its shapes" {
+	const f = withWeights("fams=async types=int32,uint64,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	const shapes = ["\nasync function a", "\nconst a", " = async (p0: int32, p1: string): Promise<", "\n\tasync m(p0: int32, p1: string): Promise<",
+		"\tawait Promise.resolve(0);\n", " = await Promise.resolve(", " = await pr", "await Promise.all([", "} catch (z", "await Promise.reject<",
+		"(await a", ".n.d = ", ".push(", ".v = ", " = async (q", "throw new Error(", "\"re:\""];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "an async program names its Raiser skip only for the shapes the Raiser runs differently" {
+	const f = withWeights("fams=async types=int32,float64 stmts=8 w.stmt.fam=80 w.async.interleave=8 w.async.all=8");
+	let inline = 0;
+	let all = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		const started = text.contains("const pr");
+		const joined = text.contains("await Promise.all([");
+		assert text.contains(SKIP_RAISER_INLINE) == started;
+		assert text.contains(SKIP_RAISER_ALL) == joined;
+		assert countOf(text, SKIP_RAISER_INLINE) <= 1 && countOf(text, SKIP_RAISER_ALL) <= 1;
+		if (started) { inline++; }
+		if (joined) { all++; }
+	}
+	assert inline > 5 && all > 5;
+	assert !generate(1 as uint64, withWeights("fams=closure,union")).contains("@skip");
+}
+
+test "a directive is kept once however often its shape appears" {
+	const g = new Gen();
+	g.directive(SKIP_RAISER_ALL);
+	g.directive(SKIP_RAISER_INLINE);
+	g.directive(SKIP_RAISER_ALL);
+	assert g.directives.length == 2;
+}
+
+test "no 64-bit integer goes through a promise" {
+	const f = withWeights("fams=async types=int32,int64,uint64,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (const n of ["int64", "uint64", "CellCInt64", "CellCUint64", "PtSInt64", "PtSUint64"]) {
+			assert !text.contains("Promise<" + n) && !text.contains("reject<" + n);
+		}
+	}
+}
+
+test "Promise.all is never emitted over a boolean result" {
+	for (let seed = 1; seed < 41; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32];
+		g.costCap = FN_COST_CAP;
+		g.concurrent = true;
+		g.afns = [{ name: "avBool", kind: AK.Bool, ty: Ty.Int32, fails: false, cost: 1 as int64 },
+			{ name: "avInt", kind: AK.Int, ty: Ty.Int32, fails: false, cost: 1 as int64 }];
+		const text = g.asyncAll("");
+		assert text == "" || (text.contains("avInt(") && !text.contains("avBool"));
+	}
+}
+
+test "an async function stays within the function budget and leaves no context open" {
+	for (let seed = 1; seed < 13; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Int32, Ty.Float64];
+		g.stmtMax = 16;
+		g.depthMax = 4;
+		g.exprMax = 4;
+		g.tripMax = 8;
+		g.fams = [Fam.Async, Fam.Closure];
+		for (let i = 0; i < 4; i++) { g.asyncFn(); }
+		for (const a of g.afns) { assert a.cost <= FN_COST_CAP + (4 as int64); }
+		assert g.mult == (1 as int64);
+		assert !g.asyncCtx && g.bodyDepth == 0;
+	}
+}
+
+test "Promise.all joins promises of one exact type" {
+	let joined = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32, Ty.Float64];
+		g.costCap = FN_COST_CAP;
+		g.concurrent = true;
+		g.afns = [{ name: "avCi0", kind: AK.Cell, ty: Ty.Int32, fails: false, cost: 1 as int64 },
+			{ name: "avCi1", kind: AK.Cell, ty: Ty.Int32, fails: false, cost: 1 as int64 },
+			{ name: "avCf0", kind: AK.Cell, ty: Ty.Float64, fails: false, cost: 1 as int64 },
+			{ name: "avCf1", kind: AK.Cell, ty: Ty.Float64, fails: false, cost: 1 as int64 },
+			{ name: "avPi0", kind: AK.Pt, ty: Ty.Int32, fails: false, cost: 1 as int64 }];
+		const text = g.asyncAll("");
+		if (text == "") { continue; }
+		joined++;
+		const groups = [text.contains("avCi"), text.contains("avCf"), text.contains("avPi")];
+		assert (groups[0] ? 1 : 0) + (groups[1] ? 1 : 0) + (groups[2] ? 1 : 0) == 1;
+	}
+	assert joined > 20;
+}
+
+test "calls started together and Promise.all stay out of module level and of ordered programs" {
+	for (let seed = 1; seed < 41; seed++) {
+		for (const top of [true, false]) {
+			const g = new Gen();
+			g.rng = Rng.seeded(seed as uint64);
+			g.tys = [Ty.Int32];
+			g.costCap = FN_COST_CAP;
+			g.concurrent = top == false;
+			g.atTop = top;
+			g.afns = [{ name: "avInt0", kind: AK.Int, ty: Ty.Int32, fails: false, cost: 1 as int64 },
+				{ name: "avInt1", kind: AK.Int, ty: Ty.Int32, fails: false, cost: 1 as int64 }];
+			if (top) {
+				assert g.asyncInterleave("") == "" && g.asyncAll("") == "";
+			} else {
+				assert g.asyncInterleave("") != "" && g.asyncAll("") != "";
+			}
+		}
+	}
+	let ordered = 0;
+	const f = withWeights("fams=async types=int32,float64 stmts=8 w.stmt.fam=80");
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		if (!text.contains("@skip-raiser") && !text.contains("const pr") && !text.contains("Promise.all")) { ordered++; }
+	}
+	assert ordered > 8;
+}
+
+test "a generator is never declared inside an async function" {
+	const f = withWeights("fams=iter,async stmts=8 w.stmt.fam=80 w.expr.fam=40 w.iter.decl=6");
+	let gens = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		let insideAsync = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line != "" && !line.startsWith("\t") && !line.startsWith("}") && !line.startsWith("//")) {
+				insideAsync = line.startsWith("async function ") || line.contains(" = async (") || line.startsWith("class AObj");
+			}
+			if (line.contains("function* y")) {
+				gens++;
+				assert !insideAsync;
+			}
+		}
+	}
+	assert gens > 5;
+}
+
+test "an async program never indexes a string while the string family still does" {
+	const f = withWeights("fams=async,str types=int32,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	for (let seed = 1; seed < 41; seed++) {
+		assert !generate(seed as uint64, f).contains("function atS(");
+	}
+	assert countOver("function atS(", 20, withWeights("fams=str types=int32,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40")) > 3;
+}
+
+function declaredName(line: string): string {
+	const t = line.trim();
+	if (!t.startsWith("let ") && !t.startsWith("const ")) { return ""; }
+	const rest = t.slice(t.indexOf(" ") + 1, t.length);
+	let end = 0;
+	while (end < rest.length && rest.charCodeAt(end) != 58 && rest.charCodeAt(end) != 32) { end++; }
+	return rest.slice(0, end);
+}
+
+function trailingDigits(name: string): int32 {
+	let n = 0;
+	while (n < name.length && name.charCodeAt(name.length - 1 - n) >= 48 && name.charCodeAt(name.length - 1 - n) <= 57) { n++; }
+	return n;
+}
+
+test "an async body numbers its names with two digits so that no name begins another" {
+	const f = withWeights("fams=async,closure,agg,coll,str,own stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	let named = 0;
+	for (let seed = 1; seed < 31; seed++) {
+		let insideAsync = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line != "" && !line.startsWith("\t") && !line.startsWith("}") && !line.startsWith("//")) {
+				insideAsync = line.startsWith("async function ") || line.contains(" = async (") || line.startsWith("class AObj");
+			}
+			if (!insideAsync || !line.startsWith("\t")) { continue; }
+			const name = declaredName(line);
+			if (name == "" || name.startsWith("[") || trailingDigits(name) == 0) { continue; }
+			named++;
+			assert trailingDigits(name) == 2;
+		}
+	}
+	assert named > 200;
+}
+
+test "a loop in an async body never holds an await together with a closure" {
+	const f = withWeights("fams=async,closure,coll stmts=8 w.stmt.fam=80 w.expr.fam=40 w.stmt.for=40");
+	let loops = 0;
+	let awaiting = 0;
+	let closing = 0;
+	for (let seed = 1; seed < 81; seed++) {
+		let insideAsync = false;
+		let loopIndent = "";
+		let text = "";
+		const lines = generate(seed as uint64, f).split("\n");
+		for (let k = 0; k <= lines.length; k++) {
+			const line = k < lines.length ? lines[k] : "";
+			if (loopIndent != "" && (k == lines.length || line == loopIndent + "}")) {
+				loops++;
+				if (text.contains("await ")) { awaiting++; }
+				if (text.contains("=>")) { closing++; }
+				assert !(text.contains("await ") && text.contains("=>"));
+				loopIndent = "";
+			}
+			if (line != "" && !line.startsWith("\t") && !line.startsWith("}") && !line.startsWith("//")) {
+				insideAsync = line.startsWith("async function ") || line.contains(" = async (") || line.startsWith("class AObj");
+			}
+			if (loopIndent != "") { text += line + "\n"; continue; }
+			if (insideAsync && line.trim().startsWith("for (") && line.endsWith("{")) {
+				loopIndent = line.substring(0, line.length - line.trim().length);
+				text = line + "\n";
+			}
+		}
+	}
+	assert loops > 30 && awaiting > 8 && closing > 8;
 }
