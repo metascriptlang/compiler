@@ -110,6 +110,9 @@ extern function msFutureReadDouble(fut: Ptr<void>): number from "msFutureReadDou
 extern function msFutureReadInt32(fut: Ptr<void>): int32 from "msFutureReadInt32";
 
 @compilerFunc @throws
+extern function msFutureReadInt64(fut: Ptr<void>): int64 from "msFutureReadInt64";
+
+@compilerFunc @throws
 extern function msFutureReadBool(fut: Ptr<void>): boolean from "msFutureReadBool";
 
 @compilerFunc @throws

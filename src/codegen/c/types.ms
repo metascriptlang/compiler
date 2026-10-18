@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, isStringLiteralUnion, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, isStringLiteralUnion, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -948,6 +948,7 @@ export enum PromiseAllShape {
 	None,
 	Int32,
 	Int64,
+	Integer,
 	Boxed,
 }
 
@@ -959,6 +960,7 @@ export function promiseAllShape(inner: Type | null): PromiseAllShape {
 		if (simple == "double" || simple == "bool" || simple == "MS_BOOL" || simple == "msString" || simple.endsWith("*")) return PromiseAllShape.None;
 		if (simple == "int32_t") return PromiseAllShape.Int32;
 		if (simple == "int64_t") return PromiseAllShape.Int64;
+		if (isIntegerType(inner)) return PromiseAllShape.Integer;
 		return PromiseAllShape.Boxed;
 	}
 	if (isAwaitable(inner)) return PromiseAllShape.None;
@@ -2002,7 +2004,8 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	const futName = "msFuture_" + mangle(innerDesc);
 	const arrName = arrayCTypeName(arrT);
 	const payloadName = getArrayContentType(arrName);
-	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", arrTypeInfo);
+	const copyStmt = shape == PromiseAllShape.Integer ? "MS_COPY_SAME" : "MS_COPY_BOXED_MOVE";
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, copyStmt, arrTypeInfo);
 	return "msPromiseAllFor_" + futName;
 }
 
