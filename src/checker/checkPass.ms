@@ -27,6 +27,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram } from "./instantiate";
 import { CtorRow, ctorRoutineMark, ctorRoutinesFrom, replayCtorRoutines } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
+import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { bindContainerNames, bindModuleNames, releaseNames, paramSymbol } from "./bindNames";
@@ -589,6 +590,9 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 			ctx.stmtPosExpr = d.expr;
 			checkExpr(ctx, d.expr, null);
 			ctx.stmtPosExpr = prevStmtPos;
+			if (isComputedGotoMark(node) && !isRegisteredMark(ctx, node)) {
+				addError(ctx, "@computedGoto must be a statement of a while loop body", d.expr.location.line, d.expr.location.column);
+			}
 			if (d.expr.kind == NodeKind.MacroInvocation && invokedMacroSym(ctx, d.expr) == null && !isDirectiveInvocation(d.expr)) {
 				addError(ctx, "invalid directive '@" + (d.expr.data as MacroInvocationData).macroName + "': no macro or compiler directive has this name", d.expr.location.line, d.expr.location.column);
 			}
@@ -1908,6 +1912,8 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	// PARALOCK Phase 1: snapshot affine state + outer affine Promise keys before the body
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
+	const marks = computedGotoMarks(d.whileBody);
+	for (const m of marks) ctx.computedGotoMarks.push(m);
 	// Ref parity: while(true) propagates, others conservative
 	if (isAlwaysTrue(d.whileCondition)) {
 		const saved = enterLoopScope(ctx);
@@ -1920,6 +1926,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 		exitLoopScope(ctx, saved);
 		restoreInitState(ctx.initTracker, oldState);
 	}
+	if (marks.length > 0) refuseComputedGotoMisuse(ctx, node, marks[0]);
 	// PARALOCK Phase 1: detect outer-handle consumption (reuse on iteration N+1)
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.whileBody);

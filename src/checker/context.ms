@@ -1257,6 +1257,7 @@ export class CheckerContext {
 	pendingSpawnThunk: boolean;
 	inLoop: boolean;           // break/continue validation
 	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
+	computedGotoMarks: Node[]; // @computedGoto statements of the loops being checked
 	decoratorsPending: boolean;
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
 	moduleGraph: ModuleGraph;
@@ -1347,6 +1348,7 @@ export function createContext(): CheckerContext {
 		pendingSpawnThunk: false,
 		inLoop: false,
 		inSwitch: false,
+		computedGotoMarks: [],
 		decoratorsPending: false,
 		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,
