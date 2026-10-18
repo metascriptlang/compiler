@@ -52,20 +52,20 @@ export class Reflect {
 	}
 }
 
-function holeError(what: string, index: number, length: number): never {
-	throw new Error(`${what} at index ${index} would leave a hole in an array of length ${length}`);
+function holeError(what: string, length: number): never {
+	throw new Error(`${what} would leave a hole in an array of length ${length}`);
 }
 
 // An index write at the length appends, as JavaScript's [[Set]] does; past it would leave a hole.
 function arraySet<E>(target: E[], key: number, value: E): boolean {
 	if (key == target.length) target.push(value);
-	else if (key > target.length) holeError("a write", key, target.length);
+	else if (key > target.length) holeError(`a write at index ${key}`, target.length);
 	else target[key] = value;
 	return true;
 }
 // A shorter length cuts the array; a longer one would leave holes.
 function arraySet<E>(target: E[], key: "length", value: number): boolean {
-	if (value > target.length) holeError("a length", value, target.length);
+	if (value > target.length) holeError(`a length of ${value}`, target.length);
 	target.shrink(value as int64);
 	return true;
 }
@@ -76,7 +76,7 @@ function arrayHas<E>(target: E[], key: "length"): boolean { return true; }
 // Deleting the last element removes it; any other index would leave a hole.
 function arrayDelete<E>(target: E[], key: number): boolean {
 	if (key >= target.length) return true;
-	if (key != target.length - 1) holeError("a delete", key, target.length);
+	if (key != target.length - 1) holeError(`a delete at index ${key}`, target.length);
 	target.pop();
 	return true;
 }
@@ -139,9 +139,9 @@ export function proxyReverse<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: P
 	const n = len(p);
 	for (let lower = 0; lower < Math.floor(n / 2); lower += 1) {
 		const upper = n - lower - 1;
-		if (!has(p, lower)) holeError("reverse", lower, n);
+		if (!has(p, lower)) holeError(`reverse at index ${lower}`, n);
 		const lowerValue = get(p, lower);
-		if (!has(p, upper)) holeError("reverse", upper, n);
+		if (!has(p, upper)) holeError(`reverse at index ${upper}`, n);
 		const upperValue = get(p, upper);
 		set(p, lower, upperValue);
 		set(p, upper, lowerValue);
@@ -183,7 +183,7 @@ export function proxyMap<E, H, U>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Pr
 	const n = len(p);
 	const out: U[] = [];
 	for (let k = 0; k < n; k += 1) {
-		if (!has(p, k)) holeError("map", k, n);
+		if (!has(p, k)) holeError(`map at index ${k}`, n);
 		out.push(fn(get(p, k), k));
 	}
 	return out;
