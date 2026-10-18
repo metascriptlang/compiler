@@ -1,5 +1,4 @@
 // Raiser VM — Bytecode executor
-// If/else dispatch loop. C backend has optional computed-goto fast path (vmDispatch.c).
 
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
@@ -235,9 +234,9 @@ export interface RaiserVM {
 
 interface RaiserRun {
 	floor: number;
-	funcIdx: number;
-	baseReg: number;
-	ip: number;
+	funcIdx: int32;
+	baseReg: int32;
+	ip: int32;
 	halted: boolean;
 	yielded: boolean;
 	exitValue: RaiserValue;
@@ -462,7 +461,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	const callee = getModuleFunc(vm.mod, funcIdx);
 	if (vm.frameFloor > 0 && !runSuspendedAt(vm, vm.frameFloor)) suspendRun(vm);
 	vm.funcIdx = funcIdx as int32;
-	vm.baseReg = vm.frameFloor;
+	vm.baseReg = vm.frameFloor as int32;
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
@@ -1131,7 +1130,7 @@ function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return vm.sched.strands.items.length - 1;
 }
@@ -1184,7 +1183,7 @@ function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
 	vm.safePoints = sp;
 	vm.unwinding = false;
 	vm.savedIp = -1;
-	vm.funcIdx = funcIdx;
+	vm.funcIdx = funcIdx as int32;
 	vm.baseReg = 0;
 	vm.ip = 0;
 }
@@ -1529,308 +1528,408 @@ function runStrandSlice(vm: RaiserVM): void {
 		const base = vm.baseReg;
 
 		// --- Core ops ---
-		if (op == RaiserOpcode.LoadConst) {
-			const bx = (ib * 256 + ic);
-			if (bx >= getFuncConstLen(func)) {
-				vmError(vm, `constant index out of bounds: ${bx}`);
-			} else {
-				const val = getFuncConst(func, bx);
-				setReg(vm, base + ia, val);
-			}
-		} else if (op == RaiserOpcode.Move) {
-			setReg(vm, base + ia, slots[base + ib]);
-		} else if (op == RaiserOpcode.LoadGlobal) {
-			setReg(vm, base + ia, vm.globals[ib]);
-		} else if (op == RaiserOpcode.StoreGlobal) {
-			const source = slots[base + ia];
-			vmIncref(vm, source);
-			vmDecref(vm, vm.globals[ib]);
-			copyValueInto(vm.globals[ib], source);
-		} else if (op == RaiserOpcode.CopyValue) {
-			const source = slots[base + ib];
-			const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source,
-				func.copyPlans, ic as int32, vm.orc);
-			setReg(vm, base + ia, copied);
-			vmMaybeCollect(vm);
-		} else if (op == RaiserOpcode.LoadNil) {
-			setRegNil(vm, base + ia);
-		} else if (op == RaiserOpcode.Halt) {
-			const haltVal = slots[base + ia];
-			if (ib != 1 && strandFinish(vm, haltVal)) {
+		match (op) {
+			RaiserOpcode.LoadConst => {
+				const bx = (ib * 256 + ic);
+				if (bx >= getFuncConstLen(func)) {
+					vmError(vm, `constant index out of bounds: ${bx}`);
+				} else {
+					const val = getFuncConst(func, bx);
+					setReg(vm, base + ia, val);
+				}
+			},
+			RaiserOpcode.Move => {
+				setReg(vm, base + ia, slots[base + ib]);
+			},
+			RaiserOpcode.LoadGlobal => {
+				setReg(vm, base + ia, vm.globals[ib]);
+			},
+			RaiserOpcode.StoreGlobal => {
+				const source = slots[base + ia];
+				vmIncref(vm, source);
+				vmDecref(vm, vm.globals[ib]);
+				copyValueInto(vm.globals[ib], source);
+			},
+			RaiserOpcode.CopyValue => {
+				const source = slots[base + ib];
+				const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source,
+					func.copyPlans, ic as int32, vm.orc);
+				setReg(vm, base + ia, copied);
+				vmMaybeCollect(vm);
+			},
+			RaiserOpcode.LoadNil => {
+				setRegNil(vm, base + ia);
+			},
+			RaiserOpcode.Halt => {
+				const haltVal = slots[base + ia];
+				if (ib != 1 && strandFinish(vm, haltVal)) {
+					vm.yielded = true;
+				} else {
+					finishProgram(vm, haltVal, ib == 1);
+				}
+			},
+			RaiserOpcode.Jump => {
+				const rawAx = ia * 65536 + ib * 256 + ic;
+				const offset = rawAx >= 8388608 ? rawAx - 16777216 : rawAx;
+				if (offset < 0) {
+					// Loop back-edge: this is ONE iteration. Straight-line code is
+					// finite by construction and recursion is bounded by
+					// MAX_CALL_DEPTH, so back-edges are the only unbounded source
+					// worth budgeting (reference: handleJmpBack decrements
+					// loopIterations only on backward jumps).
+					vm.loopCount = vm.loopCount + 1;
+					if (vm.loopCount > vm.loopLimit) {
+						vmError(vm, `interpretation requires too many iterations (limit ${vm.loopLimit}); if you are sure this is not a bug in your code, raise it with --max-vm-iterations=<n>`);
+						break;
+					}
+				}
+				vm.ip = vm.ip + (offset as int32);
+			},
+			// --- i64 arithmetic ---
+			RaiserOpcode.AddI64 => {
+				const lhs = slots[base + ib];
+				const rhs = slots[base + ic];
+				const sum = int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64));
+				if ((sum ^ lhs.intVal) >= 0 || (sum ^ rhs.intVal) >= 0) { setRegInt(vm, base + ia, sum);
+				} else { vmError(vm, "over- or underflow"); }
+			},
+			RaiserOpcode.SubI64 => {
+				const lhs = slots[base + ib];
+				const rhs = slots[base + ic];
+				const diff = int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64));
+				if ((diff ^ lhs.intVal) >= 0 || (diff ^ ~rhs.intVal) >= 0) { setRegInt(vm, base + ia, diff);
+				} else { vmError(vm, "over- or underflow"); }
+			},
+			RaiserOpcode.MulI64 => {
+				const lhs = slots[base + ib];
+				const rhs = slots[base + ic];
+				if (mulOverflowsI64(lhs.intVal, rhs.intVal)) { vmError(vm, "over- or underflow");
+				} else { setRegInt(vm, base + ia, int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64))); }
+			},
+			RaiserOpcode.DivI64 => {
+				const lhs = slots[base + ib];
+				const rhs = slots[base + ic];
+				if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
+				} else if (rhs.intVal == -1) {
+					if (lhs.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
+					} else { setRegInt(vm, base + ia, -lhs.intVal); }
+				} else {
+					setRegInt(vm, base + ia, lhs.intVal / rhs.intVal);
+				}
+			},
+			RaiserOpcode.ModI64 => {
+				if (slots[base + ic].intVal == 0) { vmError(vm, "integer modulo by zero");
+				} else {
+					setRegInt(vm, base + ia, slots[base + ic].intVal == -1 ? 0 : slots[base + ib].intVal % slots[base + ic].intVal);
+				}
+			},
+			RaiserOpcode.DivU64 => {
+				if (slots[base + ic].intVal == 0) { vmError(vm, "integer division by zero");
+				} else {
+					setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) / (slots[base + ic].intVal as uint64)));
+				}
+			},
+			RaiserOpcode.ModU64 => {
+				if (slots[base + ic].intVal == 0) { vmError(vm, "integer modulo by zero");
+				} else {
+					setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) % (slots[base + ic].intVal as uint64)));
+				}
+			},
+			RaiserOpcode.AddU64 => {
+				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) + (slots[base + ic].intVal as uint64)));
+			},
+			RaiserOpcode.SubU64 => {
+				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) - (slots[base + ic].intVal as uint64)));
+			},
+			RaiserOpcode.MulU64 => {
+				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) * (slots[base + ic].intVal as uint64)));
+			},
+			RaiserOpcode.AddrReg => {
+				setRegRef(vm, base + ia, RaiserValueKind.RegAddr, (base + ib) as int64);
+			},
+			RaiserOpcode.AddrGlobal => {
+				setRegRef(vm, base + ia, RaiserValueKind.GlobalAddr, (ib * 256 + ic) as int64);
+			},
+			RaiserOpcode.AddrIndex => {
+				vmHandleAddrIndex(vm, ia, ib, ic);
+			},
+			RaiserOpcode.AddrField => {
+				const handle = vmHeapOperand(vm, getReg(vm, base + ib), RaiserValueKind.Object, "an object");
+				if (!vm.halted) setReg(vm, base + ia, raiserFieldAddr(handle, getFuncConst(func, ic).strVal));
+			},
+			RaiserOpcode.LoadDeref => {
+				vmHandleLoadDeref(vm, ia, ib, ic);
+			},
+			RaiserOpcode.StoreDeref => {
+				vmHandleStoreDeref(vm, ia, ib, ic);
+			},
+			RaiserOpcode.InstanceOf => {
+				const held = slots[base + ib];
+				const key = getFuncConst(func, ic).strVal;
+				setRegBool(vm, base + ia, held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[held.intVal].classType, key));
+			},
+			RaiserOpcode.ObjConv => {
+				const held = slots[base + ia];
+				if (held.kind != RaiserValueKind.Nil) {
+					const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[held.intVal].classType : RAISER_NO_CLASS;
+					if (!raiserIsInstance(classType, getFuncConst(func, ib).strVal)) {
+						vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + getFuncConst(func, ic).strVal);
+					}
+				}
+			},
+			RaiserOpcode.SameLoc => {
+				const l = slots[base + ib];
+				const r = slots[base + ic];
+				setRegBool(vm, base + ia, l.kind == r.kind && l.intVal == r.intVal && l.floatVal == r.floatVal && l.strVal == r.strVal);
+			},
+			RaiserOpcode.NegI64 => {
+				const val = slots[base + ib];
+				if (val.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
+				} else { setRegInt(vm, base + ia, -val.intVal); }
+			},
+			// --- i64 compare-branch ---
+			RaiserOpcode.BeqI64 => {
+				if (slots[base + ia].intVal == slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BneI64 => {
+				if (slots[base + ia].intVal != slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BTruthy => {
+				if (raiserToBool(slots[base + ia])) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BltI64 => {
+				if (slots[base + ia].intVal < slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BleI64 => {
+				if (slots[base + ia].intVal <= slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BltU64 => {
+				if ((slots[base + ia].intVal as uint64) < (slots[base + ib].intVal as uint64)) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BleU64 => {
+				if ((slots[base + ia].intVal as uint64) <= (slots[base + ib].intVal as uint64)) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BgtI64 => {
+				if (slots[base + ia].intVal > slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
+			},
+			RaiserOpcode.BgeI64 => {
+				if (slots[base + ia].intVal >= slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
+			},
+			// --- Bitwise ---
+			RaiserOpcode.BitAnd => {
+				setRegInt(vm, base + ia, slots[base + ib].intVal & slots[base + ic].intVal);
+			},
+			RaiserOpcode.BitOr => {
+				setRegInt(vm, base + ia, slots[base + ib].intVal | slots[base + ic].intVal);
+			},
+			RaiserOpcode.BitXor => {
+				setRegInt(vm, base + ia, slots[base + ib].intVal ^ slots[base + ic].intVal);
+			},
+			RaiserOpcode.BitNot => {
+				const val = slots[base + ib];
+				setRegInt(vm, base + ia, ~val.intVal);
+			},
+			RaiserOpcode.ShiftLeft => {
+				const count = (slots[base + ic].intVal & 63) as uint64;
+				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) << count));
+			},
+			RaiserOpcode.ShiftRight => {
+				setRegInt(vm, base + ia, slots[base + ib].intVal >> (slots[base + ic].intVal & 63));
+			},
+			RaiserOpcode.NarrowU => {
+				const val = slots[base + ia];
+				const width = ib as int64;
+				setRegInt(vm, base + ia, val.intVal & (((1 as int64) << width) - 1));
+			},
+			RaiserOpcode.NarrowS => {
+				const val = slots[base + ia];
+				const half = (1 as int64) << ((ib as int64) - 1);
+				const low = ic == 1 ? 0 : -half;
+				if (val.intVal < low || val.intVal >= low + 2 * half) vmError(vm, "over- or underflow");
+			},
+			RaiserOpcode.SignExtend => {
+				const val = slots[base + ia];
+				const imm = 64 - (ib as int64);
+				const raised = int64Bits((val.intVal as uint64) << (imm as uint64));
+				setRegInt(vm, base + ia, raised >> imm);
+			},
+			RaiserOpcode.ShiftRightU => {
+				const count = (slots[base + ic].intVal & 63) as uint64;
+				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) >> count));
+			},
+			RaiserOpcode.Conv => {
+				vmHandleConv(vm, ia, ib, ic);
+			},
+			// --- Complex ops (previously handled in MetaScript fallback) ---
+			RaiserOpcode.Print => {
+				const val = slots[base + ia];
+				const s = raiserToString(val);
+				vm.output = `${vm.output}${s}\n`;
+				const sink = vm.printSink;
+				if (sink != null) sink(s);
+			},
+			RaiserOpcode.Call => {
+				vmHandleCall(vm, ia, ib, ic);
+			},
+			RaiserOpcode.CallIndirect => {
+				vmHandleCallIndirect(vm, ia, ib, ic);
+			},
+			RaiserOpcode.Ret => {
+				vmHandleRet(vm, ia, ib, ic);
+			},
+			RaiserOpcode.NewArray => {
+				vmHandleNewArray(vm, ia, ib, ic);
+			},
+			RaiserOpcode.LoadIndex => {
+				vmHandleLoadIndex(vm, ia, ib, ic);
+			},
+			RaiserOpcode.StoreIndex => {
+				vmHandleStoreIndex(vm, ia, ib, ic);
+			},
+			RaiserOpcode.ArrayLen => {
+				vmHandleArrayLen(vm, ia, ib, ic);
+			},
+			RaiserOpcode.ArrayPush => {
+				vmHandleArrayPush(vm, ia, ib, ic);
+			},
+			RaiserOpcode.ArraySetLen => {
+				vmHandleArraySetLen(vm, ia, ib, ic);
+			},
+			RaiserOpcode.ArraySlice => {
+				vmHandleArraySlice(vm, ia, ib, ic);
+			},
+			RaiserOpcode.NewObject => {
+				vmHandleNewObject(vm, ia, ib, func);
+			},
+			RaiserOpcode.LoadField => {
+				vmHandleLoadField(vm, func, pc, ia, ib, ic);
+			},
+			RaiserOpcode.StoreField => {
+				vmHandleStoreField(vm, func, pc, ia, ib, ic);
+			},
+			RaiserOpcode.ConcatStr => {
+				vmHandleConcatStr(vm, ia, ib, ic);
+			},
+			RaiserOpcode.EqStr => {
+				vmHandleEqStr(vm, ia, ib, ic);
+			},
+			RaiserOpcode.NeStr => {
+				vmHandleNeStr(vm, ia, ib, ic);
+			},
+			RaiserOpcode.LtStr => {
+				vmHandleLtStr(vm, ia, ib, ic);
+			},
+			RaiserOpcode.LeStr => {
+				vmHandleLeStr(vm, ia, ib, ic);
+			},
+			RaiserOpcode.StrLen => {
+				vmHandleStrLen(vm, ia, ib, ic);
+			},
+			RaiserOpcode.StrByteLen => {
+				const value = getReg(vm, vm.baseReg + ib).strVal.byteLength;
+				setRegInt(vm, vm.baseReg + ia, value);
+			},
+			RaiserOpcode.StrCharAt => {
+				vmHandleStrCharAt(vm, ia, ib, ic);
+			},
+			RaiserOpcode.StrSlice => {
+				vmHandleStrSlice(vm, ia, ib, ic);
+			},
+			RaiserOpcode.AddF64 => {
+				vmHandleAddF64(vm, ia, ib, ic);
+			},
+			RaiserOpcode.SubF64 => {
+				vmHandleSubF64(vm, ia, ib, ic);
+			},
+			RaiserOpcode.MulF64 => {
+				vmHandleMulF64(vm, ia, ib, ic);
+			},
+			RaiserOpcode.DivF64 => {
+				vmHandleDivF64(vm, ia, ib, ic);
+			},
+			RaiserOpcode.NegF64 => {
+				vmHandleNegF64(vm, ia, ib, ic);
+			},
+			RaiserOpcode.BeqF64 => {
+				vmCmpBranchF64(vm, ia, ib, ic, 0);
+			},
+			RaiserOpcode.BneF64 => {
+				vmCmpBranchF64(vm, ia, ib, ic, 1);
+			},
+			RaiserOpcode.BltF64 => {
+				vmCmpBranchF64(vm, ia, ib, ic, 2);
+			},
+			RaiserOpcode.BleF64 => {
+				vmCmpBranchF64(vm, ia, ib, ic, 3);
+			},
+			RaiserOpcode.BgtF64 => {
+				vmCmpBranchF64(vm, ia, ib, ic, 4);
+			},
+			RaiserOpcode.BgeF64 => {
+				vmCmpBranchF64(vm, ia, ib, ic, 5);
+			},
+			RaiserOpcode.CallHost => {
+				vmHandleCallHost(vm, ia, ib, ic);
+			},
+			RaiserOpcode.IsKind => {
+				const v = slots[base + ib];
+				setRegBool(vm, base + ia, (v.kind as number) == ic);
+			},
+			RaiserOpcode.Yield => {
 				vm.yielded = true;
-			} else {
-				finishProgram(vm, haltVal, ib == 1);
-			}
-		} else if (op == RaiserOpcode.Jump) {
-			const rawAx = ia * 65536 + ib * 256 + ic;
-			const offset = rawAx >= 8388608 ? rawAx - 16777216 : rawAx;
-			if (offset < 0) {
-				// Loop back-edge: this is ONE iteration. Straight-line code is
-				// finite by construction and recursion is bounded by
-				// MAX_CALL_DEPTH, so back-edges are the only unbounded source
-				// worth budgeting (reference: handleJmpBack decrements
-				// loopIterations only on backward jumps).
-				vm.loopCount = vm.loopCount + 1;
-				if (vm.loopCount > vm.loopLimit) {
-					vmError(vm, `interpretation requires too many iterations (limit ${vm.loopLimit}); if you are sure this is not a bug in your code, raise it with --max-vm-iterations=<n>`);
-					break;
+			},
+			RaiserOpcode.Spawn => {
+				const fut = vmSpawnClosure(vm, getReg(vm, base + ib));
+				if (fut >= 0) setRegRef(vm, base + ia, RaiserValueKind.Future, fut);
+			},
+			RaiserOpcode.Await => {
+				vmHandleAwait(vm, ia, ib, ic);
+			},
+			RaiserOpcode.Sleep => {
+				vmHandleSleep(vm, ia, ib, ic);
+			},
+			RaiserOpcode.ModuleImport => {
+				vmHandleModuleImport(vm, ia, ib * 256 + ic, func);
+			},
+			RaiserOpcode.FutureNew => {
+				setRegRef(vm, base + ia, RaiserValueKind.Future, newFuture(vm));
+			},
+			RaiserOpcode.FutureSettle => {
+				futureComplete(vm, getReg(vm, base + ia).intVal, getReg(vm, base + ib));
+			},
+			RaiserOpcode.FutureFail => {
+				futureFail(vm, getReg(vm, base + ia).intVal, vmExceptionText(vm, getReg(vm, base + ib)), getReg(vm, base + ib));
+			},
+			RaiserOpcode.Try => {
+				vm.safePoints.push(vm.ip - 1 + (ib * 256 + ic));
+			},
+			RaiserOpcode.Catch => {
+				vmError(vm, "Catch is handler metadata and must never execute");
+			},
+			RaiserOpcode.Finally => {
+				// Only reached when the guarded region completed without raising.
+				popSafePoint(vm);
+			},
+			RaiserOpcode.FinallyEnd => {
+				if (vm.unwinding) {
+					vm.savedIp = -1;
+					unwindStep(vm);
+				} else if (vm.savedIp >= 0) {
+					vm.ip = vm.savedIp as int32;
+					vm.savedIp = -1;
 				}
-			}
-			vm.ip = vm.ip + (offset as int32);
-		// --- i64 arithmetic ---
-		} else if (op == RaiserOpcode.AddI64) {
-			const lhs = slots[base + ib];
-			const rhs = slots[base + ic];
-			const sum = int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64));
-			if ((sum ^ lhs.intVal) >= 0 || (sum ^ rhs.intVal) >= 0) { setRegInt(vm, base + ia, sum);
-			} else { vmError(vm, "over- or underflow"); }
-		} else if (op == RaiserOpcode.SubI64) {
-			const lhs = slots[base + ib];
-			const rhs = slots[base + ic];
-			const diff = int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64));
-			if ((diff ^ lhs.intVal) >= 0 || (diff ^ ~rhs.intVal) >= 0) { setRegInt(vm, base + ia, diff);
-			} else { vmError(vm, "over- or underflow"); }
-		} else if (op == RaiserOpcode.MulI64) {
-			const lhs = slots[base + ib];
-			const rhs = slots[base + ic];
-			if (mulOverflowsI64(lhs.intVal, rhs.intVal)) { vmError(vm, "over- or underflow");
-			} else { setRegInt(vm, base + ia, int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64))); }
-		} else if (op == RaiserOpcode.DivI64) {
-			const lhs = slots[base + ib];
-			const rhs = slots[base + ic];
-			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
-			} else if (rhs.intVal == -1) {
-				if (lhs.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
-				} else { setRegInt(vm, base + ia, -lhs.intVal); }
-			} else {
-				setRegInt(vm, base + ia, slots[base + ib].intVal / slots[base + ic].intVal);
-			}
-		} else if (op == RaiserOpcode.ModI64) {
-			if (slots[base + ic].intVal == 0) { vmError(vm, "integer modulo by zero");
-			} else {
-				setRegInt(vm, base + ia, slots[base + ic].intVal == -1 ? 0 : slots[base + ib].intVal % slots[base + ic].intVal);
-			}
-		} else if (op == RaiserOpcode.DivU64) {
-			if (slots[base + ic].intVal == 0) { vmError(vm, "integer division by zero");
-			} else {
-				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) / (slots[base + ic].intVal as uint64)));
-			}
-		} else if (op == RaiserOpcode.ModU64) {
-			if (slots[base + ic].intVal == 0) { vmError(vm, "integer modulo by zero");
-			} else {
-				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) % (slots[base + ic].intVal as uint64)));
-			}
-		} else if (op == RaiserOpcode.AddU64) {
-			setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) + (slots[base + ic].intVal as uint64)));
-		} else if (op == RaiserOpcode.SubU64) {
-			setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) - (slots[base + ic].intVal as uint64)));
-		} else if (op == RaiserOpcode.MulU64) {
-			setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) * (slots[base + ic].intVal as uint64)));
-		} else if (op == RaiserOpcode.AddrReg) {
-			setRegRef(vm, base + ia, RaiserValueKind.RegAddr, (base + ib) as int64);
-		} else if (op == RaiserOpcode.AddrGlobal) {
-			setRegRef(vm, base + ia, RaiserValueKind.GlobalAddr, (ib * 256 + ic) as int64);
-		} else if (op == RaiserOpcode.AddrIndex) {
-			vmHandleAddrIndex(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.AddrField) {
-			const handle = vmHeapOperand(vm, getReg(vm, base + ib), RaiserValueKind.Object, "an object");
-			if (!vm.halted) setReg(vm, base + ia, raiserFieldAddr(handle, getFuncConst(func, ic).strVal));
-		} else if (op == RaiserOpcode.LoadDeref) {
-			vmHandleLoadDeref(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.StoreDeref) {
-			vmHandleStoreDeref(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.InstanceOf) {
-			const held = slots[base + ib];
-			const key = getFuncConst(func, ic).strVal;
-			setRegBool(vm, base + ia, held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[held.intVal].classType, key));
-		} else if (op == RaiserOpcode.ObjConv) {
-			const held = slots[base + ia];
-			if (held.kind != RaiserValueKind.Nil) {
-				const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[held.intVal].classType : RAISER_NO_CLASS;
-				if (!raiserIsInstance(classType, getFuncConst(func, ib).strVal)) {
-					vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + getFuncConst(func, ic).strVal);
-				}
-			}
-		} else if (op == RaiserOpcode.SameLoc) {
-			const l = slots[base + ib];
-			const r = slots[base + ic];
-			setRegBool(vm, base + ia, l.kind == r.kind && l.intVal == r.intVal && l.floatVal == r.floatVal && l.strVal == r.strVal);
-		} else if (op == RaiserOpcode.NegI64) {
-			const val = slots[base + ib];
-			if (val.intVal == INT64_LOW) { vmError(vm, "over- or underflow");
-			} else { setRegInt(vm, base + ia, -val.intVal); }
-		// --- i64 compare-branch ---
-		} else if (op == RaiserOpcode.BeqI64) {
-			if (slots[base + ia].intVal == slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BneI64) {
-			if (slots[base + ia].intVal != slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BTruthy) {
-			if (raiserToBool(slots[base + ia])) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BltI64) {
-			if (slots[base + ia].intVal < slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BleI64) {
-			if (slots[base + ia].intVal <= slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BltU64) {
-			if ((slots[base + ia].intVal as uint64) < (slots[base + ib].intVal as uint64)) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BleU64) {
-			if ((slots[base + ia].intVal as uint64) <= (slots[base + ib].intVal as uint64)) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BgtI64) {
-			if (slots[base + ia].intVal > slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
-		} else if (op == RaiserOpcode.BgeI64) {
-			if (slots[base + ia].intVal >= slots[base + ib].intVal) vm.ip = vm.ip + (ic as int32);
-		// --- Bitwise ---
-		} else if (op == RaiserOpcode.BitAnd) {
-			setRegInt(vm, base + ia, slots[base + ib].intVal & slots[base + ic].intVal);
-		} else if (op == RaiserOpcode.BitOr) {
-			setRegInt(vm, base + ia, slots[base + ib].intVal | slots[base + ic].intVal);
-		} else if (op == RaiserOpcode.BitXor) {
-			setRegInt(vm, base + ia, slots[base + ib].intVal ^ slots[base + ic].intVal);
-		} else if (op == RaiserOpcode.BitNot) {
-			const val = slots[base + ib];
-			setRegInt(vm, base + ia, ~val.intVal);
-		} else if (op == RaiserOpcode.ShiftLeft) {
-			const count = (slots[base + ic].intVal & 63) as uint64;
-			setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) << count));
-		} else if (op == RaiserOpcode.ShiftRight) {
-			setRegInt(vm, base + ia, slots[base + ib].intVal >> (slots[base + ic].intVal & 63));
-		} else if (op == RaiserOpcode.NarrowU) {
-			const val = slots[base + ia];
-			const width = ib as int64;
-			setRegInt(vm, base + ia, val.intVal & (((1 as int64) << width) - 1));
-		} else if (op == RaiserOpcode.NarrowS) {
-			const val = slots[base + ia];
-			const half = (1 as int64) << ((ib as int64) - 1);
-			const low = ic == 1 ? 0 : -half;
-			if (val.intVal < low || val.intVal >= low + 2 * half) vmError(vm, "over- or underflow");
-		} else if (op == RaiserOpcode.SignExtend) {
-			const val = slots[base + ia];
-			const imm = 64 - (ib as int64);
-			const raised = int64Bits((val.intVal as uint64) << (imm as uint64));
-			setRegInt(vm, base + ia, raised >> imm);
-		} else if (op == RaiserOpcode.ShiftRightU) {
-			const count = (slots[base + ic].intVal & 63) as uint64;
-			setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) >> count));
-		} else if (op == RaiserOpcode.Conv) {
-			vmHandleConv(vm, ia, ib, ic);
-		// --- Complex ops (previously handled in MetaScript fallback) ---
-		} else if (op == RaiserOpcode.Print) {
-			const val = slots[base + ia];
-			const s = raiserToString(val);
-			vm.output = `${vm.output}${s}\n`;
-			const sink = vm.printSink;
-			if (sink != null) sink(s);
-		} else if (op == RaiserOpcode.Call) {
-			vmHandleCall(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.CallIndirect) {
-			vmHandleCallIndirect(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.Ret) {
-			vmHandleRet(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.NewArray) {
-			vmHandleNewArray(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.LoadIndex) {
-			vmHandleLoadIndex(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.StoreIndex) {
-			vmHandleStoreIndex(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.ArrayLen) {
-			vmHandleArrayLen(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.ArrayPush) {
-			vmHandleArrayPush(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.ArraySetLen) {
-			vmHandleArraySetLen(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.ArraySlice) {
-			vmHandleArraySlice(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.NewObject) {
-			vmHandleNewObject(vm, ia, ib, func);
-		} else if (op == RaiserOpcode.LoadField) {
-			vmHandleLoadField(vm, func, pc, ia, ib, ic);
-		} else if (op == RaiserOpcode.StoreField) {
-			vmHandleStoreField(vm, func, pc, ia, ib, ic);
-		} else if (op == RaiserOpcode.ConcatStr) {
-			vmHandleConcatStr(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.EqStr) {
-			vmHandleEqStr(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.NeStr) {
-			vmHandleNeStr(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.LtStr) {
-			vmHandleLtStr(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.LeStr) {
-			vmHandleLeStr(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.StrLen) {
-			vmHandleStrLen(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.StrByteLen) {
-			const value = getReg(vm, vm.baseReg + ib).strVal.byteLength;
-			setRegInt(vm, vm.baseReg + ia, value);
-		} else if (op == RaiserOpcode.StrCharAt) {
-			vmHandleStrCharAt(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.StrSlice) {
-			vmHandleStrSlice(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.AddF64) {
-			vmHandleAddF64(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.SubF64) {
-			vmHandleSubF64(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.MulF64) {
-			vmHandleMulF64(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.DivF64) {
-			vmHandleDivF64(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.NegF64) {
-			vmHandleNegF64(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.BeqF64) {
-			vmCmpBranchF64(vm, ia, ib, ic, 0);
-		} else if (op == RaiserOpcode.BneF64) {
-			vmCmpBranchF64(vm, ia, ib, ic, 1);
-		} else if (op == RaiserOpcode.BltF64) {
-			vmCmpBranchF64(vm, ia, ib, ic, 2);
-		} else if (op == RaiserOpcode.BleF64) {
-			vmCmpBranchF64(vm, ia, ib, ic, 3);
-		} else if (op == RaiserOpcode.BgtF64) {
-			vmCmpBranchF64(vm, ia, ib, ic, 4);
-		} else if (op == RaiserOpcode.BgeF64) {
-			vmCmpBranchF64(vm, ia, ib, ic, 5);
-		} else if (op == RaiserOpcode.CallHost) {
-			vmHandleCallHost(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.IsKind) {
-			const v = slots[base + ib];
-			setRegBool(vm, base + ia, (v.kind as number) == ic);
-		} else if (op == RaiserOpcode.Yield) {
-			vm.yielded = true;
-		} else if (op == RaiserOpcode.Spawn) {
-			const fut = vmSpawnClosure(vm, getReg(vm, base + ib));
-			if (fut >= 0) setRegRef(vm, base + ia, RaiserValueKind.Future, fut);
-		} else if (op == RaiserOpcode.Await) {
-			vmHandleAwait(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.Sleep) {
-			vmHandleSleep(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.ModuleImport) {
-			vmHandleModuleImport(vm, ia, ib * 256 + ic, func);
-		} else if (op == RaiserOpcode.FutureNew) {
-			setRegRef(vm, base + ia, RaiserValueKind.Future, newFuture(vm));
-		} else if (op == RaiserOpcode.FutureSettle) {
-			futureComplete(vm, getReg(vm, base + ia).intVal, getReg(vm, base + ib));
-		} else if (op == RaiserOpcode.FutureFail) {
-			futureFail(vm, getReg(vm, base + ia).intVal, vmExceptionText(vm, getReg(vm, base + ib)), getReg(vm, base + ib));
-		} else if (op == RaiserOpcode.Try) {
-			vm.safePoints.push(vm.ip - 1 + (ib * 256 + ic));
-		} else if (op == RaiserOpcode.Catch) {
-			vmError(vm, "Catch is handler metadata and must never execute");
-		} else if (op == RaiserOpcode.Finally) {
-			// Only reached when the guarded region completed without raising.
-			popSafePoint(vm);
-		} else if (op == RaiserOpcode.FinallyEnd) {
-			if (vm.unwinding) {
-				vm.savedIp = -1;
-				unwindStep(vm);
-			} else if (vm.savedIp >= 0) {
-				vm.ip = vm.savedIp as int32;
-				vm.savedIp = -1;
-			}
-		} else if (op == RaiserOpcode.Throw) {
-			vmHandleThrow(vm, ia, ib, ic);
-		} else if (op == RaiserOpcode.Trap) {
-			const bx = (ib * 256 + ic);
-			const msg = bx < getFuncConstLen(func) ? getFuncConst(func, bx).strVal : "trap: bad message constant";
-			vmError(vm, msg);
-		} else {
-			vmError(vm, `Unknown opcode: ${op}`);
+			},
+			RaiserOpcode.Throw => {
+				vmHandleThrow(vm, ia, ib, ic);
+			},
+			RaiserOpcode.Trap => {
+				const bx = (ib * 256 + ic);
+				const msg = bx < getFuncConstLen(func) ? getFuncConst(func, bx).strVal : "trap: bad message constant";
+				vmError(vm, msg);
+			},
+			_ => {
+				vmError(vm, `Unknown opcode: ${op}`);
+			},
 		}
 	}
 }
