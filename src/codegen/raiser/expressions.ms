@@ -14,7 +14,7 @@ import {
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData,
 	createNodeAt
 } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, convOperand } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, convOperand, fitsImm, immField } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
@@ -104,6 +104,32 @@ function isComparisonOp(op: string): boolean {
 		"==" | "===" | "!=" | "!==" | "<" | "<=" | ">" | ">=" => true,
 		_ => false,
 	};
+}
+
+function comparisonOpcodeImm(op: string): RaiserOpcode {
+	return match (op) {
+		"==" | "===" => RaiserOpcode.BeqI64Imm,
+		"!=" | "!==" => RaiserOpcode.BneI64Imm,
+		"<" => RaiserOpcode.BltI64Imm,
+		"<=" => RaiserOpcode.BleI64Imm,
+		">" => RaiserOpcode.BgtI64Imm,
+		">=" => RaiserOpcode.BgeI64Imm,
+		_ => { throw new Error(`internal: '${op}' has no immediate compare-and-skip opcode`); },
+	};
+}
+
+function isEqualityOp(op: string): boolean {
+	return op == "==" || op == "===" || op == "!=" || op == "!==";
+}
+
+function immLiteral(node: Node): boolean {
+	if (node.kind != NodeKind.NumberLiteral || isFloatExpr(node) || carriesBigInt(node.nodeType)) return false;
+	const d = node.data as NumberLiteralData;
+	return d.outOfRangeText == "" && fitsImm(d.intVal);
+}
+
+function immLiteralValue(node: Node): int64 {
+	return (node.data as NumberLiteralData).intVal;
 }
 
 function isArithmeticOp(op: string): boolean {
@@ -838,6 +864,11 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 	const op = d.operator;
 	if (!isComparisonOp(op)) return null;
 	const lReg = compileExpr(s, d.left);
+	const integerCompare = !exprIsString(s, d.left) && !exprIsString(s, d.right) && !isFloatExpr(d.left) && !isFloatExpr(d.right)
+		&& !((isUint64Type(d.left.nodeType) || isUint64Type(d.right.nodeType)) && !isEqualityOp(op));
+	if (integerCompare && immLiteral(d.right)) {
+		return raiserABC(comparisonOpcodeImm(op), lReg, immField(immLiteralValue(d.right)), 1);
+	}
 	const rReg = compileExpr(s, d.right);
 	if (exprIsString(s, d.left) || exprIsString(s, d.right)) {
 		if (op == "==" || op == "===") return raiserABC(RaiserOpcode.EqStr, lReg, rReg, 1);
@@ -1035,6 +1066,14 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, test);
 		emitLoadConst(s, dest, raiserBool(false));
 		return dest;
+	}
+
+	if ((op == "+" || op == "-") && immLiteral(d.right) && !isFloatExpr(node) && !isUnsignedBand(node.nodeType)) {
+		const lhs = compileExpr(s, d.left);
+		const result = allocReg(s);
+		emitInst(s, raiserABC(op == "+" ? RaiserOpcode.AddI64Imm : RaiserOpcode.SubI64Imm, result, lhs, immField(immLiteralValue(d.right))));
+		emitAtWidth(s, result, node.nodeType);
+		return result;
 	}
 
 	const bitwise = isBitwiseOp(op);
@@ -1757,9 +1796,14 @@ function compileConditionalExpr(s: RaiserCompState, node: Node): int32 {
 // --- Update (i++, ++i, i--, --i) ---
 
 function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: string, target: Node): void {
-	const oneReg = allocReg(s);
-	emitLoadConst(s, oneReg, isFloatExpr(target) ? raiserFloat(1.0) : raiserInt(1));
-	emitCompoundArith(s, updateOp == "++" ? "+=" : "-=", dest, fromReg, oneReg, target);
+	if (!isFloatExpr(target) && !isUnsignedBand(target.nodeType)) {
+		emitInst(s, raiserABC(updateOp == "++" ? RaiserOpcode.AddI64Imm : RaiserOpcode.SubI64Imm, dest, fromReg, immField(1)));
+		emitAtWidth(s, dest, target.nodeType);
+	} else {
+		const oneReg = allocReg(s);
+		emitLoadConst(s, oneReg, isFloatExpr(target) ? raiserFloat(1.0) : raiserInt(1));
+		emitCompoundArith(s, updateOp == "++" ? "+=" : "-=", dest, fromReg, oneReg, target);
+	}
 	if (target.nodeType != null && peelDistinct(target.nodeType).kind == TypeKind.Char) emitInst(s, raiserABC(RaiserOpcode.NarrowS, dest, 8, 1));
 }
 

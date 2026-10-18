@@ -16,7 +16,7 @@ import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx } from "../../raiser/bytecode";
-import { disasmFunc } from "../../raiser/disasm";
+import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
@@ -1528,12 +1528,12 @@ function backJumpSpan(f: RaiserFunction): number {
 test "engine: a for loop tests its bound with one compare-and-skip and keeps no old value of i++" {
 	const sum = compiledFunc("function sum(n: int64): int64 { let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { s += i; } return s; } console.log(`${sum(10)}`);", "sum");
 	const text = disasmFunc(sum);
-	assert backJumpSpan(sum) == 6, text;
+	assert backJumpSpan(sum) == 5, text;
 	assert !text.includes("; true") && !text.includes("; false"), text;
 	const fl = compiledFunc("function sum(n: float64): float64 { let s: float64 = 0.0; for (let i: float64 = 0.0; i < n; i++) { s += i; } return s; } console.log(`${sum(10.0)}`);", "sum");
 	assert backJumpSpan(fl) == 6, disasmFunc(fl);
 	const wh = compiledFunc("function f(n: int64): int64 { let i: int64 = 0; while (i < n) { i++; } return i; } console.log(`${f(3)}`);", "f");
-	assert backJumpSpan(wh) == 5, disasmFunc(wh);
+	assert backJumpSpan(wh) == 4, disasmFunc(wh);
 	const st = compiledFunc("function f(a: string, b: string): int64 { let i: int64 = 0; while (a < b && i < 3) { i++; } return i; } console.log(`${f('a', 'b')}`);", "f");
 	assert !disasmFunc(st).includes("; true"), disasmFunc(st);
 }
@@ -1755,4 +1755,69 @@ test "engine: a field load into the register holding the only reference to its o
 test "engine: an element load into the register holding the only reference to its array reads the element first" {
 	const ctx = evalOrcVM("function inner(): int64 { let a: int64[][] = [[7, 8]]; let b: int64[] = a[0]; return b[1]; } function nest(): number { let g: number[][][] = [[[5]]]; let h: number[][] = g[0]; let k: number[] = h[0]; return k[0]; } console.log(`${inner()} ${nest()}`);");
 	assert ctx.error == "" && ctx.output == "8 5\n", `${ctx.error} ${ctx.output}`;
+}
+
+// --- Immediate operands: an integer literal that fits the 16-bit field rides in the instruction ---
+
+function countNamed(f: RaiserFunction, name: string): number {
+	let n = 0;
+	for (const inst of f.code) {
+		if (opName(inst.op) == name) n = n + 1;
+	}
+	return n;
+}
+
+test "engine: fib, a counting loop and a while on zero use the immediate forms" {
+	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
+	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BltI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
+	assert fib.code.length == 9, disasmFunc(fib);
+	const run = compiledFunc("function run(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 5000000; i = i + 1) { s = s + i; } return s; } console.log(`${run()}`);", "run");
+	assert countNamed(run, "LoadInt") == 2 && countNamed(run, "AddI64Imm") == 1, disasmFunc(run);
+	assert countNamed(run, "LoadConst") == 1 && countNamed(run, "BltI64") == 1, disasmFunc(run);
+	const wh = compiledFunc("function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${w(3)}`);", "w");
+	assert countNamed(wh, "LoadConst") == 0 && countNamed(wh, "BneI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);
+	assert backJumpSpan(wh) == 5, disasmFunc(wh);
+	const ctx = evalOrcVM("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }"
+		+ " function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${fib(15)} ${w(7)}`);");
+	assert ctx.error == "" && ctx.output == "610 7\n", `${ctx.error} ${ctx.output}`;
+}
+
+test "engine: an immediate at the field bound is kept and one past it falls back to the register form" {
+	const f = compiledFunc("function f(y: int64): int64 { return (y + 32767) + (y + 32768) + (y - -32768) + (y - -32769); } console.log(`${f(1)}`);", "f");
+	assert countNamed(f, "AddI64Imm") == 1 && countNamed(f, "SubI64Imm") == 1 && countNamed(f, "AddI64") == 4 && countNamed(f, "SubI64") == 1, disasmFunc(f);
+	const c = compiledFunc("function c(x: int64): int64 { let r: int64 = 0; if (x == 32767) r += 1; if (x == 32768) r += 2; if (x > -32768) r += 4; if (x > -32769) r += 8; return r; } console.log(`${c(1)}`);", "c");
+	assert countNamed(c, "BeqI64Imm") == 1 && countNamed(c, "BeqI64") == 1 && countNamed(c, "BgtI64Imm") == 1 && countNamed(c, "BgtI64") == 1, disasmFunc(c);
+	const ctx = evalOrcVM("function f(y: int64): int64 { return (y + 32767) + (y + 32768) + (y - -32768) + (y - -32769); }"
+		+ " function c(x: int64): int64 { let r: int64 = 0; if (x == 32767) r += 1; if (x == 32768) r += 2; if (x > -32768) r += 4; if (x > -32769) r += 8; return r; }"
+		+ " console.log(`${f(1)} ${c(32767)} ${c(32768)} ${c(-32768)} ${c(-32769)} ${c(-32770)}`);");
+	assert ctx.error == "" && ctx.output == "131076 13 14 8 0 0\n", `${ctx.error} ${ctx.output}`;
+}
+
+test "engine: an immediate add or sub stops on overflow at int64 and at the narrow width, and takes a negative operand" {
+	const programs = [
+		"function f(x: int64): int64 { return x + 1; } console.log(`${f(9223372036854775807)}`);",
+		"function f(x: int64): int64 { return x - 1; } console.log(`${f(-9223372036854775807 - 1)}`);",
+		"function f(x: int64): int64 { return x - -1; } console.log(`${f(9223372036854775807)}`);",
+		"function f(x: int32): int32 { return x + 1; } console.log(`${f(2147483647)}`);",
+		"function f(x: int8): int8 { return x - 1; } console.log(`${f(-128)}`);",
+	];
+	for (const program of programs) {
+		const ctx = evalOrcVM(program);
+		assert ctx.error.indexOf("over- or underflow") >= 0, program;
+		assert ctx.output == "", program;
+	}
+	const f = compiledFunc("function f(x: int32): int32 { return x + 1; } console.log(`${f(1)}`);", "f");
+	assert countNamed(f, "AddI64Imm") == 1 && countNamed(f, "NarrowS") == 1, disasmFunc(f);
+	const ctx = evalOrcVM("function a(x: int64): int64 { return x + -5; } function b(x: int64): int64 { return x - -5; } function c(x: int32): int32 { return x + 1; }"
+		+ " console.log(`${a(10)} ${b(10)} ${c(2147483646)} ${a(9223372036854775807)} ${b(-9223372036854775807 - 1)}`);");
+	assert ctx.error == "" && ctx.output == "5 15 2147483647 9223372036854775802 -9223372036854775803\n", `${ctx.error} ${ctx.output}`;
+}
+
+test "engine: an unsigned operand keeps its wrapping add and its unsigned compare beside an immediate" {
+	const f = compiledFunc("function f(x: uint64, y: uint32): boolean { const z = y + 1; return x < 5 || z == 0; } console.log(`${f(1, 2)}`);", "f");
+	assert countNamed(f, "BltU64") == 1 && countNamed(f, "BltI64Imm") == 0 && countNamed(f, "AddU64") == 1 && countNamed(f, "AddI64Imm") == 0, disasmFunc(f);
+	assert countNamed(f, "BeqI64Imm") == 1, disasmFunc(f);
+	const ctx = evalOrcVM("function lt(x: uint64): boolean { return x < 5; } function wrap(y: uint32): uint32 { return y + 1; } function zero(x: uint64): boolean { return x == 0; }"
+		+ " console.log(`${lt(18446744073709551615)} ${lt(4)} ${wrap(4294967295)} ${zero(0)} ${zero(18446744073709551615)}`);");
+	assert ctx.error == "" && ctx.output == "false true 0 true false\n", `${ctx.error} ${ctx.output}`;
 }

@@ -3,9 +3,9 @@
 
 import {
 	RaiserOpcode, RaiserInstruction,
-	raiserABC, raiserABx, raiserAx, getSignedAx
+	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -225,6 +225,10 @@ export function resetTemps(s: RaiserCompState): void {
 // --- Typed emit helpers ---
 
 export function emitLoadConst(s: RaiserCompState, reg: int32, val: RaiserValue): void {
+	if (val.kind == RaiserValueKind.Int && fitsImm(val.intVal)) {
+		emitInst(s, raiserABC(RaiserOpcode.LoadInt, reg, immField(val.intVal), 0));
+		return;
+	}
 	const ci = addConst(s, val);
 	const inst = raiserABx(RaiserOpcode.LoadConst, reg, ci);
 	emitInst(s, inst);
@@ -515,7 +519,7 @@ export function emitTrapNil(s: RaiserCompState, message: string): int32 {
 
 function writesResultAfterReading(op: RaiserOpcode): boolean {
 	return match (op) {
-		RaiserOpcode.LoadConst | RaiserOpcode.LoadGlobal | RaiserOpcode.LoadField | RaiserOpcode.LoadIndex
+		RaiserOpcode.LoadConst | RaiserOpcode.LoadInt | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm | RaiserOpcode.LoadGlobal | RaiserOpcode.LoadField | RaiserOpcode.LoadIndex
 			| RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64
 			| RaiserOpcode.ModI64 | RaiserOpcode.NegI64
 			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
@@ -532,6 +536,8 @@ function skipsInstructions(op: RaiserOpcode): boolean {
 	return match (op) {
 		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64
 			| RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm
+			| RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
 			| RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64
 			| RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64
 			| RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr
