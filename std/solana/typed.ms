@@ -60,17 +60,13 @@ import {
 } from "./seed";
 
 import { msSolAccountCount } from "./kernel";
-import { msSolLoadU32, msSolLoadU8 } from "./memory";
+import { msSolClaimRecord, msSolLoadU32, msSolLoadU8 } from "./memory";
 
 when (js) {
-	import { msSolStoreU8, msSolViewAt } from "./memory";
+	import { msSolViewAt } from "./memory";
 	import { accountLayoutText } from "./accountCodecMacro";
-
-	function msSolClaimRecord(address: uint64): void { msSolStoreU8(address + 4, 1); }
 } else {
 	import { msSolPointer } from "./memory";
-
-	extern function msSolClaimRecord(address: uint64): void;
 }
 
 export struct Signer { private account: Account; }

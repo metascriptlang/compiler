@@ -500,6 +500,11 @@ export function msSolStoreU8(address: uint64, value: uint8): void {
 	@emit(`msSolMemStore(${address}, 1, ${value});`);
 }
 
+// solana.h msSolClaimRecord: MS_SOL_BORROW_OFFSET 4, MS_SOL_CLAIMED_RECORD 1
+export function msSolClaimRecord(address: uint64): void {
+	@emit(`msSolMemStore(${address} + 4n, 1, 1);`);
+}
+
 export function msSolStoreU16(address: uint64, value: uint16): void {
 	@emit(`msSolMemStore(${address}, 2, ${value});`);
 }
