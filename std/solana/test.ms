@@ -5234,6 +5234,25 @@ function scratchNegativeStep(): Result<uint64, ProgramError> {
 
 function scratchNegativeEntry(): void { codeOf(scratchNegativeStep()); }
 
+let scratchWholeSeen: uint64 = 0;
+
+function scratchWholeStep(): Result<uint64, ProgramError> {
+	const crits = scratch<Crit>(2);
+	crits[0].hp = 41;
+	crits[0].owner.bytes[5] = 6;
+	crits[1] = crits[0];
+	crits[0].hp = 1;
+	scratchWholeSeen = (crits[1].hp as uint64) * 1000 + (crits[1].owner.bytes[5] as uint64) * 10 + (crits[0].hp as uint64);
+	return Result.ok(0);
+}
+
+function scratchWholeEntry(): void { codeOf(scratchWholeStep()); }
+
+test "scratch stores a whole element through the span and the copy keeps its own bytes" {
+	assert run(programKey(), [], [], scratchWholeEntry).result == 0;
+	assert scratchWholeSeen == 41061;
+}
+
 test "scratch refuses a negative count and gives an empty span for zero" {
 	const zero: uint8[] = [1];
 	assert run(programKey(), [], zero, scratchNegativeEntry).result == 0;

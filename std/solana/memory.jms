@@ -628,3 +628,11 @@ export function msSolViewAt<T>(layout: string, address: uint64): Ptr<T> {
 	@emit(`return [{ v: msSolMemView(${layout}, ${address}) }, "v"];`);
 	unreachable;
 }
+
+export function msSolArrayAt<T>(layout: string, address: uint64, count: uint64): T[] {
+	@emit(`const d = msSolViewDescriptor(${layout});
+  const n = Number(${count});
+  if (n === 0) return [];
+  return d.k === "uint8" ? msSolViewBytes(${address}, n) : msSolViewArray({ k: "array", n: n, z: d.z * n, e: d }, ${address});`);
+	unreachable;
+}
