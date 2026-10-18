@@ -11,10 +11,10 @@
 //   deepAliases(dest, ri): boolean     — recursive self-alias check
 //   skipConvDfa(n): Node               — strip transparent wrappers
 
-import { Node, NodeKind, Symbol, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, MoveExprData, OutExprData, SymbolKind } from "../ast/node";
+import { Node, NodeKind, Symbol, Type, TypeKind, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, MoveExprData, OutExprData, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, setFlag, isCursorSym, makeSymbol } from "../checker/symbol";
-import { noneType } from "../checker/types";
+import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant } from "../checker/types";
 import { makeHiddenDeref } from "../transform/util";
 import { parseInput } from "../transform/testUtil";
 
@@ -49,7 +49,9 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 	while (n != null) {
 		match (n.kind) {
 			NodeKind.MemberExpr => {
-				n = skipConvDfa((n.data as MemberExprData).object);
+				const md = n.data as MemberExprData;
+				if (readsUnionDiscriminant(md)) return false;
+				n = skipConvDfa(md.object);
 			},
 			NodeKind.ArrayAccess => {
 				n = skipConvDfa((n.data as ArrayAccessData).array);
@@ -70,6 +72,18 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 		};
 	}
 	return false;
+}
+
+function readsUnionDiscriminant(md: MemberExprData): boolean {
+	const objNode = md.object;
+	const declared: Type | null = objNode.nodeType != null ? objNode.nodeType
+		: (objNode.resolvedSym != null ? objNode.resolvedSym.symbolType : null);
+	const u = peelToStructOrUnion(declared);
+	if (u == null || u.kind != TypeKind.Union) return false;
+	const p = md.property;
+	return (isDiscriminatedUnion(u) && getDiscriminantName(u) == p)
+		|| findSharedStringDiscriminant(u) == p || findSharedBooleanDiscriminant(u) == p
+		|| findSharedEnumDiscriminant(u) == p;
 }
 
 // ===== getRootSym — extract root symbol from a path expression =====
