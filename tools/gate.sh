@@ -1412,7 +1412,7 @@ std/crypto/sha256.ms|build corpus solana suite tests
 runtime/manual.h|boundary build corpus guard san solana suite tests
 runtime/solana/host.c|boundary build corpus guard solana suite tests
 std/solana/core.ms|build corpus guard solana suite tests
-std/solana/test.cms|build corpus guard solana suite tests
+std/solana/test.ms|build corpus guard solana suite tests
 runtime/solana/solana.h|boundary build corpus guard solana suite tests
 runtime/freestanding/musl/pow.c|boundary build corpus solana suite tests
 docs/TESTING.md|
@@ -1480,9 +1480,9 @@ CASES
   want="tools/gate.sh|tools/wt.sh"
   [ "$got" = "$want" ] || { printf 'FAIL reds tools: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf '%s\n' 'FAIL solana escrow-build: exit 1' 'FAIL solana heap-replay: exit 1' \
-    'FAIL solana std/solana/test.cms: no test result' >"$log"
+    'FAIL solana std/solana/test.ms: no test result' >"$log"
   got=$(reds_of solana "$log" 1 | paste -sd'|' -)
-  want="escrow-build|heap-replay|std/solana/test.cms"
+  want="escrow-build|heap-replay|std/solana/test.ms"
   [ "$got" = "$want" ] || { printf 'FAIL reds: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   rm -f "$log"
   got=$(printf 'key\t%s\tsrc/test/corpus/programs/%s\n' o1 100-file.ms o2 200-dir o3 630-escapes.ms o4 802-nested o5 803-up o6 804-dirty \
@@ -1833,7 +1833,7 @@ solana_replays() {
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.ms std/solana/vrf.ms \
+  for entry in std/solana/test.ms std/solana/hostTest.ms std/solana/token.ms std/solana/index.ms std/solana/vrf.ms \
     std/solana/idlTest.ms std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/simulatorContextTest.ms \
     std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
     std/solana/simulatorProgramsTest.ms std/solana/simulatorTokenTest.ms std/solana/simulatorInvokeTest.ms \

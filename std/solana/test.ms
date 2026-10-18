@@ -1,5 +1,3 @@
-@include("runtime/solana/solana.h");
-
 import {
 	External, Signer as ChainAuth, WritablePda as DerivedSlot, accounts, external, externalMutable,
 } from "./typed";
@@ -124,12 +122,8 @@ import { Node, NodeKind, bindSym } from "std/meta";
 import { sha256 } from "std/crypto/sha256";
 import { isEdwardsPoint } from "std/crypto/ed25519/point";
 
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolProgramId(): uint64;
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolStoreU8(address: uint64, value: uint8): void;
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolHashAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
+import { msSolLoadU64, msSolProgramId, msSolSpanAddress, msSolStoreU8 } from "./memory";
+import { msSolDeriveAddress } from "./kernel";
 
 
 export struct Counter {
@@ -4853,7 +4847,7 @@ test "the hash-only given-bump check answers ConstraintSeeds for another bump or
 function onCurveEntry(): void {
 	const slot = unchecked(0);
 	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
-	if (!slot.ok || msSolHashAddress(tableAddress(seeds), 15, 255, msSolProgramId(), slot.value.keyAddress()) != 0) {
+	if (!slot.ok || msSolDeriveAddress(tableAddress(seeds), 15, 255, msSolProgramId(), slot.value.keyAddress()) == 2) {
 		failWith(ProgramError.invalidSeeds());
 		return;
 	}
