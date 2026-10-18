@@ -27,7 +27,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass } from "./types";
+import { isOutParam, unionHasMemberOfKind, isArrayType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -1345,7 +1345,7 @@ export function typeTraitOf(node: Node): Symbol | null {
 	const d = node.data as CallExprData;
 	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
 	if (sym == null) return null;
-	return sym.builtinKind == "IsPlainData" || sym.builtinKind == "NeedsCopy" ? sym : null;
+	return sym.builtinKind == "IsPlainData" || sym.builtinKind == "NeedsCopy" || sym.builtinKind == "IsArray" ? sym : null;
 }
 
 function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
@@ -1362,8 +1362,8 @@ function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 		node.nodeType = booleanType();
 		return node.nodeType;
 	}
-	const answer = trait.builtinKind == "IsPlainData"
-		? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner, ctx))
+	const answer = trait.builtinKind == "IsPlainData" ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner, ctx))
+		: trait.builtinKind == "IsArray" ? isArrayType(asked)
 		: needsValueCopy(asked);
 	node.kind = NodeKind.BooleanLiteral;
 	node.data = { boolValue: answer } as BooleanLiteralData;
