@@ -50,3 +50,4 @@ import "./scenarios/charArithmetic";
 import "./scenarios/voidInUnion";
 import "./scenarios/textOfVoid";
 import "./scenarios/functionReturnRepr";
+import "./scenarios/narrowedWriteTarget";
