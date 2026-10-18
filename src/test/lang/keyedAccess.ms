@@ -41,3 +41,13 @@ test "a literal key in brackets is the property" {
 	t["n"] = 7;
 	assert t["n"] == 7 && t["title"] == "a";
 }
+
+function element<T, K extends keyof T>(t: T, key: K): T[K] { return t[key]; }
+
+test "keyof an array is its indices and \"length\"" {
+	const xs: string[] = ["a", "b"];
+	const k: keyof string[] = 1;
+	const l: keyof string[] = "length";
+	assert element(xs, 1) == "b" && element(xs, "length") == 2 && xs["length"] == 2;
+	assert k == 1 && l == "length";
+}
