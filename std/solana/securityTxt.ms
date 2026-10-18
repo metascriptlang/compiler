@@ -70,6 +70,9 @@ export macro securityTxt(fields: Node): Node {
 			refuse(["securityTxt: required field '", KEYS[i], "' is missing"], fields);
 		}
 	}
+	when (js) {
+		return quote {};
+	}
 	cBytes(block, "=======END SECURITY.TXT V1=======".asBytes());
 	block.push("\\000");
 	const code: Node = createNodeAt(NodeKind.StringLiteral, {
