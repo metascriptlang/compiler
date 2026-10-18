@@ -1591,7 +1591,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			const symName = (cd.arguments[0].data as StringLiteralData).value;
 			let bindCtx = ctx;
 			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
-				const mc = lookupModuleCtx(macroSym.modulePath);
+				const mc = declaringModuleCtx(ctx, macroSym);
 				if (mc != null) bindCtx = mc;
 			}
 			const boundSym = lookupSymbolInDefiningScope(bindCtx.table, macroSym.name, symName);
@@ -1616,7 +1616,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			const typeName = (cd.arguments[0].data as IdentifierData).name;
 			let declCtx = ctx;
 			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
-				const mc = lookupModuleCtx(macroSym.modulePath);
+				const mc = declaringModuleCtx(ctx, macroSym);
 				if (mc != null) declCtx = mc;
 			}
 			const sym = lookupSymbolInDefiningScope(declCtx.table, macroSym.name, typeName);
@@ -1819,7 +1819,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	}
 	let regCtx = ctx;
 	if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
-		const bmc = lookupModuleCtx(macroSym.modulePath);
+		const bmc = declaringModuleCtx(ctx, macroSym);
 		if (bmc == null) {
 			addError(ctx, `macro '${d.macroName}' has no checked declaring scope '${macroSym.modulePath}'`, node.location.line, node.location.column);
 			return node;

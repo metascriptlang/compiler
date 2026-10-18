@@ -10,7 +10,7 @@ import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNode
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
-import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
+import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
@@ -92,6 +92,8 @@ export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerCon
 	if (sym.modulePath == "" || sym.modulePath == ctx.modulePath) return ctx;
 	const defining = lookupModuleCtx(sym.modulePath);
 	if (defining != null) return defining;
+	const own = preludeModuleCtx(ctx, sym.modulePath);
+	if (own != null) return own;
 	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
 	let scope: Scope | null = prelude.table.current;
 	while (scope != null) {
@@ -101,6 +103,23 @@ export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerCon
 		scope = scope.parent;
 	}
 	return null;
+}
+
+export function preludeModuleCtx(ctx: CheckerContext, modulePath: string): CheckerContext | null {
+	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
+	const members = prelude.preludeModuleScopes.get(modulePath);
+	if (members == null) return null;
+	const view = createContext();
+	view.table.identCache = prelude.table.identCache;
+	view.table.current = globalScope(prelude.table);
+	openScope(view.table, ScopeKind.Module);
+	for (const s of members) addSymbolToScope(view.table.current, s);
+	view.modulePath = modulePath;
+	view.preludeCtx = prelude;
+	view.extensionRegistry = prelude.extensionRegistry;
+	view.exportRegistry = prelude.exportRegistry;
+	view.compilerFuncs = prelude.compilerFuncs;
+	return view;
 }
 
 export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null): CheckerContext {

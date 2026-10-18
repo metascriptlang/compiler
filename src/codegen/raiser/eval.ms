@@ -23,7 +23,7 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction 
 import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
+import { lookupModuleCtx, preludeModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
@@ -324,6 +324,8 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 	if (sym.modulePath != "" && _engineToken != null && sym.modulePath != _engineToken.modulePath) {
 		const mc = lookupModuleCtx(sym.modulePath);
 		if (mc != null) return mc;
+		const held = preludeModuleCtx(_engineToken, sym.modulePath);
+		if (held != null) return held;
 	}
 	if (_engineToken != null) return _engineToken;
 	return null as unknown as CheckerContext;
