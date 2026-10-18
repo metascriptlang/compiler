@@ -1705,6 +1705,16 @@ test "engine: a call argument, a local assignment and a branch value land withou
 	assert countOp(glob, RaiserOpcode.Move) == 0, disasmFunc(glob);
 }
 
+test "engine: a condition on a float, a string or a negated value jumps on its ToBoolean" {
+	const ctx = evalOrcVM("function t(x: float64, s: string): string {"
+		+ " let r = ''; if (x) r = r + 'x'; if (s) r = r + 's'; if (!x) r = r + 'X'; if (!s) r = r + 'S';"
+		+ " if (x || s) r = r + 'o'; if (x && s) r = r + 'a'; let n = 0; while (x) { n = n + 1; x = 0.0; }"
+		+ " do { n = n + 10; } while (s && n < 5); return `${r} ${n}`; }"
+		+ " const zero = 0.0; console.log(t(zero / zero, '')); console.log(t(0.5, 'a'));");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "XS 10\nxsoa 11\n", ctx.output;
+}
+
 test "engine: a destination the expression reads, or a merge of branches, keeps its value" {
 	const ctx = evalOrcVM("function h(a: int64, b: int64, c: int64): int64 { return a * 100 + b * 10 + c; }"
 		+ " function k(a: int64, b: int64): int64 { return a - b; }"

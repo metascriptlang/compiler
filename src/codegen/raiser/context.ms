@@ -535,7 +535,7 @@ function skipsInstructions(op: RaiserOpcode): boolean {
 			| RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64
 			| RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64
 			| RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr
-			| RaiserOpcode.BltU64 | RaiserOpcode.BleU64 => true,
+			| RaiserOpcode.BltU64 | RaiserOpcode.BleU64 | RaiserOpcode.BTruthy => true,
 		_ => false,
 	};
 }

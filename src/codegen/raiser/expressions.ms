@@ -862,11 +862,19 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 // matches; the caller patches them. A comparison is one compare-and-skip plus
 // the jump, `!` flips the sense, `&&` and `||` chain jumps and materialise no bool.
 
+// After a skip opcode that fires on true: the jump taken when the test is false, or, for
+// `whenTrue`, a jump the skip hops over so that false routes past the taken one.
+function jumpAfterSkip(s: RaiserCompState, whenTrue: boolean): int32[] {
+	if (!whenTrue) return [emitJumpPlaceholder(s)];
+	const over = emitJumpPlaceholder(s);
+	const taken = emitJumpPlaceholder(s);
+	patchJumpTo(s, over, codeLen(s));
+	return [taken];
+}
+
 function jumpIfValue(s: RaiserCompState, reg: int32, whenTrue: boolean): int32[] {
-	const zeroReg = allocReg(s);
-	emitLoadConst(s, zeroReg, raiserInt(0));
-	emitInst(s, raiserABC(whenTrue ? RaiserOpcode.BeqI64 : RaiserOpcode.BneI64, reg, zeroReg, 1));
-	return [emitJumpPlaceholder(s)];
+	emitInst(s, raiserABC(RaiserOpcode.BTruthy, reg, 0, 1));
+	return jumpAfterSkip(s, whenTrue);
 }
 
 export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): int32[] {
@@ -910,12 +918,7 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 			const test = compileCompareTest(s, node);
 			if (test == null) throw new Error("internal: a comparison operator without a compare-and-skip opcode");
 			emitInst(s, test);
-			if (!whenTrue) return [emitJumpPlaceholder(s)];
-			// a skip that fires on true would hop over the taken jump, so route false past it
-			const over = emitJumpPlaceholder(s);
-			const taken = emitJumpPlaceholder(s);
-			patchJumpTo(s, over, codeLen(s));
-			return [taken];
+			return jumpAfterSkip(s, whenTrue);
 		}
 	}
 	return jumpIfValue(s, compileExpr(s, node), whenTrue);
