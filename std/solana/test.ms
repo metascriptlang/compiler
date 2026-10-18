@@ -3919,10 +3919,22 @@ test "the IDL's arguments read the bytes args<T>() reads for a struct that exten
 	}
 }
 
+function decodeBase64(text: string): uint8[] {
+	const out: uint8[] = [];
+	when (js) {
+		const decoded = Buffer.fromString(text, "base64");
+		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
+	} else {
+		const decoded = Buffer.fromString(text, "base64").asBytes();
+		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
+	}
+	return out;
+}
+
 test "the IDL's fields of an event read back what emit<E>() logged for a struct that extends another" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], paidToEntry).result == 0;
-	const logged = Buffer.fromString(logs()[0].slice("Program data: ".length), "base64").asBytes();
+	const logged = decodeBase64(logs()[0].slice("Program data: ".length));
 	const parsed = JSON.parseValue(inheritedDataIdl());
 	assert parsed.ok;
 	if (parsed.ok) {
