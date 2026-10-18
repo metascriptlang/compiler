@@ -11,7 +11,7 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { NewExprData, CallExprData, Node } from "../../ast/node";
 import { distinctBody, setRepr, isStdCollectionKind } from "../../checker/types";
-import { emit, emitNode, emitJoinedNodes, JSGenerator } from "./emit";
+import { emit, emitNode, emitJoinedNodes, JSGenerator, jsPropertyAccess } from "./emit";
 import { valueCopyFnName } from "./valueCopy";
 
 function valueKeyShape(t: Type | null): Type | null {
@@ -100,7 +100,7 @@ function keyFnName(gen: JSGenerator, shape: Type): string {
 	let parts = "";
 	let j = 0;
 	while (j < shape.typeChildren.length) {
-		const src = shape.kind == TypeKind.Tuple ? "v[" + j.toString() + "]" : "v." + shape.typeNames[j];
+		const src = shape.kind == TypeKind.Tuple ? "v[" + j.toString() + "]" : "v" + jsPropertyAccess(shape.typeNames[j]);
 		parts = parts + (j > 0 ? " + \",\" + " : "") + partExpr(gen, shape.typeChildren[j], src);
 		j += 1;
 	}

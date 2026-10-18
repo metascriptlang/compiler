@@ -423,6 +423,26 @@ export function escapeJSString(s: string): string {
 	return result;
 }
 
+function isJsIdentifierName(name: string): boolean {
+	if (name.byteLength == 0) return false;
+	for (let i = 0; i < name.byteLength; i += 1) {
+		const b = name.byteAt(i);
+		const letter = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code)
+			|| b == "_".code || b == "$".code;
+		if (!letter && (i == 0 || b < "0".code || b > "9".code)) return false;
+	}
+	return true;
+}
+
+export function jsPropertyKey(name: string): string {
+	return isJsIdentifierName(name) ? name : "\"" + escapeJSString(name) + "\"";
+}
+
+export function jsPropertyAccess(name: string, optional: boolean = false): string {
+	if (isJsIdentifierName(name)) return (optional ? "?." : ".") + name;
+	return (optional ? "?.[" : "[") + jsPropertyKey(name) + "]";
+}
+
 // ===== Import Path Conversion =====
 
 export function convertImportPath(path: string): string {
@@ -468,6 +488,24 @@ test "escapeJSString keeps astral runs, escapes lone surrogates" {
 	assert escapeJSString(astral) == astral;
 	assert escapeJSString(fromCodePoint(55296)) == "\\" + "ud800";
 	assert escapeJSString(fromCodePoint(57343)) == "\\" + "udfff";
+}
+
+test "jsPropertyKey quotes exactly the names that are not identifiers" {
+	assert jsPropertyKey("plain") == "plain";
+	assert jsPropertyKey("$_a9") == "$_a9";
+	assert jsPropertyKey("data-probe") == "\"data-probe\"";
+	assert jsPropertyKey("42") == "\"42\"";
+	assert jsPropertyKey("1e3") == "\"1e3\"";
+	assert jsPropertyKey("") == "\"\"";
+	assert jsPropertyKey("q\"b\\s") == "\"q\\\"b\\\\s\"";
+	assert jsPropertyKey("é") == "\"é\"";
+}
+
+test "jsPropertyAccess brackets a name that is not an identifier" {
+	assert jsPropertyAccess("plain") == ".plain";
+	assert jsPropertyAccess("plain", true) == "?.plain";
+	assert jsPropertyAccess("aria-label") == "[\"aria-label\"]";
+	assert jsPropertyAccess("aria-label", true) == "?.[\"aria-label\"]";
 }
 
 test "convertImportPath" {
