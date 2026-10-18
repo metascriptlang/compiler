@@ -1192,6 +1192,7 @@ function sameDistinct(a: Type, b: Type): boolean {
 
 export function sameNominal(a: Type, b: Type): boolean {
 	if (a == b) return true;
+	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
 	if (a.sym != null && b.sym != null) {
 		if (a.sym == b.sym) return true;
 		return a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
