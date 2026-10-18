@@ -1,0 +1,431 @@
+import { InstructionAccount, SeedSlice, SignerSeeds } from "./addressTables";
+
+@emit(`
+const msSolMemPage = 4096n;
+const msSolMemArrayWindow = 1048576n;
+const msSolMemHeaderSize = 88n;
+const msSolMemRefused = 0xffffffffffffffffn;
+const msSolMemEncoder = new TextEncoder();
+const msSolMemDecoder = new TextDecoder();
+const msSolMemSeedLayout = { stride: 16, fields: [{ name: "address", offset: 0, width: 8 }, { name: "length", offset: 8, width: 8 }] };
+const msSolMemMetaLayout = { stride: 16, fields: [{ name: "key", offset: 0, width: 8 }, { name: "writable", offset: 8, width: 1 }, { name: "signer", offset: 9, width: 1 }] };
+let msSolMemRegions = [];
+let msSolMemKeys = new WeakMap();
+let msSolMemTexts = new Map();
+let msSolMemNext = 0x100000000n;
+let msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n };
+let msSolMemFaultCode = 0n;
+let msSolMemFaultText = "";
+
+function msSolMemFail(message) {
+  throw new Error("solana memory: " + message);
+}
+
+function msSolMemHex(address) {
+  return "0x" + address.toString(16);
+}
+
+function msSolMemRoundUp(value) {
+  return (value + msSolMemPage - 1n) / msSolMemPage * msSolMemPage;
+}
+
+function msSolMemOverlapping(start, extent) {
+  for (const region of msSolMemRegions) {
+    if (region.start < start + extent && start < region.start + region.extent) return region;
+  }
+  return null;
+}
+
+function msSolMemInsert(region) {
+  let at = 0;
+  while (at < msSolMemRegions.length && msSolMemRegions[at].start < region.start) at++;
+  msSolMemRegions.splice(at, 0, region);
+  return region;
+}
+
+function msSolMemPlace(extent, make) {
+  let start = msSolMemNext;
+  for (let clash = msSolMemOverlapping(start, extent); clash !== null; clash = msSolMemOverlapping(start, extent)) {
+    start = msSolMemRoundUp(clash.start + clash.extent);
+  }
+  msSolMemNext = start + extent;
+  return msSolMemInsert(make(start));
+}
+
+function msSolMemMap(start, size) {
+  const extent = msSolMemRoundUp(size === 0n ? 1n : size);
+  const clash = msSolMemOverlapping(start, extent);
+  if (clash !== null) {
+    msSolMemFail("cannot map " + msSolMemHex(start) + ".." + msSolMemHex(start + extent) + ": overlaps the region at " + msSolMemHex(clash.start));
+  }
+  return msSolMemInsert({ start: start, extent: extent, kind: "bytes", backing: null, bytes: new Uint8Array(Number(size)), readOnly: false });
+}
+
+function msSolMemAllocate(size) {
+  const bytes = new Uint8Array(Number(size));
+  const extent = msSolMemRoundUp(size === 0n ? 1n : size);
+  return msSolMemPlace(extent, function (start) {
+    return { start: start, extent: extent, kind: "bytes", backing: null, bytes: bytes, readOnly: false };
+  });
+}
+
+function msSolMemMode(array) {
+  if (array.length === 0) return { size: 1, bytes: 0 };
+  const first = array[0];
+  if (typeof first === "number") return { size: 1, bytes: array.length };
+  if (typeof first === "bigint") return { size: 8, bytes: array.length * 8 };
+  if (first !== null && typeof first === "object") {
+    const layout = msSolMemLayoutOf(first);
+    return { size: layout.stride, bytes: array.length * layout.stride, layout: layout };
+  }
+  msSolMemFail("an array of " + typeof first + " has no memory layout");
+}
+
+function msSolMemLayoutOf(object) {
+  if ("key" in object) return msSolMemMetaLayout;
+  if ("address" in object) return msSolMemSeedLayout;
+  msSolMemFail("a struct table with fields {" + Object.keys(object).join(", ") + "} has no memory layout");
+}
+
+function msSolMemRegionOf(base) {
+  if (base === null || typeof base !== "object") msSolMemFail("cannot take the address of a " + typeof base);
+  let region = msSolMemKeys.get(base);
+  if (region !== undefined) return region;
+  if (ArrayBuffer.isView(base)) {
+    const bytes = new Uint8Array(base.buffer, base.byteOffset, base.byteLength);
+    const extent = msSolMemRoundUp(BigInt(bytes.length === 0 ? 1 : bytes.length));
+    region = msSolMemPlace(extent, function (start) {
+      return { start: start, extent: extent, kind: "bytes", backing: base, bytes: bytes, readOnly: false };
+    });
+  } else if (Array.isArray(base)) {
+    const live = BigInt(msSolMemMode(base).bytes);
+    const extent = live * 4n > msSolMemArrayWindow ? msSolMemRoundUp(live * 4n) : msSolMemArrayWindow;
+    region = msSolMemPlace(extent, function (start) {
+      return { start: start, extent: extent, kind: "array", backing: base, bytes: null, readOnly: false };
+    });
+  } else {
+    msSolMemFail("cannot take the address of an object that is neither a byte buffer nor an array");
+  }
+  msSolMemKeys.set(base, region);
+  return region;
+}
+
+function msSolMemSpanAddress(span) {
+  const region = msSolMemRegionOf(span.base);
+  const size = region.kind === "bytes" ? (span.base.BYTES_PER_ELEMENT || 1) : msSolMemMode(span.base).size;
+  return region.start + BigInt(span.off) * BigInt(size);
+}
+
+function msSolMemTextRegion(text) {
+  let region = msSolMemTexts.get(text);
+  if (region !== undefined) return region;
+  const bytes = msSolMemEncoder.encode(text);
+  const extent = msSolMemRoundUp(BigInt(bytes.length));
+  region = msSolMemPlace(extent, function (start) {
+    return { start: start, extent: extent, kind: "bytes", backing: null, bytes: bytes, readOnly: true };
+  });
+  msSolMemTexts.set(text, region);
+  return region;
+}
+
+function msSolMemLive(region) {
+  return region.kind === "bytes" ? region.bytes.length : msSolMemMode(region.backing).bytes;
+}
+
+function msSolMemFind(address, width, verb) {
+  let low = 0;
+  let high = msSolMemRegions.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (msSolMemRegions[middle].start <= address) low = middle + 1; else high = middle;
+  }
+  const region = low > 0 ? msSolMemRegions[low - 1] : null;
+  if (region === null || address >= region.start + region.extent) {
+    msSolMemFail(verb + " of " + width + " byte(s) at " + msSolMemHex(address) + " hits no region");
+  }
+  const offset = address - region.start;
+  if (offset + BigInt(width) > BigInt(msSolMemLive(region))) {
+    msSolMemFail(verb + " of " + width + " byte(s) at " + msSolMemHex(address) + " crosses the end of the region at " + msSolMemHex(region.start) + " (" + msSolMemLive(region) + " bytes)");
+  }
+  return { region: region, offset: Number(offset) };
+}
+
+function msSolMemGetByte(region, offset) {
+  if (region.kind === "bytes") return region.bytes[offset];
+  const array = region.backing;
+  const first = array[0];
+  if (typeof first === "number") return array[offset];
+  if (typeof first === "bigint") return Number((array[offset >> 3] >> BigInt((offset & 7) * 8)) & 255n);
+  const layout = msSolMemLayoutOf(first);
+  const entry = array[Math.floor(offset / layout.stride)];
+  const inside = offset % layout.stride;
+  for (const field of layout.fields) {
+    if (inside >= field.offset && inside < field.offset + field.width) {
+      return Number((BigInt(entry[field.name]) >> BigInt((inside - field.offset) * 8)) & 255n);
+    }
+  }
+  return 0;
+}
+
+function msSolMemSetByte(region, offset, value) {
+  if (region.readOnly) msSolMemFail("store to the read-only region at " + msSolMemHex(region.start));
+  if (region.kind === "bytes") { region.bytes[offset] = value; return; }
+  const array = region.backing;
+  const first = array[0];
+  if (typeof first === "number") { array[offset] = value; return; }
+  if (typeof first === "bigint") {
+    const shift = BigInt((offset & 7) * 8);
+    array[offset >> 3] = BigInt.asUintN(64, (array[offset >> 3] & ~(255n << shift)) | (BigInt(value) << shift));
+    return;
+  }
+  const layout = msSolMemLayoutOf(first);
+  const entry = array[Math.floor(offset / layout.stride)];
+  const inside = offset % layout.stride;
+  for (const field of layout.fields) {
+    if (inside >= field.offset && inside < field.offset + field.width) {
+      const shift = BigInt((inside - field.offset) * 8);
+      const next = (BigInt(entry[field.name]) & ~(255n << shift)) | (BigInt(value) << shift);
+      entry[field.name] = field.width === 8 ? BigInt.asUintN(64, next) : Number(next);
+      return;
+    }
+  }
+}
+
+function msSolMemLoad(address, width) {
+  const found = msSolMemFind(address, width, "load");
+  const region = found.region;
+  const offset = found.offset;
+  if (region.kind === "bytes") {
+    const view = new DataView(region.bytes.buffer, region.bytes.byteOffset, region.bytes.byteLength);
+    if (width === 1) return view.getUint8(offset);
+    if (width === 2) return view.getUint16(offset, true);
+    if (width === 4) return view.getUint32(offset, true);
+    return view.getBigUint64(offset, true);
+  }
+  let value = 0n;
+  for (let i = width - 1; i >= 0; i--) value = (value << 8n) | BigInt(msSolMemGetByte(region, offset + i));
+  return width === 8 ? value : Number(value);
+}
+
+function msSolMemStore(address, width, value) {
+  const found = msSolMemFind(address, width, "store");
+  const region = found.region;
+  const offset = found.offset;
+  if (region.readOnly) msSolMemFail("store to the read-only region at " + msSolMemHex(region.start));
+  if (region.kind === "bytes") {
+    const view = new DataView(region.bytes.buffer, region.bytes.byteOffset, region.bytes.byteLength);
+    if (width === 1) view.setUint8(offset, value);
+    else if (width === 2) view.setUint16(offset, value, true);
+    else if (width === 4) view.setUint32(offset, value, true);
+    else view.setBigUint64(offset, value, true);
+    return;
+  }
+  let rest = BigInt(value);
+  for (let i = 0; i < width; i++) {
+    msSolMemSetByte(region, offset + i, Number(rest & 255n));
+    rest >>= 8n;
+  }
+}
+
+function msSolMemRead(address, length) {
+  const found = msSolMemFind(address, Number(length), "read");
+  const out = new Uint8Array(Number(length));
+  for (let i = 0; i < out.length; i++) out[i] = msSolMemGetByte(found.region, found.offset + i);
+  return out;
+}
+
+function msSolMemRaise(code, text) {
+  if (msSolMemFaultCode !== 0n) return;
+  msSolMemFaultCode = code;
+  msSolMemFaultText = msSolMemDecoder.decode(msSolMemEncoder.encode(text).subarray(0, 159));
+}
+
+function msSolMemCopy(destination, source, length) {
+  if (length === 0n) return;
+  if (destination < source + length && source < destination + length) {
+    msSolMemRaise(msSolMemRefused, "ProgramFailedToComplete: sol_memcpy_: Overlapping copy");
+    return;
+  }
+  const to = msSolMemFind(destination, Number(length), "copy to");
+  const from = msSolMemFind(source, Number(length), "copy from");
+  if (to.region.readOnly) msSolMemFail("store to the read-only region at " + msSolMemHex(to.region.start));
+  if (to.region.kind === "bytes" && from.region.kind === "bytes") {
+    to.region.bytes.set(from.region.bytes.subarray(from.offset, from.offset + Number(length)), to.offset);
+    return;
+  }
+  const bytes = msSolMemRead(source, length);
+  for (let i = 0; i < bytes.length; i++) msSolMemSetByte(to.region, to.offset + i, bytes[i]);
+}
+
+function msSolMemFill(destination, value, length) {
+  if (length === 0n) return;
+  const to = msSolMemFind(destination, Number(length), "fill");
+  if (to.region.readOnly) msSolMemFail("store to the read-only region at " + msSolMemHex(to.region.start));
+  if (to.region.kind === "bytes") { to.region.bytes.fill(value, to.offset, to.offset + Number(length)); return; }
+  for (let i = 0; i < Number(length); i++) msSolMemSetByte(to.region, to.offset + i, value);
+}
+
+function msSolMemCompare(left, right, length) {
+  if (length === 0n) return 0;
+  const a = msSolMemRead(left, length);
+  const b = msSolMemRead(right, length);
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+function msSolMemDataRoom(record) {
+  const table = msSolMemContext.table;
+  const count = msSolMemContext.count;
+  let index = 0n;
+  while (index < count && msSolMemLoad(table + 8n * index, 8) !== record) index++;
+  if (index === count) return 0n;
+  let next = index + 1n;
+  while (next < count && msSolMemLoad(table + 8n * next, 8) <= record) next++;
+  let end = msSolMemContext.instructionData - 8n;
+  if (next < count) end = msSolMemLoad(table + 8n * next, 8);
+  else if (msSolMemLoad(msSolMemContext.input, 8) !== count) return 0n;
+  return BigInt.asUintN(64, end - 8n * (next - index) - (record + msSolMemHeaderSize));
+}
+
+function msSolMemRelease() {
+  msSolMemRegions = [];
+  msSolMemKeys = new WeakMap();
+  msSolMemTexts = new Map();
+  msSolMemNext = 0x100000000n;
+  msSolMemContext = { table: 0n, count: 0n, instructionData: 0n, input: 0n };
+}
+`);
+
+export function msSolPointer(address: uint64): Ptr<void> {
+	@emit(`msSolMemFail("msSolPointer(" + ${address} + "): JS has no integer to pointer conversion (LANG.md: Taking an address); read and write through msSolLoad and msSolStore");`);
+	unreachable;
+}
+
+export function msSolLoadU8(address: uint64): uint8 {
+	@emit(`return msSolMemLoad(${address}, 1);`);
+	unreachable;
+}
+
+export function msSolLoadU16(address: uint64): uint16 {
+	@emit(`return msSolMemLoad(${address}, 2);`);
+	unreachable;
+}
+
+export function msSolLoadU32(address: uint64): uint32 {
+	@emit(`return msSolMemLoad(${address}, 4);`);
+	unreachable;
+}
+
+export function msSolLoadU64(address: uint64): uint64 {
+	@emit(`return msSolMemLoad(${address}, 8);`);
+	unreachable;
+}
+
+export function msSolStoreU8(address: uint64, value: uint8): void {
+	@emit(`msSolMemStore(${address}, 1, ${value});`);
+}
+
+export function msSolStoreU16(address: uint64, value: uint16): void {
+	@emit(`msSolMemStore(${address}, 2, ${value});`);
+}
+
+export function msSolStoreU32(address: uint64, value: uint32): void {
+	@emit(`msSolMemStore(${address}, 4, ${value});`);
+}
+
+export function msSolStoreU64(address: uint64, value: uint64): void {
+	@emit(`msSolMemStore(${address}, 8, ${value});`);
+}
+
+export function msSolCopy(destination: uint64, source: uint64, length: uint64): void {
+	@emit(`msSolMemCopy(${destination}, ${source}, ${length});`);
+}
+
+export function msSolFill(destination: uint64, value: uint8, length: uint64): void {
+	@emit(`msSolMemFill(${destination}, ${value}, ${length});`);
+}
+
+export function msSolCompare(left: uint64, right: uint64, length: uint64): int32 {
+	@emit(`return msSolMemCompare(${left}, ${right}, ${length});`);
+	unreachable;
+}
+
+export function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64 {
+	@emit(`return msSolMemSpanAddress(${data});`);
+	unreachable;
+}
+
+export function msSolTableAddress(table: Span<SeedSlice>): uint64 {
+	@emit(`return msSolMemSpanAddress(${table});`);
+	unreachable;
+}
+
+export function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 {
+	@emit(`return msSolMemSpanAddress(${table});`);
+	unreachable;
+}
+
+export function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 {
+	@emit(`return msSolMemSpanAddress(${table});`);
+	unreachable;
+}
+
+export function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 {
+	@emit(`return msSolMemSpanAddress(${table});`);
+	unreachable;
+}
+
+export function msSolWordsAddress(words: Span<uint64>): uint64 {
+	@emit(`return msSolMemSpanAddress(${words});`);
+	unreachable;
+}
+
+export function msSolStringAddress(text: string): uint64 {
+	@emit(`return ${text}.length === 0 ? 0n : msSolMemTextRegion(${text}).start;`);
+	unreachable;
+}
+
+export function msSolStringLength(text: string): uint64 {
+	@emit(`return ${text}.length === 0 ? 0n : BigInt(msSolMemTextRegion(${text}).bytes.length);`);
+	unreachable;
+}
+
+export function msSolDataRoom(record: uint64): uint64 {
+	@emit(`return msSolMemDataRoom(${record});`);
+	unreachable;
+}
+
+export function msSolHostRaise(code: uint64, text: string): void {
+	@emit(`msSolMemRaise(${code}, ${text});`);
+}
+
+export function msSolMemoryMap(start: uint64, size: uint64): void {
+	@emit(`msSolMemMap(${start}, ${size});`);
+}
+
+export function msSolMemoryAllocate(size: uint64): uint64 {
+	@emit(`return msSolMemAllocate(${size}).start;`);
+	unreachable;
+}
+
+export function msSolMemoryRelease(): void {
+	@emit(`msSolMemRelease();`);
+}
+
+export function msSolMemorySetAccounts(table: uint64, count: uint64, instructionData: uint64, input: uint64): void {
+	@emit(`msSolMemContext = { table: ${table}, count: ${count}, instructionData: ${instructionData}, input: ${input} };`);
+}
+
+export function msSolMemoryFaultCode(): uint64 {
+	@emit(`return msSolMemFaultCode;`);
+	unreachable;
+}
+
+export function msSolMemoryFaultText(): string {
+	@emit(`return msSolMemFaultText;`);
+	unreachable;
+}
+
+export function msSolMemoryClearFault(): void {
+	@emit(`msSolMemFaultCode = 0n; msSolMemFaultText = "";`);
+}
