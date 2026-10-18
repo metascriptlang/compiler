@@ -137,8 +137,14 @@ function guardVariantReads(node: Node, ctx: TransformContext, jsBackend: boolean
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
-		if (jsBackend && md.object.kind == NodeKind.Identifier) md.object = projectNarrowedRead(md.object);
-		guardProjection(md.object, md.property, ctx, jsBackend, false);
+		const deref = md.object.kind == NodeKind.HiddenDeref ? md.object.data as HiddenDerefData : null;
+		if (deref != null) {
+			if (jsBackend && deref.expr.kind == NodeKind.Identifier) deref.expr = projectNarrowedRead(deref.expr);
+			guardProjection(deref.expr, md.property, ctx, jsBackend, false);
+		} else {
+			if (jsBackend && md.object.kind == NodeKind.Identifier) md.object = projectNarrowedRead(md.object);
+			guardProjection(md.object, md.property, ctx, jsBackend, false);
+		}
 	}
 	if (!jsBackend) guardProjection(node, "", ctx, jsBackend, node.flags.has(NodeFlag.ConvCheck));
 	forEachChild(node, (c: Node): void => guardVariantReads(c, ctx, jsBackend));

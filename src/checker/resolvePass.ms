@@ -2316,32 +2316,33 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData, va
 
 	// Resolve each variant type. Every variant carries the disc field as a
 	// literal type (`BooleanLiteral` or `EnumLiteral`), so a narrowed variant
-	// used as a whole value keeps it. An enum variant is stamped
-	// `<alias>.<key>` (dotted): error messages display `MyData.Ok`, and
-	// `variantStructCName` excludes dotted names from direct C use (falls back
-	// to the synthetic `<Union>_v<N>` that `genUnionType` emits). C stores no
-	// field of one value in an anonymous struct (`storesNothing`).
+	// used as a whole value keeps it. A `struct` union unwraps each written
+	// object to a by-value arm, stamps an enum arm `<alias>.<key>` (dotted: error
+	// messages display `MyData.Ok`; `variantStructCName` excludes dotted names
+	// from direct C use and falls back to the synthetic `<Union>_v<N>` that
+	// `genUnionType` emits) and C stores no field of one value in it
+	// (`storesNothing`). A `type` union keeps each object a reference and
+	// anonymous, as the written union of objects does.
 	const variantTypes: Type[] = [];
 	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
 		let resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
-		if (resolved != null && resolved.kind == TypeKind.Ref && resolved.typeReturn != null
-				&& d.variantTypes[vi].trim().charAt(0) == "{") {
-			resolved = resolved.typeReturn;
-		}
-		if (resolved != null && resolved.kind == TypeKind.Struct && vi < d.variantKeys.length) {
+		const written = d.variantTypes[vi].trim().charAt(0) == "{" && resolved != null && resolved.kind == TypeKind.Ref && resolved.typeReturn != null;
+		const body = written ? resolved.typeReturn : resolved;
+		if (body != null && body.kind == TypeKind.Struct && vi < d.variantKeys.length) {
 			const bareKey = bareAfterDelim(d.variantKeys[vi], ".");
 			const discFieldType = isBooleanDisc ? createBooleanLiteral(d.variantKeys[vi] == "true") : createEnumLiteral(discType, bareKey);
 			const newNames: string[] = [d.discriminantName];
-			for (const n of resolved.typeNames) newNames.push(n);
+			for (const n of body.typeNames) newNames.push(n);
 			const newChildren: Type[] = [discFieldType];
-			for (const c of resolved.typeChildren) newChildren.push(c);
-			resolved.typeNames = newNames;
-			resolved.typeChildren = newChildren;
-			if (!isBooleanDisc) {
-				resolved.typeName = d.aliasName + "." + bareKey;
-				markDuVariant(resolved);
+			for (const c of body.typeChildren) newChildren.push(c);
+			body.typeNames = newNames;
+			body.typeChildren = newChildren;
+			if (valueUnion && !isBooleanDisc) {
+				body.typeName = d.aliasName + "." + bareKey;
+				markDuVariant(body);
 			}
 		}
+		if (written && valueUnion) resolved = body;
 		variantTypes.push(resolved);
 	}
 

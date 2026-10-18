@@ -1,5 +1,5 @@
-// `struct X = match (...) { ... }` declares the union a `type X = match` declares, as a value:
-// same layout, arms, narrowing and exhaustiveness, and a copy where the other would be shared.
+// `struct X = match (...) { ... }` declares a discriminated union as a value: arms held by value
+// and a copy where `type X = match` shares the union.
 
 enum Kind { Lib, App }
 
@@ -95,10 +95,11 @@ test "a struct match held by a struct is copied with it" {
 	if (h.pair.ok) assert h.pair.value == "lib";
 }
 
-test "a struct match has the layout of the type form" {
-	assert sizeof(Pair) == sizeof(SharedPair);
-	assert sizeof(Shape) == sizeof(SharedShape);
+test "a struct match holds its arms by value, the type form by reference" {
 	assert sizeof(Pair) == 24;
+	assert sizeof(Shape) == 24;
+	assert sizeof(SharedPair) == 16;
+	assert sizeof(SharedShape) == 16;
 }
 
 test "a struct match narrows by its discriminant" {
@@ -114,7 +115,7 @@ test "a struct match is matched exhaustively" {
 	assert describe({ kind: Kind.App, count: 3 }) == 2;
 }
 
-test "the type form still declares the same union" {
+test "the type form declares the same arms and narrowing" {
 	const a: SharedPair = { ok: true, value: "lib" };
 	if (a.ok) assert a.value == "lib";
 	const s: SharedShape = { kind: Kind.App, count: 3 };

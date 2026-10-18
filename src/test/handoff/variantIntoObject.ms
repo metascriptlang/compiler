@@ -48,10 +48,11 @@ test "a narrowed Result is refused where an object is expected and is not told t
 	assert hasError(decl + "if (r.ok) { const q: { ok: true; value: int32 } = r; }", refusal);
 }
 
-test "a narrowed variant of a type union is refused without the hint to declare it with type" {
-	const src = pairDecl.replace("struct Pair", "type Pair") + takeOk + "if (p.ok) f(p);";
-	assert hasError(src, "takes an object (a reference). Copy it with '{ ...p }', take the parameter as 'Pair'.");
-	assert !hasError(src, "to share it");
+test "a narrowed variant of a type union is accepted where an object is expected" {
+	const src = pairDecl.replace("struct Pair", "type Pair") + takeOk;
+	assert strictErrorCount(src + "if (p.ok) f(p);") == 0;
+	assert strictErrorCount(src + "if (p.ok) { const q: { ok: true; value: string } = p; }") == 0;
+	assert strictErrorCount(src + "function g(): { ok: true; value: string } { if (p.ok) return p; return { ok: true, value: \"x\" }; }") == 0;
 }
 
 test "a narrowed variant is copied into an object, kept as its union or serialized without a refusal" {

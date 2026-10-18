@@ -630,7 +630,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 // ===== Discriminated Union Declaration =====
 // syntax: type X = match (discName: EnumOrBool) { Key => { fields }, ... };
-//         struct X = match (...) { ... };  the same union, declared a value (NodeFlag.ValueUnion)
+//         struct X = match (...) { ... };  the same arms held by value (NodeFlag.ValueUnion)
 //   - Enum discriminator: keys are enum members (`MyKind.Ok`, `MyKind.Err`)
 //   - Boolean discriminator: keys are `true` / `false` literals
 

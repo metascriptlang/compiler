@@ -5,8 +5,8 @@
 // @stdout: arm changed: 1 lib
 // @stdout: held: lib z
 // @stdout: type form: true
-// @stdout: sizes: 24 24 24 24
-// note: `struct X = match (...)` declares the union `type X = match (...)` declares, as a value: a store copies it, so a write through the copy leaves the original, on C and on JS (where the store runs the copy routine of the value union, one case per arm). Covered: a boolean disc, an enum disc, the generic form, assignment over a union of another arm, a union held by a struct, and the sizes against the type form.
+// @stdout: sizes: 24 16 24 16
+// note: `struct X = match (...)` declares a discriminated union as a value: a store copies it, where `type X = match (...)` shares it, so a write through the copy leaves the original, on C and on JS (where the store runs the copy routine of the value union, one case per arm). Covered: a boolean disc, an enum disc, the generic form, assignment over a union of another arm, a union held by a struct, and the sizes against the type form, whose arms are references.
 
 enum K { A, B }
 

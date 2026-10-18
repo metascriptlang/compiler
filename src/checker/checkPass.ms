@@ -5395,10 +5395,10 @@ test "flow: enum DU narrowing via match-syntax discriminated union" {
 	assert declared.kind == TypeKind.Union;
 	const narrowed = getFlowTypeOfReference(vRef, declared);
 	assert narrowed != null;
-	// Narrowed to the A-variant (has `x`)
-	assert narrowed.kind == TypeKind.Struct;
+	// Narrowed to the A-variant (has `x`), a reference to the object the arm writes
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
 	let hasX = false;
-	for (const fn of narrowed.typeNames) {
+	for (const fn of narrowed.typeReturn.typeNames) {
 		if (fn == "x") { hasX = true; break; }
 	}
 	assert hasX;

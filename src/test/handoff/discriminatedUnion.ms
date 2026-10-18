@@ -93,7 +93,8 @@ test "construction validation — correct variant fields" {
 
 test "construction validation — wrong variant field" {
 	const src = "enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n};\nfunction bad(): Data { return { kind: Kind.A, y: \"oops\" }; }";
-	assert hasError(src, "does not exist on variant");
+	assert hasError(src, "'y' does not exist in type");
+	assert hasError(src.replace("type Data", "struct Data"), "does not exist on variant");
 }
 
 test "construction validation — missing discriminant" {

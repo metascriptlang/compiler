@@ -1341,11 +1341,7 @@ export function matchUnionBehindInstance(t: Type): Type {
 	instantiateGenericBody(t, genericParamsOf(t));
 	if (t.typeReturn == null) return t;
 	const u = peelToStructOrUnion(t);
-	if (!isDiscriminatedUnion(u)) return t;
-	for (const member of u!.typeChildren) {
-		if (member.kind == TypeKind.Ref) return t;
-	}
-	return u!;
+	return isDiscriminatedUnion(u) ? u! : t;
 }
 
 // A generic instantiation whose body has no nominal Struct/Union carries no

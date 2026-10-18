@@ -51,6 +51,25 @@ test "an object that is already the arm's own struct is not rebuilt" {
 	assert !result.value.contains("msArmConv_");
 }
 
+test "an arm of a type match union is an object behind the union's pointer and keeps its discriminator field" {
+	const result = compileToC("type Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };\nconst p: Pair = { ok: true, value: \"y\" };\nconsole.log(p.ok);");
+	assert result.ok;
+	assert result.value.contains("  MS_BOOL ok;\n  msString value;\n};");
+	assert result.value.contains("* v0;");
+	assert !result.value.contains("typedef struct {\n  msString value;\n} Pair");
+}
+
+test "the type form and the hand-written union of objects share one C layout" {
+	const written = compileToC("type Pair = { ok: true; value: string } | { ok: false; error: string };\nconst p: Pair = { ok: true, value: \"y\" };\nconsole.log(p.ok);");
+	const matched = compileToC("type Pair = match (ok: boolean) { true => { value: string }, false => { error: string } };\nconst p: Pair = { ok: true, value: \"y\" };\nconsole.log(p.ok);");
+	assert written.ok;
+	assert matched.ok;
+	assert written.value.contains("* v0;");
+	assert written.value.contains("* v1;");
+	assert matched.value.contains("* v0;");
+	assert matched.value.contains("* v1;");
+}
+
 test "an enum discriminator read passes as a call argument on a union of objects" {
 	const result = compileToC("enum Q { Open, Shut }\ntype G = { kind: Q.Open; n: int32 } | { kind: Q.Shut; why: string };\nfunction name(q: Q): int32 { return q == Q.Open ? 1 : 2; }\nconst gs: G[] = [{ kind: Q.Open, n: 1 }, { kind: Q.Shut, why: \"w\" }];\nconsole.log(name(gs[1].kind));");
 	assert result.ok;
