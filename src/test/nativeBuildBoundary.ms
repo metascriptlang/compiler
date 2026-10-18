@@ -810,6 +810,13 @@ function runEmccJspi(): void {
 	const jspiByDefault = execFileCapture("node", ["-e", "process.exit(typeof WebAssembly.Suspending == 'function' ? 0 : 1)"]).ok;
 	const nodeArgs = jspiByDefault ? ["timer.js"] : ["--experimental-wasm-jspi", "timer.js"];
 	record("an emcc program waits on a timer from sync code", "total=21", command(dir, "emcc-jspi-timer-run", "node", nodeArgs).stdout.trim());
+	put(`${dir}/rawSleep.ms`, "extern function msSleepMs(ms: int32): void;\nmsSleepMs(5);\nconsole.log(\"slept\");\n");
+	const raw = command(dir, "emcc-jspi-raw", compiler, ["build", "rawSleep.ms", "--os=emcc", "--output=rawSleep.js"]);
+	need(raw.code == 0, "emcc-jspi raw sleep build");
+	const rawJs = readFile(`${dir}/rawSleep.js`);
+	recordTrue("an emcc program that sleeps through a runtime extern links JSPI", rawJs.ok && rawJs.value.indexOf("WebAssembly.Suspending") >= 0);
+	const rawArgs = jspiByDefault ? ["rawSleep.js"] : ["--experimental-wasm-jspi", "rawSleep.js"];
+	record("an emcc program sleeps through a runtime extern", "slept", command(dir, "emcc-jspi-raw-run", "node", rawArgs).stdout.trim());
 }
 
 function runEmccWatchProcess(): void {
