@@ -97,7 +97,13 @@ export function findAt(
 ): Result<ProgramAddress, ProgramError> {
 	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
 	const keyAddress = msSolSpanAddress(found.key.bytes);
-	const code = msSolFindAddress(table, count, program, keyAddress, keyAddress + 32);
+	when (js) {
+		let bump: uint8[1] = [];
+		const code = msSolFindAddress(table, count, program, keyAddress, msSolSpanAddress(bump));
+		found.bump = bump[0];
+	} else {
+		const code = msSolFindAddress(table, count, program, keyAddress, keyAddress + 32);
+	}
 	if (code == 2) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
 	if (code != 0) { return Result.err(ProgramError.invalidSeeds()); }
 	return Result.ok(found);
