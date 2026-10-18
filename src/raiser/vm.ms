@@ -4,7 +4,7 @@
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx,
-	getBx
+	packedOp, packedA, packedBx
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
@@ -16,7 +16,7 @@ import {
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
-	makeTestModule, packFunction, getFuncConst, getFuncConstLen, getFuncInst, getFuncCodeLen, getModuleFunc, createRaiserFunction, createRaiserModule,
+	makeTestModule, assertPacked, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
@@ -740,22 +740,22 @@ function unwindStep(vm: RaiserVM): void {
 		while (vm.safePoints.length > safePointBase(vm)) {
 			const sp = popSafePoint(vm);
 			const func = getModuleFunc(vm.mod, vm.funcIdx);
-			if (sp < 0 || sp >= getFuncCodeLen(func)) {
+			if (sp < 0 || sp >= func.packed.length) {
 				vmError(vm, `safepoint out of bounds: ${sp}`);
 				return;
 			}
-			const meta = getFuncInst(func, sp);
-			if (meta.op == RaiserOpcode.Catch) {
+			const meta = func.packed[sp];
+			if (packedOp(meta) == RaiserOpcode.Catch) {
 				vm.unwinding = false;
 				vm.savedIp = -1;
 				// Bind the caught value into the register the handler names,
 				// now rather than later: a throw inside the handler body
 				// overwrites currentException.
-				setReg(vm, vm.baseReg + meta.a, vm.currentException);
+				setReg(vm, vm.baseReg + packedA(meta), vm.currentException);
 				vm.ip = (sp + 1) as int32;
 				return;
 			}
-			if (meta.op == RaiserOpcode.Finally) {
+			if (packedOp(meta) == RaiserOpcode.Finally) {
 				vm.ip = (sp + 1) as int32;
 				return;
 			}
@@ -778,11 +778,11 @@ function cleanUpOnReturn(vm: RaiserVM): number {
 	if (n == safePointBase(vm)) return -1;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	let sp = vm.safePoints[n - 1];
-	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
-	const meta = getFuncInst(func, sp);
-	if (meta.op == RaiserOpcode.Catch) sp = sp + getBx(meta);
-	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
-	if (getFuncInst(func, sp).op != RaiserOpcode.Finally) return -1;
+	if (sp < 0 || sp >= func.packed.length) return -1;
+	const meta = func.packed[sp];
+	if (packedOp(meta) == RaiserOpcode.Catch) sp = sp + packedBx(meta);
+	if (sp < 0 || sp >= func.packed.length) return -1;
+	if (packedOp(func.packed[sp]) != RaiserOpcode.Finally) return -1;
 	vm.safePoints.length = n - 1;
 	return sp + 1;
 }
@@ -1504,7 +1504,7 @@ function runStrandSlice(vm: RaiserVM): void {
 	const mod = vm.mod;
 	let funcIdx = vm.funcIdx;
 	let func = getModuleFunc(mod, funcIdx);
-	packFunction(func);
+	assertPacked(func);
 	let code = func.packed;
 	let regs = vm.regs;
 	let slots = regs.slots;
@@ -1512,7 +1512,7 @@ function runStrandSlice(vm: RaiserVM): void {
 		if (vm.funcIdx != funcIdx) {
 			funcIdx = vm.funcIdx;
 			func = getModuleFunc(mod, funcIdx);
-			packFunction(func);
+			assertPacked(func);
 			code = func.packed;
 		}
 		if (vm.regs != regs) {
@@ -3389,6 +3389,19 @@ test "StrLen: empty string" {
 		[raiserString("")]
 	));
 	assert vm.exitValue.intVal == 0;
+}
+
+test "a function whose code grew after creation is refused at entry" {
+	const code: RaiserInstruction[] = [raiserABC(RaiserOpcode.Halt, 0, 0, 0)];
+	const func = createRaiserFunction("grown", code, [], 0, 0, 2);
+	func.code.push(raiserABC(RaiserOpcode.Halt, 0, 0, 0));
+	let message = "";
+	try {
+		execModule(createRaiserModule("test", [func], 0));
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("function grown has 2 instructions but 1 packed words");
 }
 
 test "CallIndirect basic" {

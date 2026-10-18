@@ -283,6 +283,18 @@ function packedField(inst: RaiserInstruction, v: number, name: string): int64 {
 	return whole;
 }
 
+export function packedOp(word: int64): RaiserOpcode {
+	return (word & 255) as RaiserOpcode;
+}
+
+export function packedA(word: int64): number {
+	return ((word >> 8) & 65535) as number;
+}
+
+export function packedBx(word: int64): number {
+	return (((word >> 24) & 65535) * 256 + ((word >> 40) & 65535)) as number;
+}
+
 export function packInstruction(inst: RaiserInstruction): int64 {
 	const op = inst.op as int64;
 	if (op < 0 || op > 255) throw new Error(`internal: opcode ${inst.op} does not fit the packed 8-bit field`);

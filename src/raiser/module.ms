@@ -8,8 +8,8 @@ import { RaiserCopyPlan } from "./valueCopy";
 
 export interface RaiserFunction {
 	name: string;
-	code: RaiserInstruction[];
-	packed: int64[];      // code, packed for the VM by packFunction
+	code: RaiserInstruction[];  // disasm, tests and codegen only: the VM reads `packed`
+	packed: int64[];      // code, packed once by createRaiserFunction
 	lines: int32[];       // source line per instruction, 0 = unknown
 	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
@@ -20,23 +20,10 @@ export interface RaiserFunction {
 	classTypes: RaiserClassType[];
 }
 
-// Codegen may still edit `code` while it builds a function, so packing waits for
-// the first run of that function.
-export function packFunction(func: RaiserFunction): void {
-	const n = func.code.length;
-	if (func.packed.length == n) return;
-	const packed: int64[] = [];
-	const lines: int32[] = [];
-	const cache: int32[] = [];
-	for (let i = 0; i < n; i += 1) {
-		const inst = func.code[i];
-		packed.push(packInstruction(inst));
-		lines.push(inst.line as int32);
-		cache.push(-1);
+export function assertPacked(func: RaiserFunction): void {
+	if (func.packed.length != func.code.length) {
+		throw new Error(`internal: function ${func.name} has ${func.code.length} instructions but ${func.packed.length} packed words; its code changed after createRaiserFunction`);
 	}
-	func.packed = packed;
-	func.lines = lines;
-	func.fieldCache = cache;
 }
 
 // --- Module ---
@@ -59,7 +46,15 @@ export interface RaiserModule {
 // --- Constructors ---
 
 export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number): RaiserFunction {
-	return { name, code, packed: [], lines: [], fieldCache: [], constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
+	const packed: int64[] = [];
+	const lines: int32[] = [];
+	const fieldCache: int32[] = [];
+	for (const inst of code) {
+		packed.push(packInstruction(inst));
+		lines.push(inst.line as int32);
+		fieldCache.push(-1);
+	}
+	return { name, code, packed, lines, fieldCache, constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
