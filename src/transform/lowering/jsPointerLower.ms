@@ -7,7 +7,7 @@ import {
 } from "../../ast/node";
 import { skipModifier, peelTransparentInstance } from "../../checker/types";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { getCtorParamTypes } from "../../checker/symbol";
+import { ctorFormalTypes } from "../../checker/ctorRoutine";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
 import { makeIdentResolved, makeNumber, makeArrayAccess, makeBinary, makeVarDecl, makeBlock, makeReturn } from "../util";
@@ -218,7 +218,7 @@ function rewrite(node: Node): Node {
 	}
 	if (node.kind == NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
-		const formals = d.newCallee.resolvedSym != null ? getCtorParamTypes(d.newCallee.resolvedSym) : null;
+		const formals = ctorFormalTypes(node.resolvedSym);
 		for (let i = 0; i < d.newArguments.length; i += 1) d.newArguments[i] = convert(d.newArguments[i], formals != null && i < formals.length ? formals[i] : null);
 		d.newCallee = rewrite(d.newCallee);
 		return node;

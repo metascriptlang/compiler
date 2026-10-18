@@ -6,14 +6,12 @@
 // TypeAssertion nodes (`expr as Type`) where the target type is a narrow integer
 // get wrapped with a runtime range check call.
 
-import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind, ExprStmtData, VariableDeclData, CallExprData } from "../../ast/node";
 import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive, distinctNumericBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
-import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
-import { ExprStmtData, VariableDeclData, CallExprData } from "../../ast/node";
-import { createTransformContextWithChecker } from "../context";
+import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
 // ===== Helpers =====
@@ -235,7 +233,7 @@ export function makeRangeCheck(expr: Node, fnName: string, minVal: number, maxVa
 function castExprKind(input: string, rangeChecks: boolean = true): NodeKind {
 	const result = parseInput(input);
 	if (!result.ok) return NodeKind.Program;
-	const ctx = createTransformContextWithChecker(checkProgram(result.value));
+	const ctx = checkedCtx(checkProgram(result.value));
 	ctx.rangeChecks = rangeChecks;
 	injectRangeChecks(result.value, ctx);
 	const found: NodeKind[] = [];
@@ -249,7 +247,7 @@ function castExprKind(input: string, rangeChecks: boolean = true): NodeKind {
 function rangeHelperOf(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "";
-	const ctx = createTransformContextWithChecker(checkProgram(result.value));
+	const ctx = checkedCtx(checkProgram(result.value));
 	injectRangeChecks(result.value, ctx);
 	let name = "";
 	walkNode(result.value, (n: Node): Node => {

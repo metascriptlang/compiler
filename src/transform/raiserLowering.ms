@@ -35,7 +35,7 @@ import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
-import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
+import { lowerUserOperators } from "./lowering/operatorLower";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerTypeof } from "./lowering/typeofLower";
@@ -45,11 +45,11 @@ import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
-	const ctx = createTransformContextWithChecker(checkerCtx);
-	ctx.raiserBackend = true;
-	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
+		const ctx = createTransformContextWithChecker(checkerCtx);
+		ctx.raiserBackend = true;
+		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 		return lowerForRaiser(program, ctx);
 	} finally {
 		leaveCompilerFuncs(outer);
@@ -94,7 +94,6 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = guardModuleTdzRaiser(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
-	result = lowerAggregateEquality(result, ctx);
 	result = lowerUserOperators(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
@@ -125,12 +124,12 @@ test "the raiser lowering names runtime procs from its own std, not from the las
 	const lowered = transformForRaiser(parsed.value, checkerCtx);
 	const restored = compilerFuncSym("msCheckRangeI32");
 	leaveCompilerFuncs(saved);
-	let check: Symbol | null = null;
+	const checks: Symbol[] = [];
 	walkNode(lowered, (n: Node): Node => {
-		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") check = n.resolvedSym;
+		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") checks.push(n.resolvedSym);
 		return n;
 	});
-	assert check != null;
-	assert check != jsHelper;
+	assert checks.length > 0;
+	for (const check of checks) assert check != jsHelper;
 	assert restored == jsHelper;
 }

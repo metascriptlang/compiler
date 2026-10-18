@@ -33,7 +33,7 @@ import {
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
-import { TransformContext, freshTempSym, freshOwnedSym, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
+import { TransformContext, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
 import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn } from "../util";
@@ -48,9 +48,9 @@ import { Symbol } from "../../ast/node";
 // in the same scope, rewrites to zero-alloc msAwaitSlot path instead of
 // heap-allocated msFuture. Cleared at function boundaries.
 struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type | null; }
-let _spawnSlotMap: HashMap<string, SpawnSlotEntry> = new HashMap<string, SpawnSlotEntry>();
-let _awaitOnlyHandles: NameSet = createNameSet();
-interface SpawnSlotFrame { slots: HashMap<string, SpawnSlotEntry>; handles: NameSet; }
+let _spawnSlotMap: HashMap<Symbol, SpawnSlotEntry> = new HashMap<Symbol, SpawnSlotEntry>();
+let _awaitOnlyHandles: SymSet = createSymSet();
+interface SpawnSlotFrame { slots: HashMap<Symbol, SpawnSlotEntry>; handles: SymSet; }
 let _spawnSlotFrames: SpawnSlotFrame[] = [];
 
 function isBuiltinSpawnCall(init: Node): boolean {
@@ -60,10 +60,10 @@ function isBuiltinSpawnCall(init: Node): boolean {
 	return si.closure != null && si.timeout == null && initSym != null && initSym.builtinKind == "PromiseSpawn";
 }
 
-function scanHandleUses(n: Node | null, nested: boolean, decls: NameSet, others: NameSet): void {
+function scanHandleUses(n: Node | null, nested: boolean, decls: SymSet, others: SymSet): void {
 	if (n == null) return;
 	if (n.kind == NodeKind.Identifier) {
-		nameSetAdd(others, (n.data as IdentifierData).name);
+		if (n.resolvedSym != null) symSetAdd(others, n.resolvedSym);
 		return;
 	}
 	if (!nested && n.kind == NodeKind.AwaitExpr) {
@@ -72,26 +72,26 @@ function scanHandleUses(n: Node | null, nested: boolean, decls: NameSet, others:
 	}
 	if (!nested && n.kind == NodeKind.VariableDecl) {
 		const d = n.data as VariableDeclData;
-		if (d.declKind == DeclKind.Const && d.initializer != null && isBuiltinSpawnCall(d.initializer)) nameSetAdd(decls, d.declName);
+		if (d.declKind == DeclKind.Const && d.initializer != null && isBuiltinSpawnCall(d.initializer) && n.resolvedSym != null) symSetAdd(decls, n.resolvedSym);
 	}
 	const inner = nested || n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.ArrowFunction;
 	forEachChild(n, (c: Node): void => { scanHandleUses(c, inner, decls, others); });
 }
 
-function awaitOnlyHandles(fn: Node): NameSet {
-	const decls = createNameSet();
-	const others = createNameSet();
+function awaitOnlyHandles(fn: Node): SymSet {
+	const decls = createSymSet();
+	const others = createSymSet();
 	forEachChild(fn, (c: Node): void => { scanHandleUses(c, false, decls, others); });
-	const out = createNameSet();
-	for (const name of decls.items) {
-		if (!nameSetContains(others, name)) nameSetAdd(out, name);
+	const out = createSymSet();
+	for (const sym of decls.items) {
+		if (!symSetContains(others, sym)) symSetAdd(out, sym);
 	}
 	return out;
 }
 
 function enterSpawnSlotFrame(fn: Node): void {
 	_spawnSlotFrames.push({ slots: _spawnSlotMap, handles: _awaitOnlyHandles });
-	_spawnSlotMap = new HashMap<string, SpawnSlotEntry>();
+	_spawnSlotMap = new HashMap<Symbol, SpawnSlotEntry>();
 	_awaitOnlyHandles = awaitOnlyHandles(fn);
 }
 
@@ -384,10 +384,10 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 	// Scoped deferred: `const h = spawn(fn); ... await h;` → msAwaitSlot
 	// Check if the awaited identifier was registered as a spawn handle in this scope.
 	if (awaitArg.kind == NodeKind.Identifier) {
-		const name = (awaitArg.data as IdentifierData).name;
-		const slotEntry = _spawnSlotMap.get(name);
-		if (slotEntry != null) {
-			_spawnSlotMap.delete(name);
+		const handleSym = awaitArg.resolvedSym;
+		const slotEntry = handleSym != null ? _spawnSlotMap.get(handleSym) : null;
+		if (slotEntry != null && handleSym != null) {
+			_spawnSlotMap.delete(handleSym);
 			const stmts: Node[] = [];
 			// msAwaitSlotWait($slot);
 			stmts.push(makeExprStmt(
@@ -449,8 +449,9 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.declKind == DeclKind.Const && d.initializer != null) {
 				const si = getSpawnInfo(d.initializer);
 				if (si.closure != null && isBuiltinSpawnCall(d.initializer)
-					&& nameSetContains(_awaitOnlyHandles, d.declName)
-					&& !_spawnSlotMap.has(d.declName)) {
+					&& stmt.resolvedSym != null
+					&& symSetContains(_awaitOnlyHandles, stmt.resolvedSym)
+					&& !_spawnSlotMap.has(stmt.resolvedSym)) {
 					const innerType = getAwaitInnerType(d.initializer);
 					const stmts: Node[] = [];
 					const loc = stmt.location;
@@ -461,7 +462,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 					stmts.push(makeExprStmt(
 						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), si.closure], loc), loc));
 					// Register for later `await h` lookup
-					_spawnSlotMap.set(d.declName, { slotIdent: slot.ident, closureArg: si.closure, innerType });
+					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, closureArg: si.closure, innerType });
 					return stmts;  // Original VarDecl is eliminated (h is never emitted)
 				}
 			}
@@ -557,7 +558,7 @@ export function blockifyAwaitingArrows(program: Node): void {
 
 export function lowerAwait(program: Node, ctx: TransformContext): Node {
 	blockifyAwaitingArrows(program);
-	_spawnSlotMap = new HashMap<string, SpawnSlotEntry>();
+	_spawnSlotMap = new HashMap<Symbol, SpawnSlotEntry>();
 	_awaitOnlyHandles = awaitOnlyHandles(program);
 	_spawnSlotFrames = [];
 	walkExpandBlocksHooked(program, expandStmt, ctx, enterSpawnSlotFrame, exitSpawnSlotFrame);

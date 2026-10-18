@@ -3,6 +3,7 @@
 // any other extern here reaches CallHost and needs a bridge in
 // src/compiler/meta/hostTable.ms.
 
+@builtin("Promise")
 export class Promise<T> {
 	finished: boolean;
 	failed: boolean;
@@ -36,10 +37,21 @@ extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "ms
 @builtin("PromiseFail")
 extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
 
+@compilerFunc
 export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	const promise = msPromisePending<T>();
 	try {
 		executor((value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+	} catch (e) {
+		msPromiseFail(promise, e);
+	}
+	return promise;
+}
+
+export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+	const promise = msPromisePending<T>();
+	try {
+		callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
 	} catch (e) {
 		msPromiseFail(promise, e);
 	}

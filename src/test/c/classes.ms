@@ -4,7 +4,6 @@
 import { compileToC } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
-import { resetAllSideChannels } from "../../parser/context";
 import { formatNode } from "../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../compiler/fmt/options";
 
@@ -120,7 +119,6 @@ test "E2E C: an accessor's shape is checked where it is declared" {
 }
 
 function fmtSource(source: string): string {
-	resetAllSideChannels();
 	const parsed = parseSource(source);
 	if (!parsed.ok) return "";
 	const opts = defaultFormatOptions();

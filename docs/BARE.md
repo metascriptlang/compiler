@@ -69,7 +69,7 @@ With `--no-entry` nothing calls `main`, so the init chain never runs on its own.
 
 **What `MsMain()` actually is** (`src/codegen/c/index.ms`): `MsPreMainInner()` → every **alive module's** `__DatInit000()`; `MsMainInner()` → every alive module's `__Init000()`; then `msOrcCollect()`. It is not "initialize me", it is "initialize the entire program".
 
-`MsMainInner` contains **only** `__Init000()` calls — there is no `main_()` invocation to suppress. The implicit auto-call of an unreferenced `main` was removed 2026-08-16 (`15df69d`); `genProjectDispatcher` no longer takes `autoCallMain`/`mainRetType`. Verified by probe: a program that defines `main` and never calls it prints only its top-level output and exits 0, on both the C and JS lanes. The program body is now whatever the entry module's `__Init000()` runs, so an entry whose top level does nothing still gets init without a body — that part is free, as before.
+`MsMainInner` contains **only** `__Init000()` calls — there is no `main` invocation to suppress. The implicit auto-call of an unreferenced `main` was removed 2026-08-16 (`15df69d`); `genProjectDispatcher` no longer takes `autoCallMain`/`mainRetType`, and a function named `main` is an ordinary function with no special C name. Verified by probe: a program that defines `main` and never calls it prints only its top-level output and exits 0, on both the C and JS lanes. The program body is now whatever the entry module's `__Init000()` runs, so an entry whose top level does nothing still gets init without a body — that part is free, as before.
 
 The expensive part is the module list. `computeAliveSet` (`src/checker/reachability.ms`, called at `compile.ms:1167`) is symbol-level and seeded from the entry path — and it does **not** see code introduced by `@emit`. For a do-nothing entry the alive set is still the whole prelude: 32 modules including `std/meta/node`, `std/serialize/json/*`, `std/core/fetch/*`, `std/core/websocket/*`, `std/net`, `std/crypto`. Rooting `MsMain()` from an exported function retains all of it.
 
@@ -348,25 +348,26 @@ When `--os=bare` is combined with `--gc=manual`, the runtime uses a static arena
 |--------|-------------|------|
 | `auto` (default) | `main(int argc, char** argv, char** env)` | Full POSIX: stack init, env, signal handlers |
 | `bare` | `main(void)` | Calls `MsMain()` → `MsPreMainInner()` + `MsMainInner()` |
-| `solana` | None (user provides `entrypoint()`) | `MsMain()` exposed, user calls it |
+| `solana` | `uint64_t entrypoint(const uint8_t* input)`, emitted in `_dispatch.c` | `msSolanaEnter(input); MsMain(); return msSolanaResult();` |
 
 **`MsMain()`** is the init function: calls `MsPreMainInner` (DatInit for every alive module) then
-`MsMainInner` (Init for every alive module). It does **not** call the user's `main_()` — the
+`MsMainInner` (Init for every alive module). It does **not** call a user `main` — the
 implicit auto-call was removed 2026-08-16 (`15df69d`); see CONTRIBUTING.md "Entry point: there is no
-`main()` auto-call". Measured 2026-09-06, `--os=bare --emit=c` on a one-line `console.log` program:
+`main()` auto-call". Measured 2026-10-03, `msc build --os=bare --emit=c` on `console.log("hello");`:
 
 ```c
 static void MsPreMainInner(void) {
 }
 static void MsMainInner(void) {
-  M…bare45probeZhelloOms__Init000();
+  <std/core/object>__Init000();
+  <entry module>__Init000();
 }
 void MsMain(void) { MsPreMainInner(); MsMainInner(); msTestErrorFlag(); msOrcCollect(); }
 int main(void) { MsMain(); return msProgramResult; }
 ```
 
-`MsPreMainInner` is empty for this program and `MsMainInner` carries exactly one `__Init000()` —
-the entry module's. The program body IS that init function.
+`MsPreMainInner` is empty for this program and `MsMainInner` carries two `__Init000()` calls —
+`std/core/object`'s and the entry module's. The program body IS the entry module's init function.
 
 ⚠ **`_dispatch.c` is the one TU with no bare define**: the same emit shows it including
 `runtime/drc.h` + `runtime/core/system.h` and carrying no `#define MSOS_BARE`, while all 9 module
@@ -608,7 +609,7 @@ The compiler already computes a DCE alive set (Phase B in `cmdBuildC`). But it o
 
 3. **Skip init guards for blockchain** — `DatInit`/`Init` guard booleans are mutable globals preventing re-entry. Blockchain programs run once — guards are unnecessary. Remove them when `--os` is a blockchain target (solana, wasm).
 
-4. **Minimal dispatcher** — for blockchain, the dispatcher should inline: no `MsMain()`, no `MsPreMainInner`/`MsMainInner`, just direct calls to the live modules' init + user's `main_()`.
+4. **Minimal dispatcher** — for blockchain, the dispatcher should inline: no `MsMain()`, no `MsPreMainInner`/`MsMainInner`, just direct calls to the live modules' init. Measured 2026-10-03 (`--os=solana --emit=c`, a program defining `main` and calling it at top level): `_dispatch.c` still carries `MsMain()` and `entrypoint` calls `msSolanaEnter(input); MsMain(); return msSolanaResult();`; `main` is a `static` function the entry module's `__Init000()` calls. Not re-measured: the sbpf link and the sample below.
 
 After these changes, `helloSolana.ms` generates:
 ```c
@@ -619,14 +620,14 @@ After these changes, `helloSolana.ms` generates:
 
 static const struct { int64_t cap; char data[13]; } STR_1 = { MS_STRLIT_FLAG | 12, "hello solana" };
 
-int32_t main_(void) {
+int32_t main(void) {
     msPrintln(MS_STRING_LIT(&STR_1, 12));
     return 0;
 }
 
 uint64_t entrypoint(const uint8_t* input) {
     (void)input;
-    main_();
+    main();
     return 0;
 }
 ```

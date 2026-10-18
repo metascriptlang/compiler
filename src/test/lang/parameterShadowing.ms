@@ -39,6 +39,14 @@ function b614ArrowParam(): int32 {
 	return f(30);
 }
 
+function b614ReadonlyShadow(readonly numbers: number[]): number {
+	{
+		let numbers: number[] = [1];
+		numbers = [2];
+	}
+	return numbers[0];
+}
+
 test "parameterShadowing: a parameter read after a loop-block shadow keeps its value" {
 	assert b614LoopBlock(7, 2) == 2007;
 }
@@ -51,4 +59,7 @@ test "parameterShadowing: a struct parameter passed by pointer is not the shadow
 }
 test "parameterShadowing: an arrow parameter read after a shadow keeps its value" {
 	assert b614ArrowParam() == 35;
+}
+test "parameterShadowing: a local write cannot mutate the same-spelled readonly parameter" {
+	assert b614ReadonlyShadow([9]) == 9;
 }

@@ -388,3 +388,10 @@ test "an await in a ternary condition spills before the branches" { assert first
 test "an if condition await spills before the if" { assert firstStmtKindAfter("if (await g()) { f(); }", lowerAwaitSpill) == NodeKind.VariableDecl; }
 
 test "an assignment from an await keeps its target" { assert firstStmtKindAfter("x = await g() + 1;", lowerAwaitSpill) == NodeKind.VariableDecl; }
+
+test "a spill temp is minted with its module's identity" {
+	const first = bodyAfter("async function f() { const v = (await p) + 1; }")[0];
+	assert first.kind == NodeKind.VariableDecl;
+	assert first.resolvedSym != null && first.resolvedSym.name.startsWith("__ord_");
+	assert first.resolvedSym.item > 0;
+}

@@ -6,20 +6,20 @@ import {
 	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData,
-	ExportDeclData, DecoratedDeclData, ImportDeclData,
-	IdentifierData, SwitchStmtData, SwitchCaseData,
+	ExportDeclData, DecoratedDeclData,
+	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt, raiserString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
-	declareLocal, declareLocalStr, regIsFixedLocal,
+	declareLocal, declaredSymbol, regIsFixedLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
-	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, isRoutineSym, resolveRoutine, addConst,
+	emitClosurePair,
+	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst,
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue } from "./valueCopy";
@@ -67,7 +67,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		NodeKind.DoWhileStmt => { compileDoWhileStmt(s, node); },
 		NodeKind.ForStmt => { compileForStmt(s, node); },
 		NodeKind.ForOfStmt => { compileForOfStmt(s, node); },
-		NodeKind.ImportDecl => { compileImportDecl(s, node); },
+		NodeKind.ImportDecl => {},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
 			if (d.exportedDecl.kind == NodeKind.ExprStmt) {
@@ -122,21 +122,35 @@ function compileBlock(s: RaiserCompState, node: Node): void {
 
 function compileVariableDecl(s: RaiserCompState, node: Node): void {
 	const d = node.data as VariableDeclData;
+	const initGuard = resolveStaticInitGuard(s, node.resolvedSym);
+	if (initGuard < 0) {
+		compileVariableDeclValue(s, node, d);
+		return;
+	}
+
+	const guardReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, guardReg, initGuard, 0));
+	const jumpToInit = emitBranchIfFalsy(s, guardReg);
+	const jumpPastInit = emitJumpPlaceholder(s);
+	patchJumpTo(s, jumpToInit, codeLen(s));
+	emitLoadConst(s, guardReg, raiserInt(1));
+	emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, guardReg, initGuard, 0));
+	compileVariableDeclValue(s, node, d);
+	patchJumpTo(s, jumpPastInit, codeLen(s));
+}
+
+function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
 	if (d.initializer != null) {
-		// Check if initializer is a function reference (e.g., from non-capturing lambda lifting)
-		// Wrap in closure pair { fn: funcIdx, env: nil } so it can be passed around and called uniformly
 		if (d.initializer.kind == NodeKind.Identifier) {
-			const initId = d.initializer.data as IdentifierData;
-			const fIdx = resolveRoutine(s, d.initializer.resolvedSym, initId.name);
-			if (fIdx >= 0 && (d.initializer.resolvedSym == null
-					|| isRoutineSym(d.initializer.resolvedSym))) {
+			const fIdx = resolveRoutine(s, d.initializer.resolvedSym);
+			if (fIdx >= 0) {
 				const pairReg = emitClosurePair(s, fIdx, -1);
 				const global = resolveGlobal(s, node.resolvedSym);
 				if (global >= 0) {
 					emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, pairReg, global, 0));
 					return;
 				}
-				declareLocal(s, d.declName, pairReg);
+				declareLocal(s, declaredSymbol(node, d.declName), pairReg);
 				return;
 			}
 		}
@@ -150,10 +164,10 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 		if (regIsFixedLocal(s, reg)) {
 			const slot = allocReg(s);
 			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
-			declareLocalStr(s, d.declName, slot, isStr);
+			declareLocal(s, declaredSymbol(node, d.declName), slot, isStr);
 			return;
 		}
-		declareLocalStr(s, d.declName, reg, isStr);
+		declareLocal(s, declaredSymbol(node, d.declName), reg, isStr);
 	} else {
 		const reg = emitZeroValue(s, node.nodeType);
 		const global = resolveGlobal(s, node.resolvedSym);
@@ -161,7 +175,7 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
 			return;
 		}
-		declareLocal(s, d.declName, reg);
+		declareLocal(s, declaredSymbol(node, d.declName), reg);
 	}
 }
 
@@ -290,7 +304,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 
 	// Element register — declared as a local for the binding name
 	const elemReg = allocReg(s);
-	declareLocal(s, d.forOfBinding, elemReg);
+	declareLocal(s, declaredSymbol(node, d.forOfBinding), elemReg);
 
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.forOfLabel);
@@ -340,24 +354,6 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	patchLoopBreaks(s);
 }
 
-// --- Import Declaration ---
-// Binds imported names from builtin modules as local variables.
-// Each imported name is resolved from the builtin registry and bound
-// as a local holding the function index (for later Call resolution).
-
-function compileImportDecl(s: RaiserCompState, node: Node): void {
-	const d = node.data as ImportDeclData;
-	// Bind each imported name — check if it's a registered builtin
-	for (const name of d.importNames) {
-		const funcIdx = resolveBuiltin(s, name);
-		if (funcIdx >= 0) {
-			// Builtin found — register as a named function for direct calls
-			registerFunc(s, name, funcIdx);
-		}
-		// Unknown imports are silently skipped
-	}
-}
-
 // --- Switch Statement ---
 // Compiled as sequential test-and-branch (Raiser has no jump table opcode).
 // Each case: compare disc with test values, if match execute body and jump past.
@@ -389,7 +385,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
 		catchReg = allocReg(s);
 		const savedLocals = s.locals.items.length;
-		if (d.catchName != "") declareLocal(s, d.catchName, catchReg);
+		if (d.catchName != "") declareLocal(s, declaredSymbol(node, d.catchName), catchReg);
 		if (d.catchBody != null) compileStmt(s, d.catchBody);
 		s.locals.items.shrink(savedLocals);
 		catchEnd = emitJumpPlaceholder(s);

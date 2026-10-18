@@ -12,7 +12,6 @@
 
 import { assertFmtLossless, assertFmtPreservesAst } from "../roundtrip";
 import { parseSource } from "../../../parser/statements/validation";
-import { resetAllSideChannels } from "../../../parser/context";
 import { formatNode } from "../../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../../compiler/fmt/options";
 
@@ -33,7 +32,6 @@ test "fmt: expression arms keep the commas as written" {
 }
 
 test "fmt: a match printed without its source separates expression arms" {
-	resetAllSideChannels();
 	const parsed = parseSource("const k: int32 = 2;\nconst s = match (k) {\n\t1 => \"one\"\n\t_ => \"many\"\n};\n");
 	assert parsed.ok;
 	if (parsed.ok) {

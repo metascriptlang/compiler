@@ -3,6 +3,7 @@
 @compile("runtime/promise/combinator.c");
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 
+@builtin("Promise")
 export class Promise<T> {
 	finished: boolean;
 	failed: boolean;
@@ -41,6 +42,7 @@ extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "ms
 @builtin("PromiseFail")
 extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
 
+@compilerFunc
 export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	const promise = msPromisePending<T>();
 	try {
@@ -48,6 +50,19 @@ export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, r
 	} catch (e) {
 		msPromiseFail(promise, e);
 	}
+	return promise;
+}
+
+export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+	const promise = msPromisePending<T>();
+	const nextJob: Promise<int32> = Promise.resolve(0);
+	nextJob.then((ready: int32): void => {
+		try {
+			callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+		} catch (e) {
+			msPromiseFail(promise, e);
+		}
+	});
 	return promise;
 }
 

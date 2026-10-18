@@ -5,7 +5,7 @@ import {
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { booleanType } from "../../checker/types";
-import { makeSymbol, setFlag } from "../../checker/symbol";
+import { setFlag } from "../../checker/symbol";
 import { ModuleGraph, Module } from "../../module/graph";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren, hasEffect } from "../walker";
@@ -41,9 +41,7 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	for (const b of bindings) {
 		const reached = deferred.has(b.sym) && (cycle.size > 0 || (firstRun >= 0 && firstRun <= b.statement));
 		if (!reached && !importedByCycleMember(ctx.checkerCtx.moduleGraph, cycle, modulePath, b.sym.name)) continue;
-		const flag = mintSym(ctx, SymbolKind.Variable, initFlagName(b.sym.name), booleanType());
-		markModuleFlag(flag, modulePath);
-		ctx.tdzFlags.set(b.sym, flag);
+		const flag = moduleFlagOf(b.sym, modulePath, ctx);
 		const loc = stmts[b.statement].location;
 		const decl = makeVarDecl(flag.name, makeBool(false, loc), DeclKind.Let, loc);
 		decl.resolvedSym = flag;
@@ -55,9 +53,7 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	for (const sym of deferredOrder) {
 		if (sym.modulePath == "" || sym.modulePath == modulePath || !cycle.has(sym.modulePath)) continue;
 		if (!isLexicalBindingSym(sym) || self == null || !importsByName(self, sym.modulePath, sym.name)) continue;
-		const flag = makeSymbol(initFlagName(sym.name), SymbolKind.Variable, booleanType(), true);
-		markModuleFlag(flag, sym.modulePath);
-		ctx.tdzFlags.set(sym, flag);
+		moduleFlagOf(sym, sym.modulePath, ctx);
 	}
 	if (flagDecls.length == 0) return program;
 	const out: Node[] = [];
@@ -176,6 +172,19 @@ function guardedWriteStmt(stmt: Node, assign: Node, ctx: TransformContext): Node
 
 export function initFlagName(binding: string): string {
 	return binding + "$init";
+}
+
+const _moduleFlags = new HashMap<Symbol, Symbol>();
+
+function moduleFlagOf(binding: Symbol, modulePath: string, ctx: TransformContext): Symbol {
+	let flag = _moduleFlags.get(binding);
+	if (flag == null) {
+		flag = mintSym(ctx, SymbolKind.Variable, initFlagName(binding.name), booleanType());
+		markModuleFlag(flag, modulePath);
+		_moduleFlags.set(binding, flag);
+	}
+	ctx.tdzFlags.set(binding, flag);
+	return flag;
 }
 
 function markModuleFlag(flag: Symbol, modulePath: string): void {

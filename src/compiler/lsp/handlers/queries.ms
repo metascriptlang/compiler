@@ -184,7 +184,7 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	if (sigCtx.receiverName != "") {
 		const recSym = lookupSymbol(ctx.table, sigCtx.receiverName);
 		if (recSym != null && recSym.symbolType != null) {
-			sigs = sgFormatExtensionSignatures(ctx, sigCtx.calleeName, recSym.symbolType);
+			sigs = sgFormatExtensionSignatures(ctx, sigCtx.calleeName, recSym.symbolType, recSym);
 		}
 	}
 	// Fallback: standard symbol lookup (direct calls + non-extension methods)

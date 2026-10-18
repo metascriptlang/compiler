@@ -1,3 +1,5 @@
+export { toString } from "./shared";
+
 // MetaScript Array Prelude — Raiser Backend
 // Generic T[] methods only: Raiser values are dynamic, so one generic form
 // covers every element type (the C backend monomorphizes per element type
@@ -7,6 +9,7 @@
 // push pattern. The remaining methods are portable MS over those two ops,
 // matching the C kernels' semantics (std/core/array/index.cms).
 
+@builtin("Array")
 export class Array<T> {
 	length: number;
 }

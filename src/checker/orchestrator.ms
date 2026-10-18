@@ -18,15 +18,12 @@ import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
 import { instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
-import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, resetGenericTypeInsts } from "../parser/context";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
 export class CheckSession {
 	db: TransAmDb | null;
 	checks: HashMap<string, CheckerContext>;
 	instances: HashMap<string, Node[]>;
-	typeInstances: HashMap<string, GenericTypeInstRow[]>;
-	preludeTypeInstances: GenericTypeInstRow[];
 	rechecked: HashSet<string>;
 	ops: HashMap<string, KeyedOp[]>;
 }
@@ -36,8 +33,6 @@ export function createCheckSession(): CheckSession {
 		db: null,
 		checks: new HashMap<string, CheckerContext>(),
 		instances: new HashMap<string, Node[]>(),
-		typeInstances: new HashMap<string, GenericTypeInstRow[]>(),
-		preludeTypeInstances: [],
 		rechecked: new HashSet<string>(),
 		ops: new HashMap<string, KeyedOp[]>(),
 	};
@@ -153,7 +148,6 @@ export function setGraphCheckTiming(on: boolean): void {
 // freestanding async gate) run inside this pass, long before applyGcMode.
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictNullChecks: boolean = false, appMode: string = "console"): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
-	if (session != null) resetGenericTypeInsts();
 	const _tpre0 = performance.now();
 	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
 	const holdsPrelude = graphHoldsPrelude(graph);
@@ -176,8 +170,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	if (session != null) {
 		session.db = db;
 		session.rechecked = new HashSet<string>();
-		const preludeRows = takeGenericTypeInstsFrom(0);
-		if (kept == null) session.preludeTypeInstances = preludeRows;
 	}
 	dbBindGraph(db, graph);
 	const tBind = performance.now() - _tb0;
@@ -192,14 +184,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const injectedIncludes = baseCtx.includeDirectives;
 		const injectedFlags = baseCtx.compilerFlags;
 		const _tm0 = performance.now();
-		const typeInstanceMark = genericTypeInstMark();
 		const opsMark0 = opMark();
 		const ctx = dbTypeCheck(db, path);
 		const fresh = session == null || session.checks.get(path) != ctx;
 		if (session != null && ctx != null && fresh) {
 			session.checks.set(path, ctx);
 			session.instances.set(path, ctx.generatedInstances);
-			session.typeInstances.set(path, takeGenericTypeInstsFrom(typeInstanceMark));
 			session.ops.set(path, opsFrom(opsMark0));
 			session.rechecked.add(path);
 		} else if (session != null && ctx != null) {
@@ -314,7 +304,8 @@ import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { writeFile, ensureDir } from "std/fs";
 import { lookupSymbol } from "./symbol";
-import { findExtension } from "./context";
+import { findAllExtensionsByName, findFirstMatchingExt } from "./context";
+import { stringType } from "./types";
 test "single file checked" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
@@ -444,7 +435,7 @@ function preludeDeclaresWhatMainBinds(backendExt: string): boolean {
 	const main = lookupModuleCtx(moduleIdentity(mainPath, config, provider));
 	if (main == null) return false;
 	const math = lookupSymbol(main.table, "Math");
-	const trim = findExtension(main.extensionRegistry, "string", "trim");
+	const trim = findFirstMatchingExt(findAllExtensionsByName(main.extensionRegistry, "trim"), stringType());
 	if (math == null || trim == null || trim.sym == null) return false;
 	return scopeSymbolOf(math.modulePath, "Math") == math && scopeSymbolOf(trim.sym.modulePath, "trim") == trim.sym;
 }
@@ -591,6 +582,78 @@ test "a class is not assignable to a same-named class of another module" {
 	assert mainErrorsWith("const x: BoxA = new BoxB(\"q\");") > 0;
 	assert mainErrorsWith("function take(b: BoxA): number { return b.n; }\nconst v = take(new BoxB(\"q\"));") > 0;
 	assert mainErrorsWith("const x: BoxA = new BoxA(1);\nconst y: BoxB = new BoxB(\"q\");") == 0;
+}
+
+function dynamicWriteErrorsWith(mainSource: string): int32 {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export class Box { n: number = 0; }\nexport function setDynamicField(this b: Box, key: string, value: number): void { b.n = value; }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export class Box { s: string = \"\"; }" });
+	entries.push({ entryPath: "/src/main.ms", entrySource: "import { Box as BoxA } from \"./a\";\nimport { Box as BoxB } from \"./b\";\n" + mainSource });
+	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const main = findModule(graph, "/src/main.ms");
+	if (main == null) return -1;
+	let errors = 0;
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) errors += 1;
+	}
+	return errors;
+}
+
+test "a dynamic field write is routed only through the setDynamicField declared for that receiver's own type" {
+	assert dynamicWriteErrorsWith("function w(b: BoxA): void { b.zzz = 1; }") == 0;
+	assert dynamicWriteErrorsWith("function w(b: BoxB): void { b.zzz = 1; }") > 0;
+	assert dynamicWriteErrorsWith("function r(b: BoxB): number { return b.zzz; }") > 0;
+}
+
+function unionReceiverErrorsWith(mainSource: string): int32 {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const mainPath = "/src/main.ms";
+	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export type Cell = { kind: \"a\", x: number } | { kind: \"b\", y: string } | { kind: \"c\" };\nexport function getDynamicField(this c: Cell, key: string): number { return 0; }\nexport function describe(this c: Cell): string { return \"cell\"; }" });
+	entries.push({ entryPath: mainPath, entrySource: "import { Cell, describe, getDynamicField } from \"./a\";\n" + mainSource });
+	const provider = createMapProvider(entries);
+	provider.useFileSystem = true;
+	const graph = createModuleGraph();
+	loadStdGlobalImportModules(graph, provider, config);
+	loadModule(graph, mainPath, provider, config, 1);
+	checkModuleGraph(graph, stdPath, ".cms");
+	const main = findModule(graph, moduleIdentity(mainPath, config, provider));
+	if (main == null) return -1;
+	let errors = 0;
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) errors += 1;
+	}
+	return errors;
+}
+
+test "a union's extension and dynamic-field read reach only a receiver of that union, never a variant narrowed out of it" {
+	assert unionReceiverErrorsWith("function r(c: Cell): number { return c.zzz; }") == 0;
+	assert unionReceiverErrorsWith("function d(c: Cell): string { return c.describe(); }") == 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): number { if (c.kind === \"a\") { const v = c.y; return 0; } return 0; }") > 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): void { match (c.kind) { \"a\" => { const v = c.y; }, _ => {} }; }") > 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): string { if (c.kind === \"a\") { return c.describe(); } return \"\"; }") > 0;
+}
+
+function aliasReceiverErrorWith(mainSource: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export type Hash = int64;\nexport function show(this h: Hash): string { return \"\"; }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export struct Hash { x: int32; }" });
+	entries.push({ entryPath: "/src/main.ms", entrySource: "import { show } from \"./a\";\nimport { Hash as HashB } from \"./b\";\n" + mainSource });
+	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const main = findModule(graph, "/src/main.ms");
+	if (main == null) return "no module";
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) return e.message;
+	}
+	return "";
+}
+
+test "an extension declared on an alias is not found on a struct that spells the alias's name" {
+	assert aliasReceiverErrorWith("function f(h: HashB): string { return h.show(); }").indexOf("does not exist") >= 0;
+	assert aliasReceiverErrorWith("function f(h: int64): string { return h.show(); }") == "";
 }
 
 function hierarchyErrorsWith(mainSource: string): int32 {

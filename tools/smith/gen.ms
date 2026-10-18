@@ -2,6 +2,7 @@ import { Rng, seeded } from "./rng";
 import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, W, W_DEFAULTS, tyName, format } from "./features";
 
 const FN_COST_CAP: int64 = 20000 as int64;
+const ROUTINE_FRAMES: int32 = 4;
 const TOP_COST_CAP: int64 = 200000 as int64;
 const GEN_NODE_CAP: int32 = 4096;
 
@@ -70,7 +71,7 @@ function bitsOf(t: Ty): int32 {
 	};
 }
 
-function trapsOnOverflow(t: Ty): boolean { return t == Ty.Int32 || t == Ty.Int64; }
+function trapsOnOverflow(t: Ty): boolean { return isSigned(t); }
 
 function posMax(t: Ty): uint64 {
 	return match (t) {
@@ -186,6 +187,7 @@ class Gen {
 	bodyDepth: int32 = 0;
 	famShape: Shape = Shape.Other;
 	elseArms: int32 = 0;
+	atTop: boolean = false;
 	arithInElse: int32 = 0;
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
@@ -401,8 +403,7 @@ class Gen {
 		const a = this.expr(t, depth + 1);
 		if (isFloat(t)) { return "(-" + a + ")"; }
 		if (!isSigned(t) || this.rng.chance(40)) { return "(~" + a + ")"; }
-		if (trapsOnOverflow(t)) { return this.negHelper(t) + "(" + a + ")"; }
-		return "(-" + a + ")";
+		return this.negHelper(t) + "(" + a + ")";
 	}
 
 	convert(t: Ty, depth: int32): string {
@@ -1190,7 +1191,7 @@ class Gen {
 		const t = this.pickTy();
 		const T = tyName(t);
 		if (fam == Fam.Closure) {
-			const k = this.pickW(W.ClosureDecl, W.ClosureFill);
+			const k = this.pickW(W.ClosureDecl, W.ClosureRoutine);
 			if (k == 0) {
 				const params: Ty[] = [];
 				const n = this.rng.below(3);
@@ -1228,6 +1229,7 @@ class Gen {
 				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [t], len: 0, cost: mk.cost });
 				return text;
 			}
+			if (k == 5) { return this.routineDecl(t, indent); }
 			const name = this.entName("a");
 			const j = this.entName("j");
 			const n = this.rng.between(1, 4);
@@ -1264,6 +1266,32 @@ class Gen {
 		const name = this.entName("b");
 		const text = indent + "const " + name + " = new BoxG<" + T + ">(" + this.expr(t, 0) + ");\n";
 		this.ents.push({ kind: EntKind.BoxVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return text;
+	}
+
+	routineDecl(t: Ty, indent: string): string {
+		const outer: Var[] = [];
+		for (const v of this.scope) {
+			if (v.ty == t) { outer.push(v); }
+		}
+		const name = this.entName("r");
+		const n = this.entName("q");
+		this.scope.push({ name: n, ty: Ty.Int32, writable: false });
+		const body = this.routine(t, 1, FN_COST_CAP);
+		this.scope.pop();
+		const cost = body.cost + (ROUTINE_FRAMES as int64);
+		this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [Ty.Int32], len: 0, cost: cost });
+		const head = this.rng.chance(50) && !this.atTop ? "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" : "const " + name + " = (" + n + ": int32): " + tyName(t) + " => {\n";
+		let text = indent + head +
+			indent + "\tif (" + n + " <= 0 || " + n + " >= " + String(ROUTINE_FRAMES) + ") { return " + body.text + "; }\n" +
+			(outer.length == 0 ? "" : indent + "\tif (" + n + " == 2) { return " + outer[this.rng.below(outer.length)].name + "; }\n") +
+			indent + "\treturn " + name + "(" + n + " - 1);\n" +
+			indent + (head.startsWith("const ") ? "};\n" : "}\n");
+		if (this.rng.chance(50)) {
+			const alias = this.entName("k");
+			this.ents.push({ kind: EntKind.Callable, name: alias, ty: t, params: [Ty.Int32], len: 0, cost: cost });
+			text += indent + "const " + alias + " = " + name + ";\n";
+		}
 		return text;
 	}
 
@@ -1471,7 +1499,20 @@ export function generate(seed: uint64, f: Features): string {
 	let fns = "";
 	for (let i = 0; i < f.funcs; i++) { fns += g.fn(i) + "\n"; }
 
+	let top = "";
+	for (let b = 0; b < f.top; b++) {
+		g.scope = [];
+		g.ents = [];
+		g.cost = 0 as int64;
+		g.costCap = FN_COST_CAP;
+		g.mult = 1 as int64;
+		g.atTop = true;
+		top += g.block(0, "", false, Ty.Int32, false);
+		g.atTop = false;
+	}
+
 	g.scope = [];
+	g.ents = [];
 	g.cost = 0 as int64;
 	g.costCap = TOP_COST_CAP;
 	g.mult = 1 as int64;
@@ -1497,7 +1538,7 @@ export function generate(seed: uint64, f: Features): string {
 	for (const v of g.globals) { prints += "console.log(\"" + v.name + " \" + String(" + v.name + "));\n"; }
 
 	return "// smith seed=" + String(seed) + " features=" + f.format() + "\n" +
-		g.helperText + plantDecls(f.plant) + globals + "\n" + fns + entries + plantSite + prints;
+		g.helperText + plantDecls(f.plant) + globals + "\n" + fns + top + entries + plantSite + prints;
 }
 
 test "the same seed and features give the same program" {
@@ -1591,13 +1632,51 @@ function countOver(needle: string, seeds: int32, f: Features): int32 {
 	return n;
 }
 
+test "a nested routine recurses at most its frame bound and may be named as a value" {
+	const f = withWeights("fams=closure w.closure.routine=40");
+	let routines = 0;
+	let aliases = 0;
+	let arrows = 0;
+	for (let seed = 1; seed <= 20; seed++) {
+		const text = generate(seed as uint64, f);
+		for (const line of text.split("\n")) {
+			const t = line.trim();
+			if ((t.startsWith("function r") || (t.startsWith("const r") && t.contains(": int32): "))) && t.endsWith(" {") && line.startsWith("\t")) { routines++; }
+			if (t.startsWith("const r") && t.endsWith(" => {")) { arrows++; }
+			if (t.startsWith("if (q") && t.contains(" <= 0 || q") && !t.contains(" >= " + String(ROUTINE_FRAMES) + ") { return ")) { assert false; }
+			if (t.startsWith("const k") && t.contains(" = r") && t.endsWith(";") && !t.contains("(")) { aliases++; }
+		}
+	}
+	assert routines > 10;
+	assert arrows > 3 && arrows < routines;
+	assert aliases > 3;
+	assert countOver(" == 2) { return ", 20, f) > 10;
+}
+
+test "a top-level block declares no function inside a block" {
+	const f = withWeights("fams=closure w.closure.routine=40");
+	let routines = 0;
+	for (let seed = 1; seed <= 20; seed++) {
+		const text = generate(seed as uint64, f);
+		const at = text.indexOf("\nconsole.log(\"e");
+		let inTop = false;
+		for (const line of text.slice(0, at < 0 ? text.length : at).split("\n")) {
+			if (line.startsWith("for (") || line.startsWith("if (")) { inTop = true; }
+			if (line.startsWith("function ")) { inTop = false; }
+			if (inTop && line.startsWith("\t") && line.trim().startsWith("function r")) { assert false; }
+			if (inTop && line.trim().startsWith("const r") && line.endsWith(" => {")) { routines++; }
+		}
+	}
+	assert routines > 0;
+}
+
 test "default weights keep the pinned stream" {
-	const sizes = [21703, 13475, 18941, 17328];
-	const closureSizes = [11356, 11418, 13350, 9328];
-	const closure = withWeights("fams=closure");
+	const sizes = [23008, 14006, 27999, 14767];
+	const closureSizes = [12836, 12148, 16450, 17808];
+	const closure = withWeights("fams=closure top=0 w.closure.routine=0");
 	for (let i = 0; i < 4; i++) {
-		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic")).byteLength == sizes[i];
-		assert generate((i + 1) as uint64, closure).byteLength == closureSizes[i];
+		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic top=0 w.closure.routine=0")).replace(" top=0", "").replace(" w.closure.routine=0", "").byteLength == sizes[i];
+		assert generate((i + 1) as uint64, closure).replace(" top=0", "").replace(" w.closure.routine=0", "").byteLength == closureSizes[i];
 	}
 }
 
@@ -1630,6 +1709,23 @@ test "a zero expression weight keeps its construct out of every expression" {
 		const text = g.expr(Ty.Int32, 0);
 		assert !text.contains(" ? ") && !text.contains("f0(") && !text.contains("(~") && !text.contains("conv") && !text.contains("wrap") && !text.contains("safeNeg");
 		assert !text.contains("(q");
+	}
+}
+
+test "every signed width adds, subtracts, multiplies and negates through a guarded helper" {
+	const g = new Gen();
+	g.exprMax = 0;
+	g.costCap = TOP_COST_CAP;
+	for (const t of [Ty.Int8, Ty.Int16, Ty.Int32, Ty.Int64]) {
+		g.tys = [t];
+		for (let seed = 1; seed <= 100; seed++) {
+			g.rng = Rng.seeded(seed as uint64);
+			g.nodesLeft = GEN_NODE_CAP;
+			const sum = g.binary(t, 0);
+			assert sum.startsWith("safe") || (!sum.contains(" + ") && !sum.contains(" - ") && !sum.contains(" * "));
+			const neg = g.unary(t, 0);
+			assert neg.startsWith("safeNeg") || neg.startsWith("(~");
+		}
 	}
 }
 

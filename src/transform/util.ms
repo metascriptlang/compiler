@@ -3,9 +3,9 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { isAffineAwaitable, createFunction, createClosureType, createStruct, createArray, createPtr, createVar, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
-import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
+import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
@@ -379,14 +379,22 @@ export function bindCompilerFuncs(declared: HashMap<string, Symbol>, identCache:
 export function runtimeProcSym(procName: string): Symbol {
 	const declared = _compilerFuncs.get(procName);
 	if (declared != null) return declared;
+	throw new Error(`internal: system module needs '${procName}'`);
+}
+
+export function generatedProcSym(procName: string): Symbol {
 	const existing = _runtimeSyms.get(procName);
 	if (existing != null) return existing;
-	if (_runtimeProcsSealed) throw new Error(`internal: runtime proc '${procName}' first requested while C modules are emitted in parallel`);
+	if (_runtimeProcsSealed) throw new Error(`internal: generated proc '${procName}' first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
 	setFlag(sym, SymbolFlag.ImportC);
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
+}
+
+export function generatedRef(procName: string, loc: SourceLocation): Node {
+	return makeTypedIdentResolved(generatedProcSym(procName), null, loc);
 }
 
 export type CompilerFuncScope = { funcs: HashMap<string, Symbol>, syms: HashMap<string, Symbol>, cache: IdentCache | null };
@@ -421,13 +429,9 @@ export function isRuntimeProcCall(node: Node, procName: string): boolean {
 export function runtimeRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
 }
-export function opProcSym(name: string): Symbol {
-	const hook = lookupHookSym(name);
-	return hook != null ? hook : runtimeProcSym(name);
-}
 
 export function attachedOpSym(name: string, op: AttachedOp): Symbol {
-	const sym = opProcSym(name);
+	const sym = runtimeProcSym(name);
 	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
 	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
 	return sym;
@@ -444,7 +448,7 @@ export function cloneIdent(node: Node, loc: SourceLocation): Node {
 export function makeTypedIdentResolved(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
 	n.resolvedSym = sym;
-	if (t != null) { n.nodeType = t; }
+	n.nodeType = t != null ? t : sym.symbolType;
 	return n;
 }
 
@@ -626,6 +630,16 @@ export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	if (obj != null && obj.nodeType != null) {
 		if ((obj.nodeType.kind == TypeKind.Array || obj.nodeType.kind == TypeKind.String) && prop == "length") {
 			n.nodeType = int32Type();
+		} else if (obj.nodeType.kind == TypeKind.Ref && obj.nodeType.typeReturn != null && obj.nodeType.typeReturn.kind == TypeKind.Array && prop == "length") {
+			n.nodeType = int32Type();
+		} else if (obj.nodeType.kind == TypeKind.String && (prop == "byteLength" || prop == "unicodeLength")) {
+			n.nodeType = int32Type();
+		} else if ((obj.nodeType.kind == TypeKind.SizedArray || obj.nodeType.kind == TypeKind.Span) && prop == "length") {
+			n.nodeType = int32Type();
+		} else if ((obj.nodeType.kind == TypeKind.SizedArray || obj.nodeType.kind == TypeKind.Span) && prop == "data" && obj.nodeType.typeReturn != null) {
+			n.nodeType = obj.nodeType.typeReturn;
+		} else if (obj.nodeType.kind == TypeKind.Enum) {
+			n.nodeType = obj.nodeType;
 		} else if (isResult(obj.nodeType)) {
 			if (prop == "ok") { n.nodeType = booleanType(); }
 			else if (prop == "value" && getResultOkType(obj.nodeType) != null) { n.nodeType = getResultOkType(obj.nodeType); }
@@ -664,9 +678,12 @@ export function makeAssign(leftNode: Node, rightNode: Node, loc: SourceLocation)
 
 export function makeArrayAccess(obj: Node, idx: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.ArrayAccess, { array: obj, index: idx }, syntheticToken(loc));
-	if (obj != null && obj.nodeType != null && obj.nodeType.kind == TypeKind.Array) {
-		if (obj.nodeType.typeReturn != null) {
-			n.nodeType = obj.nodeType.typeReturn;
+	if (obj != null && obj.nodeType != null) {
+		const ot = obj.nodeType;
+		if ((ot.kind == TypeKind.Array || ot.kind == TypeKind.SizedArray || ot.kind == TypeKind.Span) && ot.typeReturn != null) {
+			n.nodeType = ot.typeReturn;
+		} else if (ot.kind == TypeKind.String) {
+			n.nodeType = charType();
 		}
 	}
 	return n;
@@ -729,7 +746,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 		nameLocation: loc,
 		interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length),
 	}, syntheticToken(loc));
-	n.nodeType = createStruct(name, fields, resolvedTypes, true);
+	n.nodeType = spelled(createStruct(name, fields, resolvedTypes, true));
 	return n;
 }
 
@@ -829,64 +846,6 @@ export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLoca
 // varOnly=true: only DeclKind.Var (for varHoist). varOnly=false: all decls (for generatorLower).
 // Handles: BlockStmt, IfStmt, WhileStmt, TryCatchStmt, DoWhileStmt, SwitchStmt/SwitchCase.
 
-export function collectDeclNames(node: Node, ns: NameSet, varOnly: boolean): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			if (!varOnly || d.declKind == DeclKind.Var) {
-				nameSetAdd(ns, d.declName);
-			}
-			collectDeclNames(d.initializer, ns, varOnly);
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			let i = 0;
-			while (i < d.statements.length) {
-				collectDeclNames(d.statements[i], ns, varOnly);
-				i += 1;
-			}
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectDeclNames(d.consequent, ns, varOnly);
-			collectDeclNames(d.alternate, ns, varOnly);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			collectDeclNames(d.whileBody, ns, varOnly);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			collectDeclNames(d.tryBody, ns, varOnly);
-			collectDeclNames(d.catchBody, ns, varOnly);
-			collectDeclNames(d.finallyBody, ns, varOnly);
-		},
-		NodeKind.DoWhileStmt => {
-			const d = node.data as DoWhileStmtData;
-			collectDeclNames(d.doBody, ns, varOnly);
-		},
-		NodeKind.SwitchStmt => {
-			const d = node.data as SwitchStmtData;
-			let si = 0;
-			while (si < d.switchCases.length) {
-				collectDeclNames(d.switchCases[si], ns, varOnly);
-				si += 1;
-			}
-		},
-		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			let ci = 0;
-			while (ci < d.caseStmts.length) {
-				collectDeclNames(d.caseStmts[ci], ns, varOnly);
-				ci += 1;
-			}
-		},
-		_ => {},
-	};
-}
-
 // ===== DeclKind Helpers =====
 
 // Convert boolean isConst flag → DeclKind enum (for AST nodes that still use boolean flags)
@@ -922,45 +881,52 @@ export function extractBodyStmts(body: Node): Node[] {
 	return result;
 }
 
-test "a runtime proc query mints no symbol" {
+test "a runtime proc is the declared symbol and an undeclared name is refused" {
 	const savedFuncs = _compilerFuncs;
 	const savedSyms = _runtimeSyms;
 	const savedCache = _runtimeIdentCache;
-	const cache = createIdentCache();
-	bindCompilerFuncs(new HashMap<string, Symbol>(), cache);
+	const declared = new HashMap<string, Symbol>();
+	const probe = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
+	declared.set("msProbeAccess", probe);
+	bindCompilerFuncs(declared, createIdentCache());
 	const other = makeSymbol("msOther", SymbolKind.Function, null, false);
-	assert !isRuntimeProcSym(other, "msProbeAccess");
 	const sameName = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
 	setFlag(sameName, SymbolFlag.ImportC);
-	sameName.nameId = getIdentId(cache, "msProbeAccess");
+	assert runtimeProcSym("msProbeAccess") == probe;
+	assert isRuntimeProcSym(probe, "msProbeAccess");
+	assert !isRuntimeProcSym(other, "msProbeAccess");
 	assert !isRuntimeProcSym(sameName, "msProbeAccess");
-	assert _runtimeSyms.size == 0;
-	const minted = runtimeProcSym("msProbeAccess");
-	assert isRuntimeProcSym(minted, "msProbeAccess");
-	assert !isRuntimeProcSym(sameName, "msProbeAccess");
-	assert _runtimeSyms.size == 1;
-	_compilerFuncs = savedFuncs;
-	_runtimeSyms = savedSyms;
-	_runtimeIdentCache = savedCache;
-}
-
-test "a sealed runtime proc table serves known procs and refuses a new one" {
-	const savedFuncs = _compilerFuncs;
-	const savedSyms = _runtimeSyms;
-	const savedCache = _runtimeIdentCache;
-	bindCompilerFuncs(new HashMap<string, Symbol>(), createIdentCache());
-	const known = runtimeProcSym("msSealKnown");
-	sealRuntimeProcs(true);
-	const again = runtimeProcSym("msSealKnown");
 	let refused = "";
 	try {
 		runtimeProcSym("msSealNew");
 	} catch (e) {
 		refused = e.message;
 	}
+	assert refused == "internal: system module needs 'msSealNew'";
+	assert _runtimeSyms.size == 0;
+	_compilerFuncs = savedFuncs;
+	_runtimeSyms = savedSyms;
+	_runtimeIdentCache = savedCache;
+}
+
+test "a generated proc is minted once per name and a sealed table refuses a new one" {
+	const savedFuncs = _compilerFuncs;
+	const savedSyms = _runtimeSyms;
+	const savedCache = _runtimeIdentCache;
+	bindCompilerFuncs(new HashMap<string, Symbol>(), createIdentCache());
+	const known = generatedProcSym("msGenKnown");
+	assert isRuntimeProcSym(known, "msGenKnown");
+	sealRuntimeProcs(true);
+	const again = generatedProcSym("msGenKnown");
+	let refused = "";
+	try {
+		generatedProcSym("msGenNew");
+	} catch (e) {
+		refused = e.message;
+	}
 	sealRuntimeProcs(false);
 	assert again == known;
-	assert refused.contains("msSealNew");
+	assert refused.contains("msGenNew");
 	_compilerFuncs = savedFuncs;
 	_runtimeSyms = savedSyms;
 	_runtimeIdentCache = savedCache;

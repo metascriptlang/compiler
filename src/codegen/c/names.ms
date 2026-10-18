@@ -208,12 +208,16 @@ export function isSharedStructuralName(name: string): boolean {
 	return false;
 }
 
+export function ownedGeneratedName(sym: Readonly<Symbol> | null): boolean {
+	return sym != null && sym.modulePath != "";
+}
+
 export function mangledTypeName(sym: Readonly<Symbol> | null, name: string): string {
 	if (sym != null) {
 		const early = symExternOrImportName(sym, name);
 		if (early != "") return early;
 	}
-	if (name.length > 0 && name.slice(0, 1) == "$") return mangle(name);
+	if (name.length > 0 && name.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangleQualified(name, mangleModuleName(sym!.modulePath)) : mangle(name);
 	if (name.indexOf("__", 0) >= 0) return mangle(name);
 	if (isSharedStructuralName(name)) return mangle(name);
 	if (sym != null && sym.modulePath != "") {
@@ -227,12 +231,13 @@ export function classInitCName(classCName: string): string {
 }
 
 // Static field global name: "Counter.total" → "Counter__total__<module>"
-export function staticFieldCName(sym: Readonly<Symbol> | null, qualifiedName: string): string {
-	const dotIdx = qualifiedName.indexOf(".");
+export function staticFieldCName(sym: Readonly<Symbol>): string {
+	const name = sym.name;
+	const dotIdx = name.indexOf(".");
 	const base = dotIdx >= 0
-		? mangle(qualifiedName.slice(0, dotIdx)) + "__" + safeName(qualifiedName.slice(dotIdx + 1, qualifiedName.length))
-		: mangle(qualifiedName);
-	if (sym != null && sym.modulePath != "") return `${base}__${mangleModuleName(sym.modulePath)}`;
+		? mangle(name.slice(0, dotIdx)) + "__" + safeName(name.slice(dotIdx + 1, name.length))
+		: mangle(name);
+	if (sym.modulePath != "") return `${base}__${mangleModuleName(sym.modulePath)}`;
 	return base;
 }
 
@@ -250,7 +255,7 @@ function symExternOrImportName(sym: Readonly<Symbol> | null, name: string): stri
 
 // ===== Symbol → C Name (Standard reference parity) =====
 // Single source of truth for function C names. Reads sym.modulePath.
-// extern functions use nativeName. main() stays main_. Others get module-qualified.
+// extern functions use nativeName. Others get module-qualified.
 
 // A reference to a module-level symbol is named after its declaration: the text at the use site may be
 // an import alias.
@@ -259,7 +264,6 @@ export function referenceName(sym: Symbol | null, text: string): string {
 }
 
 export function mangledFunctionName(sym: Symbol | null, name: string, overloadIdx: number): string {
-	if (name == "main") return safeName(name);
 	if (sym != null && sym.exportName != "") return sym.exportName;
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
@@ -478,6 +482,13 @@ test "a reference through an import alias names the global after its declaration
 
 test "mangledFunctionName main stays safe" {
 	assert mangledFunctionName(null, "main", 0) == "main_";
+}
+
+test "mangledFunctionName qualifies main by its module" {
+	const sym = makeSymbol("main", SymbolKind.Function, noneType(), false);
+	sym.modulePath = "src/app.ms";
+	assert mangledFunctionName(sym, "main", 0) != "main_";
+	assert mangledFunctionName(sym, "main", 0).startsWith("main__");
 }
 
 test "mangledFunctionName plain name no sym" {

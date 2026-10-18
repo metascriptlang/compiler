@@ -7,44 +7,11 @@
 import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
-import { lookupHookSym, ensureDrcProto, procHeader } from "./types";
+import { ensureDrcProto, procHeader } from "./types";
 import { mangledFunctionName } from "./names";
 import { placedInstanceOf } from "../../checker/instantiate";
 
 // ===== DRC forward prototypes =====
-
-// DRC lifecycle suffixes — single source of truth for hook detection.
-const DRC_SUFFIXES: string[] = ["Destroy", "Copy", "Sink", "WasMoved", "Dup", "Eq", "Trace", "TypeInfo"];
-
-function findSuffix(name: string, suffixes: string[]): string {
-	for (const suffix of suffixes) {
-		if (name.endsWith(suffix)) return suffix;
-	}
-	return "";
-}
-
-export function isDrcLifecycleName(name: string): boolean {
-	const suffix = findSuffix(name, DRC_SUFFIXES);
-	if (suffix == "") return false;
-	// Generated nested value-array walker (msNumberArrayArray, int32_tArrayArray, …) is
-	// array-OF-array → base ends "ArrayArray". Always a DRC hook, regardless of prefix/case.
-	const drcBase = name.slice(0, name.length - suffix.length);
-	if (drcBase.endsWith("ArrayArray")) return true;
-	// Ref-array element walker (msUint8Arraystar_Array, int32_tArraystar_Array, …) —
-	// the elemIsRefArray per-type struct family; same landmine as the nested walkers.
-	if (drcBase.endsWith("star_Array")) return true;
-	// Generated tuple hooks are DRC hooks despite the ms prefix; without this the blanket
-	// ms→false below would DCE them, leaving an undefined symbol at link.
-	if (drcBase.length > 8 && drcBase.slice(0, 8) == "msTuple_") return true;
-	// Generated anon-struct hooks (msAnon_<hash>Copy/Sink/…) — same landmine as msTuple_.
-	if (drcBase.length > 7 && drcBase.slice(0, 7) == "msAnon_") return true;
-	// Other ms* hooks are runtime-provided (single-level array families, msArray, msString…).
-	if (name.length > 2 && name.byteAt(0) == "m".code && name.byteAt(1) == "s".code) return false;
-	// DRC hooks otherwise start with a type name (PascalCase). User functions like
-	// hasTypeInfo, countHooks start with lowercase — not DRC hooks.
-	if (name.length > 0 && name.byteAt(0) >= "a".code && name.byteAt(0) <= "z".code) return false;
-	return true;
-}
 
 // ===== Cross-module function prototypes =====
 
@@ -58,10 +25,6 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	// module's registry entry — by this point (codegen), all modules have been
 	// type-checked and the registry holds resolved types.
 	if (fnType == null || fnType.kind != TypeKind.Function) return;
-	if (sym == null && lookupHookSym(calleeName) != null) {
-		addCGenError(g, `internal: generated op '${calleeName}' is called without its symbol in ${g.modulePath}`, 0, 0);
-		return;
-	}
 	if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp)) {
 		ensureDrcProto(g, calleeName, sym);
 		return;
@@ -75,7 +38,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	if (nameSetHas(g.declaredProcs, protoKey)) return;
 	nameSetAdd(g.declaredProcs, protoKey);
 	const mutBits: int32 = sym != null ? sym.mutatedParams : 0;
-	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, isDrcLifecycleName(calleeName)) + ";");
+	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, false) + ";");
 }
 
 export function copiesInline(g: CGen, sym: Symbol): boolean {
@@ -111,14 +74,17 @@ function requestInlineCopy(g: CGen, calleeName: string, sym: Symbol): void {
 
 // useHeader + emitIncludeDirectives moved to context.ms to break types.ms ↔ forward.ms cycle.
 
-// ms-prefixed GENERATED hooks must classify as DRC hooks or functionDeclIsAlive DCEs their
-// defs (undefined symbol at link once a call site is reachable) — msTuple_ and
-// msAnon_ both hit the blanket ms→false landmine.
-test "generated tuple and anon hooks are DRC hooks despite ms prefix" {
-	assert isDrcLifecycleName("msTuple_lta21pDestroy");
-	assert isDrcLifecycleName("msAnon_7qcfd4Copy");
-	assert isDrcLifecycleName("msAnon_7qcfd4Sink");
-	assert isDrcLifecycleName("msAnon_7qcfd4Dup");
-	assert !isDrcLifecycleName("msArrayCopy");
-	assert !isDrcLifecycleName("msStringCopy");
+import { createStruct, createFunction, createPrimitive } from "../../checker/types";
+import { makeSymbol } from "../../checker/symbol";
+import { SymbolKind } from "../../ast/node";
+import { CheckerContext } from "../../checker/context";
+import { createCGen, extract } from "./context";
+
+test "a function named like a lifecycle hook keeps the ordinary parameter ABI in its prototype" {
+	const num = createPrimitive(TypeKind.Float64);
+	const big = createStruct("Big", ["a", "b", "c", "d"], [num, num, num, num], true);
+	big.sym = makeSymbol("Big", SymbolKind.Struct, big, false);
+	const g = createCGen(null as unknown as CheckerContext, "");
+	ensureCrossModuleProto(g, "MakeCopy", createFunction([big], ["p"], num), null);
+	assert extract(sec(g, CSection.ProcHeaders)).contains("double MakeCopy(const Big*);");
 }

@@ -52,6 +52,7 @@ export enum W {
 	ClosureInvoke,
 	ClosureMaker,
 	ClosureFill,
+	ClosureRoutine,
 	GenericId,
 	GenericTwice,
 	GenericPick,
@@ -137,6 +138,7 @@ export const W_KEYS: string[] = [
 	"w.closure.invoke",
 	"w.closure.maker",
 	"w.closure.fill",
+	"w.closure.routine",
 	"w.generic.id",
 	"w.generic.twice",
 	"w.generic.pick",
@@ -197,7 +199,7 @@ export const W_DEFAULTS: int32[] = [
 	25, 25, 8, 12, 12, 6, 6, 6,
 	1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
-	1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 2,
 	1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1,
@@ -246,6 +248,7 @@ export struct Features {
 	exprDepth: int32;
 	trips: int32;
 	entries: int32;
+	top: int32;
 	plant: Plant;
 	w: int32[];
 }
@@ -338,6 +341,7 @@ export function defaults(this typeof Features): Features {
 		exprDepth: 3,
 		trips: 4,
 		entries: 4,
+		top: 1,
 		plant: Plant.None,
 		w: W_DEFAULTS.map((n: int32): int32 => n),
 	};
@@ -361,6 +365,7 @@ export function format(this f: Features): string {
 		" expr=" + String(f.exprDepth) +
 		" trips=" + String(f.trips) +
 		" entries=" + String(f.entries) +
+		" top=" + String(f.top) +
 		" plant=" + plantName(f.plant) + weightText(f.w);
 }
 
@@ -470,6 +475,8 @@ export function overlay(this base: Features, text: string): Result<Features, str
 			f = { ...f, trips: try boundedInt(key, value, 1, 64) };
 		} else if (key == "entries") {
 			f = { ...f, entries: try boundedInt(key, value, 1, 64) };
+		} else if (key == "top") {
+			f = { ...f, top: try boundedInt(key, value, 0, 8) };
 		} else if (key.startsWith("w.")) {
 			const at = weightIndex(key);
 			if (at < 0) { return Result.err("unknown weight '" + key + "'"); }

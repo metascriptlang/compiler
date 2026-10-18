@@ -17,8 +17,7 @@
 
 import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { isIntegerType } from "../checker/types";
-import { makeSymbol } from "../checker/symbol";
-import { TransformContext } from "./context";
+import { TransformContext, newLoweredSym } from "./context";
 import { makeIdentResolved, makeTypedIdentResolved, runtimeRef, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken } from "./util";
 import { createNode } from "../ast/node";
 
@@ -46,26 +45,26 @@ interface CaptureEntry {
 export function lowerPowerAssert(program: Node, ctx: TransformContext): Node {
 	const pd = program.data as ProgramData;
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		walkForTests(pd.programStmts[i]);
+		walkForTests(pd.programStmts[i], ctx);
 	}
 	return program;
 }
 
-function walkForTests(node: Node): void {
+function walkForTests(node: Node, ctx: TransformContext): void {
 	if (node.kind == NodeKind.TestDecl) {
-		instrumentTestBody(node);
+		instrumentTestBody(node, ctx);
 		return;
 	}
 	// Recurse into blocks that might contain test decls (e.g., top-level blocks)
 	if (node.kind == NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
 		for (let i = 0; i < bd.statements.length; i += 1) {
-			walkForTests(bd.statements[i]);
+			walkForTests(bd.statements[i], ctx);
 		}
 	}
 }
 
-function instrumentTestBody(testNode: Node): void {
+function instrumentTestBody(testNode: Node, ctx: TransformContext): void {
 	const d = testNode.data as TestDeclData;
 	if (d.testBody == null) return;
 	if (d.testBody.kind != NodeKind.BlockStmt) return;
@@ -74,7 +73,7 @@ function instrumentTestBody(testNode: Node): void {
 	for (let i = 0; i < bd.statements.length; i += 1) {
 		const stmt = bd.statements[i];
 		if (stmt.kind == NodeKind.AssertStmt) {
-			newStmts.push(instrumentAssert(stmt));
+			newStmts.push(instrumentAssert(stmt, ctx));
 		} else {
 			newStmts.push(stmt);
 		}
@@ -86,7 +85,7 @@ function instrumentTestBody(testNode: Node): void {
 
 let paCounter = 0;
 
-function instrumentAssert(assertNode: Node): Node {
+function instrumentAssert(assertNode: Node, ctx: TransformContext): Node {
 	const d = assertNode.data as AssertStmtData;
 	const expr = d.assertExpr;
 	const source = d.assertSource;
@@ -102,7 +101,7 @@ function instrumentAssert(assertNode: Node): Node {
 	paCounter = 0;
 	const captures: CaptureEntry[] = [];
 	const baseCol = expr.location.column;
-	const resultRef = decomposeExpr(expr, captures, baseCol, loc);
+	const resultRef = decomposeExpr(ctx, expr, captures, baseCol, loc);
 
 	// Need at least 2 captures to be useful (otherwise it's just the whole expression)
 	if (captures.length < 2) return assertNode;
@@ -158,6 +157,7 @@ function instrumentAssert(assertNode: Node): Node {
 // ===== Expression Decomposition =====
 
 function decomposeExpr(
+	ctx: TransformContext,
 	expr: Node,
 	captures: CaptureEntry[],
 	baseCol: number,
@@ -174,13 +174,13 @@ function decomposeExpr(
 	// Identifier: capture the value
 	if (expr.kind == NodeKind.Identifier) {
 		const d = expr.data as IdentifierData;
-		return captureValue(expr, d.name, expr.location.column - baseCol, captures, loc);
+		return captureValue(ctx, expr, d.name, expr.location.column - baseCol, captures, loc);
 	}
 
 	// Member access: decompose object, then capture the full member access
 	if (expr.kind == NodeKind.MemberExpr) {
 		const d = expr.data as MemberExprData;
-		const objRef = decomposeExpr(d.object, captures, baseCol, loc);
+		const objRef = decomposeExpr(ctx, d.object, captures, baseCol, loc);
 		// Build new member expr using the temp reference
 		const newMember = createNode(NodeKind.MemberExpr, {
 			object: objRef, property: d.property, isOptional: d.isOptional,
@@ -189,14 +189,14 @@ function decomposeExpr(
 		newMember.flags = expr.flags;
 		newMember.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newMember.resolvedSym = expr.resolvedSym;
-		return captureValue(newMember, exprLabel(expr), expr.location.column - baseCol, captures, loc);
+		return captureValue(ctx, newMember, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
 
 	// Binary expression: decompose left and right, then capture the result
 	if (expr.kind == NodeKind.BinaryExpr) {
 		const d = expr.data as BinaryExprData;
-		const leftRef = decomposeExpr(d.left, captures, baseCol, loc);
-		const rightRef = decomposeExpr(d.right, captures, baseCol, loc);
+		const leftRef = decomposeExpr(ctx, d.left, captures, baseCol, loc);
+		const rightRef = decomposeExpr(ctx, d.right, captures, baseCol, loc);
 		const newBinary = createNode(NodeKind.BinaryExpr, {
 			operator: d.operator, left: leftRef, right: rightRef,
 		}, syntheticToken(loc));
@@ -204,13 +204,13 @@ function decomposeExpr(
 		newBinary.flags = expr.flags;
 		newBinary.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newBinary.resolvedSym = expr.resolvedSym;
-		return captureValue(newBinary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
+		return captureValue(ctx, newBinary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
 
 	// Unary expression: decompose operand, then capture the result
 	if (expr.kind == NodeKind.UnaryExpr) {
 		const d = expr.data as UnaryExprData;
-		const operandRef = decomposeExpr(d.operand, captures, baseCol, loc);
+		const operandRef = decomposeExpr(ctx, d.operand, captures, baseCol, loc);
 		const newUnary = createNode(NodeKind.UnaryExpr, {
 			unaryOp: d.unaryOp, operand: operandRef,
 		}, syntheticToken(loc));
@@ -218,7 +218,7 @@ function decomposeExpr(
 		newUnary.flags = expr.flags;
 		newUnary.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newUnary.resolvedSym = expr.resolvedSym;
-		return captureValue(newUnary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
+		return captureValue(ctx, newUnary, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
 
 	// Call expression: decompose arguments, then capture the call result
@@ -226,7 +226,7 @@ function decomposeExpr(
 		const d = expr.data as CallExprData;
 		const newArgs: Node[] = [];
 		for (let i = 0; i < d.arguments.length; i += 1) {
-			newArgs.push(decomposeExpr(d.arguments[i], captures, baseCol, loc));
+			newArgs.push(decomposeExpr(ctx, d.arguments[i], captures, baseCol, loc));
 		}
 		// A method callee is left intact — later passes lower it by matching on
 		// the original node (protocol methods have no property to read at all),
@@ -241,7 +241,7 @@ function decomposeExpr(
 		newCall.flags = expr.flags;
 		newCall.variantSlot = expr.variantSlot;
 		if (expr.resolvedSym != null) newCall.resolvedSym = expr.resolvedSym;
-		return captureValue(newCall, exprLabel(expr), expr.location.column - baseCol, captures, loc);
+		return captureValue(ctx, newCall, exprLabel(expr), expr.location.column - baseCol, captures, loc);
 	}
 
 	// Anything else: return as-is (no decomposition)
@@ -251,6 +251,7 @@ function decomposeExpr(
 // ===== Helpers =====
 
 function captureValue(
+	ctx: TransformContext,
 	expr: Node,
 	label: string,
 	column: number,
@@ -259,7 +260,7 @@ function captureValue(
 ): Node {
 	const name = "__pa_" + paCounter.toString();
 	paCounter = paCounter + 1;
-	const tempSym = makeSymbol(name, SymbolKind.Temp, expr.nodeType, false);
+	const tempSym = newLoweredSym(ctx, SymbolKind.Temp, name, expr.nodeType);
 	const varDecl = makeVarDecl(name, expr, DeclKind.Const, loc);
 	varDecl.resolvedSym = tempSym;
 	const ref = makeTypedIdentResolved(tempSym, expr.nodeType, loc);
@@ -326,6 +327,8 @@ function makeCallStmt(fnName: string, args: Node[], loc: SourceLocation): Node {
 }
 
 // ===== Tests =====
+import { makeSymbol } from "../checker/symbol";
+import { makeCtx } from "./testUtil";
 
 function testRef(name: string, loc: SourceLocation): Node {
 	return makeIdentResolved(makeSymbol(name, SymbolKind.Variable, null, false), loc);
@@ -376,7 +379,7 @@ test "decompose simple binary" {
 	}, syntheticToken(makeLoc(1, 2)));
 	paCounter = 0;
 	const captures: CaptureEntry[] = [];
-	const result = decomposeExpr(bin, captures, 0, loc);
+	const result = decomposeExpr(makeCtx(), bin, captures, 0, loc);
 	// Should have 3 captures: a, b, a === b
 	assert captures.length == 3;
 	assert captures[0].label == "a";
@@ -396,7 +399,7 @@ test "decompose member access" {
 	}, syntheticToken(makeLoc(1, 6)));
 	paCounter = 0;
 	const captures: CaptureEntry[] = [];
-	decomposeExpr(bin, captures, 0, loc);
+	decomposeExpr(makeCtx(), bin, captures, 0, loc);
 	// Should have 4 captures: obj, obj.x, y, obj.x === y
 	assert captures.length == 4;
 	assert captures[0].label == "obj";

@@ -31,6 +31,7 @@ import "./scenarios/literalTypeArgument";
 import "./scenarios/constructorFieldAssignment";
 import "./scenarios/promiseFlow";
 import "./scenarios/nestedPromise";
+import "./scenarios/awaitedThenable";
 import "./scenarios/arcLiteralSafety";
 import "./scenarios/returnBeforeBody";
 import "./scenarios/generatorYields";

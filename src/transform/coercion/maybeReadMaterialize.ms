@@ -160,7 +160,7 @@ function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	}
 	const val = makeMember(node, "value", node.location);
 	const payload = unwrapMaybeType(carrier);
-	val.nodeType = payload;
+	val.nodeType = project ? payload : nt;
 	if (unwrapRefusesNull(nt)) val.flags = val.flags.incl(NodeFlag.ConvCheck);
 	if (project && nt != payload && isTagCarriedUnion(payload)) {
 		const projected = projectTagUnionMember(val, payload, nt);

@@ -6,7 +6,7 @@
 
 import { TypeKind } from "../../ast/node";
 import { checkSource, strictErrorCount, warningCount, hasError, errorCount } from "./helpers";
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJSBare } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
 
 // ===== A: Variable declaration coercion =====
@@ -291,7 +291,7 @@ test "same type no conversion" {
 }
 
 function ok(body: string): boolean {
-	return compileToC(body).ok && compileToJS(body).ok;
+	return compileToC(body).ok && compileToJSBare(body).ok;
 }
 
 test "an integer literal past int32 is int64 and keeps its value" {

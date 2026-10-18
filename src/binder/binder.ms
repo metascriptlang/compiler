@@ -924,29 +924,9 @@ function bindCallExpr(state: BinderState, node: Node): void {
 	// MacroInvocation by the checker after this pass — stamp the program point
 	// here so bindExpandedSubtree has a seed (same point as that arm below).
 	node.flowNode = state.currentFlow;
-	// `exit(...)` never returns (C: exit/msExit, [[noreturn]]). Flow after the
-	// call is dead, so an `if (!r.ok) { exit(1); } r.value` guard narrows the
-	// fall-through path to the ok variant.
-	if (d.callee != null && isExitCallee(d.callee)) {
-		state.currentFlow = state.unreachableFlow;
-		return;
-	}
 	if (d.arguments.length > 0 || (d.callee != null && (d.callee.kind == NodeKind.MemberExpr || d.callee.kind == NodeKind.Identifier))) {
 		state.currentFlow = createFlowMutation(state, FlowFlag.Call, state.currentFlow, node);
 	}
-}
-
-function isExitCallee(callee: Node): boolean {
-	if (callee.kind == NodeKind.Identifier) {
-		return (callee.data as IdentifierData).name == "exit";
-	}
-	if (callee.kind == NodeKind.MemberExpr) {
-		const md = callee.data as MemberExprData;
-		return md.property == "exit" && md.object != null
-			&& md.object.kind == NodeKind.Identifier
-			&& (md.object.data as IdentifierData).name == "process";
-	}
-	return false;
 }
 
 function bindNewExpr(state: BinderState, node: Node): void {

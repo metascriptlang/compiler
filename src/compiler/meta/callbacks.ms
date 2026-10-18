@@ -45,18 +45,32 @@ export interface EngineMacroResult {
 	errors: CheckerError[];
 }
 
-type MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext) => EngineMacroResult | null;
+type MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext) => EngineMacroResult | null;
 
-let macroEngineCompilerFn: MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext): EngineMacroResult | null => {
+let macroEngineCompilerFn: MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext): EngineMacroResult | null => {
 	return null;
 };
 
-export function callMacroEngineCompiler(program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext): EngineMacroResult | null {
-	return macroEngineCompilerFn(program, token, macroFnName, declaringCtx);
+export function callMacroEngineCompiler(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext): EngineMacroResult | null {
+	return macroEngineCompilerFn(program, token, macroFnName, declCtx);
 }
 
 export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
 	macroEngineCompilerFn = fn;
+}
+
+let _engineCompileDepth: int32 = 0;
+
+export function enterEngineCompile(): void {
+	_engineCompileDepth += 1;
+}
+
+export function leaveEngineCompile(): void {
+	_engineCompileDepth -= 1;
+}
+
+export function engineCompiling(): boolean {
+	return _engineCompileDepth > 0;
 }
 
 type MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string) => Node;
@@ -78,7 +92,6 @@ export function callComptimeHelperPreparer(decl: Node): void {
 export function registerComptimeHelperPreparer(fn: ComptimeHelperPreparerFn): void {
 	comptimeHelperPreparerFn = fn;
 }
-
 
 interface ActiveMetaFrame {
 	ctx: CheckerContext;

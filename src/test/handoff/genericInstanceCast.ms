@@ -1,5 +1,5 @@
 import { hasError, strictErrorCount } from "./helpers";
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJS, compileToJSBare } from "../helpers";
 
 function accepts(src: string): boolean {
 	return strictErrorCount(src) == 0;
@@ -37,7 +37,7 @@ test "genericInstanceCast: C tests each instantiation against its own type info"
 }
 
 test "genericInstanceCast: JS declares an instance that is only ever a cast target" {
-	const r = compileToJS(box + "function f(u: unknown): int32 { return (u as Box<int32>).v; }\nconsole.log(\"cast only\");");
+	const r = compileToJSBare(box + "function f(u: unknown): int32 { return (u as Box<int32>).v; }\nconsole.log(\"cast only\");");
 	assert r.ok;
 	const at = r.value.indexOf("instanceof Box_");
 	assert at >= 0, "the cast tests a mangled class";
@@ -52,7 +52,7 @@ test "genericInstanceCast: a cast to the same instance is not tested" {
 }
 
 test "genericInstanceCast: JS constructs and tests the instance class" {
-	const r = compileToJS(box + readBack);
+	const r = compileToJSBare(box + readBack);
 	assert r.ok;
 	assert r.value.contains("new Box_"), "new builds a mangled class";
 	assert !r.value.contains("new Box(") && !r.value.contains("new Box__Z"), "new never builds the erased class";
