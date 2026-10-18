@@ -436,6 +436,11 @@ export function resolveOperatorCall(table: SymbolTable | null, registry: Extensi
 	return resolveOperatorCallAt(table, null, registry, methodName, argTypes);
 }
 
+export function resolveUserOperator(ctx: CheckerContext, op: string, argTypes: Type[]): ExtensionMethod {
+	const instantiation = ctx.instantiatingCtx != null ? ctx.instantiatingCtx.table : null;
+	return resolveOperatorCallAt(ctx.table, instantiation, ctx.extensionRegistry, op, argTypes);
+}
+
 export function resolveOperatorCallAt(table: SymbolTable | null, instantiation: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
 	const cands: ExtensionMethod[] = [];
 	if (registry != null) {

@@ -6,7 +6,7 @@ import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, I
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, extDeclaresReceiver, isGeneratorFlags } from "./context";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, isGeneratorFlags } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
@@ -345,8 +345,8 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	const loc = node.location;
 	if (ctx.extensionRegistry != null) {
 		const pair = [leftType, rightType];
-		const declaredNe = negated ? resolveOperatorCall(ctx.table, ctx.extensionRegistry, "!=", pair) : null as unknown as ExtensionMethod;
-		const declaredEq = resolveOperatorCall(ctx.table, ctx.extensionRegistry, "==", pair);
+		const declaredNe = negated ? resolveUserOperator(ctx, "!=", pair) : null as unknown as ExtensionMethod;
+		const declaredEq = resolveUserOperator(ctx, "==", pair);
 		const declared = declaredNe != null ? declaredNe : declaredEq;
 		if (declared != null && declared.sym != null) {
 			const direct = boundCallOf(declared.sym, [d.left, d.right], loc);
