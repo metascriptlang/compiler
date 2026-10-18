@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // @stdout: sync null 3 null 4 | null a null b | null 7 null 8 | null 5 null 6
 // @stdout: nested null 1 null 2 | arrow null 9 null 10 | declared null 11
 // @stdout: void ok

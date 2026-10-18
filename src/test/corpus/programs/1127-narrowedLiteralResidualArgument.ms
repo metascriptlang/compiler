@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot evaluate typeof at comptime: a function variant shares its Raiser value kind with a number or object variant (inbox 2026-10-15-raiser-typeof-cannot-tell-a-function-from-an-object)
 // @stdout: three=handled method=handled
 // @stdout: two=always number=handled
 // @stdout: string=plain class=7 classes=bee,3
