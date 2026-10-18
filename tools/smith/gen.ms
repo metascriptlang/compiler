@@ -210,6 +210,39 @@ const BIT_OPS: string[] = ["&", "|", "^"];
 
 function quoted(s: string): string { return "\"" + s + "\""; }
 
+const EXC_SKIP_FINALLY: string = "// @skip-raiser: 2026-10-14-raiser-loses-a-finally-when-a-raise-starts-in-catch-or-finally";
+const EXC_SKIP_DEFER: string = "// @skip-raiser: 2026-10-19-raiser-defer-in-a-loop-is-skipped-by-continue-and-late-after-break";
+
+const EXC_BASE: string = "class ExcErr extends Error {\n" +
+	"\tcode: int32;\n" +
+	"\tconstructor(msg: string, code: int32) {\n" +
+	"\t\tsuper(msg);\n" +
+	"\t\tthis.code = code;\n" +
+	"\t}\n}\n" +
+	"class ExcErr2 extends ExcErr {\n" +
+	"\ttag: string;\n" +
+	"\tconstructor(msg: string, code: int32, tag: string) {\n" +
+	"\t\tsuper(msg, code);\n" +
+	"\t\tthis.tag = tag;\n" +
+	"\t}\n}\n" +
+	"class ExcObj {\n" +
+	"\tname: string;\n" +
+	"\txs: int32[];\n" +
+	"\tconstructor(name: string, n: int32) {\n" +
+	"\t\tthis.name = name;\n" +
+	"\t\tthis.xs = [n, n % 1000];\n" +
+	"\t}\n}\n" +
+	"struct ExcBag { s: string; xs: string[]; n: int32; }\n" +
+	"struct ExcFault { code: int32; why: string; }\n" +
+	"enum ExcFail { Neg, Big, Odd }\n" +
+	"let excLog: int32 = 0;\n" +
+	"function excMix(s: string): void {\n" +
+	"\tlet h: int32 = excLog;\n" +
+	"\tfor (let i: int32 = 0; i < s.length; i++) { h = (h * 31 + (s.charCodeAt(i) as int32)) % 1000003; }\n" +
+	"\texcLog = h;\n}\n" +
+	"function excFold(tr: string[]): void { excMix(tr.join(\",\")); }\n" +
+	"function excErrText(e: ExcFail): string { return e == ExcFail.Neg ? \"neg\" : e == ExcFail.Big ? \"big\" : \"odd\"; }\n";
+
 class Gen {
 	rng: Rng = new Rng();
 	tys: Ty[] = [];
@@ -243,6 +276,9 @@ class Gen {
 	blockCount: int32 = 0;
 	directives: string[] = [];
 	eTypes: ETy[] = [];
+	excCount: int32 = 0;
+	matchArms: int32 = 0;
+	excHaz: int32 = -1;
 
 	wt(k: W): int32 { return this.w[k as int32]; }
 
@@ -634,6 +670,7 @@ class Gen {
 		if (fam == Fam.Seq) { return this.seqExpr(t, depth); }
 		if (fam == Fam.Gcls) { return this.gclsExpr(t, depth); }
 		if (fam == Fam.Enum) { return this.enumExpr(t, depth); }
+		if (fam == Fam.Exc) { return this.excExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -1304,6 +1341,7 @@ class Gen {
 		if (fam == Fam.Seq) { return this.seqStatement(t, indent); }
 		if (fam == Fam.Gcls) { return this.gclsStatement(t, indent); }
 		if (fam == Fam.Enum) { return this.enumStatement(t, indent, depth); }
+		if (fam == Fam.Exc) { return this.excStatement(t, indent, depth); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -2755,6 +2793,652 @@ class Gen {
 		return indent + "let " + name + ": " + et.ann + " = " + value + ";\n";
 	}
 
+	excHazard(pct: int32): boolean {
+		if (this.excHaz < 0) { this.excHaz = this.rng.chance(30) ? 1 : 0; }
+		return this.excHaz == 1 && this.rng.chance(pct);
+	}
+
+	excNext(): int32 {
+		const n = this.excCount;
+		this.excCount = this.excCount + 1;
+		return n;
+	}
+
+	excBase(): void {
+		this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+		this.useHelper("excBase", EXC_BASE);
+	}
+
+	excThrower(j: int32): string {
+		this.excBase();
+		if (j == 0) {
+			return this.useHelper("excT0", "function excT0(k: int32, tr: string[]): int32 {\n" +
+				"\tconst m = ixI(k, 997);\n" +
+				"\ttr.push(\"t0\");\n" +
+				"\tif (m % 3 == 0) { throw new Error(\"a\" + String(m)); }\n" +
+				"\treturn m;\n}\n");
+		}
+		if (j == 1) {
+			return this.useHelper("excT1", "function excT1(k: int32, tr: string[]): int32 {\n" +
+				"\tconst m = ixI(k, 997);\n" +
+				"\ttr.push(\"t1\");\n" +
+				"\tif (m % 4 == 1) { throw new ExcErr2(\"b\" + String(m), m, \"T\"); }\n" +
+				"\treturn m + 1;\n}\n");
+		}
+		this.excThrower(0);
+		this.excThrower(1);
+		return this.useHelper("excT2", "function excT2(k: int32, tr: string[]): int32 {\n" +
+			"\tconst m = ixI(k, 997);\n" +
+			"\ttr.push(\"t2\");\n" +
+			"\tconst a = excT0(m + 1, tr);\n" +
+			"\tif (m % 5 == 2) { throw new ExcErr(\"c\" + String(a), a); }\n" +
+			"\treturn a + excT1(m, tr);\n}\n");
+	}
+
+	excFill(depth: int32, ind: string): string {
+		if (depth >= this.depthMax || !this.rng.chance(50)) { return ""; }
+		return this.block(depth + 1, ind, false, Ty.Int32, false);
+	}
+
+	excTrips(): int32 { return this.rng.between(1, this.tripMax < 4 ? this.tripMax : 4); }
+
+	excLoopVar(): string {
+		const name = "i" + String(this.loopCount);
+		this.loopCount = this.loopCount + 1;
+		return name;
+	}
+
+	excArms(tr: string, x: string, ind: string): string {
+		return ind + "if (" + x + " instanceof ExcErr2) { " + tr + ".push(\"c2:\" + " + x + ".tag + String(" + x + ".code) + " + x + ".message); }\n" +
+			ind + "else if (" + x + " instanceof ExcErr) { " + tr + ".push(\"c1:\" + String(" + x + ".code) + " + x + ".message); }\n" +
+			ind + "else { " + tr + ".push(\"c0:\" + " + x + ".message); }\n";
+	}
+
+	excPush(tr: string, th: string, arg: string): string {
+		return tr + ".push(\"t\" + String(" + th + "(" + arg + ", " + tr + ")));\n";
+	}
+
+	excStatement(t: Ty, indent: string, depth: int32): string {
+		const k = this.pickW(W.ExcCatch, W.ExcNarrow);
+		if (k == 0) { return this.excCatch(indent, depth); }
+		if (k == 1) { return this.excFinally(indent, depth); }
+		if (k == 2) { return this.excRethrow(indent, depth); }
+		if (k == 3) { return this.excUnwind(indent); }
+		if (k == 4) { return this.excDefer(indent, depth); }
+		if (k == 5) { return this.excDeferLoop(indent, depth); }
+		if (k == 6) { return this.excRecover(indent, depth); }
+		if (k == 7) { return this.excResultStmt(t, indent); }
+		return this.excNarrowStmt(t, indent);
+	}
+
+	excCatch(indent: string, depth: int32): string {
+		if (!this.reserve(12 as int64)) { return ""; }
+		const i1 = indent + "\t";
+		const th = this.excThrower(this.rng.below(3));
+		const tr = this.entName("v");
+		const x = this.entName("d");
+		let body = this.excFill(depth, i1);
+		body += i1 + this.excPush(tr, th, this.smallInt(0));
+		body += this.excFill(depth, i1);
+		body += i1 + tr + ".push(\"ok\");\n";
+		return indent + "const " + tr + ": string[] = [];\n" +
+			indent + "try {\n" + body + indent + "} catch (" + x + ") {\n" +
+			this.excArms(tr, x, i1) +
+			indent + "}\n" +
+			indent + "excFold(" + tr + ");\n";
+	}
+
+	excFinally(indent: string, depth: int32): string {
+		const trips = this.excTrips();
+		if (!this.reserve((18 + 8 * trips) as int64)) { return ""; }
+		const i1 = indent + "\t";
+		const i2 = i1 + "\t";
+		const th = this.excThrower(this.rng.below(3));
+		const tr = this.entName("v");
+		const x = this.entName("d");
+		const head = indent + "const " + tr + ": string[] = [];\n";
+		const tail = indent + "excFold(" + tr + ");\n";
+		const hazard = this.excHazard(40);
+		const form = hazard ? 1 + this.rng.below(2) : (this.rng.chance(35) ? 3 : 0);
+		if (form == 3) {
+			const name = "excF" + String(this.excNext());
+			this.useHelper(name, "function " + name + "(k: int32, tr: string[]): int32 {\n" +
+				"\tconst m = ixI(k, 997);\n" +
+				"\ttry {\n" +
+				"\t\tif (m % 4 == 1) { return m; }\n" +
+				"\t\ttr.push(\"t\" + String(" + th + "(m, tr)));\n" +
+				"\t} catch (x) {\n" +
+				"\t\ttr.push(\"c:\" + x.message);\n" +
+				"\t} finally {\n" +
+				"\t\ttr.push(\"F\");\n" +
+				"\t}\n" +
+				"\treturn 0 - m;\n}\n");
+			return head + indent + tr + ".push(\"r\" + String(" + name + "(" + this.smallInt(0) + ", " + tr + ")));\n" + tail;
+		}
+		if (form == 1) {
+			this.directive(EXC_SKIP_FINALLY);
+			const kv = this.entName("n");
+			const iv = this.excLoopVar();
+			const jump = this.rng.chance(50) ? "continue" : "break";
+			return head +
+				indent + "const " + kv + ": int32 = ixI(" + this.smallInt(0) + ", 997);\n" +
+				indent + "for (let " + iv + ": int32 = 0; " + iv + " < " + String(trips) + "; " + iv + "++) {\n" +
+				i1 + "try {\n" +
+				i2 + "if (ixI(" + kv + " + " + iv + ", 4) == 1) { " + jump + "; }\n" +
+				i2 + this.excPush(tr, th, kv + " + " + iv) +
+				i1 + "} catch (" + x + ") {\n" +
+				this.excArms(tr, x, i2) +
+				i1 + "} finally {\n" +
+				i2 + tr + ".push(\"F\");\n" +
+				i1 + "}\n" +
+				i1 + tr + ".push(\".\");\n" +
+				indent + "}\n" + tail;
+		}
+		if (form == 2) {
+			this.directive(EXC_SKIP_FINALLY);
+			return head +
+				indent + "try {\n" +
+				i1 + "try {\n" +
+				i2 + this.excPush(tr, th, this.smallInt(0)) +
+				i1 + "} finally {\n" +
+				i2 + tr + ".push(\"F\");\n" +
+				i2 + "if (ixI(" + this.smallInt(0) + ", 2) == 0) { throw new ExcErr(\"fin\", 1); }\n" +
+				i1 + "}\n" +
+				i1 + tr + ".push(\"after\");\n" +
+				indent + "} catch (" + x + ") {\n" +
+				this.excArms(tr, x, i1) +
+				indent + "}\n" + tail;
+		}
+		return head +
+			indent + "try {\n" +
+			i1 + tr + ".push(\"a\");\n" +
+			i1 + "try {\n" +
+			this.excFill(depth, i2) +
+			i2 + this.excPush(tr, th, this.smallInt(0)) +
+			i1 + "} finally {\n" +
+			i2 + tr + ".push(\"F1\");\n" +
+			i1 + "}\n" +
+			i1 + tr + ".push(\"b\");\n" +
+			indent + "} catch (" + x + ") {\n" +
+			this.excArms(tr, x, i1) +
+			indent + "} finally {\n" +
+			i1 + tr + ".push(\"F2\");\n" +
+			indent + "}\n" + tail;
+	}
+
+	excRethrow(indent: string, depth: int32): string {
+		if (!this.reserve(20 as int64)) { return ""; }
+		const i1 = indent + "\t";
+		const i2 = i1 + "\t";
+		const th = this.excThrower(this.rng.below(3));
+		const tr = this.entName("v");
+		const xa = this.entName("d");
+		const xb = this.entName("d");
+		const hazard = this.excHazard(40);
+		const form = hazard ? 3 : this.rng.below(3);
+		const inner = this.excFill(depth, i2) + i2 + this.excPush(tr, th, this.smallInt(0));
+		let handler = i2 + tr + ".push(\"c:\" + " + xa + ".message);\n";
+		const cond = "ixI(" + this.smallInt(0) + ", 2) == 0";
+		if (form == 0 || form == 3) { handler += i2 + "if (" + cond + ") { throw " + xa + "; }\n"; }
+		if (form == 1) { handler += i2 + "if (" + cond + ") { throw new ExcErr2(\"w\" + " + xa + ".message, 7, \"W\"); }\n"; }
+		if (form == 2) { handler = i2 + "if (" + xa + " instanceof ExcErr2) { throw " + xa + "; }\n" + handler; }
+		let fin = i1 + "} catch (" + xa + ") {\n" + handler + i1 + "}\n";
+		if (form == 3) {
+			this.directive(EXC_SKIP_FINALLY);
+			fin = i1 + "} catch (" + xa + ") {\n" + handler + i1 + "} finally {\n" + i2 + tr + ".push(\"F1\");\n" + i1 + "}\n";
+		}
+		const outerFin = this.rng.chance(30) ? " finally {\n" + i1 + tr + ".push(\"F2\");\n" + indent + "}" : "";
+		return indent + "const " + tr + ": string[] = [];\n" +
+			indent + "try {\n" +
+			i1 + "try {\n" + inner + fin +
+			i1 + tr + ".push(\"after\");\n" +
+			indent + "} catch (" + xb + ") {\n" +
+			this.excArms(tr, xb, i1) +
+			indent + "}" + outerFin + "\n" +
+			indent + "excFold(" + tr + ");\n";
+	}
+
+	excUnwind(indent: string): string {
+		if (!this.reserve(40 as int64)) { return ""; }
+		const th = this.excThrower(0);
+		const name = "excU" + String(this.excNext());
+		const own: string[] = [
+			"\tconst s = \"u\" + String(m);\n",
+			"\tconst xs: string[] = [\"x\" + String(m), \"y\"];\n",
+			"\tconst b: ExcBag = { s: \"b\" + String(m), xs: [\"p\", String(m)], n: m };\n",
+			"\tconst o = new ExcObj(\"o\" + String(m), m);\n",
+			"\tconst ys: int32[] = [m, m + 1];\n",
+			"\tconst q: ExcFault = { code: m, why: \"q\" + String(m) };\n",
+		];
+		const reads: string[] = ["s.length", "xs.length", "b.n + b.xs.length", "o.xs.length + o.name.length", "ys.length", "q.why.length"];
+		let decl = "";
+		let sum = "0";
+		let live = 0;
+		for (let i = 0; i < own.length; i++) {
+			if (live < 2 || this.rng.chance(55)) {
+				decl += own[i];
+				sum += " + " + reads[i];
+				live++;
+			}
+		}
+		const modulus = this.rng.between(4, 7);
+		this.useHelper(name, "function " + name + "(k: int32, d: int32, tr: string[]): int32 {\n" +
+			"\tconst m = ixI(k, 997);\n" +
+			decl +
+			"\ttr.push(\"e\" + String(d));\n" +
+			"\tif (ixI(m + d, " + String(modulus) + ") == 0) { throw new ExcErr2(\"u\" + String(d), m, \"U\"); }\n" +
+			"\tif (d <= 0) { return " + sum + "; }\n" +
+			"\tconst r = " + name + "(m, d - 1, tr);\n" +
+			"\ttr.push(\"x\" + String(d));\n" +
+			"\treturn r + " + sum + ";\n}\n");
+		const i1 = indent + "\t";
+		const tr = this.entName("v");
+		const x = this.entName("d");
+		return indent + "const " + tr + ": string[] = [];\n" +
+			indent + "try {\n" +
+			i1 + tr + ".push(\"r\" + String(" + name + "(" + this.smallInt(0) + ", " + String(this.rng.between(1, 4)) + ", " + tr + ")));\n" +
+			indent + "} catch (" + x + ") {\n" +
+			this.excArms(tr, x, i1) +
+			indent + "}\n" +
+			indent + "excFold(" + tr + ");\n";
+	}
+
+	excDefer(indent: string, depth: int32): string {
+		if (!this.reserve(16 as int64)) { return ""; }
+		const i1 = indent + "\t";
+		const i2 = i1 + "\t";
+		const th = this.excThrower(this.rng.below(3));
+		const tr = this.entName("v");
+		const head = indent + "const " + tr + ": string[] = [];\n";
+		const tail = indent + "excFold(" + tr + ");\n";
+		const form = this.rng.below(4);
+		if (form == 1) {
+			const x = this.entName("d");
+			return head +
+				indent + "try {\n" +
+				i1 + "defer " + tr + ".push(\"in\");\n" +
+				i1 + this.excPush(tr, th, this.smallInt(0)) +
+				i1 + tr + ".push(\"ok\");\n" +
+				indent + "} catch (" + x + ") {\n" +
+				this.excArms(tr, x, i1) +
+				indent + "}\n" + tail;
+		}
+		if (form == 2) {
+			const x = this.entName("d");
+			const name = "excD" + String(this.excNext());
+			this.useHelper(name, "function " + name + "(k: int32, tr: string[]): int32 {\n" +
+				"\tdefer tr.push(\"d0\");\n" +
+				"\tconst v = " + th + "(k, tr);\n" +
+				"\tdefer tr.push(\"d1\");\n" +
+				"\treturn v;\n}\n");
+			return head +
+				indent + "try {\n" +
+				i1 + tr + ".push(\"r\" + String(" + name + "(" + this.smallInt(0) + ", " + tr + ")));\n" +
+				indent + "} catch (" + x + ") {\n" +
+				this.excArms(tr, x, i1) +
+				indent + "}\n" + tail;
+		}
+		if (form == 3) {
+			const c = this.entName("n");
+			return head +
+				indent + "let " + c + ": int32 = ixI(" + this.smallInt(0) + ", 99);\n" +
+				indent + "{\n" +
+				i1 + "defer " + tr + ".push(\"c\" + String(" + c + "));\n" +
+				i1 + c + " = " + c + " + 7;\n" +
+				i1 + tr + ".push(\"b\" + String(" + c + "));\n" +
+				this.excFill(depth, i1) +
+				indent + "}\n" + tail;
+		}
+		return head +
+			indent + "{\n" +
+			i1 + "defer " + tr + ".push(\"d0\");\n" +
+			i1 + tr + ".push(\"b0\");\n" +
+			i1 + "{\n" +
+			i2 + "defer " + tr + ".push(\"d1\");\n" +
+			i2 + tr + ".push(\"b1\");\n" +
+			this.excFill(depth, i2) +
+			i1 + "}\n" +
+			i1 + tr + ".push(\"b2\");\n" +
+			indent + "}\n" + tail;
+	}
+
+	excLoopBody(depth: int32, ind: string, trips: int32): string {
+		const savedMult = this.mult;
+		this.mult = this.mult * (trips as int64);
+		const text = this.excFill(depth, ind);
+		this.mult = savedMult;
+		return text;
+	}
+
+	excDeferLoop(indent: string, depth: int32): string {
+		const trips = this.excTrips();
+		if (!this.reserve((16 + 8 * trips) as int64)) { return ""; }
+		const i1 = indent + "\t";
+		const i2 = i1 + "\t";
+		const th = this.excThrower(this.rng.below(3));
+		const tr = this.entName("v");
+		const head = indent + "const " + tr + ": string[] = [];\n";
+		const tail = indent + "excFold(" + tr + ");\n";
+		const hazard = this.excHazard(50);
+		const form = hazard ? 1 + this.rng.below(2) * 2 : (this.rng.chance(50) ? 0 : (this.rng.chance(50) ? 2 : 4));
+		if (form == 2) {
+			const name = "excL" + String(this.excNext());
+			this.useHelper(name, "function " + name + "(n: int32, tr: string[]): int32 {\n" +
+				"\tdefer tr.push(\"d0\");\n" +
+				"\tfor (let i: int32 = 0; i < 4; i++) {\n" +
+				"\t\tdefer tr.push(\"l\" + String(i));\n" +
+				"\t\tif (i == n) { return i * 10; }\n" +
+				"\t\ttr.push(\"b\" + String(i));\n" +
+				"\t}\n" +
+				"\tdefer tr.push(\"late\");\n" +
+				"\treturn -1;\n}\n");
+			return head + indent + tr + ".push(\"r\" + String(" + name + "(ixI(" + this.smallInt(0) + ", 6), " + tr + ")));\n" + tail;
+		}
+		const iv = this.excLoopVar();
+		const kv = this.entName("n");
+		const set = indent + "const " + kv + ": int32 = ixI(" + this.smallInt(0) + ", 997);\n";
+		const open = indent + "for (let " + iv + ": int32 = 0; " + iv + " < " + String(trips) + "; " + iv + "++) {\n";
+		if (form == 1) {
+			this.directive(EXC_SKIP_DEFER);
+			const jump = this.rng.chance(50) ? "continue" : "break";
+			return head + set + open +
+				i1 + "defer " + tr + ".push(\"d\" + String(" + iv + "));\n" +
+				i1 + "if (ixI(" + kv + ", " + String(trips + 1) + ") == " + iv + ") { " + jump + "; }\n" +
+				i1 + tr + ".push(\"b\" + String(" + iv + "));\n" +
+				indent + "}\n" + tail;
+		}
+		if (form == 3) {
+			this.directive(EXC_SKIP_DEFER);
+			const w = this.entName("n");
+			return head + set +
+				indent + "let " + w + ": int32 = 0;\n" +
+				indent + "while (" + w + " < " + String(trips) + ") {\n" +
+				i1 + w + "++;\n" +
+				i1 + "defer " + tr + ".push(\"w\" + String(" + w + "));\n" +
+				i1 + "if (ixI(" + kv + ", " + String(trips + 1) + ") == " + w + ") { continue; }\n" +
+				i1 + tr + ".push(\"b\" + String(" + w + "));\n" +
+				indent + "}\n" + tail;
+		}
+		if (form == 4) {
+			const x = this.entName("d");
+			return head + set +
+				indent + "try {\n" +
+				i1 + "for (let " + iv + ": int32 = 0; " + iv + " < " + String(trips) + "; " + iv + "++) {\n" +
+				i2 + "defer " + tr + ".push(\"d\" + String(" + iv + "));\n" +
+				i2 + this.excPush(tr, th, kv + " + " + iv) +
+				i1 + "}\n" +
+				indent + "} catch (" + x + ") {\n" +
+				this.excArms(tr, x, i1) +
+				indent + "}\n" + tail;
+		}
+		this.scope.push({ name: iv, ty: Ty.Int32, writable: false });
+		const fill = this.excLoopBody(depth, i1, trips);
+		this.scope.pop();
+		return head + set + open +
+			i1 + "defer " + tr + ".push(\"d\" + String(" + iv + "));\n" +
+			i1 + tr + ".push(\"b\" + String(" + iv + "));\n" +
+			fill +
+			indent + "}\n" + tail;
+	}
+
+	excRecover(indent: string, depth: int32): string {
+		const trips = this.excTrips();
+		if (!this.reserve((14 + 8 * trips) as int64)) { return ""; }
+		const i1 = indent + "\t";
+		const i2 = i1 + "\t";
+		const i3 = i2 + "\t";
+		const th = this.excThrower(this.rng.below(3));
+		const tr = this.entName("v");
+		const x = this.entName("d");
+		const kv = this.entName("n");
+		const iv = this.excLoopVar();
+		const hazard = this.excHazard(40);
+		const form = hazard ? 4 : this.rng.below(4);
+		const set = indent + "const " + kv + ": int32 = ixI(" + this.smallInt(0) + ", 997);\n";
+		const head = indent + "const " + tr + ": string[] = [];\n" + set;
+		const tail = indent + "excFold(" + tr + ");\n";
+		const open = indent + "for (let " + iv + ": int32 = 0; " + iv + " < " + String(trips) + "; " + iv + "++) {\n";
+		if (form == 3) {
+			return head +
+				indent + "try {\n" +
+				i1 + "for (let " + iv + ": int32 = 0; " + iv + " < " + String(trips) + "; " + iv + "++) {\n" +
+				i2 + this.excPush(tr, th, kv + " + " + iv) +
+				i2 + tr + ".push(\".\");\n" +
+				i1 + "}\n" +
+				indent + "} catch (" + x + ") {\n" +
+				this.excArms(tr, x, i1) +
+				indent + "}\n" + tail;
+		}
+		this.scope.push({ name: iv, ty: Ty.Int32, writable: false });
+		const fill = this.excLoopBody(depth, i2, trips);
+		this.scope.pop();
+		let handler = i2 + tr + ".push(\"r\" + " + x + ".message);\n";
+		if (form == 1 || form == 4) { handler += i2 + "continue;\n"; }
+		if (form == 2) { handler += i2 + "break;\n"; }
+		let fin = "";
+		if (form == 4) {
+			this.directive(EXC_SKIP_FINALLY);
+			fin = " finally {\n" + i2 + tr + ".push(\"F\");\n" + i1 + "}";
+		} else if (form == 0 && this.rng.chance(40)) {
+			fin = " finally {\n" + i2 + tr + ".push(\"F\");\n" + i1 + "}";
+		}
+		return head + open +
+			i1 + "try {\n" +
+			fill +
+			i2 + this.excPush(tr, th, kv + " + " + iv) +
+			i1 + "} catch (" + x + ") {\n" +
+			handler +
+			i1 + "}" + fin + "\n" +
+			i1 + tr + ".push(\".\");\n" +
+			indent + "}\n" + tail;
+	}
+
+	excResult(okKind: int32, t: Ty, errKind: int32): string {
+		this.excBase();
+		const A = okKind == 0 ? tyTitle(t) : okKind == 1 ? "Obj" : okKind == 2 ? "Bag" : "Void";
+		const B = errKind == 0 ? "S" : errKind == 1 ? "E" : "F";
+		const name = "excRs" + A + B;
+		if (this.hasHelper(name + "1")) { return name; }
+		const OK = okKind == 0 ? tyName(t) : okKind == 1 ? "ExcObj" : okKind == 2 ? "ExcBag" : "void";
+		const ER = errKind == 0 ? "string" : errKind == 1 ? "ExcFail" : "ExcFault";
+		const params = okKind == 0 ? "k: int32, v: " + tyName(t) : "k: int32";
+		const okVal = okKind == 0 ? "v" : okKind == 1 ? "new ExcObj(\"o\" + String(m), m)" : okKind == 2 ? "{ s: \"b\" + String(m), xs: [\"x\", String(m)], n: m }" : "null";
+		const e1 = errKind == 0 ? "\"e\" + String(m)" : errKind == 1 ? "ExcFail.Odd" : "{ code: m, why: \"f\" + String(m) }";
+		const e2 = errKind == 0 ? "\"m\" + String(m)" : errKind == 1 ? "ExcFail.Neg" : "{ code: m + 1, why: \"g\" + String(m) }";
+		const sig = "Result<" + OK + ", " + ER + ">";
+		this.useHelper(name + "0", "function " + name + "0(" + params + "): " + sig + " {\n" +
+			"\tconst m = ixI(k, 997);\n" +
+			"\tif (m % 5 == 3) { return Result.err(" + e1 + "); }\n" +
+			"\treturn Result.ok(" + okVal + ");\n}\n");
+		let chain = "\tconst m = ixI(k, 997);\n";
+		if (okKind == 0) {
+			chain += "\tconst a = try " + name + "0(k, v);\n" +
+				"\tif (m % 7 == 2) { return Result.err(" + e2 + "); }\n" +
+				"\tconst b = try " + name + "0(m + 1, a);\n" +
+				"\treturn Result.ok(b);\n";
+		} else if (okKind == 3) {
+			chain += "\ttry " + name + "0(k);\n" +
+				"\tif (m % 7 == 2) { return Result.err(" + e2 + "); }\n" +
+				"\ttry " + name + "0(m + 1);\n" +
+				"\treturn Result.ok(null);\n";
+		} else {
+			chain += "\tconst a = try " + name + "0(k);\n" +
+				"\tif (m % 7 == 2 || a.xs.length > 5) { return Result.err(" + e2 + "); }\n" +
+				"\tconst b = try " + name + "0(m + 1);\n" +
+				"\treturn Result.ok(b);\n";
+		}
+		this.useHelper(name + "1", "function " + name + "1(" + params + "): " + sig + " {\n" + chain + "}\n");
+		return name;
+	}
+
+	excResultStmt(t: Ty, indent: string): string {
+		if (!this.reserve(14 as int64)) { return ""; }
+		const okKind = this.rng.below(4);
+		const errKind = this.rng.below(3);
+		const name = this.excResult(okKind, t, errKind);
+		const tr = this.entName("v");
+		const r = this.entName("n");
+		const k = this.smallInt(0);
+		const args = okKind == 0 ? k + ", " + this.expr(t, 0) : k;
+		const okText = okKind == 0 ? "String(" + r + ".value)" : okKind == 1 ? r + ".value.name + String(" + r + ".value.xs.length)" : okKind == 2 ? r + ".value.s + String(" + r + ".value.n)" : "\"\"";
+		const errText = errKind == 0 ? r + ".error" : errKind == 1 ? "excErrText(" + r + ".error)" : "String(" + r + ".error.code) + " + r + ".error.why";
+		let text = indent + "const " + tr + ": string[] = [];\n" +
+			indent + "const " + r + " = " + name + "1(" + args + ");\n" +
+			indent + "if (" + r + ".ok) { " + tr + ".push(\"ok\" + " + okText + "); } else { " + tr + ".push(\"err:\" + " + errText + "); }\n";
+		if (okKind == 0 && this.rng.chance(50)) {
+			text += indent + tr + ".push(\"c\" + String(try " + name + "1(" + this.smallInt(0) + ", " + this.expr(t, 0) + ") catch " + this.expr(t, 0) + "));\n";
+		}
+		return text + indent + "excFold(" + tr + ");\n";
+	}
+
+	excNarrowFn(t: Ty): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		this.excBase();
+		this.useHelper("excNul" + X, "function excNul" + X + "(k: int32, v: " + T + "): " + T + " | null {\n" +
+			"\tif (ixI(k, 3) == 0) { return null; }\n" +
+			"\treturn v;\n}\n");
+		this.useHelper("excOr" + X, "function excOr" + X + "(x: " + T + " | null, d: " + T + "): " + T + " {\n" +
+			"\tif (x === null) { return d; }\n" +
+			"\treturn x;\n}\n");
+		this.useHelper("excBox" + X, "function excBox" + X + "(k: int32, v: " + T + "): " + T + " | string | null {\n" +
+			"\tconst r = ixI(k, 3);\n" +
+			"\tif (r == 0) { return null; }\n" +
+			"\tif (r == 1) { return \"s\" + String(v); }\n" +
+			"\treturn v;\n}\n");
+		const name = "excDo" + X;
+		if (this.hasHelper(name)) { return name; }
+		const nul = "excNul" + X;
+		let body = "";
+		let live = 0;
+		if (this.rng.chance(60)) {
+			body += "\tif (n !== null) { acc = n; tr += \"A\" + String(n); } else { tr += \"N\"; }\n";
+			live++;
+		}
+		if (this.rng.chance(60)) {
+			body += "\tn = " + nul + "(m + 1, v);\n" +
+				"\tif (n === null) { tr += \"n\"; } else { acc = n; tr += \"B\" + String(acc); }\n";
+			live++;
+		}
+		if (this.rng.chance(40)) {
+			body += "\tn = null;\n" +
+				"\tif (n != null) { tr += \"never\"; }\n";
+			live++;
+		}
+		if (this.rng.chance(60) || live == 0) {
+			body += "\tfor (let i: int32 = 0; i < 4; i++) {\n" +
+				"\t\tif (n === null) { n = " + nul + "(m + i, v); tr += \"l\"; }\n" +
+				"\t\telse { acc = n; n = null; tr += \"m\" + String(acc); }\n" +
+				"\t}\n";
+		}
+		if (this.rng.chance(60)) {
+			body += "\tconst u = excBox" + X + "(m, v);\n" +
+				"\tif (u === null) { tr += \"u0\"; }\n" +
+				"\telse if (typeof u === \"string\") { tr += \"us\" + u; }\n" +
+				"\telse { acc = u; tr += \"un\" + String(u); }\n";
+		}
+		if (this.rng.chance(50)) {
+			body += "\tif (n === null) { return tr + \"R\"; }\n" +
+				"\tacc = n;\n" +
+				"\ttr += \"z\";\n";
+		}
+		this.useHelper(name, "function " + name + "(k: int32, v: " + T + "): string {\n" +
+			"\tconst m = ixI(k, 997);\n" +
+			"\tlet tr = \"\";\n" +
+			"\tlet acc: " + T + " = v;\n" +
+			"\tlet n: " + T + " | null = " + nul + "(m, v);\n" +
+			body +
+			"\treturn tr + \" \" + String(excOr" + X + "(" + nul + "(m, v), acc)) + String(acc);\n}\n");
+		return name;
+	}
+
+	excNodeHelpers(): void {
+		this.excBase();
+		this.useHelper("excNode", "class ExcNode {\n" +
+			"\tv: int32;\n" +
+			"\tnext: ExcNode | null;\n" +
+			"\tconstructor(v: int32, next: ExcNode | null) {\n" +
+			"\t\tthis.v = v;\n" +
+			"\t\tthis.next = next;\n" +
+			"\t}\n}\n" +
+			"function excList(n: int32): ExcNode | null {\n" +
+			"\tlet head: ExcNode | null = null;\n" +
+			"\tfor (let i: int32 = n; i > 0; i--) { head = new ExcNode(i * 10, head); }\n" +
+			"\treturn head;\n}\n" +
+			"function excSum(h: ExcNode | null): int32 {\n" +
+			"\tlet cur = h;\n" +
+			"\tlet s: int32 = 0;\n" +
+			"\twhile (cur != null) { s += cur.v; cur = cur.next; }\n" +
+			"\treturn s;\n}\n" +
+			"function excLast(h: ExcNode | null): int32 {\n" +
+			"\tlet cur = h;\n" +
+			"\tlet last: int32 = -1;\n" +
+			"\twhile (cur != null) { last = cur.v; if (cur.next == null) { break; } cur = cur.next; }\n" +
+			"\treturn last;\n}\n");
+	}
+
+	excNarrowStmt(t: Ty, indent: string): string {
+		if (!this.reserve(14 as int64)) { return ""; }
+		const k = this.rng.below(5);
+		this.excBase();
+		if (k == 3) {
+			this.excNodeHelpers();
+			return indent + "excMix(String(excSum(excList(ixI(" + this.smallInt(0) + ", 6)))) + \":\" + String(excLast(excList(ixI(" + this.smallInt(0) + ", 6)))));\n";
+		}
+		if (k == 4) {
+			this.useHelper("excMk", "function excMk(k: int32): ExcObj | null {\n" +
+				"\tif (ixI(k, 3) == 0) { return null; }\n" +
+				"\treturn new ExcObj(\"o\" + String(k), k);\n}\n");
+			const o = this.entName("n");
+			return indent + "const " + o + ": ExcObj | null = excMk(" + this.smallInt(0) + ");\n" +
+				indent + "if (" + o + " !== null) { excMix(" + o + ".name + String(" + o + ".xs.length)); } else { excMix(\"null\"); }\n";
+		}
+		const name = this.excNarrowFn(t);
+		return indent + "excMix(" + name + "(" + this.smallInt(0) + ", " + this.expr(t, 0) + "));\n";
+	}
+
+	excWrapHelper(t: Ty): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		this.excBase();
+		const thr = "excWt" + X;
+		this.useHelper(thr, "function " + thr + "(k: int32, v: " + T + "): " + T + " {\n" +
+			"\tif (ixI(k, 3) == 1) { throw new ExcErr(\"w\" + String(k), k); }\n" +
+			"\treturn v;\n}\n");
+		const name = "excW" + X;
+		if (this.hasHelper(name)) { return name; }
+		const form = this.rng.below(3);
+		let body = "\ttry { return " + thr + "(k, v); } catch (x) { return d; }\n";
+		if (form == 1) { body = "\ttry { return " + thr + "(k, v); } catch (x) { if (x instanceof ExcErr) { return d; } return v; }\n"; }
+		if (form == 2) { body = "\ttry {\n\t\ttry { return " + thr + "(k, v); } finally { excLog = (excLog + 1) % 1000003; }\n\t} catch (x) { return d; }\n"; }
+		this.useHelper(name, "function " + name + "(k: int32, v: " + T + ", d: " + T + "): " + T + " {\n" + body + "}\n");
+		return name;
+	}
+
+	excExpr(t: Ty, depth: int32): string {
+		const k = this.pickW(W.ExcWrap, W.ExcNullable);
+		if (k == 0) {
+			if (!this.reserve(10 as int64)) { return ""; }
+			const name = this.excWrapHelper(t);
+			return name + "(" + this.smallInt(depth) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (k == 1) {
+			if (!this.reserve(14 as int64)) { return ""; }
+			const name = this.excResult(0, t, this.rng.below(3));
+			if (this.matchArms > 0) {
+				const wrap = "excOe" + name.slice(5);
+				this.useHelper(wrap, "function " + wrap + "(k: int32, v: " + tyName(t) + ", d: " + tyName(t) + "): " + tyName(t) + " {\n" +
+					"\treturn try " + name + "1(k, v) catch d;\n}\n");
+				return wrap + "(" + this.smallInt(depth) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+			}
+			return "(try " + name + "1(" + this.smallInt(depth) + ", " + this.expr(t, depth + 1) + ") catch " + this.expr(t, depth + 1) + ")";
+		}
+		if (!this.reserve(6 as int64)) { return ""; }
+		this.excNarrowFn(t);
+		const X = tyTitle(t);
+		return "excOr" + X + "(excNul" + X + "(" + this.smallInt(depth) + ", " + this.expr(t, depth + 1) + "), " + this.expr(t, depth + 1) + ")";
+	}
+
 	routineDecl(t: Ty, indent: string): string {
 		const outer: Var[] = [];
 		for (const v of this.scope) {
@@ -2809,9 +3493,13 @@ class Gen {
 				pattern = pattern == "" ? String(v) : pattern + " | " + String(v);
 			}
 			if (pattern == "") { continue; }
+			this.matchArms++;
 			arms += indent + "\t" + pattern + " => " + this.expr(t, 1) + ",\n";
+			this.matchArms--;
 		}
+		this.matchArms++;
 		arms += indent + "\t_ => " + this.expr(t, 1) + ",\n";
+		this.matchArms--;
 		const name = this.newLocal(t);
 		return indent + "let " + name + ": " + tyName(t) + " = match (" + scrutinee + ") {\n" + arms + indent + "};\n";
 	}
@@ -3023,6 +3711,7 @@ export function generate(seed: uint64, f: Features): string {
 	let prints = "";
 	for (const v of g.globals) { prints += "console.log(\"" + v.name + " \" + String(" + v.name + "));\n"; }
 
+	if (g.hasHelper("excBase")) { prints += "console.log(\"excLog \" + String(excLog));\n"; }
 	let head = "// smith seed=" + String(seed) + " features=" + f.format() + "\n";
 	for (const d of g.directives) { head += d + "\n"; }
 	return head + g.helperText + plantDecls(f.plant) + globals + "\n" + fns + top + entries + plantSite + prints;
@@ -3789,10 +4478,10 @@ test "a rest pattern puts one skip-raiser directive right after the head and cit
 	assert withRest > 10;
 }
 
-test "no directive is written unless a rest pattern asks for it and no program skips the JS lane" {
+test "seq and gcls write no directive unless a rest pattern asks for it, and no program skips the JS lane" {
 	assert !textOver(seqFeatures("w.seq.rest=0"), 40).contains("// @skip");
 	assert !textOver(gclsFeatures(""), 40).contains("// @skip");
-	assert !textOver(withWeights("w.fam.seq=0 w.fam.gcls=0"), 20).contains("// @skip");
+	assert !textOver(withWeights("w.fam.seq=0 w.fam.gcls=0"), 20).contains("raiser-has-no-host-bridge-for-msgenericarraypush");
 	assert !bothText().contains("@skip-js");
 }
 
@@ -4103,4 +4792,201 @@ test "the families added after own keep the seven-family stream at weight zero" 
 		const b = generate(seed as uint64, without);
 		assert a.slice(a.indexOf("\n"), a.length) == b.slice(b.indexOf("\n"), b.length);
 	}
+}
+
+const EXC_STMT_KEYS: string[] = ["catch", "finally", "rethrow", "unwind", "defer", "deferloop", "recover", "result", "narrow"];
+const EXC_EXPR_KEYS: string[] = ["wrap", "orelse", "nullable"];
+const EXC_STMT_MARKS: string[] = [".push(\"ok\");", ".push(\"F", ".push(\"after\");", "function excU", "defer ", ".push(\"d\" + String(i", ".push(\"r\" + d", "function excRs", "excMix(excDo"];
+const EXC_EXPR_MARKS: string[] = ["excWInt32(", "(try excRsInt32", "excOrInt32(excNulInt32("];
+
+function excOnly(key: string): Features {
+	let isStmt = false;
+	for (const k of EXC_STMT_KEYS) { if (k == key) { isStmt = true; } }
+	let text = "fams=exc types=int32 stmts=8 w.stmt.fam=80 w.expr.fam=40";
+	for (const k of isStmt ? EXC_STMT_KEYS : EXC_EXPR_KEYS) { if (k != key) { text += " w.exc." + k + "=0"; } }
+	return withWeights(text);
+}
+
+function excKeys(): string[] {
+	const out: string[] = [];
+	for (const k of EXC_STMT_KEYS) { out.push(k); }
+	for (const k of EXC_EXPR_KEYS) { out.push(k); }
+	return out;
+}
+
+function excMarks(): string[] {
+	const out: string[] = [];
+	for (const k of EXC_STMT_MARKS) { out.push(k); }
+	for (const k of EXC_EXPR_MARKS) { out.push(k); }
+	return out;
+}
+
+function excFinallyHazard(lines: string[]): boolean {
+	for (let i = 0; i < lines.length; i++) {
+		const t = lines[i].trim();
+		const next = i + 1 < lines.length ? lines[i + 1].trim() : "";
+		if (t.contains("throw new ExcErr(\"fin\", 1)")) { return true; }
+		if (t.startsWith("if (ixI(n") && (t.endsWith(", 4) == 1) { continue; }") || t.endsWith(", 4) == 1) { break; }"))) { return true; }
+		if (t == "continue;" && next.startsWith("} finally {")) { return true; }
+		if (t.startsWith("if (ixI(") && t.contains("{ throw ") && next.startsWith("} finally {")) { return true; }
+	}
+	return false;
+}
+
+function excDeferHazard(lines: string[]): boolean {
+	for (const line of lines) {
+		const t = line.trim();
+		if (t.startsWith("if (ixI(n") && (t.contains(") == i") || t.contains(") == n")) && (t.endsWith("{ continue; }") || t.endsWith("{ break; }"))) { return true; }
+	}
+	return false;
+}
+
+test "the exc family alone reaches each of its shapes" {
+	const keys = excKeys();
+	const marks = excMarks();
+	for (let i = 0; i < keys.length; i++) {
+		const f = excOnly(keys[i]);
+		let seen = false;
+		for (let seed = 1; seed <= 40 && !seen; seed++) {
+			const text = generate(seed as uint64, f);
+			if (text.contains(marks[i])) { seen = true; }
+			if (i < EXC_STMT_KEYS.length && keys[i] != "unwind") { assert !text.contains("function excU"); }
+			if (i < EXC_STMT_KEYS.length && keys[i] != "narrow") { assert !text.contains("excMix(excDo"); }
+		}
+		assert seen;
+	}
+}
+
+test "a zero exc family weight removes its helpers and its printed log" {
+	const none = withWeights("fams=none");
+	const exc = withWeights("fams=exc stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	for (let seed = 1; seed <= 8; seed++) {
+		assert !generate(seed as uint64, none).contains("excLog");
+		assert generate(seed as uint64, exc).contains("console.log(\"excLog \" + String(excLog));\n");
+	}
+}
+
+test "a hazard shape carries its skip directive and every other shape carries none" {
+	const keys = excKeys();
+	for (let i = 0; i < keys.length; i++) {
+		const f = excOnly(keys[i]);
+		let hazardous = 0;
+		for (let seed = 1; seed <= 60; seed++) {
+			const text = generate(seed as uint64, f);
+			const lines = text.split("\n");
+			const fin = excFinallyHazard(lines);
+			const def = excDeferHazard(lines);
+			assert text.contains(EXC_SKIP_FINALLY + "\n") == fin;
+			assert text.contains(EXC_SKIP_DEFER + "\n") == def;
+			assert !text.contains("@skip-js");
+			if (fin || def) {
+				hazardous++;
+				assert lines[1].startsWith("// @skip-raiser: ");
+				let at = 1;
+				while (lines[at].startsWith("// @")) { at++; }
+				assert at == 1 + (fin ? 1 : 0) + (def ? 1 : 0);
+				assert !lines[at].startsWith("//");
+			}
+		}
+		const only = keys[i] == "finally" || keys[i] == "rethrow" || keys[i] == "deferloop" || keys[i] == "recover";
+		if (only) { assert hazardous > 0 && hazardous < 60; }
+		if (!only && i < EXC_STMT_KEYS.length) { assert hazardous == 0; }
+	}
+}
+
+test "a directive line is kept once" {
+	const g = new Gen();
+	g.directive(EXC_SKIP_FINALLY);
+	g.directive(EXC_SKIP_DEFER);
+	g.directive(EXC_SKIP_FINALLY);
+	assert g.directives.length == 2;
+}
+
+test "no exc construct throws from a constructor" {
+	const f = withWeights("fams=exc stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	let constructors = 0;
+	for (let seed = 1; seed <= 30; seed++) {
+		let inCtor = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.contains("constructor(")) { inCtor = true; constructors++; }
+			else if (inCtor && line == "\t}") { inCtor = false; }
+			if (inCtor) { assert !line.contains("throw"); }
+		}
+	}
+	assert constructors > 30;
+}
+
+test "no exc construct assigns a string to a union local" {
+	const f = withWeights("fams=exc stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	let unions = 0;
+	for (let seed = 1; seed <= 30; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (!line.contains("| string | null")) { continue; }
+			assert line.startsWith("function excBox");
+			unions++;
+		}
+	}
+	assert unions > 0;
+}
+
+test "no exc construct matches on a Result or puts a try in a match arm" {
+	const f = withWeights("fams=exc stmts=8 w.stmt.fam=80 w.expr.fam=40 w.stmt.match=40");
+	let arms = 0;
+	let wrapped = 0;
+	for (let seed = 1; seed <= 40; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			const t = line.trim();
+			assert !t.contains("{ ok");
+			if (t.contains("match (n")) { assert false; }
+			const first = t.length > 0 ? t.charCodeAt(0) : 0;
+			const armLike = t.contains(" => ") && (t.startsWith("_ =>") || (first >= 48 && first <= 57) || t.startsWith("-"));
+			if (!armLike) { continue; }
+			arms++;
+			assert !t.contains("try ");
+			if (t.contains("excOe")) { wrapped++; }
+		}
+	}
+	assert arms > 20 && wrapped > 0;
+}
+
+test "an exc statement is refused before it writes when the budget cannot hold it" {
+	const g = new Gen();
+	g.rng = Rng.seeded(1 as uint64);
+	g.tys = [Ty.Int32];
+	g.tripMax = 4;
+	g.costCap = 5 as int64;
+	assert g.excCatch("", 0) == "";
+	assert g.excFinally("", 0) == "";
+	assert g.excRethrow("", 0) == "";
+	assert g.excUnwind("") == "";
+	assert g.excDefer("", 0) == "";
+	assert g.excDeferLoop("", 0) == "";
+	assert g.excRecover("", 0) == "";
+	assert g.excResultStmt(Ty.Int32, "") == "";
+	assert g.excNarrowStmt(Ty.Int32, "") == "";
+	assert g.excExpr(Ty.Int32, 0) == "" || g.cost <= g.costCap;
+	assert g.helperText == "" && g.directives.length == 0;
+}
+
+test "exc statements restore scope, ents, the cost multiplier and the match-arm stack" {
+	let helpers = 0;
+	for (let seed = 1; seed <= 12; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Int32, Ty.Float64];
+		g.stmtMax = 16;
+		g.depthMax = 4;
+		g.exprMax = 4;
+		g.tripMax = 8;
+		g.fams = [Fam.Exc];
+		g.w = withWeights("fams=exc w.stmt.fam=80 w.expr.fam=40").w;
+		g.fn(0);
+		assert g.cost <= FN_COST_CAP;
+		assert g.mult == (1 as int64);
+		assert g.scope.length == g.fns[0].params.length;
+		assert g.ents.length == 0;
+		assert g.matchArms == 0;
+		if (g.hasHelper("excBase")) { helpers++; }
+	}
+	assert helpers > 8;
 }

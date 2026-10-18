@@ -24,6 +24,7 @@ export enum Fam {
 	Seq,
 	Gcls,
 	Enum,
+	Exc,
 }
 
 export enum W {
@@ -52,6 +53,7 @@ export enum W {
 	FamSeq,
 	FamGcls,
 	FamEnum,
+	FamExc,
 	ClosureNamed,
 	ClosureArray,
 	ClosureIife,
@@ -150,6 +152,18 @@ export enum W {
 	EnumDisc,
 	EnumUnknown,
 	EnumNever,
+	ExcCatch,
+	ExcFinally,
+	ExcRethrow,
+	ExcUnwind,
+	ExcDefer,
+	ExcDeferLoop,
+	ExcRecover,
+	ExcResult,
+	ExcNarrow,
+	ExcWrap,
+	ExcOrElse,
+	ExcNullable,
 	ExprFam,
 	StmtFam,
 	StmtElse,
@@ -182,6 +196,7 @@ export const W_KEYS: string[] = [
 	"w.fam.seq",
 	"w.fam.gcls",
 	"w.fam.enum",
+	"w.fam.exc",
 	"w.closure.named",
 	"w.closure.array",
 	"w.closure.iife",
@@ -280,6 +295,18 @@ export const W_KEYS: string[] = [
 	"w.enum.disc",
 	"w.enum.unknown",
 	"w.enum.never",
+	"w.exc.catch",
+	"w.exc.finally",
+	"w.exc.rethrow",
+	"w.exc.unwind",
+	"w.exc.defer",
+	"w.exc.deferloop",
+	"w.exc.recover",
+	"w.exc.result",
+	"w.exc.narrow",
+	"w.exc.wrap",
+	"w.exc.orelse",
+	"w.exc.nullable",
 	"w.expr.fam",
 	"w.stmt.fam",
 	"w.stmt.else",
@@ -289,7 +316,7 @@ export const W_KEYS: string[] = [
 export const W_DEFAULTS: int32[] = [
 	25, 30, 8, 10, 8, 19,
 	25, 25, 8, 12, 12, 6, 6, 6,
-	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 2,
@@ -309,13 +336,15 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1,
 	20, 20, 50, 30,
 ];
 
 const W_GROUPS: W[][] = [
 	[W.ExprLeaf, W.ExprCall],
 	[W.StmtLet, W.StmtReturn],
-	[W.FamClosure, W.FamEnum],
+	[W.FamClosure, W.FamExc],
 	[W.ClosureNamed, W.ClosureIife],
 	[W.ClosureDecl, W.ClosureRoutine],
 	[W.GenericId, W.GenericBox],
@@ -335,6 +364,8 @@ const W_GROUPS: W[][] = [
 	[W.GclsCell, W.GclsWrap],
 	[W.GclsDecl, W.GclsOwn],
 	[W.EnumNumeric, W.EnumNever],
+	[W.ExcCatch, W.ExcNarrow],
+	[W.ExcWrap, W.ExcNullable],
 ];
 
 export enum Plant {
@@ -371,7 +402,7 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
-export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls, Fam.Enum];
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls, Fam.Enum, Fam.Exc];
 
 export function famName(f: Fam): string {
 	return match (f) {
@@ -386,6 +417,7 @@ export function famName(f: Fam): string {
 		Fam.Seq => "seq",
 		Fam.Gcls => "gcls",
 		Fam.Enum => "enum",
+		Fam.Exc => "exc",
 	};
 }
 
@@ -393,7 +425,7 @@ function famFromName(name: string): Result<Fam, string> {
 	for (const f of ALL_FAMS) {
 		if (famName(f) == name) { return Result.ok(f); }
 	}
-	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, enum, none)");
+	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, enum, exc, none)");
 }
 
 export function tyName(t: Ty): string {
@@ -662,7 +694,7 @@ test "an unknown weight, a bad value and an all-zero group are refused" {
 	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
-	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0 w.fam.seq=0 w.fam.gcls=0 w.fam.enum=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0 w.fam.seq=0 w.fam.gcls=0 w.fam.enum=0 w.fam.exc=0").ok;
 }
 
 test "swarm keeps the weights of its base" {
