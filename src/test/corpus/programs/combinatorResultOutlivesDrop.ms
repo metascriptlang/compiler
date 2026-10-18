@@ -6,7 +6,6 @@
 // @stdout: any 5
 // @stdout: allSettled done
 // @serial
-// @ledger-slack(Error): 153
 // @xfail(raiser): raiser runtime error: Unknown host function: msPromiseRace (no host bridge registers it in hostTable.ms)
 
 // note: A combinator keeps its result future alive until its last input has settled,
