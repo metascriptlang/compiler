@@ -38,7 +38,7 @@ function widenBranchLiteral(t: Type): Type {
 	return closureStorageType(t);
 }
 
-function branchContributesToJoin(t: Type | null): boolean {
+export function branchContributesToJoin(t: Type | null): boolean {
 	return t != null && !isUnresolvedType(t)
 		&& t.kind != TypeKind.Never && t.kind != TypeKind.Void
 		&& t.kind != TypeKind.Error;

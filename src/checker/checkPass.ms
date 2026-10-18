@@ -35,7 +35,7 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -2391,18 +2391,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (refuseGeneratorReturnValue(ctx, node)) return;
 	if (d.argument == null) {
-		// Bare `return;` is the user explicitly saying "void return". Inference
-		// (e.g. lambda body without an explicit return-type annotation) needs
-		// this signal — without it, a body whose only return is bare leaves
-		// `inferredReturn` stuck at Unknown, codegen falls back to `void*`, and
-		// the C compiler rejects the bare `return;` as "non-void function
-		// should return a value". Mirrors the "first return wins" rule used
-		// below for `return X` so subsequent returns can't downgrade the type.
-		if (ctx.matchExprDepth == 0
-				&& ctx.inferredReturn != null
-				&& ctx.inferredReturn.kind == TypeKind.Inferred) {
-			ctx.inferredReturn = voidType();
-		}
+		checkBareReturn(ctx, node);
 		return;
 	}
 
@@ -2414,10 +2403,9 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// the expected type against itself (trivially passes); check BEFORE stamp
 	// compares Null against expected, which is the real safety question.
 	if (d.argument.kind == NodeKind.NullLiteral && ctx.matchExprDepth == 0) {
-		if (ctx.currentFunction != null
-			&& ctx.currentFunction.symbolType.kind == TypeKind.Function
-			&& ctx.currentFunction.symbolType.typeReturn != null) {
-			const declared = ctx.currentFunction.symbolType.typeReturn;
+		const fnType = ctx.currentFunction != null ? ctx.currentFunction.symbolType : null;
+		const declared = fnType == null ? null : fnType.kind == TypeKind.Function ? fnType.typeReturn : isUnresolvedType(fnType) ? fnType : null;
+		if (declared != null) {
 			d.argument.nodeType = nullType();
 			if (isUnresolvedType(declared)) {
 				if (ctx.matchExprDepth == 0 && ctx.inferredReturn != null) {
@@ -2428,12 +2416,13 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 						if (!isUnresolvedType(joinedRet)) ctx.inferredReturn = joinedRet;
 					}
 					ctx.inferredReturnStmts.push(node);
+					giveBareReturnsNull(ctx);
 				}
 				return;
 			}
 			if (!isAssignable(nullType(), declared)) {
 				addError(ctx,
-					"Return type mismatch in '" + ctx.currentFunction.name + "': expected " + formatTypeBrief(declared) + ", got null",
+					"Return type mismatch in '" + ctx.currentFunction!.name + "': expected " + formatTypeBrief(declared) + ", got null",
 					node.location.line, node.location.column);
 				return;
 			}
@@ -2500,6 +2489,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		}
 		if (returnExpected == null && d.argument != null) {
 			ctx.inferredReturnStmts.push(node);
+			giveBareReturnsNull(ctx);
 		}
 	}
 }
