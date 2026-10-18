@@ -69,6 +69,16 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 	return null as unknown as ModuleExports;
 }
 
+export function macroPreludeKind(registry: ExportRegistry | null, name: string): string {
+	if (registry == null) return "";
+	for (const mod of registry.entries) {
+		for (const e of mod.symbols) {
+			if (e.name == name && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym.builtinKind;
+		}
+	}
+	return "";
+}
+
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
 	const modExports = findModuleExports(registry, modulePath);
 	if (modExports == null) return null as unknown as ExportedSymInfo;

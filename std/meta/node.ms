@@ -602,6 +602,7 @@ export class FlowNode {
 
 // ===== Node Interface =====
 
+@builtin("MetaNode")
 export class Node {
 	kind: NodeKind;
 	location: SourceLocation;

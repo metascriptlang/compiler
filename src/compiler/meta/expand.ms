@@ -53,7 +53,7 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
-import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, Severity, addError, addErrorFullRange, createContext, macroPreludeKind } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
@@ -1574,6 +1574,18 @@ function atCallSite(): SourceLocation {
 // Safe to bake into the shared body: the compiled-macro cache is keyed by macro
 // name, and a named type does not vary per call site. Mutation is idempotent —
 // a second pass finds literals, not calls.
+function macroIntrinsicOf(ctx: CheckerContext, macroSym: Symbol, callee: Node): string {
+	if (callee.kind != NodeKind.Identifier) return "";
+	let scopeCtx = ctx;
+	if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
+		const mc = declaringModuleCtx(ctx, macroSym);
+		if (mc != null) scopeCtx = mc;
+	}
+	const name = (callee.data as IdentifierData).name;
+	const sym = lookupSymbolInDefiningScope(scopeCtx.table, macroSym.name, name);
+	return sym != null ? sym.builtinKind : macroPreludeKind(scopeCtx.exportRegistry, name);
+}
+
 function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string, typeArgParams: string[] | null = null): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.CallExpr) {
@@ -1585,9 +1597,8 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 		// valueToNode rebinds the Symbol on the way out; the checker sees
 		// NodeFlag.BoundSym and skips the user-scope lookup — no imports needed,
 		// no user-local name capture.
-		if (cd.callee.kind == NodeKind.Identifier
-				&& (cd.callee.data as IdentifierData).name == "bindSym"
-				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
+		const intrinsic = macroIntrinsicOf(ctx, macroSym, cd.callee);
+		if (intrinsic == "MetaBindSym" && cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			const symName = (cd.arguments[0].data as StringLiteralData).value;
 			let bindCtx = ctx;
 			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
@@ -1609,8 +1620,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			}
 			return bindSymCall(hostSym, symName, boundSym, node.location);
 		}
-		if (cd.callee.kind == NodeKind.Identifier
-				&& (cd.callee.data as IdentifierData).name == "getTypeImpl"
+		if (intrinsic == "MetaGetTypeImpl"
 				&& cd.arguments.length == 1
 				&& cd.arguments[0].kind == NodeKind.Identifier) {
 			const typeName = (cd.arguments[0].data as IdentifierData).name;

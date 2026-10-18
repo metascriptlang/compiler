@@ -62,8 +62,10 @@ extern function msMetaGetSize(n: Node): int32;
 extern function msMetaGetAlign(n: Node): int32;
 extern function msMetaGetOffset(n: Node, field: string): int32;
 
+@builtin("MetaBindSym")
 export function bindSym(name: string): Node | null { return msMetaBindSym(name, -1); }
 export function getType(n: Node | null): Node | null { if (n == null) return null; return msMetaGetType(n, false); }
+@builtin("MetaGetTypeImpl")
 export function getTypeImpl(n: Node | null): Node | null { if (n == null) return null; return msMetaGetType(n, true); }
 export function getImpl(n: Node | null): Node | null { if (n == null) return null; return msMetaGetImpl(n); }
 export function resolveType(text: string): Node | null { return msMetaResolveType(text); }

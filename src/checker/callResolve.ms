@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt } from "./context";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt } from "./context";
 import { fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
@@ -346,7 +346,10 @@ export function markNamesUsed(ctx: CheckerContext, node: Node | null): void {
 	if (node.kind == NodeKind.Identifier) name = (node.data as IdentifierData).name;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
-		if (cd.callee.kind == NodeKind.Identifier && (cd.callee.data as IdentifierData).name == "bindSym"
+		const calleeName = cd.callee.kind == NodeKind.Identifier ? (cd.callee.data as IdentifierData).name : "";
+		const callee = calleeName != "" ? lookupSymbol(ctx.table, calleeName) : null;
+		const intrinsic = callee != null ? callee.builtinKind : calleeName != "" ? macroPreludeKind(ctx.exportRegistry, calleeName) : "";
+		if (intrinsic == "MetaBindSym"
 				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			name = (cd.arguments[0].data as StringLiteralData).value;
 		}
