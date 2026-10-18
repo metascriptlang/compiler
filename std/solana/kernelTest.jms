@@ -238,10 +238,12 @@ test "the curve check refuses what it does not simulate and accepts a point on t
 	assert msSolHostFaultCodeOf() != 0 && msSolHostFaultMessage() != "";
 }
 
-test "the invoke family names what it waits for" {
+test "the invoke family runs through the dispatcher and records nothing for a refused call" {
 	enterThree();
-	assert faultOf(() => { msSolHostLeave(); }) == "solana kernel: msSolHostLeave waits for simulatorInvoke";
-	assert faultOf(() => { msSolHostInvocationTotal(); }) == "solana kernel: msSolHostInvocationTotal waits for simulatorInvoke";
-	assert faultOf(() => { msSolHostInvocationAt(0); }) == "solana kernel: msSolHostInvocationAt waits for simulatorInvoke";
-	assert faultOf(() => { msSolInvokeMetas(0, 0, 0, 0, 0, 0, 0); }) == "solana kernel: msSolInvokeMetas waits for simulatorInvoke";
+	assert msSolHostInvocationTotal() == 0;
+	assert faultOf(() => { msSolHostLeave(); }) == "";
+	assert msSolInvokeMetas(0, 0, 65, 0, 0, 0, 0) == 0xffffffffffffffff;
+	assert msSolHostFaultMessage() == "solana invoke: more than 64 accounts in one instruction";
+	assert msSolHostInvocationTotal() == 0;
+	assert msSolHostInvocationAt(0) == 0;
 }

@@ -41,6 +41,8 @@ import {
 	setSysvarStatus,
 } from "./simulatorLog";
 import { msSolHostCurveValidatePoint } from "./simulatorCrypto";
+import { holdAccounts, invocationAt, invocationTotal, invokeSigned, resetDispatcher, settle } from "./simulatorInvoke";
+import { invokeMetas } from "./simulatorMetas";
 import {
 	deriveAddress,
 	findAddress,
@@ -70,6 +72,7 @@ function waits(name: string): Error {
 // host.c msSolHostEnter
 function enter(input: uint64): void {
 	resetSimulator();
+	resetDispatcher();
 	msSolMemoryKeepOnly(input);
 	let start = input;
 	if (input == 0) {
@@ -87,6 +90,7 @@ function enter(input: uint64): void {
 	accountTable = table;
 	instructionData = parsed.instructionData;
 	msSolMemorySetAccounts(table, parsed.count, parsed.instructionData, start, parsed.programId);
+	holdAccounts(table, parsed.count);
 	entered = true;
 }
 
@@ -116,8 +120,10 @@ export function msSolHostEnter(input: uint64): void {
 	enter(input);
 }
 
+// host.c msSolHostLeave
 export function msSolHostLeave(): void {
-	throw waits("msSolHostLeave");
+	if (result != 0) { return; }
+	settle();
 }
 
 // host.c msSolHostResult
@@ -140,11 +146,11 @@ export function msSolHostLogAt(index: uint64): string {
 }
 
 export function msSolHostInvocationTotal(): uint64 {
-	throw waits("msSolHostInvocationTotal");
+	return invocationTotal();
 }
 
 export function msSolHostInvocationAt(index: uint64): uint64 {
-	throw waits("msSolHostInvocationAt");
+	return invocationAt(index);
 }
 
 // host.c msSolHostRentReadTotal, msSolHostSetClock and msSolHostSetSysvarStatus
@@ -169,7 +175,7 @@ export function msSolInvokeMetas(
 	signers: uint64,
 	signerCount: uint64,
 ): uint64 {
-	throw waits("msSolInvokeMetas");
+	return invokeMetas(program, metas, count, data, length, signers, signerCount, invokeSigned);
 }
 
 // solana.h msSolAccountCount, msSolAccountAt, msSolAccountSlot
