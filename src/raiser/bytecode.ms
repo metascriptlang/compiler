@@ -129,8 +129,8 @@ export enum RaiserOpcode {
 	// Same append-at-the-END rule as the opcodes above.
 	Try,              // ABx: push a safepoint at ip + Bx (a Catch or a Finally)
 	Catch,            // ABx: metadata — handler body follows, Bx = offset past the block
-	Finally,          // ABC: pop the safepoint — reached only when nothing was raised
-	FinallyEnd,       // ABC: resume the pending unwind, if there is one
+	Finally,          // ABC: pop the safepoint — reached only when nothing was raised; R[A], R[A+1] = how the finally body was entered
+	FinallyEnd,       // ABC: resume what R[A], R[A+1] of its Finally hold: fall through, re-raise, or return
 	Throw,            // ABC: raise R[A]
 
 	// Compile-time-known-bad site: the bytecode compiler already reported it

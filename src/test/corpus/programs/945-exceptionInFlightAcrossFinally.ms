@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser bytecode compiler drops a raise from inside a finally and hands the exception in flight to the inner catch, also on the baseline
 // @stdout: inner swallowed|outer first|outer first|outer first|outer second|outer second|5|1|level2|caught level2 raise|outer in flight
 // note: an exception in flight survives a finally that raises and handles another one; a raise or a jump out of the finally releases the exception it replaces (inject-scopes-2: C lost it and panicked, or leaked it).
 

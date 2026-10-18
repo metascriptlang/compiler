@@ -81,6 +81,7 @@ export interface RaiserLoopInfo {
 	// the loop counter never advances), while to before the backjump, do-while
 	// to before the bottom condition.
 	continuePatches: RaiserBreakPatches;
+	tryDepth: int32;
 }
 
 export interface RaiserLoopStack {
@@ -140,6 +141,12 @@ export interface RaiserCompState {
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;
 	receiverReg: int32;
+	tries: RaiserTryInfo[];
+}
+
+export interface RaiserTryInfo {
+	finallyBody: Node | null;
+	routeReg: int32;
 }
 
 export function createCompState(): RaiserCompState {
@@ -152,7 +159,7 @@ export function createCompState(): RaiserCompState {
 	const enumItems: RaiserFuncEntry[] = [];
 	const enumMap: RaiserEnumMap = { items: enumItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap: createFuncMap(), enumMap, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1 };
+		funcMap: createFuncMap(), enumMap, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -319,6 +326,7 @@ export function pushLoop(s: RaiserCompState, startIp: int32, label: string): voi
 		label,
 		breakPatches: { items: [] },
 		continuePatches: { items: [] },
+		tryDepth: s.tries.length,
 	};
 	s.loopStack.items.push(info);
 }
