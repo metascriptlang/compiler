@@ -1,4 +1,4 @@
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJS, compileToJSBare } from "../helpers";
 
 const pickUnion = "function pick(k: int32): number | string | null { if (k == 0) return null; return \"row\"; }\n";
 const pickInt = "function pickInt(k: int32): int32 | null { if (k == 0) return null; return 5; }\n";
@@ -18,7 +18,7 @@ test "nullishUnionJoin: the present value is widened into the union's int member
 }
 
 test "nullishUnionJoin: JS keeps both operands as they are" {
-	const r = compileToJS(pickInt + "function f(): int32 { const r: int32 | string = pickInt(1) ?? \"y\"; return r as int32; }\n");
+	const r = compileToJSBare(pickInt + "function f(): int32 { const r: int32 | string = pickInt(1) ?? \"y\"; return r as int32; }\n");
 	assert r.ok, r.ok ? "" : r.error;
 	assert r.value.contains("\"y\""), r.value;
 }

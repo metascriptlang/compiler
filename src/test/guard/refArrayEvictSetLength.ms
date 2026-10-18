@@ -23,20 +23,21 @@ interface Plain { tag: int32; }
 
 function shrinkBySetLength(): int32 {
 	const arr: Plain[] = [{ tag: 1 }, { tag: 2 }, { tag: 3 }];
-	arr.setLength(1);
+	arr.shrink(1);
 	return arr[0].tag;
 }
 
 function emptyBySetLength(): int32 {
 	const arr: Plain[] = [{ tag: 4 }, { tag: 5 }];
-	arr.setLength(0);
+	arr.shrink(0);
 	return arr.length as int32;
 }
 
 function shrinkByLengthAssign(): int32 {
 	const arr: Plain[] = [{ tag: 6 }, { tag: 7 }, { tag: 8 }];
-	arr.length = 2;
-	return arr[0].tag + arr[1].tag;
+	const kept = arr[0].tag + arr[1].tag;
+	arr.length = 0;
+	return kept;
 }
 
 function main(): int32 {

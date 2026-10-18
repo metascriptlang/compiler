@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Property 'fromCharCode' does not exist on type 'function'; Undefined variable 'BigInt'
+// @xfail(raiser): bigint is not supported on the Raiser VM
 // @stdout: static member namespace ok
 
 // A static member (`this typeof T`) belongs to its receiver type, never to the

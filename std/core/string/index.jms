@@ -37,13 +37,14 @@ export extern function String<T>(val: T): string;
 
 // ===== Character Construction =====
 
-export function fromCharCode(this typeof String, code: int32): string {
-	@emit(`return globalThis.String.fromCharCode(Number(${code}) & 0xFFFF);`);
+export function fromCharCode(this typeof String, ...codes: int32[]): string {
+	@emit(`return globalThis.String.fromCharCode(...${codes}.map((code) => Number(code) & 0xFFFF));`);
 	unreachable;
 }
 
 // ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
 
+@compilerFunc
 export function charAt(this s: string, idx: int32): string {
 	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? "" : ${s}.charAt(${idx});`);
 	unreachable;
@@ -89,22 +90,29 @@ export function padEnd(this s: string, targetLen: int32, pad: string): string {
 	unreachable;
 }
 
-// strtod/strtoll parity: unparseable input is 0, never NaN.
-export function parseFloat(this s: string): number {
-	@emit(`var v = Number.parseFloat(${s}); return Number.isNaN(v) ? 0 : v;`);
+export extern function parseFloat(this s: string): number from "Number.parseFloat(#)";
+
+function intPrefix(s: string): string {
+	@emit(`var m = /^[+-]?(?:0[xX][0-9a-fA-F]+|[0-9]+)/.exec(${s}.trimStart());
+return m === null ? "" : m[0];`);
 	unreachable;
 }
 
-// int64 is a BigInt on this backend, so the decimal text is parsed exactly by
-// BigInt() — Number.parseInt would round the value before it ever gets here.
-// The regex keeps parseInt's own tolerance (leading sign, surrounding space)
-// and its 0-for-garbage answer.
-export function parseInt(this s: string): int64 {
-	@emit(`var m = /^([+-]?\\d+)$/.exec(${s}.trim());
-if (m !== null) return BigInt(m[1]);
-var v = Number.parseInt(${s}, 10);
-return Number.isNaN(v) ? 0n : BigInt(v);`);
+function intPrefixValue(t: string): bigint {
+	@emit(`var neg = ${t}[0] === "-";
+var v = globalThis.BigInt(neg || ${t}[0] === "+" ? ${t}.slice(1) : ${t});
+return neg ? -v : v;`);
 	unreachable;
+}
+
+export function parseInt(this s: string): int64 {
+	const text = intPrefix(s);
+	if (text == "") return 0;
+	const v = intPrefixValue(text);
+	if (v < -9223372036854775808n || v > 9223372036854775807n) {
+		throw new Error(`value ${text} not in range -9223372036854775808 .. 9223372036854775807`);
+	}
+	return v as int64;
 }
 
 // Native strings carry no separate allocation — capacity is the byte length.
@@ -146,12 +154,19 @@ export function fromCodePoint(cp: number): string {
 }
 
 // Number/bool to string (called by builtinLower .toString())
+@compilerFunc
 export function msNumberToString(n: number): string {
 	@emit(`return String(${n});`);
 	unreachable;
 }
 
+function checkRadix(radix: number): void {
+	if (!(radix >= 2.0 && radix < 37.0)) throw new RangeError("toString() radix argument must be between 2 and 36");
+}
+
+@compilerFunc
 export function msNumberToStringRadix(n: number, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
@@ -161,51 +176,63 @@ export function msNumberToStringRadix(n: number, radix: number): string {
 // double, so they are the same String()/toString() call. Exact int64 semantics
 // on this backend wait on the BigInt mapping — until then these exist so the
 // shared lowering can name one function for both backends.
+@compilerFunc
 export function msIntToString(n: int64): string {
 	@emit(`return String(${n});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msUint64ToString(n: uint64): string {
 	@emit(`return String(${n});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msIntToStringRadix(n: int64, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msUint64ToStringRadix(n: uint64, radix: number): string {
+	checkRadix(radix);
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msBoolToString(b: boolean): string {
 	@emit(`return ${b} ? "true" : "false";`);
 	unreachable;
 }
 
 // String hash — DJB2 over WTF-8 bytes (matches C runtime msStringHash)
+@compilerFunc
 export function msStringHash(s: string): int32 {
 	const sb = wtf8Cached(s);
-	let h: int32 = 5381;
+	let h: float64 = 5381;
 	for (let i = 0; i < sb.length; i += 1) {
-		h = (h * 33 + sb[i]) as int32;
+		h = (h * 33 + sb[i]) % 4294967296.0;
 	}
-	return h;
+	if (h > 2147483647) h = h - 4294967296.0;
+	return h as int32;
 }
 
 // .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
+@compilerFunc
 export function msStringLength(s: string): int32 {
 	@emit(`return ${s}.length;`);
 	unreachable;
 }
 
+@compilerFunc
 export function msStringByteLength(s: string): int32 {
 	return wtf8Cached(s).length;
 }
 
+@compilerFunc
 export function msStringByteAt(s: string, idx: int32): int32 {
 	return s.byteAt(idx);
 }

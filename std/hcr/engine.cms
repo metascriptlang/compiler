@@ -44,10 +44,14 @@ extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 extern function msDrainUntilIdle(): void;
 extern function msReportOrphanFailures(): int32;
 extern function msHcrCoreDeinit(): void;
+extern function msHcrDefer(moduleId: cstring, name: cstring, init: Ptr<void>, deinit: Ptr<void>): void;
+extern function msHcrDeferredPending(moduleId: cstring): int32;
+extern function msModuleDeinitLazy(): void;
 
 interface HcrImage {
 	handle: Ptr<void>;
 	moduleId: string;
+	deferred: string;
 	importIds: string[];
 	symbolNames: string[];
 	symbolKeys: string[];
@@ -146,7 +150,7 @@ function symbolOf(image: Ptr<void>, name: string): Ptr<void> {
 }
 
 function emptyImage(handle: Ptr<void>): HcrImage {
-	return { handle, moduleId: "", importIds: [], symbolNames: [], symbolKeys: [], variableSymbols: [], variableNames: [],
+	return { handle, moduleId: "", deferred: "", importIds: [], symbolNames: [], symbolKeys: [], variableSymbols: [], variableNames: [],
 		bindOwners: [], bindNames: [], bindKeys: [], typeNames: [], typeKeys: [] };
 }
 
@@ -162,6 +166,8 @@ function describe(handle: Ptr<void>): HcrImage {
 	if (hcrIsNull(idRaw) != 0 || hcrIsNull(functionsRaw) != 0 || hcrIsNull(variablesRaw) != 0 || hcrIsNull(variableNamesRaw) != 0
 		|| hcrIsNull(bindingsRaw) != 0 || hcrIsNull(importsRaw) != 0 || hcrIsNull(typeKeysRaw) != 0) return image;
 	image.moduleId = msHcrCallText(idRaw);
+	const deferredRaw = symbolOf(handle, "HcrDeferred000");
+	if (hcrIsNull(deferredRaw) == 0) image.deferred = msHcrCallText(deferredRaw);
 	for (let i: int32 = 0; i < msHcrListCount(importsRaw); i += 1) image.importIds.push(msHcrListItem(importsRaw, i));
 	for (let i: int32 = 0; i < msHcrImportCount(functionsRaw); i += 1) {
 		image.symbolNames.push(msHcrImportId(functionsRaw, i));
@@ -249,12 +255,22 @@ function required(image: HcrImage, name: string): Ptr<void> {
 	return raw;
 }
 
+function bindDeferred(module: HcrModule): void {
+	if (module.image.deferred == "") return;
+	msHcrDefer(module.moduleId, module.image.deferred, required(module.image, "Init000"), symbolOf(module.image.handle, "Deinit000"));
+}
+
+function awaitsFirstImport(module: HcrModule): boolean {
+	return module.image.deferred != "" && msHcrDeferredPending(module.moduleId) != 0;
+}
+
 
 function sweepEndedRuns(root: string): void {
 	const own = `${msHcrProcessId()}`;
 	for (const entry of readDir(root)) {
 		if (!entry.endsWith("/")) continue;
 		const name = entry.slice(0, entry.length - 1);
+		if (name.length > 10) continue;
 		const pid = name.parseInt();
 		if (name == own || `${pid}` != name || pid <= 0 || pid > 4294967295) continue;
 		if (msHcrProcessAlive(pid as uint32) != 0) continue;
@@ -284,7 +300,9 @@ function loadAndInitialize(): void {
 	for (const item of order) {
 		if (msHcrCallInitStatus(required(item.image, "DatInit000")) != 0) fatal(`data initialization of module '${item.module.moduleId}' threw`);
 	}
+	for (const item of order) bindDeferred(item.module);
 	for (const item of order) {
+		if (awaitsFirstImport(item.module)) continue;
 		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) fatal(`initialization of module '${item.module.moduleId}' threw`);
 	}
 }
@@ -304,7 +322,9 @@ export function start(): int32 {
 }
 
 function destroyGlobals(): void {
+	msModuleDeinitLazy();
 	for (let i = modules.length - 1; i >= 0; i -= 1) {
+		if (modules[i].image.deferred != "") continue;
 		const raw = symbolOf(modules[i].image.handle, "Deinit000");
 		if (hcrIsNull(raw) == 0 && msHcrCallInitStatus(raw) != 0) fatal(`module '${modules[i].moduleId}' threw while destroying its globals`);
 	}
@@ -318,6 +338,7 @@ function release(candidates: HcrCandidate[]): void {
 function failingHandler(entry: string, count: int32): string {
 	for (let i: int32 = 0; i < count; i += 1) {
 		const module = modules[i];
+		if (awaitsFirstImport(module)) continue;
 		const raw = symbolOf(module.image.handle, entry);
 		if (hcrIsNull(raw) == 0 && hcrCallStatus(raw) != 0) return module.moduleId;
 	}
@@ -417,6 +438,7 @@ function revertAfterCrash(reason: string): ReloadResult {
 		step.module.crashedIdentity = step.module.identity;
 		step.module.image = step.image;
 		step.module.identity = step.identity;
+		bindDeferred(step.module);
 		names.push(step.module.moduleId);
 	}
 	for (const step of undo) {
@@ -552,10 +574,12 @@ function performReload(): ReloadResult {
 		item.module.image = item.image;
 		item.module.identity = item.identity;
 		item.module.failedIdentity = 0;
+		bindDeferred(item.module);
 		names.push(item.module.moduleId);
 	}
 	let initFailed = "";
 	for (const item of initializationOrder(candidates)) {
+		if (awaitsFirstImport(item.module)) continue;
 		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) {
 			initFailed = item.module.moduleId;
 			break;
@@ -578,6 +602,7 @@ function performReload(): ReloadResult {
 		msHcrRollback(item.module.moduleId);
 		item.module.image = previousImages[i];
 		item.module.identity = previousIdentities[i];
+		bindDeferred(item.module);
 	}
 	forgetAfter(known);
 	return result(ReloadKind.Rejected, [resumeFailed],

@@ -4,7 +4,7 @@
 // on the held member, one routine per union and table.
 
 import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, nullType, setRepr } from "../../checker/types";
+import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
 import { isTypeofExpr, primitiveNameLiteral } from "../../checker/fit";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
@@ -45,6 +45,8 @@ function lowerNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const test = lowerKindTest(node, ctx);
 		if (test != null) return test;
+		const instance = lowerGenericInstanceof(node, ctx);
+		if (instance != null) return instance;
 	}
 	mapChildren(node, (c: Node): Node => lowerNode(c, ctx));
 	if (isTypeofExpr(node)) return lowerTagRead(node, ctx);
@@ -112,6 +114,55 @@ function lowerKindTest(node: Node, ctx: TransformContext): Node | null {
 	}
 	const kindRead = routineCall("msTypeofKind_", operand, ctx, node.location, (x: Symbol): Node[] => memberCases(t!, x, kindNameOf, ctx, node.location));
 	return makeBinary(kindRead, op2, makeString(name, node.location), node.location);
+}
+
+// `x instanceof Box` with a generic `Box` asks which union member `x` holds:
+// each instance has its own identity, and the members name the instances.
+function lowerGenericInstanceof(node: Node, ctx: TransformContext): Node | null {
+	const d = node.data as BinaryExprData;
+	const cls = d.operator == "instanceof" && d.right != null ? d.right.resolvedSym : null;
+	if (cls == null || cls.symbolKind != SymbolKind.Class || symGenericParams(cls) == "") return null;
+	const operand = lowerNode(d.left, ctx);
+	const t = operand.nodeType;
+	const u = t != null ? peelTransparentInstance(t) : null;
+	if (u == null || shapeOf(u) != Shape.Union || !instanceTestable(u, cls)) {
+		reportTransformError(ctx, `instanceof cannot test the generic class ${cls.name} on a '${t != null ? typeDisplayName(t) : "unknown"}' value: no union member names the instance`, node.location);
+		return node;
+	}
+	const loc = node.location;
+	if (ctx.raiserBackend && holdsAwaitable(u)) {
+		reportTransformError(ctx, `instanceof cannot test a '${typeDisplayName(u)}' value on the Raiser VM: a finished Promise is read as its value there, so its member cannot be told apart`, loc);
+		return node;
+	}
+	const held: Type = u;
+	const target: Symbol = cls;
+	const prefix = "msInstanceOf_" + hashToBase36(typeKey(cls.symbolType)) + "_";
+	return routineCall(prefix, operand, ctx, loc, (x: Symbol): Node[] => {
+		const order = armOrder(held, ctx, loc);
+		const body: Node[] = [];
+		for (let k = 0; k < order.length; k += 1) {
+			const answer = makeReturn(makeBool(derivesFromClass(held.typeChildren[order[k]], target), loc), loc);
+			if (k == order.length - 1) {
+				body.push(answer);
+			} else {
+				body.push(makeIf(holdsMember(held, x, order[k], ctx, loc), makeBlock([answer], loc), null, loc));
+			}
+		}
+		return body;
+	}, booleanType());
+}
+
+function holdsAwaitable(u: Type): boolean {
+	for (const m of u.typeChildren) if (isAwaitable(m)) return true;
+	return false;
+}
+
+// An instance of `cls` cannot hide behind an ancestor member; a union with no
+// member of `cls` at all answers false.
+function instanceTestable(u: Type, cls: Symbol): boolean {
+	if (genericInstanceMembers(u, cls) != null) return true;
+	for (const m of u.typeChildren) if (derivesFromClass(m, cls)) return false;
+	return true;
 }
 
 // The TS tag that alone tells the member of kind `name` apart: null when no
@@ -258,9 +309,9 @@ function tagLiteral(tag: string, typeofNode: Node): Node {
 	return lit;
 }
 
-function routineCall(prefix: string, operand: Node, ctx: TransformContext, loc: SourceLocation, body: (x: Symbol) => Node[]): Node {
-	const call = makeCall(makeTypedIdentResolved(nameRoutine(prefix, operand.nodeType!, body, ctx, loc), null, loc), [operand], loc);
-	call.nodeType = stringType();
+function routineCall(prefix: string, operand: Node, ctx: TransformContext, loc: SourceLocation, body: (x: Symbol) => Node[], returns: Type = stringType()): Node {
+	const call = makeCall(makeTypedIdentResolved(nameRoutine(prefix, operand.nodeType!, body, returns, ctx, loc), null, loc), [operand], loc);
+	call.nodeType = returns;
 	return call;
 }
 
@@ -287,7 +338,7 @@ function memberCases(source: Type, x: Symbol, nameOf: (t: Type) => string, ctx: 
 	return body;
 }
 
-function nameRoutine(prefix: string, source: Type, buildBody: (x: Symbol) => Node[], ctx: TransformContext, loc: SourceLocation): Symbol {
+function nameRoutine(prefix: string, source: Type, buildBody: (x: Symbol) => Node[], returns: Type, ctx: TransformContext, loc: SourceLocation): Symbol {
 	const name = prefix + hashToBase36(typeKey(source));
 	const at = _routineNames.indexOf(name);
 	if (at >= 0) return _routineSyms[at];
@@ -295,12 +346,12 @@ function nameRoutine(prefix: string, source: Type, buildBody: (x: Symbol) => Nod
 	_routineNames.push(name);
 	_routineSyms.push(sym);
 	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", source);
-	const fnNode = makeFnDecl(name, [valueSym], ["unknown"], makeBlock(buildBody(valueSym), loc), "", "string", loc);
+	const fnNode = makeFnDecl(name, [valueSym], ["unknown"], makeBlock(buildBody(valueSym), loc), "", typeDisplayName(returns), loc);
 	if (fnNode.nodeType == null || fnNode.nodeType.typeChildren == null || fnNode.nodeType.typeChildren.length != 1) {
 		throw new Error(`internal: the typeof routine for '${typeDisplayName(source)}' has no parameter type`);
 	}
 	fnNode.nodeType.typeChildren[0] = source;
-	fnNode.nodeType.typeReturn = stringType();
+	fnNode.nodeType.typeReturn = returns;
 	sym.symbolType = fnNode.nodeType;
 	fnNode.resolvedSym = sym;
 	_routineDecls.push(fnNode);

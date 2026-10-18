@@ -9,7 +9,7 @@ import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { noneType, int32Type, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrObjectRestNames, destrHasRuntimeLength } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
 import { nullishLowered } from "../coercion/nullishCoalesce";
-import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken, runtimeRef } from "../util";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind, makeWhile, makeBinary, makeAssign, makeExprStmt, makeBlock, makeHiddenAddr, makeTypedObjectLiteral, makeConditional, syntheticToken, runtimeRef, counterType, makeCounterStep } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -45,18 +45,19 @@ function arrayRestValue(base: Node, from: int32, restType: Type | null, loc: Sou
 	accDecl.resolvedSym = accSym;
 	accDecl.nodeType = restType;
 	items.push(accDecl);
-	const iSym = freshTempSym(ctx, "destri", int32Type());
+	const indexType = counterType(ctx);
+	const iSym = freshTempSym(ctx, "destri", indexType);
 	const iDecl = makeVarDecl(iSym.name, makeNumber(from, loc), DeclKind.Let, loc);
 	iDecl.resolvedSym = iSym;
-	iDecl.nodeType = int32Type();
+	iDecl.nodeType = indexType;
 	items.push(iDecl);
 	const lenMember = makeMember(base, "length", loc);
 	lenMember.nodeType = int32Type();
 	const iv0 = makeIdentResolved(iSym, loc);
-	iv0.nodeType = int32Type();
+	iv0.nodeType = indexType;
 	const cond = makeBinary(iv0, "<", lenMember, loc);
 	const iv1 = makeIdentResolved(iSym, loc);
-	iv1.nodeType = int32Type();
+	iv1.nodeType = indexType;
 	const refAcc = restType.kind == TypeKind.Ref && restType.typeReturn != null;
 	const elemAccess = makeArrayAccess(base, iv1, loc);
 	elemAccess.nodeType = refAcc ? restType.typeReturn.typeReturn : restType.typeReturn;
@@ -64,12 +65,7 @@ function arrayRestValue(base: Node, from: int32, restType: Type | null, loc: Sou
 	accRef.nodeType = restType;
 	const pushCall = makeCall(runtimeRef("msGenericArrayPush", loc), [refAcc ? accRef : makeHiddenAddr(accRef, loc), elemAccess], loc);
 	const pushStmt = makeExprStmt(pushCall, loc);
-	const iv2 = makeIdentResolved(iSym, loc);
-	iv2.nodeType = int32Type();
-	const iv3 = makeIdentResolved(iSym, loc);
-	iv3.nodeType = int32Type();
-	const incr = makeExprStmt(makeAssign(iv2, makeBinary(iv3, "+", makeNumber(1, loc), loc), loc), loc);
-	items.push(makeWhile(cond, makeBlock([pushStmt, incr], loc), loc));
+	items.push(makeWhile(cond, makeBlock([pushStmt, makeCounterStep(iSym, indexType, loc)], loc), loc));
 	const restRef = makeIdentResolved(accSym, loc);
 	restRef.nodeType = restType;
 	return restRef;

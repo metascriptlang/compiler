@@ -3,6 +3,8 @@ import {
 	Bytes,
 	InstructionAccount,
 	System,
+	createProgramAccount,
+	putPubkey,
 	putU64,
 	putU8,
 	unchecked,
@@ -11,14 +13,21 @@ import {
 	External,
 	ExternalMutable,
 	Program,
+	Signer,
 	Writable,
 	WritableSigner,
 	asAccount,
 } from "./typed";
 import { ProgramError } from "./error";
-import { invokeSigned } from "./invoke";
+import { invoke, invokeSigned } from "./invoke";
 import { associatedTokenAddress, isTokenProgram } from "./mint";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
+import {
+	ASSOCIATED_TOKEN_PROGRAM_ID,
+	Pubkey,
+	SYSTEM_PROGRAM_ID,
+	TOKEN_2022_PROGRAM_ID,
+	TOKEN_PROGRAM_ID,
+} from "./pubkey";
 import { SignerSeeds } from "./seed";
 
 export { associatedTokenAddress, initializeMint2 } from "./mint";
@@ -38,7 +47,7 @@ when (testBuild) {
 		writable,
 		writableSigner,
 	} from "./typed";
-	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
+	import { HostAccount, NOT_SIMULATED, REFUSED, invocations, logs, run, signerIs, textBytes } from "./host";
 	import {
 		associated,
 		findProgramAddressOf,
@@ -55,6 +64,13 @@ export enum TokenAccountState {
 }
 
 export struct Mint {
+	mintAuthority: Pubkey | null;
+	supply: uint64;
+	decimals: uint8;
+	freezeAuthority: Pubkey | null;
+}
+
+export struct InterfaceMint {
 	mintAuthority: Pubkey | null;
 	supply: uint64;
 	decimals: uint8;
@@ -82,6 +98,20 @@ export struct TokenAccount {
 	delegatedAmount: uint64;
 	closeAuthority: Pubkey | null;
 }
+
+export struct InterfaceTokenAccount {
+	mint: Pubkey;
+	owner: Pubkey;
+	amount: uint64;
+	delegate: Pubkey | null;
+	state: TokenAccountState;
+	nativeReserve: uint64 | null;
+	delegatedAmount: uint64;
+	closeAuthority: Pubkey | null;
+}
+
+type AnyMint = Mint | InterfaceMint;
+type AnyTokenAccount = TokenAccount | InterfaceTokenAccount;
 
 export enum ExtensionType {
 	Uninitialized = 0,
@@ -267,6 +297,51 @@ function extensionIn(data: Bytes, kind: ExtensionType): Result<Bytes, ProgramErr
 	return Result.err(ProgramError.invalidAccountData());
 }
 
+function unsupportedExtension(): ProgramError {
+	return ProgramError.custom(4200);
+}
+
+function isKind(found: uint64, kind: ExtensionType): boolean {
+	return found == ((kind as int32) as uint64);
+}
+
+function inertMintExtension(found: uint64): boolean {
+	return isKind(found, ExtensionType.MintCloseAuthority) ||
+		isKind(found, ExtensionType.InterestBearingConfig) ||
+		isKind(found, ExtensionType.MetadataPointer) ||
+		isKind(found, ExtensionType.TokenMetadata) ||
+		isKind(found, ExtensionType.GroupPointer) ||
+		isKind(found, ExtensionType.TokenGroup) ||
+		isKind(found, ExtensionType.GroupMemberPointer) ||
+		isKind(found, ExtensionType.TokenGroupMember) ||
+		isKind(found, ExtensionType.ScaledUiAmount);
+}
+
+function inertAccountExtension(found: uint64): boolean {
+	return isKind(found, ExtensionType.ImmutableOwner) ||
+		isKind(found, ExtensionType.MemoTransfer) ||
+		isKind(found, ExtensionType.CpiGuard);
+}
+
+function inertExtensions(data: Bytes, accountType: uint8): Result<void, ProgramError> {
+	if (data.length <= 165) { return Result.ok(null); }
+	const tlv = try data.range(166, data.length - 166);
+	let offset: uint64 = 0;
+	while (tlv.length - offset >= 4) {
+		const found = (try tlv.readU16(offset)) as uint64;
+		const length = (try tlv.readU16(offset + 2)) as uint64;
+		if (found == 0) { return Result.ok(null); }
+		if (length > tlv.length - offset - 4) {
+			return Result.err(ProgramError.invalidAccountData());
+		}
+		const inert = accountType == 1 ? inertMintExtension(found) : inertAccountExtension(found);
+		if (!inert) { return Result.err(unsupportedExtension()); }
+		offset = offset + 4 + length;
+	}
+	if (offset != tlv.length) { return Result.err(ProgramError.invalidAccountData()); }
+	return Result.ok(null);
+}
+
 function withExtensions(
 	data: Bytes,
 	base: uint64,
@@ -412,6 +487,131 @@ export function closeAccount(
 	);
 }
 
+export function burnChecked(
+	program: Pubkey,
+	account: Account,
+	mint: Account,
+	authority: Account,
+	amount: uint64,
+	decimals: uint8,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[10] = [];
+	let length = putU8(storage, 0, 15);
+	length = putU64(storage, length, amount);
+	length = putU8(storage, length, decimals);
+	return invokeSigned(
+		program,
+		[
+			InstructionAccount.writable(account),
+			InstructionAccount.writable(mint),
+			InstructionAccount.readonlySigner(authority),
+		],
+		storage,
+		length,
+		signers,
+	);
+}
+
+export function revoke(
+	program: Pubkey,
+	source: Account,
+	owner: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[1] = [];
+	const length = putU8(storage, 0, 5);
+	return invokeSigned(
+		program,
+		[InstructionAccount.writable(source), InstructionAccount.readonlySigner(owner)],
+		storage,
+		length,
+		signers,
+	);
+}
+
+export function approveChecked(
+	program: Pubkey,
+	source: Account,
+	mint: Account,
+	delegate: Account,
+	owner: Account,
+	amount: uint64,
+	decimals: uint8,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[10] = [];
+	let length = putU8(storage, 0, 13);
+	length = putU64(storage, length, amount);
+	length = putU8(storage, length, decimals);
+	return invokeSigned(
+		program,
+		[
+			InstructionAccount.writable(source),
+			InstructionAccount.readonly(mint),
+			InstructionAccount.readonly(delegate),
+			InstructionAccount.readonlySigner(owner),
+		],
+		storage,
+		length,
+		signers,
+	);
+}
+
+export enum AuthorityType {
+	MintTokens = 0,
+	FreezeAccount = 1,
+	AccountOwner = 2,
+	CloseAccount = 3,
+}
+
+export function setAuthority(
+	program: Pubkey,
+	target: Account,
+	authority: Account,
+	kind: AuthorityType,
+	next: Pubkey | null,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[35] = [];
+	let length = putU8(storage, 0, 6);
+	length = putU8(storage, length, kind as uint8);
+	if (next === null) {
+		length = putU8(storage, length, 0);
+	} else {
+		length = putU8(storage, length, 1);
+		length = putPubkey(storage, length, next);
+	}
+	return invokeSigned(
+		program,
+		[InstructionAccount.writable(target), InstructionAccount.readonlySigner(authority)],
+		storage,
+		length,
+		signers,
+	);
+}
+
+export function initializeAccount3(
+	program: Pubkey,
+	account: Account,
+	mint: Account,
+	owner: Pubkey,
+): Result<uint64, ProgramError> {
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[33] = [];
+	const length = putPubkey(storage, putU8(storage, 0, 18), owner);
+	return invoke(
+		program,
+		[InstructionAccount.writable(account), InstructionAccount.readonly(mint)],
+		storage,
+		length,
+	);
+}
+
 function createAssociated(
 	payer: Account,
 	associated: Account,
@@ -423,6 +623,9 @@ function createAssociated(
 	signers: Readonly<Span<SignerSeeds>>,
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program.key())) { return Result.err(ProgramError.incorrectProgramId()); }
+	if (systemProgram.key() != SYSTEM_PROGRAM_ID) {
+		return Result.err(ProgramError.incorrectProgramId());
+	}
 	let storage: uint8[1] = [];
 	const length = putU8(storage, 0, discriminator);
 	return invokeSigned(
@@ -466,12 +669,11 @@ export function createAssociatedTokenIdempotent(
 }
 
 export function acceptsOwner(this typeof Mint, owner: Pubkey): boolean {
-	return isTokenProgram(owner);
+	return owner.equals(TOKEN_PROGRAM_ID);
 }
 
 export function decode(this typeof Mint, data: Bytes): Result<Mint, ProgramError> {
-	const fits = data.length == 82 || (try hasExtensionLayout(data, 1) catch false);
-	if (!fits) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	if (data.length != 82) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	const decoded = mintFields(data);
 	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return decoded;
@@ -479,7 +681,7 @@ export function decode(this typeof Mint, data: Bytes): Result<Mint, ProgramError
 
 export function verify(this typeof Mint, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID)) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
 	if (!mintReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
@@ -487,12 +689,11 @@ export function verify(this typeof Mint, index: int32): Result<Account, ProgramE
 }
 
 export function acceptsOwner(this typeof TokenAccount, owner: Pubkey): boolean {
-	return isTokenProgram(owner);
+	return owner.equals(TOKEN_PROGRAM_ID);
 }
 
 export function decode(this typeof TokenAccount, data: Bytes): Result<TokenAccount, ProgramError> {
-	const fits = data.length == 165 || (try hasExtensionLayout(data, 2) catch false);
-	if (!fits) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	if (data.length != 165) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	const decoded = tokenAccountFields(data);
 	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return decoded;
@@ -500,26 +701,93 @@ export function decode(this typeof TokenAccount, data: Bytes): Result<TokenAccou
 
 export function verify(this typeof TokenAccount, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID)) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
 	if (!tokenAccountReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return Result.ok(found);
 }
 
-function tokenProgramOf(mint: External<Mint>): Pubkey {
+export function acceptsOwner(this typeof InterfaceMint, owner: Pubkey): boolean {
+	return isTokenProgram(owner);
+}
+
+export function decode(this typeof InterfaceMint, data: Bytes): Result<InterfaceMint, ProgramError> {
+	const fits = data.length == 82 || (try hasExtensionLayout(data, 1) catch false);
+	if (!fits || !inertExtensions(data, 1).ok) {
+		return Result.err(ProgramError.accountDidNotDeserialize());
+	}
+	const decoded = mintFields(data);
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const mint = decoded.value;
+	return Result.ok({
+		mintAuthority: mint.mintAuthority,
+		supply: mint.supply,
+		decimals: mint.decimals,
+		freezeAuthority: mint.freezeAuthority,
+	});
+}
+
+export function verify(this typeof InterfaceMint, index: int32): Result<Account, ProgramError> {
+	const found = try unchecked(index);
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	if (!mintReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const _inert = try inertExtensions(found.data(), 1);
+	return Result.ok(found);
+}
+
+export function acceptsOwner(this typeof InterfaceTokenAccount, owner: Pubkey): boolean {
+	return isTokenProgram(owner);
+}
+
+export function decode(
+	this typeof InterfaceTokenAccount,
+	data: Bytes,
+): Result<InterfaceTokenAccount, ProgramError> {
+	const fits = data.length == 165 || (try hasExtensionLayout(data, 2) catch false);
+	if (!fits || !inertExtensions(data, 2).ok) {
+		return Result.err(ProgramError.accountDidNotDeserialize());
+	}
+	const decoded = tokenAccountFields(data);
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const held = decoded.value;
+	return Result.ok({
+		mint: held.mint,
+		owner: held.owner,
+		amount: held.amount,
+		delegate: held.delegate,
+		state: held.state,
+		nativeReserve: held.nativeReserve,
+		delegatedAmount: held.delegatedAmount,
+		closeAuthority: held.closeAuthority,
+	});
+}
+
+export function verify(this typeof InterfaceTokenAccount, index: int32): Result<Account, ProgramError> {
+	const found = try unchecked(index);
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	if (!tokenAccountReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const _inert = try inertExtensions(found.data(), 2);
+	return Result.ok(found);
+}
+
+function tokenProgramOf<M extends AnyMint>(mint: External<M>): Pubkey {
 	return mint.asAccount().owner();
 }
 
-function mintDecimals(mint: External<Mint>): Result<uint8, ProgramError> {
+function mintDecimals<M extends AnyMint>(mint: External<M>): Result<uint8, ProgramError> {
 	const decoded = try mint.asAccount().readMint();
 	return Result.ok(decoded.decimals);
 }
 
-export function transferTokens(
-	from: ExternalMutable<TokenAccount>,
-	to: ExternalMutable<TokenAccount>,
-	mint: External<Mint>,
+export function transferTokens<A extends AnyTokenAccount, B extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	to: ExternalMutable<B>,
+	mint: External<M>,
 	authority: Account,
 	amount: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -537,9 +805,9 @@ export function transferTokens(
 	);
 }
 
-export function mintTokens(
-	mint: ExternalMutable<Mint>,
-	to: ExternalMutable<TokenAccount>,
+export function mintTokens<M extends AnyMint, A extends AnyTokenAccount>(
+	mint: ExternalMutable<M>,
+	to: ExternalMutable<A>,
 	authority: Account,
 	amount: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -548,8 +816,8 @@ export function mintTokens(
 	return mintTo(target.owner(), target, to.asAccount(), authority, amount, signers);
 }
 
-export function closeTokenAccount(
-	account: ExternalMutable<TokenAccount>,
+export function closeTokenAccount<A extends AnyTokenAccount>(
+	account: ExternalMutable<A>,
 	destination: Writable,
 	authority: Account,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -558,11 +826,186 @@ export function closeTokenAccount(
 	return closeAccount(closing.owner(), closing, destination.asAccount(), authority, signers);
 }
 
-export function createAssociatedFor(
+const TOKEN_ACCOUNT_LENGTH: uint64 = 165;
+
+function expectSigning(
+	account: Account,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<void, ProgramError> {
+	if (signers.length == 0 && !account.isSigner()) {
+		return Result.err(ProgramError.missingRequiredSignature());
+	}
+	return Result.ok(null);
+}
+
+function createdTokenAccount<M extends AnyMint>(
+	payer: WritableSigner,
+	target: Account,
+	mint: External<M>,
+	owner: Pubkey,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<uint64, ProgramError> {
+	const minted = mint.asAccount();
+	const program = minted.owner();
+	const _created = try createProgramAccount(
+		payer.asAccount(),
+		target,
+		TOKEN_ACCOUNT_LENGTH,
+		program,
+		signers,
+	);
+	return initializeAccount3(program, target, minted, owner);
+}
+
+export function createTokenAccount<M extends AnyMint>(
+	payer: WritableSigner,
+	account: WritableSigner,
+	mint: External<M>,
+	owner: Pubkey,
+): Result<uint64, ProgramError> {
+	return createdTokenAccount(payer, account.asAccount(), mint, owner, []);
+}
+
+export function createTokenAccount<M extends AnyMint>(
+	payer: WritableSigner,
+	account: Writable,
+	mint: External<M>,
+	owner: Pubkey,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const target = account.asAccount();
+	const _signing = try expectSigning(target, signers);
+	return createdTokenAccount(payer, target, mint, owner, signers);
+}
+
+function burned<A extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	mint: ExternalMutable<M>,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<uint64, ProgramError> {
+	const minted = mint.asAccount();
+	const decoded = try minted.readMint();
+	return burnChecked(
+		minted.owner(),
+		from.asAccount(),
+		minted,
+		authority,
+		amount,
+		decoded.decimals,
+		signers,
+	);
+}
+
+export function burnTokens<A extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	mint: ExternalMutable<M>,
+	authority: Signer,
+	amount: uint64,
+): Result<uint64, ProgramError> {
+	return burned(from, mint, authority.asAccount(), amount, []);
+}
+
+export function burnTokens<A extends AnyTokenAccount, M extends AnyMint>(
+	from: ExternalMutable<A>,
+	mint: ExternalMutable<M>,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	return burned(from, mint, authority, amount, signers);
+}
+
+export function setAuthorityOf<T extends AnyMint | AnyTokenAccount>(
+	target: ExternalMutable<T>,
+	kind: AuthorityType,
+	authority: Signer,
+	next: Pubkey | null,
+): Result<uint64, ProgramError> {
+	const held = target.asAccount();
+	return setAuthority(held.owner(), held, authority.asAccount(), kind, next);
+}
+
+export function setAuthorityOf<T extends AnyMint | AnyTokenAccount>(
+	target: ExternalMutable<T>,
+	kind: AuthorityType,
+	authority: Account,
+	next: Pubkey | null,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	const held = target.asAccount();
+	return setAuthority(held.owner(), held, authority, kind, next, signers);
+}
+
+function approved<A extends AnyTokenAccount, M extends AnyMint>(
+	source: ExternalMutable<A>,
+	mint: External<M>,
+	delegate: Account,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>>,
+): Result<uint64, ProgramError> {
+	const decimals = try mintDecimals(mint);
+	return approveChecked(
+		tokenProgramOf(mint),
+		source.asAccount(),
+		mint.asAccount(),
+		delegate,
+		authority,
+		amount,
+		decimals,
+		signers,
+	);
+}
+
+export function approveDelegate<A extends AnyTokenAccount, M extends AnyMint>(
+	source: ExternalMutable<A>,
+	mint: External<M>,
+	delegate: Account,
+	authority: Signer,
+	amount: uint64,
+): Result<uint64, ProgramError> {
+	return approved(source, mint, delegate, authority.asAccount(), amount, []);
+}
+
+export function approveDelegate<A extends AnyTokenAccount, M extends AnyMint>(
+	source: ExternalMutable<A>,
+	mint: External<M>,
+	delegate: Account,
+	authority: Account,
+	amount: uint64,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	return approved(source, mint, delegate, authority, amount, signers);
+}
+
+export function revokeDelegate<A extends AnyTokenAccount>(
+	source: ExternalMutable<A>,
+	authority: Signer,
+): Result<uint64, ProgramError> {
+	const held = source.asAccount();
+	return revoke(held.owner(), held, authority.asAccount());
+}
+
+export function revokeDelegate<A extends AnyTokenAccount>(
+	source: ExternalMutable<A>,
+	authority: Account,
+	signers: Readonly<Span<SignerSeeds>> = [],
+): Result<uint64, ProgramError> {
+	const _signing = try expectSigning(authority, signers);
+	const held = source.asAccount();
+	return revoke(held.owner(), held, authority, signers);
+}
+
+export function createAssociatedFor<M extends AnyMint>(
 	payer: WritableSigner,
 	associated: Writable,
 	wallet: Account,
-	mint: External<Mint>,
+	mint: External<M>,
 	systemProgram: Program<System>,
 	tokenProgram: Account,
 ): Result<uint64, ProgramError> {
@@ -579,10 +1022,10 @@ export function createAssociatedFor(
 	);
 }
 
-export function expectAssociated(
+export function expectAssociated<M extends AnyMint>(
 	tokenAccount: Pubkey,
 	wallet: Pubkey,
-	mint: External<Mint>,
+	mint: External<M>,
 ): Result<void, ProgramError> {
 	const mintKey = mint.asAccount().key();
 	const derived = try associatedTokenAddress(wallet, mintKey, tokenProgramOf(mint));
@@ -592,12 +1035,12 @@ export function expectAssociated(
 	return Result.ok(null);
 }
 
-export function expectTokenMint(token: TokenAccount, mint: Pubkey): Result<void, ProgramError> {
+export function expectTokenMint<A extends AnyTokenAccount>(token: A, mint: Pubkey): Result<void, ProgramError> {
 	if (token.mint != mint) { return Result.err(ProgramError.constraintTokenMint()); }
 	return Result.ok(null);
 }
 
-export function expectTokenOwner(token: TokenAccount, owner: Pubkey): Result<void, ProgramError> {
+export function expectTokenOwner<A extends AnyTokenAccount>(token: A, owner: Pubkey): Result<void, ProgramError> {
 	if (token.owner != owner) { return Result.err(ProgramError.constraintTokenOwner()); }
 	return Result.ok(null);
 }
@@ -910,19 +1353,19 @@ when (testBuild) {
 			);
 		}
 		if (op == 12) {
-			const minting = try externalMutable<Mint>(0);
-			const receiving = try externalMutable<TokenAccount>(1);
+			const minting = try externalMutable<InterfaceMint>(0);
+			const receiving = try externalMutable<InterfaceTokenAccount>(1);
 			return signed(mintTokens(minting, receiving, authority, 500), ["auth", [5]]);
 		}
 		if (op == 13) {
-			const closing = try externalMutable<TokenAccount>(1);
+			const closing = try externalMutable<InterfaceTokenAccount>(1);
 			const destination = try writable(3);
 			return signed(closeTokenAccount(closing, destination, authority), ["auth", [5]]);
 		}
 		if (op == 14) {
-			const from = try externalMutable<TokenAccount>(3);
-			const to = try externalMutable<TokenAccount>(1);
-			const typed = try external<Mint>(0);
+			const from = try externalMutable<InterfaceTokenAccount>(3);
+			const to = try externalMutable<InterfaceTokenAccount>(1);
+			const typed = try external<InterfaceMint>(0);
 			return signed(transferTokens(from, to, typed, authority, 250), ["auth", [5]]);
 		}
 		if (op == 15) {
@@ -930,6 +1373,8 @@ when (testBuild) {
 			const program = try account(5);
 			return createAssociatedToken(payer, target, authority, mint, system, program);
 		}
+		if (op == 16) { return initializeMint2((try account(5)).key(), mint, 6, authority.key(), null); }
+		if (op == 17) { return initializeMint2((try account(5)).key(), mint, 6, authority.key(), payer.key()); }
 		if (op == 0) { return mintTo(token, mint, target, authority, 500); }
 		if (op == 1) {
 			const extended = TOKEN_2022_PROGRAM_ID;
@@ -959,10 +1404,10 @@ when (testBuild) {
 			executable: true,
 		};
 		return [
-			holderOf(1, TOKEN_PROGRAM_ID, mintData(7, 500, 6)),
+			holderOf(1, TOKEN_PROGRAM_ID, mintData(3, 500, 6)),
 			holderOf(2, TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 0, 1)),
 			{ ...holderOf(3, keyOf(0), []), signer: true, writable: false },
-			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true },
+			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true, lamports: TOKEN_ACCOUNT_RENT },
 			{ ...holderOf(0, keyOf(0), []), writable: false, executable: true },
 			program,
 		];
@@ -979,7 +1424,9 @@ when (testBuild) {
 		const mintBytes: uint8[] = [7, 0xf4, 1, 0, 0, 0, 0, 0, 0];
 		assert sameBytes(minted.data, mintBytes);
 
-		assert resultOf(cpiAccounts(), 1, cpiEntry) == 0;
+		const extended = cpiAccounts();
+		for (const index of [0, 1, 3]) { extended[index].owner = TOKEN_2022_PROGRAM_ID; }
+		assert resultOf(extended, 1, cpiEntry) == 0;
 		const moved = invocations()[0];
 		assert moved.program.equals(TOKEN_2022_PROGRAM_ID);
 		assert moved.accounts[0].key.equals(keyOf(4)) && moved.accounts[0].writable;
@@ -997,44 +1444,121 @@ when (testBuild) {
 		assert sameBytes(closed.data, closeBytes);
 	}
 
+	const MINT_RENT: uint64 = 2 * (82 + 128) * 3480;
+
+	function zeros(count: int32): uint8[] {
+		const bytes: uint8[] = [];
+		pushZeros(bytes, count);
+		return bytes;
+	}
+
+	function blankMintAccounts(program: Pubkey): HostAccount[] {
+		const accounts = cpiAccounts();
+		accounts[0] = { ...holderOf(1, program, zeros(82)), lamports: MINT_RENT };
+		accounts[5].key = program;
+		return accounts;
+	}
+
 	test "initializeMint2 writes 35 bytes without a freeze authority and 67 with one" {
-		assert resultOf(cpiAccounts(), 3, cpiEntry) == 0;
+		assert resultOf(blankMintAccounts(TOKEN_PROGRAM_ID), 3, cpiEntry) == 0;
 		const plain = invocations()[0];
 		assert plain.accounts.length == 1;
 		assert plain.accounts[0].writable && !plain.accounts[0].signer;
 		assert plain.data.length == 35;
 		assert plain.data[0] == 20 && plain.data[1] == 6;
 		assert plain.data[2] == 3 && plain.data[34] == 0;
-		assert resultOf(cpiAccounts(), 4, cpiEntry) == 0;
+		assert resultOf(blankMintAccounts(TOKEN_PROGRAM_ID), 4, cpiEntry) == 0;
 		const frozen = invocations()[0];
 		assert frozen.data.length == 67;
 		assert frozen.data[34] == 1 && frozen.data[35] == 4;
 	}
 
+	test "initializeMint2 gives a blank mint its authorities and decimals, on either token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const plain = blankMintAccounts(program);
+			assert resultOf(plain, 16, cpiEntry) == 0;
+			const mint = plain[0].data;
+			assert mint.length == 82 && mint[0] == 1 && wordAt(keyAt(mint, 4), 0) == 3;
+			assert u64At(mint, 36) == 0 && mint[44] == 6 && mint[45] == 1 && mint[46] == 0;
+			const freezable = blankMintAccounts(program);
+			assert resultOf(freezable, 17, cpiEntry) == 0;
+			assert freezable[0].data[46] == 1 && wordAt(keyAt(freezable[0].data, 50), 0) == 4;
+		}
+	}
+
+	test "initializeMint2 is refused for a mint that is initialized, below rent, of another length or of another program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const extended = program == TOKEN_2022_PROGRAM_ID;
+			const again = blankMintAccounts(program);
+			assert resultOf(again, 16, cpiEntry) == 0;
+			assert resultOf(again, 17, cpiEntry) == ProgramError.custom(6).code;
+			assert again[0].data[46] == 0;
+			again[0].lamports = MINT_RENT - 1;
+			assert resultOf(again, 16, cpiEntry) == ProgramError.custom(extended ? 0 : 6).code;
+			const poor = blankMintAccounts(program);
+			poor[0].lamports = MINT_RENT - 1;
+			assert resultOf(poor, 16, cpiEntry) == ProgramError.custom(0).code;
+			assert poor[0].data[45] == 0;
+			for (const length of [81, 165]) {
+				const sized = blankMintAccounts(program);
+				sized[0].data = zeros(length);
+				assert resultOf(sized, 16, cpiEntry) == ProgramError.invalidAccountData().code;
+			}
+			const foreign = blankMintAccounts(program);
+			foreign[0].owner = extended ? TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
+			const input: uint8[] = [16];
+			const refused = run(keyOf(9), foreign, input, cpiEntry);
+			assert refusedWith(refused, ProgramError.incorrectProgramId(), extended ? "" : FOREIGN_WRITE);
+			assert foreign[0].data[45] == 0;
+		}
+	}
+
+	function associatedCpiAccounts(existing: boolean): HostAccount[] {
+		const accounts = cpiAccounts();
+		accounts[1].key = ataOf(3, 1, TOKEN_PROGRAM_ID);
+		if (!existing) {
+			accounts[1].owner = Pubkey.zero();
+			accounts[1].data = [];
+			accounts[1].lamports = 0;
+			accounts[3].data = [];
+			accounts[3].lamports = 10000000;
+		}
+		return accounts;
+	}
+
 	test "createAssociatedTokenIdempotent sends discriminator 1 with the six accounts in order" {
-		assert resultOf(cpiAccounts(), 5, cpiEntry) == 0;
+		assert resultOf(associatedCpiAccounts(true), 5, cpiEntry) == 0;
 		const created = invocations()[0];
 		assert created.program.equals(ASSOCIATED_TOKEN_PROGRAM_ID);
 		assert created.accounts.length == 6;
 		const funding = created.accounts[0];
 		assert funding.key.equals(keyOf(4)) && funding.signer && funding.writable;
-		assert created.accounts[1].key.equals(keyOf(2)) && created.accounts[1].writable;
+		assert created.accounts[1].key.equals(ataOf(3, 1, TOKEN_PROGRAM_ID)) && created.accounts[1].writable;
 		const program = created.accounts[5];
 		assert program.key.equals(TOKEN_PROGRAM_ID) && !program.writable;
 		assert created.data.length == 1 && created.data[0] == 1;
 	}
 
+	test "createAssociatedToken and its idempotent form refuse a system program account that is not System" {
+		for (const op of [15, 5]) {
+			const accounts = cpiAccounts();
+			accounts[1].lamports = 0;
+			accounts[3].lamports = 10000000;
+			accounts[4].key = keyOf(8);
+			assert resultOf(accounts, op as uint8, cpiEntry) == ProgramError.incorrectProgramId().code;
+			assert invocations().length == 0 && accounts[3].lamports == 10000000;
+		}
+	}
+
 	test "createAssociatedToken sends discriminator 0 with the six accounts and their flags" {
-		const accounts = cpiAccounts();
-		accounts[1].lamports = 0;
-		accounts[3].lamports = 10000000;
+		const accounts = associatedCpiAccounts(false);
 		assert resultOf(accounts, 15, cpiEntry) == 0;
 		const created = invocations()[0];
 		assert created.program.equals(ASSOCIATED_TOKEN_PROGRAM_ID);
 		assert created.accounts.length == 6;
 		assert created.accounts[0].key.equals(keyOf(4)) && created.accounts[0].writable;
 		assert created.accounts[0].signer;
-		assert created.accounts[1].key.equals(keyOf(2)) && created.accounts[1].writable;
+		assert created.accounts[1].key.equals(ataOf(3, 1, TOKEN_PROGRAM_ID)) && created.accounts[1].writable;
 		assert !created.accounts[1].signer;
 		assert created.accounts[2].key.equals(keyOf(3)) && !created.accounts[2].writable;
 		assert !created.accounts[2].signer;
@@ -1050,12 +1574,8 @@ when (testBuild) {
 
 	test "each token CPI sends the signer seeds it was given" {
 		for (const op of [7, 8, 9, 10, 11, 12, 13, 14]) {
-			const accounts = cpiAccounts();
-			if (op == 10) {
-				accounts[1].lamports = 0;
-				accounts[3].lamports = 10000000;
-			}
-			if (op == 14) { accounts[3].owner = TOKEN_PROGRAM_ID; }
+			const accounts = op == 10 || op == 11 ? associatedCpiAccounts(op == 11) : cpiAccounts();
+			if (op == 8 || op == 14) { accounts[3].owner = TOKEN_PROGRAM_ID; }
 			assert resultOf(accounts, op as uint8, cpiEntry) == 0;
 			const calls = invocations();
 			assert calls.length == 1 && calls[0].signers == 1;
@@ -1161,12 +1681,11 @@ when (testBuild) {
 }
 
 when (testBuild) {
-	import { Signer } from "./typed";
 	export struct TransferAccounts {
 		owner: Signer;
-		from: ExternalMutable<TokenAccount>;
-		to: ExternalMutable<TokenAccount>;
-		mint: External<Mint>;
+		from: ExternalMutable<InterfaceTokenAccount>;
+		to: ExternalMutable<InterfaceTokenAccount>;
+		mint: External<InterfaceMint>;
 	}
 
 	function typedTransferStep(): Result<uint64, ProgramError> {
@@ -1223,9 +1742,9 @@ when (testBuild) {
 
 	export struct DecoratedTokens {
 		owner: Signer;
-		mint: External<Mint>;
-		@associated(mint, owner) own: ExternalMutable<TokenAccount>;
-		@tokenMint(mint) @tokenAuthority(owner) plain: ExternalMutable<TokenAccount>;
+		mint: External<InterfaceMint>;
+		@associated(mint, owner) own: ExternalMutable<InterfaceTokenAccount>;
+		@tokenMint(mint) @tokenAuthority(owner) plain: ExternalMutable<InterfaceTokenAccount>;
 	}
 
 	function decoratedStep(): Result<uint64, ProgramError> {
@@ -1291,13 +1810,13 @@ when (testBuild) {
 		const op = try instructionData().readU8(0);
 		const found = try account(0);
 		if (op == 0) {
-			const lean = Mint.verify(0);
+			const lean = InterfaceMint.verify(0);
 			const full = found.readMint();
 			if (lean.ok != full.ok) { return Result.err(ProgramError.custom(8)); }
 			if (!lean.ok) { return Result.err(ProgramError.custom(7)); }
 			return Result.ok(0);
 		}
-		const lean = TokenAccount.verify(0);
+		const lean = InterfaceTokenAccount.verify(0);
 		const full = found.readTokenAccount();
 		if (lean.ok != full.ok) { return Result.err(ProgramError.custom(8)); }
 		if (!lean.ok) { return Result.err(ProgramError.custom(7)); }
@@ -1341,6 +1860,114 @@ when (testBuild) {
 			}
 		}
 		assert accepted > 20 && refused > 100;
+	}
+
+	function kindStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const data = (try account(0)).data();
+		if (op == 0) { const _checked = try Mint.verify(0); }
+		if (op == 1) { const _checked = try InterfaceMint.verify(0); }
+		if (op == 2) { const _checked = try TokenAccount.verify(0); }
+		if (op == 3) { const _checked = try InterfaceTokenAccount.verify(0); }
+		if (op == 4 && !Mint.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		if (op == 5 && !InterfaceMint.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		if (op == 6 && !TokenAccount.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		if (op == 7 && !InterfaceTokenAccount.decode(data).ok) { return Result.err(ProgramError.custom(1)); }
+		return Result.ok(0);
+	}
+
+	function kindEntry(): void {
+		const result = kindStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function verdict(program: Pubkey, data: uint8[], op: uint8): uint64 {
+		return resultOf([holderOf(1, program, data)], op, kindEntry);
+	}
+
+	function extendedAccount(kinds: int32[]): uint8[] {
+		const bytes = tokenAccountData(1, 3, 900, 1);
+		bytes.push(2);
+		for (const kind of kinds) {
+			pushU16(bytes, kind as uint64);
+			pushU16(bytes, 0);
+		}
+		return bytes;
+	}
+
+	test "Mint and TokenAccount accept only the legacy program's exact layout" {
+		const wrong = ProgramError.accountOwnedByWrongProgram().code;
+		const unreadable = ProgramError.accountDidNotDeserialize().code;
+		assert verdict(TOKEN_PROGRAM_ID, mintData(7, 500, 6), 0) == 0;
+		assert verdict(TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 900, 1), 2) == 0;
+		assert verdict(TOKEN_2022_PROGRAM_ID, mintData(7, 500, 6), 0) == wrong;
+		assert verdict(TOKEN_2022_PROGRAM_ID, tokenAccountData(1, 3, 900, 1), 2) == wrong;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([3]), 0) == wrong;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([7]), 2) == wrong;
+		assert verdict(TOKEN_PROGRAM_ID, extendedMint([3]), 0) == unreadable;
+		assert verdict(TOKEN_PROGRAM_ID, extendedAccount([7]), 2) == unreadable;
+		assert verdict(Pubkey.zero(), mintData(7, 500, 6), 0) == wrong;
+		assert verdict(TOKEN_PROGRAM_ID, mintData(7, 500, 6), 4) == 0;
+		assert verdict(TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 900, 1), 6) == 0;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([3]), 4) == 1;
+		assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([7]), 6) == 1;
+	}
+
+	test "InterfaceMint and InterfaceTokenAccount accept either program and the extensions that change no transfer" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			assert verdict(program, mintData(7, 500, 6), 1) == 0;
+			assert verdict(program, tokenAccountData(1, 3, 900, 1), 3) == 0;
+		}
+		assert verdict(Pubkey.zero(), mintData(7, 500, 6), 1) == ProgramError.accountOwnedByWrongProgram().code;
+		assert verdict(TOKEN_PROGRAM_ID, extendedMint([3]), 1) == ProgramError.accountDidNotDeserialize().code;
+		for (const kinds of [[3], [10], [18], [19], [20], [21], [22], [23], [25], [3, 10, 18, 25]]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint(kinds), 1) == 0;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint(kinds), 5) == 0;
+		}
+		for (const kinds of [[7], [8], [11], [7, 8, 11]]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount(kinds), 3) == 0;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount(kinds), 7) == 0;
+		}
+	}
+
+	test "InterfaceMint refuses every extension that is not known to leave a transfer and a balance as they read" {
+		const refused = ProgramError.custom(4200).code;
+		for (const kind of [1, 4, 6, 9, 12, 14, 16, 24, 26, 28, 29, 1000]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind]), 1) == refused;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind]), 5) == 1;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([3, kind]), 1) == refused;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind, 3]), 1) == refused;
+		}
+		for (const kind of [2, 5, 7, 8, 11, 13, 15, 17, 27]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedMint([kind]), 1) == refused;
+		}
+	}
+
+	test "InterfaceTokenAccount refuses every account extension that moves, holds back or hides an amount" {
+		const refused = ProgramError.custom(4200).code;
+		for (const kind of [2, 5, 13, 15, 17, 27, 28, 29, 1000]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([kind]), 3) == refused;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([kind]), 7) == 1;
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([7, kind]), 3) == refused;
+		}
+		for (const kind of [1, 3, 10, 18]) {
+			assert verdict(TOKEN_2022_PROGRAM_ID, extendedAccount([kind]), 3) == refused;
+		}
+	}
+
+	test "a malformed extension table is an invalid account, not an accepted or a refused extension" {
+		const invalid = ProgramError.invalidAccountData().code;
+		const over = extendedMint([3]);
+		over[168] = 200;
+		assert verdict(TOKEN_2022_PROGRAM_ID, over, 1) == invalid;
+		const trailing = extendedMint([3]);
+		pushZeros(trailing, 0);
+		trailing.push(0xff);
+		trailing.push(0xff);
+		assert verdict(TOKEN_2022_PROGRAM_ID, trailing, 1) == invalid;
+		const padded = extendedMint([3]);
+		pushZeros(padded, 8);
+		assert verdict(TOKEN_2022_PROGRAM_ID, padded, 1) == 0;
 	}
 
 	function wrongProgramStep(): Result<uint64, ProgramError> {
@@ -1388,5 +2015,1950 @@ when (testBuild) {
 		assert accounts[1].owner.equals(TOKEN_PROGRAM_ID) && accounts[1].data.length == 82;
 		assert accounts[1].lamports == 2 * (82 + 128) * 3480;
 		assert accounts[0].lamports == 10000000 - (accounts[1].lamports - 5);
+	}
+}
+
+when (testBuild) {
+	import { signedPda } from "./macro";
+	import { ProgramAddress } from "./pda";
+
+	const TOKEN_ACCOUNT_RENT: uint64 = 2 * (165 + 128) * 3480;
+
+	function u64At(bytes: uint8[], offset: int32): uint64 {
+		let value: uint64 = 0;
+		for (let index = offset + 7; index >= offset; index--) {
+			value = (value << 8) | (bytes[index] as uint64);
+		}
+		return value;
+	}
+
+	function keyAt(bytes: uint8[], offset: int32): Pubkey {
+		let key = Pubkey.zero();
+		for (let index = 0; index < 32; index++) { key.bytes[index] = bytes[offset + index]; }
+		return key;
+	}
+
+	function newTokenStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const owner = keyOf(8);
+		if (op == 4) {
+			return initializeAccount3(TOKEN_PROGRAM_ID, try account(1), try account(2), owner);
+		}
+		const payer = try writableSigner(0);
+		const mint = try external<InterfaceMint>(2);
+		if (op == 0) {
+			return createTokenAccount(payer, try writableSigner(1), mint, owner);
+		}
+		const fresh = try writable(1);
+		if (op == 1) { return createTokenAccount(payer, fresh, mint, owner); }
+		if (op == 2) {
+			return signedPda(
+				createTokenAccount(payer, fresh, mint, owner),
+				fresh.asAccount(),
+				["vault", mint],
+			);
+		}
+		const bump = try instructionData().readU8(1);
+		return signed(createTokenAccount(payer, fresh, mint, owner), ["vault", mint, [bump]]);
+	}
+
+	function newTokenEntry(): void {
+		const result = newTokenStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function newTokenAccounts(program: Pubkey, mint: uint8[]): HostAccount[] {
+		const payer: HostAccount = {
+			...holderOf(4, Pubkey.zero(), []),
+			lamports: 10000000,
+			signer: true,
+		};
+		const fresh: HostAccount = { ...holderOf(2, Pubkey.zero(), []), lamports: 0, signer: true };
+		return [payer, fresh, holderOf(1, program, mint)];
+	}
+
+	function vaultAddress(): ProgramAddress {
+		const mint = keyOf(1);
+		const found = findProgramAddressOf(keyOf(9), ["vault", mint]);
+		return found.ok ? found.value : { key: Pubkey.zero(), bump: 0 };
+	}
+
+	function keyBytes(key: Pubkey): uint8[] {
+		const bytes: uint8[] = [];
+		pushKey(bytes, key);
+		return bytes;
+	}
+
+	function vaultAccounts(program: Pubkey): HostAccount[] {
+		const accounts = newTokenAccounts(program, mintData(7, 500, 6));
+		accounts[1].key = vaultAddress().key;
+		accounts[1].signer = false;
+		return accounts;
+	}
+
+	function isFreshTokenAccount(holder: HostAccount, program: Pubkey, length: int32): boolean {
+		return holder.owner.equals(program) && holder.data.length == length &&
+			keyAt(holder.data, 0).equals(keyOf(1)) && keyAt(holder.data, 32).equals(keyOf(8)) &&
+			u64At(holder.data, 64) == 0 && holder.data[108] == 1 && u64At(holder.data, 72) == 0 &&
+			holder.data[129] == 0 && holder.data[109] == 0;
+	}
+
+	test "createTokenAccount creates the account for the mint's token program and initializes it for the mint and the owner" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = newTokenAccounts(program, mintData(7, 500, 6));
+			assert resultOf(accounts, 0, newTokenEntry) == 0;
+			assert isFreshTokenAccount(accounts[1], program, 165);
+			assert accounts[1].lamports == TOKEN_ACCOUNT_RENT;
+			assert accounts[0].lamports == 10000000 - TOKEN_ACCOUNT_RENT;
+			const calls = invocations();
+			assert calls.length == 2 && calls[0].program.isZero() && calls[0].data[0] == 13;
+			assert calls[0].data[12] == 165 && keyAt(calls[0].data, 20).equals(program);
+			const initialized = calls[1];
+			assert initialized.program.equals(program) && initialized.accounts.length == 2;
+			assert initialized.accounts[0].key.equals(keyOf(2)) && initialized.accounts[0].writable;
+			assert !initialized.accounts[0].signer;
+			assert initialized.accounts[1].key.equals(keyOf(1));
+			assert !initialized.accounts[1].writable && !initialized.accounts[1].signer;
+			assert initialized.data.length == 33 && initialized.data[0] == 18;
+			assert keyAt(initialized.data, 1).equals(keyOf(8));
+		}
+	}
+
+	test "createTokenAccount at an address that did not sign and has no seeds is refused before any CPI" {
+		const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mintData(7, 500, 6));
+		accounts[1].signer = false;
+		assert resultOf(accounts, 0, newTokenEntry) == ProgramError.accountNotSigner().code;
+		assert resultOf(accounts, 1, newTokenEntry) == ProgramError.missingRequiredSignature().code;
+		assert invocations().length == 0 && accounts[1].data.length == 0;
+	}
+
+	test "createTokenAccount under signedPda creates the account at the canonical address of the seeds" {
+		const accounts = vaultAccounts(TOKEN_PROGRAM_ID);
+		assert resultOf(accounts, 2, newTokenEntry) == 0;
+		assert isFreshTokenAccount(accounts[1], TOKEN_PROGRAM_ID, 165);
+		const created = invocations()[0];
+		assert created.signers == 1;
+		const seeds: uint8[][] = [textBytes("vault"), keyBytes(keyOf(1)), [vaultAddress().bump]];
+		assert signerIs(created, 0, seeds);
+		assert invocations()[1].signers == 0;
+		const elsewhere = vaultAccounts(TOKEN_PROGRAM_ID);
+		elsewhere[1].key = keyOf(2);
+		assert resultOf(elsewhere, 2, newTokenEntry) == ProgramError.constraintSeeds().code;
+		assert invocations().length == 0;
+	}
+
+	test "createTokenAccount under signed creates the account only at the address its seeds sign for" {
+		const accounts = vaultAccounts(TOKEN_2022_PROGRAM_ID);
+		const data: uint8[] = [3, vaultAddress().bump];
+		assert run(keyOf(9), accounts, data, newTokenEntry).result == 0;
+		assert isFreshTokenAccount(accounts[1], TOKEN_2022_PROGRAM_ID, 165);
+		const elsewhere = vaultAccounts(TOKEN_2022_PROGRAM_ID);
+		elsewhere[1].key = keyOf(2);
+		const refused = run(keyOf(9), elsewhere, data, newTokenEntry);
+		assert runtimeRefused(refused, ESCALATED);
+		assert elsewhere[1].data.length == 0 && elsewhere[1].owner.isZero();
+	}
+
+	test "createTokenAccount refuses an address that already holds a token account and leaves it intact" {
+		const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mintData(7, 500, 6));
+		accounts[1].owner = TOKEN_PROGRAM_ID;
+		accounts[1].data = tokenAccountData(1, 3, 77, 1);
+		accounts[1].lamports = TOKEN_ACCOUNT_RENT;
+		assert resultOf(accounts, 0, newTokenEntry) == ProgramError.custom(0).code;
+		assert u64At(accounts[1].data, 64) == 77 && keyAt(accounts[1].data, 32).equals(keyOf(3));
+		assert resultOf(accounts, 4, newTokenEntry) == ProgramError.custom(6).code;
+		assert u64At(accounts[1].data, 64) == 77 && keyAt(accounts[1].data, 32).equals(keyOf(3));
+	}
+
+	function mintExtensionLength(kind: int32): int32 {
+		return match (kind) {
+			1 => 108,
+			3 => 32,
+			14 => 64,
+			26 => 33,
+			6 => 1,
+			10 => 52,
+			18 => 64,
+			25 => 56,
+			_ => 0,
+		};
+	}
+
+	function extendedMint(kinds: int32[]): uint8[] {
+		const bytes = mintData(7, 500, 6);
+		pushZeros(bytes, 83);
+		bytes.push(1);
+		for (const kind of kinds) {
+			pushU16(bytes, kind as uint64);
+			pushU16(bytes, mintExtensionLength(kind) as uint64);
+			pushZeros(bytes, mintExtensionLength(kind));
+		}
+		return bytes;
+	}
+
+	test "createTokenAccount sizes a Token-2022 account at 165 bytes for a mint whose extensions require none" {
+		for (const kinds of [[] as int32[], [3], [10], [18], [25], [3, 10, 18, 25]]) {
+			const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, kinds.length == 0 ? mintData(7, 500, 6) : extendedMint(kinds));
+			assert resultOf(accounts, 0, newTokenEntry) == 0;
+			assert accounts[1].data.length == 165 && invocations()[0].data[12] == 165;
+			assert accounts[1].lamports == 2 * (165 + 128) * 3480;
+		}
+	}
+
+	test "createTokenAccount refuses a Token-2022 mint with a fee, a hook, a pause switch, a fixed owner or a default state" {
+		for (const kinds of [[1], [9], [14], [26], [6], [3, 1]]) {
+			const accounts = newTokenAccounts(TOKEN_2022_PROGRAM_ID, extendedMint(kinds));
+			assert resultOf(accounts, 0, newTokenEntry) == ProgramError.custom(4200).code;
+			assert invocations().length == 0 && accounts[1].data.length == 0;
+		}
+	}
+
+	test "a token account created for the native mint holds the lamports above its rent reserve" {
+		const native = Pubkey.parse("So11111111111111111111111111111111111111112");
+		assert native.ok;
+		if (native.ok) {
+			const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mintData(7, 0, 9));
+			accounts[2].key = native.value;
+			accounts[1].lamports = TOKEN_ACCOUNT_RENT + 5000;
+			assert resultOf(accounts, 0, newTokenEntry) == 0;
+			assert accounts[0].lamports == 10000000;
+			assert accounts[1].lamports == TOKEN_ACCOUNT_RENT + 5000;
+			assert u64At(accounts[1].data, 64) == 5000 && accounts[1].data[109] == 1;
+			assert u64At(accounts[1].data, 113) == TOKEN_ACCOUNT_RENT;
+		}
+	}
+
+	function blankTokenAccounts(mint: uint8[]): HostAccount[] {
+		const accounts = newTokenAccounts(TOKEN_PROGRAM_ID, mint);
+		accounts[1].owner = TOKEN_PROGRAM_ID;
+		accounts[1].data = tokenAccountData(0, 0, 0, 0);
+		accounts[1].lamports = TOKEN_ACCOUNT_RENT;
+		return accounts;
+	}
+
+	test "initializeAccount3 is refused by the token program for a mint that is not initialized, a mint of another program and an account below rent" {
+		assert resultOf(blankTokenAccounts(mintData(7, 500, 6)), 4, newTokenEntry) == 0;
+		const blank = mintData(7, 500, 6);
+		blank[45] = 0;
+		assert resultOf(blankTokenAccounts(blank), 4, newTokenEntry) == ProgramError.custom(2).code;
+		const foreign = blankTokenAccounts(mintData(7, 500, 6));
+		foreign[2].owner = TOKEN_2022_PROGRAM_ID;
+		assert resultOf(foreign, 4, newTokenEntry) == ProgramError.incorrectProgramId().code;
+		const poor = blankTokenAccounts(mintData(7, 500, 6));
+		poor[1].lamports = TOKEN_ACCOUNT_RENT - 1;
+		assert resultOf(poor, 4, newTokenEntry) == ProgramError.custom(0).code;
+		assert poor[1].data[108] == 0;
+		const short = blankTokenAccounts(mintData(7, 500, 6));
+		short[1].data.pop();
+		assert resultOf(short, 4, newTokenEntry) == ProgramError.invalidAccountData().code;
+	}
+
+	test "initializeAccount3 on an account the token program does not own is refused as the runtime refuses the write" {
+		const foreign = blankTokenAccounts(mintData(7, 500, 6));
+		foreign[1].owner = keyOf(9);
+		const input: uint8[] = [4];
+		const refused = run(keyOf(9), foreign, input, newTokenEntry);
+		assert runtimeRefused(refused, FOREIGN_WRITE);
+		assert foreign[1].data[108] == 0;
+	}
+}
+
+when (testBuild) {
+	import { signer } from "./typed";
+	import { programAddressOf } from "./macro";
+	import { HostRun } from "./host";
+
+	function burnStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const amount = try instructionData().readU64(1);
+		const authority = try account(2);
+		if (op == 3) {
+			const program = (try account(1)).owner();
+			return burnChecked(program, try account(0), try account(1), authority, amount, 5);
+		}
+		const from = try externalMutable<InterfaceTokenAccount>(0);
+		const mint = try externalMutable<InterfaceMint>(1);
+		if (op == 0) { return burnTokens(from, mint, try signer(2), amount); }
+		if (op == 1) { return burnTokens(from, mint, authority, amount); }
+		return signed(burnTokens(from, mint, authority, amount), ["auth", [5]]);
+	}
+
+	function burnEntry(): void {
+		const result = burnStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function burnAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(4, program, tokenAccountData(1, 3, 900, 1)),
+			holderOf(1, program, mintData(7, 5000, 6)),
+			{ ...holderOf(3, Pubkey.zero(), []), signer: true, writable: false },
+		];
+	}
+
+	function burnRun(accounts: HostAccount[], op: uint8, amount: uint64): HostRun {
+		const data: uint8[] = [op];
+		pushU64(data, amount);
+		return run(keyOf(9), accounts, data, burnEntry);
+	}
+
+	function setKeyAt(bytes: uint8[], offset: int32, key: Pubkey): void {
+		for (let index = 0; index < 32; index++) { bytes[offset + index] = key.bytes[index]; }
+	}
+
+	function withDelegate(bytes: uint8[], delegate: Pubkey, allowance: uint64): uint8[] {
+		bytes[72] = 1;
+		setKeyAt(bytes, 76, delegate);
+		for (let index = 0; index < 8; index++) {
+			bytes[121 + index] = ((allowance >> ((index * 8) as uint64)) & 255) as uint8;
+		}
+		return bytes;
+	}
+
+	function authorityPda(): Pubkey {
+		const found = programAddressOf(keyOf(9), ["auth", [5]]);
+		return found.ok ? found.value : Pubkey.zero();
+	}
+
+	test "burnTokens takes the amount from the account and the supply, with the mint's decimals and token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = burnAccounts(program);
+			assert burnRun(accounts, 0, 250).result == 0;
+			assert u64At(accounts[0].data, 64) == 650 && u64At(accounts[1].data, 36) == 4750;
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 3 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(4)) && sent.accounts[0].writable;
+			assert sent.accounts[1].key.equals(keyOf(1)) && sent.accounts[1].writable;
+			assert !sent.accounts[0].signer && !sent.accounts[1].signer;
+			assert sent.accounts[2].key.equals(keyOf(3)) && sent.accounts[2].signer;
+			assert !sent.accounts[2].writable;
+			const burnBytes: uint8[] = [15, 250, 0, 0, 0, 0, 0, 0, 0, 6];
+			assert sameBytes(sent.data, burnBytes);
+		}
+	}
+
+	test "burnTokens is refused for more than the account holds, another authority, another mint and a frozen account" {
+		const beyond = burnAccounts(TOKEN_PROGRAM_ID);
+		assert burnRun(beyond, 0, 901).result == ProgramError.custom(1).code;
+		const stranger = burnAccounts(TOKEN_PROGRAM_ID);
+		stranger[2].key = keyOf(5);
+		assert burnRun(stranger, 0, 250).result == ProgramError.custom(4).code;
+		const otherMint = burnAccounts(TOKEN_PROGRAM_ID);
+		otherMint[1].key = keyOf(6);
+		assert burnRun(otherMint, 0, 250).result == ProgramError.custom(3).code;
+		const frozen = burnAccounts(TOKEN_PROGRAM_ID);
+		frozen[0].data[108] = 2;
+		assert burnRun(frozen, 0, 250).result == ProgramError.custom(17).code;
+		for (const refused of [beyond, stranger, otherMint, frozen]) {
+			assert u64At(refused[0].data, 64) == 900 && u64At(refused[1].data, 36) == 5000;
+		}
+	}
+
+	test "burnTokens by an authority that did not sign is refused before any CPI" {
+		const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+		accounts[2].signer = false;
+		assert burnRun(accounts, 0, 250).result == ProgramError.accountNotSigner().code;
+		assert burnRun(accounts, 1, 250).result == ProgramError.missingRequiredSignature().code;
+		assert invocations().length == 0 && u64At(accounts[0].data, 64) == 900;
+	}
+
+	test "burnTokens under signed burns for a PDA authority and only for the PDA its seeds derive" {
+		const accounts = burnAccounts(TOKEN_2022_PROGRAM_ID);
+		setKeyAt(accounts[0].data, 32, authorityPda());
+		accounts[2].key = authorityPda();
+		accounts[2].signer = false;
+		assert burnRun(accounts, 2, 250).result == 0;
+		assert u64At(accounts[0].data, 64) == 650 && u64At(accounts[1].data, 36) == 4750;
+		assert signerIs(invocations()[0], 0, authSigner());
+		const stranger = burnAccounts(TOKEN_2022_PROGRAM_ID);
+		stranger[2].signer = false;
+		const refused = burnRun(stranger, 2, 250);
+		assert runtimeRefused(refused, ESCALATED);
+		assert u64At(stranger[0].data, 64) == 900;
+	}
+
+	test "a delegate burns within its allowance, which the burn spends" {
+		const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+		accounts[0].data = withDelegate(tokenAccountData(1, 8, 900, 1), keyOf(3), 300);
+		assert burnRun(accounts, 0, 301).result == ProgramError.custom(1).code;
+		assert u64At(accounts[0].data, 121) == 300 && u64At(accounts[0].data, 64) == 900;
+		assert burnRun(accounts, 0, 100).result == 0;
+		assert u64At(accounts[0].data, 64) == 800 && u64At(accounts[0].data, 121) == 200;
+		assert accounts[0].data[72] == 1;
+		assert burnRun(accounts, 0, 200).result == 0;
+		assert u64At(accounts[0].data, 64) == 600 && u64At(accounts[0].data, 121) == 0;
+		assert accounts[0].data[72] == 0;
+		assert burnRun(accounts, 0, 1).result == ProgramError.custom(4).code;
+	}
+
+	test "any signer burns from an account the System program or the incinerator owns" {
+		const incinerator = Pubkey.parse("1nc1nerator11111111111111111111111111111111");
+		assert incinerator.ok;
+		if (incinerator.ok) {
+			for (const holder of [Pubkey.zero(), incinerator.value]) {
+				const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+				setKeyAt(accounts[0].data, 32, holder);
+				assert burnRun(accounts, 0, 250).result == 0;
+				assert u64At(accounts[0].data, 64) == 650 && u64At(accounts[1].data, 36) == 4750;
+			}
+		}
+	}
+
+	test "burnChecked is refused for decimals that are not the mint's, a native account and an account of another token program" {
+		const accounts = burnAccounts(TOKEN_PROGRAM_ID);
+		assert burnRun(accounts, 3, 250).result == ProgramError.custom(18).code;
+		const native = burnAccounts(TOKEN_PROGRAM_ID);
+		native[0].data[109] = 1;
+		assert burnRun(native, 0, 250).result == ProgramError.custom(10).code;
+		const mixed = burnAccounts(TOKEN_PROGRAM_ID);
+		mixed[0].owner = TOKEN_2022_PROGRAM_ID;
+		const refused = burnRun(mixed, 0, 250);
+		assert runtimeRefused(refused, FOREIGN_WRITE);
+		assert u64At(mixed[0].data, 64) == 900 && u64At(mixed[1].data, 36) == 5000;
+	}
+
+	function authorityStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const kind = (try instructionData().readU8(1)) as AuthorityType;
+		const next: Pubkey | null = (try instructionData().readU8(2)) == 1 ? keyOf(6) : null;
+		const authority = try account(1);
+		if (op == 5) {
+			const target = try account(0);
+			return setAuthority(target.owner(), target, authority, kind, next);
+		}
+		if (op >= 3) {
+			const held = try externalMutable<InterfaceTokenAccount>(0);
+			if (op == 3) { return setAuthorityOf(held, kind, try signer(1), next); }
+			return signed(setAuthorityOf(held, kind, authority, next), ["auth", [5]]);
+		}
+		const mint = try externalMutable<InterfaceMint>(0);
+		if (op == 0) { return setAuthorityOf(mint, kind, try signer(1), next); }
+		if (op == 1) { return setAuthorityOf(mint, kind, authority, next); }
+		return signed(setAuthorityOf(mint, kind, authority, next), ["auth", [5]]);
+	}
+
+	function authorityEntry(): void {
+		const result = authorityStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function signingAs(word: uint64): HostAccount {
+		return { ...holderOf(word, Pubkey.zero(), []), signer: true, writable: false };
+	}
+
+	function mintAuthorityAccounts(program: Pubkey): HostAccount[] {
+		return [holderOf(1, program, mintData(7, 5000, 6)), signingAs(7)];
+	}
+
+	function ownerAuthorityAccounts(program: Pubkey): HostAccount[] {
+		return [holderOf(4, program, tokenAccountData(1, 3, 900, 1)), signingAs(3)];
+	}
+
+	function authorityRun(
+		accounts: HostAccount[],
+		op: uint8,
+		kind: AuthorityType,
+		next: boolean,
+	): HostRun {
+		const data: uint8[] = [op, kind as uint8, next ? 1 : 0];
+		return run(keyOf(9), accounts, data, authorityEntry);
+	}
+
+	test "setAuthorityOf hands a mint's mint authority to another key through the mint's token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = mintAuthorityAccounts(program);
+			assert authorityRun(accounts, 0, AuthorityType.MintTokens, true).result == 0;
+			assert accounts[0].data[0] == 1 && keyAt(accounts[0].data, 4).equals(keyOf(6));
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 2 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable;
+			assert !sent.accounts[0].signer;
+			assert sent.accounts[1].key.equals(keyOf(7)) && sent.accounts[1].signer;
+			assert !sent.accounts[1].writable;
+			const expected: uint8[] = [6, 0, 1];
+			pushKey(expected, keyOf(6));
+			assert sameBytes(sent.data, expected);
+			const former = authorityRun(accounts, 0, AuthorityType.MintTokens, true);
+			assert former.result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "setAuthorityOf with no next authority fixes the supply, and a fixed supply stays fixed" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = mintAuthorityAccounts(program);
+			assert authorityRun(accounts, 0, AuthorityType.MintTokens, false).result == 0;
+			assert accounts[0].data[0] == 0;
+			const left = program.equals(TOKEN_PROGRAM_ID) ? keyOf(7) : Pubkey.zero();
+			assert keyAt(accounts[0].data, 4).equals(left);
+			const cleared: uint8[] = [6, 0, 0];
+			assert sameBytes(invocations()[0].data, cleared);
+			const again = authorityRun(accounts, 0, AuthorityType.MintTokens, true);
+			assert again.result == ProgramError.custom(5).code && accounts[0].data[0] == 0;
+		}
+	}
+
+	test "setAuthorityOf changes a mint's freeze authority only where the mint has one" {
+		const accounts = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		const never = authorityRun(accounts, 0, AuthorityType.FreezeAccount, true);
+		assert never.result == ProgramError.custom(16).code && accounts[0].data[46] == 0;
+		accounts[0].data[46] = 1;
+		setKeyAt(accounts[0].data, 50, keyOf(7));
+		assert authorityRun(accounts, 0, AuthorityType.FreezeAccount, true).result == 0;
+		assert accounts[0].data[46] == 1 && keyAt(accounts[0].data, 50).equals(keyOf(6));
+		assert keyAt(accounts[0].data, 4).equals(keyOf(7));
+		accounts[1].key = keyOf(6);
+		assert authorityRun(accounts, 0, AuthorityType.FreezeAccount, false).result == 0;
+		assert accounts[0].data[46] == 0;
+	}
+
+	test "setAuthorityOf hands a token account to another owner and drops its delegate" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = ownerAuthorityAccounts(program);
+			accounts[0].data = withDelegate(accounts[0].data, keyOf(8), 300);
+			const kept = authorityRun(accounts, 3, AuthorityType.AccountOwner, false);
+			assert kept.result == ProgramError.custom(12).code;
+			assert keyAt(accounts[0].data, 32).equals(keyOf(3)) && accounts[0].data[72] == 1;
+			assert authorityRun(accounts, 3, AuthorityType.AccountOwner, true).result == 0;
+			assert keyAt(accounts[0].data, 32).equals(keyOf(6));
+			assert u64At(accounts[0].data, 64) == 900;
+			assert accounts[0].data[72] == 0 && u64At(accounts[0].data, 121) == 0;
+			assert accounts[0].data[129] == 1 && keyAt(accounts[0].data, 133).equals(keyOf(3));
+			assert invocations()[0].program.equals(program);
+			const former = authorityRun(accounts, 3, AuthorityType.AccountOwner, true);
+			assert former.result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "a close authority is changed by itself when the account has one and by the owner when it has none" {
+		const accounts = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		setKeyAt(accounts[0].data, 133, keyOf(8));
+		const byOwner = authorityRun(accounts, 3, AuthorityType.CloseAccount, true);
+		assert byOwner.result == ProgramError.custom(4).code;
+		accounts[1].key = keyOf(8);
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, false).result == 0;
+		assert accounts[0].data[129] == 0 && keyAt(accounts[0].data, 32).equals(keyOf(3));
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, true).result
+			== ProgramError.custom(4).code;
+		accounts[1].key = keyOf(3);
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, true).result == 0;
+		assert accounts[0].data[129] == 1 && keyAt(accounts[0].data, 133).equals(keyOf(6));
+	}
+
+	test "setAuthorityOf is refused for a frozen account and for an authority the target does not have" {
+		const frozen = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		frozen[0].data[108] = 2;
+		const cold = authorityRun(frozen, 3, AuthorityType.AccountOwner, true);
+		assert cold.result == ProgramError.custom(17).code;
+		assert keyAt(frozen[0].data, 32).equals(keyOf(3));
+		const held = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		for (const kind of [AuthorityType.MintTokens, AuthorityType.FreezeAccount]) {
+			assert authorityRun(held, 3, kind, true).result == ProgramError.custom(15).code;
+		}
+		const minted = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		for (const kind of [AuthorityType.AccountOwner, AuthorityType.CloseAccount]) {
+			assert authorityRun(minted, 0, kind, true).result == ProgramError.custom(15).code;
+		}
+		assert keyAt(minted[0].data, 4).equals(keyOf(7));
+	}
+
+	test "setAuthorityOf by an authority that did not sign is refused before any CPI" {
+		const accounts = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		accounts[1].signer = false;
+		const proof = authorityRun(accounts, 0, AuthorityType.MintTokens, true);
+		assert proof.result == ProgramError.accountNotSigner().code;
+		const bare = authorityRun(accounts, 1, AuthorityType.MintTokens, true);
+		assert bare.result == ProgramError.missingRequiredSignature().code;
+		assert invocations().length == 0 && keyAt(accounts[0].data, 4).equals(keyOf(7));
+	}
+
+	test "setAuthorityOf under signed changes what a PDA of the program holds, mint or token account" {
+		const minted = mintAuthorityAccounts(TOKEN_2022_PROGRAM_ID);
+		setKeyAt(minted[0].data, 4, authorityPda());
+		minted[1].key = authorityPda();
+		minted[1].signer = false;
+		assert authorityRun(minted, 2, AuthorityType.MintTokens, true).result == 0;
+		assert keyAt(minted[0].data, 4).equals(keyOf(6));
+		assert signerIs(invocations()[0], 0, authSigner());
+		const held = ownerAuthorityAccounts(TOKEN_PROGRAM_ID);
+		setKeyAt(held[0].data, 32, authorityPda());
+		setKeyAt(held[0].data, 133, authorityPda());
+		held[1].key = authorityPda();
+		held[1].signer = false;
+		assert authorityRun(held, 4, AuthorityType.CloseAccount, true).result == 0;
+		assert keyAt(held[0].data, 133).equals(keyOf(6));
+		const stranger = mintAuthorityAccounts(TOKEN_PROGRAM_ID);
+		stranger[1].signer = false;
+		const refused = authorityRun(stranger, 2, AuthorityType.MintTokens, true);
+		assert runtimeRefused(refused, ESCALATED);
+		assert keyAt(stranger[0].data, 4).equals(keyOf(7));
+	}
+
+	test "setAuthority on an account that is neither a mint nor a token account, or not initialized, is refused" {
+		const neither: uint64[] = [
+			ProgramError.invalidArgument().code,
+			ProgramError.invalidAccountData().code,
+		];
+		const empty: uint64[] = [
+			ProgramError.uninitializedAccount().code,
+			ProgramError.invalidAccountData().code,
+		];
+		const programs: Pubkey[] = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
+		for (let index = 0; index < 2; index++) {
+			const other = mintAuthorityAccounts(programs[index]);
+			other[0].data.push(0);
+			assert authorityRun(other, 5, AuthorityType.MintTokens, true).result == neither[index];
+			const unminted = mintAuthorityAccounts(programs[index]);
+			unminted[0].data[45] = 0;
+			assert authorityRun(unminted, 5, AuthorityType.MintTokens, true).result == empty[index];
+			const unheld = ownerAuthorityAccounts(programs[index]);
+			unheld[0].data[108] = 0;
+			assert authorityRun(unheld, 5, AuthorityType.AccountOwner, true).result == empty[index];
+		}
+	}
+
+	test "a Token-2022 account with an immutable owner keeps its owner and still takes a close authority" {
+		const accounts = ownerAuthorityAccounts(TOKEN_2022_PROGRAM_ID);
+		for (const byte of [2, 7, 0, 0, 0]) { accounts[0].data.push(byte as uint8); }
+		const kept = authorityRun(accounts, 3, AuthorityType.AccountOwner, true);
+		assert kept.result == ProgramError.custom(34).code;
+		assert keyAt(accounts[0].data, 32).equals(keyOf(3));
+		assert authorityRun(accounts, 3, AuthorityType.CloseAccount, true).result == 0;
+		assert keyAt(accounts[0].data, 133).equals(keyOf(6));
+	}
+
+	function delegateStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const amount = try instructionData().readU64(1);
+		const source = try externalMutable<InterfaceTokenAccount>(0);
+		const delegate = try account(2);
+		const authority = try account(3);
+		if (op == 3) { return revokeDelegate(source, try signer(3)); }
+		if (op == 4) { return revokeDelegate(source, authority); }
+		if (op == 5) { return signed(revokeDelegate(source, authority), ["auth", [5]]); }
+		if (op == 6) {
+			const minted = try account(1);
+			return approveChecked(
+				minted.owner(),
+				try account(0),
+				minted,
+				delegate,
+				authority,
+				amount,
+				5,
+			);
+		}
+		const mint = try external<InterfaceMint>(1);
+		if (op == 7) {
+			const to = try externalMutable<InterfaceTokenAccount>(4);
+			return transferTokens(source, to, mint, delegate, amount);
+		}
+		if (op == 0) { return approveDelegate(source, mint, delegate, try signer(3), amount); }
+		if (op == 1) { return approveDelegate(source, mint, delegate, authority, amount); }
+		return signed(approveDelegate(source, mint, delegate, authority, amount), ["auth", [5]]);
+	}
+
+	function delegateEntry(): void {
+		const result = delegateStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function delegateAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(4, program, tokenAccountData(1, 3, 900, 1)),
+			{ ...holderOf(1, program, mintData(7, 5000, 6)), writable: false },
+			signingAs(8),
+			signingAs(3),
+			holderOf(5, program, tokenAccountData(1, 6, 0, 1)),
+		];
+	}
+
+	function delegateRun(accounts: HostAccount[], op: uint8, amount: uint64): HostRun {
+		const data: uint8[] = [op];
+		pushU64(data, amount);
+		return run(keyOf(9), accounts, data, delegateEntry);
+	}
+
+	function delegateOf(accounts: HostAccount[]): Pubkey | null {
+		return accounts[0].data[72] == 1 ? keyAt(accounts[0].data, 76) : null;
+	}
+
+	test "approveDelegate names the delegate and its allowance, with the mint's decimals and token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0;
+			assert delegateOf(accounts) == keyOf(8) && u64At(accounts[0].data, 121) == 300;
+			assert u64At(accounts[0].data, 64) == 900;
+			assert keyAt(accounts[0].data, 32).equals(keyOf(3));
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 4 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(4)) && sent.accounts[0].writable;
+			assert sent.accounts[1].key.equals(keyOf(1)) && !sent.accounts[1].writable;
+			assert sent.accounts[2].key.equals(keyOf(8)) && !sent.accounts[2].writable;
+			assert !sent.accounts[0].signer && !sent.accounts[1].signer && !sent.accounts[2].signer;
+			assert sent.accounts[3].key.equals(keyOf(3)) && sent.accounts[3].signer;
+			assert !sent.accounts[3].writable;
+			const approveBytes: uint8[] = [13, 44, 1, 0, 0, 0, 0, 0, 0, 6];
+			assert sameBytes(sent.data, approveBytes);
+		}
+	}
+
+	test "a later approveDelegate replaces the delegate and the allowance, which the balance does not bound" {
+		const accounts = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(accounts, 0, 300).result == 0;
+		accounts[2].key = keyOf(6);
+		assert delegateRun(accounts, 0, 5000).result == 0;
+		assert delegateOf(accounts) == keyOf(6) && u64At(accounts[0].data, 121) == 5000;
+	}
+
+	test "approveDelegate is refused for another authority, another mint, a frozen account and wrong decimals" {
+		const stranger = delegateAccounts(TOKEN_PROGRAM_ID);
+		stranger[3].key = keyOf(6);
+		assert delegateRun(stranger, 0, 300).result == ProgramError.custom(4).code;
+		const otherMint = delegateAccounts(TOKEN_PROGRAM_ID);
+		otherMint[1].key = keyOf(6);
+		assert delegateRun(otherMint, 0, 300).result == ProgramError.custom(3).code;
+		const frozen = delegateAccounts(TOKEN_PROGRAM_ID);
+		frozen[0].data[108] = 2;
+		assert delegateRun(frozen, 0, 300).result == ProgramError.custom(17).code;
+		const decimals = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(decimals, 6, 300).result == ProgramError.custom(18).code;
+		for (const refused of [stranger, otherMint, frozen, decimals]) {
+			assert delegateOf(refused) == null && u64At(refused[0].data, 121) == 0;
+		}
+	}
+
+	test "approveDelegate and revokeDelegate by an authority that did not sign are refused before any CPI" {
+		const accounts = delegateAccounts(TOKEN_PROGRAM_ID);
+		accounts[3].signer = false;
+		for (const op of [0, 3]) {
+			const refused = delegateRun(accounts, op as uint8, 300);
+			assert refused.result == ProgramError.accountNotSigner().code;
+		}
+		for (const op of [1, 4]) {
+			const refused = delegateRun(accounts, op as uint8, 300);
+			assert refused.result == ProgramError.missingRequiredSignature().code;
+		}
+		assert invocations().length == 0 && delegateOf(accounts) == null;
+	}
+
+	test "a delegate transfers within its allowance, which the transfer spends" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0;
+			assert delegateRun(accounts, 7, 301).result == ProgramError.custom(1).code;
+			assert u64At(accounts[0].data, 121) == 300 && u64At(accounts[4].data, 64) == 0;
+			assert delegateRun(accounts, 7, 100).result == 0;
+			assert u64At(accounts[0].data, 64) == 800 && u64At(accounts[4].data, 64) == 100;
+			assert u64At(accounts[0].data, 121) == 200 && delegateOf(accounts) == keyOf(8);
+			assert delegateRun(accounts, 7, 200).result == 0;
+			assert u64At(accounts[4].data, 64) == 300 && u64At(accounts[0].data, 121) == 0;
+			assert delegateOf(accounts) == null;
+			assert delegateRun(accounts, 7, 1).result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "revokeDelegate removes the delegate and its allowance through the account's token program" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0 && delegateOf(accounts) == keyOf(8);
+			assert delegateRun(accounts, 3, 0).result == 0;
+			assert delegateOf(accounts) == null && u64At(accounts[0].data, 121) == 0;
+			assert u64At(accounts[0].data, 64) == 900;
+			const sent = invocations()[0];
+			assert sent.program.equals(program) && sent.accounts.length == 2 && sent.signers == 0;
+			assert sent.accounts[0].key.equals(keyOf(4)) && sent.accounts[0].writable;
+			assert !sent.accounts[0].signer;
+			assert sent.accounts[1].key.equals(keyOf(3)) && sent.accounts[1].signer;
+			assert !sent.accounts[1].writable;
+			const revokeBytes: uint8[] = [5];
+			assert sameBytes(sent.data, revokeBytes);
+			assert delegateRun(accounts, 7, 1).result == ProgramError.custom(4).code;
+			assert delegateRun(accounts, 3, 0).result == 0;
+		}
+	}
+
+	test "revokeDelegate is refused for a signer that is not the owner and for a frozen account" {
+		const stranger = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(stranger, 0, 300).result == 0;
+		stranger[3].key = keyOf(6);
+		assert delegateRun(stranger, 3, 0).result == ProgramError.custom(4).code;
+		const frozen = delegateAccounts(TOKEN_PROGRAM_ID);
+		assert delegateRun(frozen, 0, 300).result == 0;
+		frozen[0].data[108] = 2;
+		assert delegateRun(frozen, 3, 0).result == ProgramError.custom(17).code;
+		for (const refused of [stranger, frozen]) {
+			assert delegateOf(refused) == keyOf(8) && u64At(refused[0].data, 121) == 300;
+		}
+	}
+
+	test "the delegate itself revokes its own allowance" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = delegateAccounts(program);
+			assert delegateRun(accounts, 0, 300).result == 0 && delegateOf(accounts) == keyOf(8);
+			accounts[3].key = keyOf(8);
+			assert delegateRun(accounts, 3, 0).result == 0;
+			assert delegateOf(accounts) == null && u64At(accounts[0].data, 121) == 0;
+			assert delegateRun(accounts, 3, 0).result == ProgramError.custom(4).code;
+		}
+	}
+
+	test "approveDelegate and revokeDelegate under signed act for a PDA owner and only for that PDA" {
+		const accounts = delegateAccounts(TOKEN_2022_PROGRAM_ID);
+		setKeyAt(accounts[0].data, 32, authorityPda());
+		accounts[3].key = authorityPda();
+		accounts[3].signer = false;
+		assert delegateRun(accounts, 2, 300).result == 0;
+		assert delegateOf(accounts) == keyOf(8) && u64At(accounts[0].data, 121) == 300;
+		assert signerIs(invocations()[0], 0, authSigner());
+		assert delegateRun(accounts, 5, 0).result == 0;
+		assert delegateOf(accounts) == null;
+		assert signerIs(invocations()[0], 0, authSigner());
+		const stranger = delegateAccounts(TOKEN_PROGRAM_ID);
+		stranger[3].signer = false;
+		for (const op of [2, 5]) {
+			const refused = delegateRun(stranger, op as uint8, 300);
+			assert runtimeRefused(refused, ESCALATED);
+		}
+		assert delegateOf(stranger) == null;
+	}
+}
+
+when (testBuild) {
+	function rawStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		let storage: uint8[8] = [];
+		let length: uint64 = 0;
+		for (let at: uint64 = 0; at < input.length; at++) {
+			length = putU8(storage, length, try input.readU8(at));
+		}
+		const target = try account(0);
+		const callee = (try account(1)).key();
+		return invoke(callee, [InstructionAccount.writable(target)], storage, length);
+	}
+
+	function rawEntry(): void {
+		const result = rawStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function rawRun(program: Pubkey, data: uint8[]): HostRun {
+		const callee: HostAccount = {
+			...holderOf(6, keyOf(0), []),
+			key: program,
+			writable: false,
+			executable: true,
+		};
+		const accounts = [holderOf(1, program, mintData(3, 500, 6)), callee];
+		return run(keyOf(9), accounts, data, rawEntry);
+	}
+
+	test "an instruction a simulated program does not implement fails the run and names the program and the instruction" {
+		const token = rawRun(TOKEN_PROGRAM_ID, [4]);
+		assert token.result == NOT_SIMULATED;
+		assert token.fault == "sol_invoke_signed: Token program instruction 4 is not simulated";
+		const extended = rawRun(TOKEN_2022_PROGRAM_ID, [30]);
+		assert extended.result == NOT_SIMULATED;
+		assert extended.fault == "sol_invoke_signed: Token-2022 program instruction 30 is not simulated";
+		const associated = rawRun(ASSOCIATED_TOKEN_PROGRAM_ID, [2]);
+		assert associated.result == NOT_SIMULATED;
+		assert associated.fault ==
+			"sol_invoke_signed: Associated Token program instruction 2 is not simulated";
+		const system = rawRun(SYSTEM_PROGRAM_ID, [9, 0, 0, 0]);
+		assert system.result == NOT_SIMULATED;
+		assert system.fault == "sol_invoke_signed: System program instruction 9 is not simulated";
+	}
+
+	test "instruction data that names no instruction is refused as the token and System programs refuse it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const empty = rawRun(program, []);
+			assert empty.result == ProgramError.custom(12).code && empty.fault == "";
+		}
+		const short = rawRun(SYSTEM_PROGRAM_ID, [2, 0, 0]);
+		assert short.result == ProgramError.invalidInstructionData().code && short.fault == "";
+	}
+}
+
+when (testBuild) {
+	import { accountCount } from "./core";
+
+	function ledgerStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		const op = try input.readU8(0);
+		const amount = try input.readU64(1);
+		if (op == 0) {
+			const mint = try externalMutable<InterfaceMint>(0);
+			return mintTokens(mint, try externalMutable<InterfaceTokenAccount>(1), try account(2), amount);
+		}
+		if (op == 1) {
+			const program = (try account(3)).key();
+			return mintTo(program, try account(0), try account(1), try account(2), amount);
+		}
+		if (op == 2) {
+			const from = try externalMutable<InterfaceTokenAccount>(0);
+			const to = try externalMutable<InterfaceTokenAccount>(1);
+			return transferTokens(from, to, try external<InterfaceMint>(2), try account(3), amount);
+		}
+		if (op == 20) {
+			const from = try externalMutable<TokenAccount>(0);
+			const to = try externalMutable<TokenAccount>(1);
+			return transferTokens(from, to, try external<Mint>(2), try account(3), amount);
+		}
+		if (op == 21) {
+			const from = try externalMutable<TokenAccount>(0);
+			const to = try externalMutable<InterfaceTokenAccount>(1);
+			return transferTokens(from, to, try external<InterfaceMint>(2), try account(3), amount);
+		}
+		if (op == 3) {
+			return transferChecked(
+				(try account(4)).key(),
+				try account(0),
+				try account(2),
+				try account(1),
+				try account(3),
+				amount,
+				try input.readU8(9),
+			);
+		}
+		if (op == 4) {
+			const closing = try externalMutable<InterfaceTokenAccount>(0);
+			return closeTokenAccount(closing, try writable(1), try account(2));
+		}
+		if (op == 6) {
+			let storage: uint8[10] = [];
+			let length = putU8(storage, 0, 12);
+			length = putU64(storage, length, amount);
+			length = putU8(storage, length, 6);
+			const held = InstructionAccount.writable(try account(0));
+			const mint = InstructionAccount.readonly(try account(2));
+			const authority = InstructionAccount.readonlySigner(try account(3));
+			return invoke((try account(4)).key(), [held, mint, held, authority], storage, length);
+		}
+		if (op == 7) {
+			let storage: uint8[1] = [];
+			const length = putU8(storage, 0, 9);
+			const held = InstructionAccount.writable(try account(0));
+			const authority = InstructionAccount.readonlySigner(try account(2));
+			return invoke((try account(3)).key(), [held, held, authority], storage, length);
+		}
+		return closeAccount((try account(3)).key(), try account(0), try account(1), try account(2));
+	}
+
+	function ledgerEntry(): void {
+		const result = ledgerStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function ledgerRun(accounts: HostAccount[], op: uint8, amount: uint64, decimals: uint8 = 6): HostRun {
+		const data: uint8[] = [op];
+		pushU64(data, amount);
+		data.push(decimals);
+		return run(keyOf(9), accounts, data, ledgerEntry);
+	}
+
+	function asPassed(held: Account): InstructionAccount {
+		return InstructionAccount.flagged(held, held.isWritable(), held.isSigner());
+	}
+
+	function forwardStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		let storage: uint8[40] = [];
+		let length: uint64 = 0;
+		for (let at: uint64 = 0; at < input.length; at++) {
+			length = putU8(storage, length, try input.readU8(at));
+		}
+		const last = accountCount() - 1;
+		const callee = (try account(last)).key();
+		const first = asPassed(try account(0));
+		if (last == 1) { return invoke(callee, [first], storage, length); }
+		const second = asPassed(try account(1));
+		if (last == 2) { return invoke(callee, [first, second], storage, length); }
+		const third = asPassed(try account(2));
+		if (last == 3) { return invoke(callee, [first, second, third], storage, length); }
+		return invoke(callee, [first, second, third, asPassed(try account(3))], storage, length);
+	}
+
+	function forwardEntry(): void {
+		const result = forwardStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function forwardRun(accounts: HostAccount[], instruction: uint8, amount: uint64): HostRun {
+		const data: uint8[] = [instruction];
+		pushU64(data, amount);
+		if (instruction == 12) { data.push(6); }
+		return run(keyOf(9), accounts, data, forwardEntry);
+	}
+
+	function programAccount(program: Pubkey): HostAccount {
+		return { ...holderOf(6, keyOf(0), []), key: program, writable: false, executable: true };
+	}
+
+	function otherTokenProgram(program: Pubkey): Pubkey {
+		return program == TOKEN_PROGRAM_ID ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+	}
+
+	function mintingAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(1, program, mintData(3, 5000, 6)),
+			holderOf(4, program, tokenAccountData(1, 8, 0, 1)),
+			signingAs(3),
+			programAccount(program),
+		];
+	}
+
+	function movingAccounts(program: Pubkey): HostAccount[] {
+		return [
+			holderOf(4, program, tokenAccountData(1, 3, 900, 1)),
+			holderOf(5, program, tokenAccountData(1, 6, 0, 1)),
+			{ ...holderOf(1, program, mintData(7, 5000, 6)), writable: false },
+			signingAs(3),
+			programAccount(program),
+		];
+	}
+
+	test "transferTokens moves the amount through the legacy types and through a mix of legacy and interface types" {
+		for (const op of [20 as uint8, 21 as uint8]) {
+			const accounts = movingAccounts(TOKEN_PROGRAM_ID);
+			assert ledgerRun(accounts, op, 300).result == 0;
+			assert heldBy(accounts, 0) == 600 && heldBy(accounts, 1) == 300;
+		}
+		const extended = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		assert refusedWith(ledgerRun(extended, 20, 300), ProgramError.accountOwnedByWrongProgram(), "");
+		assert unmoved(extended) && invocations().length == 0;
+		const mixed = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		assert refusedWith(ledgerRun(mixed, 21, 300), ProgramError.accountOwnedByWrongProgram(), "");
+		assert unmoved(mixed);
+	}
+
+	function closingAccounts(program: Pubkey): HostAccount[] {
+		return [
+			{ ...holderOf(4, program, tokenAccountData(1, 3, 0, 1)), lamports: TOKEN_ACCOUNT_RENT },
+			holderOf(7, Pubkey.zero(), []),
+			signingAs(3),
+			programAccount(program),
+		];
+	}
+
+	function fillU64(bytes: uint8[], offset: int32, value: uint8): void {
+		for (let index = 0; index < 8; index++) { bytes[offset + index] = value; }
+	}
+
+	const FOREIGN_WRITE: string = "ExternalAccountDataModified";
+	const ESCALATED: string = "PrivilegeEscalation";
+
+	function runtimeRefused(outcome: HostRun, runtimeError: string): boolean {
+		return outcome.result == REFUSED && outcome.fault.indexOf(runtimeError) == 0;
+	}
+
+	function notSimulated(outcome: HostRun, what: string): boolean {
+		return outcome.result == NOT_SIMULATED && outcome.fault.indexOf(what) >= 0;
+	}
+
+	function refusedWith(outcome: HostRun, error: ProgramError, runtimeError: string): boolean {
+		if (runtimeError != "") { return runtimeRefused(outcome, runtimeError); }
+		return outcome.result == error.code && outcome.fault == "";
+	}
+
+	test "mintTokens adds the amount to the account and the supply, for the mint authority that signed" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = mintingAccounts(program);
+			assert ledgerRun(accounts, 0, 500).result == 0;
+			assert u64At(accounts[1].data, 64) == 500 && u64At(accounts[0].data, 36) == 5500;
+			const stranger = mintingAccounts(program);
+			stranger[2].key = keyOf(5);
+			assert refusedWith(ledgerRun(stranger, 0, 1), ProgramError.custom(4), "");
+			const fixed = mintingAccounts(program);
+			fixed[0].data[0] = 0;
+			assert refusedWith(ledgerRun(fixed, 0, 1), ProgramError.custom(5), "");
+			const unsigned = mintingAccounts(program);
+			unsigned[2].signer = false;
+			assert runtimeRefused(ledgerRun(unsigned, 0, 1), ESCALATED);
+			assert refusedWith(forwardRun(unsigned, 7, 1), ProgramError.missingRequiredSignature(), "");
+			for (const refused of [stranger, fixed, unsigned]) {
+				assert u64At(refused[1].data, 64) == 0 && u64At(refused[0].data, 36) == 5000;
+			}
+		}
+	}
+
+	test "mintTokens is refused for a frozen or native account, another mint, accounts that are not initialized and a supply beyond 2^64 - 1" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const frozen = mintingAccounts(program);
+			frozen[1].data[108] = 2;
+			frozen[1].data[109] = 1;
+			assert refusedWith(ledgerRun(frozen, 0, 1), ProgramError.custom(17), "");
+			const native = mintingAccounts(program);
+			native[1].data[109] = 1;
+			native[1].data[0] = 9;
+			assert refusedWith(ledgerRun(native, 0, 1), ProgramError.custom(10), "");
+			const otherMint = mintingAccounts(program);
+			otherMint[1].data[0] = 9;
+			otherMint[2].key = keyOf(5);
+			assert refusedWith(ledgerRun(otherMint, 0, 1), ProgramError.custom(3), "");
+			const blank = mintingAccounts(program);
+			blank[1].data[108] = 0;
+			assert refusedWith(ledgerRun(blank, 1, 1), ProgramError.uninitializedAccount(), "");
+			const unminted = mintingAccounts(program);
+			unminted[0].data[45] = 0;
+			assert refusedWith(ledgerRun(unminted, 1, 1), ProgramError.uninitializedAccount(), "");
+			const swapped = mintingAccounts(program);
+			swapped[1].data = mintData(3, 5000, 6);
+			assert refusedWith(ledgerRun(swapped, 1, 1), ProgramError.invalidAccountData(), "");
+			const full = mintingAccounts(program);
+			fillU64(full[0].data, 36, 255);
+			assert refusedWith(ledgerRun(full, 0, 1), ProgramError.custom(14), "");
+			full[2].key = keyOf(5);
+			assert refusedWith(ledgerRun(full, 0, 1), ProgramError.custom(4), "");
+			assert forwardRun(mintingAccounts(program), 7, 0).result == 0;
+		}
+	}
+
+	test "an account balance beyond 2^64 - 1 wraps under the Token program and is refused by Token-2022" {
+		const wrapped = mintingAccounts(TOKEN_PROGRAM_ID);
+		fillU64(wrapped[1].data, 64, 255);
+		assert ledgerRun(wrapped, 0, 2).result == 0 && u64At(wrapped[1].data, 64) == 1;
+		const kept = mintingAccounts(TOKEN_2022_PROGRAM_ID);
+		fillU64(kept[1].data, 64, 255);
+		assert refusedWith(ledgerRun(kept, 0, 2), ProgramError.custom(14), "");
+		assert kept[1].data[64] == 255 && u64At(kept[0].data, 36) == 5000;
+	}
+
+	test "minting to an account or of a mint the other token program owns is refused as each token program refuses it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const fault = program == TOKEN_PROGRAM_ID ? FOREIGN_WRITE : "";
+			const foreign = mintingAccounts(program);
+			foreign[1].owner = otherTokenProgram(program);
+			assert refusedWith(ledgerRun(foreign, 0, 1), ProgramError.incorrectProgramId(), fault);
+			assert refusedWith(ledgerRun(foreign, 0, 0), ProgramError.incorrectProgramId(), "");
+			const foreignMint = mintingAccounts(program);
+			foreignMint[0].owner = otherTokenProgram(program);
+			assert refusedWith(ledgerRun(foreignMint, 1, 1), ProgramError.incorrectProgramId(), fault);
+			const frozen = mintingAccounts(program);
+			frozen[1].owner = otherTokenProgram(program);
+			frozen[1].data[108] = 2;
+			const expected = program == TOKEN_PROGRAM_ID ? ProgramError.custom(17) : ProgramError.incorrectProgramId();
+			assert refusedWith(ledgerRun(frozen, 0, 1), expected, "");
+			for (const refused of [foreign, foreignMint, frozen]) {
+				assert u64At(refused[1].data, 64) == 0 && u64At(refused[0].data, 36) == 5000;
+			}
+		}
+	}
+
+	function checkedOrder(accounts: HostAccount[]): HostAccount[] {
+		return [accounts[0], accounts[2], accounts[1], accounts[3], accounts[4]];
+	}
+
+	function uncheckedOrder(accounts: HostAccount[]): HostAccount[] {
+		return [accounts[0], accounts[1], accounts[3], accounts[4]];
+	}
+
+	function heldBy(accounts: HostAccount[], index: int32): uint64 {
+		return u64At(accounts[index].data, 64);
+	}
+
+	function unmoved(accounts: HostAccount[]): boolean {
+		return heldBy(accounts, 0) == 900 && heldBy(accounts, 1) == 0;
+	}
+
+	test "transferTokens moves the amount for the owner that signed, with the mint's decimals" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = movingAccounts(program);
+			assert ledgerRun(accounts, 2, 300).result == 0;
+			assert heldBy(accounts, 0) == 600 && heldBy(accounts, 1) == 300;
+			const plain = uncheckedOrder(movingAccounts(program));
+			assert forwardRun(plain, 3, 100).result == 0;
+			assert heldBy(plain, 0) == 800 && heldBy(plain, 1) == 100;
+			const stranger = movingAccounts(program);
+			stranger[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(stranger, 2, 1), ProgramError.custom(4), "");
+			const unsigned = movingAccounts(program);
+			unsigned[3].signer = false;
+			assert runtimeRefused(ledgerRun(unsigned, 2, 1), ESCALATED);
+			assert refusedWith(forwardRun(checkedOrder(unsigned), 12, 1), ProgramError.missingRequiredSignature(), "");
+			const short = movingAccounts(program);
+			assert refusedWith(ledgerRun(short, 2, 901), ProgramError.custom(1), "");
+			assert refusedWith(forwardRun(uncheckedOrder(short), 3, 901), ProgramError.custom(1), "");
+			const decimals = movingAccounts(program);
+			assert refusedWith(ledgerRun(decimals, 3, 1, 5), ProgramError.custom(18), "");
+			decimals[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(decimals, 3, 1, 5), ProgramError.custom(18), "");
+			for (const refused of [stranger, unsigned, short, decimals]) { assert unmoved(refused); }
+		}
+	}
+
+	test "transferTokens is refused for a frozen account, another mint and accounts that are not token accounts, in each token program's order" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const legacy = program == TOKEN_PROGRAM_ID;
+			const frozenSource = movingAccounts(program);
+			frozenSource[0].data[108] = 2;
+			assert refusedWith(ledgerRun(frozenSource, 2, 901), ProgramError.custom(17), "");
+			const frozenTarget = movingAccounts(program);
+			frozenTarget[1].data[108] = 2;
+			assert refusedWith(ledgerRun(frozenTarget, 2, 1), ProgramError.custom(17), "");
+			frozenTarget[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(frozenTarget, 2, 1), ProgramError.custom(legacy ? 17 : 4), "");
+			const otherMint = movingAccounts(program);
+			otherMint[2].key = keyOf(2);
+			assert refusedWith(ledgerRun(otherMint, 3, 1), ProgramError.custom(3), "");
+			assert refusedWith(ledgerRun(otherMint, 3, 901), ProgramError.custom(1), "");
+			const otherTarget = movingAccounts(program);
+			otherTarget[1].data[0] = 2;
+			assert refusedWith(ledgerRun(otherTarget, 3, 1), ProgramError.custom(3), "");
+			assert refusedWith(ledgerRun(otherTarget, 3, 901), ProgramError.custom(1), "");
+			assert refusedWith(forwardRun(uncheckedOrder(otherTarget), 3, 1), ProgramError.custom(3), "");
+			otherTarget[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(otherTarget, 3, 1), ProgramError.custom(legacy ? 3 : 4), "");
+			const blankSource = movingAccounts(program);
+			blankSource[0].data[108] = 0;
+			assert refusedWith(ledgerRun(blankSource, 3, 1), ProgramError.uninitializedAccount(), "");
+			const blankTarget = movingAccounts(program);
+			blankTarget[1].data[108] = 0;
+			assert refusedWith(ledgerRun(blankTarget, 3, 1), ProgramError.uninitializedAccount(), "");
+			const expected = legacy ? ProgramError.uninitializedAccount() : ProgramError.custom(1);
+			assert refusedWith(ledgerRun(blankTarget, 3, 901), expected, "");
+			const mintAsTarget = movingAccounts(program);
+			mintAsTarget[1].data = mintData(7, 5000, 6);
+			assert refusedWith(ledgerRun(mintAsTarget, 3, 1), ProgramError.invalidAccountData(), "");
+			for (const refused of [frozenSource, frozenTarget, otherMint, otherTarget]) { assert unmoved(refused); }
+		}
+	}
+
+	test "a transfer that touches an account of the other token program is refused as each token program refuses it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const legacy = program == TOKEN_PROGRAM_ID;
+			const fault = legacy ? FOREIGN_WRITE : "";
+			for (const index of [0, 1]) {
+				const foreign = movingAccounts(program);
+				foreign[index].owner = otherTokenProgram(program);
+				assert refusedWith(ledgerRun(foreign, 3, 1), ProgramError.incorrectProgramId(), fault);
+				assert unmoved(foreign);
+			}
+			const nothing = movingAccounts(program);
+			nothing[1].owner = otherTokenProgram(program);
+			assert refusedWith(ledgerRun(nothing, 3, 0), ProgramError.incorrectProgramId(), "");
+			const frozen = movingAccounts(program);
+			frozen[0].owner = otherTokenProgram(program);
+			frozen[0].data[108] = 2;
+			assert refusedWith(ledgerRun(frozen, 3, 1), legacy ? ProgramError.custom(17) : ProgramError.incorrectProgramId(), "");
+			const stranger = movingAccounts(program);
+			stranger[0].owner = otherTokenProgram(program);
+			stranger[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(stranger, 3, 1), legacy ? ProgramError.custom(4) : ProgramError.incorrectProgramId(), "");
+			const foreignMint = movingAccounts(program);
+			foreignMint[2].owner = otherTokenProgram(program);
+			const outcome = ledgerRun(foreignMint, 3, 1);
+			if (legacy) {
+				assert outcome.result == 0 && outcome.fault == "" && heldBy(foreignMint, 1) == 1;
+			} else {
+				assert refusedWith(outcome, ProgramError.incorrectProgramId(), "") && unmoved(foreignMint);
+			}
+		}
+	}
+
+	test "a transfer of an account to itself changes nothing and keeps the balance and authority refusals" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = movingAccounts(program);
+			const moved = ledgerRun(accounts, 6, 300);
+			assert moved.result == 0 && moved.fault == "" && unmoved(accounts);
+			assert refusedWith(ledgerRun(accounts, 6, 901), ProgramError.custom(1), "");
+			accounts[3].key = keyOf(8);
+			assert refusedWith(ledgerRun(accounts, 6, 1), ProgramError.custom(4), "");
+		}
+	}
+
+	function nativeAccounts(program: Pubkey): HostAccount[] {
+		const accounts = movingAccounts(program);
+		accounts[0].data[109] = 1;
+		accounts[0].lamports = 5000;
+		return accounts;
+	}
+
+	test "a transfer from a native account moves its lamports with the amount" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = nativeAccounts(program);
+			accounts[1].lamports = TOKEN_ACCOUNT_RENT;
+			assert ledgerRun(accounts, 3, 300).result == 0;
+			assert heldBy(accounts, 0) == 600 && heldBy(accounts, 1) == 300;
+			assert accounts[0].lamports == 4700 && accounts[1].lamports == TOKEN_ACCOUNT_RENT + 300;
+			const toNative = movingAccounts(program);
+			toNative[1].data[109] = 1;
+			assert ledgerRun(toNative, 3, 300).result == 0;
+			assert heldBy(toNative, 1) == 300 && toNative[0].lamports == 1000 && toNative[1].lamports == 1000;
+		}
+	}
+
+	test "a balance or a lamport count a transfer cannot hold is answered as each token program answers it" {
+		const wrapped = movingAccounts(TOKEN_PROGRAM_ID);
+		fillU64(wrapped[1].data, 64, 255);
+		assert ledgerRun(wrapped, 3, 2).result == 0 && heldBy(wrapped, 1) == 1 && heldBy(wrapped, 0) == 898;
+		const kept = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		fillU64(kept[1].data, 64, 255);
+		assert refusedWith(ledgerRun(kept, 3, 2), ProgramError.custom(14), "");
+		assert heldBy(kept, 0) == 900 && kept[1].data[64] == 255;
+		const poor = nativeAccounts(TOKEN_PROGRAM_ID);
+		poor[0].lamports = 100;
+		const unbalanced = ledgerRun(poor, 3, 300);
+		assert runtimeRefused(unbalanced, "UnbalancedInstruction");
+		const refused = nativeAccounts(TOKEN_2022_PROGRAM_ID);
+		refused[0].lamports = 100;
+		assert refusedWith(ledgerRun(refused, 3, 300), ProgramError.custom(14), "");
+		assert unmoved(poor) && unmoved(refused) && poor[0].lamports == 100 && refused[1].lamports == 1000;
+	}
+
+	function withAccountExtension(bytes: uint8[], kind: int32, length: int32): uint8[] {
+		bytes.push(2);
+		pushU16(bytes, 7);
+		pushU16(bytes, 0);
+		pushU16(bytes, kind as uint64);
+		pushU16(bytes, length as uint64);
+		pushZeros(bytes, length);
+		return bytes;
+	}
+
+	function extendedSource(kind: int32, length: int32): HostAccount[] {
+		const accounts = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		accounts[0].data = withAccountExtension(accounts[0].data, kind, length);
+		return accounts;
+	}
+
+	test "InterfaceTokenAccount refuses a Token-2022 account that carries a transfer-changing extension, before anything is sent" {
+		const kinds: int32[] = [13, 2, 15, 27];
+		const lengths: int32[] = [0, 8, 1, 0];
+		for (let index = 0; index < kinds.length; index++) {
+			const accounts = extendedSource(kinds[index], lengths[index]);
+			assert refusedWith(ledgerRun(accounts, 2, 1), ProgramError.custom(4200), "");
+			assert invocations().length == 0;
+			assert unmoved(accounts);
+		}
+	}
+
+	test "the Token-2022 program itself refuses a non-transferable account, a fee, hook or pause account without its mint" {
+		const accounts = extendedSource(13, 0);
+		assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 1), ProgramError.custom(37), "");
+		assert refusedWith(forwardRun(uncheckedOrder(accounts), 3, 901), ProgramError.custom(1), "");
+		const kinds: int32[] = [2, 15, 27];
+		const lengths: int32[] = [8, 1, 0];
+		for (let index = 0; index < kinds.length; index++) {
+			const bare = extendedSource(kinds[index], lengths[index]);
+			assert refusedWith(forwardRun(uncheckedOrder(bare), 3, 1), ProgramError.custom(31), "");
+			assert unmoved(bare);
+		}
+	}
+
+	test "InterfaceTokenAccount accepts the account extensions that change no transfer and moves with its mint" {
+		const kinds: int32[] = [7, 8, 11];
+		const lengths: int32[] = [0, 1, 1];
+		for (let index = 0; index < kinds.length; index++) {
+			const accounts = extendedSource(kinds[index], lengths[index]);
+			assert ledgerRun(accounts, 2, 40).result == 0;
+			assert heldBy(accounts, 0) == 860 && heldBy(accounts, 1) == 40;
+		}
+	}
+
+	function closed(accounts: HostAccount[], gained: uint64): boolean {
+		return accounts[0].lamports == 0 && accounts[0].data.length == 0 &&
+			accounts[0].owner == Pubkey.zero() && accounts[1].lamports == 1000 + gained;
+	}
+
+	function kept(accounts: HostAccount[]): boolean {
+		return accounts[0].lamports == TOKEN_ACCOUNT_RENT && accounts[0].data.length == 165 &&
+			accounts[1].lamports == 1000;
+	}
+
+	test "closeTokenAccount pays the account's lamports out for its close authority, or its owner when it has none" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const accounts = closingAccounts(program);
+			assert ledgerRun(accounts, 4, 0).result == 0 && closed(accounts, TOKEN_ACCOUNT_RENT);
+			const ownerOnly = closingAccounts(program);
+			ownerOnly[0].data[129] = 0;
+			assert ledgerRun(ownerOnly, 4, 0).result == 0 && closed(ownerOnly, TOKEN_ACCOUNT_RENT);
+			const appointed = closingAccounts(program);
+			setKeyAt(appointed[0].data, 133, keyOf(8));
+			assert refusedWith(ledgerRun(appointed, 4, 0), ProgramError.custom(4), "") && kept(appointed);
+			appointed[2].key = keyOf(8);
+			assert ledgerRun(appointed, 4, 0).result == 0 && closed(appointed, TOKEN_ACCOUNT_RENT);
+			const frozen = closingAccounts(program);
+			frozen[0].data[108] = 2;
+			assert ledgerRun(frozen, 4, 0).result == 0 && closed(frozen, TOKEN_ACCOUNT_RENT);
+			const native = closingAccounts(program);
+			native[0].data[109] = 1;
+			native[0].data[64] = 44;
+			assert ledgerRun(native, 4, 0).result == 0 && closed(native, TOKEN_ACCOUNT_RENT);
+		}
+	}
+
+	test "closeTokenAccount is refused for a balance, another signer, a delegate, an unsigned authority and accounts that are not token accounts" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const holding = closingAccounts(program);
+			holding[0].data[64] = 1;
+			assert refusedWith(ledgerRun(holding, 4, 0), ProgramError.custom(11), "");
+			holding[2].key = keyOf(8);
+			assert refusedWith(ledgerRun(holding, 4, 0), ProgramError.custom(11), "");
+			const stranger = closingAccounts(program);
+			stranger[2].key = keyOf(8);
+			assert refusedWith(ledgerRun(stranger, 4, 0), ProgramError.custom(4), "");
+			const delegate = closingAccounts(program);
+			delegate[0].data = withDelegate(delegate[0].data, keyOf(8), 5);
+			delegate[2].key = keyOf(8);
+			assert refusedWith(ledgerRun(delegate, 4, 0), ProgramError.custom(4), "");
+			const unsigned = closingAccounts(program);
+			unsigned[2].signer = false;
+			assert runtimeRefused(ledgerRun(unsigned, 4, 0), ESCALATED);
+			assert refusedWith(forwardRun(unsigned, 9, 0), ProgramError.missingRequiredSignature(), "");
+			const blank = closingAccounts(program);
+			blank[0].data[108] = 0;
+			assert refusedWith(ledgerRun(blank, 5, 0), ProgramError.uninitializedAccount(), "");
+			const mint = closingAccounts(program);
+			mint[0].data = mintData(3, 0, 6);
+			assert refusedWith(ledgerRun(mint, 5, 0), ProgramError.invalidAccountData(), "");
+			assert refusedWith(ledgerRun(closingAccounts(program), 7, 0), ProgramError.invalidAccountData(), "");
+			assert refusedWith(ledgerRun(blank, 7, 0), ProgramError.invalidAccountData(), "");
+			for (const refused of [holding, stranger, delegate, unsigned, blank]) { assert kept(refused); }
+		}
+	}
+
+	test "closing an account of the other token program is refused as each token program refuses it" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const legacy = program == TOKEN_PROGRAM_ID;
+			const foreign = closingAccounts(program);
+			foreign[0].owner = otherTokenProgram(program);
+			const fault = legacy ? "ExternalAccountLamportSpend" : "";
+			assert refusedWith(ledgerRun(foreign, 5, 0), ProgramError.incorrectProgramId(), fault);
+			assert kept(foreign);
+			foreign[0].data[64] = 1;
+			const expected = legacy ? ProgramError.custom(11) : ProgramError.incorrectProgramId();
+			assert refusedWith(ledgerRun(foreign, 5, 0), expected, "");
+		}
+	}
+
+	test "an account the System program or the incinerator owns closes only into the incinerator, for any signer" {
+		const incinerator = Pubkey.parse("1nc1nerator11111111111111111111111111111111");
+		assert incinerator.ok;
+		if (incinerator.ok) {
+			for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+				for (const holder of [Pubkey.zero(), incinerator.value]) {
+					const accounts = closingAccounts(program);
+					setKeyAt(accounts[0].data, 32, holder);
+					assert refusedWith(ledgerRun(accounts, 5, 0), ProgramError.invalidAccountData(), "");
+					assert kept(accounts);
+					accounts[1].key = incinerator.value;
+					accounts[2].key = keyOf(8);
+					assert ledgerRun(accounts, 5, 0).result == 0 && closed(accounts, TOKEN_ACCOUNT_RENT);
+				}
+			}
+		}
+	}
+
+	function associatedStep(): Result<uint64, ProgramError> {
+		const input = instructionData();
+		const op = try input.readU8(0);
+		const mint = try account(0);
+		const target = try account(1);
+		const wallet = try account(2);
+		const payer = try account(3);
+		const system = try account(4);
+		const program = try account(5);
+		if (op == 0) { return createAssociatedToken(payer, target, wallet, mint, system, program); }
+		if (op == 1) { return createAssociatedTokenIdempotent(payer, target, wallet, mint, system, program); }
+		let storage: uint8[1] = [];
+		const length = putU8(storage, 0, try input.readU8(1));
+		return invoke(
+			ASSOCIATED_TOKEN_PROGRAM_ID,
+			[
+				InstructionAccount.writable(payer),
+				InstructionAccount.writable(target),
+				InstructionAccount.readonly(wallet),
+				InstructionAccount.readonly(mint),
+				InstructionAccount.readonly(system),
+				InstructionAccount.readonly(program),
+			],
+			storage,
+			length,
+		);
+	}
+
+	function associatedEntry(): void {
+		const result = associatedStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function associatedRun(accounts: HostAccount[], op: uint8, discriminator: uint8 = 0): HostRun {
+		const data: uint8[] = [op, discriminator];
+		return run(keyOf(9), accounts, data, associatedEntry);
+	}
+
+	const PAYER_FUNDS: uint64 = 10000000;
+
+	function associatedAccounts(program: Pubkey, mint: uint8[]): HostAccount[] {
+		return [
+			{ ...holderOf(1, program, mint), writable: false },
+			{ ...holderOf(2, Pubkey.zero(), []), key: ataOf(3, 1, program), lamports: 0 },
+			{ ...holderOf(3, Pubkey.zero(), []), writable: false },
+			{ ...holderOf(4, Pubkey.zero(), []), signer: true, lamports: PAYER_FUNDS },
+			{ ...holderOf(0, Pubkey.zero(), []), writable: false, executable: true },
+			programAccount(program),
+		];
+	}
+
+	function existingAssociated(program: Pubkey, mint: uint64, owner: uint64): HostAccount[] {
+		const accounts = associatedAccounts(program, mintData(7, 500, 6));
+		accounts[1].owner = program;
+		accounts[1].data = tokenAccountData(mint, owner, 25, 1);
+		accounts[1].lamports = TOKEN_ACCOUNT_RENT;
+		return accounts;
+	}
+
+	function rentOf(length: int32): uint64 {
+		return 2 * ((length as uint64) + 128) * 3480;
+	}
+
+	function extensionKinds(data: uint8[]): int32[] {
+		const kinds: int32[] = [];
+		let offset = 166;
+		while (offset + 4 <= data.length) {
+			kinds.push((data[offset] as int32) | ((data[offset + 1] as int32) << 8));
+			offset += 4 + ((data[offset + 2] as int32) | ((data[offset + 3] as int32) << 8));
+		}
+		return kinds;
+	}
+
+	function sameKinds(left: int32[], right: int32[]): boolean {
+		if (left.length != right.length) { return false; }
+		for (let index = 0; index < left.length; index++) {
+			if (left[index] != right[index]) { return false; }
+		}
+		return true;
+	}
+
+	function untouched(accounts: HostAccount[]): boolean {
+		return accounts[1].lamports == 0 && accounts[1].data.length == 0 &&
+			accounts[1].owner == Pubkey.zero() && accounts[3].lamports == PAYER_FUNDS;
+	}
+
+	test "createAssociatedToken creates the account at the size its token program gives it, at the rent minimum" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			for (const op of [0, 1]) {
+				const length = program == TOKEN_PROGRAM_ID ? 165 : 170;
+				const accounts = associatedAccounts(program, mintData(7, 500, 6));
+				const made = associatedRun(accounts, op as uint8);
+				assert made.result == 0 && made.fault == "";
+				const created = accounts[1];
+				assert created.owner == program && created.data.length == length;
+				assert created.lamports == rentOf(length) && accounts[3].lamports == PAYER_FUNDS - rentOf(length);
+				assert keyAt(created.data, 0).equals(keyOf(1)) && keyAt(created.data, 32).equals(keyOf(3));
+				assert u64At(created.data, 64) == 0 && created.data[108] == 1 && created.data[72] == 0;
+				assert length == 165 || (created.data[165] == 2 && sameKinds(extensionKinds(created.data), [7]));
+			}
+		}
+	}
+
+	test "a Token-2022 associated account carries the immutable owner first, then the extensions its mint requires" {
+		const mints: int32[][] = [[1], [9], [14], [26], [3], [6], [1, 9, 14, 26]];
+		const lengths: int32[] = [182, 174, 175, 174, 170, 170, 195];
+		const kinds: int32[][] = [[7, 2], [7, 13], [7, 15], [7, 27], [7], [7], [7, 2, 13, 15, 27]];
+		for (let index = 0; index < mints.length; index++) {
+			const mint = extendedMint(mints[index]);
+			if (mints[index][0] == 6) { mint[170] = 2; }
+			const accounts = associatedAccounts(TOKEN_2022_PROGRAM_ID, mint);
+			assert associatedRun(accounts, 0).result == 0;
+			const created = accounts[1].data;
+			assert created.length == lengths[index] && accounts[1].lamports == rentOf(lengths[index]);
+			assert created[165] == 2 && sameKinds(extensionKinds(created), kinds[index]);
+			assert created[108] == (mints[index][0] == 6 ? 2 : 1);
+		}
+	}
+
+	test "createAssociatedToken refuses an address that exists, and its idempotent form one of another owner or mint" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const existing = existingAssociated(program, 1, 3);
+			assert refusedWith(associatedRun(existing, 0), ProgramError.illegalOwner(), "");
+			const again = associatedRun(existing, 1);
+			assert again.result == 0 && again.fault == "";
+			assert u64At(existing[1].data, 64) == 25 && existing[3].lamports == PAYER_FUNDS;
+			assert refusedWith(associatedRun(existingAssociated(program, 1, 8), 1), ProgramError.custom(0), "");
+			assert refusedWith(associatedRun(existingAssociated(program, 2, 3), 1), ProgramError.invalidAccountData(), "");
+			assert refusedWith(associatedRun(existingAssociated(program, 2, 8), 1), ProgramError.custom(0), "");
+			const blank = existingAssociated(program, 1, 3);
+			blank[1].data[108] = 0;
+			const taken = existingAssociated(program, 1, 3);
+			taken[1].owner = keyOf(8);
+			for (const op of [0, 1]) {
+				assert refusedWith(associatedRun(blank, op as uint8), ProgramError.illegalOwner(), "");
+				assert refusedWith(associatedRun(taken, op as uint8), ProgramError.illegalOwner(), "");
+			}
+		}
+	}
+
+	test "createAssociatedToken refuses an address the wallet, the token program and the mint do not derive" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			for (const op of [0, 1]) {
+				const elsewhere = associatedAccounts(program, mintData(7, 500, 6));
+				elsewhere[1].key = keyOf(2);
+				assert refusedWith(associatedRun(elsewhere, op as uint8), ProgramError.invalidSeeds(), "");
+				const otherProgram = associatedAccounts(program, mintData(7, 500, 6));
+				otherProgram[1].key = ataOf(3, 1, otherTokenProgram(program));
+				assert refusedWith(associatedRun(otherProgram, op as uint8), ProgramError.invalidSeeds(), "");
+				const existing = existingAssociated(program, 1, 3);
+				existing[1].key = keyOf(2);
+				assert refusedWith(associatedRun(existing, op as uint8), ProgramError.invalidSeeds(), "");
+				assert untouched(elsewhere) && untouched(otherProgram);
+			}
+		}
+	}
+
+	test "createAssociatedToken funds only what a prefunded address lacks, and is refused for a mint or a payer that cannot serve" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const length = program == TOKEN_PROGRAM_ID ? 165 : 170;
+			const prefunded = associatedAccounts(program, mintData(7, 500, 6));
+			prefunded[1].lamports = 1000000;
+			assert associatedRun(prefunded, 0).result == 0;
+			assert prefunded[1].lamports == rentOf(length) && prefunded[1].data.length == length;
+			assert prefunded[3].lamports == PAYER_FUNDS - (rentOf(length) - 1000000);
+			const foreignMint = associatedAccounts(program, mintData(7, 500, 6));
+			foreignMint[0].owner = otherTokenProgram(program);
+			assert refusedWith(associatedRun(foreignMint, 0), ProgramError.incorrectProgramId(), "");
+			const blankMint = associatedAccounts(program, mintData(7, 500, 6));
+			blankMint[0].data[45] = 0;
+			assert refusedWith(associatedRun(blankMint, 0), ProgramError.custom(2), "");
+			const poor = associatedAccounts(program, mintData(7, 500, 6));
+			poor[3].lamports = rentOf(length) - 1;
+			assert refusedWith(associatedRun(poor, 0), ProgramError.custom(1), "");
+			assert poor[3].lamports == rentOf(length) - 1 && poor[1].data.length == 0;
+			const unsigned = associatedAccounts(program, mintData(7, 500, 6));
+			unsigned[3].signer = false;
+			const escalated = associatedRun(unsigned, 2, 0);
+			assert runtimeRefused(escalated, ESCALATED);
+			assert untouched(foreignMint) && untouched(blankMint) && untouched(unsigned);
+		}
+	}
+
+	test "an associated account of the native mint holds the lamports above its rent reserve" {
+		const native = Pubkey.parse("So11111111111111111111111111111111111111112");
+		assert native.ok;
+		if (native.ok) {
+			const found = associatedTokenAddress(keyOf(3), native.value, TOKEN_PROGRAM_ID);
+			assert found.ok;
+			if (found.ok) {
+				const accounts = associatedAccounts(TOKEN_PROGRAM_ID, mintData(7, 0, 9));
+				accounts[0].key = native.value;
+				accounts[1].key = found.value.key;
+				accounts[1].lamports = rentOf(165) + 700;
+				assert associatedRun(accounts, 0).result == 0;
+				const created = accounts[1].data;
+				assert created.length == 165 && accounts[1].lamports == rentOf(165) + 700;
+				assert accounts[3].lamports == PAYER_FUNDS && u64At(created, 64) == 700;
+				assert created[109] == 1 && u64At(created, 113) == rentOf(165);
+			}
+		}
+	}
+
+	test "a Token-2022 extension with a setting in force fails the run, because its rule is not simulated" {
+		const paused = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		paused[2].data = extendedMint([26]);
+		assert ledgerRun(paused, 3, 1).result == 0;
+		paused[2].data[170 + 32] = 1;
+		const stopped = ledgerRun(paused, 3, 1);
+		assert stopped.result == NOT_SIMULATED;
+		assert stopped.fault == "sol_invoke_signed: Token-2022 extension 26 with a setting in force is not simulated";
+		const charged = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		charged[2].data = extendedMint([1]);
+		charged[2].data[170 + 106] = 50;
+		assert notSimulated(ledgerRun(charged, 3, 1), "extension 1 with a setting in force");
+		const hooked = movingAccounts(TOKEN_2022_PROGRAM_ID);
+		hooked[2].data = extendedMint([14]);
+		hooked[2].data[170 + 32] = 9;
+		assert notSimulated(ledgerRun(hooked, 3, 1), "extension 14 with a setting in force");
+		const guarded = extendedSource(11, 1);
+		guarded[0].data[174] = 1;
+		assert notSimulated(ledgerRun(guarded, 3, 1), "extension 11 with a setting in force");
+		for (const refused of [charged, hooked, guarded]) { assert unmoved(refused); }
+	}
+}
+
+when (testBuild) {
+	function sentTo(program: Pubkey, accounts: HostAccount[], data: uint8[]): HostRun {
+		accounts.push(programAccount(program));
+		const outcome = run(keyOf(9), accounts, data, forwardEntry);
+		accounts.pop();
+		return outcome;
+	}
+
+	function instructionOf(tag: uint8, amount: uint64, tail: uint8[]): uint8[] {
+		const data: uint8[] = [tag];
+		pushU64(data, amount);
+		for (const byte of tail) { data.push(byte); }
+		return data;
+	}
+
+	function authorityTo(kind: uint8, next: uint64): uint8[] {
+		const data: uint8[] = [6, kind, 1];
+		pushKey(data, keyOf(next));
+		return data;
+	}
+
+	function ownedBy(word: uint64): uint8[] {
+		const data: uint8[] = [18];
+		pushKey(data, keyOf(word));
+		return data;
+	}
+
+	function approving(program: Pubkey): HostAccount[] {
+		return delegateAccounts(program).slice(0, 4);
+	}
+
+	function initializing(program: Pubkey): HostAccount[] {
+		return [
+			{ ...holderOf(4, program, zeros(165)), lamports: TOKEN_ACCOUNT_RENT },
+			{ ...holderOf(1, program, mintData(7, 5000, 6)), writable: false },
+		];
+	}
+
+	function shortFor(program: Pubkey): ProgramError {
+		return program == TOKEN_PROGRAM_ID
+			? ProgramError.custom(12)
+			: ProgramError.invalidInstructionData();
+	}
+
+	test "data shorter than a token instruction reads is refused before its accounts are counted" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const short = shortFor(program);
+			const burns: uint8[][] = [[8], [8, 1, 0, 0, 0, 0, 0, 0], [15], instructionOf(15, 1, [])];
+			for (const data of burns) {
+				assert refusedWith(sentTo(program, burnAccounts(program), data), short, "");
+				assert refusedWith(sentTo(program, burnAccounts(program).slice(0, 2), data), short, "");
+			}
+			const approvals: uint8[][] = [[13], instructionOf(13, 1, [])];
+			for (const data of approvals) {
+				assert refusedWith(sentTo(program, approving(program), data), short, "");
+				assert refusedWith(sentTo(program, approving(program).slice(0, 3), data), short, "");
+			}
+			const cutKey = authorityTo(0, 5);
+			cutKey.pop();
+			const badTag = authorityTo(0, 5);
+			badTag[2] = 2;
+			const authorities: uint8[][] = [[6], [6, 0], [6, 0, 1], cutKey, badTag];
+			for (const data of authorities) {
+				assert refusedWith(sentTo(program, mintAuthorityAccounts(program), data), short, "");
+				const alone = mintAuthorityAccounts(program).slice(0, 1);
+				assert refusedWith(sentTo(program, alone, data), short, "");
+			}
+			const cutOwner = ownedBy(3);
+			cutOwner.pop();
+			const owners: uint8[][] = [[18], cutOwner];
+			for (const data of owners) {
+				assert refusedWith(sentTo(program, initializing(program), data), short, "");
+				assert refusedWith(sentTo(program, initializing(program).slice(0, 1), data), short, "");
+			}
+		}
+	}
+
+	test "a token instruction sent fewer accounts than it reads is refused before an account is read, but for the Token program's Revoke" {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
+			const missing = ProgramError.notEnoughAccountKeys();
+			const blankSource = burnAccounts(program).slice(0, 2);
+			blankSource[0].data[108] = 0;
+			assert refusedWith(sentTo(program, blankSource, instructionOf(8, 1, [])), missing, "");
+			const frozen = approving(program).slice(0, 3);
+			frozen[0].data[108] = 2;
+			assert refusedWith(sentTo(program, frozen, instructionOf(13, 1, [6])), missing, "");
+			const blank = ownerAuthorityAccounts(program).slice(0, 1);
+			blank[0].data[108] = 0;
+			const unread = program == TOKEN_PROGRAM_ID ? ProgramError.uninitializedAccount() : missing;
+			assert refusedWith(sentTo(program, blank, [5]), unread, "");
+			const sized = ownerAuthorityAccounts(program).slice(0, 1);
+			sized[0].data = zeros(100);
+			assert refusedWith(sentTo(program, sized, [6, 0, 0]), missing, "");
+			const used = initializing(program).slice(0, 1);
+			used[0].data = tokenAccountData(1, 3, 900, 1);
+			assert refusedWith(sentTo(program, used, ownedBy(3)), missing, "");
+		}
+	}
+
+	test "a byte after a token instruction's last field is taken by the Token program and refused by Token-2022" {
+		const legacy = TOKEN_PROGRAM_ID;
+		assert sentTo(legacy, burnAccounts(legacy), instructionOf(8, 1, [0])).result == 0;
+		assert sentTo(legacy, burnAccounts(legacy), instructionOf(15, 1, [6, 0])).result == 0;
+		assert sentTo(legacy, approving(legacy), instructionOf(13, 1, [6, 0])).result == 0;
+		const owned = ownedBy(3);
+		owned.push(0);
+		assert sentTo(legacy, initializing(legacy), owned).result == 0;
+		assert sentTo(legacy, mintingAccounts(legacy).slice(0, 3), instructionOf(7, 1, [0])).result == 0;
+		assert sentTo(legacy, uncheckedOrder(movingAccounts(legacy)), instructionOf(3, 1, [0])).result == 0;
+		assert sentTo(legacy, checkedOrder(movingAccounts(legacy)).slice(0, 4), instructionOf(12, 1, [6, 0]))
+			.result == 0;
+
+		const extended = TOKEN_2022_PROGRAM_ID;
+		const refused = ProgramError.invalidInstructionData();
+		const burning = burnAccounts(extended);
+		assert refusedWith(sentTo(extended, burning, instructionOf(8, 1, [0])), refused, "");
+		assert refusedWith(sentTo(extended, burnAccounts(extended), instructionOf(15, 1, [6, 0])), refused, "");
+		const lending = approving(extended);
+		assert refusedWith(sentTo(extended, lending, instructionOf(13, 1, [6, 0])), refused, "");
+		const fresh = initializing(extended);
+		assert refusedWith(sentTo(extended, fresh, owned), refused, "");
+		const minting = mintingAccounts(extended).slice(0, 3);
+		assert refusedWith(sentTo(extended, minting, instructionOf(7, 1, [0])), refused, "");
+		const moving = uncheckedOrder(movingAccounts(extended));
+		assert refusedWith(sentTo(extended, moving, instructionOf(3, 1, [0])), refused, "");
+		const checked = checkedOrder(movingAccounts(extended)).slice(0, 4);
+		assert refusedWith(sentTo(extended, checked, instructionOf(12, 1, [6, 0])), refused, "");
+		assert u64At(burning[0].data, 64) == 900 && delegateOf(lending) == null && fresh[0].data[108] == 0;
+		assert u64At(minting[1].data, 64) == 0 && u64At(moving[0].data, 64) == 900;
+
+		for (const program of [legacy, extended]) {
+			assert sentTo(program, ownerAuthorityAccounts(program), [5, 1, 2, 3]).result == 0;
+			const fixed = mintAuthorityAccounts(program);
+			assert sentTo(program, fixed, [6, 0, 0, 9, 9]).result == 0 && fixed[0].data[0] == 0;
+		}
+	}
+
+	function foreignTo(program: Pubkey, accounts: HostAccount[], index: int32): HostAccount[] {
+		accounts[index].owner = otherTokenProgram(program);
+		return accounts;
+	}
+
+	test "Token-2022 refuses an account or a mint another program owns before any other check" {
+		const program = TOKEN_2022_PROGRAM_ID;
+		const refused = ProgramError.incorrectProgramId();
+		const burn = instructionOf(8, 1, []);
+		const stranger = foreignTo(program, burnAccounts(program), 0);
+		stranger[2].key = keyOf(5);
+		assert refusedWith(sentTo(program, stranger, burn), refused, "");
+		const frozen = foreignTo(program, burnAccounts(program), 0);
+		frozen[0].data[108] = 2;
+		assert refusedWith(sentTo(program, frozen, burn), refused, "");
+		const blank = foreignTo(program, burnAccounts(program), 0);
+		blank[0].data[108] = 0;
+		assert refusedWith(sentTo(program, blank, instructionOf(8, 0, [])), refused, "");
+		const beyond = foreignTo(program, burnAccounts(program), 1);
+		assert refusedWith(sentTo(program, beyond, instructionOf(8, 901, [])), refused, "");
+		const undecimal = foreignTo(program, burnAccounts(program), 1);
+		assert refusedWith(sentTo(program, undecimal, instructionOf(15, 1, [5])), refused, "");
+		const cut = foreignTo(program, burnAccounts(program), 0);
+		assert refusedWith(sentTo(program, cut, [8]), ProgramError.invalidInstructionData(), "");
+
+		const approve = instructionOf(13, 1, [6]);
+		const lentByStranger = foreignTo(program, approving(program), 0);
+		lentByStranger[3].key = keyOf(5);
+		assert refusedWith(sentTo(program, lentByStranger, approve), refused, "");
+		const lentFrozen = foreignTo(program, approving(program), 0);
+		lentFrozen[0].data[108] = 2;
+		assert refusedWith(sentTo(program, lentFrozen, approve), refused, "");
+		const foreignMint = foreignTo(program, approving(program), 1);
+		assert refusedWith(sentTo(program, foreignMint, approve), refused, "");
+		assert refusedWith(sentTo(program, foreignMint, instructionOf(13, 1, [5])), refused, "");
+		assert delegateOf(foreignMint) == null;
+
+		const revokedByStranger = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revokedByStranger[1].key = keyOf(5);
+		assert refusedWith(sentTo(program, revokedByStranger, [5]), refused, "");
+		const revokedBlank = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revokedBlank[0].data[108] = 0;
+		assert refusedWith(sentTo(program, revokedBlank, [5]), refused, "");
+		assert refusedWith(sentTo(program, foreignTo(program, ownerAuthorityAccounts(program), 0), [5]), refused, "");
+
+		const mintByStranger = foreignTo(program, mintAuthorityAccounts(program), 0);
+		mintByStranger[1].key = keyOf(5);
+		assert refusedWith(sentTo(program, mintByStranger, authorityTo(0, 5)), refused, "");
+		const unsupported = foreignTo(program, mintAuthorityAccounts(program), 0);
+		assert refusedWith(sentTo(program, unsupported, authorityTo(2, 5)), refused, "");
+		assert refusedWith(sentTo(program, unsupported, authorityTo(1, 5)), refused, "");
+		const frozenOwner = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		frozenOwner[0].data[108] = 2;
+		assert refusedWith(sentTo(program, frozenOwner, authorityTo(2, 5)), refused, "");
+		const blankOwner = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		blankOwner[0].data[108] = 0;
+		assert refusedWith(sentTo(program, blankOwner, authorityTo(2, 5)), refused, "");
+		const sized = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		sized[0].data = zeros(100);
+		assert refusedWith(sentTo(program, sized, authorityTo(0, 5)), refused, "");
+		const own = ownerAuthorityAccounts(program);
+		own[0].data = zeros(100);
+		assert refusedWith(sentTo(program, own, authorityTo(0, 5)), ProgramError.invalidAccountData(), "");
+
+		const used = foreignTo(program, initializing(program), 0);
+		used[0].data = tokenAccountData(1, 3, 900, 1);
+		assert refusedWith(sentTo(program, used, ownedBy(3)), refused, "");
+		const small = foreignTo(program, initializing(program), 0);
+		small[0].data = zeros(164);
+		assert refusedWith(sentTo(program, small, ownedBy(3)), refused, "");
+		const unminted = foreignTo(program, initializing(program), 0);
+		unminted[1].data = zeros(82);
+		assert refusedWith(sentTo(program, unminted, ownedBy(3)), refused, "");
+		assert refusedWith(sentTo(program, foreignTo(program, initializing(program), 1), ownedBy(3)), refused, "");
+	}
+
+	test "the Token program runs its own checks on an account another program owns and is refused only a write that changes it" {
+		const program = TOKEN_PROGRAM_ID;
+		const burn = instructionOf(8, 1, []);
+		assert runtimeRefused(sentTo(program, foreignTo(program, burnAccounts(program), 0), burn), FOREIGN_WRITE);
+		assert runtimeRefused(sentTo(program, foreignTo(program, burnAccounts(program), 1), burn), FOREIGN_WRITE);
+		const nothing = instructionOf(8, 0, []);
+		const wrongProgram = ProgramError.incorrectProgramId();
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 0), nothing), wrongProgram, "");
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 1), nothing), wrongProgram, "");
+		const beyond = instructionOf(8, 901, []);
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 0), beyond), ProgramError.custom(1), "");
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 1), beyond), ProgramError.custom(1), "");
+		const stranger = foreignTo(program, burnAccounts(program), 0);
+		stranger[2].key = keyOf(5);
+		assert refusedWith(sentTo(program, stranger, burn), ProgramError.custom(4), "");
+		const frozen = foreignTo(program, burnAccounts(program), 0);
+		frozen[0].data[108] = 2;
+		assert refusedWith(sentTo(program, frozen, burn), ProgramError.custom(17), "");
+		const blank = foreignTo(program, burnAccounts(program), 0);
+		blank[0].data[108] = 0;
+		assert refusedWith(sentTo(program, blank, nothing), ProgramError.uninitializedAccount(), "");
+		const undecimal = instructionOf(15, 1, [5]);
+		assert refusedWith(sentTo(program, foreignTo(program, burnAccounts(program), 0), undecimal), ProgramError.custom(18), "");
+
+		const approve = instructionOf(13, 1, [6]);
+		const lent = foreignTo(program, approving(program), 0);
+		assert runtimeRefused(sentTo(program, lent, approve), FOREIGN_WRITE) && delegateOf(lent) == null;
+		const again = foreignTo(program, approving(program), 0);
+		again[0].data = withDelegate(again[0].data, keyOf(8), 1);
+		assert sentTo(program, again, approve).result == 0;
+		const lentByStranger = foreignTo(program, approving(program), 0);
+		lentByStranger[3].key = keyOf(5);
+		assert refusedWith(sentTo(program, lentByStranger, approve), ProgramError.custom(4), "");
+		const foreignMint = foreignTo(program, approving(program), 1);
+		assert refusedWith(sentTo(program, foreignMint, instructionOf(13, 1, [5])), ProgramError.custom(18), "");
+		assert sentTo(program, foreignMint, approve).result == 0 && delegateOf(foreignMint) == keyOf(8);
+
+		const unlent = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		assert sentTo(program, unlent, [5]).result == 0;
+		const revoked = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revoked[0].data = withDelegate(revoked[0].data, keyOf(8), 5);
+		assert runtimeRefused(sentTo(program, revoked, [5]), FOREIGN_WRITE);
+		assert delegateOf(revoked) == keyOf(8) && u64At(revoked[0].data, 121) == 5;
+		const revokedByStranger = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		revokedByStranger[1].key = keyOf(5);
+		assert refusedWith(sentTo(program, revokedByStranger, [5]), ProgramError.custom(4), "");
+
+		const mint = foreignTo(program, mintAuthorityAccounts(program), 0);
+		assert runtimeRefused(sentTo(program, mint, authorityTo(0, 5)), FOREIGN_WRITE);
+		assert keyAt(mint[0].data, 4) == keyOf(7);
+		assert sentTo(program, foreignTo(program, mintAuthorityAccounts(program), 0), authorityTo(0, 7)).result == 0;
+		assert refusedWith(sentTo(program, foreignTo(program, mintAuthorityAccounts(program), 0), authorityTo(2, 5)),
+			ProgramError.custom(15), "");
+		const owner = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		assert runtimeRefused(sentTo(program, owner, authorityTo(2, 5)), FOREIGN_WRITE);
+		assert keyAt(owner[0].data, 32) == keyOf(3);
+		assert sentTo(program, foreignTo(program, ownerAuthorityAccounts(program), 0), authorityTo(2, 3)).result == 0;
+		const sized = foreignTo(program, ownerAuthorityAccounts(program), 0);
+		sized[0].data = zeros(100);
+		assert refusedWith(sentTo(program, sized, authorityTo(0, 5)), ProgramError.invalidArgument(), "");
+
+		const fresh = foreignTo(program, initializing(program), 0);
+		assert runtimeRefused(sentTo(program, fresh, ownedBy(3)), FOREIGN_WRITE) && fresh[0].data[108] == 0;
+		const used = foreignTo(program, initializing(program), 0);
+		used[0].data = tokenAccountData(1, 3, 900, 1);
+		assert refusedWith(sentTo(program, used, ownedBy(3)), ProgramError.custom(6), "");
+		const small = foreignTo(program, initializing(program), 0);
+		small[0].data = zeros(164);
+		assert refusedWith(sentTo(program, small, ownedBy(3)), ProgramError.invalidAccountData(), "");
+		const unminted = foreignTo(program, initializing(program), 0);
+		unminted[1].data = zeros(82);
+		assert refusedWith(sentTo(program, unminted, ownedBy(3)), ProgramError.custom(2), "");
+		assert refusedWith(sentTo(program, foreignTo(program, initializing(program), 1), ownedBy(3)), wrongProgram, "");
 	}
 }

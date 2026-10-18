@@ -22,7 +22,7 @@ function decodeWide<T>(seed: int32): Result<int32, string> {
 	return Result.ok(v.n + (sizeof(T) as int32));
 }
 
-export function unused<T>(seed: int32): Result<int32, string> {
+function unused<T>(seed: int32): Result<int32, string> {
 	const value = try widen<T>(seed);
 	return Result.ok(value * 2);
 }

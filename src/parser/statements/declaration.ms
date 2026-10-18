@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
 import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -1127,6 +1127,8 @@ export function parseActorDecl(state: ParserState): NodeResult {
 			continue;
 		}
 		const member = try parseClassMember(state);
+		const refusal = autoAccessorRefusal(member, "an actor");
+		if (refusal != "") return Result.err(refusal);
 		members.push(member);
 	}
 
@@ -1197,6 +1199,16 @@ function parseClassMember(state: ParserState): NodeResult {
 		advance(state);
 	}
 
+	const accessorToken = current(state);
+	const autoAccessor = accessorToken.kind == TokenKind.Ident && accessorToken.value == "accessor"
+		&& isPropertyName(peek(state, 1)) && peek(state, 1).line == accessorToken.line;
+	if (autoAccessor) {
+		const accName = peek(state, 1).value;
+		if (memberIsStatic) return Result.err(`Accessor field '${accName}' at line ${accessorToken.line} cannot be static: an accessor is a plain instance getter or setter`);
+		if (memberIsReadonly) return Result.err(`Accessor field '${accName}' at line ${accessorToken.line}: 'accessor' modifier cannot be used with 'readonly' modifier`);
+		advance(state);
+	}
+
 	// Check for extern modifier on methods
 	let memberFlags = "";
 	if (current(state).kind == TokenKind.Extern) {
@@ -1248,6 +1260,9 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Method — early return (LParen for regular, Lt for generic like parse<T>(...))
 	if (!isAtEnd(state) && (current(state).kind == TokenKind.LParen || current(state).kind == TokenKind.Lt)) {
+		if (autoAccessor) {
+			return Result.err(`Accessor field '${nameToken.value}' at line ${nameToken.line} cannot be a method: write 'accessor ${nameToken.value}: T' or a 'get' / 'set' pair`);
+		}
 		if (memberIsOptional) {
 			return Result.err(`Optional method '${nameToken.value}?' at line ${nameToken.line}: declare a property with a nullable function type instead`);
 		}
@@ -1256,6 +1271,9 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Property — capture type and optional initializer
 	const propTypeRaw = captureOptionalType(state);
+	if (autoAccessor && propTypeRaw == "") {
+		return Result.err(`Accessor field '${nameToken.value}' at line ${nameToken.line} needs a type annotation: write 'accessor ${nameToken.value}: T', the type its getter returns and its setter takes`);
+	}
 	const propType = memberIsOptional ? optionalizeTypeString(propTypeRaw) : propTypeRaw;
 	const propTypeExpr = getLastTypeExpr();
 	let propInit: Node = null as unknown as Node;
@@ -1274,6 +1292,7 @@ function parseClassMember(state: ParserState): NodeResult {
 		propInitializer: propInit,
 	}, nameToken);
 	propNode.typeExpr = propTypeExpr;
+	if (autoAccessor) propNode.flags = propNode.flags.incl(NodeFlag.AutoAccessor);
 	return Result.ok(propNode);
 }
 
@@ -1300,6 +1319,12 @@ function parseClassConstructor(state: ParserState): NodeResult {
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;
 	return Result.ok(ctorNode);
+}
+
+function autoAccessorRefusal(member: Node, owner: string): string {
+	const field = member.kind == NodeKind.DecoratedDecl ? (member.data as DecoratedDeclData).decoratedNode : member;
+	if (field == null || field.kind != NodeKind.PropertyDecl || !field.flags.has(NodeFlag.AutoAccessor)) return "";
+	return `Accessor field '${(field.data as PropertyDeclData).propName}' at line ${field.location.line}: an accessor field belongs to a class, not to ${owner}`;
 }
 
 function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string, visibility: string): NodeResult {
@@ -1817,6 +1842,8 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 				if (current(state).kind == TokenKind.Semicolon) { advance(state); continue; }
 				const member = try parseClassMember(state);
+				const refusal = autoAccessorRefusal(member, "an extern class");
+				if (refusal != "") return Result.err(refusal);
 				members.push(member);
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.RBrace) advance(state);

@@ -19,7 +19,7 @@
 
 import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { makeSymbol } from "./symbol";
+import { makeSymbol, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { readonlyDataConstBinding } from "./constFold";
 
 // Single wording shared by both consumers — only the severity differs.
@@ -130,7 +130,8 @@ function moduleBindingOf(node: Node): Node | null {
 
 export function moduleBindingNeedsWritableStorage(node: Node): boolean {
 	const binding = moduleBindingOf(node);
-	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.modulePath == "") return false;
+	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.declNode == null) return false;
+	if (!hasFlag(binding.resolvedSym, SymbolFlag.Global)) return false;
 	const d = binding.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const) return true;
 	if (d.initializer == null) return true;
@@ -162,6 +163,44 @@ export function collectWritableModuleBindings(program: Node): Node[] {
 		if (binding != null && moduleBindingNeedsWritableStorage(binding)) out.push(binding);
 	}
 	return out;
+}
+
+export function emptyTopLevelMessage(fileName: string): string {
+	return `'${fileName}' calls nothing at its top level, so this Solana program would do nothing and report success for every instruction. Solana runs the top-level code of this file once per instruction: call the function that handles instructions there, for example 'when (!testBuild) { entry(); }' at the end of the file`;
+}
+
+function declaredNode(node: Node): Node {
+	if (node.kind == NodeKind.ExportDecl) return declaredNode((node.data as ExportDeclData).exportedDecl);
+	if (node.kind == NodeKind.DecoratedDecl) return declaredNode((node.data as DecoratedDeclData).decoratedNode);
+	return node;
+}
+
+function runsOnlyAtCompileTime(node: Node): boolean {
+	return match (node.kind) {
+		NodeKind.FunctionDecl | NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+		| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl | NodeKind.ActorDecl
+		| NodeKind.TestDecl | NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.MacroInvocation
+		| NodeKind.ComptimeBlock => true,
+		_ => false,
+	};
+}
+
+function callsOutsideRoutines(node: Node): boolean {
+	if (node.kind == NodeKind.CallExpr || node.kind == NodeKind.NewExpr) return true;
+	if (isFunctionLike(node) || node.kind == NodeKind.ClassDecl) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && callsOutsideRoutines(child)) found = true;
+	});
+	return found;
+}
+
+export function topLevelCallsAnything(program: Node): boolean {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const declared = declaredNode(stmt);
+		if (!runsOnlyAtCompileTime(declared) && callsOutsideRoutines(declared)) return true;
+	}
+	return false;
 }
 
 // ===== Tests =====
@@ -219,7 +258,15 @@ function fsVariable(name: string, kind: DeclKind, initializer: Node): Node {
 	}, fsLoc());
 	const sym = makeSymbol(name, SymbolKind.Variable, null, false);
 	sym.modulePath = "test.ms";
+	sym.declNode = node;
+	setFlag(sym, SymbolFlag.Global);
 	node.resolvedSym = sym;
+	return node;
+}
+
+function fsLowered(name: string, kind: DeclKind, initializer: Node): Node {
+	const node = fsVariable(name, kind, initializer);
+	node.resolvedSym.declNode = null as unknown as Node;
 	return node;
 }
 
@@ -243,11 +290,23 @@ test "freestanding: surviving writable module bindings are collected through wra
 	assert hits[1] == nonConstant;
 }
 
+test "freestanding: a binding the compiler lowered into the module is not the author's" {
+	const hoisted = fsLowered("__call_0", DeclKind.Const, fsCall());
+	const counter = fsLowered("__lhs_1", DeclKind.Let, fsNumber(0));
+	assert collectWritableModuleBindings(fsProgram([hoisted, counter])).length == 0;
+}
+
 test "freestanding: scalar module const literals need no writable storage" {
 	const numberConst = fsVariable("limit", DeclKind.Const, fsNumber(12));
 	const boolConst = fsVariable("enabled", DeclKind.Const,
 		createNodeAt(NodeKind.BooleanLiteral, { boolValue: true }, fsLoc()));
 	assert collectWritableModuleBindings(fsProgram([numberConst, boolConst])).length == 0;
+}
+
+test "freestanding: a binding a lowering declares at module scope needs no writable storage" {
+	const temp = fsVariable("__call_0", DeclKind.Const, fsCall());
+	temp.resolvedSym!.symFlags = temp.resolvedSym!.symFlags.excl(SymbolFlag.Global);
+	assert collectWritableModuleBindings(fsProgram([temp])).length == 0;
 }
 
 
@@ -297,4 +356,19 @@ test "freestanding: report position is the declaration name" {
 	const loc = freestandingAsyncLoc(fn);
 	assert loc.line == 1;
 	assert loc.column == 1;
+}
+
+test "freestanding: a top level of declarations calls nothing" {
+	const entry = fsFn("entry", "", fsBlock([fsExprStmt(fsCall())]));
+	const exported = createNodeAt(NodeKind.ExportDecl, { exportedDecl: fsFn("dispatch", "", fsBlock([fsExprStmt(fsCall())])) }, fsLoc());
+	assert !topLevelCallsAnything(fsProgram([entry, exported]));
+	assert !topLevelCallsAnything(fsProgram([]));
+	const routine = createNodeAt(NodeKind.ArrowFunction, { arrowParams: [], arrowParamTypes: [], arrowBody: fsBlock([fsExprStmt(fsCall())]), arrowFlags: "", arrowReturnType: "", arrowDefaults: [] }, fsLoc());
+	assert !topLevelCallsAnything(fsProgram([fsVariable("handler", DeclKind.Const, routine)]));
+}
+
+test "freestanding: a top-level call, nested or in an initializer, counts" {
+	assert topLevelCallsAnything(fsProgram([fsFn("entry", "", fsBlock([])), fsExprStmt(fsCall())]));
+	assert topLevelCallsAnything(fsProgram([fsBlock([fsExprStmt(fsCall())])]));
+	assert topLevelCallsAnything(fsProgram([fsVariable("result", DeclKind.Const, fsCall())]));
 }

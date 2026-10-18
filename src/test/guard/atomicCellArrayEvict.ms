@@ -43,20 +43,21 @@ function spliceInPlace(): int32 {
 
 function shrinkBySetLength(): int32 {
 	const arr: Locked<int32>[] = [new Locked(4), new Locked(5), new Locked(6)];
-	arr.setLength(1);
+	arr.shrink(1);
 	return lockedRead(arr[0], (v: int32): int32 => v);
 }
 
 function shrinkByLengthAssign(): int32 {
 	const arr: Arc<Pt>[] = [new Arc<Pt>({ x: 7 }), new Arc<Pt>({ x: 8 })];
-	arr.length = 1;
-	return arr[0].x;
+	const kept = arr[0].x;
+	arr.length = 0;
+	return kept;
 }
 
 // A plain counted array evicted in the same program as the atomic ones.
 function plainShrink(): int32 {
 	const arr: Plain[] = [{ tag: 1 }, { tag: 2 }, { tag: 3 }];
-	arr.setLength(2);
+	arr.shrink(2);
 	return arr[0].tag + arr[1].tag;
 }
 

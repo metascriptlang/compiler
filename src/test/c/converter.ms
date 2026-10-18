@@ -9,12 +9,10 @@
 import { compileToC, compileToCWithStd, compileProjectToCWithStd, MapEntry } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
-import { resetAllSideChannels } from "../../parser/context";
 import { formatNode } from "../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../compiler/fmt/options";
 
 function fmtSource(source: string): string {
-	resetAllSideChannels();
 	const parsed = parseSource(source);
 	if (!parsed.ok) return "";
 	const opts = defaultFormatOptions();

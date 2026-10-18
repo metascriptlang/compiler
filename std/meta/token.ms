@@ -49,6 +49,8 @@ export enum TokenKind {
 	// ident-like; the `>= Break`/`>= Abstract` range checks lack an upper bound (guard: the
 	// "jsx tokens are not ident-like" test).
 	JsxTagStart, JsxClose, JsxText,
+	// `**=` — appended to preserve ordinals.
+	StarStarEq,
 }
 
 export interface Token {

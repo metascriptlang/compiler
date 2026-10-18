@@ -1,4 +1,19 @@
-#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+#if defined(MSOS_WASM) || defined(MSOS_EMCC)
+#include "runtime/core/system.h"
+#include "runtime/promise/pool.h"
+
+/* No worker thread exists on this target: every spawn runs on the spawning thread, so its
+ * future is complete before anything awaits it and nothing ever helps or waits on a pool. */
+_Thread_local bool msIsPoolWorker = false;
+MS_TLS_PUBLISH(msIsPoolWorker)
+
+void msPoolSubmit(struct msSpawnCtx* ctx) { msSpawnWorkerRun(ctx); }
+bool msPoolHelpOne(void) { return false; }
+bool msPoolBusyDec(void) { return false; }
+void msPoolBusyInc(void) {}
+int32_t msPoolPendingPeek(void) { return 0; }
+
+#elif !defined(MSOS_BARE)
 /*
  * MetaScript Thread Pool — Malebolgia-style fixed worker pool
  *
@@ -53,8 +68,10 @@ static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&id
 static _Atomic(int32_t) msPoolBusyCount = 0;
 static int32_t msPoolWorkerCount = 0;
 
-int32_t msPoolBusyPeek(void) {
-	return atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed);
+static _Atomic(int32_t) msPoolPendingCount = 0;
+
+int32_t msPoolPendingPeek(void) {
+	return atomic_load_explicit(&msPoolPendingCount, memory_order_acquire);
 }
 
 /* Thread-local: true when current thread is a pool worker executing a task.
@@ -108,6 +125,13 @@ static _Atomic(bool) msPoolActorWake[MS_POOL_MAX_WORKERS] = {false};
 void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int)) {
     msPoolActorPollFn = pollFn;
     msPoolSchedIdSetterFn = idSetterFn;
+}
+
+/* Decrement only after the run: the run posts the task's completion, which the exit
+ * drain must be able to see once the count it reads reaches 0. */
+static void msPoolRunQueued(struct msSpawnCtx* task) {
+	msSpawnWorkerRun(task);
+	atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);
 }
 
 /* ===== Worker Loop ===== */
@@ -173,7 +197,7 @@ static void* msPoolWorkerLoop(void* arg) {
 
 		/* Execute spawn task from local copy (queue slot is now free) */
 		if (hasTask) {
-			msSpawnWorkerRun(&item);
+			msPoolRunQueued(&item);
 			MS_LOCK(pool);
 			pool->busyCount--;
 			atomic_fetch_sub_explicit(&msPoolBusyCount, 1, memory_order_relaxed);
@@ -347,6 +371,7 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 	/* Enqueue — copy struct into slot (Malebolgia: zero alloc, no pointer) */
 	pool->queue[pool->tail] = *ctx;
 	pool->tail = (pool->tail + 1) % pool->cap;
+	atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
 	/* Signal one IDLE worker (find via bitmask — guaranteed to be sleeping) */
 	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
 	if (idle != 0) {
@@ -370,7 +395,7 @@ bool msPoolHelpOne(void) {
 	pool->head = (pool->head + 1) % pool->cap;
 	MS_SIGNAL(pool->space);  /* wake any backpressured submitter */
 	MS_UNLOCK(pool);
-	msSpawnWorkerRun(&task);
+	msPoolRunQueued(&task);
 	return true;
 }
 
@@ -384,11 +409,8 @@ bool msPoolHelpOne(void) {
  * nested help-first wait chains reach it routinely (a waiter helps, the helped
  * task waits, that waiter helps again …) — so a caller that unconditionally
  * re-increments on exit adds a count it never removed, and the counter drifts
- * upward for good. That strands msDrainUntilIdle, whose exit condition is
- * msPoolBusyPeek() == 0: the program finishes all its work, prints everything,
- * and then never exits (proven 2026-09-05 by corpus 421, which read a steady
- * busy=1..2 with the pool completely idle). Pair every Dec with an Inc ONLY
- * when this returned true. */
+ * upward for good, and shouldSend then inlines spawns the idle pool could take.
+ * Pair every Dec with an Inc ONLY when this returned true. */
 bool msPoolBusyDec(void) {
 	int32_t prev = atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed);
 	while (prev > 0) {
@@ -450,4 +472,4 @@ void msPoolShutdown(void) {
 	gPool = NULL;
 }
 
-#endif /* !MSOS_BARE && !MSOS_WASM */
+#endif /* MSOS_WASM || MSOS_EMCC, else !MSOS_BARE */

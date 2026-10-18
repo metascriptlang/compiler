@@ -238,6 +238,9 @@ Macros can receive any `Node` type as argument — functions, expressions, JSX. 
 | Expression | `validate(x + y)` | `BinaryExpr` node |
 | JSX | `jsx(<View>...</View>)` | `JSXElement` node |
 | Const ref | `jsx(el)` where `const el = <View/>` | `JSXElement` node (inlined) |
+| Computed key | `styles({ [screen.wide]: { width: 280 } })` | `ObjectLiteral` whose property is a `ComputedProperty` node |
+
+A computed key whose expression is not a string literal is kept for the macro (measured 2026-10-15 on C, JS and the Raiser, corpus `macroReadsComputedKey`): `keys[i]` is `"__computed__"` and `properties[i]` is `{ kind: NodeKind.ComputedProperty, computedKey, computedValue }`. `computedKey` is the expression as checked, so `getImpl(computedKey.object)` on `[screen.wide]` returns the `VariableDecl` of `screen`, at the top of the argument and nested two objects deep; two computed keys are two properties. Outside a macro argument such a key is an error (`docs/LANG.md`, Structs, Computed keys), so a macro that keeps a `ComputedProperty` in its output gets that error at the key. `["lit"]` is the plain key `lit` and arrives as one.
 
 Two forms that older revisions of this table listed do **not** exist (measured 2026-09-08): `@log class Foo {}` does not pass the class to `log` (`Macro 'log' expects 1 args, got 0`), and `@routes { … }` parses as a decorator on a block statement and passes nothing. Attaching behaviour to a declaration is the job of decorators, below.
 

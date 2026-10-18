@@ -20,7 +20,7 @@ import { containsConditionalEval } from "./callHoist";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull, makeHiddenStdConv, runtimeRef,
+	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, generatedRef,
 } from "../util";
 import { overloadWinner } from "../../checker/symbol";
 
@@ -67,7 +67,7 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 					}
 
 					if (srcType.kind == TypeKind.Array) {
-						const elems = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						const elems = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
 						elems.nodeType = createPtr(spanTarget.typeReturn);
 						const dataExpr = makeHiddenStdConv(elems, spanDataPtr(spanTarget.typeReturn), loc);
 						const lenExpr = makeMember(secondRead(d.convExpr), "length", loc);
@@ -79,7 +79,7 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
 						// String -> Span<char>: { data: msArrDataOr0(str.p), len: str.len }
-						const bytes = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						const bytes = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
 						bytes.nodeType = createPtr(spanTarget.typeReturn);
 						const dataExpr2 = makeHiddenStdConv(bytes, createPtr(spanTarget.typeReturn), loc);
 						const lenExpr2 = makeMember(secondRead(d.convExpr), "len", loc);
@@ -381,23 +381,15 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 	const startExpr = bd.left;
 	const endExpr = bd.right;
 
-	// Build data pointer: arr.data + start (pointer arithmetic in C)
-	let dataBase: Node | null = null;
-	if (arrType.kind == TypeKind.Array) {
-		// Heap array: arr.p->data + start (nativeLower rewrites .data to .p->data for Arrays)
-		dataBase = makeMember(d.array, "data", loc);
+	let dataExpr: Node;
+	if (arrType.kind == TypeKind.Array || arrType.kind == TypeKind.String) {
+		dataExpr = makeCall(runtimeRef("msArrDataAt", loc), [makeMember(d.array, "p", loc), startExpr], loc);
 	} else if (arrType.kind == TypeKind.SizedArray || arrType.kind == TypeKind.Span) {
-		// Stack array or span: arr.data + start
-		dataBase = makeMember(d.array, "data", loc);
-	} else if (arrType.kind == TypeKind.String) {
-		// String: msArrDataOr0(str.p) + start — msString holds the bytes in its payload
-		dataBase = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.array, "p", loc)], loc);
+		dataExpr = makeBinary(makeMember(d.array, "data", loc), "+", startExpr, loc);
 	} else {
 		return node;
 	}
 
-	// data = base + start
-	const dataExpr = makeBinary(dataBase, "+", startExpr, loc);
 	// Set pointer type for correct C emission
 	if (resultType.typeReturn != null) {
 		dataExpr.nodeType = createPtr(resultType.typeReturn);

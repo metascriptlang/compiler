@@ -62,12 +62,12 @@ function initialize(): Result<uint64, ProgramError> {
 	const x = try accounts<InitializeAccounts>();
 	const config = try createPda<Config>(x.admin, x.config, ["config"]);
 	const counter = try createPda<Counter>(x.admin, x.counter, ["counter"]);
-	const settings = config.account.data();
+	const settings = config.asMutable().data();
 	settings.admin = x.admin.key();
-	settings.bump = config.bump;
-	const value = counter.account.data();
+	settings.bump = config.foundBump();
+	const value = counter.asMutable().data();
 	value.value = 0;
-	value.bump = counter.bump;
+	value.bump = counter.foundBump();
 	return Result.ok(0);
 }
 

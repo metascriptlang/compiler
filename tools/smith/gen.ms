@@ -2,6 +2,7 @@ import { Rng, seeded } from "./rng";
 import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, W, W_DEFAULTS, tyName, format } from "./features";
 
 const FN_COST_CAP: int64 = 20000 as int64;
+const ROUTINE_FRAMES: int32 = 4;
 const TOP_COST_CAP: int64 = 200000 as int64;
 const GEN_NODE_CAP: int32 = 4096;
 
@@ -25,6 +26,13 @@ enum EntKind {
 	BoxVar,
 	StructVar,
 	ClassVar,
+	ArrayVar,
+	FixedVar,
+	MapVar,
+	SetVar,
+	StrVar,
+	OwnVar,
+	HeldVar,
 }
 
 struct Ent {
@@ -63,7 +71,7 @@ function bitsOf(t: Ty): int32 {
 	};
 }
 
-function trapsOnOverflow(t: Ty): boolean { return t == Ty.Int32 || t == Ty.Int64; }
+function trapsOnOverflow(t: Ty): boolean { return isSigned(t); }
 
 function posMax(t: Ty): uint64 {
 	return match (t) {
@@ -149,6 +157,8 @@ const FLOAT_EDGES: string[] = [
 const INT_OPS: string[] = ["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"];
 const FLOAT_OPS: string[] = ["+", "-", "*", "/", "%"];
 const CMP_OPS: string[] = ["==", "!=", "<", "<=", ">", ">="];
+const STR_CHARS: string[] = ["a", "b", "Z", " ", "é", "ÿ", "中", "-", "0", "\\n", "\\t", "\\\"", "\\\\"];
+const STR_TESTS: string[] = [" == ", " != ", " < ", " > ", ".includes(", ".startsWith(", ".endsWith("];
 
 class Gen {
 	rng: Rng = new Rng();
@@ -174,6 +184,13 @@ class Gen {
 	makerCount: int32 = 0;
 	nodesLeft: int32 = GEN_NODE_CAP;
 	w: int32[] = W_DEFAULTS;
+	bodyDepth: int32 = 0;
+	famShape: Shape = Shape.Other;
+	elseArms: int32 = 0;
+	atTop: boolean = false;
+	arithInElse: int32 = 0;
+	blockId: int32 = 0;
+	blockCount: int32 = 0;
 
 	wt(k: W): int32 { return this.w[k as int32]; }
 
@@ -366,8 +383,11 @@ class Gen {
 	}
 
 	binary(t: Ty, depth: int32): string {
+		const inElse = this.elseArms > 0;
+		if (inElse) { this.arithInElse++; }
 		const a = this.expr(t, depth + 1);
 		const b = this.expr(t, depth + 1);
+		if (inElse) { this.arithInElse--; }
 		if (isFloat(t)) { return "(" + a + " " + this.pickOp(FLOAT_OPS) + " " + b + ")"; }
 		const op = this.pickOp(INT_OPS);
 		const guarded = op == "/" || op == "%" || (trapsOnOverflow(t) && (op == "+" || op == "-" || op == "*"));
@@ -383,8 +403,7 @@ class Gen {
 		const a = this.expr(t, depth + 1);
 		if (isFloat(t)) { return "(-" + a + ")"; }
 		if (!isSigned(t) || this.rng.chance(40)) { return "(~" + a + ")"; }
-		if (trapsOnOverflow(t)) { return this.negHelper(t) + "(" + a + ")"; }
-		return "(-" + a + ")";
+		return this.negHelper(t) + "(" + a + ")";
 	}
 
 	convert(t: Ty, depth: int32): string {
@@ -437,9 +456,10 @@ class Gen {
 		this.nodesLeft--;
 		if (depth >= this.exprMax || !this.reserve(1 as int64)) { return this.leaf(t); }
 		if (this.fams.length > 0 && this.rng.chance(this.wt(W.ExprFam))) {
+			this.famShape = Shape.Other;
 			const fam = this.famExpr(t, depth);
-			if (fam != "") {
-				this.shape = Shape.Other;
+			if (fam != "" && !(this.famShape == Shape.Ternary && this.arithInElse > 0)) {
+				this.shape = this.famShape;
 				return fam;
 			}
 		}
@@ -454,7 +474,8 @@ class Gen {
 		} else if (kind == 3) {
 			out = this.convert(t, depth);
 		} else if (kind == 4) {
-			out = "(" + this.cond(depth + 1) + " ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
+			if (this.arithInElse > 0) { return this.leaf(t); }
+			out = "(" + this.cond(depth + 1) + " ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
 			shape = Shape.Ternary;
 		} else {
 			const c = this.call(t, depth);
@@ -474,6 +495,26 @@ class Gen {
 		const out: Ent[] = [];
 		for (const e of this.ents) { if (e.kind == kind && e.ty == t) { out.push(e); } }
 		return out;
+	}
+
+	entsAny(kind: EntKind): Ent[] {
+		const out: Ent[] = [];
+		for (const e of this.ents) { if (e.kind == kind) { out.push(e); } }
+		return out;
+	}
+
+	pickEnt(ents: Ent[]): Ent { return ents[this.rng.below(ents.length)]; }
+
+	elseExpr(t: Ty, depth: int32): string {
+		this.elseArms++;
+		const e = this.expr(t, depth + 1);
+		this.elseArms--;
+		return e;
+	}
+
+	ternary(text: string): string {
+		this.famShape = Shape.Ternary;
+		return text;
 	}
 
 	entName(prefix: string): string {
@@ -498,7 +539,9 @@ class Gen {
 		this.cost = 0 as int64;
 		this.costCap = cap;
 		this.mult = 1 as int64;
+		this.bodyDepth++;
 		const text = this.expr(t, depth);
+		this.bodyDepth--;
 		const cost = this.cost;
 		this.cost = savedCost;
 		this.costCap = savedCap;
@@ -532,6 +575,9 @@ class Gen {
 		if (fam == Fam.Closure) { return this.closureExpr(t, depth); }
 		if (fam == Fam.Union) { return this.unionExpr(t, depth); }
 		if (fam == Fam.Agg) { return this.aggExpr(t, depth); }
+		if (fam == Fam.Coll) { return this.collExpr(t, depth); }
+		if (fam == Fam.Str) { return this.strExpr(t, depth); }
+		if (fam == Fam.Own) { return this.ownExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
@@ -737,6 +783,388 @@ class Gen {
 		return text;
 	}
 
+	collHelpers(t: Ty): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+		this.useHelper("pushA" + X, "function pushA" + X + "(xs: " + T + "[], x: " + T + "): " + T + "[] { xs.push(x); return xs; }\n" +
+			"function restA" + X + "(d: " + T + ", ...xs: " + T + "[]): " + T + " { return xs.length > 0 ? xs[xs.length - 1] : d; }\n");
+		return X;
+	}
+
+	items(t: Ty, depth: int32, n: int32): string {
+		let out = "";
+		for (let i = 0; i < n; i++) {
+			const e = this.expr(t, depth + 1);
+			out = out == "" ? e : out + ", " + e;
+		}
+		return out;
+	}
+
+	collSize(t: Ty, depth: int32): string {
+		if (t == Ty.Int32) {
+			const arrays = this.entsAny(EntKind.ArrayVar);
+			if (arrays.length == 0) { return ""; }
+			const a = this.pickEnt(arrays);
+			const form = this.rng.below(4);
+			if (form == 1 && !isFloat(a.ty)) { return "(" + a.name + ".indexOf(" + this.expr(a.ty, depth + 1) + ") as int32)"; }
+			if (form == 2) { return a.name + ".join(\",\").length"; }
+			if (form == 3) { return a.name + ".concat(" + this.pickEnt(this.entsOf(EntKind.ArrayVar, a.ty)).name + ").length"; }
+			return a.name + ".length";
+		}
+		if (isFloat(t)) { return ""; }
+		const owners = this.entsOf(EntKind.ArrayVar, t).concat(this.entsOf(EntKind.SetVar, t));
+		if (owners.length == 0) { return ""; }
+		const o = this.pickEnt(owners);
+		const test = o.kind == EntKind.SetVar ? ".has(" : ".includes(";
+		const text = "(" + o.name + test + this.expr(t, depth + 1) + ") ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
+		return this.ternary(text);
+	}
+
+	collExpr(t: Ty, depth: int32): string {
+		const X = this.collHelpers(t);
+		const arrays = this.entsOf(EntKind.ArrayVar, t);
+		const k = this.pickW(W.CollIndex, W.CollRest);
+		if (k == 1) {
+			const size = this.collSize(t, depth);
+			if (size != "") { return size; }
+		}
+		if (k == 2) {
+			const maps = this.entsOf(EntKind.MapVar, t);
+			if (maps.length > 0) {
+				const text = "(" + this.pickEnt(maps).name + ".get(" + this.smallInt(depth) + ") ?? " + this.elseExpr(t, depth) + ")";
+				return this.ternary(text);
+			}
+		}
+		if (k == 3) {
+			const fixed = this.entsOf(EntKind.FixedVar, t);
+			if (fixed.length > 0) {
+				const f = this.pickEnt(fixed);
+				return f.name + "[" + String(this.rng.below(f.len)) + "]";
+			}
+		}
+		if (k == 4) {
+			const d = this.expr(t, depth + 1);
+			if (arrays.length > 0 && this.rng.chance(60)) { return "restA" + X + "(" + d + ", ..." + this.pickEnt(arrays).name + ")"; }
+			const rest = this.items(t, depth, this.rng.below(3));
+			return "restA" + X + "(" + d + (rest == "" ? "" : ", " + rest) + ")";
+		}
+		if (arrays.length > 0 && this.rng.chance(70)) {
+			const a = this.pickEnt(arrays).name;
+			const text = "(" + a + ".length > 0 ? " + a + "[ixI(" + this.smallInt(depth) + ", " + a + ".length)] : " + this.elseExpr(t, depth) + ")";
+			return this.ternary(text);
+		}
+		const n = this.rng.between(1, 3);
+		return "[" + this.items(t, depth, n) + "][" + String(this.rng.below(n)) + "]";
+	}
+
+	collLoop(t: Ty, a: string, indent: string): string {
+		const trips = this.rng.between(1, 4);
+		if (!this.reserve((2 * trips) as int64)) { return ""; }
+		const init = this.expr(t, 0);
+		const acc = this.newLocal(t);
+		const j = this.entName("j");
+		const maps = this.entsOf(EntKind.MapVar, t);
+		const form = this.rng.below(maps.length > 0 ? 3 : 2);
+		const saved = this.scope.length;
+		const savedMult = this.mult;
+		this.mult = this.mult * (trips as int64);
+		let head = "";
+		if (form == 1) {
+			this.scope.push({ name: j, ty: Ty.Int32, writable: false });
+			this.scope.push({ name: a + "[" + j + "]", ty: t, writable: false });
+			head = "for (let " + j + ": int32 = 0; " + j + " < " + a + ".length && " + j + " < " + String(trips) + "; " + j + "++) {\n";
+		} else if (form == 2) {
+			const key = this.entName("x");
+			const value = this.entName("x");
+			this.scope.push({ name: key, ty: Ty.Int32, writable: false });
+			this.scope.push({ name: value, ty: t, writable: false });
+			head = "for (const [" + key + ", " + value + "] of " + this.pickEnt(maps).name + ") {\n";
+		} else {
+			const x = this.entName("x");
+			this.scope.push({ name: x, ty: t, writable: false });
+			head = "for (const " + x + " of " + a + ") {\n";
+		}
+		const body = this.expr(t, 1);
+		this.mult = savedMult;
+		while (this.scope.length > saved) { this.scope.pop(); }
+		const tail = form == 1 ? "" : indent + "\t" + j + "++;\n" + indent + "\tif (" + j + " >= " + String(trips) + ") { break; }\n";
+		return indent + "let " + acc + ": " + tyName(t) + " = " + init + ";\n" +
+			(form == 1 ? "" : indent + "let " + j + ": int32 = 0;\n") +
+			indent + head +
+			indent + "\t" + acc + " = " + body + ";\n" +
+			tail + indent + "}\n";
+	}
+
+	collStatement(t: Ty, indent: string): string {
+		const X = this.collHelpers(t);
+		const T = tyName(t);
+		const arrays = this.entsOf(EntKind.ArrayVar, t);
+		const k = this.pickW(W.CollDecl, W.CollFixed);
+		if (k >= 1 && k <= 5 && arrays.length > 0) {
+			const a = this.pickEnt(arrays).name;
+			if (k == 1) {
+				const value = this.rng.chance(50) ? a : "pushA" + X + "(" + a + ", " + this.expr(t, 0) + ")";
+				const name = this.entName("a");
+				this.ents.push({ kind: EntKind.ArrayVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return indent + "const " + name + " = " + value + ";\n";
+			}
+			if (k == 2) { return indent + a + ".push(" + this.expr(t, 0) + ");\n"; }
+			if (k == 3) {
+				const form = this.rng.below(6);
+				const guard = indent + "if (" + a + ".length > 0) { ";
+				if (form == 0) { return guard + a + "[ixI(" + this.smallInt(0) + ", " + a + ".length)] = " + this.expr(t, 0) + "; }\n"; }
+				if (form == 1) { return guard + a + ".pop(); }\n"; }
+				if (form == 2) { return guard + a + ".splice(ixI(" + this.smallInt(0) + ", " + a + ".length), 1); }\n"; }
+				if (form == 3) {
+					const n = String(this.rng.below(4));
+					return indent + "if (" + a + ".length > " + n + ") { " + a + ".setLength(" + n + "); }\n";
+				}
+				if (form == 4) { return indent + a + ".fill(" + this.expr(t, 0) + ");\n"; }
+				return indent + a + ".reverse();\n";
+			}
+			if (k == 4) { return this.collLoop(t, a, indent); }
+			const n = this.rng.between(1, 3);
+			let pattern = "";
+			for (let i = 0; i < n; i++) {
+				const slot = "l" + String(this.localCount + i) + " = " + this.expr(t, 0);
+				pattern = pattern == "" ? slot : pattern + ", " + slot;
+			}
+			for (let i = 0; i < n; i++) { this.newLocal(t); }
+			if (this.rng.chance(50)) { pattern += ", ..." + this.entName("r"); }
+			return indent + "let [" + pattern + "] = " + a + ";\n";
+		}
+		if (k == 6) {
+			const keyed = this.entsOf(EntKind.MapVar, t).concat(this.entsOf(EntKind.SetVar, t));
+			if (keyed.length > 0 && this.rng.chance(60)) {
+				const o = this.pickEnt(keyed);
+				const drop = this.rng.chance(30);
+				if (o.kind == EntKind.SetVar) { return indent + o.name + (drop ? ".delete(" : ".add(") + this.expr(t, 0) + ");\n"; }
+				if (drop) { return indent + o.name + ".delete(" + this.smallInt(0) + ");\n"; }
+				return indent + o.name + ".set(" + this.smallInt(0) + ", " + this.expr(t, 0) + ");\n";
+			}
+			if (isFloat(t) || this.rng.chance(50)) {
+				const name = this.entName("m");
+				const text = indent + "const " + name + " = new Map<int32, " + T + ">();\n" +
+					indent + name + ".set(" + this.smallInt(0) + ", " + this.expr(t, 0) + ");\n";
+				this.ents.push({ kind: EntKind.MapVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return text;
+			}
+			const name = this.entName("m");
+			const text = indent + "const " + name + " = new Set<" + T + ">();\n" +
+				indent + name + ".add(" + this.expr(t, 0) + ");\n";
+			this.ents.push({ kind: EntKind.SetVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+			return text;
+		}
+		if (k == 7) {
+			const fixed = this.entsOf(EntKind.FixedVar, t);
+			if (fixed.length > 0 && this.rng.chance(60)) {
+				const f = this.pickEnt(fixed);
+				if (this.rng.chance(50)) { return indent + f.name + "[" + String(this.rng.below(f.len)) + "] = " + this.expr(t, 0) + ";\n"; }
+				const name = this.entName("w");
+				this.ents.push({ kind: EntKind.FixedVar, name: name, ty: t, params: [], len: f.len, cost: 0 as int64 });
+				return indent + "let " + name + ": " + T + "[" + String(f.len) + "] = " + f.name + ";\n";
+			}
+			const n = this.rng.between(1, 4);
+			const value = this.items(t, -1, n);
+			const name = this.entName("w");
+			this.ents.push({ kind: EntKind.FixedVar, name: name, ty: t, params: [], len: n, cost: 0 as int64 });
+			return indent + "let " + name + ": " + T + "[" + String(n) + "] = [" + value + "];\n";
+		}
+		let value = "";
+		const form = arrays.length > 0 ? this.rng.below(5) : 0;
+		if (form == 1) {
+			value = "[..." + this.pickEnt(arrays).name + ", " + this.expr(t, 0) + "]";
+		} else if (form == 2) {
+			value = this.pickEnt(arrays).name + ".concat(" + this.pickEnt(arrays).name + ")";
+		} else if (form == 3) {
+			const from = this.rng.below(3);
+			value = this.pickEnt(arrays).name + ".slice(" + String(from) + (this.rng.chance(50) ? ", " + String(from + this.rng.below(4)) : "") + ")";
+		} else if (form == 4) {
+			const a = this.pickEnt(arrays).name;
+			const trips = this.rng.between(1, 4);
+			const f = this.lambda([t], t, 0, this.spare(trips as int64));
+			if (!this.reserve((trips as int64) * f.cost)) { return ""; }
+			value = a + ".slice(0, " + String(trips) + ").map(" + f.text + ")";
+		} else {
+			value = "[" + this.items(t, -1, this.rng.below(4)) + "]";
+		}
+		const name = this.entName("a");
+		this.ents.push({ kind: EntKind.ArrayVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return indent + "let " + name + ": " + T + "[] = " + value + ";\n";
+	}
+
+	strLiteral(min: int32): string {
+		let out = "";
+		const n = this.rng.between(min, 4);
+		for (let i = 0; i < n; i++) { out += STR_CHARS[this.rng.below(STR_CHARS.length)]; }
+		return out;
+	}
+
+	strLeaf(): string {
+		const vars = this.entsAny(EntKind.StrVar);
+		if (vars.length > 0 && this.rng.chance(60)) { return this.pickEnt(vars).name; }
+		return "\"" + this.strLiteral(0) + "\"";
+	}
+
+	strText(depth: int32): string {
+		if (this.nodesLeft == 0 || depth >= this.exprMax || !this.reserve(1 as int64)) { return this.strLeaf(); }
+		this.nodesLeft--;
+		const k = this.pickW(W.StrConcat, W.StrEdit);
+		if (k == 0) { return "(" + this.strText(depth + 1) + " + " + this.strText(depth + 1) + ")"; }
+		if (k == 1) {
+			const t = this.pickTy();
+			if (this.rng.chance(50)) { return "String(" + this.expr(t, depth + 1) + ")"; }
+			return "`" + this.strLiteral(0) + "${" + this.expr(t, depth + 1) + "}" + this.strLiteral(0) + "${" + this.strText(depth + 1) + "}`";
+		}
+		const s = "(" + this.strText(depth + 1) + ")";
+		if (k == 2) {
+			const form = this.rng.below(4);
+			const from = String(this.rng.below(5));
+			const to = String(this.rng.below(7));
+			if (form == 0) { return s + ".slice(" + from + (this.rng.chance(50) ? ", " + to : "") + ")"; }
+			if (form == 1) { return s + ".substring(" + from + ", " + to + ")"; }
+			if (form == 2) { return s + ".charAt(" + String(this.rng.below(6)) + ")"; }
+			this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+			const at = this.useHelper("atS", "function atS(s: string, i: int32): string { return s.length > 0 ? s[ixI(i, s.length)] : \"\"; }\n");
+			return at + "(" + s + ", " + this.smallInt(depth) + ")";
+		}
+		if (k == 3) { return s + [".toUpperCase()", ".toLowerCase()", ".trim()", ".trimStart()", ".trimEnd()"][this.rng.below(5)]; }
+		if (k == 4) {
+			const form = this.rng.below(3);
+			if (form == 0) { return s + ".repeat(" + String(this.rng.below(3)) + ")"; }
+			const filled = "(" + s + " + \"" + this.strLiteral(1) + "\")";
+			return filled + (form == 1 ? ".padStart(" : ".padEnd(") + String(this.rng.below(9)) + ", \"" + this.strLiteral(1) + "\")";
+		}
+		const form = this.rng.below(3);
+		const search = "\"" + this.strLiteral(1) + "\"";
+		if (form == 0) { return s + ".replace(" + search + ", \"" + this.strLiteral(0) + "\")"; }
+		if (form == 1) { return s + ".replaceAll(" + search + ", \"" + this.strLiteral(0) + "\")"; }
+		return s + ".split(" + search + ").join(\"" + this.strLiteral(0) + "\")";
+	}
+
+	strExpr(t: Ty, depth: int32): string {
+		const k = this.pickW(W.StrSize, W.StrTest);
+		if (t == Ty.Int32 && k == 0) {
+			const s = "(" + this.strText(depth + 1) + ")";
+			const form = this.rng.below(4);
+			if (form == 0) { return s + ".length"; }
+			if (form == 3) { return s + ".split(\"" + this.strLiteral(1) + "\").length"; }
+			return "(" + s + (form == 1 ? ".indexOf(\"" : ".lastIndexOf(\"") + this.strLiteral(1) + "\") as int32)";
+		}
+		if (t == Ty.Int32 && k == 1) {
+			this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+			const code = this.useHelper("codeS", "function codeS(s: string, i: int32): int32 { return s.length > 0 ? (s.charCodeAt(ixI(i, s.length)) as int32) : -1; }\n");
+			return code + "(" + this.strText(depth + 1) + ", " + this.smallInt(depth) + ")";
+		}
+		const test = STR_TESTS[this.rng.below(STR_TESTS.length)];
+		const left = this.strText(depth + 1);
+		const a = left.startsWith("\"") ? "(" + left + " as string)" : left;
+		const b = this.strText(depth + 1);
+		const c = test.startsWith(".") ? "(" + a + ")" + test + b + ")" : "(" + a + test + b + ")";
+		const text = "(" + c + " ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
+		return this.ternary(text);
+	}
+
+	strStatement(indent: string): string {
+		const vars = this.entsAny(EntKind.StrVar);
+		const k = this.pickW(W.StrDecl, W.StrAssign);
+		if (k > 0 && vars.length > 0) {
+			const v = this.pickEnt(vars).name;
+			if (k == 1) { return indent + v + " += (" + this.strText(0) + ").slice(0, 8);\n"; }
+			return indent + v + " = (" + this.strText(0) + ").slice(0, 32);\n";
+		}
+		const value = this.strText(0);
+		const name = this.entName("s");
+		this.ents.push({ kind: EntKind.StrVar, name: name, ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 });
+		return indent + "let " + name + ": string = " + value + ";\n";
+	}
+
+	ownHelpers(t: Ty): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const O = "Own" + X;
+		this.useHelper("ownHooks", "let ownHooks: int32 = 0;\n");
+		this.useHelper("ixI", "function ixI(i: int32, n: int32): int32 { const r = i % n; return r < 0 ? r + n : r; }\n");
+		this.useHelper(O, "struct " + O + " { v: " + T + "; tag: string; }\n" +
+			"function onDestroy(this o: " + O + "): void { ownHooks = (ownHooks + 1) % 1000; }\n" +
+			"function onCopy(this ref d: " + O + ", s: " + O + "): void { ownHooks = (ownHooks + 1) % 1000; d.v = s.v; d.tag = s.tag; }\n" +
+			"function mkO" + X + "(v: " + T + ", t: string): " + O + " { return { v: v, tag: t }; }\n" +
+			"function takeO" + X + "(o: " + O + "): " + T + " { return o.v; }\n" +
+			"function bumpO" + X + "(ref o: " + O + ", x: " + T + "): void { o.v = x; o.tag = o.tag.slice(0, 4) + \"+\"; }\n" +
+			"function fillO" + X + "(out o: " + O + ", x: " + T + "): void { o = mkO" + X + "(x, \"o\"); }\n");
+		return X;
+	}
+
+	ownExpr(t: Ty, depth: int32): string {
+		if (this.bodyDepth > 0) { return ""; }
+		const owns = this.entsOf(EntKind.OwnVar, t);
+		const held = this.entsOf(EntKind.HeldVar, t);
+		const k = this.pickW(W.OwnField, W.OwnHeld);
+		if (k == 1 && held.length > 0) {
+			const h = this.pickEnt(held).name;
+			const text = "(" + h + ".length > 0 ? " + h + "[ixI(" + this.smallInt(depth) + ", " + h + ".length)].v : " + this.elseExpr(t, depth) + ")";
+			return this.ternary(text);
+		}
+		if (owns.length == 0) { return ""; }
+		const o = this.pickEnt(owns).name;
+		return t == Ty.Int32 && this.rng.chance(30) ? o + ".tag.length" : o + ".v";
+	}
+
+	dropEnt(name: string): void {
+		for (let i = 0; i < this.ents.length; i++) {
+			if (this.ents[i].name == name) {
+				this.ents.splice(i, 1);
+				return;
+			}
+		}
+	}
+
+	ownStatement(t: Ty, indent: string): string {
+		const X = this.ownHelpers(t);
+		const O = "Own" + X;
+		const owns = this.entsOf(EntKind.OwnVar, t);
+		const held = this.entsOf(EntKind.HeldVar, t);
+		const k = this.pickW(W.OwnDecl, W.OwnSink);
+		if (k >= 1 && owns.length > 0) {
+			const o = this.pickEnt(owns).name;
+			if (k == 1) {
+				const other = this.pickEnt(owns).name;
+				if (other != o && this.rng.chance(50)) { return indent + o + " = " + other + ";\n"; }
+				const name = this.entName("o");
+				this.ents.push({ kind: EntKind.OwnVar, name: name, ty: t, params: [], len: this.blockId, cost: 0 as int64 });
+				return indent + "let " + name + ": " + O + " = " + o + ";\n";
+			}
+			if (k == 2) {
+				const movable: Ent[] = [];
+				for (const e of owns) { if (e.len == this.blockId) { movable.push(e); } }
+				if (movable.length > 0) {
+					const m = this.pickEnt(movable).name;
+					this.dropEnt(m);
+					const form = this.rng.below(held.length > 0 ? 3 : 2);
+					if (form == 2) { return indent + this.pickEnt(held).name + ".push(move " + m + ");\n"; }
+					if (form == 1) { return indent + "let " + this.newLocal(t) + ": " + tyName(t) + " = takeO" + X + "(move " + m + ");\n"; }
+					const name = this.entName("o");
+					this.ents.push({ kind: EntKind.OwnVar, name: name, ty: t, params: [], len: this.blockId, cost: 0 as int64 });
+					return indent + "let " + name + ": " + O + " = move " + m + ";\n";
+				}
+			}
+			if (k == 3) { return indent + "bumpO" + X + "(" + o + ", " + this.expr(t, 0) + ");\n"; }
+			if (k == 4) { return indent + "fillO" + X + "(out " + o + ", " + this.expr(t, 0) + ");\n"; }
+			if (k == 5) {
+				if (held.length > 0 && this.rng.chance(50)) { return indent + this.pickEnt(held).name + ".push(" + o + ");\n"; }
+				const value = "[" + o + ", mkO" + X + "(" + this.expr(t, 0) + ", \"h\")]";
+				const name = this.entName("h");
+				this.ents.push({ kind: EntKind.HeldVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+				return indent + "let " + name + ": " + O + "[] = " + value + ";\n";
+			}
+		}
+		const value = "mkO" + X + "(" + this.expr(t, 0) + ", \"" + this.strLiteral(0) + "\")";
+		const name = this.entName("o");
+		this.ents.push({ kind: EntKind.OwnVar, name: name, ty: t, params: [], len: this.blockId, cost: 0 as int64 });
+		return indent + "let " + name + ": " + O + " = " + value + ";\n";
+	}
+
 	maker(t: Ty): Routine {
 		const name = "mk" + String(this.makerCount);
 		this.makerCount = this.makerCount + 1;
@@ -763,7 +1191,7 @@ class Gen {
 		const t = this.pickTy();
 		const T = tyName(t);
 		if (fam == Fam.Closure) {
-			const k = this.pickW(W.ClosureDecl, W.ClosureFill);
+			const k = this.pickW(W.ClosureDecl, W.ClosureRoutine);
 			if (k == 0) {
 				const params: Ty[] = [];
 				const n = this.rng.below(3);
@@ -801,6 +1229,7 @@ class Gen {
 				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [t], len: 0, cost: mk.cost });
 				return text;
 			}
+			if (k == 5) { return this.routineDecl(t, indent); }
 			const name = this.entName("a");
 			const j = this.entName("j");
 			const n = this.rng.between(1, 4);
@@ -812,6 +1241,9 @@ class Gen {
 				indent + "for (let " + j + ": int32 = 0; " + j + " < " + String(n) + "; " + j + "++) { " + name + ".push(" + body.text + "); }\n";
 		}
 		if (fam == Fam.Agg) { return this.aggStatement(t, indent); }
+		if (fam == Fam.Coll) { return this.collStatement(t, indent); }
+		if (fam == Fam.Str) { return this.strStatement(indent); }
+		if (fam == Fam.Own) { return this.ownStatement(t, indent); }
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
 			const vars = this.entsOf(EntKind.UnionVar, t);
@@ -834,6 +1266,32 @@ class Gen {
 		const name = this.entName("b");
 		const text = indent + "const " + name + " = new BoxG<" + T + ">(" + this.expr(t, 0) + ");\n";
 		this.ents.push({ kind: EntKind.BoxVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return text;
+	}
+
+	routineDecl(t: Ty, indent: string): string {
+		const outer: Var[] = [];
+		for (const v of this.scope) {
+			if (v.ty == t) { outer.push(v); }
+		}
+		const name = this.entName("r");
+		const n = this.entName("q");
+		this.scope.push({ name: n, ty: Ty.Int32, writable: false });
+		const body = this.routine(t, 1, FN_COST_CAP);
+		this.scope.pop();
+		const cost = body.cost + (ROUTINE_FRAMES as int64);
+		this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [Ty.Int32], len: 0, cost: cost });
+		const head = this.rng.chance(50) && !this.atTop ? "function " + name + "(" + n + ": int32): " + tyName(t) + " {\n" : "const " + name + " = (" + n + ": int32): " + tyName(t) + " => {\n";
+		let text = indent + head +
+			indent + "\tif (" + n + " <= 0 || " + n + " >= " + String(ROUTINE_FRAMES) + ") { return " + body.text + "; }\n" +
+			(outer.length == 0 ? "" : indent + "\tif (" + n + " == 2) { return " + outer[this.rng.below(outer.length)].name + "; }\n") +
+			indent + "\treturn " + name + "(" + n + " - 1);\n" +
+			indent + (head.startsWith("const ") ? "};\n" : "}\n");
+		if (this.rng.chance(50)) {
+			const alias = this.entName("k");
+			this.ents.push({ kind: EntKind.Callable, name: alias, ty: t, params: [Ty.Int32], len: 0, cost: cost });
+			text += indent + "const " + alias + " = " + name + ";\n";
+		}
 		return text;
 	}
 
@@ -952,6 +1410,9 @@ class Gen {
 		const saved = this.scope.length;
 		const savedEnts = this.ents.length;
 		const n = this.rng.between(1, this.stmtMax);
+		const savedBlock = this.blockId;
+		this.blockCount++;
+		this.blockId = this.blockCount;
 		let out = "";
 		for (let i = 0; i < n; i++) {
 			if (this.nodesLeft == 0 || this.cost + this.mult > this.costCap) { break; }
@@ -959,6 +1420,7 @@ class Gen {
 		}
 		while (this.scope.length > saved) { this.scope.pop(); }
 		while (this.ents.length > savedEnts) { this.ents.pop(); }
+		this.blockId = savedBlock;
 		return out;
 	}
 
@@ -993,6 +1455,18 @@ class Gen {
 
 function plantDecls(plant: Plant): string {
 	if (plant == Plant.None) { return ""; }
+	if (plant == Plant.San) {
+		return "@include(\"stdlib.h\")\n" +
+			"extern function malloc(size: uint64): Ptr<void>;\n" +
+			"extern function free(p: Ptr<void>): void;\n" +
+			"function plantDelta(): int32 {\n" +
+			"\tconst raw = malloc(8 as uint64);\n" +
+			"\tfree(raw);\n" +
+			"\tconst p = raw as Ptr<uint8>;\n" +
+			"\tp[0] = 1 as uint8;\n" +
+			"\treturn 0;\n" +
+			"}\n";
+	}
 	const flag = plant == Plant.Backend ? "js" : "debug";
 	const inside = plant == Plant.Backend ? "1" : "0";
 	const outside = plant == Plant.Backend ? "0" : "1";
@@ -1025,7 +1499,20 @@ export function generate(seed: uint64, f: Features): string {
 	let fns = "";
 	for (let i = 0; i < f.funcs; i++) { fns += g.fn(i) + "\n"; }
 
+	let top = "";
+	for (let b = 0; b < f.top; b++) {
+		g.scope = [];
+		g.ents = [];
+		g.cost = 0 as int64;
+		g.costCap = FN_COST_CAP;
+		g.mult = 1 as int64;
+		g.atTop = true;
+		top += g.block(0, "", false, Ty.Int32, false);
+		g.atTop = false;
+	}
+
 	g.scope = [];
+	g.ents = [];
 	g.cost = 0 as int64;
 	g.costCap = TOP_COST_CAP;
 	g.mult = 1 as int64;
@@ -1051,7 +1538,7 @@ export function generate(seed: uint64, f: Features): string {
 	for (const v of g.globals) { prints += "console.log(\"" + v.name + " \" + String(" + v.name + "));\n"; }
 
 	return "// smith seed=" + String(seed) + " features=" + f.format() + "\n" +
-		g.helperText + plantDecls(f.plant) + globals + "\n" + fns + entries + plantSite + prints;
+		g.helperText + plantDecls(f.plant) + globals + "\n" + fns + top + entries + plantSite + prints;
 }
 
 test "the same seed and features give the same program" {
@@ -1145,13 +1632,51 @@ function countOver(needle: string, seeds: int32, f: Features): int32 {
 	return n;
 }
 
-test "default weights keep the pre-weight stream" {
-	const sizes = [21703, 13475, 26098, 17328];
-	const closureSizes = [11356, 11418, 13350, 9328];
-	const closure = withWeights("fams=closure");
+test "a nested routine recurses at most its frame bound and may be named as a value" {
+	const f = withWeights("fams=closure w.closure.routine=40");
+	let routines = 0;
+	let aliases = 0;
+	let arrows = 0;
+	for (let seed = 1; seed <= 20; seed++) {
+		const text = generate(seed as uint64, f);
+		for (const line of text.split("\n")) {
+			const t = line.trim();
+			if ((t.startsWith("function r") || (t.startsWith("const r") && t.contains(": int32): "))) && t.endsWith(" {") && line.startsWith("\t")) { routines++; }
+			if (t.startsWith("const r") && t.endsWith(" => {")) { arrows++; }
+			if (t.startsWith("if (q") && t.contains(" <= 0 || q") && !t.contains(" >= " + String(ROUTINE_FRAMES) + ") { return ")) { assert false; }
+			if (t.startsWith("const k") && t.contains(" = r") && t.endsWith(";") && !t.contains("(")) { aliases++; }
+		}
+	}
+	assert routines > 10;
+	assert arrows > 3 && arrows < routines;
+	assert aliases > 3;
+	assert countOver(" == 2) { return ", 20, f) > 10;
+}
+
+test "a top-level block declares no function inside a block" {
+	const f = withWeights("fams=closure w.closure.routine=40");
+	let routines = 0;
+	for (let seed = 1; seed <= 20; seed++) {
+		const text = generate(seed as uint64, f);
+		const at = text.indexOf("\nconsole.log(\"e");
+		let inTop = false;
+		for (const line of text.slice(0, at < 0 ? text.length : at).split("\n")) {
+			if (line.startsWith("for (") || line.startsWith("if (")) { inTop = true; }
+			if (line.startsWith("function ")) { inTop = false; }
+			if (inTop && line.startsWith("\t") && line.trim().startsWith("function r")) { assert false; }
+			if (inTop && line.trim().startsWith("const r") && line.endsWith(" => {")) { routines++; }
+		}
+	}
+	assert routines > 0;
+}
+
+test "default weights keep the pinned stream" {
+	const sizes = [23008, 14006, 27999, 14767];
+	const closureSizes = [12836, 12148, 16450, 17808];
+	const closure = withWeights("fams=closure top=0 w.closure.routine=0");
 	for (let i = 0; i < 4; i++) {
-		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic")).byteLength == sizes[i];
-		assert generate((i + 1) as uint64, closure).byteLength == closureSizes[i];
+		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic top=0 w.closure.routine=0")).replace(" top=0", "").replace(" w.closure.routine=0", "").byteLength == sizes[i];
+		assert generate((i + 1) as uint64, closure).replace(" top=0", "").replace(" w.closure.routine=0", "").byteLength == closureSizes[i];
 	}
 }
 
@@ -1184,6 +1709,23 @@ test "a zero expression weight keeps its construct out of every expression" {
 		const text = g.expr(Ty.Int32, 0);
 		assert !text.contains(" ? ") && !text.contains("f0(") && !text.contains("(~") && !text.contains("conv") && !text.contains("wrap") && !text.contains("safeNeg");
 		assert !text.contains("(q");
+	}
+}
+
+test "every signed width adds, subtracts, multiplies and negates through a guarded helper" {
+	const g = new Gen();
+	g.exprMax = 0;
+	g.costCap = TOP_COST_CAP;
+	for (const t of [Ty.Int8, Ty.Int16, Ty.Int32, Ty.Int64]) {
+		g.tys = [t];
+		for (let seed = 1; seed <= 100; seed++) {
+			g.rng = Rng.seeded(seed as uint64);
+			g.nodesLeft = GEN_NODE_CAP;
+			const sum = g.binary(t, 0);
+			assert sum.startsWith("safe") || (!sum.contains(" + ") && !sum.contains(" - ") && !sum.contains(" * "));
+			const neg = g.unary(t, 0);
+			assert neg.startsWith("safeNeg") || neg.startsWith("(~");
+		}
 	}
 }
 
@@ -1259,6 +1801,17 @@ test "the program head names its seed and full feature vector" {
 	assert text.startsWith("// smith seed=5 features=" + f.format() + "\n");
 }
 
+test "a san plant writes freed memory and leaves the printed result alone" {
+	const f: Features = { ...Features.defaults(), plant: Plant.San };
+	const text = generate(5 as uint64, f);
+	assert text.contains("\tfree(raw);\n\tconst p = raw as Ptr<uint8>;\n\tp[0] = 1 as uint8;\n\treturn 0;\n");
+	assert text.contains("plantDelta()");
+	assert !text.contains("when (");
+	const r = Features.defaults().overlay("plant=san");
+	assert r.ok;
+	if (r.ok) { assert r.value.plant == Plant.San && r.value.format().contains(" plant=san"); }
+}
+
 test "a planted program declares the plant on both sides of its flag" {
 	const f: Features = { ...Features.defaults(), plant: Plant.Opt };
 	const text = generate(5 as uint64, f);
@@ -1276,6 +1829,9 @@ test "fams=none emits no closure, union or generic construct" {
 			assert !text.contains("| string | null");
 			assert !text.contains("BoxG");
 			assert !text.contains("PtS");
+			assert !text.contains("ixI");
+			assert !text.contains(": string = ");
+			assert !text.contains("ownHooks");
 		}
 	}
 }
@@ -1318,6 +1874,207 @@ test "the aggregate weights choose between struct and class statements" {
 		k += countOf(b, "const k");
 	}
 	assert s > 20 && k > 20;
+}
+
+test "the collection family alone reaches each of its shapes" {
+	const f = withWeights("fams=coll types=int32,uint8 stmts=8 w.stmt.fam=80");
+	const shapes = ["[ixI(", ".pop(); }", ".splice(ixI(", ".setLength(", ".fill(", ".reverse();", " = pushA", "[...a", ", ...a",
+		".concat(", ").map(", "for (const x", "for (let j", "for (const [x", "let [l", ", ...r", "new Map<int32, ", "new Set<",
+		" ?? ", ".delete(", ".add(", ".has(", ".includes(", ".indexOf(", ".join(\",\").length", "] = w"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "a family ternary is never narrowed by a raw cast" {
+	const g = new Gen();
+	g.rng = Rng.seeded(3 as uint64);
+	g.tys = [Ty.Int32, Ty.Uint8];
+	g.fams = [Fam.Coll];
+	g.exprMax = 3;
+	g.w = withWeights("w.expr.fam=100 w.coll.index=100").w;
+	g.ents = [{ kind: EntKind.ArrayVar, name: "a0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 }];
+	let wrapped = 0;
+	for (let i = 0; i < 200; i++) {
+		g.costCap = TOP_COST_CAP;
+		g.cost = 0 as int64;
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.convert(Ty.Uint8, 0);
+		assert !text.startsWith("((a0.length > 0 ? ");
+		if (text.startsWith("wrapInt32ToUint8((a0.length > 0 ? ")) { wrapped++; }
+	}
+	assert wrapped > 10;
+}
+
+test "no ternary sits under arithmetic inside an else arm" {
+	const g = new Gen();
+	g.rng = Rng.seeded(5 as uint64);
+	g.tys = [Ty.Int32, Ty.Uint8];
+	g.fams = [Fam.Coll, Fam.Str, Fam.Own];
+	g.exprMax = 4;
+	g.w = withWeights("w.expr.ternary=60 w.expr.fam=60").w;
+	g.ents = [
+		{ kind: EntKind.ArrayVar, name: "a0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+		{ kind: EntKind.HeldVar, name: "h1", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+	];
+	let outside = 0;
+	for (let i = 0; i < 300; i++) {
+		g.costCap = TOP_COST_CAP;
+		g.cost = 0 as int64;
+		g.nodesLeft = GEN_NODE_CAP;
+		g.elseArms = 1;
+		assert !g.binary(Ty.Int32, 0).contains(" ? ");
+		g.elseArms = 0;
+		if (g.binary(Ty.Int32, 0).contains(" ? ")) { outside++; }
+	}
+	assert outside > 30;
+}
+
+test "a float element is never searched or kept in a Set" {
+	const f = withWeights("fams=coll types=int32,float64 stmts=8 w.stmt.fam=80 w.coll.keyed=20 w.coll.size=20");
+	let searched = 0;
+	let floatDecls = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("new Set<float64>");
+		const floats: string[] = [];
+		for (const line of text.split("\n")) {
+			if (line.startsWith("function ") || line.startsWith("}")) { floats.setLength(0); }
+			const t = line.trim();
+			const name = t.slice(t.indexOf(" ") + 1, t.indexOf(t.startsWith("let a") ? ":" : " ="));
+			const source = t.slice(t.indexOf("= ") + 2, t.length - 1);
+			if (t.startsWith("let a") && t.contains(": float64[] =")) {
+				floats.push(name);
+				floatDecls++;
+			}
+			if (t.startsWith("const a") && (t.contains("pushAFloat64(") || floats.includes(source))) { floats.push(name); }
+			for (const a of floats) { assert !t.contains(a + ".includes(") && !t.contains(a + ".indexOf("); }
+			if (t.contains(".includes(") || t.contains(".indexOf(")) { searched++; }
+		}
+	}
+	assert searched > 10 && floatDecls > 10;
+}
+
+test "every for-of over a collection carries its trip bound" {
+	const f = withWeights("fams=coll types=int32,uint8 stmts=8 w.stmt.fam=80 w.coll.loop=20");
+	let loops = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		const text = generate(seed as uint64, f);
+		const forOf = countOf(text, "for (const x") + countOf(text, "for (const [x");
+		assert forOf == countOf(text, "\tif (j");
+		loops += forOf;
+	}
+	assert loops > 20;
+}
+
+test "the string family alone reaches each of its shapes" {
+	const f = withWeights("fams=str types=int32,uint8 stmts=8 w.stmt.fam=80");
+	const shapes = [".slice(", ".substring(", ".charAt(", "atS(", ".toUpperCase()", ".toLowerCase()", ".trim()", ".trimStart()",
+		".trimEnd()", ".repeat(", ".padStart(", ".padEnd(", ".replace(", ".replaceAll(", ".split(", "String(", "${", ").length",
+		".indexOf(\"", ".lastIndexOf(\"", "codeS(", " == ", " != ", " < ", " > ", ".includes(", ".startsWith(", ".endsWith(",
+		" += (", "let s", " as string)", "\\n", "\\\"", "中"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "a string variable grows only by a bounded slice" {
+	const f = withWeights("fams=str types=int32 stmts=8 w.stmt.fam=80 w.str.append=10 w.str.assign=10");
+	let writes = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			const t = line.trim();
+			if (!t.startsWith("s")) { continue; }
+			if (t.contains(" += (")) {
+				assert t.endsWith(").slice(0, 8);");
+				writes++;
+			} else if (t.contains(" = (") && t.indexOf(" = (") < 6) {
+				assert t.endsWith(").slice(0, 32);");
+				writes++;
+			}
+		}
+	}
+	assert writes > 20;
+}
+
+test "the ownership family alone reaches each of its shapes" {
+	const f = withWeights("fams=own types=int32,uint8 stmts=8 w.stmt.fam=80");
+	const shapes = ["onDestroy(this o: OwnInt32)", "onCopy(this ref d: OwnUint8", ": OwnInt32 = mkO", ": OwnUint8 = o", " = move o", "= takeOInt32(move o",
+		".push(move o", "\tbumpO", "(out o", ": OwnInt32[] = [o", ".push(o", ".tag.length", "].v : ", ".v"];
+	const seen: boolean[] = shapes.map((x: string): boolean => false);
+	let reassign = false;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
+		for (const line of text.split("\n")) {
+			const t = line.trim();
+			if (t.startsWith("o") && t.contains(" = o") && t.length < 16) { reassign = true; }
+		}
+	}
+	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+	assert reassign;
+}
+
+function ownNameAt(text: string, at: int32): string {
+	let end = at + 1;
+	while (end < text.length && text.charCodeAt(end) >= 48 && text.charCodeAt(end) <= 57) { end++; }
+	return end > at + 1 ? text.slice(at, end) : "";
+}
+
+function indentOf(line: string): int32 { return line.length - line.trimStart().length; }
+
+test "a moved variable was declared in the moving block and is never named again" {
+	const f = withWeights("fams=own types=int32,uint8 stmts=8 w.stmt.fam=80 w.own.move=6");
+	let moves = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const lines = generate(seed as uint64, f).split("\n");
+		for (let i = 0; i < lines.length; i++) {
+			const at = lines[i].indexOf("move o");
+			if (at < 0) { continue; }
+			const name = ownNameAt(lines[i], at + 5);
+			moves++;
+			let declared = -1;
+			for (let j = i - 1; j >= 0 && declared < 0; j--) {
+				if (lines[j].trim().startsWith("let " + name + ":")) { declared = indentOf(lines[j]); }
+			}
+			assert declared == indentOf(lines[i]);
+			for (let j = i + 1; j < lines.length && !lines[j].startsWith("}"); j++) {
+				const k = lines[j].indexOf(name);
+				assert k < 0 || ownNameAt(lines[j], k) != name;
+			}
+		}
+	}
+	assert moves > 20;
+}
+
+test "no ownership construct reaches a closure body" {
+	const g = new Gen();
+	g.rng = Rng.seeded(7 as uint64);
+	g.tys = [Ty.Int32];
+	g.fams = [Fam.Own];
+	g.exprMax = 3;
+	g.w = withWeights("w.expr.fam=100").w;
+	g.ents = [
+		{ kind: EntKind.OwnVar, name: "o0", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+		{ kind: EntKind.HeldVar, name: "h1", ty: Ty.Int32, params: [], len: 0, cost: 0 as int64 },
+	];
+	let outside = 0;
+	for (let i = 0; i < 200; i++) {
+		g.costCap = TOP_COST_CAP;
+		g.cost = 0 as int64;
+		g.nodesLeft = GEN_NODE_CAP;
+		const body = g.lambda([Ty.Int32], Ty.Int32, 0, FN_COST_CAP).text;
+		assert !body.contains("o0") && !body.contains("h1");
+		const plain = g.expr(Ty.Int32, 0);
+		if (plain.contains("o0") || plain.contains("h1")) { outside++; }
+	}
+	assert outside > 100;
 }
 
 test "each family alone reaches the program" {

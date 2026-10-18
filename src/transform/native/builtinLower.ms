@@ -12,34 +12,34 @@
 // JSON serialization is now user-land via std/serialize/json macros — no @builtin
 // kinds remain for JSON-related rewrites here.
 
-import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike } from "../../checker/types";
-import { findExtension } from "../../checker/context";
-import { TransformContext } from "../context";
+import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
+import { TransformContext, mintSym } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember, makeConditional,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
-	makeHiddenAddr, runtimeRef, takeValueShareFns,
+	makeHiddenAddr, runtimeRef, takeValueShareFns, makeBinary, makeReturn, makeIf, makeBlock, makeFnDecl,
 } from "../util";
-import { rewriteEcho, buildStructToString, buildUnionText, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
-import { isSlotUnion } from "../../checker/fit";
+import { rewriteEcho, evaluatedPlaceholder, takePlaceholderFns } from "./debugLower";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
-import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
+import { tryLowerPromiseBuiltin } from "../lowering/promiseLower";
+import { promiseSettleStmts, promiseFailStmts } from "../lowering/asyncBridge";
 import { evictHelperName } from "./nativeLower";
 
 // ===== Main Entry Point =====
 
 export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
-	resetStructDumpFns();
 	const result = walkNode(program, (node: Node): Node => {
 		if (node.kind == NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
-		// new Promise(executor) → msPromiseNew(executor)
-		if (node.kind == NodeKind.NewExpr) {
-			return lowerNewPromise(node);
+		if (node.kind == NodeKind.ExprStmt) {
+			const expr = (node.data as ExprStmtData).expr;
+			const kind = expr.kind == NodeKind.CallExpr && expr.resolvedSym != null && !ctx.jsBackend ? expr.resolvedSym.builtinKind : "";
+			if (kind == "PromiseSettle") return promiseSettleStmts(expr, ctx);
+			if (kind == "PromiseFail") return promiseFailStmts(expr, ctx);
 		}
 		// arr.length = n → msXxxArraySetLen(&arr, n)
 		if (node.kind == NodeKind.BinaryExpr) {
@@ -51,11 +51,15 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		}
 		return node;
 	});
-	const dumpFns = takeStructDumpFns();
-	for (const decl of takeValueShareFns()) dumpFns.push(decl);
-	if (dumpFns.length > 0 && result.kind == NodeKind.Program) {
+	const shareFns = takeValueShareFns();
+	const unionTextFns = _unionTextFns;
+	_unionTextFns = [];
+	const placeholderFns = takePlaceholderFns();
+	if (result.kind == NodeKind.Program) {
 		const pd = result.data as ProgramData;
-		for (const decl of dumpFns) { pd.programStmts.push(decl); }
+		for (const decl of shareFns) { pd.programStmts.push(decl); }
+		for (const decl of unionTextFns) { pd.programStmts.push(decl); }
+		for (const decl of placeholderFns) { pd.programStmts.push(decl); }
 	}
 	return result;
 }
@@ -80,6 +84,7 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (cd.callee.kind == NodeKind.MemberExpr) {
 		const me2 = cd.callee.data as MemberExprData;
 		if (me2.property == "toString") {
+			if (sym != null && sym.declNode != null) return node;
 			if (me2.object.nodeType != null) {
 				return lowerToString(node, me2.object, peelTransparentInstance(me2.object.nodeType), loc, ctx);
 			}
@@ -127,22 +132,10 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 // Every type has a compiler-provided default. User extensions take priority.
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
 
-function memberToString(v: Node, loc: SourceLocation, ctx: TransformContext): Node {
-	const vt = v.nodeType;
-	if (vt == null) throw new Error("internal: a union member reached toString without a type");
-	const t = peelTransparentInstance(vt);
-	const tn = typeNameOf(t);
-	if (ctx.checkerCtx != null && tn != "") {
-		const ext = findExtension(ctx.checkerCtx.extensionRegistry, tn, "toString");
-		if (ext != null && ext.sym != null) {
-			const direct = makeCall(makeTypedIdentResolved(ext.sym, null, loc), [v], loc);
-			direct.nodeType = stringType();
-			return direct;
-		}
-	}
-	const call = makeCall(makeMember(v, "toString", loc), [], loc);
-	call.nodeType = stringType();
-	return lowerToString(call, v, t, loc, ctx);
+function isRadixLiteral(n: Node): boolean {
+	if (n.kind != NodeKind.NumberLiteral) return false;
+	const v = (n.data as NumberLiteralData).value;
+	return v >= 2 && v <= 36;
 }
 
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
@@ -159,16 +152,15 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		bcall.nodeType = stringType();
 		return bcall;
 	}
-	// Priority 1: user-defined toString extension → leave for extensionMethodLower
-	if (ctx.checkerCtx != null) {
-		const tn = typeNameOf(objType);
-		if (tn != "") {
-			const ext = findExtension(ctx.checkerCtx.extensionRegistry, tn, "toString");
-			if (ext != null) return callNode;
-		}
+	if (isNullableBigInt(objType)) {
+		const cdn = callNode.data as CallExprData;
+		const radixArg = cdn.arguments.length > 0 ? cdn.arguments[0] : makeNumber(10, loc);
+		const ncall = makeCall(runtimeRef("msBigIntToStringOrNull", loc), [obj, radixArg], loc);
+		ncall.nodeType = stringType();
+		return ncall;
 	}
-	// Priority 2: compiler defaults
 	const tk = objType.kind;
+	if (tk == TypeKind.Never) return obj;
 	if (tk == TypeKind.Char && (callNode.data as CallExprData).arguments.length == 0) return charToString(obj, loc);
 	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10.
 	// 64-bit integers take the int64-parameter variant: a double argument would
@@ -176,9 +168,10 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	if (isNumeric(objType)) {
 		const cd2 = callNode.data as CallExprData;
 		const radixArg = cd2.arguments.length > 0 ? cd2.arguments[0] : makeNumber(10, loc);
-		let fn = "msNumberToStringRadix";
-		if (objType.kind == TypeKind.Uint64) { fn = "msUint64ToStringRadix"; }
-		else if (objType.kind == TypeKind.Int64) { fn = "msIntToStringRadix"; }
+		const checked = !ctx.jsBackend && cd2.arguments.length > 0 && !isRadixLiteral(radixArg);
+		let fn = checked ? "msNumberToStringRadixChecked" : "msNumberToStringRadix";
+		if (objType.kind == TypeKind.Uint64) { fn = checked ? "msUint64ToStringRadixChecked" : "msUint64ToStringRadix"; }
+		else if (objType.kind == TypeKind.Int64) { fn = checked ? "msIntToStringRadixChecked" : "msIntToStringRadix"; }
 		const call = makeCall(runtimeRef(fn, loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;
@@ -214,35 +207,10 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		cond.nodeType = stringType();
 		return cond;
 	}
-	if (isSlotUnion(objType)) return ctx.jsBackend ? callNode : buildUnionText(obj, objType, "msUnionToString_", (v: Node): Node => memberToString(v, loc, ctx), loc, ctx);
-	// Struct/Class → plain JSON string (reuses console.log's struct→string path)
-	const inner = unwrapRef(objType);
-	if (inner.kind == TypeKind.Struct && inner.typeName != "") {
-		return buildStructToString(obj, inner, loc, ctx);
-	}
-	// Array → msArrayToString (runtime helper)
-	if (tk == TypeKind.Array) {
-		const call = makeCall(runtimeRef("msArrayToString", loc), [obj], loc);
-		call.nodeType = stringType();
-		return call;
-	}
-	// Null → "null"
-	if (tk == TypeKind.Null) {
-		const s = makeString("null", loc);
-		s.nodeType = stringType();
-		return s;
-	}
-	// Function/Closure → "<function>"
-	if (tk == TypeKind.Function) {
-		const s = makeString("<function>", loc);
-		s.nodeType = stringType();
-		return s;
-	}
-	// Fallback: "<TypeName>" or "<object>"
-	const fallbackName = objType.typeName != "" ? objType.typeName : "object";
-	const s = makeString("<" + fallbackName + ">", loc);
-	s.nodeType = stringType();
-	return s;
+
+	if (tk == TypeKind.Null) return evaluatedPlaceholder(obj, objType, "null", loc, ctx);
+	if (tk == TypeKind.Function) return evaluatedPlaceholder(obj, objType, "<function>", loc, ctx);
+	return evaluatedPlaceholder(obj, objType, "<" + (objType.typeName != "" ? objType.typeName : "object") + ">", loc, ctx);
 }
 
 
@@ -250,9 +218,9 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 // Handles @builtin("Name") — known compiler builtins get inline C patterns.
 
 // Type tag for typed Promise.then/catch dispatch (matches MS_TYPETAG_* in combinator.h)
-// Per-T suffix helpers, typed readers, Promise.* / waitFor handlers, and
-// new-Promise rewriting all live in src/transform/lowering/promiseLower.ms.
-// See `tryLowerPromiseBuiltin` + `lowerNewPromise` imported at the top of this
+// Per-T suffix helpers, typed readers and Promise.* / waitFor handlers
+// all live in src/transform/lowering/promiseLower.ms.
+// See `tryLowerPromiseBuiltin` imported at the top of this
 // file. `isStructLikeType` moved to `../util` to break a circular import with
 // promiseLower (asyncBridge + builtinLower + promiseLower all need it).
 
@@ -284,6 +252,17 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return rewriteEcho(node, ctx);
 	}
 
+	if (builtinKind == "UnionText" || builtinKind == "UnionDebug") {
+		return selectUnionText(node, ctx);
+	}
+
+	if (builtinKind == "ToStringMethod" && cd.callee.kind == NodeKind.MemberExpr) {
+		const member = cd.callee.data as MemberExprData;
+		if (member.object.nodeType != null) {
+			return lowerToString(node, member.object, peelTransparentInstance(member.object.nodeType), loc, ctx);
+		}
+	}
+
 	// String(x) → x.toString() → leverages existing .toString() infrastructure
 	if (builtinKind == "ToString" && cd.arguments.length == 1) {
 		const arg = cd.arguments[0];
@@ -300,6 +279,61 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 
 	return node;
+}
+
+let _unionTextFns: Node[] = [];
+
+function selectUnionText(node: Node, ctx: TransformContext): Node {
+	const args = (node.data as CallExprData).arguments;
+	const loc = node.location;
+	const x = args[0];
+	const xt = x.nodeType!;
+	const holder = args[1].resolvedSym!;
+	const ut = args[1].nodeType!;
+	const select = ctx.jsBackend ? null : unionTextFn(holder, ut, args, loc, ctx);
+	if (!isMaybeType(xt)) return selectedText(select, x, loc);
+	const m = mintSym(ctx, SymbolKind.Parameter, "m", xt);
+	const present = makeMember(makeTypedIdentResolved(m, xt, loc), "present", loc);
+	present.nodeType = booleanType();
+	const absent = makeString("null", loc);
+	absent.nodeType = stringType();
+	const value = makeMember(makeTypedIdentResolved(m, xt, loc), "value", loc);
+	value.nodeType = unwrapMaybeType(xt);
+	const body = makeBlock([
+		makeIf(present, makeBlock([makeReturn(selectedText(select, value, loc), loc)], loc), null, loc),
+		makeReturn(absent, loc),
+	], loc);
+	return selectedText(textFn(m, xt, body, loc, ctx), x, loc);
+}
+
+function selectedText(select: Node | null, value: Node, loc: SourceLocation): Node {
+	const call = select != null ? makeCall(select, [value], loc) : makeCall(makeMember(value, "toString", loc), [], loc);
+	call.nodeType = stringType();
+	return call;
+}
+
+function unionTextFn(holder: Symbol, ut: Type, args: Node[], loc: SourceLocation, ctx: TransformContext): Node {
+	const stmts: Node[] = [];
+	for (let ai = 2; ai < args.length; ai += 1) {
+		const ret = makeReturn(args[ai], loc);
+		if (ai == args.length - 1) { stmts.push(ret); continue; }
+		const tag = makeMember(makeTypedIdentResolved(holder, ut, loc), "_tag", loc);
+		tag.nodeType = int32Type();
+		const isSlot = makeBinary(tag, "==", makeNumber(ai - 2, loc), loc);
+		isSlot.nodeType = booleanType();
+		stmts.push(makeIf(isSlot, makeBlock([ret], loc), null, loc));
+	}
+	return textFn(holder, ut, makeBlock(stmts, loc), loc, ctx);
+}
+
+function textFn(param: Symbol, pt: Type, body: Node, loc: SourceLocation, ctx: TransformContext): Node {
+	const sym = mintSym(ctx, SymbolKind.Function, "$unionText" + _unionTextFns.length.toString(), null);
+	const fnNode = makeFnDecl(sym.name, [param], ["unknown"], body, "", "string", loc);
+	fnNode.nodeType = createFunction([pt], [param.name], stringType());
+	sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_unionTextFns.push(fnNode);
+	return makeTypedIdentResolved(sym, fnNode.nodeType, loc);
 }
 
 // The reverse direction (AsString) is NOT intercepted: a borrow escaping the
@@ -396,7 +430,6 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 // ===== arr.length = n → setLength(arr, n) sugar =====
 // setLength is the real API. arr.length = n is syntactic sugar.
 // Rewrites BinaryExpr(=, MemberExpr(arr, "length"), n) → CallExpr to C runtime setLength.
-// `new Promise(executor) → msPromiseNew` lives in lowering/promiseLower.ms.
 
 function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return node;
@@ -414,9 +447,7 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	// Pick the right C runtime function based on element type
 	let fn = "msGenericArraySetLen";
 	if (elemType != null) {
-		if (isNumeric(elemType)) {
-			fn = "msNumberArraySetLen";
-		} else if (elemType.kind == TypeKind.String) {
+		if (elemType.kind == TypeKind.String) {
 			fn = "msStringArraySetLen";
 		} else {
 			// One source of truth for the ref family (atomic cells, Actor handles,

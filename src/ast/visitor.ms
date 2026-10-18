@@ -25,7 +25,7 @@ import {
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
-	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "./node";
 
 type ChildVisitor = (child: Node) => void;
@@ -458,6 +458,11 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 		NodeKind.JSXSpreadAttribute => {
 			const d = node.data as JSXSpreadAttributeData;
 			cb(d.jsxSpreadArg);
+		},
+		NodeKind.ComputedProperty => {
+			const d = node.data as ComputedPropertyData;
+			cb(d.computedKey);
+			cb(d.computedValue);
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here, preventing

@@ -4,8 +4,9 @@ import {
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
 } from "../ast/node";
-import { isIntegerType, isFloatType, createPrimitive } from "./types";
-import { makeNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
+import { isIntegerType, isFloatType, createPrimitive, enumMemberValue } from "./types";
+import { makeNumber, makeFloatNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
+import { int64Bits } from "../utils/stdBackport";
 
 const CONSTANT_CHAIN_LIMIT: int32 = 64;
 
@@ -48,22 +49,15 @@ function readonlyStaticInitializer(node: Node): Node {
 }
 
 
-function enumMemberOrdinal(expr: Node): int64 {
-	if (expr == null || expr.kind != NodeKind.Identifier || expr.nodeType == null) return -1;
+export function enumMemberLiteral(expr: Node): Node | null {
+	if (expr == null || expr.kind != NodeKind.Identifier || expr.nodeType == null) return null;
 	const sym = expr.resolvedSym;
-	if (sym == null || sym.symbolKind != SymbolKind.EnumMember) return -1;
+	if (sym == null || sym.symbolKind != SymbolKind.EnumMember) return null;
 	const t = expr.nodeType;
 	const enumType = t.kind == TypeKind.Enum ? t : (t.kind == TypeKind.EnumLiteral ? t.typeReturn : null);
-	if (enumType == null || enumType.kind != TypeKind.Enum) return -1;
-	let index = 0;
-	for (const member of enumType.typeNames) {
-		if (member == sym.name) {
-			if (enumType.typeChildren != null && index < enumType.typeChildren.length) return enumType.typeChildren[index].typeValue as int64;
-			return index as int64;
-		}
-		index = index + 1;
-	}
-	return -1;
+	if (enumType == null || enumType.kind != TypeKind.Enum) return null;
+	const index: int32 = enumType.typeNames.indexOf(sym.name) as int32;
+	return index < 0 ? null : makeTypedInteger(enumMemberValue(enumType, index) as int64, createPrimitive(TypeKind.Int32), expr.location);
 }
 
 export function literalTakesType(literal: Node, t: Type | null): boolean {
@@ -80,9 +74,75 @@ function retypedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Nod
 	if (literal.kind == NodeKind.BooleanLiteral) return makeBool((literal.data as BooleanLiteralData).boolValue, loc);
 	const nd = literal.data as NumberLiteralData;
 	if (t != null && isIntegerType(t)) return makeTypedInteger(wrapToWidth(nd.intVal as uint64, t), t, loc);
-	const copy = createNode(NodeKind.NumberLiteral, { value: nd.value, isFloat: nd.isFloat, intVal: nd.intVal, outOfRangeText: nd.outOfRangeText, isBitPattern: nd.isBitPattern }, syntheticToken(loc));
+	const value = constHoldsFloat(literal) ? constFloatValue(literal) : isFloat32Type(t) ? integerAsFloat32(nd) : nd.value;
+	const copy = createNode(NodeKind.NumberLiteral, { value: value, isFloat: nd.isFloat, intVal: nd.intVal, outOfRangeText: nd.outOfRangeText, isBitPattern: nd.isBitPattern }, syntheticToken(loc));
 	copy.nodeType = t != null ? t : literal.nodeType;
 	return copy;
+}
+
+function builtinFloatConstant(ident: Node): Node {
+	const sym = ident.resolvedSym;
+	if (sym == null || (sym.builtinKind != "NaN" && sym.builtinKind != "Infinity")) return null as unknown as Node;
+	const n = makeNumber(sym.builtinKind == "NaN" ? NaN : Infinity, ident.location);
+	n.nodeType = createPrimitive(TypeKind.Float64);
+	return n;
+}
+
+function integerAsFloat32(d: NumberLiteralData): number {
+	const narrowed: float32 = d.intVal < 0 && d.value > 0 ? (d.intVal as uint64) as float32 : d.intVal as float32;
+	return narrowed as float64;
+}
+
+function convertedLiteral(literal: Node, t: Type | null, loc: SourceLocation): Node {
+	if (literal.kind == NodeKind.NumberLiteral && t != null && (isIntegerType(t) || t.kind == TypeKind.Char) && constHoldsFloat(literal)) return truncatedInteger(literal, t, loc);
+	if (t != null && t.kind == TypeKind.Char) return byteLiteral(literal, t, loc);
+	return retypedLiteral(literal, t, loc);
+}
+
+function byteLiteral(literal: Node, t: Type, loc: SourceLocation): Node {
+	if (literal.kind != NodeKind.NumberLiteral) return null as unknown as Node;
+	const value = (literal.data as NumberLiteralData).intVal;
+	const unsignedHigh = value < 0 && literal.nodeType != null && isUnsignedIntegerType(literal.nodeType);
+	return !unsignedHigh && value >= 0 && value <= 255 ? makeTypedInteger(value, t, loc) : null as unknown as Node;
+}
+
+function truncatedInteger(literal: Node, t: Type, loc: SourceLocation): Node {
+	const v = constFloatValue(literal);
+	if (!floatTruncatesInto(v, t)) return null as unknown as Node;
+	const value: int64 = v >= 9223372036854775808.0 ? int64Bits(v as uint64) : v as int64;
+	return makeTypedInteger(value, t, loc);
+}
+
+export function floatTruncatesInto(v: number, t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Int8   => v > -129.0 && v < 128.0,
+		TypeKind.Int16  => v > -32769.0 && v < 32768.0,
+		TypeKind.Int32  => v > -2147483649.0 && v < 2147483648.0,
+		TypeKind.Int64  => v >= -9223372036854775808.0 && v < 9223372036854775808.0,
+		TypeKind.Uint8  => v > -1.0 && v < 256.0,
+		TypeKind.Uint16 => v > -1.0 && v < 65536.0,
+		TypeKind.Uint32 => v > -1.0 && v < 4294967296.0,
+		TypeKind.Uint64 => v > -1.0 && v < 18446744073709551616.0,
+		TypeKind.Char   => v > -1.0 && v < 256.0,
+		_ => false,
+	};
+}
+
+export function constHoldsFloat(folded: Node): boolean {
+	const t = folded.nodeType;
+	if (t != null && isIntegerType(t)) return false;
+	if (t != null && (isFloatType(t) || t.kind == TypeKind.Number)) return true;
+	return (folded.data as NumberLiteralData).isFloat;
+}
+
+export function constFloatValue(folded: Node): number {
+	const v = (folded.data as NumberLiteralData).value;
+	return isFloat32Type(folded.nodeType) ? roundedToFloat32(v) : v;
+}
+
+function roundedToFloat32(v: number): number {
+	const narrowed = v as float32;
+	return narrowed as float64;
 }
 
 export function isUntypedIntegerConstant(expr: Node, depth: int32): boolean {
@@ -241,7 +301,7 @@ export function exactUntypedInteger(expr: Node, depth: int32): Node {
 				"~" => ~(value as uint64),
 				_ => value as uint64,
 			};
-			return makeTypedInteger(bits as int64, createPrimitive(TypeKind.Int64), expr.location);
+			return makeTypedInteger(int64Bits(bits), createPrimitive(TypeKind.Int64), expr.location);
 		},
 		_ => {},
 	};
@@ -293,6 +353,8 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		NodeKind.NumberLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
 		NodeKind.BooleanLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
 		NodeKind.Identifier => {
+			const builtin = builtinFloatConstant(expr);
+			if (builtin != null) return builtin;
 			const initializer = constInitializer(expr);
 			if (initializer == null) return none;
 			const value = constantLiteralOf(initializer, depth + 1);
@@ -324,13 +386,12 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		},
 		NodeKind.TypeAssertion => {
 			const target = expr.nodeType;
-			if (target == null || !isIntegerType(target)) return none;
+			if (target == null || !(isIntegerType(target) || isFloatType(target) || target.kind == TypeKind.Number || target.kind == TypeKind.Char)) return none;
 			const asserted = (expr.data as TypeAssertionData).asExpr;
-			const ordinal = enumMemberOrdinal(asserted);
-			if (ordinal >= 0) return makeTypedInteger(wrapToWidth(ordinal as uint64, target), target, expr.location);
-			const inner = constantLiteralOf(asserted, depth + 1);
+			const ordinal = isIntegerType(target) ? enumMemberLiteral(asserted) : null;
+			const inner = ordinal != null ? ordinal : constantLiteralOf(asserted, depth + 1);
 			if (inner == null) return none;
-			return retypedLiteral(inner, target, expr.location);
+			return convertedLiteral(inner, target, expr.location);
 		},
 		NodeKind.HiddenStdConv => {
 			const inner = constantLiteralOf((expr.data as HiddenStdConvData).convExpr, depth + 1);
@@ -403,7 +464,7 @@ function constantTreeOf(expr: Node, depth: int32): Node {
 			if (array == null || array.kind != NodeKind.ArrayLiteral || index == null || index.kind != NodeKind.NumberLiteral) return none;
 			const nd = index.data as NumberLiteralData;
 			const elements = (array.data as ArrayLiteralData).elements;
-			if (nd.isFloat || nd.intVal < 0 || nd.intVal >= elements.length as int64) return none;
+			if (nd.isFloat || nd.intVal < 0 || nd.intVal >= (elements.length as int64)) return none;
 			return elements[nd.intVal as int32];
 		},
 		NodeKind.MemberExpr => {
@@ -420,7 +481,7 @@ function constantTreeOf(expr: Node, depth: int32): Node {
 		},
 		NodeKind.TypeAssertion => {
 			const inner = scalarTreeOf((expr.data as TypeAssertionData).asExpr, depth + 1);
-			return inner != null ? retypedLiteral(inner, expr.nodeType, expr.location) : none;
+			return inner != null ? convertedLiteral(inner, expr.nodeType, expr.location) : none;
 		},
 		NodeKind.BinaryExpr => {
 			const d = expr.data as BinaryExprData;
@@ -476,9 +537,9 @@ function isUnsignedIntegerType(t: Type): boolean {
 
 function wrapToWidth(bits: uint64, t: Type): int64 {
 	const width = integerBitWidth(t);
-	if (width == 64) return bits as int64;
+	if (width == 64) return int64Bits(bits);
 	const modulus: int64 = (1 as int64) << (width as int64);
-	const low: int64 = (bits as int64) & (modulus - 1);
+	const low: int64 = int64Bits(bits) & (modulus - 1);
 	if (isUnsignedIntegerType(t)) return low;
 	return low >= modulus / 2 ? low - modulus : low;
 }
@@ -521,7 +582,7 @@ function signedResultIsExact(op: string, left: int64, right: int64, t: Type): bo
 		return rightMagnitude == 0 || leftMagnitude <= limit / rightMagnitude;
 	}
 	const bits: uint64 = op == "+" ? (left as uint64) + (right as uint64) : (left as uint64) - (right as uint64);
-	const result = bits as int64;
+	const result = int64Bits(bits);
 	if (op == "+") {
 		if (left >= 0 && right >= 0 && result < 0) return false;
 		if (left < 0 && right < 0 && result >= 0) return false;
@@ -713,8 +774,8 @@ export function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
 			}
 			const floating = od.isFloat || (node.nodeType != null && (isFloatType(node.nodeType) || node.nodeType.kind == TypeKind.Number));
 			const result = match (op) {
-				"-" => floating ? makeNumber(-nv, loc) : makeIntNumber((0 - (od.intVal as uint64)) as int64, loc),
-				"+" => floating ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
+				"-" => od.isFloat ? makeFloatNumber(-nv, loc) : floating ? makeNumber(-nv, loc) : makeIntNumber(int64Bits(0 - (od.intVal as uint64)), loc),
+				"+" => od.isFloat ? makeFloatNumber(nv, loc) : floating ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
 				_ => node,
 			};
 			if (result != node && node.nodeType != null) {

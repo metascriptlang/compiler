@@ -3,7 +3,7 @@
 import {
 	Node, NodeKind, NodeFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
-	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
+	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ComputedPropertyData, ArrayLiteralData, ArrowFunctionData,
 	ConditionalExprData, SpreadExprData, NewExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
@@ -39,8 +39,7 @@ export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 // AssignmentExpr-as-binary, etc.) are also wrapped via printAtom rules.
 function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, options: FormatOptions): Doc {
 	if (child == null || child.flags.has(NodeFlag.Parenthesized) || rawTemplateAt(child, options) != "") return callPrintNode(child, options);
-	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && !isRight
-		&& (parentOp == "|" || parentOp == "&" || parentOp == "<")) {
+	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && assertionNeedsParens(child, parentOp, isRight)) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
 	if (child.kind != NodeKind.BinaryExpr) {
@@ -61,6 +60,22 @@ function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, opt
 	return callPrintNode(child, options);
 }
 
+const AS_PREC = 40;
+const UNBOUND_PREC = 100;
+
+// `as` binds at relational precedence, left to right; on the left a type would swallow `|`, `&` or `<`, and a
+// bare binary operand of the assertion must not bind looser than the parent.
+function assertionNeedsParens(child: Node, parentOp: string, isRight: boolean): boolean {
+	const parentPrec = opPrecedence(parentOp);
+	if (isRight) return parentPrec >= AS_PREC;
+	return parentOp == "|" || parentOp == "&" || parentOp == "<" || bareBinaryPrec((child.data as TypeAssertionData).asExpr) < parentPrec;
+}
+
+function bareBinaryPrec(node: Node): number {
+	if (node.kind != NodeKind.BinaryExpr || node.flags.has(NodeFlag.Parenthesized)) return UNBOUND_PREC;
+	return opPrecedence((node.data as BinaryExprData).operator);
+}
+
 function opPrecedence(op: string): number {
 	return match (op) {
 		"**" => 65,
@@ -75,7 +90,7 @@ function opPrecedence(op: string): number {
 		"&&" => 20,
 		"||" => 10,
 		"??" => 8,
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => 5,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => 5,
 		"|>" => 3,
 		_ => 0,
 	};
@@ -83,7 +98,7 @@ function opPrecedence(op: string): number {
 
 function isRightAssocOp(op: string): boolean {
 	return match (op) {
-		"**" | "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		"**" | "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
 }
@@ -227,11 +242,11 @@ export function printArrayAccess(node: Node, options: FormatOptions): Doc {
 function needsQuote(key: string): boolean {
 	if (key.length == 0) return true;
 	const first = key.charCodeAt(0);
-	if (!((first >= "a".code && first <= "z".code) || (first >= "A".code && first <= "Z".code) || first == "_".code)) return true;
+	if (!((first >= "a".code && first <= "z".code) || (first >= "A".code && first <= "Z".code) || first == "_".code || first == "$".code)) return true;
 	let j = 1;
 	while (j < key.length) {
 		const ch = key.charCodeAt(j);
-		if (!((ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code) || (ch >= "0".code && ch <= "9".code) || ch == "_".code)) return true;
+		if (!((ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code) || (ch >= "0".code && ch <= "9".code) || ch == "_".code || ch == "$".code)) return true;
 		j = j + 1;
 	}
 	return false;
@@ -279,7 +294,7 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		}
 		let entryDoc: Doc;
 		const writtenKey = i < d.keyLocations.length ? rawObjectKeyAt(options.source, d.keyLocations[i].line, d.keyLocations[i].column) : "";
-		if (d.keys[i] == "...") {
+		if (d.keys[i] == "..." || (prop != null && prop.kind == NodeKind.ComputedProperty)) {
 			entryDoc = callPrintNode(prop, options);
 		} else if (writtenKey != "") {
 			entryDoc = docGroup([docText(writtenKey + ": "), callPrintNode(prop, options)]);
@@ -416,6 +431,11 @@ export function printSpreadExpr(node: Node, options: FormatOptions): Doc {
 	return docGroup([docText("..."), callPrintNode(d.spreadArg, options)]);
 }
 
+export function printComputedProperty(node: Node, options: FormatOptions): Doc {
+	const d = node.data as ComputedPropertyData;
+	return docGroup([docText("["), callPrintNode(d.computedKey, options), docText("]: "), callPrintNode(d.computedValue, options)]);
+}
+
 export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as NewExprData;
 	const args: Doc[] = [];
@@ -428,9 +448,14 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	return docGroup(newParts);
 }
 
+function isUnaryLevel(node: Node): boolean {
+	return node.kind == NodeKind.UnaryExpr || node.kind == NodeKind.UpdateExpr || node.kind == NodeKind.AwaitExpr;
+}
+
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAssertionData;
-	const inner = d.asExpr.kind == NodeKind.TypeAssertion ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
+	const bare = d.asExpr.kind == NodeKind.TypeAssertion || (d.asType != "!" && (isUnaryLevel(d.asExpr) || (d.asExpr.kind == NodeKind.BinaryExpr && bareBinaryPrec(d.asExpr) >= AS_PREC)));
+	const inner = bare ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
 	if (d.asType == "!") return docGroup([inner, docText("!")]);
 	return docGroup([
 		inner,

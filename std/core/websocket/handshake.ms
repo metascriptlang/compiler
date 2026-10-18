@@ -8,7 +8,7 @@
 //
 // Inline tests cover the pure-string paths (request building, response parsing,
 // header validation, base64 key generation). The cryptographic accept-key
-// derivation is exercised in src/test/std/http/websocket.ms via the C compile
+// derivation is exercised in src/test/c/websocket.ms via the C compile
 // path — the inline harness cannot run sha1 (the extern stub throws).
 
 @include("runtime/crypto/hash.h");
@@ -537,7 +537,7 @@ export function buildUpgradeResponse(
 	return resp;
 }
 
-// ===== Tests (pure-string only — sha1/randomBytes paths covered in src/test/std/http/websocket.ms) =====
+// ===== Tests (pure-string only — sha1/randomBytes paths covered in src/test/c/websocket.ms) =====
 
 test "parseWsUrl plain host" {
 	const r = parseWsUrl("ws://example.com");

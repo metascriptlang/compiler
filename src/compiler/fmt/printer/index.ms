@@ -20,7 +20,7 @@ import {
 import {
 	printBinaryExpr, printUnaryExpr, printUpdateExpr, printCallExpr,
 	printMemberExpr, printArrayAccess, printDerefExpr, printObjectLiteral, printArrayLiteral,
-	printArrowFunction, printConditionalExpr, printSpreadExpr, printNewExpr,
+	printArrowFunction, printConditionalExpr, printSpreadExpr, printComputedProperty, printNewExpr,
 	printTypeAssertion, printMatchExpr, printTryExpr, printMoveExpr,
 	printOutExpr, printSizeofExpr, printArrayPattern, printObjectPattern,
 	printObjectPatternProp, printMacroInvocation, printFunctionExpr,
@@ -111,6 +111,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.ArrowFunction => printArrowFunction(node, options),
 		NodeKind.ConditionalExpr => printConditionalExpr(node, options),
 		NodeKind.SpreadExpr => printSpreadExpr(node, options),
+		NodeKind.ComputedProperty => printComputedProperty(node, options),
 		NodeKind.NewExpr => printNewExpr(node, options),
 		NodeKind.TypeAssertion => printTypeAssertion(node, options),
 		NodeKind.MatchExpr => printMatchExpr(node, options),

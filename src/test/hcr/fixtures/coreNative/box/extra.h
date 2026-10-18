@@ -1,0 +1,1 @@
+#define HCR_NATIVE_EXTRA 1

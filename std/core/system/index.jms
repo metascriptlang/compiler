@@ -23,6 +23,7 @@ export extern function clearTimeout(id: number): void;
 export extern function setInterval(fn: () => void, ms: number): number;
 export extern function clearInterval(id: number): void;
 
+@builtin("Result")
 export class Result<T, E> {
 	ok: boolean;
 	value: T;
@@ -39,6 +40,18 @@ export class Error {
 
 	constructor(message: string) {
 		this.message = message;
+	}
+}
+
+export class RangeError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
+export class SyntaxError extends Error {
+	constructor(message: string) {
+		super(message);
 	}
 }
 
@@ -168,6 +181,27 @@ function msCheckRangeI32(v: float64, lo: float64, hi: float64): float64 {
 }
 
 @compilerFunc
+function msCheckRangeU8(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeU16(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeU32(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
 function msToInt32(v: float64): int32 {
 	@emit(`return ${v} | 0;`);
 	unreachable;
@@ -176,6 +210,55 @@ function msToInt32(v: float64): int32 {
 @compilerFunc
 function msCheckRangeI64(v: float64): float64 {
 	@emit(`if (!(${v} >= -9223372036854775808 && ${v} < 9223372036854775808)) ${msDefect}("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeU64(v: float64): float64 {
+	@emit(`if (!(${v} > -1 && ${v} < 18446744073709551616)) ${msDefect}("value " + ${v} + " not in range 0 .. 18446744073709551615");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeI64FromU64(v: uint64): uint64 {
+	@emit(`if (!(${v} < 9223372036854775808)) ${msDefect}("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI8(v: float64): int8 {
+	@emit(`if (${v} > 127 || ${v} < -128) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowChar(v: float64): char {
+	@emit(`if ((${v} & 255) !== ${v}) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI16(v: float64): int16 {
+	@emit(`if (${v} > 32767 || ${v} < -32768) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI32(v: float64): int32 {
+	@emit(`if ((${v} | 0) !== ${v}) ${msDefect}("over- or underflow");
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msOverflowI64(v: int64): int64 {
+	@emit(`if (BigInt.asIntN(64, ${v}) !== ${v}) ${msDefect}("over- or underflow");
 	return ${v};`);
 	unreachable;
 }
@@ -335,6 +418,14 @@ function msChkIndex(i: int64, len: int64): int64 {
 }
 
 @compilerFunc
+function msChkCount(n: int64): int64 {
+	@emit(`if (${n} < 0) ${msDefect}("value " + ${n} + " not in range 0 .. 9223372036854775807");
+	if (${n} > 4294967295) ${msDefect}("over- or underflow");
+	return ${n};`);
+	unreachable;
+}
+
+@compilerFunc
 function msSpanAt(v: unknown, i: int64): unknown {
 	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
 	return ${v}.base[${v}.off + Number(${i})];`);
@@ -406,4 +497,35 @@ function msChkStore(a: unknown, i: int64, v: unknown): unknown {
 	_a[_i] = _v;
 	return _v;`);
 	unreachable;
+}
+
+when (mscDeclaresRuntime) {
+	// ===== JavaScript globals and helpers the compiler synthesizes calls to =====
+
+	@compilerFunc
+	extern function msPrintln(s: string): void;
+
+	@compilerFunc
+	extern function msWarnln(s: string): void;
+
+	@compilerFunc
+	extern function msEprintln(s: string): void;
+
+	@compilerFunc
+	extern function __paBegin(source: string): void;
+
+	@compilerFunc
+	extern function __paEnd(): void;
+
+	@compilerFunc
+	extern function __paValueStr(col: int32, label: string, val: string): void;
+
+	@compilerFunc
+	extern function __paValueNum(col: int32, label: string, val: float64): void;
+
+	@compilerFunc
+	extern function __paValueInt(col: int32, label: string, val: int64): void;
+
+	@compilerFunc
+	extern function __paValueBool(col: int32, label: string, val: boolean): void;
 }

@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, or all");
 	exit(2);
 }
 
@@ -218,6 +218,67 @@ function runLinkCache(): void {
 	const secondFailure = build(archive, "link-failure-retry");
 	recordTrue("failed link rejects stale output", firstFailure != 0);
 	recordTrue("failed link remains invalidated", secondFailure != 0);
+
+	const cliArchive = fixture("cli-archive", "", "int probeValue(void) { return 17; }\n");
+	for (const label of ["initial", "changed"]) {
+		if (label == "changed") put(`${cliArchive}/native.c`, "int probeValue(void) { return 29; }\n");
+		need(command(cliArchive, `cc-${label}`, "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, `cc cli ${label}`);
+		need(command(cliArchive, `ar-${label}`, "ar", ["rcs", "libnative.a", "native.o"]).code == 0, `ar cli ${label}`);
+		need(build(cliArchive, label, "probe", ["--link=libnative.a"]) == 0, `cli archive ${label}`);
+		if (label == "initial") need(value(cliArchive) == "17", "cli archive initial value");
+	}
+	record("archive given by --link replaced", "29", value(cliArchive));
+
+	const cliObject = fixture("cli-object", "", "int probeValue(void) { return 5; }\n");
+	need(command(cliObject, "cc-object", "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, "cc cli object");
+	put(`${cliObject}/extra.c`, "int extraValue(void) { return 40; }\n");
+	need(command(cliObject, "cc-extra", "clang", ["-c", "extra.c", "-o", "extra.o"]).code == 0, "cc cli extra");
+	need(command(cliObject, "ar-extra", "ar", ["rcs", "libextra.a", "extra.o"]).code == 0, "ar cli extra");
+	put(`${cliObject}/build.ms`, "const config = { cc: { linkFlags: [\"libextra.a\"] }, globalImports: [\"./g\"] };\nexport default config;\n");
+	put(`${cliObject}/g.ms`, "export const offset = 100;\n");
+	put(`${cliObject}/api.h`, "int probeValue(void);\nint extraValue(void);\n");
+	put(`${cliObject}/main.ms`, "@include(\"./api.h\");\nextern function probeValue(): int32;\nextern function extraValue(): int32;\nconsole.log(probeValue() + extraValue() + offset);\n");
+	need(build(cliObject, "cli-object", "probe", ["--link=native.o"]) == 0, "cli object with build.ms");
+	record("object given by --link keeps build.ms linkFlags and globalImports", "145", value(cliObject));
+
+	if (windows) {
+		const resource = fixture("cli-resource", "@compile(\"./native.c\");", "int probeValue(void) { return 1; }\n");
+		for (const name of ["AlphaOne", "BravoTwo"]) {
+			put(`${resource}/version.rc`, `1 VERSIONINFO\nFILEVERSION 1,2,3,4\nBEGIN\n  BLOCK "StringFileInfo"\n  BEGIN\n    BLOCK "040904B0"\n    BEGIN\n      VALUE "ProductName", "${name}"\n    END\n  END\n  BLOCK "VarFileInfo"\n  BEGIN\n    VALUE "Translation", 0x409, 1200\n  END\nEND\n`);
+			need(command(resource, `rc-${name}`, "zig", ["rc", "/fo", "version.res", "version.rc"]).code == 0, `zig rc ${name}`);
+			need(build(resource, name, "probe", ["--link=version.res"]) == 0, `cli resource ${name}`);
+			if (name == "AlphaOne") need(holdsUtf16(`${resource}/probe`, "AlphaOne"), "cli resource initial product name");
+		}
+		recordTrue("resource given by --link replaced", holdsUtf16(`${resource}/probe`, "BravoTwo") && !holdsUtf16(`${resource}/probe`, "AlphaOne"));
+	}
+	if (!windows) runLinkOrder();
+}
+
+function holdsUtf16(path: string, text: string): boolean {
+	const content = readFile(path);
+	if (!content.ok) return false;
+	let wide = "";
+	for (let i = 0; i < text.length; i++) wide = wide + text.charAt(i) + "\u0000";
+	return content.value.byteIndexOf(wide, 0) >= 0;
+}
+
+function firstLinkedWeakProbeWins(result: int32, edit: string): string {
+	return `__attribute__((weak)) int probeValue(void) { return ${result}; }\n// ${edit}\n`;
+}
+
+function runLinkOrder(): void {
+	const order = fixture("link-order", "@compile(\"./first.c\");\n@compile(\"./second.c\");\n@compile(\"./third.c\");", firstLinkedWeakProbeWins(1, "initial"), "", "first.c");
+	put(`${order}/second.c`, firstLinkedWeakProbeWins(2, "initial"));
+	put(`${order}/third.c`, firstLinkedWeakProbeWins(3, "initial"));
+	need(build(order, "order-initial") == 0, "link order initial");
+	need(value(order) == "1", "link order initial value");
+	put(`${order}/first.c`, firstLinkedWeakProbeWins(1, "first edited"));
+	need(build(order, "order-first-edited") == 0, "link order first edited");
+	record("an edited first native source keeps its place in the link", "1", value(order));
+	put(`${order}/first.c`, firstLinkedWeakProbeWins(1, "first and second edited"));
+	put(`${order}/second.c`, firstLinkedWeakProbeWins(2, "first and second edited"));
+	need(build(order, "order-two-edited") == 0, "link order two edited");
+	record("two edited native sources before a cached one keep their place in the link", "1", value(order));
 }
 
 function makeArchive(dir: string, name: string, result: int32): string {
@@ -586,6 +647,36 @@ function runObjectStore(): void {
 	record("a stored object after the C compiler changed", "59", builtValue(tool, build(tool, "second-toolchain", "probe", [], secondTool)));
 }
 
+function pinnedRun(dir: string, exe: string): string {
+	if (windows) {
+		const script = `$p = Start-Process '${dir}/${exe}' -PassThru -NoNewWindow -RedirectStandardOutput '${dir}/pinned.out'; $p.ProcessorAffinity = 1; $null = $p.Handle; if (-not $p.WaitForExit(30000)) { $p.Kill(); 'TIMEOUT' } else { 'exit=' + $p.ExitCode }`;
+		const r = execFileCapture("powershell", ["-NoProfile", "-Command", script]);
+		const out = readFile(`${dir}/pinned.out`);
+		return `${r.ok ? r.value.trim() : "powershell failed"} ${out.ok ? out.value.trim() : ""}`;
+	}
+	const r = execFileCapture("taskset", ["-c", "0", `${dir}/${exe}`]);
+	return r.ok ? `exit=0 ${r.value.trim()}` : `exit=${r.error.exitCode} ${r.error.output.trim()}`;
+}
+
+function runSpawnDrain(): void {
+	if (platform == "darwin") {
+		console.log("skip spawn-drain: macOS has no CPU affinity to pin the run to one core");
+		return;
+	}
+	const dir = `${root}/spawn-drain`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, "class A { name() { return \"A\"; } }\nclass B extends A { name() { return \"B\"; } }\nasync function main() {\n\tconsole.log(\"pre\");\n\tconst f = spawn(() => { return true ? new B() : new A(); });\n\tconst g: A = await f;\n\tconst x = spawn(() => 1);\n\tconst y = spawn(() => 2);\n\tconst s = (await x) + (await y);\n\tconst k = spawn(() => new B());\n\tconst h: A = await k;\n\tconsole.log(`post ${g.name()} ${s} ${h.name()}`);\n}\nmain();\n");
+	need(build(dir, "spawn-drain", "probe.exe", ["--gc=drc"]) == 0, "spawn-drain build");
+	let complete = 0;
+	let last = "";
+	for (let i = 0; i < 10; i++) {
+		last = pinnedRun(dir, "probe.exe");
+		if (last.startsWith("exit=0") && last.contains("post B 3 B")) complete = complete + 1;
+	}
+	record(`pinned to one CPU, the exit drain waits for every spawned task (last: ${last})`, "10", `${complete}`);
+}
+
 function runDirectivePaths(): void {
 	const dup = `${root}/dedupe-directive`;
 	ensureDir(dup);
@@ -618,6 +709,151 @@ function runDirectivePaths(): void {
 	record("@link with absolute archive path", "61", value(abs));
 }
 
+function runUpcastCast(): void {
+	const dir = `${root}/upcast-cast`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"interface A { a: int32; }",
+		"interface B extends A { b: int32; }",
+		"interface C extends B { c: int32; }",
+		"interface P { a: int32; }",
+		"interface Q { a: int32; q: int32; }",
+		"class Animal { legs: int32 = 4; legCount(): int32 { return this.legs; } }",
+		"class Dog extends Animal { name: string = \"d\"; }",
+		"function readA(x: A): int32 { return x.a; }",
+		"function readMaybe(x: A | null): int32 { return x === null ? 0 : x.a; }",
+		"function readP(p: P): int32 { return p.a; }",
+		"function countLegs(x: Animal): int32 { return x.legs; }",
+		"function deep(x: C): int32 { return readA(x); }",
+		"function maybe(x: B): int32 { return readMaybe(x); }",
+		"const c: C = { a: 1, b: 2, c: 3 };",
+		"const q: Q = { a: 5, q: 6 };",
+		"const dog = new Dog();",
+		"console.log(`${deep(c)} ${maybe(c)} ${readP(q)} ${countLegs(dog)} ${dog.legCount()}`);",
+		"",
+	].join("\n"));
+	need(build(dir, "upcast-cast", "probe", ["--passC=-Werror=incompatible-pointer-types"]) == 0, "upcast-cast build under -Werror=incompatible-pointer-types");
+	record("a derived interface, a structural match and a class reach their base as a cast pointer", "1 1 5 4 4", value(dir));
+}
+
+function toolPresent(exe: string): boolean {
+	return execFileCapture(exe, ["--version"]).ok;
+}
+
+function runEmccArgvFs(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-argv-fs: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-argv-fs`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"import { readFile, writeFile, mkdir, exists, readDir, remove } from \"std/fs\";",
+		"import { argv } from \"std/process\";",
+		"const parts: string[] = [`argc=${argv.length - 1}`];",
+		"for (let i = 1; i < argv.length; i++) parts.push(argv[i]);",
+		"writeFile(\"note.txt\", \"kept\");",
+		"const back = readFile(\"note.txt\");",
+		"parts.push(back.ok ? back.value : \"read failed\");",
+		"mkdir(\"sub\");",
+		"writeFile(\"sub/inner.txt\", \"x\");",
+		"parts.push(readDir(\"sub\").join(\",\"));",
+		"remove(\"sub/inner.txt\");",
+		"parts.push(`${exists(\"sub/inner.txt\")} ${exists(\"note.txt\")}`);",
+		"console.log(parts.join(\"|\"));",
+		"",
+	].join("\n"));
+	const built = command(dir, "emcc-argv-fs", compiler, ["build", "main.ms", "--os=emcc", "--passL=-sNODERAWFS=1", "--output=probe.js"]);
+	need(built.code == 0, "emcc-argv-fs build");
+	const none = command(dir, "emcc-argv-fs-none", "node", ["probe.js"]);
+	record("an emcc program reads no arguments and uses the file system", "argc=0|kept|inner.txt|false true", none.stdout.trim());
+	const two = command(dir, "emcc-argv-fs-two", "node", ["probe.js", "one", "two words"]);
+	record("an emcc program receives its arguments in order", "argc=2|one|two words|kept|inner.txt|false true", two.stdout.trim());
+}
+
+function runEmccJspi(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-jspi: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-jspi`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/spawnOnly.ms`, [
+		"function sq(n: int32): int32 { return n * n; }",
+		"async function settled(): Promise<int32> {",
+		"\treturn await new Promise<int32>((resolve) => resolve(await spawn(() => sq(7))));",
+		"}",
+		"console.log(`${await settled()}`);",
+		"",
+	].join("\n"));
+	put(`${dir}/timer.ms`, [
+		"function waitSync(n: int32): int32 {",
+		"\treturn await new Promise<int32>((resolve) => setTimeout(() => resolve(n), 5));",
+		"}",
+		"let total = 0;",
+		"for (let i = 1; i <= 6; i++) total += waitSync(i);",
+		"console.log(`total=${total}`);",
+		"",
+	].join("\n"));
+	const plain = command(dir, "emcc-jspi-spawn", compiler, ["build", "spawnOnly.ms", "--os=emcc", "--output=spawnOnly.js"]);
+	need(plain.code == 0, "emcc-jspi spawn-only build");
+	const plainJs = readFile(`${dir}/spawnOnly.js`);
+	recordTrue("an emcc program with no timer links no stack suspension", plainJs.ok && plainJs.value.indexOf("Suspending") < 0 && plainJs.value.indexOf("asyncify") < 0);
+	record("an emcc program with no timer awaits a promise and a spawn", "49", command(dir, "emcc-jspi-spawn-run", "node", ["spawnOnly.js"]).stdout.trim());
+	const timed = command(dir, "emcc-jspi-timer", compiler, ["build", "timer.ms", "--os=emcc", "--output=timer.js"]);
+	need(timed.code == 0, "emcc-jspi timer build");
+	const timedJs = readFile(`${dir}/timer.js`);
+	recordTrue("an emcc program with a timer links JSPI", timedJs.ok && timedJs.value.indexOf("WebAssembly.Suspending") >= 0 && timedJs.value.indexOf("asyncify_start_unwind") < 0);
+	const jspiByDefault = execFileCapture("node", ["-e", "process.exit(typeof WebAssembly.Suspending == 'function' ? 0 : 1)"]).ok;
+	const nodeArgs = jspiByDefault ? ["timer.js"] : ["--experimental-wasm-jspi", "timer.js"];
+	record("an emcc program waits on a timer from sync code", "total=21", command(dir, "emcc-jspi-timer-run", "node", nodeArgs).stdout.trim());
+	put(`${dir}/rawSleep.ms`, "extern function msSleepMs(ms: int32): void;\nmsSleepMs(5);\nconsole.log(\"slept\");\n");
+	const raw = command(dir, "emcc-jspi-raw", compiler, ["build", "rawSleep.ms", "--os=emcc", "--output=rawSleep.js"]);
+	need(raw.code == 0, "emcc-jspi raw sleep build");
+	const rawJs = readFile(`${dir}/rawSleep.js`);
+	recordTrue("an emcc program that sleeps through a runtime extern links JSPI", rawJs.ok && rawJs.value.indexOf("WebAssembly.Suspending") >= 0);
+	const rawArgs = jspiByDefault ? ["rawSleep.js"] : ["--experimental-wasm-jspi", "rawSleep.js"];
+	record("an emcc program sleeps through a runtime extern", "slept", command(dir, "emcc-jspi-raw-run", "node", rawArgs).stdout.trim());
+}
+
+function runEmccWatchProcess(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-watch-process: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-watch-process`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"import { watch } from \"std/fs/watch\";",
+		"import { exec, execFileCapture } from \"std/process\";",
+		"const w = watch(\".\", false);",
+		"const e = exec(\"echo hi\");",
+		"const f = execFileCapture(\"echo\", [\"hi\"]);",
+		"console.log([",
+		"\tw.ok ? \"watch ok\" : w.error.message,",
+		"\te.ok ? `exec ${e.value.trim()}` : e.error.message,",
+		"\tf.ok ? `execFile ${f.value.trim()}` : f.error.message,",
+		"].join(\"|\"));",
+		"",
+	].join("\n"));
+	const built = command(dir, "emcc-watch-process", compiler, ["build", "main.ms", "--os=emcc", "--passL=-sNODERAWFS=1", "--output=probe.js"]);
+	need(built.code == 0, "emcc-watch-process build");
+	const browser = command(dir, "emcc-watch-process-run", "node", ["probe.js"]);
+	record(
+		"an emcc program links watch and process spawn and each reports it is unsupported",
+		"file watching has no backend for this platform yet|spawn failed: ENOSYS: process spawning is not supported on this target|spawnSync echo ENOSYS: process spawning is not supported on this target",
+		browser.stdout.trim(),
+	);
+	const native = command(dir, "emcc-watch-process-native", compiler, ["build", "main.ms", "--output=native"]);
+	need(native.code == 0, "emcc-watch-process native build");
+	const ran = command(dir, "emcc-watch-process-native-run", `${dir}/native`, []);
+	record("the same program on the host watches and spawns", "watch ok|exec hi|execFile hi", ran.stdout.trim());
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -626,6 +862,11 @@ if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
 if (group == "project-cache" || group == "all") runProjectCache();
 if (group == "directive-paths" || group == "all") runDirectivePaths();
+if (group == "spawn-drain" || group == "all") runSpawnDrain();
+if (group == "upcast-cast" || group == "all") runUpcastCast();
+if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
+if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
+if (group == "emcc-jspi" || group == "all") runEmccJspi();
 
 let failures = 0;
 console.log(`root ${root}`);

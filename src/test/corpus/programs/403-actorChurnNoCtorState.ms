@@ -1,6 +1,6 @@
 // @xfail(raiser): error: Cannot resolve module 'std/actor'
 // @maxrss: 40
-// @stdout: actor-churn-noctor done
+// @stdout: actor-churn-noctor done acc=0
 // @serial
 // note: FIXED (companion to actor-churn-heapstate): the NO-constructor actor teardown path is a distinct codegen branch (Ref-with-field-defaults, expressions.ms ~983) from the with-ctor one. State has a heap number[] field; the no-ctor branch already passed innerType so destroyFn is wired, and runtime msActorDestroyWithReason frees the state — without it the array leaked per teardown. Pins the no-ctor branch against drift.
 

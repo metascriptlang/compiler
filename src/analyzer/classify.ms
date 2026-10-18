@@ -6,13 +6,14 @@
 // The RcInfo result carries enough info to emit the correct AST calls.
 
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isPrimitiveUnionMember, isCountedRef, isUncountedPtrElement } from "../checker/types";
-import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
-import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
+import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
+import { makeCtx } from "../transform/testUtil";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, hookPrototype, setOpByKey, resetHookSyms } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, liftedOp, resetHookSyms } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -397,21 +398,21 @@ export function isFreshExpr(kind: NodeKind): boolean {
 
 // ===== Tests =====
 test "Ptr | null → None (raw pointer, never refcounted)" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createUnion([createPtr(voidType()), nullType()]), ctx);
 	assert info.rcKind == RcKind.None;
 	assert !info.needsCleanup;
 }
 
 test "unknown | null → the same cyclic Ref as bare unknown" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createUnion([unknownType(), nullType()]), ctx);
 	assert info.rcKind == RcKind.Ref;
 	assert (info.destroyFn as Symbol).name == "msDecrefCyclic";
 }
 
 test "pure strlit union → String ops (msString repr)" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const u = createUnion([createStringLiteral("column"), createStringLiteral("row")]);
 	const info = classifyType(u, ctx);
 	assert info.rcKind == RcKind.String;
@@ -419,57 +420,57 @@ test "pure strlit union → String ops (msString repr)" {
 }
 
 test "number → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(numberType(), ctx);
 	assert info.rcKind == RcKind.None;
 	assert !info.needsCleanup;
 }
 
 test "boolean → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(booleanType(), ctx);
 	assert info.rcKind == RcKind.None;
 }
 
 test "void → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(voidType(), ctx);
 	assert info.rcKind == RcKind.None;
 }
 
 test "null → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(nullType(), ctx);
 	assert info.rcKind == RcKind.None;
 }
 
 test "unknown → cyclic Ref, released through the header type" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(unknownType(), ctx);
 	assert info.rcKind == RcKind.Ref;
 	assert (info.destroyFn as Symbol).name == "msDecrefCyclic";
 }
 
 test "int32 → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createPrimitive(TypeKind.Int32), ctx);
 	assert info.rcKind == RcKind.None;
 }
 
 test "enum → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createPrimitive(TypeKind.Enum), ctx);
 	assert info.rcKind == RcKind.None;
 }
 
 test "null type input → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(null, ctx);
 	assert info.rcKind == RcKind.None;
 }
 
 test "string → String" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(stringType(), ctx);
 	assert info.rcKind == RcKind.String;
 	assert info.needsCleanup;
@@ -481,7 +482,7 @@ test "string → String" {
 }
 
 test "array of number → Array" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createArray(numberType()), ctx);
 	assert info.rcKind == RcKind.Array;
 	assert info.needsCleanup;
@@ -490,7 +491,7 @@ test "array of number → Array" {
 }
 
 test "array of string → Named (standalone procs)" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createArray(stringType()), ctx);
 	assert info.rcKind == RcKind.Named;
 	assert info.seqLike;
@@ -498,29 +499,30 @@ test "array of string → Named (standalone procs)" {
 }
 
 test "function → Closure" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createFunction([], [], voidType()), ctx);
 	assert info.rcKind == RcKind.Closure;
 	assert info.needsCleanup;
 	assert (info.destroyFn as Symbol).name == "msClosureDestroy";
 }
 
+function declaredTestStruct(t: Type): Type {
+	t.sym = makeSymbol(t.typeName, SymbolKind.Struct, t, false);
+	return t;
+}
+
 function liftTestOps(t: Type, n: string): Type {
 	resetHookSyms();
-	const destroy = hookPrototype(n + "Destroy", null);
-	setFlag(destroy, SymbolFlag.DestroyOp);
-	const wasMoved = hookPrototype(n + "WasMoved", null);
-	setFlag(wasMoved, SymbolFlag.WasMovedOp);
-	setOpByKey(t, AttachedOp.AttachedDestructor, destroy);
-	setOpByKey(t, AttachedOp.AttachedAsgn, hookPrototype(n + "Copy", null));
-	setOpByKey(t, AttachedOp.AttachedWasMoved, wasMoved);
-	setOpByKey(t, AttachedOp.AttachedSink, hookPrototype(n + "Sink", null));
+	liftedOp(t, AttachedOp.AttachedDestructor, n + "Destroy", null);
+	liftedOp(t, AttachedOp.AttachedAsgn, n + "Copy", null);
+	liftedOp(t, AttachedOp.AttachedWasMoved, n + "WasMoved", null);
+	liftedOp(t, AttachedOp.AttachedSink, n + "Sink", null);
 	return t;
 }
 
 test "named object with managed field → Named" {
-	const ctx = createTransformContext();
-	const info = classifyType(liftTestOps(createStruct("Token", ["value"], [stringType()], false), "Token"), ctx);
+	const ctx = makeCtx();
+	const info = classifyType(liftTestOps(declaredTestStruct(createStruct("Token", ["value"], [stringType()], false)), "Token"), ctx);
 	assert info.rcKind == RcKind.Named;
 	assert info.needsCleanup;
 	assert (info.destroyFn as Symbol).name == "TokenDestroy";
@@ -530,19 +532,19 @@ test "named object with managed field → Named" {
 }
 
 test "named object without managed field → noRcInfo" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createStruct("Point", ["x", "y"], [numberType(), numberType()], false), ctx);
 	assert !info.needsCleanup;
 }
 
 test "anonymous object → None" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createStruct("", ["x"], [numberType()], false), ctx);
 	assert info.rcKind == RcKind.None;
 }
 
 test "ref → Ref" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const t = createPrimitive(TypeKind.Ref);
 	const info = classifyType(t, ctx);
 	assert info.rcKind == RcKind.Ref;
@@ -550,8 +552,8 @@ test "ref → Ref" {
 }
 
 test "ref to self-cyclic struct → cyclic ops" {
-	const ctx = createTransformContext();
-	const s = createStruct("CycNode", ["next"], [numberType()], false);
+	const ctx = makeCtx();
+	const s = declaredTestStruct(createStruct("CycNode", ["next"], [numberType()], false));
 	s.typeChildren[0] = createRef(s);
 	const info = classifyType(createRef(s), ctx);
 	assert info.rcKind == RcKind.Ref;
@@ -561,9 +563,9 @@ test "ref to self-cyclic struct → cyclic ops" {
 }
 
 test "ref to leaf struct → plain ops" {
-	const ctx = createTransformContext();
-	const inner = createStruct("LeafInner", ["value"], [numberType()], false);
-	const leaf = createStruct("LeafOuter", ["x", "child"], [numberType(), createRef(inner)], false);
+	const ctx = makeCtx();
+	const inner = declaredTestStruct(createStruct("LeafInner", ["value"], [numberType()], false));
+	const leaf = declaredTestStruct(createStruct("LeafOuter", ["x", "child"], [numberType(), createRef(inner)], false));
 	const info = classifyType(createRef(leaf), ctx);
 	assert info.rcKind == RcKind.Ref;
 	assert (info.destroyFn as Symbol).name == "msDecref";
@@ -571,7 +573,7 @@ test "ref to leaf struct → plain ops" {
 }
 
 test "ptr → None (unmanaged)" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const info = classifyType(createPtr(stringType()), ctx);
 	assert info.rcKind == RcKind.None;
 	assert !info.needsCleanup;
@@ -601,12 +603,12 @@ test "array of Ptr to a counted ref → Ref hooks" {
 
 test "isCountedRef agrees with classifyType's Ref arms" {
 	const ctx = createTransformContext();
-	const leaf = createStruct("CountedLeaf", ["x"], [numberType()], false);
+	const leaf = declaredTestStruct(createStruct("CountedLeaf", ["x"], [numberType()], false));
 	const samples: Type[] = [
 		createRef(leaf), unknownType(), createPrimitive(TypeKind.BigInt), stringType(), numberType(),
 		createPtr(voidType()), createPtr(createRef(leaf)), createUnion([createRef(leaf), nullType()]),
 		createUnion([createPtr(createRef(leaf)), nullType()]), createFunction([], [], voidType()),
-		liftTestOps(createStruct("CountedToken", ["value"], [stringType()], false), "CountedToken"), createArray(numberType()),
+		liftTestOps(declaredTestStruct(createStruct("CountedToken", ["value"], [stringType()], false)), "CountedToken"), createArray(numberType()),
 	];
 	for (const t of samples) {
 		assert isCountedRef(t) == (classifyType(t, ctx).rcKind == RcKind.Ref);
@@ -632,7 +634,7 @@ test "binary expr is NOT fresh" { assert !isFreshExpr(NodeKind.BinaryExpr); }
 // registered variant defer via the structural-hash registry. Distinct field names per
 // test — the registry is process-global and keys by structural hash.
 test "nameless anon struct with RC field → owned msAnon hooks" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const solo = createStruct("", ["solo"], [stringType()], false);
 	const info = classifyType(liftTestOps(solo, anonTypeName(solo)), ctx);
 	assert info.rcKind == RcKind.Named;
@@ -641,7 +643,7 @@ test "nameless anon struct with RC field → owned msAnon hooks" {
 }
 
 test "DuVariant-flagged payload defers to the DU machinery" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const v = createStruct("", ["vpay"], [stringType()], false);
 	createUnion([v, numberType()]);
 	assert v.typeFlags.has(TypeFlag.DuVariant);
@@ -650,7 +652,7 @@ test "DuVariant-flagged payload defers to the DU machinery" {
 }
 
 test "structurally-equal copy of a registered variant defers via hash registry" {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const original = createStruct("", ["vpay2"], [stringType()], false);
 	createUnion([original, numberType()]);
 	const copy = createStruct("", ["vpay2"], [stringType()], false);

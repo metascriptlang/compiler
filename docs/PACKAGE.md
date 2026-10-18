@@ -127,9 +127,10 @@ Measured 2026-09-22, card `~/metascript/.inbox/compiler/2026-09-22-build-ms-decl
 
 - `resolve.alias` — extracted, passed to the resolver, and still `Cannot resolve module` for both
   `"@lib": "./src/lib"` and `"lib": "./src/lib"`.
-- `root` — declared in `std/build`'s `BuildConfig` and written by `msc init`, but the loader reads
-  `entry` only. A fresh `msc init` scaffold does not build (`error: build requires an input file`)
-  until you rename `root:` to `entry:`.
+- `root` — declared in `std/build`'s `BuildConfig` as the base for non-relative imports, and read
+  by nothing. Measured 2026-10-15 on a candidate built from `7e7c0dd02`: with `root: "src"` or
+  `root: "."`, `import … from "lib/util"` and `from "src/lib/util"` both stop with `Cannot resolve
+  module`, exactly as without the field; only `./lib/util` resolves.
 - Importing a dep by its bare root (`import { greeting } from "greeter"`) fails; the subpath form
   `from "greeter/src/index"` works (see below).
 
@@ -293,7 +294,7 @@ mean audited.
 
 | Command | Behavior |
 |---|---|
-| `msc init <name>` | Scaffold `build.ms` + `src/index.ms`. **Currently writes `root:` where the loader wants `entry:`** — rename it before `msc build` (see "not wired"). |
+| `msc init <name>` | Scaffold `build.ms` with `entry: "src/index.ms"` + `src/index.ms` ending in a bare `main();`, so `msc build` / `msc run` take the project without a file argument. Measured 2026-10-15: inside a fresh scaffold, `msc build` printed `Built 1 module(s) → out/debug/index` on a candidate built from `7e7c0dd02`, where v0.3.4 (`15b93cbba`) stopped with `error: build requires an input file` because it wrote `root:`. |
 | `msc add <spec> [-D]` | Add a dep to `deps` (or `devDeps` with `-D`) in `build.ms`, then install commands. Spec: `name` (registry latest), `name@1.2.3`, `name@git:host/path@ref`, `name@file:path`. Also rewrites `msc.lock` for registry/git. |
 | `msc remove <name>` | Remove the dep from `build.ms` + `msc.lock`, then prune its shims from `.msc/bin/`. `-g <name>` removes a global install (manifest + `~/.metascript/bin/` shim). |
 | `msc install` | Verify locked deps are present, install commands into `.msc/bin/`. `-g <spec>` = global (see shims). |

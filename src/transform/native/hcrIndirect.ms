@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, NewExprData, ObjectLiteralData, Symbol, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
-import { hasGenericParams, createPtr, createStruct, voidType } from "../../checker/types";
-import { hasFlag, SymbolFlag, lookupCtorDefaults } from "../../checker/symbol";
+import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName } from "../../codegen/c/types";
@@ -11,6 +11,7 @@ import { syntheticToken, makeHiddenDeref, makeTypedIdent, makeMember, makeCall, 
 import { AliveSet, CEmissionFacts } from "../../codegen/c/context";
 import { functionDeclIsAlive } from "../../checker/reachability";
 import { hcrStorageDecl } from "./hcrLift";
+import { ctorRoutineOf } from "../../checker/ctorRoutine";
 
 export struct HcrIndirectModule {
 	moduleId: string;
@@ -189,8 +190,8 @@ export function lowerHcrIndirection(
 				return n;
 			}
 			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr && n.kind != NodeKind.NewExpr) return n;
-			const constructed = constructedClassOf(n);
-			const sym = n.kind == NodeKind.NewExpr || constructed != null ? constructorInitOf(constructed) : n.resolvedSym;
+			const constructed = n.kind == NodeKind.NewExpr ? (n.data as NewExprData).newCallee.resolvedSym : null;
+			const sym = n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
 			if (sym == null) return n;
 			if (n.kind == NodeKind.MemberExpr) {
 				const baseSym = (n.data as MemberExprData).object.resolvedSym;
@@ -222,7 +223,7 @@ export function lowerHcrIndirection(
 				bound.set(id, pointer);
 				bindings = bindings + `${cString(targetId)}, ${cString(symbol)}, ${cString(key)}, `;
 				if (isVariable) {
-					const storageType = createStruct(`_ms_hcr_import_value${bindSlot}`, ["value"], [sym.symbolType], true);
+					const storageType = spelled(createStruct(`_ms_hcr_import_value${bindSlot}`, ["value"], [sym.symbolType], true));
 					storageTypes.set(id, storageType);
 					emitted.push(hcrStorageDecl(storageType, loc));
 					emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${pointer};`, loc));
@@ -261,16 +262,9 @@ export function lowerHcrIndirection(
 	return program;
 }
 
-function constructedClassOf(n: Node): Symbol | null {
-	if (n.kind == NodeKind.NewExpr) return (n.data as NewExprData).newCallee.resolvedSym;
-	if (n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == "super") return n.resolvedSym;
-	return null;
-}
-
 function constructorInitOf(classSym: Symbol | null): Symbol | null {
 	if (classSym == null) return null;
-	const entry = lookupCtorDefaults(classSym, classSym.name);
-	return entry != null ? entry.initSym : null;
+	return ctorRoutineOf(classSym);
 }
 
 function referenceText(n: Node): string {

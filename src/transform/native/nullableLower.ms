@@ -10,7 +10,7 @@
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
 import { Node, NodeKind, NodeFlag, SourceLocation, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
-import { isStructType, isMaybeType, isTagCarriedUnion, getProperty, unionMemberDisplay, isUnknownType, peelTransparentInstance, unionHasMemberOfKind } from "../../checker/types";
+import { isStructType, isMaybeType, isTagCarriedUnion, getProperty, unionMemberDisplay, isUnknownType, peelTransparentInstance, unionHasMemberOfKind, unwrapRefNullUnion } from "../../checker/types";
 import { isLocation } from "../../checker/assignable";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -88,7 +88,8 @@ export function unwrapRefusesNull(target: Type): boolean {
 }
 
 export function nullAccessHead(carrier: Type): string {
-	const payload = carrier.typeReturn != null ? unionMemberDisplay(carrier.typeReturn) : "?";
+	const held = isMaybeType(carrier) ? carrier.typeReturn : unwrapRefNullUnion(carrier);
+	const payload = held != null ? unionMemberDisplay(held) : "?";
 	return `member '${payload}' is not accessible for type '${payload} | null' using '`;
 }
 

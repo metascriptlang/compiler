@@ -7,6 +7,7 @@ import { Node, Type, Symbol } from "../../ast/node";
 import { CheckerContext, CheckerError, Severity } from "../../checker/context";
 import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -585,40 +586,38 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 
 // ===== AliveSet — global DCE reachability (Standard reference parity) =====
 
+export enum TypeInfoKind {
+	Object,
+	RefArrayCell,
+	ArcCell,
+	PromiseAllCell,
+}
+
 export class CTypeInfoDemand {
-	cell: Type;
+	kind: TypeInfoKind;
+	subject: Type;
 	key: string;
 	owner: string;
 	cName: string = "";
-	destroy: Symbol;
+	destroy: Symbol | null;
 	trace: Symbol | null = null;
-}
-
-export class CInstanceTypeInfo {
-	cName: string;
-	type: Type;
-	demanders: string[];
-	inCore: boolean;
+	baseKey: string = "";
+	moduleLocal: boolean = false;
 }
 
 export class AliveSet {
 	computed: boolean;       // reachability ran: what it did not mark is dead, even when nothing was marked by name
-	entries: string[];       // "modulePath:symbolName" keys
-	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup
 	_syms: HashSet<Symbol>;
 	typeInfos: CTypeInfoDemand[];
 	typeInfoKeys: HashSet<string>;
-	instanceTypeInfos: CInstanceTypeInfo[];
-	instanceTypeInfoByName: HashMap<string, CInstanceTypeInfo>;
 	foreignOps: HashMap<Symbol, string[]>;
 }
 
 export function createAliveSet(): AliveSet {
 	return {
-		computed: false, entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
-		typeInfos: [], typeInfoKeys: new HashSet<string>(),
-		instanceTypeInfos: [], instanceTypeInfoByName: new HashMap<string, CInstanceTypeInfo>(), foreignOps: new HashMap<Symbol, string[]>(),
+		computed: false, _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
+		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
 	};
 }
 
@@ -630,26 +629,27 @@ export function aliveSetHasSym(aliveSet: Readonly<AliveSet>, sym: Symbol): boole
 	return aliveSet._syms.has(sym);
 }
 
-export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, modulePath: string, name: string, sym: Symbol | null): boolean {
-	if (sym != null) return aliveSet._syms.has(sym);
-	return aliveSetHas(aliveSet, modulePath, name);
-}
-
-export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {
-	const key = modulePath + ":" + name;
-	if (aliveSet._set.has(key)) return;
-	aliveSet._set.add(key);
-	aliveSet.entries.push(key);
-	aliveSet._modules.add(modulePath);
+export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, sym: Symbol | null, declName: string): boolean {
+	if (sym == null) throw new Error(`internal: declaration '${declName}' has no symbol, so its aliveness is unknown`);
+	return aliveSet._syms.has(sym);
 }
 
 export function aliveSetAddModule(aliveSet: AliveSet, modulePath: string): void {
 	aliveSet._modules.add(modulePath);
 }
 
-export function aliveSetHas(aliveSet: Readonly<AliveSet>, modulePath: string, name: string): boolean {
-	const key = modulePath + ":" + name;
-	return aliveSet._set.has(key);
+export function aliveSetHasNamed(aliveSet: AliveSet, modulePath: string, name: string): boolean {
+	for (const sym of aliveSet._syms) {
+		if (sym.name == name && sym.modulePath == modulePath) return true;
+	}
+	return false;
+}
+
+export function aliveSetImportsC(aliveSet: AliveSet, cName: string): boolean {
+	for (const sym of aliveSet._syms) {
+		if (hasFlag(sym, SymbolFlag.ImportC) && sym.nativeName == cName) return true;
+	}
+	return false;
 }
 
 export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {
@@ -663,7 +663,6 @@ export function aliveSetModuleCount(aliveSet: Readonly<AliveSet>): int32 {
 
 export class CEmissionFacts {
 	genericOwners: HashMap<string, string> = new HashMap<string, string>();
-	skippedTypeInfos: HashSet<string> = new HashSet<string>();
 	hcrCoreUnits: HashSet<string> = new HashSet<string>();
 	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
 	typeInfoOrder: CTypeInfoDemand[] = [];
@@ -684,10 +683,6 @@ export function factClaimGeneric(facts: CEmissionFacts, name: string, owner: str
 	noteFactWrite(facts, `g\t${name}\t${owner}`);
 }
 
-export function factSkipTypeInfo(facts: CEmissionFacts, name: string): void {
-	facts.skippedTypeInfos.add(name);
-	noteFactWrite(facts, `s\t${name}`);
-}
 
 export function factCoreUnit(facts: CEmissionFacts, modulePath: string): void {
 	facts.hcrCoreUnits.add(modulePath);
@@ -698,7 +693,6 @@ export function replayFactWrites(facts: CEmissionFacts, writes: string[]): void 
 	for (const write of writes) {
 		const fields = write.split("\t");
 		if (fields[0] == "g") factClaimGeneric(facts, fields[1], fields[2]);
-		else if (fields[0] == "s") factSkipTypeInfo(facts, fields[1]);
 		else if (fields[0] == "c") factCoreUnit(facts, fields[1]);
 	}
 }
@@ -709,13 +703,12 @@ function aliveSymKey(sym: Readonly<Symbol>): string {
 
 export function aliveSetFingerprint(aliveSet: AliveSet): string {
 	const entries: string[] = [];
-	for (const entry of aliveSet.entries) entries.push(entry);
+	aliveSet._modules.forEach((modulePath: string): void => { entries.push(`m:${modulePath}`); });
 	aliveSet._syms.forEach((sym: Symbol): void => { entries.push(aliveSymKey(sym)); });
 	entries.sort();
 	for (const info of aliveSet.typeInfos) {
-		entries.push(`t\t${info.key}\t${info.owner}\t${aliveSymKey(info.destroy)}\t${info.trace != null ? aliveSymKey(info.trace) : ""}`);
+		entries.push(`t\t${info.key}\t${info.owner}\t${info.destroy != null ? aliveSymKey(info.destroy) : ""}\t${info.trace != null ? aliveSymKey(info.trace) : ""}\t${info.baseKey}\t${info.moduleLocal}`);
 	}
-	for (const info of aliveSet.instanceTypeInfos) entries.push(`i\t${info.cName}\t${info.inCore}\t${info.demanders.join(",")}`);
 	const joined = entries.join("\n");
 	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}:${aliveSet.computed}`;
 }

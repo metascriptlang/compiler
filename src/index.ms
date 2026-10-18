@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
 import { platform } from "std/process";
-import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
+import { CliOptions, Target, parseArgs, applyBuildTarget, seedOptionDefines, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { setParserDefines } from "./parser/context";
 import { applyConfigDefines, defineSymbol, formatDefines, seedProjectDir } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
@@ -64,6 +64,15 @@ export function main(): int32 {
 
 	// build.ms defines go in before any source is parsed, under the command line's -d: switches.
 	const projectConfig = projectRoot != "" ? loadBuildConfig(buildMsPath, false) : null;
+	if (projectConfig != null && projectConfig.valid) {
+		const targeted = applyBuildTarget(opts, projectConfig.build.target);
+		if (!targeted.ok) {
+			console.log(`${error("error")}: ${buildMsPath}: build.target: ${targeted.error}`);
+			process.exit(1);
+		}
+		if (cmd == "build" && opts.mode == MODE_DEBUG && projectConfig.build.optimize == "release") opts.mode = MODE_RELEASE;
+	}
+	seedOptionDefines(opts);
 	if (projectConfig != null && projectConfig.valid) seedProjectDir(opts.defines, projectRoot);
 	if (projectConfig != null && projectConfig.valid) {
 		if (projectConfig.defines.refused.length > 0) {
@@ -145,14 +154,8 @@ export function main(): int32 {
 				opts.inputFile = cfg.entry;
 			}
 			requireFile(opts);
-			// Apply build section settings from build.ms
-			if (cfg.valid) {
-				if (opts.verbose) {
-					verboseLog(`build.ms: root=${cfg.entry} target=${cfg.build.target}`);
-				}
-				if (opts.mode == MODE_DEBUG && cfg.build.optimize == "release") {
-					opts.mode = MODE_RELEASE;
-				}
+			if (cfg.valid && opts.verbose) {
+				verboseLog(`build.ms: root=${cfg.entry} target=${cfg.build.target}`);
 			}
 			// Apply cc section from build.ms: resolve per-target config, CLI flags override
 			if (cfg.valid) {
@@ -162,7 +165,7 @@ export function main(): int32 {
 				if (opts.passC == "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
 				if (opts.passL == "" && resolved.linkFlags.length > 0) opts.passL = resolved.linkFlags.join(" ");
 			}
-			if ((cfg.valid && cfg.build.target == "js") || opts.target == Target.JS) {
+			if (opts.target == Target.JS) {
 				const outDir = (cfg.valid && cfg.build.outDir != "") ? cfg.build.outDir : opts.outputPath;
 				cmdBuildJS(opts.inputFile, outDir, opts);
 			} else {

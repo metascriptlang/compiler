@@ -1,4 +1,4 @@
-export const MODES: string[] = ["js-throws", "c-build", "split"];
+export const MODES: string[] = ["js-throws", "c-build", "split", "san"];
 
 export struct Identity {
 	mode: string;
@@ -108,6 +108,19 @@ export function firstCompilerError(text: string): string {
 	for (const raw of text.split("\n")) {
 		const message = compilerError(raw);
 		if (message != "") { return message; }
+	}
+	return "";
+}
+
+export function sanLine(stderr: string): string {
+	const head = "SUMMARY: AddressSanitizer: ";
+	for (const raw of stderr.split("\n")) {
+		const line = raw.trim();
+		if (line.startsWith(head)) {
+			const rest = line.slice(head.length, line.length);
+			const space = rest.indexOf(" ");
+			return space < 0 ? rest : rest.slice(0, space);
+		}
 	}
 	return "";
 }
@@ -239,4 +252,12 @@ test "a reduction may not introduce an operator the original never had" {
 	assert forbidOf("i++;") == "--";
 	assert presentForbidden(forbidOf("let a = -(-b);"), "function f() { --0 }") == "--";
 	assert presentForbidden(forbidOf("let a = -(-b);"), "let a = -(-b);") == "";
+}
+
+test "a sanitizer summary names its bug kind" {
+	assert sanLine("==1==ERROR: AddressSanitizer: x\nSUMMARY: AddressSanitizer: heap-use-after-free p3.ms:127 in plantDelta\n") == "heap-use-after-free";
+	assert sanLine("SUMMARY: AddressSanitizer: double-free\n") == "double-free";
+	assert sanLine("node: TypeError: x\n") == "";
+	assert parseIdentity("mode: san\nsymptom: heap-use-after-free\n").ok;
+	assert !parseIdentity("mode: san\n").ok;
 }

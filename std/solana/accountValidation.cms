@@ -81,7 +81,7 @@ macro rawAccountFieldsValid(address: Node): Node {
 		return { kind: NodeKind.TypeAssertion, line: shape.line, column: shape.column,
 			asType: "uint64", asExpr: {
 				kind: NodeKind.NumberLiteral, line: shape.line, column: shape.column,
-				value: value as number, isFloat: false, intVal: value as int64,
+				value: value as number, isFloat: false, intVal: int64Bits(value),
 				outOfRangeText: "", isBitPattern: true,
 			} };
 	}

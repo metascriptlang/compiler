@@ -394,6 +394,8 @@ test "operator disambiguation (greedy)" {
 	assert lexKindAt("a!==b", 1) == TokenKind.BangEqEq;
 	assert lexKindAt("a>>>b", 1) == TokenKind.GtGtGt;
 	assert lexKindAt("a**b", 1) == TokenKind.StarStar;
+	assert lexKindAt("a**=b", 1) == TokenKind.StarStarEq;
+	assert lexKindAt("a**=b", 2) == TokenKind.Ident;
 	assert lexKindAt("a?.b", 1) == TokenKind.QuestionDot;
 	assert lexKindAt("a??b", 1) == TokenKind.QuestionQuestion;
 	assert lexKindAt("a|>b", 1) == TokenKind.PipeGt;

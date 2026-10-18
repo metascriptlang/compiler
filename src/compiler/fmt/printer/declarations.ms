@@ -608,6 +608,7 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (d.propVisibility != "") parts.push(docText(d.propVisibility + " "));
 	if (d.propIsStatic) parts.push(docText("static "));
 	if (d.propIsReadonly) parts.push(docText("readonly "));
+	if (node.flags.has(NodeFlag.AutoAccessor)) parts.push(docText("accessor "));
 	const optional = writtenOptional(options.source, node.location.line, node.location.column, d.propName);
 	const keptType = optional && writtenTypeAfterOptional(options.source, node.location.line, node.location.column, d.propName, d.propType);
 	parts.push(docText(optional ? d.propName + "?" : d.propName));

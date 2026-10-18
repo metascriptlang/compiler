@@ -70,7 +70,7 @@ function enumMemberValid(layout: AccountLayout, value: Node, raw: boolean): Node
 	const patterns: Node[] = [];
 	const seen: int64[] = [];
 	for (const ordinal of layout.values) {
-		const expected = raw ? accountEnumBits(ordinal, layout.size) as int64 : ordinal as int64;
+		const expected = raw ? int64Bits(accountEnumBits(ordinal, layout.size)) : ordinal as int64;
 		let duplicate = false;
 		for (const prior of seen) { if (prior == expected) { duplicate = true; break; } }
 		if (duplicate) { continue; }

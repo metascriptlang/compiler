@@ -14,10 +14,7 @@ import {
 	SeedSlice,
 	bytesAddress,
 	findAddress,
-	findAt,
-	ownProgram,
 	seedBytes,
-	tableAddress,
 } from "./seed";
 
 export function isTokenProgram(program: Pubkey): boolean {
@@ -58,16 +55,13 @@ export function createMintPdaAt(
 	if (payer.asAccount().key() == target.key()) {
 		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
 	}
-	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
-	if (found.key != target.key()) { return Result.err(ProgramError.constraintSeeds()); }
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
-	const _created = try createProgramAccountSeeded(
+	const bump = try createProgramAccountSeeded(
 		payer.asAccount(),
 		target,
 		82,
 		program,
 		seeds,
-		found.bump,
 	);
 	const _initialized = try initializeMint2(
 		program,
@@ -76,7 +70,7 @@ export function createMintPdaAt(
 		mintAuthority,
 		freezeAuthority,
 	);
-	return Result.ok(found.bump);
+	return Result.ok(bump);
 }
 
 export function associatedTokenAddress(

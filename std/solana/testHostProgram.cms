@@ -1,0 +1,245 @@
+@include("runtime/solana/solana.h");
+
+import { Bytes, putU8 } from "./buffer";
+import { account, accountCount, failWith, instructionData, logU64, setReturnData } from "./core";
+import { InstructionAccount, invokeList } from "./core";
+import { ProgramError } from "./error";
+import { SeedSlice, SignerSeeds, signerOf } from "./seed";
+
+extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
+extern function msSolLog(address: uint64, length: uint64): void;
+extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
+extern function msSolProgramId(): uint64;
+extern function msSolCreateProgramAddress(
+	seeds: uint64,
+	count: uint64,
+	program: uint64,
+	out: uint64,
+): uint64;
+extern function msSolTryFindProgramAddress(
+	seeds: uint64,
+	count: uint64,
+	program: uint64,
+	out: uint64,
+	bump: uint64,
+): uint64;
+extern function msSolCurveValidatePoint(curve: uint64, point: uint64, result: uint64): uint64;
+
+export const NOTHING: uint8 = 0;
+export const OVERLAPPING_COPY: uint8 = 1;
+export const RETURN_DATA: uint8 = 2;
+export const LOG_BYTES: uint8 = 3;
+export const LOG_ACCOUNT_DATA: uint8 = 4;
+export const CREATE_ADDRESS: uint8 = 5;
+export const FIND_ADDRESS: uint8 = 6;
+export const VALIDATE_POINT: uint8 = 7;
+export const FORWARD: uint8 = 8;
+export const FORWARD_AND_CARRY_ON: uint8 = 9;
+export const STEPS: uint8 = 10;
+
+export const ADD: uint8 = 1;
+export const SUBTRACT: uint8 = 2;
+export const WRITE: uint8 = 3;
+export const ASSIGN: uint8 = 4;
+export const RESIZE: uint8 = 5;
+export const CALL: uint8 = 6;
+export const CALL_AND_CARRY_ON: uint8 = 7;
+export const LOG: uint8 = 8;
+export const FAIL: uint8 = 9;
+export const RETURN: uint8 = 10;
+
+export const NONE: uint8 = 255;
+const MAX_FORWARDED: int32 = 4;
+const SLOTS: int32 = 17;
+
+function overlappingCopy(): Result<uint64, ProgramError> {
+	let storage: uint8[32] = [];
+	const distance = (try instructionData().readU8(1)) as uint64;
+	msSolCopy(msSolSpanAddress(storage) + distance, msSolSpanAddress(storage), 8);
+	logU64(1);
+	return Result.ok(0);
+}
+
+function returnsData(): Result<uint64, ProgramError> {
+	let storage: uint8[1100] = [];
+	const length = (try instructionData().readU16(1)) as int32;
+	setReturnData(storage[0..length]);
+	logU64(1);
+	return Result.ok(0);
+}
+
+function logsBytes(): Result<uint64, ProgramError> {
+	const input = instructionData();
+	msSolLog(input.address + 1, input.length - 1);
+	logU64(1);
+	return Result.ok(0);
+}
+
+function logsAccountData(): Result<uint64, ProgramError> {
+	const input = instructionData();
+	const length = (try input.readU16(1)) as uint64;
+	const lines = try input.readU16(3);
+	const held = (try account(0)).data();
+	if (length > held.length) { return Result.err(ProgramError.accountDataTooSmall()); }
+	for (let line: uint16 = 0; line < lines; line++) { msSolLog(held.address, length); }
+	logU64(1);
+	return Result.ok(0);
+}
+
+function derives(find: boolean): Result<uint64, ProgramError> {
+	const input = instructionData();
+	const count = (try input.readU8(1)) as int32;
+	const length = (try input.readU8(2)) as uint64;
+	let zeros: uint8[40] = [];
+	let slices: SeedSlice[SLOTS] = [];
+	for (let index = 0; index < SLOTS; index++) {
+		slices[index] = { address: msSolSpanAddress(zeros), length: length };
+	}
+	let out: uint8[33] = [];
+	const table = msSolSeedsAddress(slices);
+	const program = msSolProgramId();
+	const address = msSolSpanAddress(out);
+	const status = find
+		? msSolTryFindProgramAddress(table, count as uint64, program, address, address + 32)
+		: msSolCreateProgramAddress(table, count as uint64, program, address);
+	logU64(status);
+	return Result.ok(0);
+}
+
+function validatesPoint(): Result<uint64, ProgramError> {
+	const curve = (try instructionData().readU8(1)) as uint64;
+	let point: uint8[32] = [];
+	point[0] = 1;
+	logU64(msSolCurveValidatePoint(curve, msSolSpanAddress(point), 0));
+	return Result.ok(0);
+}
+
+function forward(): Result<uint64, ProgramError> {
+	const input = instructionData();
+	const drained = try input.readU8(1);
+	const count = (try input.readU8(2)) as int32;
+	const signerCount = (try input.readU8(7)) as int32;
+	const seedCount = (try input.readU8(8)) as int32;
+	const seedLength = (try input.readU8(9)) as uint64;
+	if (count > MAX_FORWARDED || signerCount > SLOTS || seedCount > SLOTS) {
+		return Result.err(ProgramError.invalidInstructionData());
+	}
+	if (drained != NONE) {
+		const from = try account(drained as int32);
+		const sink = try account(accountCount() - 1);
+		sink.setLamports(sink.lamports() + from.lamports());
+		from.setLamports(0);
+	}
+	const callee = (try account(0)).key();
+	let metas: InstructionAccount[] = [];
+	for (let index = 0; index < count; index++) {
+		const flags = try input.readU8((3 + index) as uint64);
+		const held = try account(index + 1);
+		metas.push(InstructionAccount.flagged(held, (flags & 1) != 0, (flags & 2) != 0));
+	}
+	let storage: uint8[96] = [];
+	let length: uint64 = 0;
+	for (let at: uint64 = 10 + seedLength; at < input.length; at++) {
+		length = putU8(storage, length, try input.readU8(at));
+	}
+	let slices: SeedSlice[SLOTS] = [];
+	for (let index = 0; index < SLOTS; index++) {
+		slices[index] = { address: input.address + 10, length: seedLength };
+	}
+	let signers: SignerSeeds[SLOTS] = [];
+	for (let index = 0; index < SLOTS; index++) { signers[index] = signerOf(slices[0..seedCount]); }
+	return invokeList(callee, metas, storage, length, signers[0..signerCount]);
+}
+
+function carryOnAfter(_sent: Result<uint64, ProgramError>): Result<uint64, ProgramError> {
+	logU64(1);
+	return Result.ok(0);
+}
+
+function calls(input: Bytes, at: uint64, count: int32): Result<uint64, ProgramError> {
+	if (count > MAX_FORWARDED) { return Result.err(ProgramError.invalidInstructionData()); }
+	const callee = (try account((try input.readU8(at + 1)) as int32)).key();
+	let metas: InstructionAccount[] = [];
+	for (let index = 0; index < count; index++) {
+		const entry = at + 3 + (index as uint64) * 2;
+		const held = try account((try input.readU8(entry)) as int32);
+		const flags = try input.readU8(entry + 1);
+		metas.push(InstructionAccount.flagged(held, (flags & 1) != 0, (flags & 2) != 0));
+	}
+	const sent = at + 3 + (count as uint64) * 2;
+	const length = (try input.readU8(sent)) as uint64;
+	let storage: uint8[96] = [];
+	for (let offset: uint64 = 0; offset < length; offset++) {
+		const _put = putU8(storage, offset, try input.readU8(sent + 1 + offset));
+	}
+	return invokeList(callee, metas, storage, length);
+}
+
+function steps(): Result<uint64, ProgramError> {
+	const input = instructionData();
+	let storage: uint8[64] = [];
+	let at: uint64 = 1;
+	while (at < input.length) {
+		const step = try input.readU8(at);
+		const operand = try input.readU8(at + 1);
+		if (step == LOG) {
+			logU64(operand as uint64);
+			at = at + 2;
+		} else if (step == FAIL) {
+			return Result.err(ProgramError.custom(operand as uint32));
+		} else if (step == RETURN) {
+			setReturnData(storage[0..(operand as int32)]);
+			at = at + 2;
+		} else if (step == CALL || step == CALL_AND_CARRY_ON) {
+			const count = (try input.readU8(at + 2)) as int32;
+			const sent = calls(input, at, count);
+			if (step == CALL && !sent.ok) { return sent; }
+			const length = (try input.readU8(at + 3 + (count as uint64) * 2)) as uint64;
+			at = at + 4 + (count as uint64) * 2 + length;
+		} else {
+			const target = try account(operand as int32);
+			if (step == ADD) {
+				target.setLamports(target.lamports() + (try input.readU64(at + 2)));
+				at = at + 10;
+			} else if (step == SUBTRACT) {
+				target.setLamports(target.lamports() - (try input.readU64(at + 2)));
+				at = at + 10;
+			} else if (step == WRITE) {
+				const _written = try target.data().writeU8((try input.readU8(at + 2)) as uint64, try input.readU8(at + 3));
+				at = at + 4;
+			} else if (step == ASSIGN) {
+				target.assign((try account((try input.readU8(at + 2)) as int32)).key());
+				at = at + 3;
+			} else if (step == RESIZE) {
+				const _sized = try target.resize((try input.readU16(at + 2)) as uint64);
+				at = at + 4;
+			} else {
+				return Result.err(ProgramError.invalidInstructionData());
+			}
+		}
+	}
+	return Result.ok(0);
+}
+
+function dispatch(): Result<uint64, ProgramError> {
+	return match (try instructionData().readU8(0)) {
+		NOTHING => Result.ok(0),
+		OVERLAPPING_COPY => overlappingCopy(),
+		RETURN_DATA => returnsData(),
+		LOG_BYTES => logsBytes(),
+		LOG_ACCOUNT_DATA => logsAccountData(),
+		CREATE_ADDRESS => derives(false),
+		FIND_ADDRESS => derives(true),
+		VALIDATE_POINT => validatesPoint(),
+		FORWARD => forward(),
+		FORWARD_AND_CARRY_ON => carryOnAfter(forward()),
+		STEPS => steps(),
+		_ => Result.err(ProgramError.invalidInstructionData()),
+	};
+}
+
+export function hostProgramEntry(): void {
+	const result = dispatch();
+	if (!result.ok) { failWith(result.error); }
+}

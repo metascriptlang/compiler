@@ -14,6 +14,8 @@ extern const msTypeInfo msBigIntTypeInfo;
 
 msBigInt* msBigIntFromString(const char* s, size_t len);
 msBigInt* msBigIntFromLit(msString s);
+bool msBigIntParses(msString s);
+msBigInt* msBigIntParse(msString s);
 msString msBigIntToString(const msBigInt* a, int32_t radix);
 msString msBigIntToDebugString(const msBigInt* a);
 msBigInt* msBigIntFromInt64(int64_t v);
@@ -21,6 +23,8 @@ msBigInt* msBigIntFromUint64(uint64_t v);
 msBigInt* msBigIntFromFloat64(double v);
 
 int64_t msBigIntToInt64(const msBigInt* a);
+int64_t msBigIntToSigned(const msBigInt* a, int32_t bits);
+float msBigIntToFloat32(const msBigInt* a);
 double msBigIntToFloat64(const msBigInt* a);
 char* msBigIntToCString(const msBigInt* a, int32_t radix);
 
@@ -39,6 +43,8 @@ msBigInt* msBigIntShl(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntShr(const msBigInt* a, const msBigInt* b);
 
 int32_t msBigIntCmp(const msBigInt* a, const msBigInt* b);
+int32_t msBigIntCompareFloat64(const msBigInt* a, double d, int32_t unordered);
+int32_t msFloat64CompareBigInt(double d, const msBigInt* a, int32_t unordered);
 bool msBigIntIsZero(const msBigInt* a);
 msBigInt* msBigIntAsIntN(int64_t bits, const msBigInt* a);
 msBigInt* msBigIntAsUintN(int64_t bits, const msBigInt* a);

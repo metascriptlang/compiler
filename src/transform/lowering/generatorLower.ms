@@ -27,9 +27,9 @@ import {
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { mapChildren } from "../walker";
-import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
-import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError } from "../context";
+import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
 	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
@@ -38,8 +38,9 @@ import {
 	makeTryCatch, makeCatchSym, makeMoveExpr,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { numberType, createPtr, createPrimitive, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, createPtr, createPrimitive, numberType, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -197,28 +198,28 @@ function extendStateLifetimes(node: Node | null, locals: SymSet, live: Symbol[],
 		extendStateLifetimes(d.condition, locals, live, lifted, ctx);
 		const depth = live.length;
 		extendStateLifetimes(d.consequent, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		extendStateLifetimes(d.alternate, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		return;
 	} else if (node.kind == NodeKind.WhileStmt) {
 		const d = node.data as WhileStmtData;
 		extendStateLifetimes(d.whileCondition, locals, live, lifted, ctx);
 		const depth = live.length;
 		extendStateLifetimes(d.whileBody, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		return;
 	} else if (node.kind == NodeKind.DoWhileStmt) {
 		const d = node.data as DoWhileStmtData;
 		const depth = live.length;
 		extendStateLifetimes(d.doBody, locals, live, lifted, ctx);
-		live.length = depth;
+		live.shrink(depth);
 		extendStateLifetimes(d.doCondition, locals, live, lifted, ctx);
 		return;
 	}
 	const depth = live.length;
 	forEachChild(node, (child: Node): void => { extendStateLifetimes(child, locals, live, lifted, ctx); });
-	if (node.kind == NodeKind.BlockStmt || node.kind == NodeKind.SwitchCase) live.length = depth;
+	if (node.kind == NodeKind.BlockStmt || node.kind == NodeKind.SwitchCase) live.shrink(depth);
 }
 
 export function localsOutlivingSuspension(body: Node, locals: SymSet, ctx: TransformContext): SymSet {
@@ -318,7 +319,7 @@ function makeDoneResult(loc: SourceLocation, resultType: Type | null): Node {
 
 export function makeStateAssign(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {
 	return makeExprStmt(
-		makeAssign(makeTypedIdentResolved(stateSym, numberType(), loc), makeNumber(stateNum, loc), loc),
+		makeAssign(makeIdentResolved(stateSym, loc), makeNumber(stateNum, loc), loc),
 		loc,
 	);
 }
@@ -611,7 +612,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				splitTryFinally(stmt, sc, currentState, afterSt, loc, resultType);
 				currentState = afterSt;
 				i += 1;
-			} else if (td.catchBody == null) {
+			} else if (!td.hasCatchClause) {
 				const merged: Node[] = extractBodyStmts(td.tryBody);
 				for (let ri = i + 1; ri < stmts.length; ri += 1) merged.push(stmts[ri]);
 				splitStmts(merged, sc, currentState, exitState, loc, resultType);
@@ -729,28 +730,35 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	}
 	sc.items[tryExit].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
 
-	// Rewrite the catch variable to read the env-carried current exception
-	// ($curExc, reference :curExc) directly. buildExcRouting stores $excCaught into
-	// $curExc on the raise path, which survives the await→raise→catch state
-	// boundary that the runtime global msCurrException does not. Reading the env
-	// field (not a per-state local) keeps the value in scope across every split
-	// state and lets the env's DRC hooks own its lifetime — a local would be
-	// cleaned up per-state and dangle on the try-body unwind paths.
-	// $curExc carries the caught exception; its type must be the exception type
-	// (DRC-owned) even when the handler never reads the catch var — otherwise the
-	// env field falls back to void* and the exception leaks (no destructor hook).
+	bindCatchToCurExc(node, sc);
+	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
+}
+
+// Rewrite the catch variable to read the env-carried current exception
+// ($curExc, reference :curExc) directly. buildExcRouting stores $excCaught into
+// $curExc on the raise path, which survives the await→raise→catch state
+// boundary that the runtime global msCurrException does not. Reading the env
+// field (not a per-state local) keeps the value in scope across every split
+// state and lets the env's DRC hooks own its lifetime — a local would be
+// cleaned up per-state and dangle on the try-body unwind paths.
+// $curExc carries the caught exception; its type must be the exception type
+// (DRC-owned) even when the handler never reads the catch var — otherwise the
+// env field falls back to void* and the exception leaks (no destructor hook).
+// Shared by the catch-only and catch+finally splits: the reference binds an
+// except branch the same way whether or not a finally follows it.
+function bindCatchToCurExc(node: Node, sc: StateCollector): void {
 	if (node.nodeType != null) sc.excType = node.nodeType;
 	if (node.resolvedSym != null) {
-		renameIdentInSubtree(td.catchBody, node.resolvedSym, "$curExc", node.nodeType, sc.curExcSym);
+		renameIdentInSubtree((node.data as TryCatchStmtData).catchBody, node.resolvedSym, "$curExc", node.nodeType, sc.curExcSym);
 	}
-	splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, afterSt, loc, resultType);
 }
 
 // finallyPath helpers: the normal exit routes through a dedicated landing-free
 // finally state (an exception raised BY the finally body propagates directly
 // instead of re-entering a landing that would run the finally a second time);
-// the exception path runs the finally then re-raises $curExc out of the
-// machine (reference closureiters end-finally raise branch). Returns the
+// the exception path runs the finally then re-raises $curExc from its own
+// state, so the routing lands it on an enclosing try's landing or, with none,
+// out of the machine (reference closureiters end-finally raise branch). Returns the
 // finally state index so later excLanding mark-loops can skip it.
 function appendNormalFinally(sc: StateCollector, exitStateIdx: number, frame: FinallyFrame, afterSt: number, loc: SourceLocation, resultType: Type | null): number {
 	const finNormal = allocState(sc);
@@ -762,7 +770,6 @@ function appendNormalFinally(sc: StateCollector, exitStateIdx: number, frame: Fi
 
 function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, frame: FinallyFrame, loc: SourceLocation, resultType: Type | null): void {
 	const end = emitInline(cloneStmts(frame.stmts), sc, finReraiseIdx, loc, resultType);
-	sc.items[end].stmts.push(makeStateAssign(-1, loc, sc.stateSym));
 	const curExcRef = makeTypedIdentResolved(sc.curExcSym, null, loc);
 	if (sc.excType != null) curExcRef.nodeType = sc.excType;
 	sc.items[end].stmts.push(createNode(NodeKind.ThrowStmt, { throwArg: curExcRef }, syntheticToken(loc)));
@@ -777,7 +784,7 @@ function appendReraiseFinally(sc: StateCollector, finReraiseIdx: number, frame: 
 //   normal try completion   → finNormal  [fin..., goto afterSt]
 //   normal catch completion → finNormal2 [fin..., goto afterSt]  (catch case)
 //   raise in try body       → catchSt (catch case) / finReraise
-//   raise in catch body     → finReraise [fin..., $state=-1, rethrow $curExc]
+//   raise in catch body     → finReraise [fin..., rethrow $curExc]
 //   break/continue/return crossing the try → splitStmts via sc.finallyStack
 // tryExit/catchExit keep an excLanding on purpose: a
 // trailing await's resume read (the re-raising read) executes at their entry.
@@ -793,7 +800,7 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 	const frame: FinallyFrame = { stmts: extractBodyStmts(td.finallyBody), loopDepth: sc.loopStack.length, hasYield: containsYield(td.finallyBody) };
 	sc.finallyStack.push(frame);
 
-	if (td.catchBody == null) {
+	if (!td.hasCatchClause) {
 		const finReraise = allocState(sc);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
 		for (let s = tryStart; s < sc.items.length; s += 1) {
@@ -819,6 +826,7 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		sc.finallyStack.push(frame);
 		const catchExit = allocState(sc);
 		const finReraise = allocState(sc);
+		bindCatchToCurExc(node, sc);
 		splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, catchExit, loc, resultType);
 		// The normal-exit finally states stay landing-free (single finally run);
 		// everything else in the catch range — catchSt itself, catchExit's entry
@@ -885,7 +893,11 @@ export function hasExcLanding(sc: StateCollector): boolean {
 export function wrapExcRouting(dispatch: Node, sc: StateCollector, ctx: TransformContext, loc: SourceLocation): Node {
 	if (!hasExcLanding(sc)) return dispatch;
 	const caughtSym = makeCatchSym(ctx, "$excCaught");
-	return makeTryCatch(dispatch, caughtSym, buildExcRouting(sc, caughtSym, loc), null as unknown as Node, loc);
+	const excType = sc.excType;
+	if (excType != null) caughtSym.symbolType = excType;
+	const routing = makeTryCatch(dispatch, caughtSym, buildExcRouting(sc, caughtSym, loc), null as unknown as Node, loc);
+	routing.nodeType = sc.excType;
+	return routing;
 }
 
 export function makeCurExcDecl(sc: StateCollector, loc: SourceLocation): Node {
@@ -1049,9 +1061,9 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 	// Build IteratorResult<T> type for stamping yield/return literals
 	const iterResultType = buildIterResultType(returnNodeType);
-	const stateSym = makeSymbol("$state", SymbolKind.Variable, numberType(), true);
+	const stateSym = newLoweredSym(ctx, SymbolKind.Variable, "$state", int32Type(), true);
 	setFlag(stateSym, SymbolFlag.StateMachine);
-	const curExcSym = makeSymbol("$curExc", SymbolKind.Variable, null as unknown as Type, true);
+	const curExcSym = newLoweredSym(ctx, SymbolKind.Variable, "$curExc", null as unknown as Type, true);
 
 	// 4. Split at yield points
 	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
@@ -1141,6 +1153,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
+			if (isGenericFn(d.fnFlags)) return;
 			walkGenerators(d.fnBody, ctx);
 			if (isGeneratorFlag(d.fnFlags)) {
 				// Skip generic templates — only monomorphized instances should be lowered.
@@ -1168,6 +1181,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
+			if (isGenericFn(d.methodFlags)) return;
 			walkGenerators(d.methodBody, ctx);
 			const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
 			if (d.methodBody != null && isGeneratorFlag(d.methodFlags) && (fnType == null || !hasGenericParams(fnType))) {
@@ -1250,7 +1264,7 @@ function splitErrorsFor(src: string): int32 {
 	checkProgram(parsed.value);
 	const ctx = makeCtx();
 	lowerGenerator(parsed.value, ctx);
-	return ctx.errors.length as int32;
+	return ctx.checkerCtx.errors.length as int32;
 }
 
 test "a yield inside an expression is reported, not passed through" { assert splitErrorsFor("function* gen() { const v = (yield 1) + 1; }") == 1; }
@@ -1265,11 +1279,11 @@ test "a hoisted local without its symbol is refused, not rebuilt by name" {
 	const locals = createSymSet();
 	const ctx = makeCtx();
 	collectStateLocals(body, ctx, locals);
-	assert ctx.errors.length == 1;
+	assert ctx.checkerCtx.errors.length == 1;
 	assert locals.items.length == 0;
 }
 
-function hoistedDeclsOf(src: string): Node[] {
+function hoistedDeclsOf(src: string, name: string = "x"): Node[] {
 	const parsed = parseInput(src);
 	if (!parsed.ok) return [];
 	checkProgram(parsed.value);
@@ -1277,7 +1291,7 @@ function hoistedDeclsOf(src: string): Node[] {
 	const fd = (parsed.value.data as ProgramData).programStmts[0].data as FunctionDeclData;
 	const out: Node[] = [];
 	for (const s of (fd.fnBody.data as BlockStmtData).statements) {
-		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && s.resolvedSym.name == "x") out.push(s);
+		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && s.resolvedSym.name == name) out.push(s);
 	}
 	return out;
 }
@@ -1286,4 +1300,12 @@ test "two same-named locals of a generator are hoisted one slot each" {
 	const decls = hoistedDeclsOf("function* gen(f: boolean): Iterator<string> { if (f) { const x: string = \"s\"; yield x; yield x; } else { const x: int32 = 4; yield x.toString(); yield x.toString(); } }");
 	assert decls.length == 2;
 	assert decls[0].resolvedSym != decls[1].resolvedSym;
+}
+
+test "a generator's state and current-exception variables are minted with their module's identity" {
+	const src = "function* gen(): Iterator<number> { try { yield 1; } catch (e) { yield 2; } }";
+	const states = hoistedDeclsOf(src, "$state");
+	const excs = hoistedDeclsOf(src, "$curExc");
+	assert states.length == 1 && excs.length == 1;
+	assert states[0].resolvedSym.item > 0 && excs[0].resolvedSym.item > 0;
 }

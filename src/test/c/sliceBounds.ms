@@ -34,6 +34,5 @@ test "a slice of a string checks its bounds" {
 test "an inclusive slice checks the end past its last element" {
 	const c = cFor("function f(xs: int32[], a: int32, b: int32): int32 { const s: Span<int32> = xs[a...b]; return s.length as int32; }");
 	assert c != "";
-	assert c.contains("msSliceLen(");
-	assert c.contains(" + 1");
+	assert c.contains("msSliceLen(a, msAddI32(b, 1), ");
 }

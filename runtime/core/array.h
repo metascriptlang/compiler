@@ -138,6 +138,7 @@ void msStringArrayPush(msStringArray* arr, msString value);
 msString msStringArrayPop(msStringArray* arr);
 msString msStringArrayShift(msStringArray* arr);
 int64_t msStringArrayIndexOf(msStringArray* arr, msString value);
+int64_t msStringArrayLastIndexOf(msStringArray* arr, msString value, int64_t fromIndex);
 bool msStringArrayIncludes(msStringArray* arr, msString value);
 msStringArray msStringArraySlice(msStringArray* arr, int64_t start, int64_t end);
 msStringArray msStringArrayConcat(msStringArray* a, const msStringArray* b);
@@ -215,6 +216,7 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
  * Uses a helper macro to avoid comma-in-braced-initializer issues with C preprocessor.
  * Usage: msGenericArrayPush(&arr, value) where value can be a compound literal. */
 #define msArrDataOr0(p_) ((p_) ? (p_)->data : NULL)
+#define msArrDataAt(p_, i_) ((p_) ? (p_)->data + (i_) : NULL)
 
 #define msGenericArrayPush(arr_ptr, ...) do { \
 	__typeof__((arr_ptr)->p->data[0]) msPushedValue_ = (__VA_ARGS__); \

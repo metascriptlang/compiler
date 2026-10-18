@@ -24,23 +24,24 @@
 //     (per-iteration re-eval like while; a `continue` of B leaves a labelled
 //     block around B, so it still reaches the test)
 //
-// Codegen checks msErr only after a statement's top-level call, so a call that
-// can raise in a condition, a literal element or a return value inside a try
-// becomes its own statement here.
+// Codegen checks msErr only after a statement, so on C every call that can raise
+// nested in a statement's value, target or condition becomes its own statement
+// here, in order; the value's top-level call stays (bound too in a return in a try).
 //
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, NodeFlag, DeclKind, Type, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
-import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
+import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmtData, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData, NodeFlag, Type, ArrayLiteralData, ObjectLiteralData, ExportDeclData, MoveExprData, TypeAssertionData } from "../../ast/node";
+import { TransformContext, freshTempSym, freshOwnedSym, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
+import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym } from "../util";
+import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
+import { checkProgram } from "../../checker/checkPass";
+import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, isBoolType } from "../../checker/types";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { walkExpandBlocksHooked, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, extractBodyStmts, syntheticToken } from "../util";
-import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
@@ -48,6 +49,10 @@ import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower
 import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } from "../coercion/intArithJS";
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
+import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
+import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
+import { truthinessTest } from "../coercion/stringTruthiness";
+import { tdzBindingOf } from "./moduleTdz";
 
 // ===== Hoist (top-down) =====
 
@@ -68,6 +73,11 @@ function branchValueStmt(target: Node, branch: Node, loc: SourceLocation): Node 
 // is conditionally evaluated → never descended (LHS is).
 function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	if (expr == null) return expr;
+	if (expr.kind == NodeKind.Identifier) {
+		const flag = tdzFlagOf(expr);
+		if (flag != null) pushTdzGuard(expr, flag, hoisted, ctx);
+		return expr;
+	}
 	if (expr.kind == NodeKind.BinaryExpr) {
 		const bd = expr.data as BinaryExprData;
 		if (bd.operator == "&&" || bd.operator == "||") {
@@ -92,12 +102,21 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		return makeIdentResolved(t, loc);
 	}
 	if (expr.kind == NodeKind.UpdateExpr) return hoistUpdate(expr, hoisted, ctx);
+	if (expr.kind == NodeKind.MoveExpr) {
+		const md = expr.data as MoveExprData;
+		md.moveArg = hoistTernaries(md.moveArg, hoisted, ctx);
+		return expr;
+	}
 	if ((argDepth > 0 || callsToStatements > 0) && expr.kind == NodeKind.BinaryExpr && (expr.data as BinaryExprData).operator == "=") return hoistArgAssign(expr, hoisted, ctx);
 	if (!ctx.jsBackend) {
 		if (expr.kind == NodeKind.ArrayLiteral || expr.kind == NodeKind.ObjectLiteral) return hoistLiteral(expr, hoisted, ctx);
 		if (expr.kind == NodeKind.SpreadExpr) return hoistSpreadOperand(expr, hoisted, ctx);
 	}
 	hoistChildrenInOrder(expr, hoisted, ctx);
+	if (callsToStatements > 0 && isNeverType(expr.nodeType)) {
+		hoisted.push(makeExprStmt(shallowCopy(expr), expr.location));
+		return expr;
+	}
 	if (callsToStatements > 0 && callCanRaise(expr)) return bindToStatement(expr, "call", hoisted, ctx);
 	return expr;
 }
@@ -111,6 +130,26 @@ function hoistRaisingCalls(expr: Node, hoisted: Node[], ctx: TransformContext): 
 	return lowered;
 }
 
+function hoistNestedRaisingCalls(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	if (ctx.jsBackend) return hoistTernaries(expr, hoisted, ctx);
+	const call = topLevelCall(expr);
+	if (call == null) return hoistRaisingCalls(expr, hoisted, ctx);
+	callsToStatements += 1;
+	hoistChildrenInOrder(call, hoisted, ctx);
+	callsToStatements -= 1;
+	return expr;
+}
+
+function topLevelCall(expr: Node | null): Node | null {
+	let n = expr;
+	while (n != null && n.kind == NodeKind.TypeAssertion) n = (n.data as TypeAssertionData).asExpr;
+	return n != null && (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) ? n : null;
+}
+
+function hoistTargetCalls(target: Node, hoisted: Node[], ctx: TransformContext): Node {
+	return ctx.jsBackend ? hoistTernaries(target, hoisted, ctx) : hoistRaisingCalls(target, hoisted, ctx);
+}
+
 function callCanRaise(n: Node): boolean {
 	if (n.nodeType != null && (n.nodeType.kind == TypeKind.Void || n.nodeType.kind == TypeKind.Never)) return false;
 	if (n.kind == NodeKind.NewExpr) return true;
@@ -120,17 +159,22 @@ function callCanRaise(n: Node): boolean {
 	return hasFlag(sym, SymbolFlag.Throws) || !hasFlag(sym, SymbolFlag.ImportC);
 }
 
-function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: TransformContext): Node {
-	const loc = expr.location;
-	const sym = freshOwnedSym(ctx, prefix, expr.nodeType);
-	const value = createNode(expr.kind, expr.data, syntheticToken(loc));
-	value.location = loc;
+function shallowCopy(expr: Node): Node {
+	const value = createNode(expr.kind, expr.data, syntheticToken(expr.location));
+	value.location = expr.location;
 	value.nodeType = expr.nodeType;
 	value.resolvedSym = expr.resolvedSym;
 	value.flags = expr.flags;
 	value.variantSlot = expr.variantSlot;
 	value.typeArg = expr.typeArg;
 	value.typeExpr = expr.typeExpr;
+	return value;
+}
+
+function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: TransformContext): Node {
+	const loc = expr.location;
+	const sym = freshOwnedSym(ctx, prefix, expr.nodeType);
+	const value = shallowCopy(expr);
 	const decl = makeVarDecl(sym.name, value, DeclKind.Const, loc);
 	decl.resolvedSym = sym;
 	if (expr.nodeType != null) { decl.nodeType = expr.nodeType; }
@@ -177,7 +221,7 @@ function initializeAggregate(target: Node, literal: Node, initialized: Node[], c
 	const t = aggregateInitType(literal);
 	const loc = literal.location;
 	if (t == null) {
-		const value = hoistTernaries(literal, initialized, ctx);
+		const value = hoistNestedRaisingCalls(literal, initialized, ctx);
 		const assignment = makeAssign(target, value, loc);
 		assignment.flags = assignment.flags.incl(NodeFlag.FirstWrite);
 		initialized.push(makeExprStmt(assignment, loc));
@@ -275,10 +319,15 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 	while (i >= 0) {
 		if (ends[i] < hoisted.length && kids[i] != null) {
 			const writes: Symbol[] = [];
+			let calls = false;
 			let w = ends[i];
-			while (w < hoisted.length) { collectWrites(hoisted[w], writes); w += 1; }
+			while (w < hoisted.length) {
+				collectWrites(hoisted[w], writes);
+				calls = calls || (!tdzGuards.has(hoisted[w]) && holdsCall(hoisted[w]));
+				w += 1;
+			}
 			const pre: Node[] = [];
-			kids[i] = captureSibling(expr, i, kids[i], pre, writes, ctx);
+			kids[i] = captureSibling(expr, i, kids[i], pre, writes, calls, ctx);
 			let p = 0;
 			while (p < pre.length) { hoisted.splice(ends[i] + p, 0, pre[p]); p += 1; }
 		}
@@ -292,7 +341,7 @@ function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext
 	});
 }
 
-function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], ctx: TransformContext): Node {
+function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], writes: Symbol[], calls: boolean, ctx: TransformContext): Node {
 	const isCallee = index == 0 && (parent.kind == NodeKind.CallExpr || parent.kind == NodeKind.NewExpr);
 	if (isCallee) return child;
 	const isLocation = index == 0 && (parent.kind == NodeKind.MemberExpr || parent.kind == NodeKind.ArrayAccess
@@ -300,7 +349,10 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		|| (parent.kind == NodeKind.BinaryExpr && isAssignOperator((parent.data as BinaryExprData).operator)));
 	if (isLocation) return hoistAssignTargetEffects(child, pre, ctx, writes);
 	if (isLiteral(child)) return child;
-	if (!hasEffect(child) && !readsAnyOf(child, writes)) return child;
+	const isReceiver = index == 1 && parent.kind == NodeKind.CallExpr
+		&& parent.flags.has(NodeFlag.ExtCall) && !parent.flags.has(NodeFlag.ExtStatic);
+	const readsBeforeCall = calls && !isReceiver && snapshotsLikeJs(child.nodeType) && holdsStorageRead(child);
+	if (!hasEffect(child) && !readsAnyOf(child, writes) && !readsBeforeCall) return child;
 	const loc = child.location;
 	const sym = freshOwnedSym(ctx, "ord", child.nodeType);
 	const decl = makeVarDecl(sym.name, child, DeclKind.Const, loc);
@@ -308,6 +360,22 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 	if (child.nodeType != null) { decl.nodeType = child.nodeType; }
 	pre.push(decl);
 	return makeIdentResolved(sym, loc);
+}
+
+function holdsCall(n: Node): boolean {
+	if (n == null || isFunctionNode(n)) return false;
+	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && holdsCall(c)) found = true; });
+	return found;
+}
+
+function holdsStorageRead(n: Node): boolean {
+	if (n == null || isFunctionNode(n) || n.kind == NodeKind.HiddenAddr || n.kind == NodeKind.MoveExpr) return false;
+	if (readsBeforeHoist(n)) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && holdsStorageRead(c)) found = true; });
+	return found;
 }
 
 function isLiteral(n: Node): boolean {
@@ -372,7 +440,7 @@ function readsAnyOf(n: Node, writes: Symbol[]): boolean {
 
 // a && rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = rhs; } else { $scres = $sclhs; }
 // a || rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = $sclhs; } else { $scres = rhs; }
-function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+export function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	const bd = expr.data as BinaryExprData;
 	const loc = expr.location;
 	const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
@@ -388,13 +456,33 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
 	hoisted.push(resDecl);
 
-	const rhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), bd.right, loc), loc);
-	const lhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), makeIdentResolved(lhsSym, loc), loc), loc);
+	const lhsType = bd.left.nodeType;
+	const rhsAssign: Node[] = lhsType == null || shortCircuitRightRuns(bd.operator, lhsType)
+		? [branchValueStmt(makeIdentResolved(resSym, loc), fitShortCircuitArm(bd.right, expr.nodeType, ctx), loc)] : [];
+	const share = lhsType != null ? shortCircuitLeftShare(bd.operator, lhsType) : null;
+	const lhsAssign: Node[] = lhsType == null || share != null
+		? [makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), shortCircuitShareArm(makeIdentResolved(lhsSym, loc), share, expr.nodeType, ctx), loc), loc)] : [];
 	const isAnd = bd.operator == "&&";
-	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
-	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
-	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
+	const thenBlk = makeBlock(isAnd ? rhsAssign : lhsAssign, loc);
+	const elseBlk = makeBlock(isAnd ? lhsAssign : rhsAssign, loc);
+	hoisted.push(makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), thenBlk, elseBlk, loc));
 	return makeIdentResolved(resSym, loc);
+}
+
+export function shortCircuitShareArm(lhsRead: Node, share: Type | null, resultType: Type | null, ctx: TransformContext): Node {
+	const held = lhsRead.nodeType;
+	let read = lhsRead;
+	if (share != null && share.kind == TypeKind.Null) read = makeNull(lhsRead.location);
+	else if (share != null && held != null && isMaybeType(held) && !isMaybeType(share)) read = makeMember(lhsRead, "value", lhsRead.location);
+	if (share != null) read.nodeType = share;
+	return fitShortCircuitArm(read, resultType, ctx);
+}
+
+export function fitShortCircuitArm(arm: Node, resultType: Type | null, ctx: TransformContext): Node {
+	const t = arm.nodeType;
+	if (t == null || resultType == null || ctx.checkerCtx == null || isBoolType(resultType)) return arm;
+	const slot = isMaybeType(resultType) && !isMaybeType(t) && t.kind != TypeKind.Null ? unwrapMaybeType(resultType) : resultType;
+	return fitJoinedBranch(ctx.checkerCtx, arm, slot);
 }
 
 // JS evaluates in place and skips the hoist, except where a width step must
@@ -507,9 +595,19 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.expr.kind == NodeKind.UpdateExpr) {
 				const ud = d.expr.data as UpdateExprData;
 				const pre: Node[] = [];
-				ud.updateArg = hoistTernaries(ud.updateArg, pre, ctx);
+				ud.updateArg = hoistTargetCalls(ud.updateArg, pre, ctx);
 				if (ctx.jsBackend && needsIntegerUpdateRewrite(ud)) { ud.updateArg = hoistAssignTargetEffects(ud.updateArg, pre, ctx, []); }
 				if (pre.length == 0) return [stmt];
+				pre.push(stmt);
+				return pre;
+			}
+		},
+		NodeKind.ExportDecl => {
+			const decl = (stmt.data as ExportDeclData).exportedDecl;
+			if (!ctx.jsBackend && decl != null && decl.kind == NodeKind.VariableDecl && !decl.flags.has(NodeFlag.StaticStorage)) {
+				const d = decl.data as VariableDeclData;
+				const pre: Node[] = [];
+				d.initializer = hoistNestedRaisingCalls(d.initializer, pre, ctx);
 				pre.push(stmt);
 				return pre;
 			}
@@ -521,7 +619,9 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 		_ => {},
 	};
 	const hoisted: Node[] = [];
-	mapChildren(stmt, (child: Node): Node => hoistTernaries(child, hoisted, ctx));
+	const value = stmt.kind == NodeKind.ExprStmt || stmt.kind == NodeKind.ReturnStmt || stmt.kind == NodeKind.ThrowStmt
+		|| (stmt.kind == NodeKind.VariableDecl && !stmt.flags.has(NodeFlag.StaticStorage));
+	mapChildren(stmt, (child: Node): Node => value ? hoistNestedRaisingCalls(child, hoisted, ctx) : hoistTernaries(child, hoisted, ctx));
 	if (hoisted.length > 0) {
 		hoisted.push(stmt);
 		return hoisted;
@@ -534,6 +634,10 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const vd = stmt.data as VariableDeclData;
 	const cd = vd.initializer.data as ConditionalExprData;
 	const loc = stmt.location;
+	if (stmt.resolvedSym == null) {
+		if (stmt.nodeType == null) return [stmt];
+		throw new Error(`internal: ternary initializer of '${vd.declName}' reached lowering without its symbol`);
+	}
 	const result: Node[] = [];
 	cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, result, ctx);
 	let tempType = stmt.nodeType;
@@ -545,16 +649,8 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	letDecl.resolvedSym = stmt.resolvedSym;
 	letDecl.nodeType = tempType;
 	result.push(letDecl);
-	// A generic template body is unchecked until instantiation, so its decls
-	// carry no symbols here; only the instantiated copies do.
-	const thenTarget = stmt.resolvedSym != null
-		? makeTypedIdentResolved(stmt.resolvedSym, null, loc)
-		: makeIdent(vd.declName, loc);
-	thenTarget.resolvedSym = stmt.resolvedSym;
-	const elseTarget = stmt.resolvedSym != null
-		? makeTypedIdentResolved(stmt.resolvedSym, null, loc)
-		: makeIdent(vd.declName, loc);
-	elseTarget.resolvedSym = stmt.resolvedSym;
+	const thenTarget = makeTypedIdentResolved(stmt.resolvedSym, null, loc);
+	const elseTarget = makeTypedIdentResolved(stmt.resolvedSym, null, loc);
 	const thenStmt = branchValueStmt(thenTarget, cd.ternaryConsequent, loc);
 	const elseStmt = branchValueStmt(elseTarget, cd.ternaryAlternate, loc);
 	result.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
@@ -596,7 +692,7 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 
 function isAssignOperator(op: string): boolean {
 	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
 		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
@@ -609,9 +705,10 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as ExprStmtData;
 	const bd = d.expr.data as BinaryExprData;
 	const pre: Node[] = [];
-	bd.left = hoistTernaries(bd.left, pre, ctx);
+	const guardedWrite = bd.operator == "=" && tdzFlagOf(bd.left) != null;
+	if (!guardedWrite) bd.left = hoistTargetCalls(bd.left, pre, ctx);
 	const rhsPre: Node[] = [];
-	bd.right = hoistTernaries(bd.right, rhsPre, ctx);
+	bd.right = bd.operator == "=" || ctx.jsBackend ? hoistNestedRaisingCalls(bd.right, rhsPre, ctx) : hoistRaisingCalls(bd.right, rhsPre, ctx);
 	if (rhsPre.length > 0) {
 		const writes: Symbol[] = [];
 		for (const s of rhsPre) { collectWrites(s, writes); }
@@ -619,6 +716,7 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 		bd.left = hoistAssignTargetEffects(bd.left, pre, ctx, writes);
 		for (const s of rhsPre) { pre.push(s); }
 	}
+	if (guardedWrite) guardWrite(bd, pre, ctx);
 	if (pre.length == 0) return [stmt];
 	pre.push(stmt);
 	return pre;
@@ -702,6 +800,7 @@ function expandSwitchDisc(stmt: Node, ctx: TransformContext): Node[] {
 
 function condLowersToStatements(n: Node): boolean {
 	if (n == null || isFunctionNode(n)) return false;
+	if (tdzFlagOf(n) != null) return true;
 	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.UpdateExpr || callCanRaise(n)
 		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return true;
 	if (n.kind == NodeKind.BinaryExpr) {
@@ -733,8 +832,39 @@ function bodyHasLoopContinue(node: Node): boolean {
 
 let functionDepth = 0;
 
+let tdzFlags = new HashMap<Symbol, Symbol>();
+let tdzGuards = new HashSet<Node>();
+
+function tdzFlagOf(n: Node): Symbol | null {
+	if (functionDepth == 0 || n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
+	return tdzFlags.get(tdzBindingOf(n.resolvedSym));
+}
+
+function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: TransformContext): void {
+	const loc = binding.location;
+	const fail = compilerFuncSym("msModuleBindingUninitialized");
+	if (fail == null) {
+		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", loc);
+		return;
+	}
+	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(tdzBindingOf(binding.resolvedSym!).name, loc)], fail, loc);
+	const guard = makeIf(makeUnary("!", makeIdentResolved(flag, loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
+	tdzGuards.add(guard);
+	hoisted.push(guard);
+}
+
+// A write to a module binding throws after its value is evaluated (ECMAScript PutValue).
+function guardWrite(bd: BinaryExprData, hoisted: Node[], ctx: TransformContext): void {
+	const flag = tdzFlagOf(bd.left);
+	if (flag == null) return;
+	if (hasEffect(bd.right)) bd.right = bindToStatement(bd.right, "tdz", hoisted, ctx);
+	pushTdzGuard(bd.left, flag, hoisted, ctx);
+}
+
 export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node {
 	functionDepth = 0;
+	tdzFlags = ctx.tdzFlags;
+	tdzGuards = new HashSet<Node>();
 	walkExpandBlocksHooked(
 		program,
 		expandConditionalStmt,
@@ -750,7 +880,18 @@ test "ternary in stmt becomes if" { assert firstStmtKindAfter("a ? b : c;", lowe
 
 test "non-ternary ExprStmt unchanged" { assert firstStmtKindAfter("f();", lowerConditionalExpr) == NodeKind.ExprStmt; }
 
-test "pure var-init ternary lowers to let + if" { assert stmtCountAfter("const x = a ? b : c;", lowerConditionalExpr) == 2; }
+function checkedFnBodyCount(input: string): int32 {
+	const pr = parseInput(input);
+	if (!pr.ok) return -1;
+	const cc = checkProgram(pr.value);
+	const stmts = getStmts(lowerConditionalExpr(pr.value, createTransformContextWithChecker(cc)));
+	if (stmts.length == 0 || stmts[0].kind != NodeKind.FunctionDecl) return -1;
+	return ((stmts[0].data as FunctionDeclData).fnBody.data as BlockStmtData).statements.length;
+}
+
+test "pure var-init ternary lowers to let + if" { assert checkedFnBodyCount("function pick(a: boolean, b: number, c: number): number { const x = a ? b : c; return x; }") == 3; }
+
+test "an unchecked ternary initializer is left as written" { assert stmtCountAfter("const x = a ? b : c;", lowerConditionalExpr) == 1; }
 
 test "call-arg ternary hoisted" { assert stmtCountAfter("f(a ? b : c);", lowerConditionalExpr) == 3; }
 

@@ -1,6 +1,6 @@
 // @xfail(raiser): error: Cannot resolve module 'std/actor'
 // @maxrss: 40
-// @stdout: actor-churn-heapstate done
+// @stdout: actor-churn-heapstate done acc=0
 // @serial
 // note: FIXED: actor create+stop churn leaked a->state (and its heap string) on every teardown. The actor handle is DRC-exempt (classify.ms: actors are runtime-managed), the spawn-time msIncRef exists only so the cycle detector sees rc>0, and the with-ctor `new` path passed null objType to ensureTypeInfoDef so the state type's TypeInfo.destroyFn was never wired (HeavyDestroy existed but unreferenced). Two coordinated fixes: (1) codegen expressions.ms NewExpr with-ctor branch passes the inner struct type (symmetry with the no-ctor branch) so ensureTypeInfoDef wires destroyFn; (2) runtime msActorDestroyWithReason frees a->state via that destroyFn after onTerminate (Pony: actor heap dies with the actor) — unconditional since the exempt handle and cycle-detector incref mean the actor is the sole owner. Was 1.07GB @ 200k (heap-string state), now ~8MB drc+orc. Only the native binary runs msActorDestroyWithReason; no prior native case churned actor create+destroy.
 

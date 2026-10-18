@@ -3,6 +3,7 @@
 @compile("runtime/promise/combinator.c");
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 
+@builtin("Promise")
 export class Promise<T> {
 	finished: boolean;
 	failed: boolean;
@@ -31,7 +32,38 @@ export class Promise<T> {
 	@builtin("PromiseResolve")
 	static extern resolve(value: T): Promise<T> from "msPromiseResolve";
 	@builtin("PromiseReject")
-	static extern reject(error: string): Promise<void> from "msPromiseReject";
+	static extern reject(error: Error): Promise<never> from "msPromiseReject";
+}
+
+@builtin("PromisePending")
+extern function msPromisePending<T>(): Promise<T> from "msFutureCreate";
+@builtin("PromiseSettle")
+extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "msFutureCompleteT";
+@builtin("PromiseFail")
+extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
+
+@compilerFunc
+export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+	const promise = msPromisePending<T>();
+	try {
+		executor((value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+	} catch (e) {
+		msPromiseFail(promise, e);
+	}
+	return promise;
+}
+
+export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+	const promise = msPromisePending<T>();
+	const nextJob: Promise<int32> = Promise.resolve(0);
+	nextJob.then((ready: int32): void => {
+		try {
+			callThen(thenable, (value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+		} catch (e) {
+			msPromiseFail(promise, e);
+		}
+	});
+	return promise;
 }
 
 // Standalone async utilities

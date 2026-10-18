@@ -84,6 +84,63 @@ msBigInt* msBigIntFromLit(msString s) {
 	return msBigIntFromString(s.p != NULL ? s.p->data : "", (size_t)s.len);
 }
 
+static int digitIn(char c, int radix) {
+	int d = isdigit((unsigned char)c) ? c - '0' : isalpha((unsigned char)c) ? tolower((unsigned char)c) - 'a' + 10 : radix;
+	return d < radix;
+}
+
+static int bigSyntax(msString str, const char** body, size_t* bodyLen, int* radix, int* neg) {
+	const char* s = str.p != NULL ? str.p->data : "";
+	size_t len = (size_t)str.len;
+	while (len > 0 && isspace((unsigned char)s[0])) { s++; len--; }
+	while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
+	*neg = 0;
+	*radix = 10;
+	*body = s;
+	*bodyLen = 0;
+	if (len == 0) return 1;
+	char c = len >= 2 && s[0] == '0' ? (char)tolower((unsigned char)s[1]) : 0;
+	if (c == 'x' || c == 'o' || c == 'b') {
+		*radix = c == 'x' ? 16 : c == 'o' ? 8 : 2;
+		s += 2; len -= 2;
+	} else if (s[0] == '-' || s[0] == '+') {
+		*neg = s[0] == '-';
+		s++; len--;
+	}
+	if (len == 0) return 0;
+	for (size_t i = 0; i < len; i++) {
+		if (!digitIn(s[i], *radix)) return 0;
+	}
+	*body = s;
+	*bodyLen = len;
+	return 1;
+}
+
+bool msBigIntParses(msString str) {
+	const char* body;
+	size_t len;
+	int radix, neg;
+	return bigSyntax(str, &body, &len, &radix, &neg);
+}
+
+msBigInt* msBigIntParse(msString str) {
+	const char* s;
+	size_t len;
+	int radix, neg;
+	if (!bigSyntax(str, &s, &len, &radix, &neg)) bigFail("cannot convert string to a BigInt");
+	if (len == 0) return msBigIntFromInt64(0);
+	char* clean = (char*)malloc(len + 2);
+	if (clean == NULL) bigFail("out of memory");
+	size_t n = 0;
+	if (neg) clean[n++] = '-';
+	memcpy(clean + n, s, len);
+	clean[n + len] = '\0';
+	msBigInt* r = newBig();
+	if (mbedtls_mpi_read_string(&r->v, radix, clean) != 0) bigFail("cannot convert string to a BigInt");
+	free(clean);
+	return r;
+}
+
 msString msBigIntToString(const msBigInt* a, int32_t radix) {
 	char* raw = msBigIntToCString(a, radix);
 	msString out = msStringNew(raw, (int64_t)strlen(raw));
@@ -184,7 +241,41 @@ int64_t msBigIntToInt64(const msBigInt* a) {
 	// msBigIntDestroy only frees the mpi limbs — the msAllocTyped cell itself and
 	// the ledger's destroy count both hang off the decref path.
 	msDecref(t);
-	return neg ? -(int64_t)u : (int64_t)u;
+	return neg ? -(int64_t)(u - 1) - 1 : (int64_t)u;
+}
+
+static _Noreturn void bigRangeFail(const msBigInt* a, int64_t lo, int64_t hi) {
+	char* s = msBigIntToCString(a, 10);
+	fprintf(stderr, "Error: value %s not in range %lld .. %lld\n", s, (long long)lo, (long long)hi);
+	free(s);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+int64_t msBigIntToSigned(const msBigInt* a, int32_t bits) {
+	size_t n = mbedtls_mpi_bitlen(&a->v);
+	int neg = mbedtls_mpi_cmp_int(&a->v, 0) < 0;
+	size_t width = (size_t)bits - 1;
+	int fits = n <= width || (neg && n == width + 1 && mbedtls_mpi_lsb(&a->v) == width);
+	if (!fits) {
+		int64_t hi = (int64_t)(((uint64_t)1 << width) - 1);
+		bigRangeFail(a, -hi - 1, hi);
+	}
+	return msBigIntToInt64(a);
+}
+
+float msBigIntToFloat32(const msBigInt* a) {
+	size_t n = mbedtls_mpi_bitlen(&a->v);
+	if (n <= 24) return (float)msBigIntToInt64(a);
+	int neg = mbedtls_mpi_cmp_int(&a->v, 0) < 0;
+	size_t shift = n - 24;
+	uint32_t m = 0;
+	for (size_t i = n; i-- > shift;) m = (m << 1) | (uint32_t)mbedtls_mpi_get_bit(&a->v, i);
+	int half = mbedtls_mpi_get_bit(&a->v, shift - 1);
+	int sticky = mbedtls_mpi_lsb(&a->v) < shift - 1;
+	if (half && (sticky || (m & 1u) != 0)) m++;
+	float r = shift > 128 ? INFINITY : ldexpf((float)m, (int)shift);
+	return neg ? -r : r;
 }
 
 #define BIN_OP(name, call) \
@@ -372,6 +463,22 @@ msBigInt* msBigIntShr(const msBigInt* a, const msBigInt* b) {
 
 int32_t msBigIntCmp(const msBigInt* a, const msBigInt* b) {
 	return (int32_t)mbedtls_mpi_cmp_mpi(&a->v, &b->v);
+}
+
+int32_t msBigIntCompareFloat64(const msBigInt* a, double d, int32_t unordered) {
+	if (isnan(d)) return unordered;
+	if (isinf(d)) return d > 0 ? -1 : 1;
+	double whole = floor(d);
+	msBigInt* w = msBigIntFromFloat64(whole);
+	int32_t c = msBigIntCmp(a, w);
+	msDecref(w);
+	if (c != 0) return c;
+	return whole == d ? 0 : -1;
+}
+
+int32_t msFloat64CompareBigInt(double d, const msBigInt* a, int32_t unordered) {
+	if (isnan(d)) return unordered;
+	return -msBigIntCompareFloat64(a, d, 0);
 }
 
 bool msBigIntIsZero(const msBigInt* a) {

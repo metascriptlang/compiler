@@ -1,12 +1,14 @@
 import { argv, cwd } from "std/process";
-import { Features, defaults, overlay, swarm } from "./features";
+import { Features, Plant, defaults, overlay, swarm } from "./features";
 import { generate } from "./gen";
 import { rerunBundle, runSeeds } from "./drive";
 import { interesting, reduceInput } from "./reduce";
+import { coverSeeds } from "./cov";
 
 function usage(): int32 {
-	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt] [--swarm]");
+	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt|san] [--swarm]");
 	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...] [--swarm] [--san]");
+	console.log("       msc run tools/smith/main.ms cov <firstSeed> <count> --msc=<instrumented msc> [--features=...] [--swarm]");
 	console.log("       msc run tools/smith/main.ms rerun <bundleDir>");
 	console.log("       msc run tools/smith/main.ms reduce <bundleDir|program.ms> [--identity=<file>] [--jobs=4] [--cap=2700]");
 	console.log("       msc run tools/smith/main.ms interesting <identityFile> <program.ms>");
@@ -37,6 +39,7 @@ function main(): int32 {
 	let swarmed = false;
 	let san = false;
 	let identityPath = "";
+	let covMsc = "";
 	let jobs = 4;
 	let cap = 2700;
 	for (let i = 1; i < argv.length; i++) {
@@ -45,6 +48,8 @@ function main(): int32 {
 			overlayText += " " + a.slice("--features=".length, a.length);
 		} else if (a.startsWith("--plant=")) {
 			overlayText += " plant=" + a.slice("--plant=".length, a.length);
+		} else if (a.startsWith("--msc=")) {
+			covMsc = a.slice("--msc=".length, a.length);
 		} else if (a.startsWith("--identity=")) {
 			identityPath = a.slice("--identity=".length, a.length);
 		} else if (a.startsWith("--jobs=") || a.startsWith("--cap=")) {
@@ -92,7 +97,28 @@ function main(): int32 {
 			console.log("smith: count must be at least 1");
 			return 2;
 		}
+		if (f.plant == Plant.San && !san) {
+			console.log("smith: plant=san writes freed memory, which only the SAN lane judges; add --san");
+			return 2;
+		}
 		return runSeeds(first.value, n.value, f, swarmed, san);
+	}
+	if (positional.length == 3 && positional[0] == "cov") {
+		const first = seedOf(positional[1]);
+		const n = count(positional[2], "count");
+		if (!first.ok) {
+			console.log("smith: " + first.error);
+			return 2;
+		}
+		if (!n.ok || n.value < 1) {
+			console.log("smith: count must be at least 1");
+			return 2;
+		}
+		if (covMsc == "" || san) {
+			console.log("smith: cov measures one instrumented compiler; give --msc=<path> and drop --san");
+			return 2;
+		}
+		return coverSeeds(first.value, n.value, f, swarmed, covMsc);
 	}
 	if (positional.length == 2 && positional[0] == "rerun") {
 		if (overlayText != "" || swarmed || san) {

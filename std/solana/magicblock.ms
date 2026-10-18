@@ -15,7 +15,7 @@ import {
 import { ProgramError } from "./error";
 import { findProgramAddressOf } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
-import { SeedTable, SignerSeeds, bytesAddress, findAt, tableAddress } from "./seed";
+import { SeedTable, SignerSeeds, bytesAddress } from "./seed";
 
 export { DelegationAccounts, DelegationConfig, anyValidator, onValidator } from "./delegation";
 export { delegate } from "./macro";
@@ -56,18 +56,16 @@ function scheduleCommit(
 	if (prefix + (committed.length as uint64) > MAX_COMMIT_ACCOUNTS) {
 		return Result.err(ProgramError.invalidArgument());
 	}
-	let metas: InstructionAccount[16];
-	metas[0] = InstructionAccount.flagged(payer, payer.isWritable(), true);
-	metas[1] = InstructionAccount.writable(magicContextAccount);
-	if (feeVault !== null) { metas[2] = InstructionAccount.writable(feeVault); }
-	let at = prefix as int32;
+	let metas: InstructionAccount[] = [];
+	metas.push(InstructionAccount.flagged(payer, payer.isWritable(), true));
+	metas.push(InstructionAccount.writable(magicContextAccount));
+	if (feeVault !== null) { metas.push(InstructionAccount.writable(feeVault)); }
 	for (const account of committed) {
-		metas[at] = InstructionAccount.flagged(account, account.isWritable(), account.isSigner());
-		at = at + 1;
+		metas.push(InstructionAccount.flagged(account, account.isWritable(), account.isSigner()));
 	}
 	let storage: uint8[4] = [];
 	const length = putU32(storage, 0, discriminant);
-	return invokeList(MAGIC_PROGRAM_ID, metas[0..at], storage, length, signers);
+	return invokeList(MAGIC_PROGRAM_ID, metas, storage, length, signers);
 }
 
 export function commit(
@@ -162,19 +160,12 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 	if (!canonical.key.equals(buffer.key())) { return Result.err(ProgramError.invalidSeeds()); }
 	let seeds: SeedTable = { slices: [], bump: [0], count: 0 };
 	const count = try parseSeeds(callbackData, 8, seeds);
-	const expected = try findAt(
-		tableAddress(seeds.slices),
-		count,
-		bytesAddress(ownerProgramId.bytes),
-	);
-	if (!expected.key.equals(delegated.key())) { return Result.err(ProgramError.invalidSeeds()); }
 	const _created = try createProgramAccountSeeded(
 		payer,
 		delegated,
 		buffer.dataLength(),
 		ownerProgramId,
 		seeds.slices[0..(count as int32)],
-		expected.bump,
 	);
 	return delegated.data().copyFrom(buffer.data());
 }
@@ -191,8 +182,8 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const count = taskAccounts.length as uint64;
 	if (1 + count > MAX_TASK_ACCOUNTS) { return Result.err(ProgramError.invalidArgument()); }
-	let metas: InstructionAccount[16];
-	metas[0] = InstructionAccount.writableSigner(payer);
+	let metas: InstructionAccount[] = [];
+	metas.push(InstructionAccount.writableSigner(payer));
 	let storage: uint8[1024] = [];
 	let length = putU32(storage, 0, 6);
 	length = putU64(storage, length, taskId);
@@ -203,15 +194,14 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 	length = putU64(storage, length, count);
 	for (let index = 0; index < taskAccounts.length; index++) {
 		const meta = taskAccounts[index];
-		const held: Account = { address: meta.key - 8 };
-		metas[index + 1] = InstructionAccount.flagged(held, held.isWritable(), held.isSigner());
+		metas.push(meta.recordFlagged());
 		length = putPubkey(storage, length, meta.pubkey());
-		length = putU8(storage, length, meta.signer);
-		length = putU8(storage, length, meta.writable);
+		length = putU8(storage, length, meta.signerFlag());
+		length = putU8(storage, length, meta.writableFlag());
 	}
 	length = putU64(storage, length, taskData.length as uint64);
 	length = putSpan(storage, length, taskData);
-	return invokeList(MAGIC_PROGRAM_ID, metas[0..(1 + taskAccounts.length)], storage, length);
+	return invokeList(MAGIC_PROGRAM_ID, metas, storage, length);
 }
 
 export function scheduleTask(
@@ -841,8 +831,8 @@ when (testBuild) {
 		const payer = try account(0);
 		const context = try account(1);
 		const vault = try account(2);
-		let list: Account[16];
-		for (let index = 0; index < 16; index++) { list[index] = try account(3 + index); }
+		let list: Account[] = [];
+		for (let index = 0; index < 16; index++) { list.push(try account(3 + index)); }
 		const some = list[0..(count as int32)];
 		if (withVault == 1) { return commit(payer, some, context, vault); }
 		return commit(payer, some, context);

@@ -1,4 +1,4 @@
-import { strictErrorCount } from "./helpers";
+import { checkSource, strictErrorCount } from "./helpers";
 import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
 import { GcMode } from "../../checker/context";
 import { hostTargetInfo } from "../../checker/types";
@@ -49,7 +49,7 @@ test "flowInvalidation: nondefaultable locals require assignment on every incomi
 		{ name: "a function local, an array local and a struct holding a function are refused", source: "function f(flag: boolean): int32 {\n\tlet cb: () => int32;\n\tif (flag) { cb = (): int32 => 42; }\n\treturn cb();\n}\n", expected: -1 },
 		{ name: "a function local, an array local and a struct holding a function are refused", source: "function f(n: int32): int32 {\n\tlet xs: int32[];\n\tfor (let i = 0; i < n; i++) { xs = [i]; }\n\treturn xs.length;\n}\n", expected: -1 },
 		{ name: "a function local, an array local and a struct holding a function are refused", source: "struct S { cb: () => int32; }\nfunction f(flag: boolean): int32 {\n\tlet s: S;\n\tif (flag) { s = { cb: (): int32 => 1 }; }\n\treturn s.cb();\n}\n", expected: -1 },
-		{ name: "every branch assigning, a later closure read and a number stay accepted", source: "class Foo { x: int32 = 7; }\nenum E { A, B }\nfunction f(flag: boolean, e: E): int32 {\n\tlet o: Foo;\n\tif (flag) { o = new Foo(); } else { o = new Foo(); }\n\tlet p: Foo;\n\tmatch (e) { E.A => { p = new Foo(); }, E.B => { p = new Foo(); } };\n\tlet cb: () => int32;\n\tcb = (): int32 => 3;\n\tconst g = (): int32 => cb();\n\tlet n: int32;\n\tif (flag) { n = 1; }\n\treturn o.x + p.x + g() + n;\n}\n", expected: 0 },
+		{ name: "every branch assigning, a later closure read and a number stay accepted", source: "class Foo { x: int32 = 7; }\nenum E { A, B }\nfunction f(flag: boolean, e: E): int32 {\n\tlet o: Foo;\n\tif (flag) { o = new Foo(); } else { o = new Foo(); }\n\tlet p: Foo;\n\tmatch (e) { E.A => { p = new Foo(); }, E.B => { p = new Foo(); } };\n\tlet cb: () => int32;\n\tcb = (): int32 => 3;\n\tconst g = (): int32 => cb();\n\tlet n: int32 = 0;\n\tif (flag) { n = 1; }\n\treturn o.x + p.x + g() + n;\n}\n", expected: 0 },
 	];
 	for (const item of cases) {
 		const errors = strictErrorCount(item.source);
@@ -87,14 +87,14 @@ test "flowInvalidation: mixed representation unions expose only a stable discrim
 	}
 }
 
-function strictWarnings(source: string, strictDefs: boolean, strictNil: boolean): int32 {
+function strictWarnings(source: string, strictNil: boolean): int32 {
 	resetBuildState();
 	const entries: MapEntry[] = [
 		{ entryPath: "/src/strictPolicy.ms", entrySource: source },
 		{ entryPath: "/src/strictEntry.ms", entrySource: "import \"./strictPolicy\";" },
 	];
 	const graph = loadModuleGraph("/src/strictEntry.ms", createMapProvider(entries));
-	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Orc, null, null, strictDefs, strictNil);
+	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Orc, null, null, strictNil);
 	const mod = findModule(graph, "/src/strictPolicy.ms");
 	if (mod == null) return -1;
 	let warnings: int32 = 0;
@@ -103,18 +103,45 @@ function strictWarnings(source: string, strictDefs: boolean, strictNil: boolean)
 }
 
 test "flow invalidation: strict policies reach dependencies and do not leak into later checks" {
-	const unassigned = "function f(flag: boolean): int32 { let n: int32; if (flag) { n = 5; } return n; }";
 	const nullable = "class Box { x: int32 = 7; } function f(): int32 { let box: Box | null = new Box(); const read = (): int32 => box.x; return read(); }";
 	const nonnull = "class Box { x: int32 = 7; } function f(box: Box): int32 { return box.x; }";
-	const relaxedDefs = strictWarnings(unassigned, false, false);
-	assert relaxedDefs >= 0;
-	assert strictWarnings(unassigned, true, false) > relaxedDefs;
-	const relaxedNil = strictWarnings(nullable, false, false);
+	const relaxedNil = strictWarnings(nullable, false);
 	assert relaxedNil >= 0;
-	assert strictWarnings(nullable, false, true) > relaxedNil;
-	assert strictWarnings(nonnull, false, true) == strictWarnings(nonnull, false, false);
-	strictWarnings(unassigned, true, true);
-	assert strictWarnings(unassigned, false, false) == relaxedDefs;
+	assert strictWarnings(nullable, true) > relaxedNil;
+	assert strictWarnings(nonnull, true) == strictWarnings(nonnull, false);
+	assert strictWarnings(nullable, false) == relaxedNil;
 	const prelude = getPreludeContext();
-	assert prelude != null && !prelude.strictDefs && !prelude.strictNullChecks;
+	assert prelude != null && !prelude.strictNullChecks;
+}
+
+function lacksEndingReturn(source: string): boolean {
+	const ctx = checkSource(source);
+	if (ctx == null) return false;
+	for (const error of ctx.errors) if (error.message.contains("lacks an ending return")) return true;
+	return false;
+}
+
+test "flowInvalidation: a catch is reached from the start of its try and from every mutation in it" {
+	const work = "function work(n: int32): int32 {\n\tif (n > 0) { throw new Error(\"boom\"); }\n\treturn 1;\n}\n";
+	const memo = "function log(): void {}\nfunction f(x: string | int32, n: int32, c: boolean): int32 {\n\tif (typeof x === \"number\") { return 0; }\n\ttry {\n\t\ttry { x = 5; work(n); x = \"a\"; } finally { if (c) { log(); } }\n\t} catch (e) {\n\t\tif (typeof x === \"number\") { return 1; }\n\t}\n\treturn x.length;\n}\n";
+	const conn = "class Conn {\n\topen(n: int32): void { if (n > 0) { throw new Error(\"down\"); } }\n}\n";
+	const accepted = [
+		{ name: "narrowing inside a catch reached only by a call's raise", source: work + "function f(s: string | null, n: int32): int32 {\n\ttry { work(n); } catch (e) {\n\t\tif (s !== null) { return s.length; }\n\t}\n\treturn 0;\n}\n" },
+		{ name: "narrowing inside a loop in such a catch", source: work + "function f(xs: (string | null)[], n: int32): int32 {\n\tlet total: int32 = 0;\n\ttry { work(n); } catch (e) {\n\t\tfor (const x of xs) { if (x !== null) { total += x.length; } }\n\t}\n\treturn total;\n}\n" },
+		{ name: "narrowing inside a nested try reached by a method call", source: conn + "function f(c: Conn, s: string | null, n: int32): int32 {\n\ttry {\n\t\ttry { c.open(n); } finally { console.log(\"closed\"); }\n\t} catch (e) {\n\t\tif (s !== null) { return s.length; }\n\t}\n\treturn 0;\n}\n" },
+		{ name: "a narrowing on every normal exit of a try still holds after its finally", source: "function log(): void {}\nfunction f(s: string | null): int32 {\n\ttry { if (s === null) { return 0; } } finally { log(); }\n\treturn s.length;\n}\n" },
+		{ name: "narrowing inside a catch reached through an inner try with an empty finally", source: work + "function f(s: string | null, n: int32): int32 {\n\ttry {\n\t\ttry { work(n); } finally { }\n\t} catch (e) {\n\t\tif (s !== null) { return s.length; }\n\t}\n\treturn 0;\n}\n" },
+		{ name: "a finally walked from a normal exit and from an exception keeps each path's type", source: work + memo },
+	];
+	for (const item of accepted) assert strictErrorCount(item.source) == 0, item.name;
+	assert strictErrorCount(work + "function f(s: string | null, n: int32): int32 {\n\ttry { work(n); if (s === null) { process.exit(1); } } finally { console.log(s.length); }\n\treturn 0;\n}\n") > 0, "a finally sees the state an exception left";
+	assert strictErrorCount(work + memo.replace("if (typeof x === \"number\") { return 1; }", "log();")) > 0, "a catch reached after an assignment in the inner try keeps that assignment's type";
+	const fallsOff = [
+		{ name: "a catch that falls off the end", source: work + "function f(n: int32): int32 {\n\ttry { return work(n); } catch (e) { console.log(\"caught\"); }\n}\n" },
+		{ name: "a catch whose loop falls off the end", source: work + "function f(n: int32, xs: string[]): int32 {\n\ttry { return work(n); } catch (e) {\n\t\tfor (const x of xs) { console.log(x); }\n\t}\n}\n" },
+		{ name: "a return in a try whose empty finally sits inside a catching try", source: work + "function f(n: int32): int32 {\n\ttry {\n\t\ttry { return work(n); } finally { }\n\t} catch (e) { console.log(\"caught\"); }\n}\n" },
+		{ name: "a nested try whose method call raises past an inner finally", source: conn + "function f(c: Conn, n: int32): int32 {\n\ttry {\n\t\ttry { c.open(n); return 1; } finally { console.log(\"closed\"); }\n\t} catch (e) { console.log(\"caught\"); }\n}\n" },
+	];
+	for (const item of fallsOff) assert lacksEndingReturn(item.source), item.name;
+	assert !lacksEndingReturn(work + "function f(n: int32): int32 {\n\ttry { return work(n); } catch (e) { return -1; }\n}\n"), "a catch that returns needs no ending return";
 }

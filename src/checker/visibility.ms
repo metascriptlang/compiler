@@ -1,6 +1,8 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, IdentifierData } from "../ast/node";
-import { classDeclNodeOf, parentClassSymOf, lookupSymbol, Scope } from "./symbol";
-import { CheckerContext, addError } from "./context";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
+import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
+import { CheckerContext, addError, extReceiverSym } from "./context";
+import { skipModifier, isStructType, isMaybeType, typeDisplayName } from "./types";
+import { markInitialized } from "./initTracker";
 
 function unwrapDecl(node: Node | null): Node | null {
 	let n = node;
@@ -186,7 +188,7 @@ export function methodOwnerClass(ctx: CheckerContext, method: Symbol): Symbol | 
 	if (decl == null || decl.kind != NodeKind.MethodDecl || ctx.extensionRegistry == null) return null;
 	for (const ext of ctx.extensionRegistry.methods) {
 		if (ext.sym != method) continue;
-		const owner = lookupSymbol(ctx.table, ext.receiverTypeName);
+		const owner = ext.isStatic ? method.staticOwner : extReceiverSym(ext);
 		return owner != null && isClassLike(owner) ? owner : null;
 	}
 	return null;
@@ -276,7 +278,53 @@ export function isSuperReceiver(object: Node): boolean {
 
 function receiverClassOf(callee: Node): Symbol | null {
 	if (callee.kind != NodeKind.MemberExpr) return null;
-	const object = (callee.data as MemberExprData).object;
+	let object = (callee.data as MemberExprData).object;
+	while (object != null && object.kind == NodeKind.HiddenSubConv) object = (object.data as HiddenStdConvData).convExpr;
 	if (object == null || isSuperReceiver(object)) return null;
 	return declaringSymOf(object.nodeType);
+}
+
+export function requiresInit(ctx: CheckerContext, t: Type | null): boolean {
+	return noDefaultAt(ctx, t, 0) != null;
+}
+
+function noDefaultAt(ctx: CheckerContext, t: Type | null, depth: int32): Type | null {
+	const inner = skipModifier(t);
+	if (inner == null || depth > 16 || isMaybeType(inner)) return null;
+	if (inner.kind == TypeKind.Function || inner.kind == TypeKind.Ref) return inner;
+	if (inner.kind == TypeKind.SizedArray) return inner.typeValue > 0 && noDefaultAt(ctx, inner.typeReturn, depth + 1) != null ? inner : null;
+	const body = inner.kind == TypeKind.GenericInstance && inner.typeReturn != null ? inner.typeReturn : inner;
+	if (!isStructType(body) || body.typeChildren == null) return null;
+	if (body.typeNames != null && hiddenPrivateField(ctx, declaringSymOf(inner), body.typeNames) != "") return inner;
+	for (const field of body.typeChildren) {
+		if (noDefaultAt(ctx, field, depth + 1) != null) return inner;
+	}
+	return null;
+}
+
+export function refuseUnassignedRead(ctx: CheckerContext, node: Node, name: string, t: Type | null): void {
+	const why = requiresInit(ctx, t) ? ": " + noDefaultReason(ctx, t) : "";
+	addError(ctx, "'" + name + "' may be read before it is assigned" + why, node.location.line, node.location.column);
+	markInitialized(ctx.initTracker, name);
+}
+
+export function noDefaultReason(ctx: CheckerContext, t: Type | null): string {
+	const holder = hiddenHolder(ctx, t, 0);
+	if (holder == null) return `type '${typeDisplayName(t)}' has no default value`;
+	const sealed = `has a private field and can only be built by the module that declares it`;
+	return skipModifier(t) == holder ? `type '${typeDisplayName(t)}' ${sealed}` : `type '${typeDisplayName(t)}' holds '${typeDisplayName(holder)}', which ${sealed}`;
+}
+
+export function hiddenHolder(ctx: CheckerContext, t: Type | null, depth: int32): Type | null {
+	const inner = skipModifier(t);
+	if (inner == null || depth > 16 || isMaybeType(inner)) return null;
+	if (inner.kind == TypeKind.SizedArray) return hiddenHolder(ctx, inner.typeReturn, depth + 1);
+	const body = inner.kind == TypeKind.GenericInstance && inner.typeReturn != null ? inner.typeReturn : inner;
+	if (!isStructType(body) || body.typeChildren == null) return null;
+	if (body.typeNames != null && hiddenPrivateField(ctx, declaringSymOf(inner), body.typeNames) != "") return inner;
+	for (const field of body.typeChildren) {
+		const found = hiddenHolder(ctx, field, depth + 1);
+		if (found != null) return found;
+	}
+	return null;
 }

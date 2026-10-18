@@ -1,12 +1,13 @@
 /*
  * MetaScript Async Dispatcher — Emscripten (browser WASM)
  *
- * Single-threaded, Asyncify-based. No pthreads, no selector, no wake pipe.
- * msWaitFor yields to JS event loop via emscripten_sleep.
+ * Single-threaded. No pthreads, no selector, no wake pipe.
+ * msWaitFor yields to the JS event loop via emscripten_sleep, which JSPI suspends.
  * Timer heap + callback deque: same logic as desktop, no threading.
  */
 #ifdef MSOS_EMCC
 
+#include "runtime/core/system.h"
 #include "dispatch.h"
 #include <emscripten.h>
 #include <stdlib.h>
@@ -112,14 +113,27 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
     int64_t now = msMonoTimeMs();
     while (d->timers.len > 0 && d->timers.data[0].finishAtMs <= now) {
         msTimer t = msTimerHeapPop(&d->timers);
+        *didWork = true;
         if (t.fut != NULL) {
             msFutureBase* f = (msFutureBase*)t.fut;
             if (!atomic_load_explicit(&f->finished, memory_order_acquire)) {
                 atomic_store_explicit(&f->finished, true, memory_order_release);
                 msFutureFireCallbacks(f);
             }
+            continue;
         }
-        *didWork = true;
+        if (t.periodMs > 0 && !t.cancelled && t.cb.fn != NULL) {
+            msTimer next = t;
+            next.finishAtMs = now + t.periodMs;
+            msTimerHeapPush(&d->timers, next);
+        }
+        if (t.cancelled || t.cb.fn == NULL) {
+            if (t.cb.env != NULL) msDecref(t.cb.env);
+            continue;
+        }
+        if (t.cb.env != NULL) ((void(*)(void*))t.cb.fn)(t.cb.env);
+        else ((void(*)(void))t.cb.fn)();
+        if (t.periodMs == 0 && t.cb.env != NULL) msDecref(t.cb.env);
     }
     return d->timers.len > 0 ? (int)(d->timers.data[0].finishAtMs - now) : -1;
 }
@@ -181,15 +195,44 @@ msFuture_void* msSleepAsync(int ms) {
     return f;
 }
 
-void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
-    if (isFail) msFutureFail(fut, error);
-    else {
-        msFutureBase* f = (msFutureBase*)fut;
-        ((msFuture_ptr*)f)->value = value;
-        atomic_store_explicit(&f->finished, true, memory_order_release);
-        msFutureFireCallbacks(f);
+static int64_t gTimerSeq = 0;
+
+static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
+    if (cb.env != NULL) msIncRef(cb.env);
+    int64_t delay = (int64_t)ms;
+    if (delay < 0) delay = 0;
+    gTimerSeq += 1;
+    msTimerHeapPush(&msGetDispatcher()->timers, (msTimer){
+        .finishAtMs = msMonoTimeMs() + delay,
+        .cb = cb,
+        .id = gTimerSeq,
+        .periodMs = periodMs,
+    });
+    return gTimerSeq;
+}
+
+static void msCancelTimer(int64_t id) {
+    msTimerHeap* h = &msGetDispatcher()->timers;
+    for (int i = 0; i < h->len; i += 1) {
+        if (h->data[i].id == id) {
+            h->data[i].cancelled = true;
+            h->data[i].periodMs = 0;
+            break;
+        }
     }
 }
+
+double msSetTimeout(msClosure cb, double ms) { return (double)msArmTimer(cb, ms, 0); }
+
+double msSetInterval(msClosure cb, double ms) {
+    int64_t period = (int64_t)ms;
+    if (period < 1) period = 1;
+    return (double)msArmTimer(cb, ms, period);
+}
+
+void msClearTimeout(double id) { msCancelTimer((int64_t)id); }
+
+void msClearInterval(double id) { msCancelTimer((int64_t)id); }
 
 int32_t msGetWakePipeFd(void) { return -1; }
 void msDestroyDispatcher(void) {
@@ -203,14 +246,15 @@ void msDestroyDispatcher(void) {
 
 /* No-ops for emcc (no threads, no actors) */
 bool (*msActorPollHook)(void) = NULL;
-int32_t msPoolBusyPeek(void) { return 0; }
 bool msCompletionQueueDrain(void) { return false; }
+/* The producer has already stored the value or error and set finished, as on the
+ * threaded drain: fire the callbacks, never overwrite the stored result. */
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
-    msPostCompletion(fut, NULL, isFail, error);
+    (void)isFail; (void)error;
+    if (fut != NULL) msFutureFireCallbacks((msFutureBase*)fut);
 }
-/* Single-threaded: completes inline, no queue-side ref. Owned == Push. */
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
-    msPostCompletion(fut, NULL, isFail, error);
+    msCompletionQueuePush(fut, isFail, error);
 }
 
 /* ===== Async Stepper (same as dispatchFull.c — no threading needed) ===== */
@@ -227,6 +271,10 @@ void msAsyncCb(void* raw) {
     }
     if (next == NULL) { free(e); return; }
     msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
+}
+
+void msEnsureOwnerDispatcher(void) {
+    (void)msGetDispatcher();
 }
 
 void msAsyncStart(void* retFut, msClosure stepper) {

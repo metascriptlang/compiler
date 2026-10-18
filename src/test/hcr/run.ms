@@ -164,25 +164,18 @@ function moduleAbi(): void {
 	console.log("ok   hcrModuleAbi");
 }
 
-function linkKeys(dir: string): string[] {
+function linkInputKeys(dir: string): string[] {
 	const cache = `${dir}/out/debug/.cache`;
 	const keys: string[] = [];
 	for (const e of readDir(cache)) {
-		if (e.startsWith("link.") && e.endsWith(".cache")) keys.push(`${e}\n${read(`${cache}/${e}`)}`);
+		if (!e.startsWith("link.") || !e.endsWith(".cache")) continue;
+		const inputs: string[] = [e];
+		for (const line of lines(read(`${cache}/${e}`))) {
+			if (!line.startsWith("outputHash:")) inputs.push(line);
+		}
+		keys.push(inputs.join("\n"));
 	}
 	return keys;
-}
-
-function sameLink(cold: string, warm: string): boolean {
-	const before = cold.split("\n");
-	const after = warm.split("\n");
-	if (before.length != after.length) return false;
-	for (let i = 0; i < before.length; i += 1) {
-		if (before[i] == after[i]) continue;
-		const settledOnly = before[i].startsWith("outputHash:content:") && after[i].startsWith("outputHash:settled:");
-		if (!settledOnly) return false;
-	}
-	return true;
 }
 
 function firstWarmBuild(): void {
@@ -192,17 +185,13 @@ function firstWarmBuild(): void {
 	copy(`${FIXTURES}/logic.ms`, `${dir}/logic.ms`);
 	const build = ["build", "app.ms", "--hcr", "--output=module.hcr"];
 	mustBuild(tag, dir, build, "cold build failed");
-	const cold = linkKeys(dir);
+	const cold = linkInputKeys(dir);
 	copy(`${FIXTURES}/logicBodyEdit.ms`, `${dir}/logic.ms`);
 	mustBuild(tag, dir, build, "body-edit build failed");
 	let relinked = 0;
 	const changed: string[] = [];
-	for (const key of linkKeys(dir)) {
-		let kept = false;
-		for (const entry of cold) {
-			if (sameLink(entry, key)) kept = true;
-		}
-		if (!kept) {
+	for (const key of linkInputKeys(dir)) {
+		if (!cold.includes(key)) {
 			relinked += 1;
 			changed.push(key);
 		}
@@ -238,6 +227,20 @@ function firstWarmBuild(): void {
 	}
 	need(tag, reused + recompiled > 0, "the first warm plain build reported no @compile object");
 	need(tag, recompiled == 0, `the first warm plain build compiled ${recompiled} @compile objects again`);
+	console.log(`ok   ${tag}`);
+}
+
+function timeReportsPhaseC(): void {
+	const tag = "hcrTimeReportsPhaseC";
+	const dir = freshDir(`${TMP}/timePhaseC`);
+	copy(`${FIXTURES}/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/logic.ms`, `${dir}/logic.ms`);
+	const hcr = ["build", "app.ms", "--hcr", "--time", "--output=module.hcr"];
+	const cold = mustBuild(tag, dir, hcr, "cold --hcr build failed");
+	copy(`${FIXTURES}/logicBodyEdit.ms`, `${dir}/logic.ms`);
+	const warm = mustBuild(tag, dir, hcr, "warm --hcr build failed");
+	need(tag, cold.contains("phase C (codegen+compile)") && cold.contains("codegen: "), "a cold --hcr build printed no phase C");
+	need(tag, warm.contains("phase C (codegen+compile)") && warm.contains("codegen: "), "a warm --hcr build printed no phase C");
 	console.log(`ok   ${tag}`);
 }
 
@@ -897,8 +900,9 @@ function runCommand(): void {
 		const ended = `${copies}/999999998`;
 		const alive = `${copies}/${platform == "windows" ? "4" : "1"}`;
 		const foreign = `${copies}/notARun`;
-		for (const d of [`${ended}/core`, alive, foreign]) ensureDir(d);
-		for (const f of [`${ended}/core/app.core${sharedLibraryExt()}`, `${alive}/keep.txt`, `${foreign}/keep.txt`]) put(f, "x");
+		const pastInt64 = `${copies}/18446744073709551616`;
+		for (const d of [`${ended}/core`, alive, foreign, pastInt64]) ensureDir(d);
+		for (const f of [`${ended}/core/app.core${sharedLibraryExt()}`, `${alive}/keep.txt`, `${foreign}/keep.txt`, `${pastInt64}/keep.txt`]) put(f, "x");
 		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 		const seen: string[] = [];
 		for (const line of lines(both(ran))) {
@@ -914,6 +918,7 @@ function runCommand(): void {
 		need(tag, !exists(ended), "the image copies of an ended run survived the next start");
 		need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
 		need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
+		need(tag, exists(`${pastInt64}/keep.txt`), "the start removed a directory whose digits pass int64");
 	}
 	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
 	console.log(`ok   ${tag}`);
@@ -1270,6 +1275,21 @@ function registryVariables(): void {
 	]);
 }
 
+// ---- hcrModuleTdz: a module binding's initialized flag follows its cell across reloads ----
+
+function moduleTdz(): void {
+	const tag = "hcrModuleTdz";
+	const dir = buildLogicGenerations(tag, "moduleTdz", ["logic.ms", "logicAdd.ms", "logicReset.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-TDZ", [
+		"HCR-TDZ early: Cannot access 'later' before initialization",
+		"HCR-TDZ start: v1 6 8",
+		"HCR-TDZ g2: reloaded logic",
+		"HCR-TDZ added: v2 6 8 20 tag",
+		"HCR-TDZ g3: reloaded logic",
+		"HCR-TDZ reset: v3 200 9 21 tag",
+	]);
+}
+
 function registryGeneric(): void {
 	const tag = "hcrRegistryGeneric";
 	const dir = freshDir(`${TMP}/registryGeneric`);
@@ -1359,6 +1379,83 @@ function coreCell(): void {
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "array cells boxed by a project image first and by a core module later did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function coreOp(): void {
+	const tag = "hcrCoreOp";
+	const dir = freshDir(`${TMP}/coreOp`);
+	for (const sub of ["app", "lib"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "lib/lib.ms", "logicEdit.ms"]) {
+		copy(`${FIXTURES}/coreOp/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-OP ")) seen.push(line);
+	}
+	const want = [
+		"HCR-OP start row s+ 2 column wide 7",
+		"HCR-OP cleared none none 0",
+		"HCR-OP reloaded logic column s++ 12",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "lifted operations a project image needs first and a core module needs later did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function rewriteCoreNativeHeader(dir: string, include: string): void {
+	const revision = `${performance.now()}`.replaceAll(".", "");
+	put(`${dir}/box/shared.h`, `${include}#define HCR_NATIVE_REV ${revision}\n`);
+	settleSecond();
+}
+
+function coreNative(): void {
+	const tag = "hcrCoreNative";
+	const dir = freshDir(`${TMP}/coreNative`);
+	for (const sub of ["app", "box"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "box/box.ms", "box/native.h", "box/first.c", "box/second.c", "box/extra.h"]) {
+		copy(`${FIXTURES}/coreNative/${f}`, `${dir}/${f}`);
+	}
+	const app = `${dir}/app`;
+	const build = ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`];
+	rewriteCoreNativeHeader(dir, "");
+	mustBuild(tag, app, build, "the first build failed");
+
+	rewriteCoreNativeHeader(dir, "");
+	const ran = msc(app, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-NATIVE ")) seen.push(line);
+	}
+	const want = [
+		"HCR-NATIVE start 3 v1",
+		"HCR-NATIVE reloaded logic v2",
+		"HCR-NATIVE restart required the core image changed (runtime, standard library or toolchain)",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a session that began by recompiling one core native beside a cached one did not reload a module edit, or did not ask for a restart once that native's header was edited");
+	}
+
+	const edits = [
+		{ include: "", label: "v4", what: "its header changed" },
+		{ include: "#include \"extra.h\"\n", label: "v5", what: "its header gained an include" },
+	];
+	for (const edit of edits) {
+		rewriteCoreNativeHeader(dir, edit.include);
+		mustBuild(tag, app, build, `the build after ${edit.what} failed`);
+		const recompiled = linkInputKeys(app);
+		put(`${app}/logic.ms`, `export function label(): string {\n\treturn "${edit.label}";\n}\n`);
+		mustBuild(tag, app, build, "the body-edit build failed");
+		let relinked = 0;
+		for (const key of linkInputKeys(app)) {
+			if (!recompiled.includes(key)) relinked += 1;
+		}
+		need(tag, relinked == 1, `the build after a body edit relinked ${relinked} images, expected only logic's, once one core native was recompiled because ${edit.what}`);
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1601,10 +1698,96 @@ function instanceofReload(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function dynamicImportReload(): void {
+	const tag = "hcrDynamicImportReload";
+	const fixture = "dynamicImport";
+	const dir = freshDir(`${TMP}/${fixture}`);
+	for (const name of ["app.ms", "note.ms", "dep.ms", "failing.ms"]) copy(`${FIXTURES}/${fixture}/${name}`, `${dir}/${name}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["lazy.ms", "lazyEdit.ms", "lazyAgain.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/${fixture}/${edits[i]}`, `${dir}/lazy.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["lazy", "dep", "failing", "note", "support"], "DYN", [
+		"DYN start app",
+		"DYN g2: reloaded lazy",
+		"DYN sync end",
+		"DYN dep body",
+		"DYN lazy body g2",
+		"DYN lazy g2 g2 dep g2 dep",
+		"DYN resumed lazy g3",
+		"DYN g3: reloaded lazy",
+		"DYN after g3 g3 g2 dep",
+		"DYN failing body",
+		"DYN first boom",
+		"DYN second boom same",
+		"DYN destroy lazy",
+		"DYN destroy dep",
+		"DYN destroy app",
+	]);
+}
+
+const DYNAMIC_IMPORT_PINS = [
+	"dynamicImportOrder", "dynamicImportConcurrent", "dynamicImportInitThrows", "dynamicImportCycle",
+	"dynamicImportStaticDep", "dynamicImportDeinitOrder", "dynamicImportSpawn",
+	"dynamicImportTla", "dynamicImportTlaDep", "dynamicImportTlaConcurrent", "dynamicImportTlaRejects",
+	"dynamicImportTlaCycle", "dynamicImportTlaSpawn", "dynamicImportTlaDeinit",
+];
+
+function stdoutPins(source: string): string[] {
+	const want: string[] = [];
+	for (const line of lines(source)) {
+		if (line.startsWith("// @stdout: ")) want.push(line.slice(12, line.length));
+	}
+	return want;
+}
+
+function runPinOnHost(tag: string, host: string, dir: string, entry: string, label: string): void {
+	const main = read(`${dir}/${entry}`);
+	const want = stdoutPins(main);
+	put(`${dir}/${entry}`, "import { reload } from \"std/hcr\";\n" + main);
+	const entryDir = entry.includes("/") ? `${dir}/${entry.slice(0, entry.lastIndexOf("/"))}` : dir;
+	const entryFile = entry.includes("/") ? entry.slice(entry.lastIndexOf("/") + 1, entry.length) : entry;
+	mustBuild(tag, entryDir, ["build", entryFile, "--hcr", `--output=run/module${sharedLibraryExt()}`], `${label}: the --hcr build failed`);
+	const ran = execFileResult(host, ["run", "module"], entryDir);
+	const seen: string[] = [];
+	for (const line of lines(ran.output)) {
+		if (line != "") seen.push(line);
+	}
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, `${label}: the --hcr images did not print the pinned stdout`);
+	}
+}
+
+function dynamicImportParity(): void {
+	const tag = "hcrDynamicImportParity";
+	const hostDir = freshDir(`${TMP}/dynamicImportHost`);
+	const host = `${hostDir}/${platform == "windows" ? "host.exe" : "host"}`;
+	copy(STD_HOST, `${hostDir}/host.cms`);
+	mustBuild(tag, hostDir, ["build", "host.cms", `--output=${host}`], "thin host build failed");
+	for (const pin of DYNAMIC_IMPORT_PINS) {
+		const source = `${ROOT}/src/test/corpus/programs/${pin}`;
+		const dir = freshDir(`${TMP}/${pin}`);
+		for (const f of readDir(source)) copy(`${source}/${f}`, `${dir}/${f}`);
+		runPinOnHost(tag, host, dir, "main.ms", pin);
+	}
+	const outside = freshDir(`${TMP}/dynamicImportOutside`);
+	for (const sub of ["app", "shared"]) {
+		ensureDir(`${outside}/${sub}`);
+		for (const f of readDir(`${FIXTURES}/dynamicImportOutside/${sub}`)) copy(`${FIXTURES}/dynamicImportOutside/${sub}/${f}`, `${outside}/${sub}/${f}`);
+	}
+	runPinOnHost(tag, host, outside, "app/main.ms", "a module outside the project, so linked into the core");
+	console.log(`ok   ${tag}`);
+}
+
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
 	{ name: "hcrFirstWarmBuild", run: firstWarmBuild },
+	{ name: "hcrTimeReportsPhaseC", run: timeReportsPhaseC },
 	{ name: "hcrModuleLocalNames", run: localNames },
 	{ name: "hcrWatchWarm", run: watchWarm },
 	{ name: "hcrWatchGeneric", run: watchGeneric },
@@ -1634,10 +1817,13 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrModulePassReload", run: modulePassReload },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
+	{ name: "hcrModuleTdz", run: moduleTdz },
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
+	{ name: "hcrCoreOp", run: coreOp },
+	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
@@ -1648,6 +1834,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrAddedModule", run: addedModule },
 	{ name: "hcrSameSecondEdit", run: sameSecondEdit },
 	{ name: "hcrAndroidImages", run: androidImages },
+	{ name: "hcrDynamicImportReload", run: dynamicImportReload },
+	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 

@@ -121,6 +121,11 @@ test "comptime values: unsupported evaluation" {
 	}
 }
 
+test "comptime values: a constant narrowing outside its target is refused before the run" {
+	const result = evalSourceFull("const i: int32 = 300; return i as int8;");
+	assert result.lastError.contains("cannot convert 300 to int8"), result.lastError;
+}
+
 test "comptime values: an operator the engine cannot evaluate is reported by name" {
 	const result = evalSourceFull("const o = { x: 1 }; return \"x\" in o;");
 	const expected = "cannot evaluate operator 'in' at comptime";

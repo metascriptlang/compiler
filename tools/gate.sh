@@ -4,7 +4,7 @@ export LC_ALL=C
 
 INERT='\.md$|^docs/|^\.claude/|^\.github/|^\.gitignore$|^LICENSE|^src/test/known-red\.json$'
 FLOOR_EXEMPT='^tools/'
-SOLANA_SDK='^(std/(solana|crypto|meta|serialize/json)|runtime/solana|tools/solana|examples/(escrow|anchorBench))/|^runtime/manual\.h$|^src/test/c/solana'
+SOLANA_SDK='^(std/(solana|crypto|meta|serialize/json)|runtime/(solana|freestanding)|tools/solana|examples/(escrow|anchorBench))/|^runtime/manual\.h$|^src/test/c/solana'
 SOLANA_COMPILER='^src/(checker|codegen/c|monomorphize)/|^src/module/cparse/target\.ms$|^src/compiler/(meta/|(buildConfig|cc|compile|defines|options|toolchain)\.ms$)'
 EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomorphize|parser|raiser|transform|utils)/|^src/compiler/(meta/|[^/]+\.ms$)|^src/index\.ms$|^(std|runtime|vendor)/'
 RULES=(
@@ -1372,6 +1372,7 @@ runtime/solana/host.c|boundary build corpus guard solana suite tests
 std/solana/core.cms|build corpus guard solana suite tests
 std/solana/test.cms|build corpus guard solana suite tests
 runtime/solana/solana.h|boundary build corpus guard solana suite tests
+runtime/freestanding/musl/pow.c|boundary build corpus solana suite tests
 docs/TESTING.md|
 src/test/known-red.json|
 CASES
@@ -1722,7 +1723,7 @@ solana_check() {
   local name=$1 rc
   shift
   "$@"; rc=$?
-  [ "$rc" -eq 0 ] || printf 'FAIL %s: exit %s\n' "$name" "$rc"
+  [ "$rc" -eq 0 ] || printf 'FAIL solana %s: exit %s\n' "$name" "$rc"
   return "$rc"
 }
 
@@ -1746,7 +1747,7 @@ solana_host_test() {
 solana_replays() {
   local dir=$1 rc=0
   if ! command -v node >/dev/null 2>&1 || [ ! -d tools/solana/node_modules/litesvm ]; then
-    printf 'FAIL solana replay-deps: node or tools/solana/node_modules/litesvm missing\n'
+    printf 'FAIL solana replay-deps: node or tools/solana/node_modules/litesvm missing; run (cd tools/solana && npm ci)\n'
     return 1
   fi
   solana_check fields-build "$CAND" build tools/solana/accountValuesProbe.ms --os=solana --release --output="$dir/accountValues.so" \
@@ -1769,18 +1770,28 @@ solana_replays() {
   fi
   solana_check resize-build "$CAND" build tools/solana/resizeProbe.ms --os=solana --output="$dir/resizeProbe.so" \
     && { solana_check resize-replay node tools/solana/resizeAfterCpi.mjs "$dir/resizeProbe.so" || rc=1; } || rc=1
+  solana_check fidelity-build "$CAND" build tools/solana/hostFidelityProbe.ms --os=solana --release --output="$dir/hostFidelityProbe.so" \
+    && { solana_check fidelity-replay node tools/solana/hostFidelity.mjs "$dir/hostFidelityProbe.so" || rc=1; } || rc=1
+  solana_check token-build "$CAND" build tools/solana/tokenOpsProbe.ms --os=solana --release --output="$dir/tokenOpsProbe.so" \
+    && { solana_check token-replay node tools/solana/tokenOps.mjs "$dir/tokenOpsProbe.so" || rc=1; } || rc=1
+  local pin
+  for pin in logText:logTextProbe createAccountPrefund:createAccountPrefundProbe failFirst:failFirstProbe arrayCount:arrayCountProbe tokenInterface:tokenInterfaceProbe pow:powProbe; do
+    solana_check "${pin%%:*}-build" "$CAND" build "tools/solana/${pin#*:}.ms" --os=solana --release --output="$dir/${pin#*:}.so" \
+      && { solana_check "${pin%%:*}-replay" node "tools/solana/${pin%%:*}.mjs" "$dir/${pin#*:}.so" || rc=1; } || rc=1
+  done
   return $rc
 }
 
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/index.cms std/solana/vrf.ms std/solana/idlTest.ms std/solana/accountCodecTest.ms \
+  for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.cms std/solana/vrf.ms \
+    std/solana/idlTest.ms std/solana/accountCodecTest.ms \
     examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done
   solana_host_test std/solana/accountCodecTest.ms --target=js || rc=1
-  if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^tools\/solana\//{f=1} END{exit !f}' "$OUT/why"; then
+  if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"; then
     solana_replays "$dir" || rc=1
   fi
   return $rc

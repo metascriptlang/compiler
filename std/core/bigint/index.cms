@@ -23,18 +23,135 @@ when (!bare && !solana) {
 
 	// The operator forms are synthesized by src/transform/native/bigIntOpLower.ms
 	// and reach C as bare calls against the header above.
+	when (mscDeclaresRuntime) {
+		@compilerFunc
+		extern function msBigIntAdd(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntSub(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntMul(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntDiv(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntMod(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntPow(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntAnd(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntOr(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntXor(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntShl(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntShr(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntNeg(a: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntNot(a: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntCmp(a: bigint, b: bigint): int32;
+		@compilerFunc
+		extern function msBigIntCompareFloat64(a: bigint, d: float64, unordered: int32): int32;
+		@compilerFunc
+		extern function msFloat64CompareBigInt(d: float64, a: bigint, unordered: int32): int32;
+		@compilerFunc
+		extern function msBigIntIsZero(a: bigint): boolean;
+		@compilerFunc
+		extern function msBigIntToInt64(a: bigint): int64;
+		@compilerFunc
+		extern function msBigIntToDebugString(a: bigint): string;
+	}
+	@compilerFunc
 	extern function msBigIntToString(b: bigint, radix: int32): string;
+	@compilerFunc
 	extern function msBigIntToFloat64(b: bigint): float64;
+	@compilerFunc
+	extern function msBigIntToFloat32(b: bigint): float32;
+	@compilerFunc
+	extern function msBigIntToSigned(b: bigint, bits: int32): int64;
+	@compilerFunc
 	extern function msBigIntFromFloat64(v: float64): bigint;
+	@compilerFunc
 	extern function msBigIntFromLit(s: string): bigint;
+	@compilerFunc
+	extern function msBigIntFromInt64(v: int64): bigint;
+	@compilerFunc
+	extern function msBigIntFromUint64(v: uint64): bigint;
 	extern function msBigIntAsIntN(bits: int64, b: bigint): bigint;
 	extern function msBigIntAsUintN(bits: int64, b: bigint): bigint;
+	extern function msBigIntParses(s: string): boolean;
+	extern function msBigIntParse(s: string): bigint;
 
 	export function toString(this b: bigint, radix: int32 = 10): string {
+		if (radix < 2 || radix > 36) throw new RangeError("toString() radix argument must be between 2 and 36");
 		return msBigIntToString(b, radix);
 	}
 
-	export extern function BigInt(v: string): bigint from "msBigIntFromLit";
+	export function BigInt(v: string): bigint {
+		if (!msBigIntParses(v)) throw new SyntaxError("Cannot convert " + v + " to a BigInt");
+		return msBigIntParse(v);
+	}
+
+	export function BigInt(v: float64): bigint { return v as bigint; }
+
+	export function BigInt(v: boolean): bigint { return v ? 1n : 0n; }
+	export function BigInt(v: int8): bigint { return v as bigint; }
+	export function BigInt(v: int16): bigint { return v as bigint; }
+	export function BigInt(v: int32): bigint { return v as bigint; }
+	export function BigInt(v: int64): bigint { return v as bigint; }
+	export function BigInt(v: uint8): bigint { return v as bigint; }
+	export function BigInt(v: uint16): bigint { return v as bigint; }
+	export function BigInt(v: uint32): bigint { return v as bigint; }
+	export function BigInt(v: uint64): bigint { return v as bigint; }
+	export function BigInt(v: char): bigint { return v as bigint; }
+	export function BigInt(v: bigint): bigint { return v; }
+
+	function notIntegerMessage(v: float64): string {
+		return `The number ${v} cannot be converted to a BigInt because it is not an integer`;
+	}
+
+	@compilerFunc
+	function msBigIntFromNumber(v: float64): bigint {
+		if (v % 1.0 != 0.0) throw new RangeError(notIntegerMessage(v));
+		return msBigIntFromFloat64(v);
+	}
+
+	@compilerFunc
+	function msBigIntEqualsNullable(a: bigint | null, b: bigint | null): boolean {
+		if (a == null) return b == null;
+		if (b == null) return false;
+		return a == b;
+	}
+
+	extern function raiseNullRead(head: string, labels: string, tag: int64): never from "msRaiseFieldError";
+
+	@compilerFunc
+	function msBigIntNonNull(b: bigint | null, head: string, labels: string): bigint {
+		if (b == null) raiseNullRead(head, labels, 0);
+		return b;
+	}
+
+	@compilerFunc
+	function msBigIntIsTruthy(b: bigint | null): boolean {
+		if (b == null) return false;
+		return b != 0n;
+	}
+
+	when (mscDeclaresRuntime) {
+		@compilerFunc
+		function msBigIntDebugText(b: bigint | null): string {
+			if (b == null) return "null";
+			return msBigIntToDebugString(b);
+		}
+	}
+
+	@compilerFunc
+	function msBigIntToStringOrNull(b: bigint | null, radix: int32): string {
+		if (b == null) return "null";
+		return b.toString(radix);
+	}
 
 	export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsIntN";
 	export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint from "msBigIntAsUintN";

@@ -1,4 +1,4 @@
-// Parked at inbox card 2026-09-27-match-expression-contexts.md
+// Parked at inbox card 2026-10-15-match-as-an-arrow-expression-body-is-not-lowered.md
 
 function laterDeclaredShape(circle: boolean): LaterShape {
 	if (circle) { const value: LaterCircle = { kind: "circle", label: "circle-payload", radius: 2.0 }; return value; }

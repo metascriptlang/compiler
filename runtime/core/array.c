@@ -13,19 +13,34 @@
 /* Reference parity: payloads are uniquely owned — no refcount field.
    DRC handles ownership (move vs deep copy) at compile time. */
 
+/* A count is a length: negative is a range error, and a payload size that does
+   not fit int64 is an overflow, both before any allocation, so no array reports
+   a length its block does not hold. */
+static int64_t msArrayBytes(int64_t cap, int64_t elemSize) {
+	int64_t body, total;
+	if (cap < 0) msRaiseRangeError(cap, 0, INT64_MAX);
+	if (__builtin_mul_overflow(cap, elemSize, &body)) msRaiseOverflow();
+	if (__builtin_add_overflow(body, (int64_t)sizeof(msArrayPayloadBase), &total)) msRaiseOverflow();
+	return total;
+}
+
+static int64_t msArrayCountAdd(int64_t len, int64_t addLen) {
+	int64_t sum;
+	if (__builtin_add_overflow(len, addLen, &sum)) msRaiseOverflow();
+	return sum;
+}
+
 void* msArrayPayloadNew(int64_t cap, int64_t elemSize) {
-	if (cap <= 0) return NULL;
-	int64_t headerSize = sizeof(msArrayPayloadBase);
-	int64_t totalSize = headerSize + cap * elemSize;
+	if (cap == 0) return NULL;
+	int64_t totalSize = msArrayBytes(cap, elemSize);
 	msArrayPayloadBase* p = (msArrayPayloadBase*)calloc(1, totalSize);
 	if (p) { p->cap = cap; }
 	return p;
 }
 
 void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize) {
-	if (cap <= 0) return NULL;
-	int64_t headerSize = sizeof(msArrayPayloadBase);
-	int64_t totalSize = headerSize + cap * elemSize;
+	if (cap == 0) return NULL;
+	int64_t totalSize = msArrayBytes(cap, elemSize);
 	msArrayPayloadBase* p = (msArrayPayloadBase*)malloc(totalSize);
 	if (p) { p->cap = cap; }
 	return p;
@@ -41,7 +56,7 @@ static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int
 	int64_t oldCap = ((msArrayPayloadBase*)p)->cap & MS_CAP_MASK;
 	int64_t newCap = msArrayResizeCap(oldCap);
 	if (newCap < needed) newCap = needed;
-	int64_t newSize = headerSize + newCap * elemSize;
+	int64_t newSize = msArrayBytes(newCap, elemSize);
 	msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(newSize);
 	if (q) {
 		memcpy((char*)q + headerSize, (char*)p + headerSize, len * elemSize);
@@ -57,22 +72,22 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) 
 	int64_t headerSize = sizeof(msArrayPayloadBase);
 	if (addLen <= 0) return p;
 	if (p == NULL) {
-		return msArrayPayloadNew(len + addLen, elemSize);
+		return msArrayPayloadNew(msArrayCountAdd(len, addLen), elemSize);
 	}
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
 	if ((base->cap & ~MS_CAP_MASK) != 0) {
-		return msArrayPayloadCopyFlagged(len, p, len + addLen, elemSize, true);
+		return msArrayPayloadCopyFlagged(len, p, msArrayCountAdd(len, addLen), elemSize, true);
 	}
 	/* Payload is uniquely owned — safe to realloc in place */
 	int64_t oldCap = base->cap;
-	int64_t needed = len + addLen;
+	int64_t needed = msArrayCountAdd(len, addLen);
 	if (needed <= oldCap) return p;
 
 	int64_t newCap = msArrayResizeCap(oldCap);
 	if (newCap < needed) newCap = needed;
 
 	int64_t oldSize = headerSize + oldCap * elemSize;
-	int64_t newSize = headerSize + newCap * elemSize;
+	int64_t newSize = msArrayBytes(newCap, elemSize);
 	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
 	if (q) {
 		if (newSize > oldSize) {
@@ -241,26 +256,26 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	int64_t headerSize = sizeof(msArrayPayloadBase);
 	if (addLen <= 0) return p;
 	if (p == NULL) {
-		int64_t cap = len + addLen;
-		int64_t totalSize = headerSize + cap * elemSize;
+		int64_t cap = msArrayCountAdd(len, addLen);
+		int64_t totalSize = msArrayBytes(cap, elemSize);
 		msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(totalSize);
 		if (q) q->cap = cap;
 		return q;
 	}
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
 	if ((base->cap & ~MS_CAP_MASK) != 0) {
-		return msArrayPayloadCopyFlagged(len, p, len + addLen, elemSize, false);
+		return msArrayPayloadCopyFlagged(len, p, msArrayCountAdd(len, addLen), elemSize, false);
 	}
 	/* Payload is uniquely owned — safe to realloc in place */
 	int64_t oldCap = base->cap;
-	int64_t needed = len + addLen;
+	int64_t needed = msArrayCountAdd(len, addLen);
 	if (needed <= oldCap) return p;
 
 	int64_t newCap = msArrayResizeCap(oldCap);
 	if (newCap < needed) newCap = needed;
 
 	int64_t oldSize = headerSize + oldCap * elemSize;
-	int64_t newSize = headerSize + newCap * elemSize;
+	int64_t newSize = msArrayBytes(newCap, elemSize);
 	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
 	if (q) q->cap = newCap;
 	return q;
@@ -372,6 +387,16 @@ msString msStringArrayPop(msStringArray* arr) {
 int64_t msStringArrayIndexOf(msStringArray* arr, msString value) {
 	if (arr->p == NULL) return -1;
 	for (int64_t i = 0; i < arr->len; i++) {
+		if (msStringEquals(arr->p->data[i], value)) return i;
+	}
+	return -1;
+}
+
+int64_t msStringArrayLastIndexOf(msStringArray* arr, msString value, int64_t fromIndex) {
+	if (arr->p == NULL) return -1;
+	int64_t i = fromIndex < 0 ? arr->len + fromIndex : fromIndex;
+	if (i >= arr->len) i = arr->len - 1;
+	for (; i >= 0; i--) {
 		if (msStringEquals(arr->p->data[i], value)) return i;
 	}
 	return -1;

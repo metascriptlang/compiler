@@ -109,10 +109,10 @@ export function raiserToBool(v: RaiserValue): boolean {
 	return match (v.kind) {
 		RaiserValueKind.Nil => false,
 		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal != 0,
-		RaiserValueKind.Float => v.floatVal != 0.0,
+		RaiserValueKind.Float => v.floatVal != 0.0 && v.floatVal == v.floatVal,
 		RaiserValueKind.String => v.strVal.length > 0,
-		RaiserValueKind.Array | RaiserValueKind.Object => true,
-		_ => false,
+		RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => true,
+		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => true,
 	};
 }
 
@@ -137,7 +137,7 @@ export function raiserEqual(a: RaiserValue, b: RaiserValue): boolean {
 
 export function raiserToString(v: RaiserValue): string {
 	return match (v.kind) {
-		RaiserValueKind.Nil => "nil",
+		RaiserValueKind.Nil => "null",
 		RaiserValueKind.Bool => { if (v.intVal != 0) { return "true"; } else { return "false"; } },
 		RaiserValueKind.Int => `${v.intVal}`,
 		RaiserValueKind.Float => `${v.floatVal}`,
@@ -188,6 +188,14 @@ test "float" {
 	assert v.floatVal == 3.14;
 }
 
+test "float NaN, 0 and -0 are falsy" {
+	const zero = 0.0;
+	assert !raiserToBool(raiserFloat(zero / zero));
+	assert !raiserToBool(raiserFloat(zero));
+	assert !raiserToBool(raiserFloat(-zero));
+	assert raiserToBool(raiserFloat(0.5));
+}
+
 test "int to float conversion" {
 	const v = raiserInt(5);
 	assert raiserToFloat(v) == 5.0;
@@ -209,7 +217,7 @@ test "bool equality" {
 	assert !raiserEqual(raiserBool(true), raiserBool(false));
 }
 
-test "nil" { assert raiserToString(raiserNil()) == "nil"; }
+test "nil prints as null" { assert raiserToString(raiserNil()) == "null"; }
 
 test "true" { assert raiserToString(raiserBool(true)) == "true"; }
 
@@ -307,7 +315,7 @@ export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserV
 export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: int64): void {
 	const items = heap.arrays[handle].items;
 	if (newLen < items.length) {
-		items.setLength(newLen as number);
+		items.shrink(newLen < 0 ? 0 : newLen);
 	} else {
 		while (items.length < newLen) {
 			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };

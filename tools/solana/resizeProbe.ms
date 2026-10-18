@@ -1,6 +1,7 @@
 @include("runtime/solana/solana.h");
 
 import { ProgramError, account, createAccount, failWith, instructionData, logU64, minimumBalance, programId } from "std/solana";
+import { recordAddress } from "std/solana/core";
 
 extern function msSolLoadU64(address: uint64): uint64;
 
@@ -8,12 +9,12 @@ function growAfterCreate(space: uint64, target: uint64, freshIndex: int32, neigh
 	const payer = try account(0);
 	const fresh = try account(freshIndex);
 	const neighbour = try account(neighbourIndex);
-	logU64(msSolLoadU64(neighbour.address + 8));
+	logU64(msSolLoadU64(neighbour.recordAddress() + 8));
 	logU64(neighbour.lamports());
-	const _created = try createAccount(payer, fresh, minimumBalance(20480), space, programId());
+	const _created = try createAccount(payer, fresh, try minimumBalance(20480), space, programId());
 	const grown = fresh.resize(target);
 	logU64(grown.ok ? 1 : 0);
-	logU64(msSolLoadU64(neighbour.address + 8));
+	logU64(msSolLoadU64(neighbour.recordAddress() + 8));
 	logU64(neighbour.lamports());
 	return Result.ok(0);
 }

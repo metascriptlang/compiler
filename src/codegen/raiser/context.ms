@@ -9,6 +9,7 @@ import { RaiserValue, RaiserClassType, raiserInt, raiserString, raiserNil } from
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
+import { placedInstanceOf } from "../../checker/instantiate";
 
 // --- Bytecode-compiler error queue ---
 // The expression/statement compilers used to silently emit LoadConst nil
@@ -49,10 +50,14 @@ export function takeRaiserCompileErrors(): CheckerError[] {
 	return out;
 }
 
+export function restoreRaiserCompileErrors(errors: CheckerError[]): void {
+	_raiserCompileErrors = errors;
+}
+
 // --- Locals ---
 
 export interface RaiserLocal {
-	name: string;
+	sym: Symbol;
 	reg: int32;
 	isString: boolean;
 }
@@ -90,24 +95,30 @@ export interface RaiserFuncEntry {
 }
 
 export interface RaiserFuncMap {
+	symbolIndices: HashMap<Symbol, int32>;
+	ctorIndices: HashMap<Symbol, int32>;
+	initIndices: HashMap<Symbol, int32>;
+}
+
+export interface RaiserEnumMap {
 	items: RaiserFuncEntry[];
-	symbolIndices: HashMap<Symbol, int32> | null;
 }
 
-// --- Builtin registry ---
-// Maps builtin function names to their function indices in the module.
-
-export interface RaiserBuiltinEntry {
-	name: string;
-	funcIdx: int32;
+export function createFuncMap(): RaiserFuncMap {
+	return { symbolIndices: new HashMap<Symbol, int32>(), ctorIndices: new HashMap<Symbol, int32>(), initIndices: new HashMap<Symbol, int32>() };
 }
 
-export interface RaiserBuiltinMap {
-	items: RaiserBuiltinEntry[];
+export interface RaiserGlobalEntry {
+	symbol: Symbol;
+	index: int32;
+	initGuard: int32;
+}
+
+export interface RaiserGlobalMap {
+	items: RaiserGlobalEntry[];
 }
 
 // --- Compiler state ---
-// Enum tracking reuses RaiserFuncMap: entries encoded as "EnumName.MemberName" → index.
 
 export interface RaiserCompState {
 	code: RaiserInstruction[];
@@ -123,13 +134,12 @@ export interface RaiserCompState {
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
-	enumMap: RaiserFuncMap;
-	builtins: RaiserBuiltinMap;
+	enumMap: RaiserEnumMap;
 	copyTypes: Type[];
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
-	globals: RaiserFuncMap;
-	scopedFunctions: boolean;
+	globals: RaiserGlobalMap;
+	receiverReg: int32;
 }
 
 export function createCompState(): RaiserCompState {
@@ -139,21 +149,10 @@ export function createCompState(): RaiserCompState {
 	const locals: RaiserLocals = { items: localItems };
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
-	const funcEntries: RaiserFuncEntry[] = [];
-	const funcMap: RaiserFuncMap = { items: funcEntries, symbolIndices: null };
 	const enumItems: RaiserFuncEntry[] = [];
-	const enumMap: RaiserFuncMap = { items: enumItems, symbolIndices: null };
-	const builtinItems: RaiserBuiltinEntry[] = [];
-	const builtins: RaiserBuiltinMap = { items: builtinItems };
+	const enumMap: RaiserEnumMap = { items: enumItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [], symbolIndices: null }, scopedFunctions: false };
-}
-
-// Overloads share module and name and differ by the declaration-time disamb,
-// the same key C mangles routine names with.
-export function routineKey(sym: Symbol): string {
-	const name = sym.name;
-	return sym.modulePath + ":" + name + "#" + sym.disamb;
+		funcMap: createFuncMap(), enumMap, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1 };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -170,16 +169,18 @@ export function raiserClassKey(classSym: Symbol): string {
 	return sym.modulePath + ":" + sym.name + "#" + sym.disamb;
 }
 
-export function globalSymbolKey(sym: Symbol): string {
-	const name = sym.name;
-	return sym.modulePath + ":" + name + ":" + sym.disamb;
-}
-
 export function resolveGlobal(s: RaiserCompState, sym: Symbol | null): int32 {
 	if (sym == null || !sym.symFlags.has(SymbolFlag.Global)) return -1;
-	const key = globalSymbolKey(sym);
 	for (const entry of s.globals.items) {
-		if (entry.name == key) return entry.index;
+		if (entry.symbol == sym) return entry.index;
+	}
+	return -1;
+}
+
+export function resolveStaticInitGuard(s: RaiserCompState, sym: Symbol | null): int32 {
+	if (sym == null || !sym.symFlags.has(SymbolFlag.StaticLocal)) return -1;
+	for (const entry of s.globals.items) {
+		if (entry.symbol == sym) return entry.initGuard;
 	}
 	return -1;
 }
@@ -239,28 +240,28 @@ export function emitHalt(s: RaiserCompState): void {
 
 // --- Locals helpers ---
 
-export function declareLocal(s: RaiserCompState, name: string, reg: int32): void {
-	const local: RaiserLocal = { name, reg, isString: false };
+export function declareLocal(s: RaiserCompState, sym: Symbol, reg: int32, isString: boolean = false): void {
+	const local: RaiserLocal = { sym, reg, isString };
 	s.locals.items.push(local);
 }
 
-export function declareLocalStr(s: RaiserCompState, name: string, reg: int32, isString: boolean): void {
-	const local: RaiserLocal = { name, reg, isString };
-	s.locals.items.push(local);
+export function declaredSymbol(node: Node, name: string): Symbol {
+	if (node.resolvedSym == null) throw new Error(`internal: '${name}' reached Raiser codegen without a symbol`);
+	return node.resolvedSym!;
 }
 
-export function isLocalString(s: RaiserCompState, name: string): boolean {
+export function isLocalString(s: RaiserCompState, sym: Symbol | null): boolean {
 	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
-		if (s.locals.items[i].name == name) {
+		if (s.locals.items[i].sym == sym) {
 			return s.locals.items[i].isString;
 		}
 	}
 	return false;
 }
 
-export function resolveLocal(s: RaiserCompState, name: string): int32 {
+export function resolveLocal(s: RaiserCompState, sym: Symbol | null): int32 {
 	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
-		if (s.locals.items[i].name == name) {
+		if (s.locals.items[i].sym == sym) {
 			return s.locals.items[i].reg;
 		}
 	}
@@ -277,9 +278,7 @@ export function regIsFixedLocal(s: RaiserCompState, reg: int32): boolean {
 // --- Condition helpers ---
 
 export function emitBranchIfFalsy(s: RaiserCompState, condReg: int32): int32 {
-	const zeroReg = allocReg(s);
-	emitLoadConst(s, zeroReg, raiserInt(0));
-	emitInst(s, raiserABC(RaiserOpcode.BneI64, condReg, zeroReg, 1));
+	emitInst(s, raiserABC(RaiserOpcode.BTruthy, condReg, 0, 1));
 	return emitJumpPlaceholder(s);
 }
 
@@ -327,7 +326,7 @@ export function pushLoop(s: RaiserCompState, startIp: int32, label: string): voi
 export function popLoop(s: RaiserCompState): RaiserLoopInfo {
 	const len = s.loopStack.items.length;
 	const info = s.loopStack.items[len - 1];
-	s.loopStack.items.length = len - 1;
+	s.loopStack.items.shrink(len - 1);
 	return info;
 }
 
@@ -358,45 +357,22 @@ export function clearRaiserFuncDemand(): void {
 	_raiserFuncDemandFn = (_idx: int32): void => {};
 }
 
-export function registerFunc(s: RaiserCompState, name: string, index: int32): void {
-	const entry: RaiserFuncEntry = { name, index };
-	s.funcMap.items.push(entry);
+function demandIndex(index: int32 | null): int32 {
+	if (index == null) return -1;
+	_raiserFuncDemandFn(index);
+	return index;
 }
 
-export function resolveFunc(s: RaiserCompState, name: string): int32 {
-	for (let i = s.funcMap.items.length - 1; i >= 0; i = i - 1) {
-		if (s.funcMap.items[i].name == name) {
-			_raiserFuncDemandFn(s.funcMap.items[i].index);
-			return s.funcMap.items[i].index;
-		}
-	}
-	return -1;
+export function resolveRoutine(s: RaiserCompState, sym: Symbol | null): int32 {
+	return sym != null && isRoutineSym(sym) ? demandIndex(s.funcMap.symbolIndices.get(placedInstanceOf(sym))) : -1;
 }
 
-export function resolveRoutine(s: RaiserCompState, sym: Symbol | null, name: string): int32 {
-	if (sym != null && isRoutineSym(sym)) {
-		if (s.funcMap.symbolIndices != null) {
-			const index = s.funcMap.symbolIndices.get(sym);
-			return index != null ? index : -1;
-		}
-		if (s.scopedFunctions && sym.modulePath != "") {
-			const exact = resolveFunc(s, routineKey(sym));
-			if (exact >= 0) return exact;
-			return resolveFunc(s, sym.modulePath + ":" + sym.name);
-		}
-		const exact = resolveFunc(s, routineKey(sym));
-		if (exact >= 0) return exact;
-		const byName = resolveFunc(s, sym.name);
-		return byName >= 0 && compiledForAnotherRoutine(s, byName) ? -1 : byName;
-	}
-	return resolveFunc(s, name);
+export function resolveConstructor(s: RaiserCompState, classSym: Symbol): int32 {
+	return demandIndex(s.funcMap.ctorIndices.get(placedInstanceOf(classSym)));
 }
 
-function compiledForAnotherRoutine(s: RaiserCompState, index: int32): boolean {
-	for (const item of s.funcMap.items) {
-		if (item.index == index && item.name.indexOf("#") >= 0) return true;
-	}
-	return false;
+export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
+	return demandIndex(s.funcMap.initIndices.get(placedInstanceOf(classSym)));
 }
 
 // --- Enum helpers ---
@@ -433,20 +409,6 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 }
 
 // --- Builtin helpers ---
-
-export function registerBuiltin(s: RaiserCompState, name: string, funcIdx: int32): void {
-	const entry: RaiserBuiltinEntry = { name, funcIdx };
-	s.builtins.items.push(entry);
-}
-
-export function resolveBuiltin(s: RaiserCompState, name: string): int32 {
-	for (let i = 0; i < s.builtins.items.length; i = i + 1) {
-		if (s.builtins.items[i].name == name) {
-			return s.builtins.items[i].funcIdx;
-		}
-	}
-	return -1;
-}
 
 // --- Closure pair helpers ---
 // Emit a closure pair object { fn: funcIdx, env: envReg | -1 } into destReg.

@@ -479,7 +479,36 @@ enum AggregateVectorFlag {
 	F64,
 }
 
+function returnedAggregateSetVector(): Vec<BitSet<AggregateVectorFlag>> {
+	const value = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	let values: Vec<BitSet<AggregateVectorFlag>> = [];
+	values.push(value);
+	return values;
+}
 
+test "valueStorage: returned aggregate-bitset vectors preserve independent value copies" {
+	const original = returnedAggregateSetVector();
+	let copied = original;
+	copied[0] = copied[0].excl(AggregateVectorFlag.F0);
+	assert original[0].has(AggregateVectorFlag.F0);
+	assert original[0].has(AggregateVectorFlag.F64);
+	assert !copied[0].has(AggregateVectorFlag.F0);
+	assert copied[0].has(AggregateVectorFlag.F64);
+	copied = new Array(0);
+	assert original[0].has(AggregateVectorFlag.F0);
+}
+
+test "valueStorage: nested aggregate-bitset vector copies retain independent inner buffers" {
+	const inner = returnedAggregateSetVector();
+	const original: Vec<Vec<BitSet<AggregateVectorFlag>>> = [inner];
+	let copied = original;
+	copied[0][0] = copied[0][0].excl(AggregateVectorFlag.F64);
+	assert original[0][0].has(AggregateVectorFlag.F64);
+	assert !copied[0][0].has(AggregateVectorFlag.F64);
+	assert copied[0][0].has(AggregateVectorFlag.F0);
+	copied = new Array(0);
+	assert original[0][0].has(AggregateVectorFlag.F64);
+}
 
 struct AggregateBitSetKey { bits: BitSet<AggregateVectorFlag>; id: int32; }
 
@@ -554,20 +583,16 @@ struct WordSetZeroHolder { bits: BitSet<WordVectorFlag>; }
 struct AggregateSetZeroHolder { bits: BitSet<AggregateVectorFlag>; }
 
 test "valueStorage: word-bitset locations start at the zero value" {
-	let local: BitSet<WordVectorFlag>;
 	const holder: WordSetZeroHolder = {};
 	const values: Vec<BitSet<WordVectorFlag>> = new Array(3);
-	assert local.isEmpty();
 	assert holder.bits.isEmpty();
 	assert values[0].isEmpty();
 	assert values[2].isEmpty();
 }
 
 test "valueStorage: aggregate-bitset locations start at independent zero values" {
-	let local: BitSet<AggregateVectorFlag>;
 	const holder: AggregateSetZeroHolder = {};
 	let values: Vec<BitSet<AggregateVectorFlag>> = new Array(3);
-	assert local.isEmpty();
 	assert holder.bits.isEmpty();
 	assert values[0].isEmpty();
 	assert values[2].isEmpty();

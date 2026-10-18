@@ -38,7 +38,7 @@ test "a type name where a type is taken keeps compiling on C and JS" {
 function namespaceErrors(line: string): string[] {
 	resetBuildState();
 	const entries: MapEntry[] = [
-		{ entryPath: "/src/lib.ms", entrySource: "export enum Color { Red, Green }\nexport struct Pt { x: int32; }" },
+		{ entryPath: "/src/lib.ms", entrySource: "export enum Color { Red, Green }\nexport struct Pt { x: int32; }\nexport function hi(): string { return \"hi\"; }\nexport let answer: int32 = 42;" },
 		{ entryPath: "/src/main.ms", entrySource: "import * as L from \"./lib\";\n" + line },
 	];
 	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
@@ -56,6 +56,30 @@ test "a type reached through a namespace import is a type, not a value" {
 	assert namespaceErrors("const p = L.Pt;").length == 1;
 	const member = namespaceErrors("const r = L.Color.Red;");
 	assert member.length == 0, member.join(" | ");
+}
+
+test "a namespace import read as a value has the module's type and keeps its exports read-only" {
+	for (const line of [
+		"const d = L; const s: string = d.hi();",
+		"function f(n: typeof L): string { return n.hi(); }\nconst s = f(L);",
+		"class H { m: typeof L; constructor(m: typeof L) { this.m = m; } }\nconst n: int32 = new H(L).m.answer;",
+	]) {
+		const errors = namespaceErrors(line);
+		assert errors.length == 0, line + " => " + errors.join(" | ");
+	}
+	for (const item of [
+		{ line: "const d = L; d.answer = 5;", message: "read-only property of a module namespace" },
+		{ line: "L.answer = 5;", message: "read-only property of a module namespace" },
+		{ line: "L.answer++;", message: "read-only property of a module namespace" },
+		{ line: "const d = L; const s = `${d}`;", message: "has no text form here" },
+		{ line: "console.log(L);", message: "has no text form here" },
+		{ line: "const u: unknown = L;", message: "typeof import(\"/src/lib.ms\")" },
+		{ line: "const n = 1; let x: typeof n = 2;", message: "names a namespace import only" },
+	]) {
+		const errors = namespaceErrors(item.line);
+		assert errors.length > 0, item.line;
+		for (const e of errors) assert e.indexOf(item.message) >= 0, item.line + " => " + errors.join(" | ");
+	}
 }
 
 const unions = "struct Holder { v: int64 | uint64; }\nconst u: int64 | uint64 = 3 as uint64;\nconst w: int32 | uint32 = 7 as uint32;\nconst f: int32 | float64 = 2.5;\nconst h: Holder = { v: 3 as uint64 };\n";

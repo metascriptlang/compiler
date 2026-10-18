@@ -2,8 +2,8 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen } from "../context";
+import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
+import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../context";
 import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -51,8 +51,32 @@ export function parseExpressionFromState(state: ParserState): ExprResult {
 // Wrap in lambda to ensure proper closure calling convention.
 registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(tokens); });
 
-// syntax: expr = primary (postfix)* (binop primary (postfix)*)* ('?' expr ':' expr)?
-// syntax: postfix = '(' args ')' | '.' ID | '?.' ID | '[' expr ']' | '++' | '--' | 'as' type
+const NO_BINARY_PREC: int32 = 100;
+
+function parseAsType(state: ParserState, left: Node, token: Token): Node {
+	advance(state);
+	const asStart = state.position;
+	skipTypeAnnotation(state);
+	const asType = collectTokenText(state, asStart, state.position);
+	const asSavedPos = state.position;
+	state.position = asStart;
+	const asTypeExpr = parseTypeExpr(state);
+	state.position = asSavedPos;
+	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType }, token);
+	asNode.typeExpr = asTypeExpr;
+	return asNode;
+}
+
+// After `a op b as T`, an operator that binds tighter than `op` would have taken
+// `b` had the assertion been erased, so the expression stops there instead.
+function bindsBefore(next: Token, lastPrec: int32): boolean {
+	if (!isBinaryOperator(next) && next.kind != TokenKind.As) return false;
+	const p = getPrecedence(next.kind);
+	return p > lastPrec || (p == lastPrec && next.kind == TokenKind.StarStar);
+}
+
+// syntax: expr = primary (postfix)* ((binop primary (postfix)*) | 'as' type)* ('?' expr ':' expr)?
+// syntax: postfix = '(' args ')' | '.' ID | '?.' ID | '[' expr ']' | '++' | '--'
 function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 	const arrowReturnTypeBan = state.noArrowReturnType;
 	let left = try parsePrimary(state);
@@ -132,9 +156,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 				const endIdx = try parseExprWithPrec(state, 0);
 				idx = createNode(NodeKind.BinaryExpr, { operator: rangeTok.value, left: idx, right: endIdx }, rangeTok);
 			}
-			if (current(state).kind == TokenKind.RBracket) {
-				advance(state);
-			}
+			expectCloser(state, token, TokenKind.RBracket);
 			const accessData: NodeData = {
 				array: left,
 				index: idx
@@ -152,26 +174,6 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			continue;
 		}
 
-		// Type assertion: expr as Type
-		if (token.kind == TokenKind.As) {
-			if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
-			chainOpen = false;
-			advance(state);
-			const asStart = state.position;
-			skipTypeAnnotation(state);
-			const asEnd = state.position;
-			const asType = collectTokenText(state, asStart, asEnd);
-			// Build positioned TypeExpr by re-parsing the same range
-			const asSavedPos = state.position;
-			state.position = asStart;
-			const asTypeExpr = parseTypeExpr(state);
-			state.position = asSavedPos;
-			const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType }, token);
-			asNode.typeExpr = asTypeExpr;
-			left = asNode;
-			continue;
-		}
-
 		// Non-null assertion: expr! — sentinel asType "!" strips the nullable
 		if (token.kind == TokenKind.Bang) {
 			advance(state);
@@ -183,12 +185,18 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 	}
 	if (chainOpen) left.flags = left.flags.incl(NodeFlag.OptionalChainEnd);
 
-	// Binary operators with Pratt precedence climbing
-	while (!isAtEnd(state) && isBinaryOperator(current(state))) {
+	// Binary operators with Pratt precedence climbing; `as` binds at relational precedence
+	let lastPrec = NO_BINARY_PREC;
+	while (!isAtEnd(state) && (isBinaryOperator(current(state)) || current(state).kind == TokenKind.As)) {
 		const op = current(state);
 		const prec = getPrecedence(op.kind);
 		if (prec < minPrec) {
 			break;
+		}
+		if (op.kind == TokenKind.As) {
+			left = parseAsType(state, left, op);
+			if (bindsBefore(current(state), lastPrec)) break;
+			continue;
 		}
 
 		advance(state);
@@ -215,6 +223,7 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 			right
 		};
 		left = createNode(NodeKind.BinaryExpr, data, op);
+		lastPrec = prec;
 	}
 
 	// Ternary conditional: expr ? consequent : alternate
@@ -276,16 +285,20 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 //                 | ('-' | '!' | '~') expr | 'async' (funcExpr | arrow) | '...' expr
 
 // The postfix pass consumes `as` unconditionally, but TS binds it outside a
-// prefix op: `typeof x as T` = `(typeof x) as T`, `++x as T` = `(++x) as T`.
-// Rewraps the innermost assertion's expression with the prefix op.
-function rewrapUnderAssertion(operand: Node, wrap: (inner: Node) => Node): Node {
+// prefix op: `-x as T` = `(-x) as T`, `typeof x as T` = `(typeof x) as T`.
+// Wraps the operand of the innermost unparenthesized `as`; a `!` below it stays
+// in the operand, one above it stays outside.
+function prefixed(operand: Node, wrap: (inner: Node) => Node): Node {
+	let target: Node | null = null;
 	let cur = operand;
-	while (true) {
+	while (cur.kind == NodeKind.TypeAssertion && !cur.flags.has(NodeFlag.Parenthesized)) {
 		const ad = cur.data as TypeAssertionData;
-		if (ad.asExpr != null && ad.asExpr.kind == NodeKind.TypeAssertion) { cur = ad.asExpr; continue; }
-		ad.asExpr = wrap(ad.asExpr);
-		break;
+		if (ad.asType != "!") target = cur;
+		cur = ad.asExpr;
 	}
+	if (target == null) return wrap(operand);
+	const td = target.data as TypeAssertionData;
+	td.asExpr = wrap(td.asExpr);
 	return operand;
 }
 
@@ -349,6 +362,12 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
 	}
 
+	if (token.kind == TokenKind.Import && peek(state, 1).kind == TokenKind.LParen) {
+		advance(state);
+		state.sawImportCall = true;
+		return Result.ok(createNode(NodeKind.Identifier, { name: "import" }, token));
+	}
+
 	if (token.kind == TokenKind.Ident ||
 		token.kind == TokenKind.This ||
 		token.kind == TokenKind.Super) {
@@ -368,7 +387,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		}
 		advance(state);
 		const expr = try parseExprWithPrec(state, 0);
-		if (current(state).kind == TokenKind.RParen) { advance(state); }
+		expectCloser(state, token, TokenKind.RParen);
 		expr.flags = expr.flags.incl(NodeFlag.Parenthesized);
 		return Result.ok(expr);
 	}
@@ -406,15 +425,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.Typeof || token.kind == TokenKind.Void || token.kind == TokenKind.Delete) {
 		advance(state);
 		const operand = try parseExprWithPrec(state, 99);
-		// The postfix pass consumes `as` unconditionally, but TS binds it outside
-		// the prefix op: `typeof x as T` = `(typeof x) as T`. Rewrap the innermost
-		// assertion's expression with the prefix op.
-		if (operand.kind == NodeKind.TypeAssertion) {
-			return Result.ok(rewrapUnderAssertion(operand, (inner: Node): Node => {
-				return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
-			}));
-		}
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
+		return Result.ok(prefixed(operand, (inner: Node): Node => {
+			return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
+		}));
 	}
 
 	// new expression: new Callee(args)
@@ -444,8 +457,8 @@ function parsePrimary(state: ParserState): ExprResult {
 		// Parse arguments if present
 		const args: Node[] = [];
 		if (!isAtEnd(state) && current(state).kind == TokenKind.LParen) {
-			advance(state);
-			const argList = try parseExprList(state, TokenKind.RParen, parseExprWithPrec);
+			const lparen = advance(state);
+			const argList = try parseExprList(state, lparen, TokenKind.RParen, parseExprWithPrec);
 			const newNode = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: argList }, token);
 			newNode.comments = takeListEndComments();
 			if (newTypeArg != "") newNode.typeArg = newTypeArg;
@@ -461,7 +474,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.Await) {
 		advance(state);
 		const awaitOperand = try parseExprWithPrec(state, 70);
-		return Result.ok(createNode(NodeKind.AwaitExpr, { awaitArg: awaitOperand }, token));
+		return Result.ok(prefixed(awaitOperand, (inner: Node): Node => {
+			return createNode(NodeKind.AwaitExpr, { awaitArg: inner }, token);
+		}));
 	}
 
 	// Yield expression: yield expr, yield* expr
@@ -512,10 +527,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		const wrapUpdate = (inner: Node): Node => {
 			return createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: inner, isPrefix: true }, token);
 		};
-		if (updateTarget.kind == NodeKind.TypeAssertion) {
-			return Result.ok(rewrapUnderAssertion(updateTarget, wrapUpdate));
-		}
-		return Result.ok(wrapUpdate(updateTarget));
+		return Result.ok(prefixed(updateTarget, wrapUpdate));
 	}
 
 	// Async: async function expr or async arrow
@@ -620,13 +632,15 @@ function parsePrimary(state: ParserState): ExprResult {
 		// Parse operand with high precedence to capture postfix (., (), []) but not binary ops.
 		// This ensures !result.ok → !(result.ok), not (!result).ok
 		const operand = try parseExprWithPrec(state, 70);
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
+		return Result.ok(prefixed(operand, (inner: Node): Node => {
+			return createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: inner }, token);
+		}));
 	}
 
 	// Array literal: [expr, expr, ...]
 	if (token.kind == TokenKind.LBracket) {
 		advance(state);
-		const elems = try parseExprList(state, TokenKind.RBracket, parseExprWithPrec);
+		const elems = try parseExprList(state, token, TokenKind.RBracket, parseExprWithPrec);
 		const arrayNode = createNode(NodeKind.ArrayLiteral, { elements: elems }, token);
 		arrayNode.comments = takeListEndComments();
 		return Result.ok(arrayNode);
@@ -778,6 +792,83 @@ test "typeof x as T binds as outside" {
 	const d = n.data as TypeAssertionData;
 	assert d.asExpr.kind == NodeKind.UnaryExpr;
 }
+
+function shapeOf(n: Node): string {
+	const mark = n.flags.has(NodeFlag.Parenthesized) ? "p:" : "";
+	if (n.kind == NodeKind.TypeAssertion) {
+		const d = n.data as TypeAssertionData;
+		return mark + (d.asType == "!" ? "nn(" : "as[" + d.asType + "](") + shapeOf(d.asExpr) + ")";
+	}
+	if (n.kind == NodeKind.UnaryExpr) {
+		const d = n.data as UnaryExprData;
+		return mark + d.unaryOp + "(" + shapeOf(d.operand) + ")";
+	}
+	if (n.kind == NodeKind.UpdateExpr) {
+		const d = n.data as UpdateExprData;
+		return mark + d.updateOp + "(" + shapeOf(d.updateArg) + ")";
+	}
+	if (n.kind == NodeKind.AwaitExpr) return mark + "await(" + shapeOf((n.data as AwaitExprData).awaitArg) + ")";
+	if (n.kind == NodeKind.MemberExpr) {
+		const d = n.data as MemberExprData;
+		return mark + shapeOf(d.object) + "." + d.property;
+	}
+	if (n.kind == NodeKind.Identifier) return mark + (n.data as IdentifierData).name;
+	if (n.kind == NodeKind.NumberLiteral) return mark + `${(n.data as NumberLiteralData).value}`;
+	return mark + "?";
+}
+
+function shape(input: string): string { return shapeOf(exprNode(input)); }
+
+test "every prefix operator binds inside as, as in TS" {
+	assert shape("-128 as int8") == "as[int8](-(128))";
+	assert shape("-x as uint8") == "as[uint8](-(x))";
+	assert shape("!b as boolean") == "as[boolean](!(b))";
+	assert shape("~x as uint32") == "as[uint32](~(x))";
+	assert shape("await p as T") == "as[T](await(p))";
+	assert shape("void x as T") == "as[T](void(x))";
+	assert shape("--x as int32") == "as[int32](--(x))";
+}
+
+test "a prefix operator reaches the innermost as of a chain" {
+	assert shape("-x as T as U") == "as[U](as[T](-(x)))";
+	assert shape("-a.b as T") == "as[T](-(a.b))";
+	assert shape("-(x) as T") == "as[T](-(p:x))";
+}
+
+test "parentheses keep an as inside the prefix operator" {
+	assert shape("-(x as T)") == "-(p:as[T](x))";
+	assert shape("typeof (x as T)") == "typeof(p:as[T](x))";
+	assert shape("-(x as T) as U") == "as[U](-(p:as[T](x)))";
+}
+
+test "a non-null assertion binds tighter than a prefix operator" {
+	assert shape("-a!") == "-(nn(a))";
+	assert shape("-a! as T") == "as[T](-(nn(a)))";
+	assert shape("typeof a! as T") == "as[T](typeof(nn(a)))";
+	assert shape("(-a as T)!") == "nn(p:as[T](-(a)))";
+}
+test "as binds at relational precedence, left to right" {
+	for (const src of ["a ** b as T", "a * b as T", "a + b as T", "a << b as T", "a < b as T", "a in b as T"]) {
+		const n = exprNode(src);
+		assert n.kind == NodeKind.TypeAssertion, src;
+		assert (n.data as TypeAssertionData).asExpr.kind == NodeKind.BinaryExpr, src;
+	}
+	for (const src of ["a == b as T", "a & b as T", "a && b as T", "a ?? b as T", "a = b as T"]) {
+		const n = exprNode(src);
+		assert n.kind == NodeKind.BinaryExpr, src;
+		assert (n.data as BinaryExprData).right.kind == NodeKind.TypeAssertion, src;
+	}
+	assert binLeftKind("a as T * b") == NodeKind.TypeAssertion;
+	assert binLeftKind("a as Box<int32> < b") == NodeKind.TypeAssertion;
+}
+
+test "after a + b as T, an operator that would have taken b ends the expression" {
+	for (const src of ["a + b as T * c", "a < b as T + c", "a + b as T ** c"]) {
+		assert exprNode(src).kind == NodeKind.TypeAssertion, src;
+	}
+	assert exprKind("a * b as T + c") == NodeKind.BinaryExpr;
+}
+
 // Precedence tree shape
 test "* tighter than +" { assert binLeftKind("a + b * c") == NodeKind.Identifier; }
 
@@ -798,6 +889,8 @@ test "optional chain" { assert parseOk("a?.b?.c"); }
 test "parens" { assert parseOk("(a + b) * c"); }
 // Right-associative
 test "** right assoc" { assert parseOk("a ** b ** c"); }
+
+test "**= binds loosest" { assert exprOp("a **= b ** 2") == "**="; }
 
 test "assign right assoc" { assert parseOk("a = b = c"); }
 

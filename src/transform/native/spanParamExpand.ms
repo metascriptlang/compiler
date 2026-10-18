@@ -12,8 +12,6 @@
 // Two passes:
 //   Pass 1 (Declarations): For each FunctionDecl with Span<T> params:
 //     - Replace Span<T> param with two params (T* name_data, int64_t name_len)
-//     - Inject shadowing local: const name = { data: name_data, len: name_len }
-//     - Body stays untouched — references name as a Span struct via the local
 //
 //   Pass 2 (Call Sites): For each call of an extern whose declared type has Span<T> params, in any module:
 //     - If arg is ObjectLiteral (from spanLower): extract data/len fields into two args
@@ -25,16 +23,14 @@
 // V1 limitation: top-level FunctionDecl only. Span in closures/function-pointer types
 // emits a diagnostic.
 
-import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
-import { createPtr, createSpan, getSysType, copyTypeShallow } from "../../checker/types";
+import { Node, NodeKind, FunctionDeclData, Symbol, CallExprData, ObjectLiteralData, ArrayLiteralData, Type, TypeKind, DeclKind, BlockStmtData } from "../../ast/node";
+import { createPtr, getSysType, createSpan, copyTypeShallow } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { secondRead } from "../lowering/spanLower";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
-import {
-	makeVarDecl, makeTypedIdent, makeObjectLiteral, makeMember,
-	makeConditional, makeBinary, makeNumber, makeNull,
-} from "../util";
+import { makeMember, makeConditional, makeBinary, makeNumber, makeNull } from "../util";
+import { overloadWinner } from "../../checker/symbol";
 
 // Track which functions had Span params expanded (by function name → param indices)
 interface ExpandedParam {
@@ -92,6 +88,27 @@ function spanParamsOf(fnType: Type, names: string[]): ExpandedParam[] {
 	return spanParams;
 }
 
+function flattenSpanFormals(fnType: Type, spanParams: ExpandedParam[]): Type {
+	const children: Type[] = [];
+	let i = 0;
+	while (i < fnType.typeChildren.length) {
+		let elemType: Type | null = null;
+		for (const ep of spanParams) {
+			if (ep.originalIndex == i) elemType = ep.elemType;
+		}
+		if (elemType != null) {
+			children.push(createPtr(elemType));
+			children.push(getSysType(TypeKind.Int64));
+		} else {
+			children.push(fnType.typeChildren[i]);
+		}
+		i = i + 1;
+	}
+	const flat = copyTypeShallow(fnType);
+	flat.typeChildren = children;
+	return flat;
+}
+
 function expandFunctionDecl(node: Node): void {
 	const d = node.data as FunctionDeclData;
 	if (d.fnFlags.indexOf("extern", 0) < 0) return;
@@ -104,10 +121,8 @@ function expandFunctionDecl(node: Node): void {
 	if (spanParams.length == 0) return;
 	let i = 0;
 
-	// Build new param lists and type children
 	const newParams: string[] = [];
 	const newParamTypes: string[] = [];
-	const newTypeChildren: Type[] = [];
 
 	i = 0;
 	while (i < d.params.length) {
@@ -133,24 +148,18 @@ function expandFunctionDecl(node: Node): void {
 			}
 
 			const name = ep.paramName;
-			const elemType = ep.elemType;
 
 			// Replace with two params: name_data (Ptr<T>) and name_len (int64)
 			newParams.push(name + "_data");
 			newParams.push(name + "_len");
 			newParamTypes.push(""); // resolved via typeChildren
 			newParamTypes.push("int64");
-			newTypeChildren.push(createPtr(elemType));
-			newTypeChildren.push(getSysType(TypeKind.Int64));
 		} else {
 			newParams.push(d.params[i]);
 			if (i < d.fnParamTypes.length) {
 				newParamTypes.push(d.fnParamTypes[i]);
 			} else {
 				newParamTypes.push("");
-			}
-			if (i < fnType.typeChildren.length) {
-				newTypeChildren.push(fnType.typeChildren[i]);
 			}
 		}
 
@@ -160,42 +169,9 @@ function expandFunctionDecl(node: Node): void {
 	// Update params and type
 	d.params = newParams;
 	d.fnParamTypes = newParamTypes;
-	const flat = copyTypeShallow(fnType);
-	flat.typeChildren = newTypeChildren;
+	const flat = flattenSpanFormals(fnType, spanParams);
 	node.nodeType = flat;
 	if (node.resolvedSym != null && node.resolvedSym.symbolType == fnType) node.resolvedSym.symbolType = flat;
-
-	// Inject shadowing locals at top of body
-	if (d.fnBody != null && d.fnBody.kind == NodeKind.BlockStmt) {
-		const bd = d.fnBody.data as BlockStmtData;
-		const loc = node.location;
-
-		// Insert in reverse order so they appear in original param order
-		let si = spanParams.length - 1;
-		while (si >= 0) {
-			const ep = spanParams[si];
-			const spanType = createSpan(ep.elemType);
-
-			// const name = { data: name_data, len: name_len }
-			const dataRef = makeTypedIdent(ep.paramName + "_data", createPtr(ep.elemType), loc);
-			const lenRef = makeTypedIdent(ep.paramName + "_len", getSysType(TypeKind.Int64), loc);
-			const initObj = makeObjectLiteral(["data", "len"], [dataRef, lenRef], loc);
-			initObj.nodeType = spanType;
-			const shadowDecl = makeVarDecl(ep.paramName, initObj, DeclKind.Const, loc);
-			shadowDecl.nodeType = spanType;
-
-			// Prepend to body statements
-			const newStmts: Node[] = [shadowDecl];
-			let bi = 0;
-			while (bi < bd.statements.length) {
-				newStmts.push(bd.statements[bi]);
-				bi = bi + 1;
-			}
-			bd.statements = newStmts;
-
-			si = si - 1;
-		}
-	}
 
 }
 
@@ -293,6 +269,7 @@ function expandCallSite(node: Node): void {
 	}
 
 	d.arguments = newArgs;
+	d.callee.nodeType = flattenSpanFormals(declared, spanParams);
 }
 
 // ===== V1 Diagnostic: Span in Closures =====

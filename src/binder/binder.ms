@@ -31,7 +31,7 @@ import {
 	MacroInvocationData, SpliceManyData,
 	HiddenDerefData, HiddenStdConvData,
 	IdentifierData, BooleanLiteralData,
-	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../ast/node";
 
 // ===== FlowNode Constructors =====
@@ -80,7 +80,7 @@ function createFlowCondition(flag: FlowFlag, antecedent: FlowNode, expr: Node): 
 	return f;
 }
 
-function createFlowMutation(flag: FlowFlag, antecedent: FlowNode, node: Node): FlowNode {
+function createFlowMutation(state: BinderState, flag: FlowFlag, antecedent: FlowNode, node: Node): FlowNode {
 	// flag = Assignment or ArrayMutation
 	if (antecedent == null) return antecedent;
 	// Short-circuit on unreachable — no point recording a mutation in dead code.
@@ -89,7 +89,20 @@ function createFlowMutation(flag: FlowFlag, antecedent: FlowNode, node: Node): F
 	f.antecedent = antecedent;
 	f.node = node;
 	setFlowNodeReferenced(antecedent);
+	addAntecedent(state.currentExceptionTarget, f);
 	return f;
+}
+
+function createReduceLabel(target: FlowNode, antecedents: FlowList, antecedent: FlowNode): FlowNode {
+	const f = createFlowNode(FlowFlag.ReduceLabel);
+	f.antecedent = antecedent;
+	f.reduceLabelData = { target: target, antecedents: antecedents };
+	return f;
+}
+
+function combineFlowLists(head: FlowList | null, tail: FlowList | null): FlowList | null {
+	if (head == null) return tail;
+	return { flow: head.flow, next: combineFlowLists(head.next, tail) };
 }
 
 function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseStart: int32, clauseEnd: int32): FlowNode {
@@ -307,6 +320,10 @@ function bindIfStmt(state: BinderState, node: Node): void {
 
 function bindWhileStmt(state: BinderState, node: Node): void {
 	const d = node.data as WhileStmtData;
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.whileCondition, d.whileBody]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const preBody = createBranchLabel();
 	const postLoop = createBranchLabel();
@@ -327,6 +344,10 @@ function bindWhileStmt(state: BinderState, node: Node): void {
 
 function bindDoWhileStmt(state: BinderState, node: Node): void {
 	const d = node.data as DoWhileStmtData;
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.doBody, d.doCondition]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const preCond = createBranchLabel();
 	const postLoop = createBranchLabel();
@@ -348,6 +369,10 @@ function bindDoWhileStmt(state: BinderState, node: Node): void {
 function bindForStmt(state: BinderState, node: Node): void {
 	const d = node.data as ForStmtData;
 	if (d.forInit != null) bindStatement(state, d.forInit);
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.forCondition, d.forBody, d.forUpdate]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const preBody = createBranchLabel();
 	const preIncr = createBranchLabel();
@@ -377,12 +402,16 @@ function bindForStmt(state: BinderState, node: Node): void {
 function bindForOfStmt(state: BinderState, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	bindExpression(state, d.forOfIterable);
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.forOfBody]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const postLoop = createBranchLabel();
 	addAntecedent(preLoop, state.currentFlow);
 	state.currentFlow = preLoop;
 	// Loop var is implicitly assigned each iteration
-	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 	const savedBreak = state.currentBreakTarget;
 	const savedContinue = state.currentContinueTarget;
 	state.currentBreakTarget = postLoop;
@@ -398,11 +427,15 @@ function bindForOfStmt(state: BinderState, node: Node): void {
 function bindForInStmt(state: BinderState, node: Node): void {
 	const d = node.data as ForInStmtData;
 	bindExpression(state, d.forInObject);
+	if (!isReachable(state.currentFlow)) {
+		bindDeadLoop(state, [d.forInBody]);
+		return;
+	}
 	const preLoop = createLoopLabel();
 	const postLoop = createBranchLabel();
 	addAntecedent(preLoop, state.currentFlow);
 	state.currentFlow = preLoop;
-	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 	const savedBreak = state.currentBreakTarget;
 	const savedContinue = state.currentContinueTarget;
 	state.currentBreakTarget = postLoop;
@@ -413,6 +446,16 @@ function bindForInStmt(state: BinderState, node: Node): void {
 	addAntecedent(preLoop, state.currentFlow);
 	addAntecedent(postLoop, preLoop);
 	state.currentFlow = finishFlowLabel(postLoop);
+}
+
+function bindDeadLoop(state: BinderState, parts: Node[]): void {
+	const savedBreak = state.currentBreakTarget;
+	const savedContinue = state.currentContinueTarget;
+	state.currentBreakTarget = null;
+	state.currentContinueTarget = null;
+	for (const part of parts) bindStatement(state, part);
+	state.currentBreakTarget = savedBreak;
+	state.currentContinueTarget = savedContinue;
 }
 
 function bindSwitchStmt(state: BinderState, node: Node): void {
@@ -527,9 +570,6 @@ function bindReturnStmt(state: BinderState, node: Node): void {
 function bindThrowStmt(state: BinderState, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	if (d.throwArg != null) bindExpression(state, d.throwArg);
-	if (state.currentExceptionTarget != null) {
-		addAntecedent(state.currentExceptionTarget, state.currentFlow);
-	}
 	state.currentFlow = state.unreachableFlow;
 }
 
@@ -549,36 +589,60 @@ function bindContinueStmt(state: BinderState, node: Node): void {
 
 function bindTryStmt(state: BinderState, node: Node): void {
 	const d = node.data as TryCatchStmtData;
-	// Phase 1: simplified. Try body flows to both catch and post-try.
-	// Phase 6 will implement ReduceLabel re-routing for finally.
-	const postLabel = createBranchLabel();
-	const catchLabel = createBranchLabel();
+	const savedReturn = state.currentReturnTarget;
 	const savedException = state.currentExceptionTarget;
-	state.currentExceptionTarget = catchLabel;
+	const normalExitLabel = createBranchLabel();
+	const returnLabel = createBranchLabel();
+	let exceptionLabel = createBranchLabel();
+	const hasFinally = d.finallyBody != null && (!d.hasCatchClause || d.finallyBody.kind != NodeKind.BlockStmt || (d.finallyBody.data as BlockStmtData).statements.length > 0);
+	if (hasFinally) state.currentReturnTarget = returnLabel;
+	addAntecedent(exceptionLabel, state.currentFlow);
+	state.currentExceptionTarget = exceptionLabel;
 	if (d.tryBody != null) bindStatement(state, d.tryBody);
-	state.currentExceptionTarget = savedException;
-	addAntecedent(postLabel, state.currentFlow);
-	if (d.catchBody != null) {
-		state.currentFlow = finishFlowLabel(catchLabel);
+	addAntecedent(normalExitLabel, state.currentFlow);
+	if (d.hasCatchClause) {
+		state.currentFlow = finishFlowLabel(exceptionLabel);
+		exceptionLabel = createBranchLabel();
+		addAntecedent(exceptionLabel, state.currentFlow);
+		state.currentExceptionTarget = exceptionLabel;
 		bindStatement(state, d.catchBody);
-		addAntecedent(postLabel, state.currentFlow);
-	} else {
-		addAntecedent(postLabel, finishFlowLabel(catchLabel));
+		addAntecedent(normalExitLabel, state.currentFlow);
 	}
-	state.currentFlow = finishFlowLabel(postLabel);
-	if (d.finallyBody != null) bindStatement(state, d.finallyBody);
+	state.currentReturnTarget = savedReturn;
+	state.currentExceptionTarget = savedException;
+	if (!hasFinally) {
+		state.currentFlow = finishFlowLabel(normalExitLabel);
+		return;
+	}
+	const finallyLabel = createBranchLabel();
+	finallyLabel.antecedents = combineFlowLists(normalExitLabel.antecedents,
+		combineFlowLists(exceptionLabel.antecedents, returnLabel.antecedents));
+	state.currentFlow = finallyLabel.antecedents == null ? state.unreachableFlow : finallyLabel;
+	bindStatement(state, d.finallyBody);
+	if (!isReachable(state.currentFlow)) {
+		state.currentFlow = state.unreachableFlow;
+		return;
+	}
+	if (state.currentReturnTarget != null && returnLabel.antecedents != null) {
+		addAntecedent(state.currentReturnTarget, createReduceLabel(finallyLabel, returnLabel.antecedents, state.currentFlow));
+	}
+	if (state.currentExceptionTarget != null && exceptionLabel.antecedents != null) {
+		addAntecedent(state.currentExceptionTarget, createReduceLabel(finallyLabel, exceptionLabel.antecedents, state.currentFlow));
+	}
+	state.currentFlow = normalExitLabel.antecedents == null ? state.unreachableFlow
+		: createReduceLabel(finallyLabel, normalExitLabel.antecedents, state.currentFlow);
 }
 
 function bindVariableDecl(state: BinderState, node: Node): void {
 	const d = node.data as VariableDeclData;
 	if (d.initializer != null) bindExpression(state, d.initializer);
-	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 }
 
 function bindDestructuringDecl(state: BinderState, node: Node): void {
 	const d = node.data as DestructuringDeclData;
 	if (d.destrInit != null) bindExpression(state, d.destrInit);
-	state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
+	state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 }
 
 function bindExprStmt(state: BinderState, node: Node): void {
@@ -694,7 +758,7 @@ function bindExpression(state: BinderState, node: Node): void {
 			const d = node.data as UpdateExprData;
 			if (d.updateArg != null) bindExpression(state, d.updateArg);
 			// x++ and --x are assignments to x
-			state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
+			state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 		},
 		NodeKind.CallExpr => bindCallExpr(state, node),
 		NodeKind.NewExpr => bindNewExpr(state, node),
@@ -782,6 +846,11 @@ function bindExpression(state: BinderState, node: Node): void {
 			const d = node.data as JSXSpreadAttributeData;
 			if (d.jsxSpreadArg != null) bindExpression(state, d.jsxSpreadArg);
 		},
+		NodeKind.ComputedProperty => {
+			const d = node.data as ComputedPropertyData;
+			bindExpression(state, d.computedKey);
+			bindExpression(state, d.computedValue);
+		},
 		NodeKind.QuoteExpr => {
 			node.flowNode = state.currentFlow;
 		},
@@ -816,7 +885,7 @@ function bindBinaryExpr(state: BinderState, node: Node): void {
 		|| d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") {
 		if (d.left != null) bindExpression(state, d.left);
 		if (d.right != null) bindExpression(state, d.right);
-		state.currentFlow = createFlowMutation(FlowFlag.Assignment, state.currentFlow, node);
+		state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 		return;
 	}
 	// Default: walk both sides
@@ -855,29 +924,9 @@ function bindCallExpr(state: BinderState, node: Node): void {
 	// MacroInvocation by the checker after this pass — stamp the program point
 	// here so bindExpandedSubtree has a seed (same point as that arm below).
 	node.flowNode = state.currentFlow;
-	// `exit(...)` never returns (C: exit/msExit, [[noreturn]]). Flow after the
-	// call is dead, so an `if (!r.ok) { exit(1); } r.value` guard narrows the
-	// fall-through path to the ok variant.
-	if (d.callee != null && isExitCallee(d.callee)) {
-		state.currentFlow = state.unreachableFlow;
-		return;
-	}
 	if (d.arguments.length > 0 || (d.callee != null && (d.callee.kind == NodeKind.MemberExpr || d.callee.kind == NodeKind.Identifier))) {
-		state.currentFlow = createFlowMutation(FlowFlag.Call, state.currentFlow, node);
+		state.currentFlow = createFlowMutation(state, FlowFlag.Call, state.currentFlow, node);
 	}
-}
-
-function isExitCallee(callee: Node): boolean {
-	if (callee.kind == NodeKind.Identifier) {
-		return (callee.data as IdentifierData).name == "exit";
-	}
-	if (callee.kind == NodeKind.MemberExpr) {
-		const md = callee.data as MemberExprData;
-		return md.property == "exit" && md.object != null
-			&& md.object.kind == NodeKind.Identifier
-			&& (md.object.data as IdentifierData).name == "process";
-	}
-	return false;
 }
 
 function bindNewExpr(state: BinderState, node: Node): void {
@@ -887,7 +936,7 @@ function bindNewExpr(state: BinderState, node: Node): void {
 		bindExpression(state, arg);
 	}
 	if (d.newArguments.length > 0) {
-		state.currentFlow = createFlowMutation(FlowFlag.Call, state.currentFlow, node);
+		state.currentFlow = createFlowMutation(state, FlowFlag.Call, state.currentFlow, node);
 	}
 }
 
@@ -1043,6 +1092,10 @@ function findIdent(node: Node | null, name: string): Node | null {
 			if (found == null) found = findIdent(d.whileCondition, name);
 			if (found == null) found = findIdent(d.whileBody, name);
 		},
+		NodeKind.DoWhileStmt => { found = findIdent((node.data as DoWhileStmtData).doBody, name); },
+		NodeKind.ForStmt => { found = findIdent((node.data as ForStmtData).forBody, name); },
+		NodeKind.ForOfStmt => { found = findIdent((node.data as ForOfStmtData).forOfBody, name); },
+		NodeKind.ForInStmt => { found = findIdent((node.data as ForInStmtData).forInBody, name); },
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
 			if (found == null) found = findIdent(d.expr, name);
@@ -1118,6 +1171,23 @@ test "binder marks code after return as unreachable" {
 	assert yRef != null;
 	assert yRef.flowNode != null;
 	assert yRef.flowNode.flags.has(FlowFlag.Unreachable);
+}
+
+test "binder binds every loop kind in dead code to the unreachable flow" {
+	const loops = [
+		"while (n > 0) { g(x); }",
+		"do { g(x); } while (n > 0);",
+		"for (let i = 0; i < n; i += 1) { g(x); }",
+		"for (const k of ks) { g(x); }",
+		"for (const k in ks) { g(x); }",
+	];
+	for (const loop of loops) {
+		const program = bindSource("function f(x: number, n: number, ks: number[]): void { return; " + loop + " }");
+		const fnData = (program.data as ProgramData).programStmts[0].data as FunctionDeclData;
+		const xRef = findIdent(fnData.fnBody, "x");
+		assert xRef != null && xRef.flowNode != null;
+		assert xRef.flowNode.flags.has(FlowFlag.Unreachable);
+	}
 }
 
 test "binder splits flow on if condition" {

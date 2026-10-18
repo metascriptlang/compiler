@@ -69,7 +69,7 @@ With `--no-entry` nothing calls `main`, so the init chain never runs on its own.
 
 **What `MsMain()` actually is** (`src/codegen/c/index.ms`): `MsPreMainInner()` → every **alive module's** `__DatInit000()`; `MsMainInner()` → every alive module's `__Init000()`; then `msOrcCollect()`. It is not "initialize me", it is "initialize the entire program".
 
-`MsMainInner` contains **only** `__Init000()` calls — there is no `main_()` invocation to suppress. The implicit auto-call of an unreferenced `main` was removed 2026-08-16 (`15df69d`); `genProjectDispatcher` no longer takes `autoCallMain`/`mainRetType`. Verified by probe: a program that defines `main` and never calls it prints only its top-level output and exits 0, on both the C and JS lanes. The program body is now whatever the entry module's `__Init000()` runs, so an entry whose top level does nothing still gets init without a body — that part is free, as before.
+`MsMainInner` contains **only** `__Init000()` calls — there is no `main` invocation to suppress. The implicit auto-call of an unreferenced `main` was removed 2026-08-16 (`15df69d`); `genProjectDispatcher` no longer takes `autoCallMain`/`mainRetType`, and a function named `main` is an ordinary function with no special C name. Verified by probe: a program that defines `main` and never calls it prints only its top-level output and exits 0, on both the C and JS lanes. The program body is now whatever the entry module's `__Init000()` runs, so an entry whose top level does nothing still gets init without a body — that part is free, as before.
 
 The expensive part is the module list. `computeAliveSet` (`src/checker/reachability.ms`, called at `compile.ms:1167`) is symbol-level and seeded from the entry path — and it does **not** see code introduced by `@emit`. For a do-nothing entry the alive set is still the whole prelude: 32 modules including `std/meta/node`, `std/serialize/json/*`, `std/core/fetch/*`, `std/core/websocket/*`, `std/net`, `std/crypto`. Rooting `MsMain()` from an exported function retains all of it.
 
@@ -97,10 +97,12 @@ Read `<mangled>` out of the generated `_dispatch.c` (`out/<mode>/.cache/_dispatc
 
 ⚠ **Correctness caveat**: targeted init initializes *only* that module. Any prelude module whose globals you actually touch needs its own `__Init000()` call added. The 11.9 KB figure is the floor for a module that uses nothing; a real module pays for what it uses. This is the same module-level DCE gap Phase 3b describes for Solana — it does not block a wasm build, it just means the init root is all-or-nothing unless you hand-pick.
 
+⚠ **A raise left pending at a module init** is reported and exits 1 inside that `__Init000()`, so the host never resumes (each init ends with `msTestErrorFlag()`, `genModuleInitFns`; HCR images excepted, their engine reads the status). Measured 2026-10-15 on tree `5cb77466d`, macOS `--app=lib` dylibs driven by C hosts: a host calling the entry's `__DatInit000()` + `__Init000()` whose top level throws printed `Error: unhandled exception: solo failed`, exit 1, and not its next line (before: it resumed with `msErr=1` and no report); a host calling `MsMain()` on main → a → b, b throwing, stopped at b's error (before: a's and main's top levels ran on zero-valued exports and the last error was reported).
+
 #### Two other costs
 
 1. **WASI imports appear and must be shimmed.** Rooting the runtime pulls `wasi_snapshot_preview1.{proc_exit, fd_close, fd_write, fd_seek}`. Defining `__wasi_*` in a `@compile`-ed `.c` resolves them internally and the imports disappear — verified, back to exactly the host imports you declared. Same strategy as `spacetimedb-bindings-cpp/src/abi/wasi_shims.cpp` (~190 LOC, nearly all stubs returning success; `fd_write` forwards to the host log).
-2. **`-sASYNCIFY` is auto-enabled and cannot be turned off.** `compile.ms:1366-1375` appends it whenever `promise/index.cms` survives DCE — which it does even for a module that never awaits. Costs size plus five `asyncify_*` exports. There is no override flag.
+2. **`-sJSPI` is linked when a runtime sleep or timer entry is reachable after DCE** (`msSleepMs`, `msSleepAsync`, `msSetTimeout`, `msSetInterval`, matched by the C name of a live extern), and nothing else is: a wait from sync code suspends the wasm stack only through a sleep or a pending timer, because `spawn` runs inline on emcc. The compiler itself links JSPI, because its Raiser VM sleeps until its next timer. A JSPI build does not load in a host without JSPI (Chrome/Edge 137, Firefox 153, Safari 27 and later have it; node 24.1 needs `--experimental-wasm-jspi`). Measured 2026-10-18 by `src/test/nativeBuildBoundary.ms` group `emcc-jspi`: an awaited `new Promise` plus a `spawn` links neither JSPI nor Asyncify and prints `49`; six sync waits on `setTimeout` link JSPI and print `total=21`; a direct `msSleepMs` extern links JSPI and prints `slept`. Not measured for this `--app=lib` custom-host build.
 
 **`--gc=manual` is not usable here yet**: it fails to compile three prelude modules (`std/core/websocket/state.ms`, `std/net/index.cms`, `std/core/websocket/client.cms`). Underlying C error not yet captured. Until that is fixed, custom-host wasm runs on the default GC.
 
@@ -346,25 +348,26 @@ When `--os=bare` is combined with `--gc=manual`, the runtime uses a static arena
 |--------|-------------|------|
 | `auto` (default) | `main(int argc, char** argv, char** env)` | Full POSIX: stack init, env, signal handlers |
 | `bare` | `main(void)` | Calls `MsMain()` → `MsPreMainInner()` + `MsMainInner()` |
-| `solana` | None (user provides `entrypoint()`) | `MsMain()` exposed, user calls it |
+| `solana` | `uint64_t entrypoint(const uint8_t* input)`, emitted in `_dispatch.c` | `msSolanaEnter(input); MsMain(); return msSolanaResult();` |
 
 **`MsMain()`** is the init function: calls `MsPreMainInner` (DatInit for every alive module) then
-`MsMainInner` (Init for every alive module). It does **not** call the user's `main_()` — the
+`MsMainInner` (Init for every alive module). It does **not** call a user `main` — the
 implicit auto-call was removed 2026-08-16 (`15df69d`); see CONTRIBUTING.md "Entry point: there is no
-`main()` auto-call". Measured 2026-09-06, `--os=bare --emit=c` on a one-line `console.log` program:
+`main()` auto-call". Measured 2026-10-03, `msc build --os=bare --emit=c` on `console.log("hello");`:
 
 ```c
 static void MsPreMainInner(void) {
 }
 static void MsMainInner(void) {
-  M…bare45probeZhelloOms__Init000();
+  <std/core/object>__Init000();
+  <entry module>__Init000();
 }
 void MsMain(void) { MsPreMainInner(); MsMainInner(); msTestErrorFlag(); msOrcCollect(); }
 int main(void) { MsMain(); return msProgramResult; }
 ```
 
-`MsPreMainInner` is empty for this program and `MsMainInner` carries exactly one `__Init000()` —
-the entry module's. The program body IS that init function.
+`MsPreMainInner` is empty for this program and `MsMainInner` carries two `__Init000()` calls —
+`std/core/object`'s and the entry module's. The program body IS the entry module's init function.
 
 ⚠ **`_dispatch.c` is the one TU with no bare define**: the same emit shows it including
 `runtime/drc.h` + `runtime/core/system.h` and carrying no `#define MSOS_BARE`, while all 9 module
@@ -606,7 +609,7 @@ The compiler already computes a DCE alive set (Phase B in `cmdBuildC`). But it o
 
 3. **Skip init guards for blockchain** — `DatInit`/`Init` guard booleans are mutable globals preventing re-entry. Blockchain programs run once — guards are unnecessary. Remove them when `--os` is a blockchain target (solana, wasm).
 
-4. **Minimal dispatcher** — for blockchain, the dispatcher should inline: no `MsMain()`, no `MsPreMainInner`/`MsMainInner`, just direct calls to the live modules' init + user's `main_()`.
+4. **Minimal dispatcher** — for blockchain, the dispatcher should inline: no `MsMain()`, no `MsPreMainInner`/`MsMainInner`, just direct calls to the live modules' init. Measured 2026-10-03 (`--os=solana --emit=c`, a program defining `main` and calling it at top level): `_dispatch.c` still carries `MsMain()` and `entrypoint` calls `msSolanaEnter(input); MsMain(); return msSolanaResult();`; `main` is a `static` function the entry module's `__Init000()` calls. Not re-measured: the sbpf link and the sample below.
 
 After these changes, `helloSolana.ms` generates:
 ```c
@@ -617,14 +620,14 @@ After these changes, `helloSolana.ms` generates:
 
 static const struct { int64_t cap; char data[13]; } STR_1 = { MS_STRLIT_FLAG | 12, "hello solana" };
 
-int32_t main_(void) {
+int32_t main(void) {
     msPrintln(MS_STRING_LIT(&STR_1, 12));
     return 0;
 }
 
 uint64_t entrypoint(const uint8_t* input) {
     (void)input;
-    main_();
+    main();
     return 0;
 }
 ```

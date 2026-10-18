@@ -20,8 +20,8 @@
 //
 // Loop state lives in owned shadow locals, never in the param slots: the DRC
 // analyzer models params as borrowed (never destroyed), so assigning owned
-// values into them leaks. A function without parameter symbols falls back to
-// direct name assignment (pre-checker ASTs in unit tests).
+// values into them leaks. A function with parameters but no parameter symbols
+// (a generic template, never emitted) is left unlowered.
 
 import {
 	Node, NodeKind, DeclKind, Type, TypeKind, TypeFlag, SourceLocation, Symbol,
@@ -37,11 +37,13 @@ import { walkNode, mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
 	makeBool, makeBlock, makeWhile, makeVarDecl, makeIf, makeReturn,
-	makeIdent, makeIdentResolved, makeAssign, makeExprStmt, makeContinue,
+	makeIdentResolved, makeAssign, makeExprStmt, makeContinue,
 	extractBodyStmts,
 } from "../util";
 import { overloadWinner } from "../../checker/symbol";
-import { lowerTernaryInReturn } from "./conditionalExprLower";
+import { lowerTernaryInReturn, shortCircuitShareArm } from "./conditionalExprLower";
+import { shortCircuitLeftShare } from "../../checker/fit";
+import { truthinessTest } from "../coercion/stringTruthiness";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
@@ -162,8 +164,8 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 			readSyms.push(activation);
 		}
 		rewriteParamRefs(statementized, paramSyms, readSyms);
-	} else {
-		for (const _p of params) localSyms.push(null);
+	} else if (params.length > 0) {
+		return statementized;
 	}
 
 	// Transform: wrap body in while(true), replace tail calls with reassign+continue
@@ -293,10 +295,14 @@ function statementizeTailPositions(stmt: Node, fnName: string, fnSym: Symbol | n
 				const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
 				const lhsDecl = makeVarDecl(lhsSym.name, bd.left, DeclKind.Const, loc);
 				lhsDecl.resolvedSym = lhsSym;
-				const keepBlk = makeBlock([makeReturn(makeIdentResolved(lhsSym, loc), loc)], loc);
 				const callBlk = makeBlock([tailArmStmt(bd.right, loc)], loc);
+				const share = bd.left.nodeType != null ? shortCircuitLeftShare(bd.operator, bd.left.nodeType) : null;
+				if (bd.left.nodeType != null && share == null) {
+					return makeBlock([lhsDecl, statementizeTailPositions(callBlk, fnName, fnSym, ctx)], loc);
+				}
+				const keepBlk = makeBlock([makeReturn(shortCircuitShareArm(makeIdentResolved(lhsSym, loc), share, rd.argument.nodeType, ctx), loc)], loc);
 				const isAnd = bd.operator == "&&";
-				const guard = makeIf(makeIdentResolved(lhsSym, loc), isAnd ? callBlk : keepBlk, isAnd ? keepBlk : callBlk, loc);
+				const guard = makeIf(truthinessTest(makeIdentResolved(lhsSym, loc), ctx), isAnd ? callBlk : keepBlk, isAnd ? keepBlk : callBlk, loc);
 				return makeBlock([lhsDecl, statementizeTailPositions(guard, fnName, fnSym, ctx)], loc);
 			}
 			return stmt;
@@ -334,8 +340,8 @@ function hasTailCall(body: Node, fnName: string, fnSym: Symbol | null): boolean 
 	return found;
 }
 
-// Check if an expression is a call to fnName. Symbol identity when both sides
-// carry one (rules out shadowing and overload sets); name match as fallback.
+// Check if an expression is a call to fnSym: symbol identity, which rules out
+// shadowing and overload sets.
 function isTailCallExpr(expr: Node | null, fnName: string, fnSym: Symbol | null): boolean {
 	if (expr == null) return false;
 	if (expr.kind != NodeKind.CallExpr) return false;
@@ -344,11 +350,8 @@ function isTailCallExpr(expr: Node | null, fnName: string, fnSym: Symbol | null)
 		return isThisMethodCall(cd.callee, cd.resolvedOverloadIdx, fnName, fnSym);
 	}
 	if (cd.callee.kind != NodeKind.Identifier) return false;
-	if (fnSym != null && cd.callee.resolvedSym != null) {
-		return overloadWinner(cd.callee.resolvedSym, cd.resolvedOverloadIdx) == fnSym;
-	}
-	const id = cd.callee.data as IdentifierData;
-	return id.name == fnName;
+	if (fnSym == null || cd.callee.resolvedSym == null) return false;
+	return overloadWinner(cd.callee.resolvedSym, cd.resolvedOverloadIdx) == fnSym;
 }
 
 function isThisMethodCall(
@@ -361,10 +364,8 @@ function isThisMethodCall(
 	if (md.property != fnName) return false;
 	if (md.object.kind != NodeKind.Identifier) return false;
 	if ((md.object.data as IdentifierData).name != "this") return false;
-	if (fnSym != null && callee.resolvedSym != null) {
-		return overloadWinner(callee.resolvedSym, overloadIdx) == fnSym;
-	}
-	return true;
+	if (fnSym == null || callee.resolvedSym == null) return false;
+	return overloadWinner(callee.resolvedSym, overloadIdx) == fnSym;
 }
 
 function tailOpaque(stmt: Node): boolean {
@@ -415,8 +416,8 @@ function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (
 		const ts = tempSyms[j];
 		if (ts == null) continue;
 		const ls = localSyms[j];
-		const target = ls != null ? makeIdentResolved(ls, loc) : makeIdent(params[j], loc);
-		const assignExpr = makeAssign(target, makeIdentResolved(ts, loc), loc);
+		if (ls == null) throw new Error(`internal: tail-call parameter '${params[j]}' has no loop-carried local`);
+		const assignExpr = makeAssign(makeIdentResolved(ls, loc), makeIdentResolved(ts, loc), loc);
 		stmts.push(makeExprStmt(assignExpr, loc));
 	}
 

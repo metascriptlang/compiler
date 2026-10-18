@@ -89,7 +89,7 @@ export function allowsRegexAfter(s: LexerState): boolean {
 		last == TokenKind.EqEqEq || last == TokenKind.BangEq || last == TokenKind.BangEqEq ||
 		last == TokenKind.LtEq || last == TokenKind.Gt || last == TokenKind.GtEq ||
 		last == TokenKind.AmpAmp || last == TokenKind.PipePipe || last == TokenKind.PlusEq ||
-		last == TokenKind.MinusEq || last == TokenKind.StarEq || last == TokenKind.SlashEq ||
+		last == TokenKind.MinusEq || last == TokenKind.StarEq || last == TokenKind.StarStarEq || last == TokenKind.SlashEq ||
 		last == TokenKind.AmpEq || last == TokenKind.PipeEq || last == TokenKind.CaretEq ||
 		last == TokenKind.LtLtEq || last == TokenKind.GtGtEq || last == TokenKind.GtGtGtEq ||
 		last == TokenKind.Arrow || last == TokenKind.Eof || last == TokenKind.Return ||

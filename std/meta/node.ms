@@ -51,6 +51,7 @@ export enum TypeKind {
 	// after Error.
 	BigInt,
 	Set,
+	Module,
 }
 
 // ===== Calling Convention =====
@@ -78,6 +79,8 @@ export enum TypeFlag {
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 	HasGenericParam,
 	BorrowDot,
+	Spelled,              // the compiler spelled this name from an owner and arguments: it is the identity and no declaring symbol exists
+	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -221,6 +224,7 @@ export enum SymbolFlag {
 	Inline,
 	InheritsConstructor,
 	NoInline,
+	InitFlag, // a module binding's initialized flag (moduleTdz); HCR keeps it in step with the binding's state cell
 }
 
 // ===== Symbol =====
@@ -256,6 +260,7 @@ export class Symbol {
 	item: int32;
 	instantiatedFrom: Symbol | null;
 	borrowedFrom: Symbol | null;
+	staticOwner: Symbol | null;
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====
@@ -294,6 +299,11 @@ export enum NodeFlag {
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
 	OptionalChainEnd, // parser: last link of a run that starts at `?.` — the null test covers every link from the `?.` to here
+	AutoAccessor,  // parser: this class field was written `accessor x` — a hidden storage field plus a getter and a setter replace it before the class is filled
+	KeyOps,        // JS transform: a std collection construction carries [initializer, key hash, key ==] as its arguments
+	AssertedNull,  // checker: `null as T` folded to a typed null literal; its value is the asserted T, so an assignment narrows to T
+	UserOpStores,  // checker: this compound assignment calls its base operator's declared routine and stores the result in its target
+	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
 }
 
 // ===== Node Kind Enum =====
@@ -352,6 +362,8 @@ export enum NodeKind {
 	// See docs/LANG-JSX.md for spec, docs/JSX-ROADMAP.md for phased plan.
 	JSXElement, JSXFragment, JSXText,
 	JSXExpressionContainer, JSXAttribute, JSXSpreadAttribute,
+	// `{ [key]: value }` whose key is not a string literal: compile-time only, like JSX.
+	ComputedProperty,
 }
 
 // ===== Declaration Kind Enum =====
@@ -508,6 +520,7 @@ export type NodeData =
 	| { jsxExpr: Node }                                            // JSXExpressionContainer
 	| { jsxAttrName: string, jsxAttrValue: Node }                  // JSXAttribute
 	| { jsxSpreadArg: Node }                                       // JSXSpreadAttribute
+	| { computedKey: Node, computedValue: Node }                  // ComputedProperty
 
 // ===== Flow Graph =====
 //
@@ -737,6 +750,7 @@ export type JSXTextData = { jsxText: string };
 export type JSXExpressionContainerData = { jsxExpr: Node };
 export type JSXAttributeData = { jsxAttrName: string, jsxAttrValue: Node };
 export type JSXSpreadAttributeData = { jsxSpreadArg: Node };
+export type ComputedPropertyData = { computedKey: Node, computedValue: Node };
 
 // ===== Constructors =====
 
@@ -873,6 +887,7 @@ export function createNodeAt(kind: NodeKind.JSXText, data: JSXTextData, loc: Sou
 export function createNodeAt(kind: NodeKind.JSXExpressionContainer, data: JSXExpressionContainerData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.JSXAttribute, data: JSXAttributeData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.JSXSpreadAttribute, data: JSXSpreadAttributeData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.ComputedProperty, data: ComputedPropertyData, loc: SourceLocation): Node;
 
 // Implementation — widest signature, accepts any NodeKind and the NodeData union.
 // This is the body; all overload signatures above delegate here via the checker's

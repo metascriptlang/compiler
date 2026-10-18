@@ -1,5 +1,5 @@
 import { strictErrorCount } from "./helpers";
-import { compileToC, compileToCWithStd, compileToJS } from "../helpers";
+import { compileToC, compileToCWithStd, compileToJS, compileToJSBare } from "../helpers";
 
 test "callableBoundaries: required callable fields cannot use value default initialization" {
 	const cases = [
@@ -32,6 +32,21 @@ test "callableBoundaries: call position requires a callable value or a resolved 
 		{ name: "a string value in call position is a type error", source: "function main(): void { const s = \"a\"; s(); }\n", expected: -1 },
 		{ name: "calling the void result of a call is a type error", source: "function mount(): void {}\nfunction main(): void { mount()(); }\n", expected: -1 },
 		{ name: "a bound conversion function is callable after an explicit scalar cast", source: "\nfunction main(): void {\n\tconst x: float64 = 2.5;\n\tconst n = x as int32;\n\tconsole.log(String(n));\n}\n", expected: 0 },
+	];
+	for (const item of cases) {
+		const result = compileToCWithStd(item.source);
+		assert result.ok == (item.expected == 0), item.name + (result.ok ? "" : ": " + result.error);
+	}
+}
+
+test "callableBoundaries: a union is called only after narrowing it to a single function type" {
+	const SETTER = "type Fn = () => number;\nfunction apply<T>(cur: T, v: T | ((prev: T) => T)): T {\n\tif (typeof v === \"function\") { return v(cur); }\n\treturn v;\n}\n";
+	const cases = [
+		{ name: "an un-narrowed value-or-function union is not callable", source: "function f(v: number | (() => number)): number { return v(); }\nfunction main(): void { console.log(f(() => 3)); }\n", expected: -1 },
+		{ name: "a union of two function types is not callable after typeof", source: "type Fn = () => number;\nfunction g(v: Fn | ((p: number) => number)): number {\n\tif (typeof v === \"function\") { return v(1); }\n\treturn 0;\n}\nfunction main(): void { console.log(g((p: number): number => p + 1)); }\n", expected: -1 },
+		{ name: "a value-or-updater instantiated at a function type is refused", source: SETTER + "function main(): void { const two: Fn = (): number => 2; console.log(apply<Fn>(two, (p: Fn): Fn => two)()); }\n", expected: -1 },
+		{ name: "a value-or-updater instantiated at a value type calls the updater", source: SETTER + "function main(): void { console.log(apply<number>(1, (p: number): number => p + 1)); }\n", expected: 0 },
+		{ name: "a value-or-function union narrowed by typeof is callable", source: "function h(v: number | (() => number)): number {\n\tif (typeof v === \"function\") { return v(); }\n\treturn v;\n}\nfunction main(): void { console.log(h(() => 3) + h(4)); }\n", expected: 0 },
 	];
 	for (const item of cases) {
 		const result = compileToCWithStd(item.source);
@@ -97,7 +112,7 @@ test "callableBoundaries: static receivers do not shift explicit parameter modif
 		{ name: "the JS backend takes a ref in the second and the third position", source: "\nstruct Ctx { n: int32; }\nstruct R { k: int32; }\nclass Box { v: int32 = 0; }\nfunction seven(): int32 { return 7; }\nfunction fresh(): Ctx { return { n: 0 }; }\nfunction create(this typeof R, ref c: Ctx, k: int32): R {\n\tc.n = c.n + 1;\n\treturn { k: k };\n}\nfunction make(this typeof R, k: int32, name: string, ref c: Ctx): R {\n\tc.n = k;\n\treturn { k: k + name.length };\n}\nfunction split(this typeof R, out half: int32, k: int32): R {\n\thalf = k / 2;\n\treturn { k: k };\n}\nlet c: Ctx = { n: 0 };\nlet h: int32 = 0;\nR.create(c, seven());\nR.make(7, \"ab\", c);", expected: 0 },
 	];
 	for (const item of cases1) {
-		const result = compileToJS(item.source);
+		const result = compileToJSBare(item.source);
 		assert result.ok == (item.expected == 0), item.name + (result.ok ? "" : ": " + result.error);
 	}
 }

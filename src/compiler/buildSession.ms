@@ -1,17 +1,15 @@
-import { Node, Type, Symbol, SymbolKind } from "../ast/node";
+import { Node, Type, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { CModuleOutput } from "../codegen/c/index";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
-import { GenericTypeInstRow, takeGenericTypeInstsFrom, resetAllSideChannels } from "../parser/context";
-import { pendingInstanceKeyOf, resetInstantiationState } from "../checker/instantiate";
+import { resetInstantiationState, checkedInstanceOf } from "../checker/instantiate";
 import { resetDispatchRegistry } from "../checker/context";
 import { resetRaises } from "../checker/raises";
 import { resetResizeSummaries } from "../checker/varPartitions";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
 import { resetLinkState } from "../utils/linkState";
-import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
-import { createNameSet } from "../transform/context";
+import { resetLiftedOps } from "../transform/lowering/destructorLifting";
 import { ModuleError } from "../module/graph";
 import { monoTypeKey } from "../monomorphize/registry";
 import { HcrIndirectModule } from "../transform/native/hcrIndirect";
@@ -25,19 +23,10 @@ export enum BuildStatus {
 }
 
 export interface LowerClaims {
-	typeInfos: string[];
-	owners: string[];
-	hooks: Symbol[];
 	ops: KeyedOp[];
 }
 
 export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
-	if (a.typeInfos.join(",") != b.typeInfos.join(",")) return false;
-	if (a.owners.join(",") != b.owners.join(",")) return false;
-	if (a.hooks.length != b.hooks.length) return false;
-	for (let i = 0; i < a.hooks.length; i += 1) {
-		if (a.hooks[i].name != b.hooks[i].name) return false;
-	}
 	if (a.ops.length != b.ops.length) return false;
 	for (let i = 0; i < a.ops.length; i += 1) {
 		if (a.ops[i].key != b.ops[i].key || a.ops[i].sym.name != b.ops[i].sym.name) return false;
@@ -107,7 +96,6 @@ export function createBuildSession(keep: boolean): BuildSession {
 }
 
 export function resetBuildState(): void {
-	resetAllSideChannels();
 	resetInstantiationState();
 	resetDispatchRegistry();
 	resetRaises();
@@ -115,7 +103,7 @@ export function resetBuildState(): void {
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();
-	setGlobalHookOwners(createNameSet());
+	resetLiftedOps();
 }
 
 export function startSessionBuild(session: BuildSession): void {
@@ -132,7 +120,7 @@ function mix(h: number, value: number): number {
 
 function typeShapeWithin(t: Type | null, seen: HashSet<Type>): string {
 	if (t == null) return "_";
-	let shape = monoTypeKey(t);
+	let shape = monoTypeKey(t) + "!" + String(t.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam) as uint64);
 	if (seen.has(t)) return shape;
 	seen.add(t);
 	if (t.typeNames != null && t.typeNames.length > 0) {
@@ -173,7 +161,14 @@ function foldTypes(session: BuildSession, node: Node, h: number): number {
 function instanceFingerprint(session: BuildSession, node: Node): string {
 	const memo = session.instanceFingerprints.get(node);
 	if (memo != null) return memo;
-	const fingerprint = pendingInstanceKeyOf(node) + "#" + String(foldTypes(session, node, transAmHashNode(node)));
+	let identity = "";
+	const sym = node.resolvedSym;
+	if (sym != null && sym.instantiatedFrom != null) {
+		const generic = sym.instantiatedFrom;
+		identity = generic.modulePath + ":" + String(generic.item) + ":" + String(generic.disamb);
+		for (const arg of checkedInstanceOf(sym).concreteTypes) identity = identity + "|" + typeShape(session, arg);
+	}
+	const fingerprint = identity + "#" + String(foldTypes(session, node, transAmHashNode(node)));
 	session.instanceFingerprints.set(node, fingerprint);
 	return fingerprint;
 }
@@ -193,40 +188,6 @@ export function hcrTypeRegistryFingerprint(modules: HcrIndirectModule[]): string
 	return out;
 }
 
-export function collectTypeInstanceRows(check: CheckSession, loadOrder: string[]): GenericTypeInstRow[] {
-	const lists: GenericTypeInstRow[][] = [check.preludeTypeInstances];
-	for (const path of loadOrder) {
-		const created = check.typeInstances.get(path);
-		if (created != null) lists.push(created);
-	}
-	lists.push(takeGenericTypeInstsFrom(0));
-	return distinctTypeRows(lists);
-}
-
-export function moduleTypeInstanceRows(check: CheckSession, path: string): GenericTypeInstRow[] {
-	const created = check.typeInstances.get(path);
-	return created != null ? distinctTypeRows([created]) : [];
-}
-
-function distinctTypeRows(lists: GenericTypeInstRow[][]): GenericTypeInstRow[] {
-	const rows: GenericTypeInstRow[] = [];
-	const seen = new HashSet<string>();
-	for (const list of lists) {
-		for (const row of list) {
-			const key = row.baseName + "|" + row.typeArgKey;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			rows.push(row);
-		}
-	}
-	return rows;
-}
-
-export function typeInstanceRowsFingerprint(rows: GenericTypeInstRow[]): string {
-	let out = "";
-	for (const row of rows) out = out + row.key + "|" + row.fieldNames + "|" + row.fieldTypes + ";";
-	return out;
-}
 
 function isTypeDeclaration(kind: SymbolKind): boolean {
 	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.TypeAlias

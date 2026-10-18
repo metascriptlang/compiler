@@ -9,6 +9,7 @@ import { TypeKind, NodeKind, ClassDeclData } from "../../ast/node";
 import { checkSource, fullPipeline, errorCount } from "./helpers";
 import { compileToC, compileToJS, compileToCWithStd } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
+import { extReceiverSym } from "../../checker/context";
 import { drainPendingInstances } from "../../checker/instantiate";
 
 test "checker: generic class method has this param" {
@@ -18,7 +19,7 @@ test "checker: generic class method has this param" {
 	// module symbols; codegen later lowers them to Box_get free functions.
 	let found = false;
 	for (const m of ctx.extensionRegistry.methods) {
-		if (m.receiverTypeName == "Box" && m.methodName == "get") {
+		if (extReceiverSym(m) != null && extReceiverSym(m).name == "Box" && m.methodName == "get") {
 			found = true;
 			assert m.sym != null;
 			assert m.sym.symbolType.kind == TypeKind.Function;
@@ -34,7 +35,7 @@ test "checker: generic class method with T param has 2 params" {
 	assert ctx != null;
 	let found = false;
 	for (const m of ctx.extensionRegistry.methods) {
-		if (m.receiverTypeName == "Box" && m.methodName == "set") {
+		if (extReceiverSym(m) != null && extReceiverSym(m).name == "Box" && m.methodName == "set") {
 			found = true;
 			assert m.sym != null;
 			assert m.sym.symbolType.kind == TypeKind.Function;

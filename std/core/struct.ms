@@ -31,6 +31,7 @@ export struct IteratorResult<T> {
 	done: boolean;
 }
 
+@builtin("Iterator")
 export struct Iterator<T> {
 	next: () => IteratorResult<T>;
 }
@@ -82,12 +83,16 @@ export function hashString(s: string): int64 {
 @builtin("HiXorLo")
 extern function msHiXorLo(a: uint64, b: uint64): uint64;
 
+export function int64Bits(u: uint64): int64 {
+	return u > 9223372036854775807 ? -((~u) as int64) - 1 : u as int64;
+}
+
 // 0 marks an empty Map/Set slot, so a key that mixes to 0 takes the sentinel.
 export function hashWangYi1(x: uint64): int64 {
 	const p0 = 0xa0761d6478bd642f as uint64;
 	const p1 = 0xe7037ed1a0b428db as uint64;
 	const p58 = (0xeb44accab455d165 as uint64) ^ (8 as uint64);
-	const h = msHiXorLo(msHiXorLo(p0, x ^ p1), p58) as int64;
+	const h = int64Bits(msHiXorLo(msHiXorLo(p0, x ^ p1), p58));
 	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }
@@ -97,20 +102,23 @@ extern function msPtrBits(p: Ptr<void>): uint64;
 @builtin("Float64Bits")
 extern function msFloat64Bits(d: number): uint64;
 
-export function hashNumber(n: number): int64 { return hashWangYi1(msFloat64Bits(n + 0.0)); }
+export function hashNumber(n: number): int64 {
+	if (n != n) return hashWangYi1(0x7FF8000000000000 as uint64);
+	return hashWangYi1(msFloat64Bits(n + 0.0));
+}
 
 export function hashCombine(h: int64, v: int64): int64 {
 	let r = (h as uint64) + (v as uint64);
 	r = r + (r << (10 as uint64));
 	r = r ^ (r >> (6 as uint64));
-	return r as int64;
+	return int64Bits(r);
 }
 
 export function hashFinish(h: int64): int64 {
 	let r = (h as uint64) + ((h as uint64) << (3 as uint64));
 	r = r ^ (r >> (11 as uint64));
 	r = r + (r << (15 as uint64));
-	const f = r as int64;
+	const f = int64Bits(r);
 	if (f == (0 as int64)) return 314159265 as int64;
 	return f;
 }
@@ -162,6 +170,24 @@ export function hash(this i: uint16): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
 export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u as Ptr<void>)); }
+
+function sameKey<T>(a: T, b: T): boolean { return a == b; }
+function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
+function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
+function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
+
+test "a NaN key is found and stored once, like a TypeScript Map" {
+	const zero: number = 0.0;
+	const nan = zero / zero;
+	const m = new Map<number, int32>();
+	m.set(nan, 1);
+	m.set(nan, 2);
+	assert m.has(nan) && m.size == 1 && (m.get(nan) ?? 0) == 2;
+	const s = new HashSet<float64>();
+	s.add(nan as float64);
+	s.add(nan as float64);
+	assert s.size == 1 && s.has(nan as float64);
+}
 
 test "scalar keys hash by ordinal value and float bits" {
 	const low = 7 as uint64;
@@ -217,7 +243,7 @@ function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (m.data[h].hcode != 0) {
-		if (m.data[h].hcode == hc && m.data[h].key == key) {
+		if (m.data[h].hcode == hc && sameKey(m.data[h].key, key)) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -419,7 +445,7 @@ function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode != 0) {
-		if (s.data[h].hcode == hc && s.data[h].key == key) {
+		if (s.data[h].hcode == hc && sameKey(s.data[h].key, key)) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -570,7 +596,7 @@ function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = m.entries[slot];
-			if (e.hcode == hc && e.key == key) return h;
+			if (e.hcode == hc && sameKey(e.key, key)) return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -815,7 +841,7 @@ function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
 			if (firstOpen < 0) firstOpen = h;
 		} else {
 			const e = s.entries[slot];
-			if (e.hcode == hc && e.key == key) return h;
+			if (e.hcode == hc && sameKey(e.key, key)) return h;
 		}
 		h = (h + 1) & mask;
 	}

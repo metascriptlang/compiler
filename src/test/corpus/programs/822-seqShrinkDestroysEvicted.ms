@@ -11,9 +11,9 @@ function shiftAndShrinkClass(): void {
 	const first = a.shift();
 	a.shift();
 	console.log(`class shift ${first.id} len=${a.length} head=${a[0].id}`);
-	a.setLength(3);
+	a.shrink(3);
 	console.log(`class shrink len=${a.length} last=${a[2].id}`);
-	a.setLength(0);
+	a.shrink(0);
 	console.log(`class empty len=${a.length}`);
 }
 
@@ -23,7 +23,7 @@ function shrinkStruct(): void {
 		const s: Slot = { item: new Item(i), tag: i };
 		a.push(s);
 	}
-	a.setLength(2);
+	a.shrink(2);
 	console.log(`struct shrink len=${a.length} last=${a[1].item.id}`);
 }
 

@@ -9,6 +9,8 @@ export extern function Number(v: uint8): float64 from "Number(#)";
 export extern function Number(v: uint16): float64 from "Number(#)";
 export extern function Number(v: uint32): float64 from "Number(#)";
 export extern function Number(v: uint64): float64 from "Number(#)";
+export extern function Number(v: char): float64 from "Number(#)";
+export extern function Number(v: bigint): float64 from "Number(#)";
 
 export extern function isNaN(this typeof Number, x: float64): boolean from "Number.isNaN(#)";
 export extern function isFinite(this typeof Number, x: float64): boolean from "Number.isFinite(#)";

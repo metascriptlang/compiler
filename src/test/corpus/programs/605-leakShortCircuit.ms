@@ -1,5 +1,5 @@
 // @maxrss: 40
-// @stdout: leak-short-circuit hits=
+// @stdout: leak-short-circuit hits=1500000
 // note: FIXED by callHoist b3b: a fresh RC call in a SHORT-CIRCUIT operand (`if (a && provide(i).ok)`) runs only when `a` holds, so it can't be hoisted eagerly. Lowered to a flag + nested-if (what Nim does for `and`/`or`) so the fresh Result is captured + destroyed only on the branch that reaches it. Permanent regression guard — was 339MB leaking, now flat.
 
 // FIXED (b3b) — a fresh RC call in a SHORT-CIRCUIT operand leaked per evaluation.

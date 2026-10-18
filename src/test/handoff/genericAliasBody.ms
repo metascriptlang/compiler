@@ -1,7 +1,7 @@
 // Route 15e: Checker — a generic alias instance carries its substituted body whatever the body kind
 
 import { strictErrorCount, hasError, errorCount, checkSource } from "./helpers";
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJS, compileToJSBare } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind } from "../../ast/node";
 
@@ -112,7 +112,8 @@ test "a bare-parameter alias instance resolves the members of its argument" {
 
 test "an extension called on a bare-parameter alias instance is a call of the extension" {
 	const src = TAGGED + "function doubled(this x: int32): int32 { return x * 2; }\nconst v = stamp(7);\nconsole.log(stamp(5).doubled() + v.doubled());\n";
-	const js = emitJs(src);
+	const r = compileToJSBare(src);
+	const js = r.ok ? r.value : "error: " + r.error;
 	assert js.indexOf("error:", 0) < 0, js;
 	assert js.indexOf(".doubled(", 0) < 0, js;
 	const c = emitC(src);

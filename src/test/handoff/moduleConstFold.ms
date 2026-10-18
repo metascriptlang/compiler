@@ -83,3 +83,41 @@ test "module const handoff: a readonly bool static a static block assigns is not
 	const value = foldedReturn(source, "read");
 	assert value == null || value.kind != NodeKind.BooleanLiteral;
 }
+
+function foldedValue(source: string): number {
+	const value = foldedReturn(source, "read");
+	if (value == null || value.kind != NodeKind.NumberLiteral) return -1.5;
+	return (value.data as NumberLiteralData).value;
+}
+
+function foldedInteger(source: string): int64 {
+	const value = foldedReturn(source, "read");
+	if (value == null || value.kind != NodeKind.NumberLiteral || (value.data as NumberLiteralData).isFloat) return -77;
+	return (value.data as NumberLiteralData).intVal;
+}
+
+test "module const handoff: a 64-bit integer constant converted to float32 rounds once" {
+	assert foldedValue("const I: int64 = 1152921573326323713; const F = I as float32; function read(): float32 { return F; }") == 1152921642045800448.0;
+	assert foldedValue("const I: int64 = -1152921573326323713; const F = I as float32; function read(): float32 { return F; }") == -1152921642045800448.0;
+	assert foldedValue("const U: uint64 = 1152921573326323713; const F = U as float32; function read(): float32 { return F; }") == 1152921642045800448.0;
+	assert foldedValue("const U: uint64 = 9223372586610589697; const F = U as float32; function read(): float32 { return F; }") == 9223373136366403584.0;
+	assert foldedValue("const F = 1152921573326323713 as float32; function read(): float32 { return F; }") == 1152921642045800448.0;
+	assert foldedValue("const I: int64 = 1152921573326323712; const F = I as float32; function read(): float32 { return F; }") == 1152921504606846976.0;
+}
+
+test "module const handoff: a float constant converted to an integer folds to its truncation" {
+	assert foldedInteger("const S: int32 = 3.9 as int32; function read(): int32 { return S; }") == 3;
+	assert foldedInteger("const S: int8 = (-128.9) as int8; function read(): int8 { return S; }") == -128;
+	assert foldedInteger("const S: uint8 = 255.9 as uint8; function read(): uint8 { return S; }") == 255;
+	assert foldedInteger("const S: uint8 = (-0.5) as uint8; function read(): uint8 { return S; }") == 0;
+	assert foldedInteger("const K: number = 70000.5; const S: uint16 = (K - 10000.0) as uint16; function read(): uint16 { return S; }") == 60000;
+	assert foldedInteger("const S: uint64 = 18446744073709549568.0 as uint64; function read(): uint64 { return S; }") == -2048;
+	assert foldedInteger("const F: float32 = 16777217.0 as float32; const S: int32 = F as int32; function read(): int32 { return S; }") == 16777216;
+}
+
+test "module const handoff: a constant converted to char folds to its value" {
+	assert foldedInteger("function read(): char { return 200.9 as char; }") == 200;
+	assert foldedInteger("function read(): char { return (-0.5) as char; }") == 0;
+	assert foldedInteger("const K = 1000; function read(): char { return (K - 900) as char; }") == 100;
+	assert foldedInteger("function read(): int16 { return (200 as char) as int16; }") == 200;
+}

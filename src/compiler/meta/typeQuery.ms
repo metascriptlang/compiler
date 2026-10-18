@@ -5,7 +5,7 @@ import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker
 import { instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
-import { mapTypeToAst, nodeToValue, boundSymAt, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
+import { mapTypeToAst, nodeToValue, boundSymAt, boundSymOfObject, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
 import { boxString, unboxString } from "../../raiser/marshal";
@@ -25,11 +25,7 @@ function queryError(ctx: CheckerContext, msg: string): RaiserValue {
 function boundSymOf(v: RaiserValue): Symbol | null {
 	if (v.kind != RaiserValueKind.Object) return null;
 	const heap = activeHostObjectHeap();
-	if (heap == null) return null;
-	const hv = heapObjectGetField(heap, v.intVal, "symHandle");
-	if (hv.kind == RaiserValueKind.Int) return boundSymAt(hv.intVal as int32);
-	if (hv.kind == RaiserValueKind.Float) return boundSymAt(hv.floatVal as int32);
-	return null;
+	return heap == null ? null : boundSymOfObject(heap, v.intVal);
 }
 
 function emitNode(n: Node): RaiserValue {

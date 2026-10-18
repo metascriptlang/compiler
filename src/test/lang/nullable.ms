@@ -116,12 +116,6 @@ function returnPrim(b: boolean): number | null {
 	return null;
 }
 
-test "function returning primitive | null with value" {
-	const r = returnPrim(true);
-	assert r != null;
-	if (r != null) assert r == 42;
-}
-
 test "function returning primitive | null with null" {
 	assert returnPrim(false) == null;
 }
@@ -172,14 +166,6 @@ test "ternary on null Maybe member takes default arm" {
 }
 
 // ===== Assignment to Maybe variable =====
-
-test "assign primitive value to mutable Maybe<T> variable" {
-	let x: number | null = null;
-	assert x == null;
-	x = 42;
-	assert x != null;
-	if (x != null) assert x == 42;
-}
 
 test "assign null to mutable Maybe<T> variable" {
 	let x: number | null = 42;

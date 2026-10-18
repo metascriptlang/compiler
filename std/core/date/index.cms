@@ -1,10 +1,10 @@
 // std/core/date — prelude.
 //
 // `Date` is auto-imported into every program as a prelude class (like
-// `Math`, `JSON`, `Promise`). Currently minimal: only `Date.now()` —
-// wall-clock milliseconds since Unix epoch.
+// `Math`, `JSON`, `Promise`). Currently minimal: `Date.now()` (wall-clock
+// milliseconds since Unix epoch), `new Date(ms?)`, `getTime()` and `valueOf()`.
 //
-// Future additions (not in v0.1): `new Date(ms)`, `Date.parse(iso)`,
+// Future additions (not in v0.1): `Date.parse(iso)`,
 // instance methods (toISOString, getFullYear, etc.).
 
 when (!bare && !solana) {
@@ -12,13 +12,28 @@ when (!bare && !solana) {
 	@compile("runtime/core/datetime.c");
 
 	extern function msTimeNow(): number;
+	extern function msTimeClip(t: number): number;
 
 	export class Date {
-		// Wall-clock time in milliseconds since Unix epoch (fractional).
-		// Mirrors JS/Node `Date.now()`. Use when comparing to external
-		// timestamps — not for elapsed-time measurement (use `performance.now()`).
+		private ms: number;
+
+		constructor(ms: number = Date.now()) {
+			this.ms = msTimeClip(ms);
+		}
+
+		// Wall-clock time in whole milliseconds since Unix epoch, as JS/Node
+		// `Date.now()`. Use when comparing to external timestamps — not for
+		// elapsed-time measurement (use `performance.now()`).
 		static now(): number {
-			return msTimeNow();
+			return msTimeClip(msTimeNow());
+		}
+
+		getTime(): number {
+			return this.ms;
+		}
+
+		valueOf(): number {
+			return this.ms;
 		}
 	}
 }

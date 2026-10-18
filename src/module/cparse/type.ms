@@ -33,6 +33,7 @@ export interface CType {
 	size: int32;
 	align: int32;
 	isSigned: boolean;
+	isPlainChar: boolean;
 	isConst: boolean;
 	isVolatile: boolean;
 	isRestrict: boolean;
@@ -73,6 +74,7 @@ function newType(kind: CTypeKind, size: int32, align: int32, signed: boolean): C
 		size,
 		align,
 		isSigned: signed,
+		isPlainChar: false,
 		isConst: false,
 		isVolatile: false,
 		isRestrict: false,
@@ -104,7 +106,9 @@ export function makeBool(): CType {
 }
 
 export function makeChar(target: TargetInfo): CType {
-	return newType(CTypeKind.Char, 1, 1, target.charSigned);
+	const t = newType(CTypeKind.Char, 1, 1, target.charSigned);
+	t.isPlainChar = true;
+	return t;
 }
 
 export function makeUChar(): CType {
@@ -233,6 +237,7 @@ export function isAggregate(ty: CType): boolean {
 
 export function copyType(ty: CType): CType {
 	const t = newType(ty.kind, ty.size, ty.align, ty.isSigned);
+	t.isPlainChar = ty.isPlainChar;
 	t.isConst = ty.isConst;
 	t.isVolatile = ty.isVolatile;
 	t.isRestrict = ty.isRestrict;

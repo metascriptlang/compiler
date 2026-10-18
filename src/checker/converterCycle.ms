@@ -6,7 +6,7 @@ import { forEachChild } from "../ast/visitor";
 interface CycleWalk {
 	conv: Symbol;
 	routine: Symbol;
-	seen: HashMap<string, boolean>;
+	seen: HashSet<Node>;
 	pending: Symbol[];
 }
 
@@ -16,12 +16,6 @@ function routineBody(sym: Symbol): Node | null {
 	if (decl.kind == NodeKind.FunctionDecl) return (decl.data as FunctionDeclData).fnBody;
 	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).methodBody;
 	return null;
-}
-
-function routineKey(sym: Symbol): string {
-	const decl = sym.declNode;
-	const at = decl != null ? `${decl.location.line}:${decl.location.column}` : "";
-	return `${sym.modulePath}|${sym.name}|${at}`;
 }
 
 function isRoutine(sym: Symbol): boolean {
@@ -43,9 +37,8 @@ function visitForCycle(ctx: CheckerContext, walk: CycleWalk, node: Node): void {
 	}
 	const target = node.resolvedSym;
 	if (target != null && isRoutine(target) && routineBody(target) != null) {
-		const key = routineKey(target);
-		if (!walk.seen.has(key)) {
-			walk.seen.set(key, true);
+		if (!walk.seen.has(target.declNode)) {
+			walk.seen.add(target.declNode);
 			walk.pending.push(target);
 		}
 	}
@@ -55,8 +48,8 @@ function visitForCycle(ctx: CheckerContext, walk: CycleWalk, node: Node): void {
 }
 
 function reportCycleSites(ctx: CheckerContext, conv: Symbol): void {
-	const walk: CycleWalk = { conv: conv, routine: conv, seen: new HashMap<string, boolean>(), pending: [conv] };
-	walk.seen.set(routineKey(conv), true);
+	const walk: CycleWalk = { conv: conv, routine: conv, seen: new HashSet<Node>(), pending: [conv] };
+	if (conv.declNode != null) walk.seen.add(conv.declNode);
 	while (walk.pending.length > 0) {
 		const routine = walk.pending[walk.pending.length - 1];
 		walk.pending.pop();

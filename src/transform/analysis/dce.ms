@@ -18,13 +18,12 @@
 import { AttachedOp, Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, VariableDeclData, ReturnStmtData, BinaryExprData, MemberExprData, IdentifierData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
-import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
-import { lookupSymbol, makeSymbol, defineSymbol } from "../../checker/symbol";
-import { CheckerContext, createContext } from "../../checker/context";
+import { findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
 import { checkProgram } from "../../checker/checkPass";
 import { getDeclName } from "../../checker/collectPass";
-import { getOpByKey } from "../../codegen/c/types";
 import { makeBlock, makeExprStmt } from "../util";
+import { overloadWinner } from "../../checker/symbol";
+import { getOpByKey } from "../../codegen/c/types";
 import { lowerBuiltins } from "../native/builtinLower";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
@@ -53,14 +52,11 @@ function isFalseLiteral(node: Node): boolean {
 
 // ===== Never-Returning Call Detection (Standard reference pattern) =====
 
-function isNeverCall(node: Node, ctx: TransformContext): boolean {
-	if (ctx.checkerCtx == null) return false;
+function isNeverCall(node: Node): boolean {
 	const d = node.data as CallExprData;
-	if (d.callee.kind != NodeKind.Identifier) return false;
-	const name = (d.callee.data as IdentifierData).name;
-	const sym = lookupSymbol(ctx.checkerCtx.table, name);
-	if (sym == null) return false;
-	if (sym.symbolType.kind != TypeKind.Function) return false;
+	if (d.callee.kind != NodeKind.Identifier || d.callee.resolvedSym == null) return false;
+	const sym = overloadWinner(d.callee.resolvedSym, d.resolvedOverloadIdx);
+	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return false;
 	const ret = sym.symbolType.typeReturn;
 	return ret != null && ret.kind == TypeKind.Never;
 }
@@ -231,7 +227,7 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 
 		// CallExpr: check if callee returns never (standard pattern)
 		NodeKind.CallExpr => {
-			return isNeverCall(node, ctx) || neverOrNull(node) != null;
+			return isNeverCall(node) || neverOrNull(node) != null;
 		},
 
 		// Block: check last statement
@@ -512,14 +508,11 @@ export function lowerDCE(program: Node, ctx: TransformContext): Node {
 
 // ===== Test Helper: DCE with checker context =====
 
-function stmtCountWithChecker(input: string, setup: (cc: CheckerContext) => void): int32 {
+function checkedStmtCount(input: string): int32 {
 	const result = parseInput(input);
 	if (!result.ok) return -1;
-	const cc = createContext();
-	setup(cc);
-	const tctx = createTransformContextWithChecker(cc);
-	const lowered = lowerDCE(result.value, tctx);
-	return getStmts(lowered).length;
+	const cc = checkProgram(result.value);
+	return getStmts(lowerDCE(result.value, createTransformContextWithChecker(cc))).length;
 }
 
 // ===== Tests =====
@@ -589,29 +582,11 @@ test "else-if chain missing else" {
 	assert stmtCountAfter(code, lowerDCE) == 2;
 }
 
-test "never call strips after" {
-	const count = stmtCountWithChecker("fail(); const dead = 2;", (cc: CheckerContext) => {
-		const fnType = createFunction([], [], neverType());
-		const sym = makeSymbol("fail", SymbolKind.Function, fnType, false);
-		defineSymbol(cc.table, sym);
-	});
-	assert count == 1;
-}
+test "never call strips after" { assert checkedStmtCount("function fail(): never { throw 1; } fail(); const dead = 2;") == 2; }
 
-test "void call keeps after" {
-	const count = stmtCountWithChecker("log(); const alive = 2;", (cc: CheckerContext) => {
-		const fnType = createFunction([], [], voidType());
-		const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
-		defineSymbol(cc.table, sym);
-	});
-	assert count == 2;
-}
+test "void call keeps after" { assert checkedStmtCount("function log(): void {} log(); const alive = 2;") == 3; }
 
-test "unknown function keeps after" {
-	// No symbol registered — conservative, keeps code
-	const count = stmtCountWithChecker("mystery(); const alive = 2;", (cc: CheckerContext) => {});
-	assert count == 2;
-}
+test "unknown function keeps after" { assert checkedStmtCount("mystery(); const alive = 2;") == 2; }
 
 test "null checker graceful" {
 	// stmtCountAfter uses null checkerCtx — must not crash

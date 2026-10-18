@@ -17,6 +17,9 @@ export enum Fam {
 	Union,
 	Generic,
 	Agg,
+	Coll,
+	Str,
+	Own,
 }
 
 export enum W {
@@ -38,6 +41,9 @@ export enum W {
 	FamUnion,
 	FamGeneric,
 	FamAgg,
+	FamColl,
+	FamStr,
+	FamOwn,
 	ClosureNamed,
 	ClosureArray,
 	ClosureIife,
@@ -46,6 +52,7 @@ export enum W {
 	ClosureInvoke,
 	ClosureMaker,
 	ClosureFill,
+	ClosureRoutine,
 	GenericId,
 	GenericTwice,
 	GenericPick,
@@ -62,6 +69,39 @@ export enum W {
 	AggClass,
 	AggAlias,
 	AggPoke,
+	CollIndex,
+	CollSize,
+	CollGet,
+	CollSlot,
+	CollRest,
+	CollDecl,
+	CollAlias,
+	CollPush,
+	CollEdit,
+	CollLoop,
+	CollSplit,
+	CollKeyed,
+	CollFixed,
+	StrSize,
+	StrCode,
+	StrTest,
+	StrDecl,
+	StrAppend,
+	StrAssign,
+	StrConcat,
+	StrText,
+	StrCut,
+	StrCase,
+	StrGrow,
+	StrEdit,
+	OwnField,
+	OwnHeld,
+	OwnDecl,
+	OwnCopy,
+	OwnMove,
+	OwnRef,
+	OwnOut,
+	OwnSink,
 	ExprFam,
 	StmtFam,
 	StmtElse,
@@ -87,6 +127,9 @@ export const W_KEYS: string[] = [
 	"w.fam.union",
 	"w.fam.generic",
 	"w.fam.agg",
+	"w.fam.coll",
+	"w.fam.str",
+	"w.fam.own",
 	"w.closure.named",
 	"w.closure.array",
 	"w.closure.iife",
@@ -95,6 +138,7 @@ export const W_KEYS: string[] = [
 	"w.closure.invoke",
 	"w.closure.maker",
 	"w.closure.fill",
+	"w.closure.routine",
 	"w.generic.id",
 	"w.generic.twice",
 	"w.generic.pick",
@@ -111,6 +155,39 @@ export const W_KEYS: string[] = [
 	"w.agg.class",
 	"w.agg.alias",
 	"w.agg.poke",
+	"w.coll.index",
+	"w.coll.size",
+	"w.coll.get",
+	"w.coll.slot",
+	"w.coll.rest",
+	"w.coll.decl",
+	"w.coll.alias",
+	"w.coll.push",
+	"w.coll.edit",
+	"w.coll.loop",
+	"w.coll.split",
+	"w.coll.keyed",
+	"w.coll.fixed",
+	"w.str.size",
+	"w.str.code",
+	"w.str.test",
+	"w.str.decl",
+	"w.str.append",
+	"w.str.assign",
+	"w.str.concat",
+	"w.str.text",
+	"w.str.cut",
+	"w.str.case",
+	"w.str.grow",
+	"w.str.edit",
+	"w.own.field",
+	"w.own.held",
+	"w.own.decl",
+	"w.own.copy",
+	"w.own.move",
+	"w.own.ref",
+	"w.own.out",
+	"w.own.sink",
 	"w.expr.fam",
 	"w.stmt.fam",
 	"w.stmt.else",
@@ -120,30 +197,45 @@ export const W_KEYS: string[] = [
 export const W_DEFAULTS: int32[] = [
 	25, 30, 8, 10, 8, 19,
 	25, 25, 8, 12, 12, 6, 6, 6,
-	1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
-	1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 2,
 	1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1,
+	1, 1, 1,
+	1, 1, 1, 1, 1, 1,
+	1, 1,
+	1, 1, 1, 1, 1, 1,
 	20, 20, 50, 30,
 ];
 
 const W_GROUPS: int32[][] = [
 	[0, 5],
 	[6, 13],
-	[14, 17],
-	[18, 20],
-	[21, 25],
-	[26, 30],
-	[31, 34],
-	[35, 41],
+	[14, 20],
+	[21, 23],
+	[24, 28],
+	[29, 33],
+	[34, 37],
+	[38, 44],
+	[45, 49],
+	[50, 57],
+	[58, 60],
+	[61, 63],
+	[64, 69],
+	[70, 71],
+	[72, 77],
 ];
 
 export enum Plant {
 	None,
 	Backend,
 	Opt,
+	San,
 }
 
 export struct Features {
@@ -156,6 +248,7 @@ export struct Features {
 	exprDepth: int32;
 	trips: int32;
 	entries: int32;
+	top: int32;
 	plant: Plant;
 	w: int32[];
 }
@@ -172,7 +265,7 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
-export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg];
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own];
 
 export function famName(f: Fam): string {
 	return match (f) {
@@ -180,6 +273,9 @@ export function famName(f: Fam): string {
 		Fam.Union => "union",
 		Fam.Generic => "generic",
 		Fam.Agg => "agg",
+		Fam.Coll => "coll",
+		Fam.Str => "str",
+		Fam.Own => "own",
 	};
 }
 
@@ -187,7 +283,7 @@ function famFromName(name: string): Result<Fam, string> {
 	for (const f of ALL_FAMS) {
 		if (famName(f) == name) { return Result.ok(f); }
 	}
-	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, none)");
+	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, none)");
 }
 
 export function tyName(t: Ty): string {
@@ -216,6 +312,7 @@ function plantName(p: Plant): string {
 		Plant.None => "none",
 		Plant.Backend => "backend",
 		Plant.Opt => "opt",
+		Plant.San => "san",
 	};
 }
 
@@ -224,7 +321,8 @@ function plantFromName(name: string): Result<Plant, string> {
 		"none" => Result.ok(Plant.None),
 		"backend" => Result.ok(Plant.Backend),
 		"opt" => Result.ok(Plant.Opt),
-		_ => Result.err("unknown plant '" + name + "' (none, backend, opt)"),
+		"san" => Result.ok(Plant.San),
+		_ => Result.err("unknown plant '" + name + "' (none, backend, opt, san)"),
 	};
 }
 
@@ -243,6 +341,7 @@ export function defaults(this typeof Features): Features {
 		exprDepth: 3,
 		trips: 4,
 		entries: 4,
+		top: 1,
 		plant: Plant.None,
 		w: W_DEFAULTS.map((n: int32): int32 => n),
 	};
@@ -266,6 +365,7 @@ export function format(this f: Features): string {
 		" expr=" + String(f.exprDepth) +
 		" trips=" + String(f.trips) +
 		" entries=" + String(f.entries) +
+		" top=" + String(f.top) +
 		" plant=" + plantName(f.plant) + weightText(f.w);
 }
 
@@ -375,6 +475,8 @@ export function overlay(this base: Features, text: string): Result<Features, str
 			f = { ...f, trips: try boundedInt(key, value, 1, 64) };
 		} else if (key == "entries") {
 			f = { ...f, entries: try boundedInt(key, value, 1, 64) };
+		} else if (key == "top") {
+			f = { ...f, top: try boundedInt(key, value, 0, 8) };
 		} else if (key.startsWith("w.")) {
 			const at = weightIndex(key);
 			if (at < 0) { return Result.err("unknown weight '" + key + "'"); }
@@ -450,7 +552,7 @@ test "an unknown weight, a bad value and an all-zero group are refused" {
 	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
-	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0").ok;
 }
 
 test "swarm keeps the weights of its base" {
@@ -503,8 +605,8 @@ test "swarm samples one density per vector, not a fixed coin per feature" {
 		if (f.fams == base.fams) { all++; }
 		if (f.fams.isEmpty()) { none++; }
 	}
-	assert all > 655 && all < 983;
-	assert none > 655 && none < 983;
+	assert all > 409 && all < 614;
+	assert none > 409 && none < 614;
 }
 
 test "swarm density also correlates a restricted two-family vector" {

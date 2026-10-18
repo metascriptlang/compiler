@@ -194,6 +194,8 @@ error: implicit int64 → int32 conversion in '+=' narrows — write an explicit
 
 Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`, `anonymousLiteralFieldWidths`.
 
+**`as` from one integer type to another** (measured 2026-10-15 on C, JS and the Raiser): into a signed type, a value in the target's range is kept and a value past it stops the program, a `uint64` past 2^63 into `int64` included (`value 9223372036854775808 not in range -9223372036854775808 .. 9223372036854775807`, exit 1). A constant outside is a compile error: `(9223372036854775808 as uint64) as int64` is `cannot convert 9223372036854775808 to int64`. Into an unsigned type the value wraps (`uint64` 2^63+5 `as uint32` is 5). `int64Bits(u)` reads a `uint64`'s bits as an `int64` (`int64Bits(18446744073709551615)` is -1). `--danger` drops the run-time check on C; JS keeps it. For a `uint64` past 2^63 into `int32`, C prints the value as a float (`value 9.2233720368547758e+18 not in range …`); JS and the Raiser print the integer. Pins: corpus `669`, `uint64ToInt64Checked`, `1033`; handoff `intLiteralBoundary`; the Raiser conversion tests in `src/raiser/vm.ms`.
+
 ### Float Types
 
 | Type | Size | C Mapping |
@@ -519,13 +521,19 @@ if (f()) {}                 // cannot be tested for truthiness (also while/for/t
 const n = f();
 const s = n + 1;            // operator '+' cannot be applied to 'void'
 const b = n === 1;          // 'void' and 'number' have no overlap
+const t = "n=" + n;         // a 'void' value has no text (also `${f()}`, String(f()), a never value)
+function g(): int32 | void  // 'int32 | void' puts void in a union, and void is no value — write 'int32 | null'
 ```
+
+The last two are refused where TypeScript accepts them (TS prints `undefined`; C printed
+`<object>` without calling, JS `undefined`, the Raiser `null`), on C, JS and the Raiser alike
+(measured 2026-10-16, candidate of `wt/type-refusals`; pins `checker3pass/scenarios/textOfVoid.ms`,
+`checker3pass/scenarios/voidInUnion.ms`).
 
 Forgiven, observing the null carrier — identical output on C and JS:
 
 ```typescript
 const n = f();              // bind: n is void, carrier null
-console.log("n=" + n);      // n=null
 const eq = n === null;      // true
 const m = n;                // chained bind carries null too
 let x: void = f(); x = f(); // void slot, re-assignment stays legal
@@ -773,7 +781,11 @@ if (h.cb !== null) { h.cb(7); }           // narrow, then call
 
 **Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
 
-**Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread or a computed key takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
+**Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
+
+**Locals read before they are assigned** (measured 2026-10-12 on C, JS and the Raiser with a candidate built from tree `d98cdaec6f8d03752dd344dda894df6e3d05a478`; handoff `useBeforeAssign`, corpus `outArgumentUnassigned`): a function-local variable declared without a value must be assigned on every path before it is read, for every type, the TypeScript rule (TS2454). `let n: int32; return n;` and `let n: int32; if (c) { n = 1; } return n;` are `'n' may be read before it is assigned` on all three backends; an assignment in a loop body does not count for a read after the loop. Writing a field or an element is a read of the variable: `let p: P; p.x = 1;` is the same error, so a struct is built with a literal and a sized array is declared `let buf: uint8[4] = [];` (zero filled). An `out` argument is the assignment: `let a: int32; let s: string; fill(out a, out s);` then reading both prints `5 five` on all three. A variable whose type admits `null` (`T | null`) reads as `null` without an assignment. Module-level variables are not checked. `--strict-defs`, which used to turn this into a warning, is gone (`unknown option '--strict-defs'`). Whether the callee writes its `out` parameter is checked where the callee is declared (see Parameter Modifiers); `out a` passed to a `ref` or plain parameter is an error.
+
+**A struct with a private field has no default value outside its module** (measured 2026-10-12, same candidate, same three backends; guard `solanaPdaForgeRefused`, handoff `fieldVisibility`): for `export struct Proof { private n: int32; }`, another module cannot bring a `Proof` into being except through a function of the declaring module. `const a: Proof = {}` and `{} as Proof` are `type 'Proof' has a private field and can only be built by the module that declares it — obtain one from that module`; `const c: Proof[2] = []` is `2 of 2 slots are left without a value`; `new Array<Proof>(2)` is `would fill the array with default values`; a struct that holds a `Proof` cannot omit that field; and an `out` argument assigns such a variable only because the callee must write its `out` parameter on every path (`function leave(out p: Proof): void {}` is `'p' is not assigned on every path` where it is declared, so `let p: Proof; leave(out p); needs(p)` cannot forge one). A module-level `let g: Proof;` is `'g' is declared without a value`. Inside the declaring module nothing changes. `as` to a struct takes only a struct it is related to (itself, a distinct of it, a struct it extends or that extends it), a union holding one, or an object literal: `(0 as uint64) as Proof` is `cannot convert uint64 to Proof: only a struct, a distinct of it, or a struct it extends converts to a struct`, and so are a string, an enum, an array, a function, a `Map`, a `Promise` and `T[] | null` as the source (measured 2026-10-12 on the three backends, candidate of tree `1af2a5e74d0bcf99ee42267467cdc99e4127a310`; handoff `fieldVisibility`). Growing an array by assignment is the same hole: `d.length = n` (and `+=`, `-=`, and `d.setLength(n)`) on an array whose element has no default value (a class, a `Map`, a function, an array, or a struct holding a `Proof`) is `'length' cannot be assigned on an array whose elements have no default value, because it could grow`, also through a generic `function g<T>(a: T[], n: int32) { a.length = n; }` instantiated with such a `T`; only the literal `d.length = 0` is accepted, because zero cannot grow. `d.shrink(n)` cuts to `n` elements and destroys each dropped one; `n` outside `0 .. d.length` is `value 5 not in range 0 .. 2` and exit 1 on C and JS (the Raiser VM reports its own `raiser runtime error`). Arrays of `int32`, `string`, a scalar struct or `T | null` keep `length = n` (measured 2026-10-14 with the candidate of this arc; handoff `arrayLengthGrowth`, corpus `arrayShrinkValid`, `arrayShrinkOver`, `arrayShrinkNegative`). Not measured: `d.setLength(n)` on the Raiser for such an element, which is not refused there.
 
 `?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
 
@@ -794,6 +806,12 @@ const p: Vec2 = { x: 1.0, y: 2.0 };  // stack-allocated
 interface IUser { name: string; age: number; }
 struct SuperUser = IUser & { role: string; };
 ```
+
+#### Computed keys
+
+An object literal's fields are fixed at compile time, so a computed key must be a string literal: `{ ["lit"]: 3 }` is the field `lit`, as in TypeScript. Any other key expression is the error `a computed key must be a string literal` at its `[`, including `[k]` for `const k = "kv"`, because MetaScript types `k` as `string` where TypeScript types it `"kv"`; keys known only at run time belong in a `Map<string, T>`. TypeScript gives such a literal an index signature, which a struct cannot carry. Inside a macro argument the key is kept for the macro (`docs/LANG-METAPROGRAMMING.md`, Macro Invocation Forms).
+
+Measured 2026-10-15 on a candidate built from `wt/fix-computed-key`: `{ ["lit"]: 3, plain: 4 }` prints `{"lit":3,"plain":4}` on C, JS and the Raiser (corpus `computedKeyStringLiteral`); `[screen.wide]` and `[k]` are refused on C and JS, and two computed keys give two errors (`src/test/handoff/computedObjectKey.ms`). Before, every computed key was stored as the field `__computed__`: one printed `{"__computed__":1}`, two collapsed into one field on JS and failed in clang on C. A numeric literal key `[1]` is refused the same way, while TypeScript names the field `1`. Not measured: a computed key in a literal whose expected type is a class or an interface.
 
 #### Field Decorators
 
@@ -860,6 +878,8 @@ Developer writes normal code — the compiler picks the fastest path automatical
 | `readonly` | `f(readonly v: Struct)` | Explicit copy — caller's value unaffected |
 | `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
+
+An `out` parameter must be written on every path before the routine returns (measured 2026-10-14 on a candidate of this tree, handoff `outParameterWrites`): the end of the body, every `return`, and a `try` that returns its error each give `'x' is not assigned on every path: it is an out parameter and must be written before …`, so `function f(out x: int32, c: boolean): void { if (c) { x = 1; } }` and an early `return` before the write are errors. A branch that leaves, a `throw` and a call `g(out x)` to another out parameter count as writes or exits; writing `x[i]` or `x.f` does not count. A `throw` leaves the parameter unwritten, and the caller's variable is not assigned across a `catch`. A local that reuses an out parameter's name in the same function is an error, because the check goes by name. An `out` argument assigns the caller's variable and is written only for an out parameter (`out a` to a plain or `ref` parameter is an error); passing the variable without `out` to an out parameter assigns it too. A body-less `extern` declaration is the trust boundary and is not checked. A class method takes `out` and `ref` parameters the same way (measured on C and JS, corpus `methodOutParameter`, a generic class instance included); a constructor parameter cannot be `out` or `ref` and says so. Not covered: an out parameter on an actor method or a function expression (the parameter name keeps its `out:` prefix and the body reads `Undefined variable 'x'`), and a read of an out parameter before its first write, which the checker's identifier read path does not yet treat as a read of an unassigned local.
 
 A closure cannot capture a `ref` or `out` parameter (`'n' is a ref/out parameter and cannot be
 captured by a closure`), as the reference refuses capturing a `var` parameter (lambdalifting.nim:208
@@ -1021,6 +1041,38 @@ export default class App { }
 export { Token } from "./lexer/token";
 export * from "./utils";
 ```
+
+**JS bundle exports.** `msc build --target=js entry.ms` gives the bundle the entry module's export
+list as its ES exports, under the source names: a function, a `const`/`let`, a non-generic class,
+`export default`, and a re-export (`export { x } from`, `export * from`) of one of those, bound to the
+same value. Each exported name is exactly one runtime value: exporting an overload set, a generic
+function or class, or an enum, directly or through a re-export, is a compile error at the `export`.
+Extension functions stay out of the bundle's exports because their export is module visibility.
+Exports of other modules stay internal, and `--split` output is unaffected. Measured 2026-10-14 with
+node 24.1 by `src/test/guard/jsBundleEntryExports.ms`.
+
+**Dynamic `import()`.** `await import("./x")` gives the namespace of `./x`, typed
+`Promise<typeof import("./x")>`. A module that only `import()` reaches runs its body at the first
+import, in a later task and never inside the call. Imports issued while it evaluates share that one
+evaluation. A body that throws, or whose top-level await rejects, rejects that import and every later
+one with the same error. With a top-level await, the import settles once the body and every module it
+imports have settled. The specifier must be a string literal; `--app=lib` and targets without an event
+loop refuse `import()` (`src/test/handoff/dynamicImport.ms`). Pinned by the corpus programs
+`dynamicImport*` on c, orc, js, esm and raiser.
+
+When a module body starts another `import()`, the place of that second body relative to the outer
+importer's continuation is host-defined under `--split`: native ES modules load it after the
+continuation, while C and the bundle evaluate it before the continuation. Measured
+2026-10-17 with node 24.1 on `main` → `import("./a")`, where `a`'s body calls `import("./b")`:
+
+| lane | stdout |
+|---|---|
+| C | `start` `a body` `b body` `main got 1` `a got 2` |
+| JS bundle | `start` `a body` `b body` `main got 1` `a got 2` |
+| `--split` (5 of 5 runs) | `start` `a body` `main got 1` `b body` `a got 2` |
+
+The Raiser stops on this program with "deadlock: no runnable strand" (inbox card
+`2026-10-16-raiser-import-awaited-inside-a-module-body-deadlocks`).
 
 ### Converter Declarations
 
@@ -1520,7 +1572,9 @@ typedef struct {
 } NodeData;
 ```
 
-For boolean-disc and TS-style DUs, `_tag` is `int32_t` (variant index). The discriminator field (`ok`, `kind`) lives inside each variant struct at the same offset, so accessing `r.ok` reads it through `v0`/`v1` overlapping memory.
+For boolean-disc and TS-style DUs, `_tag` is `int32_t` (variant index), and reading `r.ok` on the union reads `_tag`. On C, a field whose type has one value (`ok: true`, `ok: false`) in an anonymous object type is stored nowhere: a read gives the literal and a write evaluates both sides and stores nothing. Each `match` arm and both variants of `Result<T, E>` are such types, so the payload starts at the union's alignment, and the variant has that one layout wherever it goes, inside the union or narrowed and passed to `JSON.stringify` or a generic. `Result<Key, Failure>` with a 32-byte `Key` of alignment 1 and an 8-byte `Failure` is 40 bytes with the payload at offset 8, where it was 48 with the payload at 9 when each variant stored `ok`. A named struct (`struct Hit { ok: true; at: uint8 }` in `Hit | Miss`) and a tuple element of type `true` keep their storage, and JS keeps every field. Measured 2026-10-16 on C and `--target=js` with corpus `resultDiscriminantOnce`: `sizeof` 40, 40, 24, 56 and 32 for `Result<Key, Failure>`, `Result<Failure, Key>`, `Result<int32, string>`, a `match (ok: boolean)` union and `Hit | Miss`, and the same output on both backends for a narrowed variant through `JSON.stringify`, a generic, object rest and spread, and `{ ok: true; n: int32 }` beside `{ ok: boolean; n: int32 }`. Not measured: a one-value enum member or string literal field, which stays stored.
+
+`sizeof` folds to the size C gives, and C checks it: each anonymous struct, union arm and union is emitted with `_Static_assert(sizeof(T) == n)`, so a size the compiler computes differently from C stops the build instead of folding a wrong number. A `string`, an array and a span are a length and a pointer, `{ int64_t len; ptr }`: 16 bytes on 64-bit targets, arm and wasm32, 12 on i386. A union of string literals is held in a `string`. Measured 2026-10-16: `type Align = "auto" | "center"` with `struct Holder { a: Align | null }` prints `16 24` for `sizeof(Align)` and `sizeof(Holder)` on C and `--target=js` (it printed `24 32`); `sizeof(string)` and `sizeof(Result<int32, string>)` fold to 16 and 24 with `--cpu=arm`, 12 and 16 with `--cpu=i386`; a probe of 40 anonymous structs and unions over every field kind passes its asserts under `zig cc -fsyntax-only` for i386, arm, wasm32, x86_64 and aarch64. Not run: a 32-bit binary (the runtime does not yet compile for i386 and arm).
 
 #### Choosing the right form
 
@@ -1708,6 +1762,14 @@ Two members that share a tag (a union of two function types) are not split by `t
 union stays whole and a call on it is rejected. Inside the branch the narrowed value is used
 directly as an operand, callee, condition or receiver; no `as` is needed (an explicit
 `v as int32` remains a no-op there).
+
+Separate `if (typeof x === "...")` branches each test the original stored union tag
+after the preceding branch rejoins; narrowing a read never changes the storage
+representation. `src/test/corpus/programs/sequentialTypeof.ms` printed
+`n:8 s:hi b:yes b:no` with `./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/sequentialTypeof.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/sequentialTypeof.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/sequentialTypeof.ms`
+(source tree `80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`).
 
 ### Struct Field Type Checking
 
@@ -1957,6 +2019,9 @@ an alias too), `spawn(work)` with `async function work()` is refused at the call
 `await work()` or `await spawn(() => workSync())`, and an async body whose return is itself a
 promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
 flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
+
+`await` takes a thenable as TypeScript does, through the `then` protocol (see
+["`then` — thenable adoption"](#then--thenable-adoption)).
 
 #### Promise Chaining (.then / .catch / .finally)
 
@@ -2855,13 +2920,13 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
 
 - **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
-- **Literals**: there is no char literal: `'A'` is a one-character `string`, as in TypeScript, and `const c: char = 'A'` is `Type 'string' is not assignable to type 'char'`. Write the code: `const c: char = "A".code` is 65 on C, JS and the Raiser (measured 2026-10-06).
-- **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
+- **Literals**: there is no char literal: `'A'` is a one-character `string`, as in TypeScript, and `const c: char = 'A'` is `Type 'string' is not assignable to type 'char'`. Write the code and convert it: `const c: char = "A".code as char` prints `A` in a template on C, JS and the Raiser (measured 2026-10-16).
+- **Numeric**: `char` compares with a char or a number (`c == 65`, `c < d`) and converts with `as`, but takes no part in arithmetic: `c + 1`, `i + c` (any int, float or `number` width), `c + d`, `total += c` and `-c` are `operator '+' cannot be applied to 'char' and 'int32': a char is not a number — convert it with an explicit 'as int32'`; write `(c as int32) + 1`, and `((c as int32) + 1) as char` to get a char back (measured 2026-10-16, candidate of `wt/type-refusals`, the same refusal on C, JS and the Raiser; pinned by `checker3pass/scenarios/charArithmetic.ms`). No implicit conversion crosses between `char` and another number either: `const c: char = 65` and `const n: int32 = c` are `implicit int32 → char conversion crosses between char and a number — write an explicit 'as char'` (and its mirror) on C, JS and the Raiser. Pinned by `checker3pass/scenarios/charAcceptsOnlyChar.ms`.
 - **No `as` between text and numbers**: `s[i] as int32`, `s as char`, `s as boolean` and `n as string` are checker errors (`cannot convert string to int32 — …`) on C, JS and the Raiser, as in TypeScript and Nim; read `s.charCodeAt(i)` or `s.byteAt(i)`, or format with `String(n)`. `"0xff" as bigint` still parses. Measured 2026-10-06, pinned by `checker3pass/scenarios/textConversions.ms`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
 
 ```typescript
-const c: char = "A".code;   // 65
+const c: char = "A".code as char;   // A
 const s = "héllo";
 const first = s[0];        // "h" — string, TS semantics
 const b: int32 = s.byteAt(1); // 0xC3 — first byte of é, byte tier
@@ -3443,6 +3508,23 @@ const p: Person = { name: "Alice", age: 30 };
 p.toString()              // plain JSON (no colors)
 ```
 
+Dynamic-array `.toString()` uses comma-separated element text. An empty array
+becomes `""`; an empty nested array or `null` element leaves an empty field
+between separators; a declared element `toString` takes precedence. The
+portable declaration is `std/core/array/shared.ms` `toString`. On source tree
+`80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`, the three commands
+`./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/arrayText.ms`
+each printed `1,2,3|ab,c||1,2,,3|a,,b|label:x,label:y`.
+
+`String(xs)` and `` `${xs}` `` use that same checked method. On tree
+`4e18eddad4d988ba10db163a62ddd34142cdd369`,
+`./msc-n2s-static-stage2 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-static-stage2 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-static-stage2 run --target=raiser src/test/corpus/programs/arrayText.ms`
+also printed `1,2,3 1,2,3 1,2,,3 1,2,,3 a,,b a,,b label:x,label:y label:x,label:y`.
+
 #### Custom String Format via Extension Methods
 
 Override the default format for any type by defining a `toString` extension method:
@@ -3540,6 +3622,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+| `then(this T, onFulfilled: (v: U) => void, onRejected?: (e: Error) => void): void` | `x` → `promiseFromThenable(x, …)`, a `Promise<U>` | T meets a site where a promise adopts a value: `await`, an async function's return, `Promise.resolve`, an element of `Promise.all`/`race`/`any` |
 
 **Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter
 to `U` for a slot of type `U`, for `as U` and for an operand beside a `U`, `toItems` for `for..of` — and
@@ -3582,9 +3665,60 @@ One step only: the result of a `valueOf` is not read again. The receiver matches
 distinct of the same shape does not borrow it, and the extension must be visible like any other (imported
 from its module, or re-exported through a hub).
 
+**Ordering**: `<` `<=` `>` `>=` order numbers, enums, strings, booleans against booleans, bigints, and
+pointers against pointers. A class, interface, struct or array has no order of its own: two of them
+are read through `valueOf` or refused, never compared by address. A union operand reads each member,
+an ordered one as itself and any other through its `valueOf`, joins the reads (numbers and enums to
+the wider number, text to `string`), and picks the member held with `typeof`/`instanceof`, a subclass
+before its base. It is refused, naming the member, when a member neither orders nor has `valueOf`,
+cannot compare with the other side, or cannot be told apart at run time from another member (two
+plain objects, two enums); when the union holds `null`; and when the operand is not a name or a field
+path (store it in a local first). Corpus `orderingThroughValueOf` runs every accepted shape on C and JS.
+
 Consequences: `const c2 = count`, `id(count)`, `[count]`, `nn ?? count` and `() => count` in a
 `() => Accessor<T>` slot keep the accessor; `console.log(count)` and `String(count)` print the handle
 (write `${count}` or `count.toString()`); `typeof count` inspects the handle.
+
+##### `then` — thenable adoption
+
+A type with a `then` that takes a callback is a thenable, and every site where a promise adopts a
+value adopts it as the `Promise<U>` its `then` describes, `U` being the parameter of `onFulfilled`:
+
+```ms
+class Deferred {
+	then(onFulfilled: (v: int32) => void, onRejected: (e: Error) => void): void { ... }
+}
+
+const a = await new Deferred();                                     // int32
+async function load(): Promise<int32> { return new Deferred(); }    // settles with what then delivers
+const p = Promise.resolve(new Deferred());                          // Promise<int32>
+const all = await Promise.all([new Deferred(), fetchCount()]);     // int32[]
+```
+
+The name is JavaScript's, as `toString` and `valueOf` keep theirs, because its sites are JavaScript's
+thenable-adoption sites. A type opts in with a method, an inherited method, a function-typed field (an
+interface member too), or an extension; an extension counts only on the type its receiver names, so a
+generic `then<T>(this x: T, ...)` makes no type a thenable. Strings and primitives never are.
+
+At every site `then` is called from a queued job, after the caller's next statement, never inside the
+adopting expression; `onFulfilled` settles with its argument, `onRejected` and a throwing `then` reject
+with the error, and only the first settlement counts. Corpus `awaitUserThenable`, `awaitThenableOrder`,
+`thenableAdoptionSites`, `thenableCombinators` and `thenableAdoptionOrder` run the shapes on C and JS.
+
+Refused, each at its site with the reason:
+
+- a `then` whose `onFulfilled` receives something awaitable (a promise or another thenable): a promise
+  never holds a promise; or receives a type parameter: declare the type its callback receives;
+- a `then` whose first parameter is not a callback, or whose `onRejected` takes something other than
+  `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
+- `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
+  instantiated with one): write `Promise<U>`;
+- `return thenable` inside a `try` that has a catch or finally, since the catch would not see the
+  rejection: write `return await`;
+- a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
+  what the callback returns;
+- an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
+  promise; and a combinator over a `Thenable[]` variable: thenables are adopted from an array literal.
 
 ##### `getDynamicField` — opt-in dynamic member access
 
@@ -4032,6 +4166,38 @@ extern class console {
     extern log(value: string): void from "msPrintln";
 }
 ```
+
+The `from` string is formatted once, at the declaration, on every backend: `$1` becomes the
+declared name and `$$` a literal `$`; any other `$` sequence is refused there. So
+`extern function abs(x: int32): int32 from "$1"` names C's `abs` and `from "to$1"` on a function
+`upper` names `toupper`. A `from` name without `#`, `@` or `(` is the name called, on C and on JS
+alike: `from "Math.abs"` emits `Math.abs(x)` on JS. On JS, a `from` string containing `#`, `@` or
+`(` is a pattern emitted in place of the call: each `#` takes the next argument, `@` the remaining
+ones. A C build refuses such a pattern at its `extern` declaration, called or not; a declaration
+meant for JS only sits inside `when (js) { … }` or in a `.jms` file. A pattern without a
+placeholder is emitted as written:
+
+```ms
+extern function answer(): int32 from "(40 + 2)";              // answer() → (40 + 2)
+extern function hashAt(s: string): int32 from "(#).indexOf('\\x23')";
+```
+
+Every `#` is a placeholder, a `#` inside a quoted JS string included, so a literal `#` is written
+`\\x23` in the pattern (JS reads `\x23` as `#`). Anywhere in a pattern, inside a JS string or
+not (a private name `#.\x1fsize`), `"\x1f"` emits a literal `#` and `"\x1d"` a literal `@`. The
+declaration is refused when the pattern's `#` count differs from the parameter count (with `@`,
+when it exceeds it), and the error names both counts; a `#` after `@` is refused too, since `@`
+has taken every remaining argument. An extern class method whose `from` is a plain name is
+still called on JS by its declared member name (`Clock.stamp()` for `from "Date.now"`).
+
+Measured 2026-10-14 on `wt/fix-extern-pattern`: corpus `externPatternArity` prints
+`42 hi 3 | 1 #x | 7 [1,2,3]` on JS, C drc and C orc (the C side defines plain functions under
+`when`); `src/test/js/externPattern.ms` pins the count refusals and `src/test/c/externPattern.ms`
+the C refusal. Measured 2026-10-15 on `wt/fix-extern-name`: the same program, extended, prints
+`… | 3 65 4 #x@` on all three (`$1`, `to$1`, plain `Math.abs` / `fabs`, `\x1f`, `\x1d`); both
+test files pin `$1`, `$$`, the refused `$2`, the plain JS name, the literal characters and the
+`#`-after-`@` refusal. Not measured: extern class methods with a pattern, which the count check
+does not cover (the C refusal does).
 
 ### Distinct Types
 ```typescript

@@ -1,6 +1,7 @@
 // MetaScript Compiler CLI — Argument parsing and option types
 
-import { argv, exit, platform, arch } from "std/process";
+import { argv, cwd, exit, platform, arch } from "std/process";
+import { isAbsolute, join, normalize } from "std/fs/path";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
 import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, defineSymbol } from "./defines";
@@ -24,6 +25,7 @@ export interface CliOptions {
 	command: string;
 	inputFile: string;
 	target: Target;
+	targetExplicit: boolean;   // --target= was passed, so build.ms `build.target` yields to it
 	outputPath: string;
 	showTime: boolean;
 	verbose: boolean;
@@ -43,6 +45,7 @@ export interface CliOptions {
 	sanitize: string;
 	passC: string;
 	passL: string;
+	link: string[];
 	emitC: boolean;
 	emitJobs: int32;
 	splitModules: boolean;     // --split: js target emits one ES module per source module instead of a bundle
@@ -54,7 +57,6 @@ export interface CliOptions {
 	watchReplay: string;
 	emitSubdir: string;
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
-	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
 	testsShard: int32;         // --tests-shard=<i>/<n>: test runs the tested modules whose position mod n is i
@@ -124,6 +126,7 @@ export function newCliOptions(): CliOptions {
 		command: "",
 		inputFile: "",
 		target: Target.C,
+		targetExplicit: false,
 		outputPath: "",
 		showTime: false,
 		verbose: false,
@@ -141,6 +144,7 @@ export function newCliOptions(): CliOptions {
 		sanitize: "",
 		passC: "",
 		passL: "",
+		link: [],
 		emitC: false,
 		emitJobs: 0,
 		splitModules: false,
@@ -152,7 +156,6 @@ export function newCliOptions(): CliOptions {
 		watchReplay: "",
 		emitSubdir: "",
 		appMode: "console",
-		strictDefs: false,
 		strictNullChecks: false,
 		testsInDir: false,
 		testsShard: 0,
@@ -198,16 +201,29 @@ export function parseArgs(): CliOptions {
 	// and the compiler is not known until resolveCC runs. resolveLto (cc.ms),
 	// called right after resolveCC, turns "" into thin/off per capability.
 
-	// Seeded last because backend/os/gc/mode are only final once every switch has
-	// been read; `seed` skips names the user already set, so -d: still wins
-	// (Nim reaches the same precedence by seeding first — condsyms.nim:34 before
-	// commands.nim:703).
-	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
-	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
-
 	opts.targetInfo = resolveTargetSizes(opts.targetOs, opts.cpuTarget);
 
 	return opts;
+}
+
+function targetNamed(name: string): Result<Target, string> {
+	return match (name) {
+		"c" => Result.ok(Target.C),
+		"js" | "javascript" => Result.ok(Target.JS),
+		"raiser" | "vm" => Result.ok(Target.Raiser),
+		_ => Result.err("unknown target '" + bold(name) + "'. Valid: " + cyan("c") + ", " + cyan("js") + ", " + cyan("raiser")),
+	};
+}
+
+export function applyBuildTarget(opts: CliOptions, name: string): Result<void, string> {
+	if (opts.targetExplicit) return Result.ok(null);
+	opts.target = try targetNamed(name);
+	return Result.ok(null);
+}
+
+export function seedOptionDefines(opts: CliOptions): void {
+	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
+	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
 }
 
 function isPackageCommand(command: string): boolean {
@@ -246,17 +262,13 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg == "--version" || arg == "-v") {
 			opts.command = "version";
 		} else if (arg.startsWith("--target=")) {
-			const targetStr = arg.slice(9, arg.length);
-			if (targetStr == "js" || targetStr == "javascript") {
-				opts.target = Target.JS;
-			} else if (targetStr == "c") {
-				opts.target = Target.C;
-			} else if (targetStr == "raiser" || targetStr == "vm") {
-				opts.target = Target.Raiser;
-			} else {
-				console.log(error("error") + ": unknown target '" + bold(targetStr) + "'. Valid: " + cyan("c") + ", " + cyan("js") + ", " + cyan("raiser"));
+			const named = targetNamed(arg.slice(9, arg.length));
+			if (!named.ok) {
+				console.log(error("error") + ": " + named.error);
 				exit(1);
 			}
+			opts.target = named.value;
+			opts.targetExplicit = true;
 		} else if (arg.startsWith("--output=")) {
 			opts.outputPath = arg.slice(9, arg.length);
 		} else if (arg.startsWith("-o=")) {
@@ -303,6 +315,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg.startsWith("--passL=")) {
 			if (opts.passL.length > 0) opts.passL = opts.passL + " ";
 			opts.passL = opts.passL + arg.slice(8, arg.length);
+		} else if (arg.startsWith("--link=")) {
+			const file = arg.slice(7, arg.length);
+			opts.link.push(isAbsolute(file) ? normalize(file) : normalize(join(cwd(), file)));
 		} else if (arg == "--check") {
 			opts.fmtCheck = true;
 		} else if (arg == "--hcr") {
@@ -321,8 +336,6 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 				console.log(error("error") + ": unknown --app mode '" + bold(appVal) + "'. Valid: " + cyan("console") + ", " + cyan("lib") + ", " + cyan("staticlib"));
 				exit(1);
 			}
-		} else if (arg == "--strict-defs") {
-			opts.strictDefs = true;
 		} else if (arg == "--strict-nil") {
 			opts.strictNullChecks = true;
 		} else if (arg == "--tests-in-dir") {

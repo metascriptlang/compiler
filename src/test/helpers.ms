@@ -12,7 +12,8 @@ import { hasExtraGlobalImports } from "../checker/prelude";
 import { TargetInfo, hostTargetInfo } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises } from "../checker/raises";
-import { hasErrors, CheckerError, CheckerContext, GcMode } from "../checker/context";
+import { hasErrors, CheckerError, CheckerContext, GcMode, Severity, ExportRegistry } from "../checker/context";
+import { checkProgramWithRegistry, preludeContextFor } from "../checker/checkPass";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
@@ -20,12 +21,13 @@ import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
+import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
-import { MapEntry, SourceProvider, createMapProvider, loadModule, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
+import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath, loadModule, SourceProvider } from "../module/loader";
 import { createDefaultConfig, Backend, ResolverConfig } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
@@ -96,7 +98,7 @@ function placeOwnedInstances(units: CheckedUnit[], classesBesideGeneric: boolean
 	}
 }
 
-export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false): CompileResult {
+export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false, lowerAccess: boolean = false): CompileResult {
 	resetBuildState();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
@@ -135,9 +137,10 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	inferRaises([analyzed]);
+	const lowered = lowerAccess ? lowerNativeAccess(analyzed, nativeCtx) : analyzed;
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
-	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
+	const cCode = generateCModule(lowered, checkerCtx, modPath, aliveSet, false, false);
 	if (checkerCtx.errors.length > preCgErrors) return Result.err(collectErrors(checkerCtx.errors, "codegen:"));
 	return Result.ok(cCode);
 }
@@ -146,6 +149,16 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 // repo root), so sources may `import { Node } from "std/meta"` etc. The plain
 // compileToC keeps stdPath empty — std imports resolve only via prelude there.
 export function compileToCWithStd(source: string): CompileResult {
+	return compileWithStd(source, false);
+}
+
+// compileToCWithStd with the std global imports checked as graph modules, as a build
+// loads them: a std macro body binds its own module's imports only there.
+export function compileToCWithStdModules(source: string): CompileResult {
+	return compileWithStd(source, true);
+}
+
+function compileWithStd(source: string, preludeInGraph: boolean): CompileResult {
 	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");
 	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
@@ -156,14 +169,16 @@ export function compileToCWithStd(source: string): CompileResult {
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.C, stdPath);
-	const graph = loadModuleGraphWithConfig(modPath, provider, config);
+	const graph = createModuleGraph();
+	if (preludeInGraph) loadStdGlobalImportModules(graph, provider, config);
+	loadModule(graph, modPath, provider, config, 1);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
 	const loadErr = loadFailure(mod);
 	if (loadErr != "") return Result.err(loadErr);
 
-	checkModuleGraph(graph, stdPath);
+	checkModuleGraph(graph, stdPath, ".cms", platform, hostTargetInfo(), GcMode.Orc, config);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));
@@ -220,6 +235,102 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	// refuses a construct reports it here instead of emitting silently-wrong JS.
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
 	return Result.ok(generateJS(transformed, []));
+}
+
+// compileToJS with the JS prelude read from disk: a lowering that synthesizes a call to a
+// prelude routine (a string for-of's byte reads, a bigint conversion) needs the routine declared.
+export function compileToJSWithStd(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
+	resetBuildState();
+	const modPath = canonicalModulePath("test/e2e.ms");
+	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
+	const provider = createMapProvider(entries);
+	provider.useFileSystem = true;
+	const root = resolveRuntimeDir();
+	const stdPath = root != "" ? join(root, "std") : "std";
+	const config = createDefaultConfig(Backend.JS, stdPath);
+	const graph = loadModuleGraphWithConfig(modPath, provider, config);
+
+	const mod = findModule(graph, modPath);
+	if (mod == null) return Result.err("module not found");
+	const loadErr = loadFailure(mod);
+	if (loadErr != "") return Result.err(loadErr);
+
+	checkModuleGraph(graph, stdPath, ".jms", platform, target);
+
+	const unit = checkedUnit(modPath);
+	if (unit == null) return Result.err(uncheckedError(mod));
+	const checkerCtx = unit.ctx;
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+	placeOwnedInstances([unit], true);
+
+	const transformed = transformProgram(unit.program, checkerCtx, true);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
+	return Result.ok(generateJS(transformed, []));
+}
+
+function isIdentChar(c: string): boolean {
+	return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_" || c == "$";
+}
+
+// A prelude routine is named by its declaring module in a JS module, which carries the
+// absolute path of the checkout; a test that pins the call shape reads it without that suffix.
+function moduleSuffixAt(js: string, from: int32): int32 {
+	let at = js.indexOf("__", from);
+	while (at >= 0) {
+		const lead = js.charAt(at + 2);
+		const next = js.charAt(at + 3);
+		if (lead == "Z" || (lead == "M" && next >= "0" && next <= "9")) return at;
+		at = js.indexOf("__", at + 2);
+	}
+	return -1;
+}
+
+function stripRuntimeMangle(js: string): string {
+	let out = "";
+	let i = 0;
+	while (i < js.length) {
+		const at = moduleSuffixAt(js, i);
+		if (at < 0) {
+			out = out + js.slice(i, js.length);
+			break;
+		}
+		let start = at;
+		while (start > i && isIdentChar(js.charAt(start - 1))) start -= 1;
+		let end = at;
+		while (end < js.length && isIdentChar(js.charAt(end))) end += 1;
+		const token = js.slice(start, end);
+		out = out + js.slice(i, start) + (token.startsWith("ms") ? token.slice(0, at - start) : token);
+		i = end;
+	}
+	return out;
+}
+
+export function compileToJSBare(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
+	const r = compileToJSWithStd(source, target);
+	if (!r.ok) return r;
+	return Result.ok(stripRuntimeMangle(r.value));
+}
+
+export function raiserErrors(source: string): string {
+	resetBuildState();
+	const pr = parseSource(source);
+	if (!pr.ok) return "parse failed: " + pr.error;
+	const ctx: CheckerContext = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, preludeContextFor("", ".rms"));
+	let text = "";
+	for (const e of ctx.errors) {
+		if (e.severity == Severity.Error) text = text + e.message + "\n";
+	}
+	return text;
+}
+
+export function refusedOnEveryBackend(source: string, needle: string): string {
+	const c = compileToC(source);
+	if (c.ok || !c.error.includes(needle)) return "C: " + (c.ok ? "accepted" : c.error);
+	const js = compileToJS(source);
+	if (js.ok || !js.error.includes(needle)) return "JS: " + (js.ok ? "accepted" : js.error);
+	const raiser = raiserErrors(source);
+	if (!raiser.includes(needle)) return "Raiser: " + (raiser == "" ? "accepted" : raiser);
+	return "";
 }
 
 export function compileTestBuildToJS(source: string): CompileResult {

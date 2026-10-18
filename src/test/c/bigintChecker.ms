@@ -1,5 +1,6 @@
 // bigint typing rules — TS parity: no implicit mixing with number/intN in
-// arithmetic or bitwise ops, no unary '+', no '>>>'. Comparisons stay legal.
+// arithmetic, bitwise or equality ops, no unary '+', no '>>>'. Relational
+// comparisons stay legal.
 // Emission pins live with each backend once lowering lands; these are
 // checker-gate pins only, so every negative case must fail BEFORE codegen.
 
@@ -75,6 +76,49 @@ test "bigint & int32 is rejected" {
 test "bigint << int32 is rejected" {
 	const result = compileToC("const a = 1n; const b: int32 = 3; const c = a << b;");
 	assert !result.ok;
+}
+
+// ===== equality with a non-bigint = compile error =====
+
+const NUMERIC_WIDTHS = ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "float64", "number", "char"];
+const BIGINT_EQUALITY_REFUSAL = "have no overlap — convert one side first: `b == BigInt(x)` or `Number(b) == x`";
+
+function refusal(source: string): string {
+	const result = compileToC(source);
+	return result.ok ? "" : result.error;
+}
+
+test "bigint equality with a number of every width is refused on either side" {
+	for (const t of NUMERIC_WIDTHS) {
+		for (const op of ["==", "!=", "===", "!=="]) {
+			assert refusal("function f(a: bigint, b: " + t + "): boolean { return a " + op + " b; }").contains("the types 'bigint' and '" + t + "' " + BIGINT_EQUALITY_REFUSAL);
+			assert refusal("function f(a: bigint, b: " + t + "): boolean { return b " + op + " a; }").contains("the types '" + t + "' and 'bigint' " + BIGINT_EQUALITY_REFUSAL);
+		}
+	}
+}
+
+test "bigint equality with a number literal or through a nullable bigint is refused" {
+	assert refusal("function f(a: bigint): boolean { return a == 5; }").contains(BIGINT_EQUALITY_REFUSAL);
+	assert refusal("function f(a: bigint): boolean { return 5.5 != a; }").contains(BIGINT_EQUALITY_REFUSAL);
+	assert refusal("function f(a: bigint | null, b: float64): boolean { return a == b; }").contains(BIGINT_EQUALITY_REFUSAL);
+}
+
+test "a number case or match arm on a bigint is refused" {
+	for (const t of NUMERIC_WIDTHS) {
+		assert refusal("function f(a: bigint, b: " + t + "): int32 { switch (a) { case b: return 1; default: return 0; } }").contains("is not comparable to the switch value of type 'bigint' — convert one side first");
+	}
+	assert refusal("function f(a: bigint): int32 { switch (a) { case 5: return 1; default: return 0; } }").contains("convert one side first");
+	assert refusal("function f(a: bigint): int32 { return match (a) { 5 => 1, _ => 0 }; }").contains("convert one side first");
+	assert refusal("function f(a: bigint): int32 { let r: int32 = 0; match (a) { 5 => { r = 1; }, _ => { r = 0; } }; return r; }").contains("convert one side first");
+}
+
+test "bigint equality with a bigint, null or a converted side and relational mixes are accepted" {
+	const checkerAccepts = (source: string): boolean => compileToJS(source).ok;
+	assert checkerAccepts("function f(a: bigint, b: bigint): boolean { return a == b && a !== 5n; }");
+	assert checkerAccepts("function f(a: bigint | null, b: bigint): boolean { return a == null || a == b; }");
+	assert checkerAccepts("function f(a: bigint, x: float64): boolean { return a == (x as bigint) || (a as float64) == x; }");
+	assert checkerAccepts("function f(a: bigint, x: float64, i: int32): boolean { return a < x && x >= a && a > i; }");
+	assert checkerAccepts("function f(a: bigint): int32 { switch (a) { case 5n: return 1; default: return 0; } }");
 }
 
 // ===== banned operators =====

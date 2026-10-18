@@ -13,7 +13,7 @@ import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFla
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
-import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
+import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
@@ -27,10 +27,11 @@ import {
 	addPre,
 	testStringRc, classifyRc,
 } from "./scope";
-import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
+import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
 import { inferCursors } from "./cursors";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
+import { checkedCtx, bindCStd } from "../transform/testUtil";
 
 // ===== DRC Modes (standard ProcessMode parity) =====
 
@@ -161,13 +162,7 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		// (injectdestructors.nim:1028). A fresh RC call under a conv still produces an owned
 		// value; a byte-view conv only makes the RESULT a borrow, not the inner call.
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => processConvWrapper(node, dctx, mode),
-		// `!x` / `-x` / `~x` (UnaryExpr) — transparent for ownership like the wrappers above:
-		// the operator consumes the operand's VALUE, but a fresh RC call nested inside the
-		// operand still produces an owned temp that needs capture. Without this case the walk
-		// hits `_ => node` and STOPS at the operator, so e.g. `if (!f(g()))` never reaches the
-		// owned `g()` → its temp leaks. Nim never hits this: `not` is nkPrefix ∈ nkCallKinds, so
-		// it flows through the same per-arg recursion as any call (p(arg, normal) + ensureDestruction).
-		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx, mode),
+		NodeKind.UnaryExpr => processUnaryWrapper(node, dctx),
 		_ => node,
 	};
 	// ONE place (Reference parity: Nim's p() calls ensureDestruction from the central processor in
@@ -270,9 +265,9 @@ function isUnionProjection(node: Node): boolean {
 	return !isTagCarriedUnion(target);
 }
 
-function processUnaryWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+function processUnaryWrapper(node: Node, dctx: DrcContext): Node {
 	const u = node.data as UnaryExprData;
-	u.operand = processNode(u.operand, dctx, mode);
+	u.operand = processNode(u.operand, dctx, DrcMode.Normal);
 	return node;
 }
 
@@ -1750,25 +1745,15 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 // Register RC-typed function parameters for scope cleanup.
 // The function owns the parameter values — they need destroy at scope exit.
 
-function isEnvParam(name: string): boolean {
-	// Lambda-lifted closure env pointer — managed by closure infrastructure, skip from cleanup
-	if (name.length < 6) return false;
-	return name.slice(0, 6) == "__envP";
-}
-
 function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, body: Node): void {
 	if (dctx.ctx.checkerCtx == null) return;
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
-		const pName = paramNames[pi];
-		// Skip closure env params (item 11) — they're managed by msClosure infrastructure
-		if (!isEnvParam(pName)) {
-			const pRcInfo = classifyRc(paramTypes[pi], dctx);
-			if (pRcInfo.needsCleanup) {
-				// Params are borrows registered as cursors (Nim default — no sink
-				// params, ea38c2a): the caller owns the value; stores inside the
-				// callee copy at the assignment point.
-				registerVar(dctx, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
-			}
+		const pRcInfo = classifyRc(paramTypes[pi], dctx);
+		if (pRcInfo.needsCleanup) {
+			// Params are borrows registered as cursors (no sink params, ea38c2a):
+			// the caller owns the value; stores inside the callee copy at the
+			// assignment point.
+			registerVar(dctx, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 		}
 	}
 }
@@ -1799,7 +1784,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const outerFinallyVars = dctx.finallyProtectedVars;
 	const outerBody = dctx.currentFuncBody;
-	const outerName = dctx.currentFuncName;
 	const outerCache = dctx.cfgCache;
 
 	// Phase A: scan finally blocks for protected variables
@@ -1810,7 +1794,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
-	dctx.currentFuncName = fnName;
 	dctx.cfgCache = createCfgCache();
 
 	// Register RC-typed params for cleanup.
@@ -1838,7 +1821,6 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;
-	dctx.currentFuncName = outerName;
 	dctx.cfgCache = outerCache;
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
@@ -1857,6 +1839,11 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	if (varType == null) return stmt;
 
 	const rcInfo = classifyRc(varType, dctx);
+	if (stmt.resolvedSym != null && hasFlag(stmt.resolvedSym, SymbolFlag.StaticLocal)) {
+		registerVar(dctx, rcInfo, false, stmt.resolvedSym);
+		if (d.initializer != null) d.initializer = processNode(d.initializer, dctx, rhsMode(d.initializer));
+		return stmt;
+	}
 
 	// Cursor detection must happen BEFORE the needsCleanup early-return.
 	// Even if the variable's own type doesn't need cleanup, it may be a pointer alias
@@ -1868,7 +1855,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// In C, codegen emits a pointer into the union — DRC must not destroy the alias.
 	if (d.initializer != null && d.initializer.kind == NodeKind.TypeAssertion) {
 		const tad = d.initializer.data as TypeAssertionData;
-		if (tad.asExpr != null && tad.asExpr.nodeType != null && tad.asExpr.nodeType.kind == TypeKind.Union) {
+		if (tad.asExpr != null && tad.asExpr.nodeType != null && tad.asExpr.nodeType.kind == TypeKind.Union && !isFreshExpr(skipConvDfa(tad.asExpr).kind)) {
 			isCursor = true;
 		}
 	}
@@ -2486,16 +2473,8 @@ function ctorSymsWithoutReceiver(paramSyms: Symbol[] | null): Symbol[] | null {
 function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const cd = member.data as ConstructorDeclData;
 	if (cd.ctorBody != null) {
-		// Same pattern as processMethodMember: use function type for param RC classification.
-		// Constructor's function type is on member.nodeType (set in resolvePass).
-		const ctorType = member.nodeType;
 		const ctorParamSyms = ctorSymsWithoutReceiver(member.paramSyms);
-		if (ctorType != null && ctorType.kind == TypeKind.Function) {
-			const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorType, false);
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
-		} else {
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
-		}
+		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
 	}
 }
 
@@ -2570,7 +2549,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 
 function testDrcContext(input: string): DrcContext {
 	const ctx = checkSource(input);
-	const tctx = createTransformContextWithChecker(ctx);
+	const tctx = checkedCtx(ctx);
 	return createDrcContext(tctx);
 }
 
@@ -2633,13 +2612,6 @@ test "processBlockBody handles null" {
 	assert result == null;
 }
 
-test "isEnvParam detects __envP" {
-	assert isEnvParam("__envP");
-	assert isEnvParam("__envP_raw");
-	assert !isEnvParam("param");
-	assert !isEnvParam("env");
-}
-
 test "recordMoveInContext finds correct scope" {
 	const dctx = testDrcContext("const x = 1;");
 	const rcStr = testStringRc();
@@ -2684,6 +2656,7 @@ test "number type needs no cleanup" {
 
 test "callCanThrow false for ms-prefixed runtime calls" {
 	const loc = testLoc();
+	bindCStd();
 	const call = makeCall(runtimeRef("msStringDecref", loc), [], loc);
 	assert !callCanThrow(call);
 }
@@ -2727,6 +2700,7 @@ test "setNeedsTryIfRaises finds a user call in an if condition" {
 
 test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
 	const loc = testLoc();
+	bindCStd();
 	const inner = makeCall(testFnRef("parseExpr", loc), [], loc);
 	const outer = makeCall(runtimeRef("msStringDecref", loc), [inner], loc);
 	assert scanSetsNeedsTry(makeExprStmt(outer, loc));
@@ -2734,6 +2708,7 @@ test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
 
 test "setNeedsTryIfRaises leaves scopes alone for a runtime-only statement" {
 	const loc = testLoc();
+	bindCStd();
 	const stmt = makeExprStmt(makeCall(runtimeRef("msStringDecref", loc), [], loc), loc);
 	assert !scanSetsNeedsTry(stmt);
 }

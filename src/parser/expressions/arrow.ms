@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, peek, markState, rewindState } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, peek, markState, rewindState, angleCloserWidth } from "../context";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr, exprNode } from "./util";
@@ -48,9 +48,9 @@ function scanParenForArrow(state: ParserState): boolean {
 						if (tt.kind == TokenKind.LParen || tt.kind == TokenKind.LBrace ||
 							tt.kind == TokenKind.LBracket || tt.kind == TokenKind.Lt) {
 							tDepth = tDepth + 1;
-						} else if (tt.kind == TokenKind.RParen || tt.kind == TokenKind.RBrace ||
-							tt.kind == TokenKind.RBracket || tt.kind == TokenKind.Gt) {
-							tDepth = tDepth - 1;
+						} else {
+							const closes = tt.kind == TokenKind.RParen || tt.kind == TokenKind.RBrace || tt.kind == TokenKind.RBracket ? 1 : angleCloserWidth(tt.kind);
+							tDepth = tDepth - closes;
 							if (tDepth < 0) return false;
 						}
 						if (tDepth == 0 &&
@@ -397,6 +397,10 @@ test "untyped param return type async" { assert arrowReturnTypeOf("async (n): Pr
 test "untyped param return type destructured" { assert arrowReturnTypeOf("({ a }): string => a") == "string"; }
 test "two untyped params return type" { assert arrowReturnTypeOf("(a, b): number => a + b") == "number"; }
 test "zero params return type" { assert arrowReturnTypeOf("(): string => 'v'") == "string"; }
+test "a return type closing nested type arguments together" {
+	assert arrowReturnTypeOf("(): Box<Box<int32>> => v") == "Box<Box<int32>>";
+	assert arrowReturnTypeOf("(n): Box<Box<Box<int32>>> => n") == "Box<Box<Box<int32>>>";
+}
 test "typed param return type" { assert arrowReturnTypeOf("(n: number): string => n") == "string"; }
 
 test "true arm paren is not an arrow" { assert armKinds("c ? (y) : (n: number): number => n + 1") == "other/arrow"; }

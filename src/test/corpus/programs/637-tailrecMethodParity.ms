@@ -1,5 +1,5 @@
 // @xfail(raiser): raiser runtime error: call stack overflow (depth 1024)
-// @stdout: tailrec-method r=
+// @stdout: tailrec-method r=5000000-2
 // `this.m(...)` is a static call only when no subclass can replace m — the Nim
 // tfFinal question (types.nim:456, ccgexprs.nim:1995), answered here by the
 // OpenClass bit. Counter is final, so both methods run 5M deep in O(1) stack.

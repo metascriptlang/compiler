@@ -111,8 +111,10 @@ void msExit(int32_t code) {
 	exit((int)code);
 }
 
+int32_t msModuleEvalDepth = 0;
+
 void msTestErrorFlag(void) {
-	if (!msErr || msCurrException == NULL) return;
+	if (!msErr || msCurrException == NULL || msModuleEvalDepth > 0) return;
 	msString m = ((msError*)msCurrException)->message;
 	fputs("Error: unhandled exception: ", stderr);
 	if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
@@ -134,8 +136,15 @@ void msFutureRaiseFrom(msFutureBase* f) {
 		msClearOrphanFailure(f);
 	}
 	void* err = (f != NULL) ? f->error : NULL;
-	if (f != NULL) f->error = NULL;
+	if (f != NULL && f->crossThreadPublished) f->error = NULL;
+	else msIncRef(err);
 	msRaiseAwaitedError(err);
+}
+
+void msFutureDropError(msFutureBase* f) {
+	void* err = f->error;
+	f->error = NULL;
+	msDecref(err);
 }
 
 void (*msFatalTrap)(void) = NULL;
@@ -179,6 +188,12 @@ _Noreturn void msRaiseOverflow(void) {
 	exit(1);
 }
 
+_Noreturn void msRaiseRadixError(void) {
+	fprintf(stderr, "Error: toString() radix argument must be between 2 and 36\n");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 /* Parity: standard reference range error handling */
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	fprintf(stderr, "Error: value %lld not in range %lld .. %lld\n",
@@ -188,11 +203,24 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 }
 
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
-	if (val >= -9223372036854775808.0 && val < 9223372036854775808.0 && val == (double)(int64_t)val) {
-		msRaiseRangeError((int64_t)val, lo, hi);
-	}
-	fprintf(stderr, "Error: value %.17g not in range %lld .. %lld\n",
-		val, (long long)lo, (long long)hi);
+	msString text = msNumberToString(val);
+	fprintf(stderr, "Error: value %.*s not in range %lld .. %lld\n",
+		(int)text.len, text.p != NULL ? text.p->data : "", (long long)lo, (long long)hi);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+_Noreturn void msRaiseRangeErrorFToU64(double val) {
+	msString text = msNumberToString(val);
+	fprintf(stderr, "Error: value %.*s not in range 0 .. 18446744073709551615\n",
+		(int)text.len, text.p != NULL ? text.p->data : "");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+_Noreturn void msRaiseRangeErrorU64(uint64_t val, int64_t lo, int64_t hi) {
+	fprintf(stderr, "Error: value %llu not in range %lld .. %lld\n",
+		(unsigned long long)val, (long long)lo, (long long)hi);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }

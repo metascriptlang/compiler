@@ -41,7 +41,7 @@ export enum RaiserOpcode {
 	StoreIndex,       // ABC: R[A][R[B]] = R[C]
 	ArrayLen,         // ABC: R[A] = len(R[B])
 	ArrayPush,        // ABC: R[A].push(R[B])
-	ArraySetLen,      // ABC: R[A].setLength(R[B]) — truncate or nil-extend
+	ArraySetLen,      // ABC: R[A].setLength(R[B]) — truncate or nil-extend; C = 1 only checks R[B] is a valid array count (0..2^32-1)
 
 	// Object operations (3)
 	NewObject,        // ABC: R[A] = new empty object; B > 0 gives it class type B - 1 of the function
@@ -164,6 +164,12 @@ export enum RaiserOpcode {
 	SameLoc,          // ABC: R[A] = R[B] and R[C] are the same address (kind, handle, index, field)
 	InstanceOf,       // ABC: R[A] = R[B] is an object whose class is K[C] or derives from it
 	ObjConv,          // ABC: fatal unless R[A] is nil or an instance of class K[B], named K[C]
+	BTruthy,          // ABC: if R[A] is truthy (ToBoolean) skip C
+	NarrowS,          // ABC: fatal unless R[A] fits a signed B-bit integer, or an unsigned one when C is 1
+	ModuleImport,     // ABx: R[A] = future of import() of the module record named K[Bx]
+	FutureNew,        // ABC: R[A] = a pending future
+	FutureSettle,     // ABC: complete future R[A] with R[B] unless it is already settled
+	FutureFail,       // ABC: fail future R[A] with exception R[B] unless it is already settled
 }
 
 export enum RaiserConvClass {

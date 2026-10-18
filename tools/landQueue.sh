@@ -5,6 +5,7 @@ WT_TOOL=${MSC_WT_TOOL:-$HOME/nerdtools/claude/tools/wt.sh}
 IDLE=${MSC_LAND_QUEUE_IDLE:-600}
 POLL=${MSC_LAND_QUEUE_POLL:-20}
 TRIES=${MSC_LAND_QUEUE_TRIES:-3}
+export GATE_PAR=${GATE_PAR:-3} MSCORPUS_BUILD_JOBS=${MSCORPUS_BUILD_JOBS:-8}
 LOCK=$Q/runner.lock
 mkdir -p "$Q"
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$Q/runner.log"; }

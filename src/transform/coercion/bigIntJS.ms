@@ -20,10 +20,11 @@ import { TokenKind, createToken } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
+import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
 import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 import { cloneIfPure } from "./intArithJS";
+import { makeRangeCheckFor } from "../native/rangeCheckInject";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => materializeBigInt(node, ctx));
@@ -34,10 +35,18 @@ function is64Kind(kind: TypeKind): boolean {
 	return kind == TypeKind.Int64 || kind == TypeKind.Uint64;
 }
 
+function isFractionalKind(kind: TypeKind): boolean {
+	return kind == TypeKind.Float32 || kind == TypeKind.Float64 || kind == TypeKind.Number;
+}
+
 function reprKind(t: Type | null): TypeKind {
 	const r = peelToRepr(t);
 	if (r == null) return TypeKind.Unknown;
-	return r.kind == TypeKind.Enum ? TypeKind.Int32 : r.kind;
+	return match (r.kind) {
+		TypeKind.Enum => TypeKind.Int32,
+		TypeKind.Char => TypeKind.Uint8,
+		_ => r.kind,
+	};
 }
 
 function is64Type(t: Type | null): boolean {
@@ -46,7 +55,7 @@ function is64Type(t: Type | null): boolean {
 
 function isNarrowIntType(t: Type | null): boolean {
 	if (t == null) return false;
-	return isIntegerType(t) && !is64Kind(t.kind);
+	return t.kind == TypeKind.Char || (isIntegerType(t) && !is64Kind(t.kind));
 }
 
 function isFloatLikeType(t: Type | null): boolean {
@@ -70,7 +79,7 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 	}
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		const bigCast = bigintCast(node, d);
+		const bigCast = bigintCast(node, d, ctx.rangeChecks);
 		if (bigCast != null) return bigCast;
 		const dstK = reprKind(node.nodeType);
 		if (dstK == TypeKind.Unknown || d.asExpr == null) return node;
@@ -114,9 +123,7 @@ export function readsUnionMember(d: TypeAssertionData): boolean {
 	return d.asExpr.nodeType != null && d.asExpr.nodeType.kind == TypeKind.Union;
 }
 
-// `x as bigint` / `b as <numeric>`. int64 and uint64 are already native BigInt
-// on this backend, so those legs only need the width clamp C applies.
-function bigintCast(node: Node, d: TypeAssertionData): Node | null {
+function bigintCast(node: Node, d: TypeAssertionData, rangeChecks: boolean): Node | null {
 	if (d.asExpr == null) return null;
 	const srcT = d.asExpr.nodeType;
 	const dstBig = reprKind(node.nodeType) == TypeKind.BigInt;
@@ -126,14 +133,26 @@ function bigintCast(node: Node, d: TypeAssertionData): Node | null {
 	if (dstBig) {
 		if (srcBig || srcT == null) return d.asExpr;
 		if (is64Kind(srcT.kind)) return d.asExpr;
+		if (isFractionalKind(reprKind(srcT))) return typedCall("msBigIntFromNumber", [d.asExpr], TypeKind.Int64, loc);
 		return bigIntOf(d.asExpr, loc);
 	}
 	const dstK = reprKind(node.nodeType);
-	if (dstK == TypeKind.Int64) return asN(false, 64, d.asExpr, loc);
+	if (dstK == TypeKind.Int64) return typedCall("msBigIntToSigned", [d.asExpr, makeNumber(64, loc)], dstK, loc);
 	if (dstK == TypeKind.Uint64) return asN(true, 64, d.asExpr, loc);
+	const dstRepr = peelToRepr(node.nodeType);
+	if (rangeChecks && dstRepr != null && dstRepr.kind == TypeKind.Char) {
+		return numberOf(makeRangeCheckFor("msCheckRangeU8", d.asExpr, dstRepr, loc), loc);
+	}
 	const bits = narrowBits(dstK);
 	if (bits > 0) return numberOf(asN(!isSignedNarrowKind(dstK), bits, d.asExpr, loc), loc);
+	if (dstK == TypeKind.Float32) return typedCall("msBigIntToFloat32", [d.asExpr], dstK, loc);
 	return numberOf(d.asExpr, loc);
+}
+
+function typedCall(fnName: string, args: Node[], kind: TypeKind, loc: SourceLocation): Node {
+	const call = makeCall(runtimeRef(fnName, loc), args, loc);
+	call.nodeType = createPrimitive(kind);
+	return call;
 }
 
 function bigConvert(inner: Node, srcK: TypeKind, dstK: TypeKind, loc: SourceLocation): Node {
@@ -329,24 +348,24 @@ function unaryAsBigInt(node: Node): Node {
 // ===== Emission helpers =====
 
 function bigIntOf(inner: Node, loc: SourceLocation): Node {
-	const call = makeCall(runtimeRef("BigInt", loc), [inner], loc);
+	const call = makeCall(generatedRef("BigInt", loc), [inner], loc);
 	call.nodeType = createPrimitive(TypeKind.Int64);
 	return call;
 }
 
 function numberOf(inner: Node, loc: SourceLocation): Node {
-	const call = makeCall(runtimeRef("Number", loc), [inner], loc);
+	const call = makeCall(generatedRef("Number", loc), [inner], loc);
 	call.nodeType = createPrimitive(TypeKind.Float64);
 	return call;
 }
 
 function mathTrunc(inner: Node, loc: SourceLocation): Node {
-	return makeCall(makeMember(runtimeRef("Math", loc), "trunc", loc), [inner], loc);
+	return makeCall(makeMember(generatedRef("Math", loc), "trunc", loc), [inner], loc);
 }
 
 function asN(unsigned: boolean, bits: int32, inner: Node, loc: SourceLocation): Node {
 	const fn = unsigned ? "asUintN" : "asIntN";
-	return makeCall(makeMember(runtimeRef("BigInt", loc), fn, loc), [makeNumber(bits, loc), inner], loc);
+	return makeCall(makeMember(generatedRef("BigInt", loc), fn, loc), [makeNumber(bits, loc), inner], loc);
 }
 
 function asTyped(node: Node, kind: TypeKind): Node {
@@ -383,7 +402,7 @@ function narrowBits(kind: TypeKind): int32 {
 
 function isAssignOp(op: string): boolean {
 	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
 		"<<=" | ">>=" | ">>>=" | "&=" | "|=" | "^=" => true,
 		_ => false,
 	};

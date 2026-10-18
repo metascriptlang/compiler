@@ -4,15 +4,17 @@
 // so the same program is larger and runs more compute units. This builds a program under
 // `--release` and under `--lto=full` alone (the two ways into the merge) and reads the
 // merged object `<out>.lto.o` with the platform-tools `llvm-readelf`; the only defined symbols
-// that may be non-local are `entrypoint` and `abort` (the one function the backend itself
-// calls to lower a trap).
+// that may be non-local are `entrypoint` and the runtime's libcalls, which the merge keeps
+// because code generation after it may still emit a call to them: `abort` (the backend lowers
+// a trap to it) and musl's `pow` (a library function the optimizer knows by name; `--gc-sections`
+// drops it from the final object when nothing calls it).
 //
 // WHY A SUBPROCESS: the observable is the symbol table of the merge's own object, which only the
 // SBF toolchain produces. The compiler under test is $MSC, else `./msc`. A host without the SBF
 // toolchain prints GUARD-SKIP, which the runner reports as unscored.
 //
 // RED MEANS: the merge keeps functions external again (an `ld.lld -r` merge listed 224 of them
-// for this program), or a function other than `entrypoint` and `abort` is exported
+// for this program), or a function other than `entrypoint` and those libcalls is exported
 // from the merged module. GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, cwd, exit, env, findOnPath } from "std/process";
@@ -104,7 +106,7 @@ for (const flag of ["--release", "--lto=full"]) {
 	const name = flag.slice(2);
 	const exported = exportedFunctions(flag);
 	for (const symbol of exported) {
-		if (symbol != "entrypoint" && symbol != "abort") {
+		if (symbol != "entrypoint" && symbol != "abort" && symbol != "pow") {
 			console.log(`GUARD-FAIL ${name}: ${symbol} is external in the merged module: the merge did not internalize it`);
 			failed = failed + 1;
 		}

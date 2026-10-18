@@ -9,7 +9,7 @@ import { Diagnostic, DiagSeverity, makeDiag } from "./error";
 import { TargetInfo } from "./target";
 import { evalConstExpr } from "./eval";
 import {
-	CType, CTypeKind, CMember, makeVoid, makeBool, makeChar, makeUChar,
+	CType, CTypeKind, CMember, makeVoid, makeBool, makeChar, makeSChar, makeUChar,
 	makeShort, makeUShort, makeInt, makeUInt, makeLong, makeULong, makeLongLong,
 	makeULongLong, makeFloat, makeDouble, makeLongDouble, makePointer, makeArray,
 	makeFunc, makeEnum, makeStruct, makeUnion, makeMember, copyType,
@@ -206,7 +206,8 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 		// Map counter to type
 		if (counter == SPEC_VOID) ty = makeVoid();
 		else if (counter == SPEC_BOOL) ty = makeBool();
-		else if (counter == SPEC_CHAR || counter == SPEC_SIGNED + SPEC_CHAR) ty = makeChar(ctx.target);
+		else if (counter == SPEC_CHAR) ty = makeChar(ctx.target);
+		else if (counter == SPEC_SIGNED + SPEC_CHAR) ty = makeSChar();
 		else if (counter == SPEC_UNSIGNED + SPEC_CHAR) ty = makeUChar();
 		else if (counter == SPEC_SHORT || counter == SPEC_SHORT + SPEC_INT ||
 				 counter == SPEC_SIGNED + SPEC_SHORT || counter == SPEC_SIGNED + SPEC_SHORT + SPEC_INT) ty = makeShort(ctx.target);

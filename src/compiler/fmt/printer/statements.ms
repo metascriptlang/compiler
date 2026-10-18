@@ -398,14 +398,15 @@ export function printSwitchStmt(node: Node, options: FormatOptions): Doc {
 function printSwitchCase(node: Node, options: FormatOptions): Doc {
 	const d = node.data as SwitchCaseData;
 	const parts: Doc[] = [];
+	for (const t of d.caseTests) {
+		if (parts.length > 0) parts.push(docHardLine());
+		parts.push(docText("case "));
+		parts.push(callPrintNode(t, options));
+		parts.push(docText(":"));
+	}
 	if (d.isDefault) {
+		if (parts.length > 0) parts.push(docHardLine());
 		parts.push(docText("default:"));
-	} else {
-		for (const t of d.caseTests) {
-			parts.push(docText("case "));
-			parts.push(callPrintNode(t, options));
-			parts.push(docText(":"));
-		}
 	}
 	if (d.caseStmts.length > 0) {
 		const stmts: Doc[] = [];

@@ -29,8 +29,8 @@ test "ordering a value array is rejected" {
 	assert hasError(src, "operator '<' cannot be applied to types");
 }
 
-test "reference array ordering compares references" {
-	assert strictErrorCount("const a: int32[] = [1];\nconst b: int32[] = [2];\nconst c = a < b;") == 0;
+test "ordering a reference array is rejected, because backends would order it by address or by text" {
+	assert hasError("const a: int32[] = [1];\nconst b: int32[] = [2];\nconst c = a < b;", "operator '<' cannot be applied to types");
 }
 
 // ===== Accepted: a candidate exists =====
@@ -66,9 +66,126 @@ test "enum ordering is unaffected" {
 	assert strictErrorCount("enum E { A, B }\nconst a = E.A;\nconst b = E.B;\nconst c = a < b;") == 0;
 }
 
-test "reference ordering is unaffected" {
-	const src = "interface R { m: int32; }\nconst a: R = { m: 1 };\nconst b: R = { m: 2 };\nconst c = a < b;";
-	assert strictErrorCount(src) == 0;
+test "tuples order field by field when every field orders against its counterpart" {
+	assert strictErrorCount("const a: [int32, string] = [1, \"a\"];\nconst b: [int32, string] = [1, \"b\"];\nconst c = a < b;") == 0;
+	assert strictErrorCount("const a: [[int32, string], bigint] = [[1, \"a\"], 2n];\nconst b: [[int32, string], bigint] = [[1, \"a\"], 3n];\nconst c = a >= b;") == 0;
+}
+
+test "a tuple with a field that has no order is rejected" {
+	const cls = "class K { m: int32 = 0; }\nconst a: [int32, K] = [1, new K()];\nconst b: [int32, K] = [1, new K()];\nconst c = a < b;";
+	assert hasError(cls, "operator '<' cannot be applied to types");
+	const nested = "struct S { m: int32; }\nconst a: [int32, [S, int32]] = [1, [{ m: 1 }, 2]];\nconst b: [int32, [S, int32]] = [1, [{ m: 1 }, 2]];\nconst c = a <= b;";
+	assert hasError(nested, "operator '<=' cannot be applied to types");
+}
+
+test "ordering two references without valueOf is rejected" {
+	const iface = "interface R { m: int32; }\nconst a: R = { m: 1 };\nconst b: R = { m: 2 };\nconst c = a < b;";
+	assert hasError(iface, "operator '<' cannot be applied to types 'R' and 'R'");
+	const cls = "class K { m: int32 = 0; }\nconst a = new K();\nconst b = new K();\nconst c = a <= b;";
+	assert hasError(cls, "operator '<=' cannot be applied to types");
+}
+
+test "ordering two references reads them through valueOf" {
+	const method = "class K { m: int32 = 0; valueOf(): int32 { return this.m; } }\nconst a = new K();\nconst b = new K();\nconst c = a < b;";
+	assert strictErrorCount(method) == 0;
+	const ext = "interface R { m: int32; }\nfunction valueOf(this r: R): int32 { return r.m; }\nconst a: R = { m: 1 };\nconst b: R = { m: 2 };\nconst c = a >= b;";
+	assert strictErrorCount(ext) == 0;
+}
+
+const UNION_HEAD = "class K { m: int32 = 0; valueOf(): int32 { return this.m; } }\nclass M { m: int32 = 0; valueOf(): int32 { return this.m; } }\nclass N { s: string = \"\"; valueOf(): string { return this.s; } }\nstruct S { m: int32 }\ntype Pick = K | int32;\nfunction pick(): Pick { return 1; }\n";
+
+test "a union whose every member orders against the other operand is accepted" {
+	for (const fn of [
+		"function f(a: K | int32, b: K): boolean { return a < b; }",
+		"function f(a: K, b: K | int32): boolean { return a >= b; }",
+		"function f(a: K | int32, b: K | int32): boolean { return a > b; }",
+		"function f(a: K | M, b: K | M): boolean { return a <= b; }",
+		"function f(a: N | string, b: string): boolean { return a < b; }",
+		"function f(a: int32 | float64, b: int32): boolean { return a < b; }",
+		"class H { u: K | int32 = 1; }\nfunction f(h: H, b: int32): boolean { return h.u < b; }",
+	]) {
+		assert strictErrorCount(UNION_HEAD + fn) == 0, fn;
+	}
+}
+
+test "a union member that cannot order against the other operand is named" {
+	assert hasError(UNION_HEAD + "function f(a: K | string, b: int32): boolean { return a < b; }", "cannot compare the member 'string' of 'K | string' with 'int32'");
+	assert hasError(UNION_HEAD + "function f(a: int32, b: K | string): boolean { return a < b; }", "cannot compare the member 'string' of 'K | string' with 'int32'");
+	assert hasError(UNION_HEAD + "function f(a: K | int32, b: K | string): boolean { return a < b; }", "cannot compare the member 'K' (read as 'int32') of 'K | int32' with 'string'");
+	assert hasError(UNION_HEAD + "function f(a: N | string, b: int32): boolean { return a < b; }", "cannot compare the member 'N' (read as 'string') of 'N | string' with 'int32'");
+	assert hasError(UNION_HEAD + "function f(a: int32 | boolean, b: int32): boolean { return a < b; }", "cannot compare the member 'boolean' of 'boolean | int32' with 'int32'");
+}
+
+test "a union member with no order is named, and a declared operator on it is not needed when valueOf reads it" {
+	assert hasError(UNION_HEAD + "function f(a: S | int32, b: int32): boolean { return a < b; }", "cannot order the member 'S' of 'S | int32'");
+	assert strictErrorCount(UNION_HEAD + "function valueOf(this s: S): int32 { return s.m; }\nfunction f(a: S | int32, b: int32): boolean { return a < b; }") == 0;
+}
+
+test "members that no tag or class test can tell apart are refused naming both, and one such member is accepted" {
+	const reads = "struct T { m: int32 }\nfunction valueOf(this s: S): int32 { return s.m; }\nfunction valueOf(this t: T): int32 { return t.m; }\n";
+	assert hasError(UNION_HEAD + reads + "function f(a: S | T, b: int32): boolean { return a < b; }", "cannot tell the members 'S' and 'T' of 'S | T' apart at run time");
+	assert strictErrorCount(UNION_HEAD + reads + "function f(a: S | K, b: int32): boolean { return a < b; }") == 0;
+	assert strictErrorCount(UNION_HEAD + reads + "function f(a: S | int32, b: S | int32): boolean { return a >= b; }") == 0;
+}
+
+const ENUM_HEAD = "enum E { A, B, C }\nenum F { X, Y }\n";
+
+test "a union holding an enum and a number orders as the enum does on its own" {
+	for (const fn of [
+		"function f(a: E | int32, b: int32): boolean { return a < b; }",
+		"function f(a: int32, b: E | int32): boolean { return a >= b; }",
+		"function f(a: E | float64, b: E): boolean { return a <= b; }",
+		"function f(a: E | uint8, b: F): boolean { return a > b; }",
+		"function f(a: E | int32, b: E | int32): boolean { return a < b; }",
+	]) {
+		assert strictErrorCount(ENUM_HEAD + fn) == 0, fn;
+	}
+}
+
+test "a union of two enums is refused because no run-time test tells them apart" {
+	assert hasError(ENUM_HEAD + "function f(a: E | F, b: int32): boolean { return a < b; }", "cannot tell the members 'E' and 'F' of 'E | F' apart at run time");
+}
+
+test "an enum member of a union must still compare with the other operand" {
+	assert hasError(ENUM_HEAD + "function f(a: E | int32, b: string): boolean { return a < b; }", "of 'E | int32' with 'string'");
+	assert hasError(ENUM_HEAD + "function f(a: E | boolean, b: int32): boolean { return a < b; }", "cannot compare the member 'boolean' of 'E | boolean' with 'int32'");
+}
+
+test "a pointer orders only against a pointer" {
+	for (const fn of [
+		"function f(p: Ptr<uint64>, n: int64): boolean { return p < n; }",
+		"function f(n: uint64, p: Ptr<uint64>): boolean { return n >= p; }",
+		"function f(p: Ptr<uint64>, e: E): boolean { return p <= e; }",
+		"function f(p: Ptr<uint64>): boolean { return p > 0; }",
+	]) {
+		assert hasError(ENUM_HEAD + fn, "cannot be applied to types"), fn;
+	}
+	for (const fn of [
+		"function f(p: Ptr<uint64>, q: Ptr<uint64>): boolean { return p < q; }",
+		"function f(p: Ptr<uint64>, q: Ptr<uint8>): boolean { return p >= q; }",
+	]) {
+		assert strictErrorCount(ENUM_HEAD + fn) == 0, fn;
+	}
+}
+
+test "a Result member of a union operand is named" {
+	assert hasError(UNION_HEAD + "function f(a: Result<int32, string> | int32, b: int32): boolean { return a < b; }", "cannot order the member 'Result<int32, string>'");
+}
+
+test "a union with null is refused like any nullable operand" {
+	assert hasError(UNION_HEAD + "function f(a: K | null, b: int32): boolean { return a < b; }", "possibly null");
+	assert hasError(UNION_HEAD + "function f(a: K | int32 | null, b: int32): boolean { return a < b; }", "possibly null");
+	assert hasError(UNION_HEAD + "function f(a: int32, b: K | null): boolean { return a < b; }", "possibly null");
+}
+
+test "a union operand that is not a name or a field path is refused with its own case" {
+	assert hasError(UNION_HEAD + "function f(b: int32): boolean { return pick() < b; }", "store it in a local first");
+	assert hasError(UNION_HEAD + "class H { u: K | int32 = 1; }\nfunction mk(): H { return new H(); }\nfunction f(b: int32): boolean { return mk().u < b; }", "store it in a local first");
+	assert strictErrorCount(UNION_HEAD + "function f(b: int32): boolean { const a = pick(); return a < b; }") == 0;
+}
+
+test "a union of primitives mixing string and number is refused naming the string" {
+	assert hasError(UNION_HEAD + "function f(a: string | int32, b: int32): boolean { return a < b; }", "cannot compare the member 'string' of 'int32 | string' with 'int32'");
 }
 
 // ===== Arithmetic and equality operands =====

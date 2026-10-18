@@ -604,6 +604,23 @@ console.log(`${readValue()}`);
 	ok(tag);
 }
 
+function isIdentCode(c: int32): boolean {
+	return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+}
+
+function emitsFrameDestroy(text: string, owner: string): boolean {
+	const head = `dollarEnv_${owner}_shared`;
+	let at = text.indexOf(head, 0);
+	while (at >= 0) {
+		let end = at + head.length;
+		while (end < text.length && isIdentCode(text.charCodeAt(end))) end += 1;
+		const ident = text.slice(at, end);
+		if ((ident.endsWith("Destroy") || ident.endsWith("Destroy_")) && text.charAt(end) == "(") return true;
+		at = text.indexOf(head, end);
+	}
+	return false;
+}
+
 function deadFrameEmitsNoHooks(): void {
 	const tag = "deadFrameEmitsNoHooks";
 	const dir = freshDir("deadframe");
@@ -624,12 +641,12 @@ function deadFrameEmitsNoHooks(): void {
 		if (!f.endsWith(".c")) continue;
 		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
 		for (const owner of ["deadClosure", "deadAsync", "deadGen"]) {
-			if (text.contains(`dollarEnv_${owner}_sharedDestroy_(`)) {
+			if (emitsFrameDestroy(text, owner)) {
 				fail(tag, `${f} emits the frame hooks of ${owner}, which nothing calls`);
 				return;
 			}
 		}
-		if (text.contains("dollarEnv_liveClosure_sharedDestroy_(")) liveHooks = true;
+		if (emitsFrameDestroy(text, "liveClosure")) liveHooks = true;
 	}
 	if (!liveHooks) {
 		fail(tag, "the frame hooks of liveClosure, which main calls, are missing");
@@ -692,6 +709,62 @@ function preludeGate(tag: string, name: string, globalImport: string, probeCall:
 	ok(tag);
 }
 
+function buildMsTargetProject(name: string): string {
+	const dir = freshDir(name);
+	writeFile(`${dir}/build.ms`, "const config = {\n\tentry: \"./main.ms\",\n\tbuild: { target: \"js\" },\n};\nexport default config;\n");
+	writeFile(`${dir}/main.ms`, "extern function answer(): int32 from \"(40 + 2)\";\n"
+		+ "when (js) { console.log(\"picked-js-branch \" + String(answer())); }\n"
+		+ "when (c) { console.log(\"picked-c-branch\"); }\n");
+	return dir;
+}
+
+function buildMsTargetDecides(): void {
+	const dir = buildMsTargetProject("bmtarget");
+	const bundle = `${dir}/out.js`;
+	const b = execFileResult(MSC, ["build", `--output=${bundle}`], dir);
+	writeFile(`${LOG_DIR}/buildMsTargetBuild.log`, both(b));
+	const text = try readFile(bundle) catch "";
+	if (!succeeded(b)) {
+		const errs = firstErrorLines(both(b));
+		fail("buildMsTargetBuild", `flagless build of a build.ms js project: ${status(b)}${errs == "" ? "" : ": " + errs}`);
+	} else if (!text.contains("picked-js-branch") || text.contains("picked-c-branch")) {
+		fail("buildMsTargetBuild", "the js bundle took the when (c) branch: backend was seeded c");
+	} else if (HAS_NODE && !hasLine(both(execFileResult("node", [bundle])), "picked-js-branch 42")) {
+		fail("buildMsTargetBuild", "the js bundle did not print 'picked-js-branch 42'");
+	} else {
+		ok("buildMsTargetBuild");
+	}
+
+	const c = execFileResult(MSC, ["check", "main.ms"], dir);
+	writeFile(`${LOG_DIR}/buildMsTargetCheck.log`, both(c));
+	if (succeeded(c)) {
+		ok("buildMsTargetCheck");
+	} else {
+		fail("buildMsTargetCheck", `flagless check of a build.ms js project: ${firstErrorLines(both(c))}`);
+	}
+
+	const flagged = execFileResult(MSC, ["check", "--target=c", "main.ms"], dir);
+	writeFile(`${LOG_DIR}/buildMsTargetFlagWins.log`, both(flagged));
+	if (succeeded(flagged)) {
+		fail("buildMsTargetFlagWins", "--target=c over build.ms js checked clean: the JS pattern extern was not refused");
+	} else if (!both(flagged).contains("is a JS pattern and needs the JS target")) {
+		fail("buildMsTargetFlagWins", `--target=c failed without the JS pattern refusal: ${firstErrorLines(both(flagged))}`);
+	} else {
+		ok("buildMsTargetFlagWins");
+	}
+
+	const rel = freshDir("bmrelease");
+	writeFile(`${rel}/build.ms`, "const config = {\n\tentry: \"./main.ms\",\n\tbuild: { optimize: \"release\" },\n};\nexport default config;\n");
+	writeFile(`${rel}/main.ms`, "console.log(1);\n");
+	const d = execFileResult(MSC, ["build", "--help-defines"], rel);
+	const seeded = firstLineContaining(d.output, "mode=");
+	if (seeded == "mode=release") {
+		ok("buildMsOptimizeSeedsMode");
+	} else {
+		fail("buildMsOptimizeSeedsMode", `build.ms optimize release seeded '${seeded}'`);
+	}
+}
+
 function main(): void {
 	if (SHARD_COUNT < 1 || SHARD_INDEX < 0 || SHARD_INDEX >= SHARD_COUNT) {
 		console.log(`nim-guard: GUARD_SHARD must be <index>/<count> with 0 <= index < count, got '${envOr("GUARD_SHARD", "")}'`);
@@ -733,6 +806,7 @@ function main(): void {
 	emitCAfterBuild();
 	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
+	buildMsTargetDecides();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
 		"globalImports symbol never reached the entry module", "", "");
 	preludeGate("preludeSymlinkedModule", "gisym", "./gi", "neonGuardPreludeProbe",
