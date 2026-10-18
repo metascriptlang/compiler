@@ -31,7 +31,9 @@ import {
 	msSolLoadU32,
 	msSolLoadU64,
 	msSolLoadU8,
+	msSolMetasAddress,
 	msSolPointer,
+	msSolSeedsAddress,
 	msSolSpanAddress,
 	msSolStoreU16,
 	msSolStoreU32,
@@ -41,6 +43,8 @@ import {
 	msSolStringLength,
 	msSolWordsAddress,
 } from "./memory";
+import { InstructionAccount } from "./addressTables";
+export { InstructionAccount } from "./addressTables";
 
 import {
 	ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -87,8 +91,6 @@ export {
 	putU8,
 } from "./buffer";
 
-extern function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 from "msSolSpanAddress";
-extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
 
 const MAX_RETURN_DATA: uint64 = 1024;
 
@@ -99,14 +101,6 @@ export struct Account {
 }
 
 export const MAX_CPI_ACCOUNTS: uint64 = 64;
-
-// The runtime's SolAccountMeta: the key is the address of the account's key in the input buffer. Only this
-// module builds one, from an Account, so every key points at a record the runtime parsed.
-export struct InstructionAccount {
-	private key: uint64;
-	private writable: uint8;
-	private signer: uint8;
-}
 
 @inline export function invokeCpi(
 	program: Pubkey,

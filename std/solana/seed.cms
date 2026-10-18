@@ -4,26 +4,14 @@ import { Pubkey } from "./pubkey";
 import { ProgramError } from "./error";
 import { ProgramAddress } from "./pda";
 import { msSolDeriveAddress, msSolFindAddress, msSolFindCanonicalAddress, msSolFindCanonicalStaged, msSolFindExpectedAddress, msSolFindExpectedStaged, msSolHashIsStaged, msSolProgramId, msSolSeedStageInPlace } from "./kernel";
-import { msSolCopy, msSolLoadU64, msSolSpanAddress, msSolStringAddress, msSolStringLength } from "./memory";
+import { SeedSlice, SignerSeeds } from "./addressTables";
+import { msSolCopy, msSolLoadU64, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
 
-extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
-extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
-extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
+export { SeedSlice, SignerSeeds } from "./addressTables";
 
 const MAX_SEEDS: uint64 = 16;
 const MAX_SEED_LENGTH: uint64 = 32;
 const NO_BUMP: uint64 = 256;
-
-// A SeedSlice points into the frame that built it: valid while that call runs, never returned.
-export struct SeedSlice {
-	address: uint64;
-	length: uint64;
-}
-
-export struct SignerSeeds {
-	address: uint64;
-	length: uint64;
-}
 
 export struct Signing {
 	table: uint64;
