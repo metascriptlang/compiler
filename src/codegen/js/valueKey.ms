@@ -11,7 +11,7 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { NewExprData, CallExprData, Node } from "../../ast/node";
 import { distinctBody, setRepr, isStdCollectionKind } from "../../checker/types";
-import { emit, emitNode, emitJoinedNodes, JSGenerator, jsPropertyAccess } from "./emit";
+import { emit, emitNode, emitJoinedNodes, JSGenerator, jsPropertyAccess, identFromKey } from "./emit";
 import { valueCopyFnName } from "./valueCopy";
 
 function valueKeyShape(t: Type | null): Type | null {
@@ -57,20 +57,6 @@ function shapeKey(t: Type): string {
 		i += 1;
 	}
 	return key + ")";
-}
-
-function identFromKey(key: string): string {
-	let out = "";
-	let i = 0;
-	while (i < key.byteLength) {
-		const b = key.byteAt(i);
-		const isAlnum = (b >= "a".code && b <= "z".code)
-			|| (b >= "A".code && b <= "Z".code)
-			|| (b >= "0".code && b <= "9".code);
-		out = isAlnum ? out + key.byteSlice(i, i + 1) : out + "_" + b.toString(16);
-		i += 1;
-	}
-	return out;
 }
 
 function partExpr(gen: JSGenerator, t: Type | null, src: string): string {

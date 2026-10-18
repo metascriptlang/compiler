@@ -12,7 +12,7 @@ import {
 } from "../../ast/node";
 import { isViewBinding } from "../../checker/symbol";
 import { isNullableShape, isStructType, needsValueCopy, setRepr, valueCopyRepr } from "../../checker/types";
-import { emit, emitNode, JSGenerator, jsTypedArrayName, jsPropertyKey, jsPropertyAccess, escapeJSString } from "./emit";
+import { emit, emitNode, JSGenerator, jsTypedArrayName, jsPropertyKey, jsPropertyAccess, escapeJSString, identFromKey } from "./emit";
 
 export function jsDefaultValue(t: Type | null): string {
 	return defaultValueOf(t, []);
@@ -89,24 +89,6 @@ function copyExpr(gen: JSGenerator, t: Type | null, src: string): string {
 	t = valueCopyRepr(t);
 	if (!needsValueCopy(t)) return src;
 	return copyFnName(gen, t as Type) + "(" + src + ")";
-}
-
-function identFromKey(key: string): string {
-	let out = "";
-	let i = 0;
-	while (i < key.byteLength) {
-		const b = key.byteAt(i);
-		const isAlnum = (b >= "a".code && b <= "z".code)
-			|| (b >= "A".code && b <= "Z".code)
-			|| (b >= "0".code && b <= "9".code);
-		if (isAlnum) {
-			out = out + key.byteSlice(i, i + 1);
-		} else {
-			out = out + "_" + b.toString(16);
-		}
-		i += 1;
-	}
-	return out;
 }
 
 function copyFnName(gen: JSGenerator, t: Type): string {
