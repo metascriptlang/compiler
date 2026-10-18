@@ -8,14 +8,12 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-// Walks t.nodeType (synthesized type-AST per SERIALIZE Phase A1). Refs/Ptrs
-// unwrap via TypeGeneric (modifierToAst maps to TypeGeneric with base name).
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, implementationOf } from "../discDetect";
 
 export macro jsonValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
-	let tt = t.nodeType;
+	let tt = implementationOf(t);
 	if (tt.kind == NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
 	}
@@ -26,7 +24,7 @@ export macro jsonValueOf(t: Node): Node {
 	// Struct/interface or union element → `_jsonArrayOfValues<T>`, which re-expands jsonValueOf per element.
 	// IIFE-closure / function element types remain rejected.
 	if (tt.kind == NodeKind.TypeArray) {
-		const elemType: Node = tt.typExprElement;
+		const elemType: Node = implementationOf(tt.typExprElement);
 		// Identifier element name — empty if elem is TypeObject (struct).
 		let en: string = "";
 		let elemByValueOf: boolean = false;

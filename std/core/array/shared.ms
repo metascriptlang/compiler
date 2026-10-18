@@ -1,3 +1,13 @@
+export function toString<T>(this arr: T[]): string {
+	let out = "";
+	for (let i = 0; i < arr.length; i += 1) {
+		if (i > 0) out += ",";
+		const item = arr[i];
+		if (item != null) out += `${item}`;
+	}
+	return out;
+}
+
 export function lastIndexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = -1): number {
 	let i = fromIndex < 0 ? arr.length + fromIndex : fromIndex;
 	if (i >= arr.length) i = arr.length - 1;

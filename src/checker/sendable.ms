@@ -235,7 +235,7 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 	const reported: string[] = [];
 	if (body != null) {
 		walkForMutableCaptures(body, params, reported, ctx);
-		if (ctx.currentActorName != "") {
+		if (ctx.currentActor != null) {
 			const actorReported: string[] = [];
 			walkActorSpawnRules(ctx, body, actorReported);
 		}
@@ -271,7 +271,7 @@ function pushIfNew(list: string[], key: string): boolean {
 }
 
 function actorDeclaresMethod(ctx: CheckerContext, methodName: string): boolean {
-	const actorSym = lookupSymbol(ctx.table, ctx.currentActorName);
+	const actorSym = ctx.currentActor;
 	if (actorSym == null || actorSym.declNode == null) return false;
 	if (actorSym.declNode.kind != NodeKind.ActorDecl) return false;
 	const body = (actorSym.declNode.data as ActorDeclData).actorBody;

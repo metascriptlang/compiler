@@ -8,7 +8,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, Dec
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable, isMaybeType } from "./types";
 import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
+import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
@@ -1778,7 +1778,7 @@ export function sgGetPrefix(source: string, line: int32, col: int32): string {
 
 // ===== sgGetCompletionCandidates — collect matching symbols =====
 
-function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type | null): SgSuggest[] {
+function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type | null, staticOwner: Symbol | null): SgSuggest[] {
 	const result: SgSuggest[] = [];
 	// Unwrap Ref/Ptr to get inner struct (class instances are Ref<Struct>)
 	if (receiverType == null) return result;
@@ -1838,7 +1838,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 			if (seen) continue;
 			// Type-based receiver matching (same algo as checker)
 			const allByName = findAllExtensionsByName(ctx.extensionRegistry, ext.methodName);
-			const matched = filterExtsByReceiverType(allByName, receiverType);
+			const matched = staticOwner != null ? filterStaticExtsByOwner(allByName, staticOwner) : filterExtsByReceiverType(allByName, receiverType);
 			if (matched.length > 0) {
 				seenMethods.push(ext.methodName);
 				// Use first match's type; strip receiver param for instance extensions
@@ -1862,9 +1862,9 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 	return result;
 }
 
-export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type | null): SgSuggest[] {
+export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type | null, staticOwner: Symbol | null = null): SgSuggest[] {
 	if (kind == SgCompletionKind.MemberAccess) {
-		return sgCompleteMemberAccess(ctx, prefix, receiverType);
+		return sgCompleteMemberAccess(ctx, prefix, receiverType, staticOwner);
 	}
 
 	// Walk scope chain for Identifier or TypeAnnotation
@@ -2158,10 +2158,13 @@ export function sgFormatSignature(sym: Symbol | null): SgSignatureInfo[] {
 
 // ===== sgFormatExtensionSignatures — build signatures filtered by receiver type =====
 
-export function sgFormatExtensionSignatures(ctx: CheckerContext, methodName: string, receiverType: Type): SgSignatureInfo[] {
+export function sgFormatExtensionSignatures(ctx: CheckerContext, methodName: string, receiverType: Type, receiverSym: Symbol | null = null): SgSignatureInfo[] {
 	if (ctx.extensionRegistry == null || receiverType == null) return [];
 	const allByName = findAllExtensionsByName(ctx.extensionRegistry, methodName);
 	const matched = filterExtsByReceiverType(allByName, receiverType);
+	if (receiverSym != null) {
+		for (const owned of filterStaticExtsByOwner(allByName, receiverSym)) matched.push(owned);
+	}
 	const result: SgSignatureInfo[] = [];
 	for (let i = 0; i < matched.length; i = i + 1) {
 		const ext = matched[i];

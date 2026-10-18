@@ -2,13 +2,13 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
-import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, ConditionalExprData, StringLiteralData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, extDeclaresReceiver, isGeneratorFlags } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, primitiveMemberHits, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, holdsFalsyValue, unwrapMaybeType } from "./types";
+import { peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -265,6 +265,110 @@ export function nullishPayloadType(t: Type | null): Type | null {
 	return t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
 }
 
+function valueShape(t: Type): Type {
+	const aliased = peelThrough(skipModifier(t) ?? t, PEEL_ALIAS);
+	return peelTransparentInstance(aliased ?? t);
+}
+
+function isValueStructShape(s: Type): boolean {
+	if (s.kind == TypeKind.GenericInstance) {
+		if (s.typeName == "" || isAwaitable(s)) return false;
+		const nominal = peelToStructOrUnion(s.typeExtra);
+		return nominal != null && nominal.kind == TypeKind.Struct;
+	}
+	if (s.kind != TypeKind.Struct || isMaybeType(s)) return false;
+	return s.typeName != "";
+}
+
+function comparedByFields(s: Type): boolean {
+	return isValueStructShape(s) || s.kind == TypeKind.Tuple || s.kind == TypeKind.SizedArray;
+}
+
+function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
+	const a = valueShape(left);
+	const b = valueShape(right);
+	if (a.kind == TypeKind.Null || b.kind == TypeKind.Null || a.kind == TypeKind.Void || b.kind == TypeKind.Void) return "";
+	if (hasGenericParams(a) || hasGenericParams(b)) return "";
+	if (isMaybeType(a) || isMaybeType(b)) {
+		const carrier = isMaybeType(a) ? a : b;
+		const other = isMaybeType(a) ? b : a;
+		if (isMaybeType(other)) return sameType(a, b) ? "nullableEquals" : "";
+		if (isUnknownType(other) || carrier.typeReturn == null) return "";
+		return equalityOperandsOk(carrier.typeReturn, other) ? "nullableEquals" : "";
+	}
+	if (isResult(a) && isResult(b)) return sameType(a, b) ? "resultEquals" : "";
+	if (a.kind == TypeKind.Array && b.kind == TypeKind.Array) return sameType(a, b) ? "vecEquals" : "";
+	if (comparedByFields(a) && comparedByFields(b)) {
+		if (sameType(a, b)) return "valueEquals";
+		if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct && (isAssignable(a, b) || isAssignable(b, a))) return "valueEquals";
+	}
+	return "";
+}
+
+export function boundCallOf(sym: Symbol, args: Node[], loc: SourceLocation): Node {
+	const callee = createNodeAt(NodeKind.Identifier, { name: sym.name }, loc);
+	callee.resolvedSym = sym;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
+	return createNodeAt(NodeKind.CallExpr, { callee: callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+}
+
+function boundCall(ctx: CheckerContext, entry: string, args: Node[], loc: SourceLocation): Node {
+	const sym = ctx.compilerFuncs.get(entry);
+	if (sym == null) throw new Error(`internal: the value routine '${entry}' is not declared by the prelude`);
+	return boundCallOf(sym, args, loc);
+}
+
+function replaceWithCall(node: Node, call: Node, negated: boolean): void {
+	if (negated) {
+		node.kind = NodeKind.UnaryExpr;
+		node.data = { unaryOp: "!", operand: call } as NodeData;
+		node.nodeType = booleanType();
+		return;
+	}
+	node.kind = NodeKind.CallExpr;
+	node.data = call.data;
+	node.nodeType = call.nodeType;
+	node.flags = call.flags;
+	node.variantSlot = call.variantSlot;
+	node.resolvedSym = call.resolvedSym;
+}
+
+// `==` / `!=` over two values of one value type calls the operator the program declares for the
+// pair, else the std routine for that type; both are bound by symbol like any synthesized call.
+export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExprData, leftType: Type, rightType: Type): boolean {
+	const op = d.operator;
+	const negated = op == "!=" || op == "!==";
+	if (!negated && op != "==" && op != "===") return false;
+	if (d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral) return false;
+	const entry = equalityEntry(ctx, leftType, rightType);
+	if (entry == "") return false;
+	const loc = node.location;
+	if (ctx.extensionRegistry != null) {
+		const pair = [leftType, rightType];
+		const declaredNe = negated ? resolveOperatorCall(ctx.table, ctx.extensionRegistry, "!=", pair) : null as unknown as ExtensionMethod;
+		const declaredEq = resolveOperatorCall(ctx.table, ctx.extensionRegistry, "==", pair);
+		const declared = declaredNe != null ? declaredNe : declaredEq;
+		if (declared != null && declared.sym != null) {
+			const direct = boundCallOf(declared.sym, [d.left, d.right], loc);
+			callCheckExpr(ctx, direct, null);
+			replaceWithCall(node, direct, negated && declaredNe == null);
+			return true;
+		}
+	}
+	let left = d.left;
+	let right = d.right;
+	if (entry == "nullableEquals") {
+		const a = valueShape(leftType);
+		const b = valueShape(rightType);
+		if (!isMaybeType(a)) left = synthMaybeWrap(left, b, leftType);
+		if (!isMaybeType(b)) right = synthMaybeWrap(right, a, rightType);
+	}
+	const call = boundCall(ctx, entry, [left, right], loc);
+	callCheckExpr(ctx, call, null);
+	replaceWithCall(node, call, negated);
+	return true;
+}
+
 export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
 	if (expr.nodeType == null || expr.nodeType.kind != TypeKind.Module) return false;
 	addError(ctx, `a module namespace (${typeDisplayName(expr.nodeType)}) has no text form here; read one of its exports instead`, expr.location.line, expr.location.column);
@@ -274,15 +378,27 @@ export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
 // Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
 // stringification the call site needs is planted DURING checking, so it is bound
 // by the same overload resolution a hand-written `x.toString()` gets and reaches
-// codegen carrying its symbol. Returns null when nothing real binds — primitives
-// and enums have no declaration and stay on the builtin-lowering path.
-export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
+// codegen carrying its symbol. A value type without a user `toString` takes the std
+// dump. Returns null when nothing real binds - primitives and enums have no
+// declaration and stay on the builtin-lowering path.
+export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean = false): Node | null {
 	const t = expr.nodeType;
 	if (t == null || refuseNamespaceText(ctx, expr)) return null;
 	if (distinctBody(t) != null) return distinctText(ctx, expr, t);
 	const peeled = peelToStructOrUnion(t);
-	if (peeled == null || peeled.kind != TypeKind.Struct) return null;
-	return declaredToString(ctx, expr);
+	const dumped = dumpedShape(t, valueShape(t));
+	if (!dumped && !isArrayShaped(t) && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum))) return null;
+	const loc = expr.location;
+	const declared = declaredToString(ctx, expr);
+	const slotUnion = textedSlotUnion(t);
+	if (declared != null && (slotUnion == null || receivesUnion(declared.resolvedSym!))) return declared;
+	if (slotUnion != null) return unionTextCall(ctx, expr, slotUnion, debug, loc);
+	if (!dumped) return null;
+	const dump = debug
+		? boundCall(ctx, "valueDebug", [expr], loc)
+		: boundCall(ctx, "valueDump", [expr, createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, loc)], loc);
+	callCheckExpr(ctx, dump, null);
+	return dump;
 }
 
 export function distinctTextRefusal(t: Type): string {
@@ -308,15 +424,122 @@ function declaredToString(ctx: CheckerContext, expr: Node): Node | null {
 	// the builtin path. The receiver's own diagnostics were already recorded when
 	// the caller checked it, so the trial's output is dropped either way.
 	const errMark = ctx.errors.length;
+	_probedToString = synthCall;
 	callCheckExpr(ctx, synthCall, null);
+	_probedToString = null;
 	const fits = ctx.errors.length == errMark;
 	while (ctx.errors.length > errMark) { ctx.errors.pop(); }
-	if (!fits) return null;
-	if (synthCall.nodeType == null || !isStringLike(synthCall.nodeType)) return null;
-	// The universal `.toString()` fallback mints a symbol with no declaration; it
-	// is the shape that used to reach C codegen as a struct member call.
-	if (synthCall.resolvedSym == null || synthCall.resolvedSym.declNode == null) return null;
-	return synthCall;
+	const userBound = fits && synthCall.nodeType != null && isStringLike(synthCall.nodeType)
+		&& synthCall.resolvedSym != null && synthCall.resolvedSym.declNode != null;
+	return userBound ? synthCall : null;
+}
+
+let _probedToString: Node | null = null;
+
+// `x.toString()` on a value type with no user `toString` is the std dump, like the implicit forms.
+export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
+	if (node == _probedToString || node.kind != NodeKind.CallExpr) return;
+	const d = node.data as CallExprData;
+	if (d.arguments.length != 0 || d.callee.kind != NodeKind.MemberExpr) return;
+	const me = d.callee.data as MemberExprData;
+	if (me.property != "toString") return;
+	const sym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+	if (sym == null || sym.builtinKind != "ToStringMethod" || sym.declNode != null) return;
+	const receiver = me.object;
+	const t = receiver.nodeType;
+	if (t == null) return;
+	let call: Node;
+	if (heldInSlotUnion(t)) {
+		call = unionTextCall(ctx, receiver, valueShape(t), false, node.location);
+	} else if (dumpedShape(t, valueShape(t))) {
+		call = boundCall(ctx, "valueDump", [receiver, createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, node.location)], node.location);
+		callCheckExpr(ctx, call, null);
+	} else {
+		return;
+	}
+	node.data = call.data;
+	node.nodeType = call.nodeType;
+	node.flags = call.flags;
+	node.variantSlot = call.variantSlot;
+	node.resolvedSym = call.resolvedSym;
+}
+
+function receivesUnion(sym: Symbol): boolean {
+	const fn = sym.symbolType;
+	if (fn == null || fn.kind != TypeKind.Function || fn.typeChildren.length == 0) return false;
+	return valueShape(fn.typeChildren[0]).kind == TypeKind.Union;
+}
+
+function heldInSlotUnion(t: Type): boolean {
+	const shape = valueShape(t);
+	return shape.kind == TypeKind.Union && isSlotUnion(shape) && !isResult(shape) && !taggedByLiteral(shape);
+}
+
+function textedSlotUnion(t: Type): Type | null {
+	const shape = valueShape(t);
+	if (heldInSlotUnion(shape)) return shape;
+	return isMaybeType(shape) && heldInSlotUnion(unwrapMaybeType(shape)) ? valueShape(unwrapMaybeType(shape)) : null;
+}
+
+function unionTextCall(ctx: CheckerContext, expr: Node, ut: Type, debug: boolean, loc: SourceLocation): Node {
+	const holder = makeSymbol("u", SymbolKind.Parameter, ut, false);
+	const args: Node[] = [expr, holderRead(holder, ut, loc)];
+	for (const member of ut.typeChildren) {
+		const value = projectTagUnionMember(holderRead(holder, ut, loc), ut, member);
+		const bound = synthStringify(ctx, value, debug);
+		args.push(bound != null ? bound : builtinText(ctx, value));
+	}
+	const call = boundCall(ctx, debug ? "unionMemberDebug" : "unionMemberText", args, loc);
+	callCheckExpr(ctx, call, null);
+	return call;
+}
+
+function holderRead(holder: Symbol, ut: Type, loc: SourceLocation): Node {
+	const read = createNodeAt(NodeKind.Identifier, { name: holder.name }, loc);
+	read.resolvedSym = holder;
+	read.nodeType = ut;
+	read.flags = read.flags.incl(NodeFlag.Sem).incl(NodeFlag.BoundSym);
+	return read;
+}
+
+function builtinText(ctx: CheckerContext, value: Node): Node {
+	const loc = value.location;
+	const call = createNodeAt(NodeKind.CallExpr, {
+		callee: createNodeAt(NodeKind.MemberExpr, { object: value, property: "toString", isOptional: false }, loc),
+		arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	callCheckExpr(ctx, call, null);
+	return call;
+}
+
+// A union the std dump can read: one whose variants lead with a string-literal field, or one holding only primitives.
+function foldableUnion(u: Type): boolean {
+	if (isStringLike(u) || unwrapRefNullUnion(u) != null || u.typeChildren.length == 0) return false;
+	let primitive = true;
+	for (const m of u.typeChildren) {
+		if (m == null || m.kind == TypeKind.Null) return false;
+		if (!isPrimitiveUnionMember(m)) primitive = false;
+	}
+	return primitive || taggedByLiteral(u);
+}
+
+function taggedByLiteral(u: Type): boolean {
+	if (u.typeChildren.length == 0) return false;
+	for (const m of u.typeChildren) {
+		const body = m == null ? null : unwrapRef(m);
+		if (body == null || body.kind != TypeKind.Struct || body.typeChildren.length == 0 || body.typeChildren[0] == null || body.typeChildren[0].kind != TypeKind.StringLiteral) return false;
+	}
+	return true;
+}
+
+function dumpedShape(t: Type, shape: Type): boolean {
+	if (shape.kind == TypeKind.Tuple || shape.kind == TypeKind.SizedArray || isResult(shape)) return true;
+	if (shape.kind == TypeKind.Union && foldableUnion(shape)) return true;
+	if (isValueStructShape(shape)) return true;
+	if (isMaybeType(shape) && shape.typeReturn != null && isValueStructShape(valueShape(shape.typeReturn))) return true;
+	const bare = skipModifier(t) ?? t;
+	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.GenericInstance) return false;
+	const inner = peelToStructOrUnion(t);
+	return inner != null && inner.kind == TypeKind.Struct && inner.typeName != "" && !isMaybeType(inner);
 }
 
 // `Flag.A | Flag.B` is a set of enum members, not the numeric OR of their
@@ -327,18 +550,18 @@ function inferBitSetOp(op: string, leftType: Type, rightType: Type): Type | null
 	if (op != "|" && op != "&" && op != "^") return null;
 	const leftElem = bitSetElemType(leftType);
 	if (leftElem != null) {
-		if (rightType.kind == TypeKind.Enum && rightType.typeName == leftElem.typeName) return leftType;
+		if (rightType.kind == TypeKind.Enum && sameType(rightType, leftElem)) return leftType;
 		const rightElem = bitSetElemType(rightType);
-		if (rightElem != null && rightElem.typeName == leftElem.typeName) return leftType;
+		if (rightElem != null && sameType(rightElem, leftElem)) return leftType;
 		return null;
 	}
 	const rightElem = bitSetElemType(rightType);
 	if (rightElem != null) {
-		if (leftType.kind == TypeKind.Enum && leftType.typeName == rightElem.typeName) return rightType;
+		if (leftType.kind == TypeKind.Enum && sameType(leftType, rightElem)) return rightType;
 		return null;
 	}
 	if (leftType.kind == TypeKind.Enum && rightType.kind == TypeKind.Enum
-		&& leftType.typeName != "" && leftType.typeName == rightType.typeName
+		&& sameNominal(leftType, rightType)
 		&& isOrdinalEnum(leftType)) {
 		return createBitSet(leftType);
 	}
@@ -620,8 +843,7 @@ function reportOrdinalEnumMix(ctx: CheckerContext, op: string, leftType: Type, r
 	if (leftType == null || rightType == null) return false;
 	if (leftType.kind != TypeKind.Enum || rightType.kind != TypeKind.Enum) return false;
 	if (!isOrdinalEnum(leftType) && !isOrdinalEnum(rightType)) return false;
-	if (leftType.typeName == "" || rightType.typeName == "") return false;
-	if (leftType.typeName == rightType.typeName) return false;
+	if (sameNominal(leftType, rightType)) return false;
 	addError(ctx, "bitwise operator '" + op + "' on '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "' mixes different enum sets", node.location.line, node.location.column);
 	return true;
 }
@@ -902,7 +1124,7 @@ function arithOperandsOk(op: string, a: Type, b: Type): boolean {
 function sameSetElement(a: Type, b: Type): boolean {
 	const ea = bitSetElemType(a);
 	const eb = bitSetElemType(b);
-	return ea != null && eb != null && ea.typeName == eb.typeName;
+	return ea != null && eb != null && sameType(ea, eb);
 }
 
 function sameStructOperand(ao: Type, a: Type, bo: Type, b: Type): boolean {
@@ -944,7 +1166,11 @@ function equalityOperandsOk(ao: Type, bo: Type): boolean {
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
 	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
 	const bEnum = b.kind == TypeKind.Enum || b.kind == TypeKind.EnumLiteral;
-	if (aEnum && bEnum) return a.typeName == b.typeName;
+	if (aEnum && bEnum) {
+		const ea = a.kind == TypeKind.EnumLiteral ? a.typeReturn : a;
+		const eb = b.kind == TypeKind.EnumLiteral ? b.typeReturn : b;
+		return ea != null && eb != null && sameNominal(ea, eb);
+	}
 	if (aEnum || bEnum) return (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
@@ -1007,7 +1233,7 @@ export function isScalarPrimitive(t: Type | null): boolean {
 		|| k == TypeKind.CString;
 }
 
-function compoundBase(op: string): string {
+export function compoundBase(op: string): string {
 	if (op.length < 2 || !op.endsWith("=") || op == "==" || op == "!=" || op == "<=" || op == ">="
 		|| op == "===" || op == "!==") return op;
 	return op.slice(0, op.length - 1);
@@ -1676,15 +1902,14 @@ function valueOfProtocolOf(ctx: CheckerContext, t: Type | null): ExtensionMethod
 	const none = null as unknown as ExtensionMethod;
 	if (t == null || ctx.extensionRegistry == null) return none;
 	let src = withoutReadonlyView(t);
-	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src)) return none;
+	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src) || isMaybeType(src)) return none;
 	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
 	if (src.kind != TypeKind.Distinct && src.kind != TypeKind.GenericInstance && src.kind != TypeKind.Struct) return none;
 	const exts = findAllExtensionsByName(ctx.extensionRegistry, "valueOf");
 	if (exts.length == 0) return none;
 	const ext = findFirstMatchingExt(exts, src);
 	if (ext == null) return none;
-	const srcName = typeNameOf(src);
-	return srcName != "" && srcName == ext.receiverTypeName ? ext : none;
+	return extDeclaresReceiver(ext, src) ? ext : none;
 }
 
 export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean {
@@ -1732,7 +1957,7 @@ function declaresOwnProtocol(ctx: CheckerContext, t: Type, name: string): boolea
 	if (ctx.extensionRegistry == null) return false;
 	const src = protocolReceiver(t);
 	const ext = findFirstMatchingExt(findAllExtensionsByName(ctx.extensionRegistry, name), src);
-	return ext != null && ext.receiverTypeName != "" && ext.receiverTypeName == typeNameOf(src);
+	return ext != null && extDeclaresReceiver(ext, src);
 }
 
 function needServedByOwnProtocol(ctx: CheckerContext, t: Type, need: ReadNeed, formal: Type | null): boolean {
@@ -1972,21 +2197,6 @@ function arrayDisplay(t: Type | null): string {
 // picks a temp's type from the STATIC type — so without this node it passes a
 // bare variant struct where the union is expected and clang only warns.
 // Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
-function structuralMemberIndex(formal: Type, exprType: Type): int32 {
-	if (!isTagCarriedUnion(formal) || isPrimitiveUnionMember(exprType)) return -1;
-	let found: int32 = -1;
-	let ci: int32 = 0;
-	for (const child of formal.typeChildren) {
-		if (child == null || child.kind == TypeKind.Null) return -1;
-		if (sameType(child, exprType)) {
-			if (found >= 0) return -1;
-			found = ci;
-		}
-		ci += 1;
-	}
-	return found;
-}
-
 export function unionSlotOf(formal: Type, exprType: Type): int32 {
 	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
 	return vi >= 0 ? vi : structuralMemberIndex(formal, exprType);
@@ -2070,6 +2280,14 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 // Declared (pre-narrowing) tagged union of a reference — the checker-side twin
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
+export function storedTypeOfNullRead(expr: Node, exprType: Type, formal: Type): Type {
+	if (exprType.kind != TypeKind.Null || expr.kind == NodeKind.NullLiteral || !isNullableShape([formal])) return exprType;
+	const stored = declaredTypeOfLocation(expr);
+	if (stored == null || stored.kind == TypeKind.Null) return exprType;
+	expr.nodeType = stored;
+	return stored;
+}
+
 function declaredTypeOfLocation(loc: Node): Type | null {
 	if (loc.kind == NodeKind.Identifier) return loc.resolvedSym != null && loc.resolvedSym.symbolType != null ? peelTransparentInstance(loc.resolvedSym.symbolType) : null;
 	if (loc.kind != NodeKind.MemberExpr) return null;
@@ -2421,8 +2639,8 @@ export function checkedProjection(expr: Node, declared: Type, member: Type): Nod
 
 export function assertIntoNullable(expr: Node, srcType: Type, target: Type): Node {
 	if (!isMaybeType(target) || target.typeReturn == null || srcType.kind == TypeKind.Null) return null as unknown as Node;
-	if (isMaybeType(srcType)) return widenMaybePayload(expr, target, srcType);
 	const payload = target.typeReturn;
+	if (isMaybeType(srcType) || (unwrapRefNullUnion(srcType) != null && isTagCarriedUnion(payload))) return widenMaybePayload(expr, target, srcType);
 	if (isSlotUnion(srcType) && tagUnionMemberSlot(srcType, payload) >= 0) {
 		return synthMaybeWrap(checkedAssertion(checkedProjection(expr, srcType, payload), payload), target, payload);
 	}
@@ -2571,6 +2789,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	const peeledFormal = peelTransparentInstance(formal);
 	const peeledExpr = peelTransparentInstance(exprType);
 	if (peeledFormal != formal || peeledExpr != exprType) return fitSlot(ctx, expr, peeledFormal, peeledExpr);
+	const stored = storedTypeOfNullRead(expr, exprType, formal);
+	if (stored != exprType) return fitSlot(ctx, expr, formal, stored);
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
 	const viewed = viewRefusal(expr, formal);
 	if (viewed != "") { addError(ctx, viewed, expr.location.line, expr.location.column); return expr; }
@@ -2620,6 +2840,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (instantiateGenericFnValue(ctx, expr, formal)) return fitNode(ctx, expr, formal, expr.nodeType);
 	const thunk = synthClosureThunk(expr, formal, exprType);
 	if (thunk != null as unknown as Node) return thunk;
+	if (isMaybeType(formal)) {
+		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
+		if (widenedMaybe != null as unknown as Node) return widenedMaybe;
+	}
 	// Implicit T → Maybe<T> coercion (Nim-parity `some(val)` / `none(T)`).
 	// MUST run BEFORE the same-kind early return below — both Token and
 	// Maybe<Token> have kind=Struct, so kind-equality alone wouldn't distinguish
@@ -2637,10 +2861,6 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			return expr;
 		}
 		return synthMaybeWrap(expr, formal, exprType);
-	}
-	if (isMaybeType(formal) && isMaybeType(exprType)) {
-		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
-		if (widenedMaybe != null as unknown as Node) return widenedMaybe;
 	}
 	if (exprType.kind == TypeKind.Null && formal.kind == TypeKind.Union && flatUnionTakesNull(formal)) {
 		expr.nodeType = formal;
@@ -3039,9 +3259,17 @@ export function settleYields(ctx: CheckerContext, name: string, at: SourceLocati
 	return createIterator(elem);
 }
 
+import { makeSymbol } from "./symbol";
+
+function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
+	const t = createStruct(name, names, types, isValue);
+	t.sym = makeSymbol(name, SymbolKind.Struct, t, false);
+	return t;
+}
+
 test "a union of two structs stores its tag" {
-	const p = createStruct("P", ["a"], [int32Type()], false);
-	const q = createStruct("Q", ["b"], [int32Type()], false);
+	const p = declaredStruct("P", ["a"], [int32Type()], false);
+	const q = declaredStruct("Q", ["b"], [int32Type()], false);
 	assert storesUnionTag(createUnion([p, q]));
 }
 
@@ -3050,13 +3278,13 @@ test "a union of two numbers stores its tag" {
 }
 
 test "a union with a shared literal discriminant keeps no tag" {
-	const a = createStruct("A", ["kind"], [createStringLiteral("a")], false);
-	const b = createStruct("B", ["kind"], [createStringLiteral("b")], false);
+	const a = declaredStruct("A", ["kind"], [createStringLiteral("a")], false);
+	const b = declaredStruct("B", ["kind"], [createStringLiteral("b")], false);
 	assert !storesUnionTag(createUnion([a, b]));
 }
 
 test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([numberType(), stringType()]));
-	const p = createStruct("P", ["a"], [int32Type()], false);
+	const p = declaredStruct("P", ["a"], [int32Type()], false);
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }

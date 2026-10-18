@@ -1,21 +1,20 @@
 // Transform Context — shared state across all transforms
 
-import { CheckerContext, addError, newSym } from "../checker/context";
+import { CheckerContext, addError, newSym, createContext } from "../checker/context";
 import { Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
-import { makeSymbol } from "../checker/symbol";
+import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
 // Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
 export interface PendingTupleOp {
 	tupleType: Type;
 	tupleName: string;
-	ops: string[];  // which ops needed: "eq", "lt", "le"
+	ops: string[];  // which ops needed: "Lt", "Le"
 }
 
 export class TransformContext {
 	tempCounter: number;
 	errors: string[];
-	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;
 	raiserBackend: boolean;
@@ -24,9 +23,8 @@ export class TransformContext {
 	boundChecks: boolean;
 	objChecks: boolean;
 	keepBuiltinMemberCalls: boolean;  // backend resolves builtins natively (opcodes / native methods) — keep member-call form instead of UFCS-rewriting to direct calls (mangled-name backends like C set false)
-	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
-	pendingValueEqs: Type[];
-	pendingCarrierEqs: Type[];   // synthesized carrier structs (Maybe<T>) compared by ==; carried as Type because they have no symbol-table entry to look the name up by
+	pendingTupleOps: PendingTupleOp[];  // tuple ordering ops to generate (reference parity)
+	pendingUnionEqs: Type[];  // payload unions compared by == on C
 	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
 	splitLoopLocals: Symbol[];  // bindings of a loop body split at a yield: generatorLower hoists them to one slot for the whole loop
@@ -41,7 +39,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>() };
+	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>() };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
@@ -121,7 +119,7 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 }
 
 export function mintSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null): Symbol {
-	const sym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, kind, name, t) : makeSymbol(name, kind, t, false);
+	const sym = newSym(mintingChecker(ctx, name), kind, name, t);
 	sym.state = SymbolState.Checked;
 	return sym;
 }
@@ -139,7 +137,18 @@ export function freshOwnedSym(ctx: TransformContext, prefix: string, t: Type | n
 	const n = ctx.tempCounter;
 	ctx.tempCounter += 1;
 	const name = "__" + prefix + "_" + n.toString();
-	return makeSymbol(name, SymbolKind.Variable, t != null ? t : noneType(), false);
+	return newLoweredSym(ctx, SymbolKind.Variable, name, t != null ? t : noneType());
+}
+
+export function newLoweredSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null, mutable: boolean = false): Symbol {
+	const sym = newSym(mintingChecker(ctx, name), kind, name, t);
+	if (mutable) setFlag(sym, SymbolFlag.Mutable);
+	return sym;
+}
+
+export function mintingChecker(ctx: TransformContext, name: string): CheckerContext {
+	if (ctx.checkerCtx == null) throw new Error(`internal: symbol '${name}' minted by a transform with no checker context`);
+	return ctx.checkerCtx;
 }
 
 test "a name set keeps first-insertion order and ignores repeats" {
@@ -166,4 +175,24 @@ test "a symbol set keys by identity, not by spelling, in first-insertion order" 
 	assert symSetContains(ss, a);
 	assert !symSetContains(ss, makeSymbol("x", SymbolKind.Variable, null, false));
 	assert !symSetContains(ss, null);
+}
+
+test "a transform with no checker context refuses to mint a symbol" {
+	const ctx = createTransformContext();
+	let refused = "";
+	try {
+		freshTempSym(ctx, "t", null);
+	} catch (e) {
+		refused = (e as Error).message;
+	}
+	assert refused.includes("'$t_0' minted by a transform with no checker context"), refused;
+}
+
+test "symbols minted by a lowering take distinct ordinals from the checker context" {
+	const ctx = createTransformContextWithChecker(createContext());
+	const a = freshTempSym(ctx, "t", null);
+	const b = freshOwnedSym(ctx, "t", null);
+	const c = newLoweredSym(ctx, SymbolKind.Variable, "v", null, true);
+	assert a.item > 0 && b.item > a.item && c.item > b.item;
+	assert hasFlag(c, SymbolFlag.Mutable) && !hasFlag(b, SymbolFlag.Mutable);
 }

@@ -7,19 +7,19 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
+import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric } from "./types";
+import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
+import { refuseAliasCycle } from "./aliasCycle";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
-import { isSysType, peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createUnionInOrder, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { getIdentId } from "./idents";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
-import { forEachChild } from "../ast/visitor";
-import { nestedViewType, ownedAlternativeOf, findViewType, createOutVar } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
-import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx, createState, isAtEnd } from "../parser/context";
+import { findCallTypeArg, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
-import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
+import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
+import { monoTypeKey } from "../monomorphize/registry";
 import { constantLiteralOf } from "./constFold";
 import { lex } from "../lexer/lexer";
 import { parseExpressionFromState } from "../parser/expressions/core";
@@ -43,6 +43,12 @@ interface ForwardOwner {
 
 const _forwardNullables: ForwardNullable[] = [];
 const _forwardOwners: ForwardOwner[] = [];
+
+function declaresType(t: Type | null, sym: Symbol): boolean {
+	let peeled = t;
+	while (peeled != null && peeled.kind == TypeKind.Alias) peeled = peeled.typeReturn;
+	return peeled != null && peeled.sym == sym;
+}
 
 function isUnresolvedAlias(t: Type | null): boolean {
 	if (t == null || t.kind != TypeKind.Inferred || t.sym == null) return false;
@@ -349,7 +355,7 @@ export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | nu
 	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + typeDisplayName(view)
 		+ " inside it: a view borrows memory its source can free while the container still holds it — use " + ownedAlternativeOf(view), line, col);
 }
-export function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
+function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
 	const view = findViewType(t);
 	if (view == null) return;
 	const what = view.kind == TypeKind.Var ? "a ref/out parameter" : "a " + typeDisplayName(view) + " view";
@@ -357,12 +363,12 @@ export function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: 
 		+ ": its parameters are captured into the frame the function suspends in, and the memory they point at can change or die across an await or yield — take the view again after each await, or pass a copy with [...x]", line, col);
 }
 
-export function bodyMentionsName(body: Node | null, name: string): boolean {
-	if (body == null) return false;
-	if (body.kind == NodeKind.Identifier && (body.data as IdentifierData).name == name) return true;
-	let hit = false;
-	forEachChild(body, (c: Node): void => { if (!hit && bodyMentionsName(c, name)) hit = true; });
-	return hit;
+export function refuseUsedSuspendingViewParams(ctx: CheckerContext, paramSyms: Symbol[], paramTypes: Type[], paramLocs: SourceLocation[] | null, fallback: SourceLocation): void {
+	for (let i = 0; i < paramSyms.length && i < paramTypes.length; i += 1) {
+		if (!hasFlag(paramSyms[i], SymbolFlag.Used)) continue;
+		const at = paramLocs != null && i < paramLocs.length && paramLocs[i] != null ? paramLocs[i] : fallback;
+		refuseSuspendingViewParam(ctx, paramSyms[i].name, paramTypes[i], at.line, at.column);
+	}
 }
 
 export function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
@@ -840,61 +846,55 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		const baseName = qualifiedSym != null ? qualifiedSym.name : writtenName;
 		const argsText = trimmed.slice(angleBracket + 1, trimmed.length - 1).trim();
 		const args = splitTopLevel(argsText, ",");
+		const builtinHead = builtinTypeHead(ctx, writtenName, baseName);
 
-		if (baseName == "Result" && args.length == 2) {
+		if (builtinHead == "Result" && args.length == 2) {
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
-		if (baseName == "Promise" && args.length == 1) {
-			const inner = resolveAnnotation(args[0], ctx, line, col);
-			if (isAwaitable(inner)) {
-				const value = awaitedType(inner);
-				const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
-				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
-				return value != null ? createPromise(value) : errorType();
-			}
-			return createPromise(inner);
+		if (builtinHead == "Promise" && args.length == 1) {
+			return promiseAnnotationOf(ctx, resolveAnnotation(args[0], ctx, line, col), line, col);
 		}
-		if (baseName == "Iterator" && args.length == 1) {
+		if (builtinHead == "Iterator" && args.length == 1) {
 			return createIterator(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Array" && args.length == 1) {
+		if (builtinHead == "Array" && args.length == 1) {
 			return createRef(createArray(resolveAnnotation(args[0], ctx, line, col)));
 		}
-		if (baseName == "Vec" && args.length == 1) {
+		if (builtinHead == "Vec" && args.length == 1) {
 			return createArray(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "BitSet" && args.length == 1) {
+		if (builtinHead == "BitSet" && args.length == 1) {
 			const elem = resolveAnnotation(args[0], ctx, line, col);
 			if (!bitSetElementAllowed(elem)) {
 				addError(ctx, "BitSet element must be an enum with ordinal members, got '" + typeDisplayName(elem) + "'", line, col);
 			}
 			return createBitSet(elem);
 		}
-		if (baseName == "Span" && args.length == 1) {
+		if (builtinHead == "Span" && args.length == 1) {
 			return createSpan(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Borrow" && args.length == 1) {
+		if (builtinHead == "Borrow" && args.length == 1) {
 			return createBorrow(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Ptr" && args.length == 1) {
+		if (builtinHead == "Ptr" && args.length == 1) {
 			return createPtr(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Cursor" && args.length == 1) {
+		if (builtinHead == "Cursor" && args.length == 1) {
 			return createCursor(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Ref" && args.length == 1) {
+		if (builtinHead == "Ref" && args.length == 1) {
 			return createRef(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Arc" && args.length == 1) {
+		if (builtinHead == "Arc" && args.length == 1) {
 			return createArc(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Locked" && args.length == 1) {
+		if (builtinHead == "Locked" && args.length == 1) {
 			return createLocked(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Readonly" && args.length == 1) {
+		if (builtinHead == "Readonly" && args.length == 1) {
 			return createReadonlyView(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Var" && args.length == 1) {
+		if (builtinHead == "Var" && args.length == 1) {
 			return createVar(resolveAnnotation(args[0], ctx, line, col));
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
@@ -930,11 +930,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				}
 				return emitUnresolvedTypeRef(ctx, baseName, line, col, "");
 			}
-			// Concrete instantiation: record for codegen + produce concrete type.
+			// Concrete instantiation: produce the concrete type.
 			// Reference parity (handleGenericInvocation):
 			// both type annotations and `new` expressions go through the same
 			// instantiation path, producing the same concrete type.
-			recordGenericTypeInstantiation(baseName, genericSym, args, ctx);
 			// Build GenericInstance with structural type args
 			const baseSym2 = lookupTypeSym(ctx, writtenName);
 			if (baseSym2 != null) {
@@ -1092,6 +1091,12 @@ function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
 	return exported.sym;
 }
 
+export function builtinTypeHead(ctx: CheckerContext, writtenName: string, baseName: string = ""): string {
+	const declared = lookupTypeSym(ctx, writtenName);
+	if (declared != null && isTypeSymbol(declared)) return declared.builtinKind;
+	return baseName != "" ? baseName : writtenName;
+}
+
 function isStaticHiddenTypeParam(ctx: CheckerContext, name: string, sym: Symbol): boolean {
 	const boundary = ctx.staticInitBoundary;
 	return boundary != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.GenericParam
@@ -1141,6 +1146,14 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 	return inferredType();
 }
 
+export function boundAnnotationType(node: Node | null): Type | null {
+	if (node == null || !node.flags.has(NodeFlag.BoundSym)) return null;
+	if (node.resolvedSym == null || node.nodeType == null) {
+		throw new Error("internal: a bound type annotation has no checked symbol or type");
+	}
+	return node.nodeType;
+}
+
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
 // Walks a positioned TypeExpr AST tree and records USE for every type identifier.
 // Does NOT resolve types — resolveAnnotation still handles that via string path.
@@ -1151,7 +1164,7 @@ export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
 	match (node.kind) {
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
-			const sym = lookupSymbol(ctx.table, d.name);
+			const sym = node.flags.has(NodeFlag.BoundSym) ? node.resolvedSym : lookupSymbol(ctx.table, d.name);
 			if (sym != null) {
 				sgRecordSym(ctx, node.location.line, node.location.column,
 					node.location.column + d.name.length,
@@ -1253,6 +1266,46 @@ export function fillForwardSymbol(ctx: CheckerContext, sym: Symbol): void {
 	if (hasFlag(sym, SymbolFlag.Exported)) markDeclMethodsExported(ctx, decl);
 }
 
+function promiseAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
+	if (isAwaitable(inner)) {
+		const value = awaitedType(inner);
+		const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
+		addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
+		return value != null ? createPromise(value) : errorType();
+	}
+	const delivered = thenablePromised(ctx, inner);
+	if (delivered != null) {
+		addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so write 'Promise<${typeDisplayName(delivered)}>'`, line, col);
+		return createPromise(delivered);
+	}
+	return createPromise(inner);
+}
+
+export function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
+	if (isPrimitiveKind(t.kind) || isStringLike(t)) return null;
+	const field = functionSlotOf(getProperty(t, "then"));
+	if (field != null) return field;
+	if (ctx.extensionRegistry == null) return null;
+	const receiver = withoutReadonlyView(t);
+	const ext = findDeclaredExt(findAllExtensionsByName(ctx.extensionRegistry, "then"), receiver);
+	if (ext == null || ext.isStatic) return null;
+	if (ext.sym != null) ensureShaped(ext.sym, ctx);
+	const method = getExtFnType(ext);
+	if (method.kind != TypeKind.Function || method.typeChildren.length == 0) return null;
+	const bindings = createUnifyBindings();
+	unifyType(method.typeChildren[0], receiver, bindings);
+	return stripReceiverParam(bindings.names.length > 0 ? instantiateGeneric(method, bindings.names, bindings.types) : method);
+}
+
+export function thenablePromised(ctx: CheckerContext, t: Type | null): Type | null {
+	if (t == null || isAwaitable(t) || isUnresolvedType(t)) return null;
+	const then = thenSignatureOf(ctx, t);
+	if (then == null) return null;
+	const onFulfilled = then.typeChildren.length > 0 ? functionSlotOf(then.typeChildren[0]) : null;
+	if (onFulfilled == null) return null;
+	return onFulfilled.typeChildren.length > 0 ? onFulfilled.typeChildren[0] : voidType();
+}
+
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 	if (sym.state == SymbolState.Shaped || sym.state == SymbolState.Checking || sym.state == SymbolState.Checked) {
 		// A primary can reach Shaped BEFORE later overloads are appended to it:
@@ -1297,16 +1350,6 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 		};
 	}
 	sym.state = SymbolState.Shaped;
-
-	if (node != null && sym.modulePath != ""
-		&& (node.kind == NodeKind.InterfaceDecl || node.kind == NodeKind.StructDecl
-			|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.TypeAliasDecl)) {
-		let st = sym.symbolType;
-		if (st != null && st.kind == TypeKind.Ref && st.typeReturn != null) st = st.typeReturn;
-		if (st != null && st.kind == TypeKind.Struct && st.typeNames != null && st.typeNames.length > 0) {
-			recordGlobalTypeShape(sym.name, st.typeNames.join(","), sym.modulePath);
-		}
-	}
 
 	// Recursively ensure all overloads are shaped (Demand-Driven Completeness)
 	drainOverloads(sym, ctx);
@@ -1360,117 +1403,17 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	return key;
 }
 
-// Find index of matching generic param for a given field type string.
-// Returns the param index, or -1 if no match. Uses only number locals (DRC-safe).
-function findGenericParamIdx(rawType: string, paramNames: string[]): number {
-	for (let i = 0; i < paramNames.length; i += 1) {
-		if (paramNames[i].trim() == rawType) return i;
-	}
-	return -1;
-}
-
-// Substitute all generic param names in a type string with concrete types.
-// Handles nested generics: "MapEntry<K, V>[]" with K=string, V=number → "MapEntry<string, number>[]"
-// Only replaces whole identifiers (not substrings): "Key" won't match param "K".
-function substituteGenericParamsInType(rawType: string, paramNames: string[], args: string[]): string {
-	let result = rawType;
-	for (let i = 0; i < paramNames.length; i += 1) {
-		if (i >= args.length) break;
-		const pname = paramNames[i].trim();
-		const arg = args[i].trim();
-		if (pname == "") continue;
-		// Replace whole-identifier occurrences of pname with arg
-		let buf = "";
-		let pos = 0;
-		while (pos < result.length) {
-			// Check if pname appears at pos as a whole identifier
-			let matched = false;
-			if (pos + pname.length <= result.length) {
-				const slice = result.slice(pos, pos + pname.length);
-				if (slice == pname) {
-					// Check boundaries: char before and after must not be alphanumeric/underscore
-					const before = pos > 0 ? result.charAt(pos - 1) : " ";
-					const after = pos + pname.length < result.length ? result.charAt(pos + pname.length) : " ";
-					const isWordBefore = (before >= "a" && before <= "z") || (before >= "A" && before <= "Z") || (before >= "0" && before <= "9") || before == "_";
-					const isWordAfter = (after >= "a" && after <= "z") || (after >= "A" && after <= "Z") || (after >= "0" && after <= "9") || after == "_";
-					if (!isWordBefore && !isWordAfter) {
-						buf = buf + arg;
-						pos = pos + pname.length;
-						matched = true;
-					}
-				}
-			}
-			if (!matched) {
-				buf = buf + result.charAt(pos);
-				pos = pos + 1;
-			}
-		}
-		result = buf;
-	}
-	return result;
-}
-
-// Record a generic type instantiation (e.g., Box<number>) for codegen
-// Looks up field names/types from parser side-channel, substitutes generic params -> concrete types
-// NOTE: Avoids all `let` string variables — only const strings + number let variables.
-// DRC generates msDecref instead of msStringDecref for let string locals in complex functions.
-export function recordGenericTypeInstantiation(baseName: string, genericSym: Symbol | null, args: string[], ctx: CheckerContext): void {
-	const argTypes: Type[] = [];
-	for (const arg of args) {
-		const trimmed = arg.trim();
-		if (trimmed == "") return;
-		const resolved = resolveAnnotation(trimmed, ctx, 0, 0);
-		if (isUnresolvedType(resolved)) return;
-		argTypes.push(resolved);
-	}
-	const typeArgKey = buildTypeArgKeys(argTypes).join("_");
-	const decl = genericSym != null ? genericSym.declNode : null;
-	const owner = genericSym != null ? genericSym.modulePath : "";
-	const instBase = monoBaseName(baseName, owner);
-	const mangledName = monoInstanceNameOf(baseName, owner, argTypes);
-
-	const fieldNamesStr = declFieldNamesJoined(decl);
-	const fieldTypesStr = declFieldTypesJoined(decl);
-
-	if (fieldNamesStr == "") {
-		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "", false);
-		return;
-	}
-
-	// Split generic param names: "T,U" -> ["T", "U"]
-	const paramNames = splitTopLevel(genericParamNamesOf(declGenericParams(decl)), ",");
-	const fnParts = splitTopLevel(fieldNamesStr, "|");
-	const ftParts = splitTopLevel(fieldTypesStr, "|");
-
-	if (fnParts.length == 0) {
-		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "", false);
-		return;
-	}
-
-	// Substitute generic params in field types (handles nested generics like MapEntry<K, V>[])
-	const firstRaw = ftParts.length > 0 ? ftParts[0].trim() : "";
-	const firstSub = substituteGenericParamsInType(firstRaw, paramNames, args);
-
-	let resultFieldNames = fnParts[0].trim();
-	let resultFieldTypes = firstSub;
-
-	for (let fi = 1; fi < fnParts.length; fi += 1) {
-		const rawType = fi < ftParts.length ? ftParts[fi].trim() : "";
-		const subType = substituteGenericParamsInType(rawType, paramNames, args);
-		resultFieldNames = resultFieldNames + "|" + fnParts[fi].trim();
-		resultFieldTypes = resultFieldTypes + "|" + subType;
-	}
-
-	addGenericTypeInst(instBase, typeArgKey, mangledName, resultFieldNames, resultFieldTypes, false);
-}
 
 // ===== Resolve Helpers =====
 
 // Resolve an array of type annotation strings into Type[], matching names 1:1
-function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: int32, col: int32): Type[] {
+function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: int32, col: int32, annotations: Node[] | null = null): Type[] {
 	const types: Type[] = [];
 	for (let i = 0; i < count; i += 1) {
-		if (i < typeStrs.length && typeStrs[i] != "") {
+		const bound = annotations != null && i < annotations.length ? boundAnnotationType(annotations[i]) : null;
+		if (bound != null) {
+			types.push(bound);
+		} else if (i < typeStrs.length && typeStrs[i] != "") {
 			types.push(resolveAnnotation(typeStrs[i], ctx, line, col));
 		} else {
 			types.push(inferredType());
@@ -1648,6 +1591,16 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// Set state to Shaped early to allow recursive references in signature
 	sym.state = SymbolState.Shaped;
 
+	const staticTypeName = getStaticExtTypeName(d.fnFlags);
+	if (staticTypeName != "") {
+		const owner = lookupSymbol(ctx.table, staticTypeName);
+		if (owner == null) {
+			addError(ctx, `'this typeof ${staticTypeName}' names no type in scope`, node.location.line, node.location.column);
+		} else {
+			sym.staticOwner = owner;
+		}
+	}
+
 	// Open temp scope with GenericParam types
  // so resolveAnnotation finds "T" -> GenericParam("T")
 	const genericNames = extractGenericParamDecls(d.fnFlags);
@@ -1659,7 +1612,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column);
+	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column, node.typeExprs);
 	resolveTypeExprs(node.typeExprs, ctx);
 
 	// Wrap out/ref param types in TypeKind.Var (reference parity: tyVar — both are T* in C)
@@ -1697,7 +1650,10 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// narrowType reads this to narrow callers in conditions.
 	let returnType: Type;
 	let predicateSentinel: Type | null = null;
-	if (d.fnReturnType != "") {
+	const boundReturn = boundAnnotationType(node.typeExpr);
+	if (boundReturn != null) {
+		returnType = boundReturn;
+	} else if (d.fnReturnType != "") {
 		// Assertion function: `asserts paramName is Type` — strip `asserts `
 		// prefix and handle as a predicate with void return type and a distinct
 		// sentinel marker ("asserts:" prefix on typeName).
@@ -2093,7 +2049,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// NOTE: only checks own fields (inherited fields can't reference child by name — they were resolved in parent's scope).
 	for (let fi = 0; fi < mergedTypes.length; fi += 1) {
 		const ft = mergedTypes[fi];
-		if (ft != null && isStructType(ft) && ft.typeName == d.interfaceName) {
+		if (ft != null && isStructType(ft) && declaresType(ft, sym)) {
 			mergedTypes[fi] = createRef(ft);
 			const fieldName = fi < mergedNames.length ? mergedNames[fi] : "?";
 			addError(ctx, "self-referential value field '" + fieldName + "' in '" + d.interfaceName + "' — a struct cannot contain itself by value (infinite size); use an interface/class (reference type), Ptr<" + d.interfaceName + ">, or an index into an owning array", node.location.line, 0);
@@ -2112,7 +2068,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 			wCol = node.paramLocations[wi].column;
 		}
 		if (wft != null && wft.kind == TypeKind.Ref && wft.typeReturn != null
-			&& wft.typeReturn.typeName == d.interfaceName) {
+			&& declaresType(wft.typeReturn, sym)) {
 			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
 		if (node.kind != NodeKind.StructDecl) refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
@@ -2129,7 +2085,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
-	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, d.interfaceName)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
+	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, sym)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
 	node.nodeType = sym.symbolType;
 	if (sym.symbolType.kind == TypeKind.Struct) refuseValueRecursion(ctx, node, target, d);
 	// Record each OWN interface field DEF for symbol graph (inherited fields
@@ -2214,6 +2170,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		if (resolved != null) {
 			assignType(sym.symbolType, resolved);
 			node.nodeType = sym.symbolType;
+			refuseAliasCycle(ctx, d, sym, resolved);
 		}
 		settleForwardTypes();
 		return;
@@ -2266,7 +2223,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 			// `{ kind: K.A, ... } | { kind: K.B, ... }` declares the same enum
 			// discriminator the match-type form declares, so it gets the same
 			// contract: typeExtra = enum type, typeNames = [disc, key0, key1...]
-			// in typeChildren order (findVariantByDiscriminant reads keys there).
+			// in typeChildren order (variantKeyMember reads keys there).
 			const enumDisc = findSharedEnumDiscriminant(resolved);
 			const enumType = enumDisc != "" ? enumDiscriminantTypeOf(resolved, enumDisc) : null;
 			if (enumType != null) {
@@ -2285,7 +2242,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		distType.typeName = d.aliasName;
 		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
 		if (hasFlag(sym, SymbolFlag.Borrow)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BorrowDot);
-		if (declaresLifecycleHook(ctx, d.aliasName)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.HasAsgn);
+		if (declaresLifecycleHook(ctx, sym)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.HasAsgn);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)
@@ -2300,6 +2257,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		assignType(sym.symbolType, resolved);
 		node.nodeType = sym.symbolType;
 	}
+	refuseAliasCycle(ctx, d, sym, resolved);
 	settleForwardTypes();
 }
 
@@ -2372,6 +2330,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 			} else {
 				const bareKey = bareAfterDelim(d.variantKeys[vi], ".");
 				resolved.typeName = d.aliasName + "." + bareKey;
+				spelled(resolved);
 			}
 		}
 		variantTypes.push(resolved);
@@ -2459,9 +2418,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
 	stripRestParamPrefix(cd.ctorParams);
-	if (cd.ctorDefaults != null && cd.ctorDefaults.length > 0) {
-		sym.defaultParams = cd.ctorDefaults;
-	}
+	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, cd.ctorDefaults != null ? cd.ctorDefaults : []);
 }
 
 function declaresConstructor(body: Node[]): boolean {
@@ -2475,11 +2432,12 @@ function declaresConstructor(body: Node[]): boolean {
 	return false;
 }
 
-function inheritConstructor(node: Node, sym: Symbol, parentSym: Symbol, parentType: Type): void {
+function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parentSym: Symbol, parentType: Type): void {
 	const d = node.data as ClassDeclData;
 	if (!hasFlag(parentSym, SymbolFlag.HasConstructor) || declaresConstructor(d.classBody)) return;
-	const parentCtor = ctorFnTypeOf(parentSym);
-	if (parentCtor == null) return;
+	const parentRoutine = ctorRoutineOf(parentSym);
+	if (parentRoutine == null || parentRoutine.symbolType == null) return;
+	const parentCtor = createFunction(ctorFormalTypes(parentRoutine)!, parentRoutine.symbolType.typeNames.slice(1), voidType());
 	const instance = unwrapRef(parentType);
 	const names = instance.kind == TypeKind.GenericInstance
 		? splitTopLevel(genericParamNamesOf(symGenericParams(parentSym)), ",").map((n: string): string => n.trim())
@@ -2508,6 +2466,18 @@ function inheritConstructor(node: Node, sym: Symbol, parentSym: Symbol, parentTy
 	d.classBody.push(ctorNode);
 	setFlag(sym, SymbolFlag.HasConstructor);
 	setFlag(sym, SymbolFlag.InheritsConstructor);
+	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, paramTypes, params, ctorNode, []);
+}
+
+// A resolved class names its parent by Symbol; one not resolved yet is declared in
+// this module, so its `extends` name binds in this scope.
+function declaredParentClass(ctx: CheckerContext, classSym: Symbol): Symbol | null {
+	if (classSym.declNode == null || classSym.declNode.kind != NodeKind.ClassDecl) return null;
+	const resolved = parentClassSymOf(classSym);
+	if (resolved != null) return resolved;
+	const ext = (classSym.declNode.data as ClassDeclData).classExtends;
+	if (ext == "") return null;
+	return lookupSymbol(ctx.table, ext.indexOf("<") >= 0 ? ext.slice(0, ext.indexOf("<")).trim() : ext.trim());
 }
 
 export function resolveClass(ctx: CheckerContext, node: Node): void {
@@ -2592,7 +2562,6 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		} else if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				// Resolve static property type and update the staticFields symbol
 				let staticType = inferredType();
 				if (pd.propType != "") {
 					const savedBoundary = ctx.staticInitBoundary;
@@ -2603,12 +2572,12 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
-				// Find matching staticFields entry and set its type
-				for (const sf of sym.staticFields) {
-					if (sf.name == d.className + "." + pd.propName) {
-						sf.symbolType = staticType;
-						sf.state = SymbolState.Shaped;
-					}
+				const sf = member.resolvedSym;
+				if (sf == null || sf.symbolKind != SymbolKind.Variable || !hasFlag(sf, SymbolFlag.Static)) {
+					addError(ctx, `internal: static field '${d.className}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
+				} else {
+					sf.symbolType = staticType;
+					sf.state = SymbolState.Shaped;
 				}
 			} else {
 				memberNames.push(pd.propName);
@@ -2619,7 +2588,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 					memberTypes.push(propType);
 					// Same owning self-ref hazard as interface fields (resolveInterface).
 					if (propType.kind == TypeKind.Ref && propType.typeReturn != null
-						&& propType.typeReturn.typeName == d.className) {
+						&& declaresType(propType.typeReturn, sym)) {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
 					refuseViewField(ctx, pd.propName, d.className, propType, member.location.line, member.location.column);
@@ -2675,10 +2644,10 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		// the self-cycle branch above does. Without this the partial-resolve
 		// races produce a misleading "field 'x' redefines inherited field"
 		// downstream instead of a clean "cyclic inheritance" diagnostic.
-		let cycleProbe = bareParentName.trim();
+		let cycleProbe: Symbol | null = lookupSymbol(ctx.table, bareParentName.trim());
 		let cycleSteps: int32 = 0;
-		while (cycleProbe != "" && cycleSteps < 64) {
-			if (cycleProbe == d.className) {
+		while (cycleProbe != null && cycleSteps < 64) {
+			if (cycleProbe == sym) {
 				addError(ctx, "'" + d.className + "' cyclic inheritance — '" + d.className + "' indirectly extends itself via '" + bareParentName + "'", node.location.line, node.location.column);
 				inner.typeNames = memberNames;
 				inner.typeChildren = memberTypes;
@@ -2687,12 +2656,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				if (hasGenerics) closeScope(ctx.table);
 				return;
 			}
-			const probeSym = lookupSymbol(ctx.table, cycleProbe);
-			if (probeSym == null || probeSym.declNode == null || probeSym.declNode.kind != NodeKind.ClassDecl) break;
-			const probeData = probeSym.declNode.data as ClassDeclData;
-			const nextParent = probeData.classExtends;
-			if (nextParent == "") break;
-			cycleProbe = nextParent.indexOf("<") >= 0 ? nextParent.slice(0, nextParent.indexOf("<")).trim() : nextParent.trim();
+			cycleProbe = declaredParentClass(ctx, cycleProbe);
 			cycleSteps = (cycleSteps + 1) as int32;
 		}
 		const parentSym = lookupSymbol(ctx.table, bareParentName);
@@ -2735,7 +2699,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				mergedNames = newNames;
 				mergedTypes = newTypes;
 				didMergeParent = true;
-				if (parentSym != null) inheritConstructor(node, sym, parentSym, parentType);
+				if (parentSym != null) inheritConstructor(ctx, node, sym, parentSym, parentType);
 			}
 		}
 	}
@@ -2749,6 +2713,11 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Propagate HasAsgn from any managed field (parent + own after merge)
 	for (const pt of mergedTypes) { propagateToOwner(inner, pt); }
 	node.nodeType = sym.symbolType;
+}
+
+function refuseActorHandleName(ctx: CheckerContext, actorName: string, memberName: string, member: Node): void {
+	if (memberName != "pid") return;
+	addError(ctx, `actor '${actorName}' cannot declare a member named 'pid': 'pid' reads the actor's handle`, member.location.line, member.location.column);
 }
 
 export function resolveActor(ctx: CheckerContext, node: Node): void {
@@ -2783,6 +2752,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 		}
 		if (member.kind == NodeKind.MethodDecl) {
 			const md = member.data as MethodDeclData;
+			if (!md.methodIsStatic) refuseActorHandleName(ctx, d.actorName, md.methodName, member);
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			if (hasMethodGenerics) {
@@ -2821,14 +2791,16 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 					refuseViewField(ctx, pd.propName, d.actorName, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
-				for (const sf of sym.staticFields) {
-					if (sf.name == d.actorName + "." + pd.propName) {
-						sf.symbolType = staticType;
-						sf.state = SymbolState.Shaped;
-					}
+				const sf = member.resolvedSym;
+				if (sf == null || sf.symbolKind != SymbolKind.Variable || !hasFlag(sf, SymbolFlag.Static)) {
+					addError(ctx, `internal: static field '${d.actorName}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
+				} else {
+					sf.symbolType = staticType;
+					sf.state = SymbolState.Shaped;
 				}
 				continue;
 			}
+			refuseActorHandleName(ctx, d.actorName, pd.propName, member);
 			memberNames.push(pd.propName);
 			if (pd.propType != "") {
 				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
@@ -2865,14 +2837,6 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 
 // ===== Tests =====
 
-import { createContext } from "./context";
-import { defineSymbol, makeSymbol } from "./symbol";
-import {
-	resetGenericTypeInsts, getGenericTypeInstCount, getGenericTypeInstBaseName,
-	getGenericTypeInstTypeArgKey, getGenericTypeInstMangledName,
-	getGenericTypeInstFieldNames, getGenericTypeInstFieldTypes,
-	findGenericTypeInstIdx,
-} from "../parser/context";
 
 function resolveWith(text: string): Type {
 	const ctx = createContext();
@@ -3039,43 +3003,21 @@ test "decorated function gets resolved" {
 	assert ret != null && ret.kind == TypeKind.Number;
 }
 
-test "Box<number> records instantiation" {
-	resetGenericTypeInsts();
+test "Box<number> resolves to a generic instance" {
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.InterfaceDecl, "Box", "T", ["value"], ["T"]);
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
 	assert t.kind == TypeKind.GenericInstance;
-	assert getGenericTypeInstCount() == 1;
-	assert getGenericTypeInstBaseName(0) == "Box";
-	assert getGenericTypeInstTypeArgKey(0) == "float64";
-	assert getGenericTypeInstMangledName(0) == "Box__float64";
-	assert getGenericTypeInstFieldNames(0) == "value";
-	assert getGenericTypeInstFieldTypes(0) == "number";
 }
 
-test "Pair<string, number> records instantiation" {
-	resetGenericTypeInsts();
+test "Pair<string, number> resolves to a generic instance" {
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.InterfaceDecl, "Pair", "A,B", ["first", "second"], ["A", "B"]);
 	const t = resolveAnnotation("Pair<string, number>", ctx, 0, 0);
 	assert t.kind == TypeKind.GenericInstance;
-	const idx = findGenericTypeInstIdx("Pair", "string_float64");
-	assert idx >= 0;
-	assert getGenericTypeInstFieldNames(idx) == "first|second";
-	assert getGenericTypeInstFieldTypes(idx) == "string|number";
-}
-
-test "dedup instantiation" {
-	resetGenericTypeInsts();
-	const ctx = createContext();
-	declareGeneric(ctx, NodeKind.InterfaceDecl, "Box", "T", ["value"], ["T"]);
-	resolveAnnotation("Box<number>", ctx, 0, 0);
-	resolveAnnotation("Box<number>", ctx, 0, 0);
-	assert getGenericTypeInstCount() == 1;
 }
 
 test "non-generic base falls through" {
-	resetGenericTypeInsts();
 	const ctx = createContext();
 	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createStruct("Foo", [], [], true), false));
 	const t = resolveAnnotation("Foo<number>", ctx, 0, 0);
@@ -3085,23 +3027,17 @@ test "non-generic base falls through" {
 }
 
 test "a declaration without parameters is not generic, whatever its name" {
-	resetGenericTypeInsts();
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.ClassDecl, "Box", "", ["v"], ["int32"]);
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
 	assert t.kind == TypeKind.Struct;
-	assert getGenericTypeInstCount() == 0;
 }
 
-test "generic class Container<T> records instantiation" {
-	resetGenericTypeInsts();
+test "generic class Container<T> resolves to a generic instance" {
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.ClassDecl, "Container", "T", ["item", "count"], ["T", "number"]);
 	const t = resolveAnnotation("Container<string>", ctx, 0, 0);
 	assert t.kind == TypeKind.GenericInstance;
-	assert getGenericTypeInstCount() == 1;
-	assert getGenericTypeInstFieldNames(0) == "item|count";
-	assert getGenericTypeInstFieldTypes(0) == "string|number";
 }
 
 test "constraint stored on GenericParam typeExtra" {
@@ -3130,7 +3066,6 @@ test "no constraint leaves typeExtra null" {
 }
 
 test "constrained interface Box<T extends number>" {
-	resetGenericTypeInsts();
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.InterfaceDecl, "Box", "T:number", ["value"], ["T"]);
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);

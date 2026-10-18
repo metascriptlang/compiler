@@ -33,13 +33,9 @@ export class JSGenerator {
 	indentLevel: int32;
 	jsImports: JsImportEntry[];
 	bundleMode: boolean;
-	bundleIsPrelude: boolean; // true if current module is std/core/* (global scope, skip imports)
 	exportedNames: string[];
 	bundleExportLocals: string[];
 	importedNames: string[]; // track const-destructured names to avoid redeclaration in IIFEs
-	// Maps import source specifier → resolved module ID for __mod["id"] lookups
-	importSourceToModuleId: string[];
-	importSourceToModuleIdKeys: string[];
 	thisName: string;
 	staticSlots: string[]; // module-scope storage for `static` decls written inside bodies
 	helpers: JSHelpers;
@@ -75,21 +71,21 @@ export class JSGenerator {
 	pendingLine: int32;       // 1-based .ms line, 0 = nothing pending
 	pendingCol: int32;
 	pendingName: int32;
-	// True while emitting an ActorDecl's synthesized class: the constructor
-	// prologue stamps the synthetic pid and instance field defaults are
+	// The synthetic pid field while emitting an ActorDecl's synthesized class:
+	// the constructor prologue stamps it and instance field defaults are
 	// emitted as JS class fields (the tier-1 actor surface).
-	inActorDecl: boolean;
+	actorHandle: Node | null;
 	dynamicPlan: DynamicModulePlan;
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], bundleExportLocals: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
 		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], moduleRequests: "", namespaceModules: [], namespaceNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
 		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32,
-		inActorDecl: false, dynamicPlan: new DynamicModulePlan() };
+		actorHandle: null, dynamicPlan: new DynamicModulePlan() };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): string {

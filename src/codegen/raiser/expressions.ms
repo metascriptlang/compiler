@@ -26,9 +26,9 @@ import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaise
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
-	resolveFunc, isLocalString, isEnumName, findEnumConstant,
+	isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine,
+	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
@@ -378,7 +378,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 	if (k == NodeKind.StringLiteral) return true;
 	if (k == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		return isLocalString(s, d.name);
+		return isLocalString(s, node.resolvedSym);
 	}
 	if (k == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
@@ -436,7 +436,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, destination, global, 0));
 				return destination;
 			}
-			const reg = resolveLocal(s, d.name);
+			const reg = resolveLocal(s, node.resolvedSym);
 			if (reg >= 0) return reg;
 			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "NaN") {
 				const nanReg = allocReg(s);
@@ -482,7 +482,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 					return r;
 				}
 			}
-			const funcIdx = resolveRoutine(s, node.resolvedSym, d.name);
+			const funcIdx = resolveRoutine(s, node.resolvedSym);
 			if (funcIdx >= 0) {
 				const r = allocReg(s);
 				emitLoadConst(s, r, raiserInt(funcIdx));
@@ -620,7 +620,7 @@ function isRefParamTarget(left: Node): boolean {
 function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 {
 	if (isRefParamTarget(left)) {
 		const pointeeType = left.resolvedSym!.symbolType.typeReturn;
-		const paramReg = resolveLocal(s, (left.data as IdentifierData).name);
+		const paramReg = resolveLocal(s, left.resolvedSym);
 		if (paramReg < 0 || !needsValueAssign(s, pointeeType)) return -1;
 		const srcReg = compileExpr(s, right);
 		return emitValueAssign(s, paramReg, srcReg, pointeeType);
@@ -642,7 +642,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, result, global, 0));
 			return result;
 		}
-		const targetReg = resolveLocal(s, (left.data as IdentifierData).name);
+		const targetReg = resolveLocal(s, left.resolvedSym);
 		if (targetReg < 0) return -1;
 		const srcReg = compileExpr(s, right);
 		const result = emitValueAssign(s, targetReg, srcReg, left.nodeType);
@@ -719,7 +719,7 @@ function compileCellAddress(s: RaiserCompState, value: Node): int32 {
 
 function isPlace(s: RaiserCompState, node: Node): boolean {
 	if (node.kind == NodeKind.Identifier) {
-		return resolveGlobal(s, node.resolvedSym) >= 0 || resolveLocal(s, (node.data as IdentifierData).name) >= 0;
+		return resolveGlobal(s, node.resolvedSym) >= 0 || resolveLocal(s, node.resolvedSym) >= 0;
 	}
 	return node.kind == NodeKind.ArrayAccess || node.kind == NodeKind.MemberExpr || node.kind == NodeKind.HiddenDeref;
 }
@@ -732,7 +732,7 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 			emitInst(s, raiserABx(RaiserOpcode.AddrGlobal, dest, global));
 			return dest;
 		}
-		const local = resolveLocal(s, (place.data as IdentifierData).name);
+		const local = resolveLocal(s, place.resolvedSym);
 		if (local >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.AddrReg, dest, local, 0));
 			return dest;
@@ -850,13 +850,12 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		const srcReg = emitValueCopy(s, compileExpr(s, d.right), d.left.nodeType);
 		if (d.left.kind == NodeKind.Identifier) {
-			const id = d.left.data as IdentifierData;
 			const global = resolveGlobal(s, d.left.resolvedSym);
 			if (global >= 0) {
 				emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, srcReg, global, 0));
 				return srcReg;
 			}
-			const targetReg = resolveLocal(s, id.name);
+			const targetReg = resolveLocal(s, d.left.resolvedSym);
 			if (targetReg >= 0) {
 				emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, srcReg, 0));
 				return targetReg;
@@ -1178,9 +1177,8 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	}
 
 	if (d.left.kind == NodeKind.Identifier) {
-		const id = d.left.data as IdentifierData;
 		const global = resolveGlobal(s, d.left.resolvedSym);
-		const targetReg = global >= 0 ? compileExpr(s, d.left) : resolveLocal(s, id.name);
+		const targetReg = global >= 0 ? compileExpr(s, d.left) : resolveLocal(s, d.left.resolvedSym);
 		if (targetReg >= 0) {
 			const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
 			const rhsReg = strConcat ? compileStringPart(s, d.right) : compileCompoundOperand(s, op, d.right);
@@ -1398,12 +1396,14 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		return compileToStringCall(s, node);
 	}
 
-	// exit(code) / process.exit(code) — Nim's VM has no quit op at comptime;
-	// on the run path exit is a Tier-0 concern: halt the VM with the code.
-	if (isExitCall(d.callee) && d.arguments.length == 1) {
+	const builtinKind = callBuiltinKind(node);
+	// exit(code) / process.exit(code) is a Tier-0 concern: halt the VM with the code.
+	if (builtinKind == "Exit" && d.arguments.length <= 1) {
 		return compileExitCall(s, node);
 	}
-	const builtinKind = callBuiltinKind(node);
+	if ((builtinKind == "UnionText" || builtinKind == "UnionDebug") && d.arguments.length >= 1) {
+		return compileTextOf(s, d.arguments[0]);
+	}
 	if (builtinKind == "MapFatal" && d.arguments.length == 1) {
 		return compileMapFatalCall(s, node);
 	}
@@ -1437,7 +1437,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
 	}
-	if (isModuleImportCall(d.callee) && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
+	if (builtinKind == "ModuleImport" && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
 		const dest = allocReg(s);
 		const name = addConst(s, raiserString((d.arguments[0].data as StringLiteralData).value));
 		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
@@ -1553,17 +1553,18 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// User function call: callee must be Identifier
 	if (d.callee.kind == NodeKind.Identifier) {
 		const calleeId = d.callee.data as IdentifierData;
-		if (calleeId.name == "super" && d.callee.resolvedSym != null && d.callee.resolvedSym.symbolKind == SymbolKind.Class) {
+		if (calleeId.name == "super" && d.callee.resolvedSym != null
+				&& (d.callee.resolvedSym.symbolKind == SymbolKind.Class || d.callee.resolvedSym.symbolKind == SymbolKind.Function)) {
 			return compileSuperCall(s, node, d.callee.resolvedSym);
 		}
-		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, calleeId.name) >= 0) return compileClosureCall(s, node);
+		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, d.callee.resolvedSym) >= 0) return compileClosureCall(s, node);
 		let calleeSym = d.callee.resolvedSym;
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
 			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
 		}
 		const overridden = overriddenMethodName(calleeSym);
 		if (overridden != "" && d.arguments.length > 0) return compileDispatchedCall(s, node, overridden);
-		let funcIdx = resolveRoutine(s, calleeSym, calleeId.name);
+		let funcIdx = resolveRoutine(s, calleeSym);
 		if (funcIdx < 0 && calleeSym != null) {
 			funcIdx = callRaiserOnDemand(calleeSym);
 		}
@@ -1581,13 +1582,22 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 
 function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int32 {
 	const d = node.data as CallExprData;
-	const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
-	const parent = body != null && body.sym != null ? body.sym : superSym;
-	const initName = parent.name + "_init";
-	let funcIdx = s.scopedFunctions && parent.modulePath != "" ? resolveFunc(s, parent.modulePath + ":" + initName) : -1;
-	if (funcIdx < 0) funcIdx = resolveFunc(s, initName);
-	if (funcIdx < 0 && callRaiserOnDemand(parent) >= 0) funcIdx = resolveFunc(s, initName);
-	const thisReg = resolveLocal(s, "this");
+	let initName = superSym.name;
+	let funcIdx = -1;
+	let parent: Symbol | null = null;
+	if (superSym.symbolKind == SymbolKind.Function) {
+		funcIdx = resolveRoutine(s, superSym);
+		const fnType = superSym.symbolType;
+		const self = fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]) : null;
+		parent = self != null ? self.sym : null;
+	} else {
+		const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
+		parent = body != null && body.sym != null ? body.sym : superSym;
+		initName = parent.name + "_init";
+		funcIdx = resolveClassInit(s, parent);
+	}
+	if (funcIdx < 0 && parent != null && callRaiserOnDemand(parent) >= 0) funcIdx = resolveClassInit(s, parent);
+	const thisReg = s.receiverReg;
 	if (funcIdx < 0 || thisReg < 0) {
 		const msg = `cannot compile 'super(...)': no '${initName}' in the Raiser function table`;
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
@@ -1741,9 +1751,8 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 	}
 
 	if (d.updateArg.kind == NodeKind.Identifier) {
-		const id = d.updateArg.data as IdentifierData;
 		const global = resolveGlobal(s, d.updateArg.resolvedSym);
-		const varReg = global >= 0 ? compileExpr(s, d.updateArg) : resolveLocal(s, id.name);
+		const varReg = global >= 0 ? compileExpr(s, d.updateArg) : resolveLocal(s, d.updateArg.resolvedSym);
 		if (varReg >= 0) {
 			if (d.isPrefix) {
 				// ++i / --i: modify first, return modified
@@ -1837,10 +1846,7 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	if (newCallee.kind == NodeKind.Identifier) {
 		const classId = newCallee.data as IdentifierData;
 		const sym = newCallee.resolvedSym;
-		const ctorName = (sym != null ? sym.name : classId.name) + "_new";
-		let funcIdx = s.scopedFunctions && sym != null && sym.modulePath != ""
-			? resolveFunc(s, sym.modulePath + ":" + ctorName)
-			: resolveFunc(s, ctorName);
+		let funcIdx = sym != null ? resolveConstructor(s, sym) : -1;
 		if (funcIdx < 0 && sym != null) funcIdx = callRaiserOnDemand(sym);
 		if (funcIdx >= 0) {
 			const knownCtorless = sym != null && !sym.symFlags.has(SymbolFlag.HasConstructor);
@@ -2030,7 +2036,11 @@ function isToStringCall(node: Node): boolean {
 function compileToStringCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
-	const objReg = compileStringPart(s, md.object);
+	return compileTextOf(s, md.object);
+}
+
+function compileTextOf(s: RaiserCompState, obj: Node): int32 {
+	const objReg = compileStringPart(s, obj);
 	const emptyReg = allocReg(s);
 	emitLoadConst(s, emptyReg, raiserString(""));
 	const dest = allocReg(s);
@@ -2059,30 +2069,14 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 	return arrReg;
 }
 
-function isModuleImportCall(callee: Node): boolean {
-	return callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "msModuleImport";
-}
-
-// exit(code) / process.exit(code) — name-based like setLength: the import
-// graph proves the callee, the codegen intercept wins every call site.
-function isExitCall(callee: Node): boolean {
-	if (callee.kind == NodeKind.Identifier) {
-		return (callee.data as IdentifierData).name == "exit";
-	}
-	if (callee.kind == NodeKind.MemberExpr) {
-		const md = callee.data as MemberExprData;
-		if (md.property != "exit") return false;
-		if (md.object.kind != NodeKind.Identifier) return false;
-		return (md.object.data as IdentifierData).name == "process";
-	}
-	return false;
-}
-
 function compileExitCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const valueReg = compileExpr(s, d.arguments[0]);
 	const codeReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.Conv, codeReg, valueReg, RaiserConvClass.I32));
+	if (d.arguments.length == 0) {
+		emitLoadConst(s, codeReg, raiserInt(0));
+	} else {
+		emitInst(s, raiserABC(RaiserOpcode.Conv, codeReg, compileExpr(s, d.arguments[0]), RaiserConvClass.I32));
+	}
 	// b=1 marks the halt abrupt: it skips the strand drain, the way
 	// process.exit bypasses msDrainUntilIdle on C.
 	emitInst(s, raiserABC(RaiserOpcode.Halt, codeReg, 1, 0));

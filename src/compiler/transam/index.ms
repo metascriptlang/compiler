@@ -55,7 +55,7 @@ import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator ca
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
-import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
+import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
@@ -246,7 +246,6 @@ function dbInvalidateExports(db: TransAmDb, fileId: int32): void {
 function removeExportEntry(registry: ExportRegistry, path: string): void {
 	for (let i = 0; i < registry.entries.length; i = i + 1) {
 		if (registry.entries[i].modulePath == path) {
-			removeFromNameIndex(registry, registry.entries[i].symbols);
 			for (let j = i; j < registry.entries.length - 1; j = j + 1) {
 				registry.entries[j] = registry.entries[j + 1];
 			}
@@ -1250,7 +1249,7 @@ test "exported static extension carries its signature" {
 	dbEnsureExportsRegistered(db, "/test/use.ms", visited, 0);
 	const make = findExportedSymbol(db.exportRegistry, "/test/box.ms", "make");
 	assert make != null;
-	assert make.extIsStatic;
+	assert make.ext != null && make.ext.isStatic;
 	assert make.sym.symbolType.kind == TypeKind.Function;
 	assert make.sym.symbolType.typeChildren.length == 2;
 }

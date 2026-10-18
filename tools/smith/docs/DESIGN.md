@@ -188,8 +188,40 @@ only in `src/compiler/meta/bridge.ms`), Apple clang 21, generator `5f48a6efb` cl
 
 Wall time ran beside other sessions' jobs (load average 12–36), so it is not throughput.
 `generatorLower` reaches the same branches under every vector: Smith generates no
-generator, so that count is what any program reaches. Not measured: the coverage of an
-empty program (the floor to subtract), batches above 20, Linux or Windows hosts.
+generator, so that count is what any program reaches. A one-line program
+(`console.log`) reaches 4,762 `lambdaLifting`, 1,513 `generatorLower` and 4,583 `inject`
+branches on the same instrumented compiler. That floor comes from the prelude, so subtract
+it before reading a vector's gain. Not measured: Linux or Windows hosts.
+
+Strategist (G5), 2026-10-15..18. The aimed pass was `lambdaLifting`. Reading its unreached
+functions gave two closure shapes:
+
+- `routineDecl` in `gen.ms`: a nested routine that calls itself, is bounded by
+  `ROUTINE_FRAMES`, and may read an enclosing variable. It is bound by `function` or by a
+  `const` arrow. Its weight is `w.closure.routine`, default 1.
+- statement blocks at module top level: the `top` field, default 1.
+
+Setting either to 0 regenerates the previous stream byte for byte. At top level a
+`function` inside a block is parked (inbox
+`2026-10-14-function-declared-in-a-static-block-is-undefined.md`), so only the arrow form
+is emitted there. On 40 seeds, `fams=closure` reached 6,519 `lambdaLifting` branches with
+routines only and 6,657 with top-level blocks. Raising `w.closure.routine` to 4 lowered it
+to 6,435, so the aimed arm keeps the default weights.
+
+The A/B ran seeds 1..100 per arm. Findings were judged on the installed `msc` (BUILD
+`9029133ef`, generator `90a37a6cd`, `MSCORPUS_JOBS=4`). Coverage came from the `d8835e9d3`
+instrumented compiler:
+
+| arm | CPU user+sys | findings | distinct causes | causes / CPU-hour | `lambdaLifting` | `inject` | pipeline |
+|---|---|---|---|---|---|---|---|
+| `--swarm` | 538 s | 5 | 2: ternary hoist ×3, JS double negation ×2 | 13.4 | 6,540 | 4,852 | 140,358 |
+| `fams=closure` | 540 s | 2 | 1: C compound assignment reads its target late ×2 | 6.7 | 6,871 | 4,811 | 132,349 |
+
+Every cause already had an inbox card. The aimed arm reached 331 more `lambdaLifting`
+branches (+5 %), but it found half the distinct causes per CPU-hour, and swarm covered more
+of the pipeline. One run of two and one causes cannot rank the arms on findings. What it
+does show is that aiming at one pass's coverage did not buy findings. The condition for G6,
+an aimed arm that wins, is therefore not met.
 
 ### Debt — workarounds to repay
 
@@ -245,10 +277,10 @@ may be emitted raw was measured one case per program, built
 
 | case | C debug | C danger | JS | generator |
 |---|---|---|---|---|
-| `int32`/`int64` `+ - *` and unary `-` overflow | panic | wraps | unwrapped value (`2147483648`) | `safeAdd/Sub/Mul/Neg<T>` |
-| `int8`/`int16`/unsigned `+ - *` overflow | wraps | wraps | wraps | raw |
+| signed `+ - *` and unary `-` overflow | stops `over- or underflow` | wraps | stops `over- or underflow` | `safeAdd/Sub/Mul/Neg<T>` |
+| unsigned `+ - *` overflow | wraps | wraps | wraps | raw |
 | integer `/` `%` by zero | panic | garbage (`0`, `-7`, `5.4707704e-315`) | throws | `safeDiv/Mod<T>` |
-| `int32`/`int64` `MIN / -1` | panic | wraps | throws | guarded in `safeDiv<T>` |
+| signed `MIN / -1` | stops `over- or underflow` | wraps | stops | guarded in `safeDiv<T>` |
 | `int32` `MIN % -1` | `0` | `0` | `0` | zero guard only |
 | `<<` `>>` with count ≥ width or negative | masked (`1 << 32` = 1, `1 << -1` = MIN) | same | same | raw |
 | to a narrower signed type out of range, `uint32` → `int32` | panic `not in range` | truncates | throws | `conv<S>To<T>` |
@@ -259,6 +291,22 @@ may be emitted raw was measured one case per program, built
 | `String(float64)`: `0.1+0.2`, `1e21`, `5e-324`, NaN, ±Infinity, `-0` | shortest round trip, JS spelling | same | same | raw |
 | operands and arguments with side effects | left to right | same | same | raw — no effect discipline |
 | `int32 < uint32` (implicit mixed signedness) | `false` | `false` | `true` | never emitted: the reference refuses it (inbox `2026-10-01-mixed-signedness-comparison-passes-the-checker.md`) |
+
+The signed rows were re-measured on 2026-10-18 against BUILD `9029133ef`, after
+signed overflow began to stop on C and JS. Before that, `int8` and `int16`
+wrapped on every lane and were emitted raw. Measured cases:
+
+- `int8` `100 * 100`;
+- `int16` `+ - *` near the bounds;
+- `int8` `-128 / -1` and `-128 - 1`;
+- `-x` on an `int8`, `int16` or `int32` parameter or `let`;
+- `int8` `-128 % -1`, which still gives `0` on C and JS;
+- the danger build: `int16` `30000 + 30000` gives `-5536`, `-(-128)` on `int8` gives `-128`.
+
+`int32`/`int64` under danger were not re-measured on this build. Negating a compile-time constant minimum skips the check on C and JS
+(inbox `2026-10-18-negating-a-constant-minimum-skips-the-overflow-check.md`). The
+generator never emits that case: every signed negation goes through `safeNeg<T>`.
+Compound `+= -= *=` is emitted on unsigned types only, because signed overflow stops.
 
 Not measured: the Raiser and SAN lanes, `--release`, Windows, Linux/gcc,
 `float32`, `int64` → `float64` rounding at the 2^53 edge.

@@ -27,9 +27,8 @@ import { nullAccessHead } from "./nullableLower";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeAssign, makeBinary, makeCall, makeNumber, makeString, makeUnary, runtimeRef } from "../util";
-import { parseInput } from "../testUtil";
+import { parseInput, checkedCtx } from "../testUtil";
 import { CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
-import { createTransformContextWithChecker } from "../context";
 import { checkProgram } from "../../checker/checkPass";
 
 export function lowerBigIntOps(program: Node, ctx: TransformContext): Node {
@@ -303,7 +302,7 @@ function reportUnloweredUpdate(node: Node, ctx: TransformContext): Node {
 function extractionOf(target: string): string {
 	const result = parseInput("function f(b: bigint): void { const r = b as " + target + "; }");
 	if (!result.ok) return "";
-	const ctx = createTransformContextWithChecker(checkProgram(result.value));
+	const ctx = checkedCtx(checkProgram(result.value));
 	lowerBigIntOps(result.value, ctx);
 	let callee = "";
 	walkNode(result.value, (n: Node): Node => {

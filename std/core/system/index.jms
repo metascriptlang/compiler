@@ -23,6 +23,7 @@ export extern function clearTimeout(id: number): void;
 export extern function setInterval(fn: () => void, ms: number): number;
 export extern function clearInterval(id: number): void;
 
+@builtin("Result")
 export class Result<T, E> {
 	ok: boolean;
 	value: T;
@@ -496,4 +497,35 @@ function msChkStore(a: unknown, i: int64, v: unknown): unknown {
 	_a[_i] = _v;
 	return _v;`);
 	unreachable;
+}
+
+when (mscDeclaresRuntime) {
+	// ===== JavaScript globals and helpers the compiler synthesizes calls to =====
+
+	@compilerFunc
+	extern function msPrintln(s: string): void;
+
+	@compilerFunc
+	extern function msWarnln(s: string): void;
+
+	@compilerFunc
+	extern function msEprintln(s: string): void;
+
+	@compilerFunc
+	extern function __paBegin(source: string): void;
+
+	@compilerFunc
+	extern function __paEnd(): void;
+
+	@compilerFunc
+	extern function __paValueStr(col: int32, label: string, val: string): void;
+
+	@compilerFunc
+	extern function __paValueNum(col: int32, label: string, val: float64): void;
+
+	@compilerFunc
+	extern function __paValueInt(col: int32, label: string, val: int64): void;
+
+	@compilerFunc
+	extern function __paValueBool(col: int32, label: string, val: boolean): void;
 }

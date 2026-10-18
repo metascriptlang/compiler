@@ -12,7 +12,6 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
-import { refineTypes } from "../../transform/typeRefine";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
@@ -20,15 +19,13 @@ import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecod
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
-import { RaiserFuncMap } from "./context";
-import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState } from "../../checker/symbol";
+import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
+import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { genericTypeInstMark, takeGenericTypeInstsFrom } from "../../parser/context";
-import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
-import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
+import { generateRaiser, appendProgramToImage } from "./rgen";
+import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
@@ -68,16 +65,13 @@ function raiserPreludeCtx(): CheckerContext {
 
 let _lastEngineCheckErrors: CheckerError[] = [];
 
-function dropCTypeRowsSince(mark: int32): void {
-	const _engineRows = takeGenericTypeInstsFrom(mark);
-}
 
 // On-demand helper compiles (ensureCompiledIntoEngine) run their own check pass
 // whose errors belong to no wrapper. Without this queue a type-broken helper
 // becomes garbage bytecode with no diagnostic (BUGS.md §2 row 9).
 let _pendingHelperErrors: CheckerError[] = [];
 
-// Check + refineTypes + transformForRaiser over a synthetic Program, ready for
+// Check + transformForRaiser over a synthetic Program, ready for
 // bytecode generation. Runs the inner pipeline destructively, so the caller must
 // pass a Program whose real-module decls are CLONED (never the canonical nodes).
 function transformForEngine(program: Node): Node {
@@ -94,19 +88,19 @@ function transformForEngine(program: Node): Node {
 		&& outer.module != null
 		&& outer.preludeCtx != null;
 	const prevEngineMode = setEngineCheckMode(true);
-	const rowMark = genericTypeInstMark();
-	const checkerCtx = hasFullOuterCtx
-		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
-		: checkProgram(program);
-	_lastEngineCheckErrors = checkerCtx.errors;
-	const txCtx = createTransformContextWithChecker(checkerCtx);
-	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
-	const transformed = transformForRaiser(refined, checkerCtx);
-	dropCTypeRowsSince(rowMark);
-	setEngineCheckMode(prevEngineMode);
-	if (outer != null) {
-		outer.program = savedOuterProgram;
-		outer.preludeCtx = savedOuterPrelude;
+	let transformed = program;
+	try {
+		const checkerCtx = hasFullOuterCtx
+			? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
+			: checkProgram(program);
+		_lastEngineCheckErrors = checkerCtx.errors;
+		transformed = transformForRaiser(program, checkerCtx);
+	} finally {
+		setEngineCheckMode(prevEngineMode);
+		if (outer != null) {
+			outer.program = savedOuterProgram;
+			outer.preludeCtx = savedOuterPrelude;
+		}
 	}
 	return transformed;
 }
@@ -137,7 +131,7 @@ export function evalASTFull(program: Node): RaiserContext {
 interface ComptimeEngine {
 	image: RaiserModule;
 	funcMap: RaiserFuncMap;
-	enumMap: RaiserFuncMap;
+	enumMap: RaiserEnumMap;
 	vm: RaiserVM;
 	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
 }
@@ -153,8 +147,8 @@ function freshEngine(): ComptimeEngine {
 	const entryFn = createRaiserFunction("__engineEntry", entryCode, entryConsts, 0, 0, 2);
 	const functions: RaiserFunction[] = [entryFn];
 	const image = createRaiserModule("comptime-engine", functions, 0);
-	const funcMap: RaiserFuncMap = { items: [], symbolIndices: new HashMap<Symbol, int32>() };
-	const enumMap: RaiserFuncMap = { items: [], symbolIndices: null };
+	const funcMap = createFuncMap();
+	const enumMap: RaiserEnumMap = { items: [] };
 	const vm = createVM(image, "arena");
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
@@ -190,7 +184,11 @@ function isVmPreludeSym(sym: Symbol): boolean {
 	if (_raiserPreludeBuilding) return false;
 	if (_vmPreludeSyms == null) {
 		const own = new HashSet<Symbol>();
-		for (const s of raiserPreludeCtx().table.current.symbols.values()) addWithOverloads(own, s);
+		for (const s of globalScope(raiserPreludeCtx().table).symbols.values()) addWithOverloads(own, s);
+		const exts = raiserPreludeCtx().extensionRegistry;
+		if (exts != null) {
+			for (const e of exts.methods) if (e.sym != null) own.add(e.sym);
+		}
 		_vmPreludeSyms = own;
 	}
 	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
@@ -244,7 +242,7 @@ function vmStdSeeds(sym: Symbol): Symbol[] {
 			if (s.name != sym.name) seeds.push(s);
 		}
 	}
-	for (const s of prelude.table.current.symbols.values()) {
+	for (const s of globalScope(prelude.table).symbols.values()) {
 		if (s.name != sym.name && !isPreludeExport(prelude, s)) seeds.push(s);
 	}
 	return seeds;
@@ -255,6 +253,8 @@ registerEngineBodyCtxFn(engineBodyCtx);
 function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
+	enterEngineCompile();
+	defer leaveEngineCompile();
 	registerSeedSymbols(seeds, exts);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
@@ -271,7 +271,7 @@ const WIRE_ENUMS = ["NodeKind", "DeclKind", "ExternKind"];
 
 function seedWireEnums(seeds: Symbol[]): void {
 	let nodeSym: Symbol | null = null;
-	for (const s of seeds) if (s.name == "Node" && s.modulePath != "") nodeSym = s;
+	for (const s of seeds) if (isMetaNodeSym(s)) nodeSym = s;
 	if (nodeSym == null) return;
 	const nodeCtx = lookupModuleCtx(nodeSym.modulePath);
 	if (nodeCtx == null) return;
@@ -283,28 +283,31 @@ function seedWireEnums(seeds: Symbol[]): void {
 	}
 }
 
-export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext): EngineMacroResult {
-	return compileIntoEngineSeeded(program, token, macroFnName, declaringCtx, []);
+export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext): EngineMacroResult {
+	return compileIntoEngineSeeded(program, token, macroFnName, declCtx, []);
 }
 
-function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
-	if (_engineToken != token) {
+function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
+	const nested = engineCompiling();
+	if (_engineToken != token && !nested) {
 		_engine = freshEngine();
 		_engineToken = token;
 	}
 	const seeds: Symbol[] = [];
 	for (const s of leadSeeds) seeds.push(s);
-	for (const s of moduleScopeSymbols(declaringCtx.table)) seeds.push(s);
-	const exts = seedExtensionsOf(declaringCtx, null);
+	for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
+	const exts = seedExtensionsOf(declCtx, null);
 	seedWireEnums(seeds);
+	const outerHelperErrors = _pendingHelperErrors;
 	_pendingHelperErrors = [];
-	takeRaiserCompileErrors(); // reset: stale entries from an earlier compile must not leak in
+	const outerCompileErrors = takeRaiserCompileErrors();
 	const funcIdx = compileProgramIntoEngine(program, seeds, exts, macroFnName);
 	const errors: CheckerError[] = [];
 	for (const e of _lastEngineCheckErrors) errors.push(e);
 	for (const e of _pendingHelperErrors) errors.push(e);
 	for (const e of takeRaiserCompileErrors()) errors.push(e);
-	_pendingHelperErrors = [];
+	_pendingHelperErrors = nested ? outerHelperErrors : [];
+	if (nested) restoreRaiserCompileErrors(outerCompileErrors);
 	return { vm: _engine.vm, funcIdx, errors };
 }
 
@@ -342,7 +345,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
 	const name = isClass ? sym.name + "_new" : sym.name;
-	const seenIdx = _engine.funcMap.symbolIndices!.get(sym);
+	const seenIdx = isClass ? _engine.funcMap.ctorIndices.get(sym) : _engine.funcMap.symbolIndices.get(sym);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null) return -1;
 	const seedCtx = seedCtxForSym(sym);
@@ -414,7 +417,7 @@ export function evalProgramViaEngine(program: Node, token: CheckerContext, fnNam
 	};
 }
 
-import { registerMacroEvaluator, registerMacroCompiler } from "../../compiler/meta/callbacks";
+import { isMetaNodeSym } from "../../compiler/meta/nodeSym";
 registerMacroEvaluator(evalASTFull);
 registerMacroCompiler(evalASTCompile);
 
@@ -435,9 +438,7 @@ function compileForOrc(code: string): RaiserModule {
 	if (!parseResult.ok) { unreachable; }
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
-	const txCtx = createTransformContextWithChecker(checkerCtx);
-	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
-	const transformed = transformForRaiser(refined, checkerCtx);
+	const transformed = transformForRaiser(program, checkerCtx);
 	return generateRaiser(transformed);
 }
 
@@ -502,15 +503,6 @@ test "engine: a conversion into char stops outside 0 .. 255 and truncates a floa
 	assert ok.output == "65 200 200\n", ok.output;
 }
 
-test "engine: an engine check leaves no C generic type rows to the module being checked" {
-	raiserPreludeCtx();
-	const pr = parseSource("const m = new Map<int16, uint8>(); m.set(1 as int16, 2 as uint8); const s = new HashSet<int16>();");
-	assert pr.ok;
-	const mark = genericTypeInstMark();
-	const _engineProgram = transformForEngine(pr.value);
-	assert takeGenericTypeInstsFrom(mark).length == 0;
-}
-
 test "engine: byteLength counts UTF-8 bytes independently from UTF-16 length" {
 	const ctx = evalOrcVM("const value = 'é😀'; console.log(value.byteLength); console.log(value.length);");
 	assert ctx.error == "";
@@ -524,7 +516,7 @@ test "engine: conditional return retains a fallthrough terminator" {
 }
 
 test "engine: explicit exit coerces its number and aborts module initialization" {
-	const ctx = evalOrcVM("console.log('before'); exit(7); console.log('after');");
+	const ctx = evalOrcVM("console.log('before'); process.exit(7); console.log('after');");
 	assert ctx.error == "";
 	assert ctx.output == "before\n";
 	assert ctx.exitValue.kind == RaiserValueKind.Int;
@@ -532,7 +524,7 @@ test "engine: explicit exit coerces its number and aborts module initialization"
 }
 
 test "engine: exit inside a spawned strand ends the program with its code" {
-	const ctx = evalOrcVM("function quit(): int32 { exit(3); return 0; }"
+	const ctx = evalOrcVM("function quit(): int32 { process.exit(3); return 0; }"
 		+ " console.log('armed'); const f = spawn(() => quit());"
 		+ " let n: int32 = 0; while (n < 1000) { n += 1; }"
 		+ " console.log(`after ${await f}`);");
@@ -1005,23 +997,18 @@ test "engine: typeof of a single-type operand is its static tag" {
 	assert ctx.output == "number string boolean\n";
 }
 
-test "engine: structs with equal field values compare equal" {
-	const ctx = evalOrcVM("struct Record { n: int32; text: string; ratio: float64; }"
-		+ " const a: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 }; const b: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 };"
-		+ " const c: Record = { n: 1, text: 'm' + 'x', ratio: 0.5 }; const d: Record = { n: 1, text: 'm' + 'n', ratio: 0.25 };"
-		+ " console.log(`${a == b} ${a == c} ${a == d} ${a != b} ${a != c}`);");
-	assert ctx.error == "";
-	assert ctx.output == "true false false false true\n";
+// The single-module engine links no prelude instance; the raiser corpus lane (663-666, stdValueEquality)
+// runs the same comparisons program-wide.
+test "engine: a struct == is a call to the std equality, not a by-reference compare" {
+	const r = evalFull("struct Record { n: int32; text: string; }"
+		+ " const a: Record = { n: 1, text: 'm' + 'n' }; const b: Record = { n: 1, text: 'm' + 'n' };"
+		+ " return a == b ? 1 : 0;");
+	assert r.lastError.indexOf("valueEquals", 0) >= 0;
 }
 
-test "engine: nested structs and tuples compare by value" {
-	const ctx = evalOrcVM("struct Inner { a: int32; tag: string; } struct Outer { inner: Inner; k: int32; }"
-		+ " const o1: Outer = { inner: { a: 1, tag: 't' }, k: 2 }; const o2: Outer = { inner: { a: 1, tag: 't' }, k: 2 };"
-		+ " const o3: Outer = { inner: { a: 1, tag: 'u' }, k: 2 };"
-		+ " const l: [int32, string] = [1, 'a' + 'b']; const r: [int32, string] = [1, 'a' + 'b']; const x: [int32, string] = [1, 'b'];"
-		+ " console.log(`${o1 == o2} ${o1 == o3} ${l == r} ${l == x}`);");
-	assert ctx.error == "";
-	assert ctx.output == "true false true false\n";
+test "engine: a tuple != is the negated std equality call" {
+	const r = evalFull("const l: [int32, string] = [1, 'a' + 'b']; const q: [int32, string] = [1, 'a' + 'b']; return l != q ? 1 : 0;");
+	assert r.lastError.indexOf("valueEquals", 0) >= 0;
 }
 
 test "engine: the hash builtins give the bits of the native 128-bit mix and float layout" {
@@ -1122,8 +1109,7 @@ test "number toString through full pipeline" {
 }
 
 // Enum member access through the FULL pipeline: the checker rewrites `Color.Green`
-// → Identifier "Color_Green" before codegen, so the codegen-only enum path
-// (evalProject, MemberExpr-based) never exercises this. Without resolution of the
+// → Identifier "Color_Green" before codegen. Without resolution of the
 // mangled identifier the VM yields nil / 0 and match-on-enum collapses to arm 0.
 test "enum member through full pipeline" {
 	const ctx = evalFull("enum Color { Red, Green, Blue } return Color.Green as number;");
@@ -1240,13 +1226,14 @@ test "null === 0 is false (kind differs)" {
 
 // --- Closure with captures ---
 
-// Helper: parse → codegen → execute (no checker, no transforms)
+// Helper: parse → check → codegen → execute (no transforms)
 function evalRaiserDirect(code: string): RaiserContext {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) {
 		unreachable;
 		return createContext();
 	}
+	checkProgram(parseResult.value);
 	const mod = generateRaiser(parseResult.value);
 	const ctx = createContext();
 	load(ctx, mod);
@@ -1307,126 +1294,6 @@ test "closure pair nested fn (no transforms)" {
 test "closure pair multi-field env (no transforms)" {
 	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.a + _envP.b; } const a = 10; const b = 32; const f = { fn: liftedFn, env: { a: a, b: b } }; return f();");
 	assert ctx.lastResult.intVal == 42;
-}
-
-// --- Class Tests ---
-test "class ctor returns object" {
-	const ctx = evalProject(["const p = Point_new(42); return p.x;", "class Point { x: number; constructor(x) { this.x = x; } }"]);
-	assert ctx.lastResult.intVal == 42;
-}
-
-test "class with method" {
-	const ctx = evalProject(["const b = Box_new(99); return b.getVal();", "class Box { val: number; constructor(v) { this.val = v; } getVal() { return this.val; } }"]);
-	assert ctx.lastResult.intVal == 99;
-}
-
-test "class with multiple methods" {
-	const ctx = evalProject(["const m = Calc_new(3, 4); return m.sum() + m.product();", "class Calc { a: number; b: number; constructor(a, b) { this.a = a; this.b = b; } sum() { return this.a + this.b; } product() { return this.a * this.b; } }"]);
-	assert ctx.lastResult.intVal == 19;
-}
-
-test "class and function in same module" {
-	const ctx = evalProject(["const pt = Pt_new(55); return readX(pt);", "class Pt { x: number; constructor(x) { this.x = x; } } function readX(p) { return p.x; }"]);
-	assert ctx.lastResult.intVal == 55;
-}
-
-// --- Project test helper ---
-// Uses parse-only (no checker/transforms) because:
-// - Raiser VM is dynamically typed; checker/transforms aren't needed for correctness
-//
-// codes[0] = entry module, codes[1..n] = dependencies (deepest last).
-// Modules are pushed in reverse order so dependencies initialize before the entry.
-
-function evalProject(codes: string[]): RaiserContext {
-	const modules: RaiserModuleInput[] = [];
-	const names: string[] = ["a", "b", "c", "d", "e", "f"];
-	let i = codes.length - 1;
-	while (i >= 0) {
-		const pr = parseSource(codes[i]);
-		if (!pr.ok) { unreachable; return createContext(); }
-		const path = "/src/" + names[i] + ".ms";
-		const input: RaiserModuleInput = { modulePath: path, program: pr.value };
-		modules.push(input);
-		i = i - 1;
-	}
-	const raiserMod = generateRaiserProject(modules);
-	const ctx = createContext();
-	load(ctx, raiserMod);
-	execute(ctx);
-	return ctx;
-}
-
-// --- Project Tests ---
-test "single file via project API" {
-	const ctx = evalProject(["return 2 + 3;"]);
-	assert ctx.lastResult.intVal == 5;
-}
-
-test "two modules: no cross-call" {
-	const ctx = evalProject(["return 42;", "const x = 1;"]);
-	assert ctx.lastResult.intVal == 42;
-}
-
-test "module with function no call" {
-	const ctx = evalProject(["return 99;", "function add(a, b) { return a + b; }"]);
-	assert ctx.lastResult.intVal == 99;
-}
-
-test "cross-module function call" {
-	const ctx = evalProject(["return add(3, 4);", "function add(a, b) { return a + b; }"]);
-	assert ctx.lastResult.intVal == 7;
-}
-
-test "multiple functions from same module" {
-	const ctx = evalProject(["return add(3, 4) + mul(2, 5);", "function add(a, b) { return a + b; } function mul(a, b) { return a * b; }"]);
-	assert ctx.lastResult.intVal == 17;
-}
-
-test "sequential cross-module calls via variable" {
-	const ctx = evalProject(["const x = dbl(3); return dbl(x);", "function dbl(x) { return x * 2; }"]);
-	assert ctx.lastResult.intVal == 12;
-}
-
-test "nested cross-module call" {
-	const ctx = evalProject(["return dbl(dbl(3));", "function dbl(x) { return x * 2; }"]);
-	assert ctx.lastResult.intVal == 12;
-}
-
-test "chain: A calls B calls C" {
-	const ctx = evalProject(["return quadruple(3);", "function quadruple(x) { return dbl(dbl(x)); }", "function dbl(x) { return x * 2; }"]);
-	assert ctx.lastResult.intVal == 12;
-}
-
-test "diamond dependency" {
-	const ctx = evalProject(["return fromB(10) + fromC(10);", "function fromC(x) { return base(x) * 3; }", "function fromB(x) { return base(x) * 2; }", "function base(x) { return x + 1; }"]);
-	assert ctx.lastResult.intVal == 55;
-}
-
-test "module init order" {
-	const ctx = evalProject(["console.log(\"A\");", "console.log(\"B\");"]);
-	assert ctx.lastOutput == "B\nA\n";
-}
-
-test "cross-module enum" {
-	const ctx = evalProject(["return Color.Blue;", "enum Color { Red, Green, Blue }"]);
-	assert ctx.lastResult.intVal == 2;
-}
-
-test "cross-module function with enum" {
-	const ctx = evalProject(["return isVertical(Dir.Up);", "enum Dir { Up, Down, Left, Right } function isVertical(d) { if (d == Dir.Up) { return 1; } if (d == Dir.Down) { return 1; } return 0; }"]);
-	assert ctx.lastResult.intVal == 1;
-}
-
-test "entry module export default" {
-	const ctx = evalProject(["export default wrap(42);", "function wrap(x) { return { value: x }; }"]);
-	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const val = heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "value");
-	assert val.intVal == 42;
-}
-
-test "recursive function cross-module" {
-	const ctx = evalProject(["return fact(5);", "function fact(n) { if (n <= 1) { return 1; } return n * fact(n - 1); }"]);
-	assert ctx.lastResult.intVal == 120;
 }
 
 // Regression: chained MemberExpr through nested ObjectLiteral.
@@ -1522,6 +1389,18 @@ test "engine: a string span views its bytes" {
 		+ " const s = 'hello'; console.log(`${n(s)} ${n(s[1..4])}`);");
 	assert ctx.error == "";
 	assert ctx.output == "532 317\n";
+}
+
+test "engine: String uses a struct's declared text conversion" {
+	const ctx = evalFull("struct Label { text: string; } function toString(this x: Label): string { return 'label:' + x.text; } const x: Label = { text: 'hot' }; console.log(String(x));");
+	assert ctx.lastError == "";
+	assert ctx.lastOutput == "label:hot\n";
+}
+
+test "engine: String uses a class's declared text conversion and preserves primitive conversions" {
+	const ctx = evalFull("class Name { text: string = 'node'; } function toString(this x: Name): string { return 'name:' + x.text; } console.log(String(new Name()), String(7), String(true), String('raw'));");
+	assert ctx.lastError == "";
+	assert ctx.lastOutput == "name:node 7 true raw\n";
 }
 
 test "engine: a byte view of a struct span traps instead of reading an element" {

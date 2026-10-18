@@ -14,7 +14,7 @@
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, implementationOf } from "../discDetect";
 
 // Macro: jv must be a JsonValue. Witness expression must be typed `T | null`
 // (e.g., user passes `null as Person | null`). Honest nullable typing — null
@@ -22,7 +22,7 @@ import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor } from "
 // The macro peels the Union to extract T, then emits an ObjectLiteral
 // constructing T from per-field accessor calls.
 export macro jsonValueToStruct(jv: Node, witness: Node): Node {
-	let tt = witness.nodeType;
+	let tt = implementationOf(witness);
 	// Peel `T | null` Union → T (single non-null variant). For multi-variant
 	// unions (DU), keep tt as TypeUnion and fall through to the DU branch
 	// below. Pre-V3 code peeled to first non-null variant unconditionally —
@@ -36,7 +36,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			nonNullCount = nonNullCount + 1;
 		}
 		if (nonNullCount == 1 && firstNonNull != null) {
-			tt = firstNonNull;
+			tt = implementationOf(firstNonNull);
 		}
 		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below
 	}
@@ -200,7 +200,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 	let i = 0;
 	while (i < fields.length) {
 		const fname: string = fields[i];
-		const ftype: Node = fieldTypes[i];
+		const ftype: Node = implementationOf(fieldTypes[i]);
 
 		// Nested struct field: peel Ref<Struct> → TypeObject, then emit a
 		// recursive jsonValueToStruct call with a typed witness `null as
@@ -329,7 +329,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		// contextual return-type binding (Nim parity inheritBindings,
 		// semcall.nim:777-859). See bug024 for the compiler mechanism.
 		if (ftype.kind == NodeKind.TypeArray) {
-			const elemType: Node = ftype.typExprElement;
+			const elemType: Node = implementationOf(ftype.typExprElement);
 			let en: string = "";
 			let elemIsStruct: boolean = false;
 			if (elemType.kind == NodeKind.EnumDecl) {
@@ -594,7 +594,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 // Element-level strictness for atomic-element arrays is deferred: the array
 // itself is kind-checked via reqArray, elements convert leniently.
 export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node): Node {
-	let tt = witness.nodeType;
+	let tt = implementationOf(witness);
 	if (tt.kind == NodeKind.TypeUnion) {
 		let nonNullCount: int32 = 0;
 		let firstNonNull: Node | null = null;
@@ -604,7 +604,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			nonNullCount = nonNullCount + 1;
 		}
 		if (nonNullCount == 1 && firstNonNull != null) {
-			tt = firstNonNull;
+			tt = implementationOf(firstNonNull);
 		}
 	}
 	if (tt.kind == NodeKind.TypeGeneric) {
@@ -788,7 +788,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 	let i = 0;
 	while (i < fields.length) {
 		const fname: string = fields[i];
-		const ftype: Node = fieldTypes[i];
+		const ftype: Node = implementationOf(fieldTypes[i]);
 		const fnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
 
 		// Peel ownership wrappers: reference-typed fields (arrays,
@@ -914,7 +914,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		}
 
 		if (elemType != null) {
-			let ec: Node = elemType;
+			let ec: Node = implementationOf(elemType);
 			let epeeling: boolean = true;
 			while (epeeling) {
 				epeeling = false;

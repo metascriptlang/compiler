@@ -53,6 +53,8 @@ import "./sizedArrayResultSlot";
 import "./objectLiteralDestination";
 import "./returnedCallResultSlot";
 import "./comptimeBlockStaticType";
+import "./nrvoOutTempZero";
+import "./emissionOwnership";
 import "./arraySpliceEmit";
 import "./raiseChecks";
 import "./inlineFunctions";

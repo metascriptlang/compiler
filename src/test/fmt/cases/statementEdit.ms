@@ -1,12 +1,10 @@
 import { parseSource } from "../../../parser/statements/validation";
 import "../../../parser/statements/core";
-import { resetAllSideChannels } from "../../../parser/context";
 import { NodeKind } from "../../../ast/node";
 import { defaultFormatOptions } from "../../../compiler/fmt/options";
 import { formatStatementEdit, innermostStatement, applyEdit } from "../../../compiler/fmt/edit";
 
 function reformatAt(source: string, line: int32, column: int32): string {
-	resetAllSideChannels();
 	const parsed = parseSource(source);
 	if (!parsed.ok) return "PARSE ERROR: " + parsed.error;
 	const stmt = innermostStatement(parsed.value, { line, column }, { line, column });
@@ -17,7 +15,6 @@ function reformatAt(source: string, line: int32, column: int32): string {
 }
 
 function stmtKindAt(source: string, line: int32, column: int32): string {
-	resetAllSideChannels();
 	const parsed = parseSource(source);
 	if (!parsed.ok) return "PARSE ERROR";
 	const stmt = innermostStatement(parsed.value, { line, column }, { line, column });

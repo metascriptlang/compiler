@@ -6,11 +6,11 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
+import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
+import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
-import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
@@ -75,15 +75,15 @@ function classEmitsShell(node: Node): boolean {
 	return false;
 }
 
-export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
-	// Skip extern functions — they're type declarations, not runtime code.
-	// The actual implementation comes from @import (e.g., node:process).
+function emittableFunctionDecl(node: Node): boolean {
 	const d = node.data as FunctionDeclData;
-	if (isExternFlag(d.fnFlags)) return;
-	// Tier 1: body-less overload signatures are typecheck-only, skip emission
-	if (d.fnFlags.indexOf("overload", 0) >= 0) return;
-	if (isGenericRoutine(node, d.fnFlags)) return;
-	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return;
+	if (isExternFlag(d.fnFlags) || d.fnFlags.indexOf("overload", 0) >= 0 || isGenericFn(d.fnFlags)) return false;
+	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return false;
+	return node.nodeType == null || !hasGenericParams(node.nodeType);
+}
+
+export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
+	if (!emittableFunctionDecl(node)) return;
 	emitIndent(gen);
 	emitFunctionDeclInner(gen, node);
 }
@@ -184,12 +184,12 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 				const pd = member.data as PropertyDeclData;
 				if (pd.propIsStatic) {
 					emitStaticPropertyDecl(gen, member);
-				} else if (gen.inActorDecl) {
+				} else if (gen.actorHandle != null) {
 					// Actor instance fields emit as JS class fields, in
 					// declaration order, running before any constructor body —
 					// the same defaults-then-ctor order as the C runtime.
 					emitIndent(gen);
-					if (pd.propName == "pid" && pd.propInitializer == null) {
+					if (member == gen.actorHandle) {
 						// Synthetic registration field (see emitActorDecl).
 						// Self-bootstrapping: a program may use actors WITHOUT
 						// importing std/actor, so the registrar installs itself
@@ -318,10 +318,10 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 		nameLocation: d.nameLocation,
 	} as ClassDeclData, node.location);
 	cls.resolvedSym = node.resolvedSym;
-	gen.inActorDecl = true;
+	gen.actorHandle = pidField;
 	emitIndent(gen);
 	emitClassDeclInner(gen, cls);
-	gen.inActorDecl = false;
+	gen.actorHandle = null;
 }
 
 // ===== Method Declaration =====
@@ -488,10 +488,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	// Compile-time-only — no runtime JS (mirrors the bare-decl skip in jsgen.ms)
 	if (inner.kind == NodeKind.MacroDecl) return;
 	if (inner.kind == NodeKind.ComptimeBlock) return;
-	if (inner.kind == NodeKind.FunctionDecl && inner.resolvedSym != null && hasFlag(inner.resolvedSym, SymbolFlag.CompileTime)) return;
-	// Skip extern functions — imported via @import, not compiled
-	if (inner.kind == NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
-	if (inner.kind == NodeKind.FunctionDecl && isGenericRoutine(inner, (inner.data as FunctionDeclData).fnFlags)) return;
+	if (inner.kind == NodeKind.FunctionDecl && !emittableFunctionDecl(inner)) return;
 	if (inner.kind == NodeKind.ClassDecl && !classEmitsShell(inner)) { emitClassDecl(gen, inner); return; }
 	const isDefault = node.flags.has(NodeFlag.ExportDefault);
 	if (gen.bundleMode) {

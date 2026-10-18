@@ -22,9 +22,10 @@
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, IfStmtData, WhileStmtData, Type, TypeKind } from "../../ast/node";
 import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
+import { newSym } from "../../checker/context";
 import { widenVariantToUnion } from "../../checker/fit";
-import { TransformContext, freshTempSym } from "../context";
-import { walkNode, walkExpandBlocksHooked, containsExprKind } from "../walker";
+import { TransformContext, freshTempSym, mintingChecker } from "../context";
+import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import { hoistGuarded, lowerGuardedTernary, expandConditionStmt } from "../lowering/guardedLower";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
@@ -37,7 +38,7 @@ import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../tes
 
 // Create a member access on a Result variable with resolvedSym for the property.
 // Property type comes from `getResultOkType` (T) / `getResultErrType` (E).
-function makeResultMember(sym: Symbol, resType: Type | null, propName: string, loc: SourceLocation): Node {
+function makeResultMember(ctx: TransformContext, sym: Symbol, resType: Type | null, propName: string, loc: SourceLocation): Node {
 	const ref = makeIdentResolved(sym, loc);
 	const mem = makeMember(ref, propName, loc);
 
@@ -47,7 +48,7 @@ function makeResultMember(sym: Symbol, resType: Type | null, propName: string, l
 		else if (propName == "value") { const okType = getResultOkType(resType); propType = okType != null ? okType : noneType(); }
 		else if (propName == "error") { const errType = getResultErrType(resType); propType = errType != null ? errType : noneType(); }
 		mem.nodeType = propType;
-		const propSym = makeSymbol(propName, SymbolKind.Property, propType, false);
+		const propSym = newSym(mintingChecker(ctx, propName), SymbolKind.Property, propName, propType);
 		propSym.state = SymbolState.Shaped;
 		mem.resolvedSym = propSym;
 	}
@@ -188,14 +189,14 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext): Node {
 
 	if (tryData.hasCatch) {
 		// $result.ok ? $result.value : catchVal
-		const okCheck = makeResultMember(sym, resType, "ok", loc);
+		const okCheck = makeResultMember(ctx, sym, resType, "ok", loc);
 		const okValueT = getResultOkType(resType);
 		let okBranch: Node;
 		if (okValueT != null && okValueT.kind == TypeKind.Void) {
 			okBranch = makeNull(loc);
 			okBranch.nodeType = okValueT;
 		} else {
-			const valueAccess = makeResultMember(sym, resType, "value", loc);
+			const valueAccess = makeResultMember(ctx, sym, resType, "value", loc);
 			// Stamp catchVal with value type so ternary branches have matching C types
 			if (tryData.catchVal.nodeType == null && valueAccess.nodeType != null) {
 				tryData.catchVal.nodeType = valueAccess.nodeType;
@@ -230,7 +231,7 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext): Node {
 		voidLit.nodeType = okT;
 		return voidLit;
 	}
-	return makeResultMember(sym, resType, "value", loc);
+	return makeResultMember(ctx, sym, resType, "value", loc);
 }
 
 // Expand a single statement — unified through hoistTryExpr.
@@ -276,11 +277,11 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 // Uses enclosingFnRetType for the return literal's type (not resType) so the error-path
 // return matches the function's signature (e.g. Result<void, string>, not Result<Person, string>).
 function makeErrorCheck(sym: Symbol, resType: Type, loc: SourceLocation, ctx: TransformContext, converter: Symbol | null = null): Node {
-	const okAccess = makeResultMember(sym, resType, "ok", loc);
+	const okAccess = makeResultMember(ctx, sym, resType, "ok", loc);
 	const notOk = makeUnary("!", okAccess, loc);
 	notOk.nodeType = booleanType();
 
-	const errorAccess = makeResultMember(sym, resType, "error", loc);
+	const errorAccess = makeResultMember(ctx, sym, resType, "error", loc);
 	// Use enclosing function's return type for the error literal, falling back to resType
 	let errRetType = (enclosingFnRetType != null && isResult(enclosingFnRetType))
 		? enclosingFnRetType : resType;
@@ -322,7 +323,7 @@ test "makeResultMember sets resolvedSym for .ok" {
 	const resType = createResult(numberType(), stringType());
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
-	const mem = makeResultMember(sym, resType, "ok", loc);
+	const mem = makeResultMember(makeCtx(), sym, resType, "ok", loc);
 	assert mem.kind == NodeKind.MemberExpr;
 	assert mem.resolvedSym != null;
 	assert mem.nodeType != null;
@@ -332,7 +333,7 @@ test "makeResultMember sets correct type for .value" {
 	const resType = createResult(numberType(), stringType());
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
-	const mem = makeResultMember(sym, resType, "value", loc);
+	const mem = makeResultMember(makeCtx(), sym, resType, "value", loc);
 	assert mem.nodeType != null;
 	assert mem.nodeType.kind == TK.Number;
 	assert mem.resolvedSym != null;
@@ -342,7 +343,7 @@ test "makeResultMember sets correct type for .error" {
 	const resType = createResult(numberType(), stringType());
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
-	const mem = makeResultMember(sym, resType, "error", loc);
+	const mem = makeResultMember(makeCtx(), sym, resType, "error", loc);
 	assert mem.nodeType != null;
 	assert mem.nodeType.kind == TK.String;
 	assert mem.resolvedSym != null;
@@ -351,7 +352,7 @@ test "makeResultMember sets correct type for .error" {
 test "makeResultMember with null resType is graceful" {
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol("$r", SymbolKind.Variable, noneType(), false);
-	const mem = makeResultMember(sym, null, "ok", loc);
+	const mem = makeResultMember(makeCtx(), sym, null, "ok", loc);
 	assert mem.kind == NodeKind.MemberExpr;
 }
 

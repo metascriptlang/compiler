@@ -604,6 +604,23 @@ console.log(`${readValue()}`);
 	ok(tag);
 }
 
+function isIdentCode(c: int32): boolean {
+	return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+}
+
+function emitsFrameDestroy(text: string, owner: string): boolean {
+	const head = `dollarEnv_${owner}_shared`;
+	let at = text.indexOf(head, 0);
+	while (at >= 0) {
+		let end = at + head.length;
+		while (end < text.length && isIdentCode(text.charCodeAt(end))) end += 1;
+		const ident = text.slice(at, end);
+		if ((ident.endsWith("Destroy") || ident.endsWith("Destroy_")) && text.charAt(end) == "(") return true;
+		at = text.indexOf(head, end);
+	}
+	return false;
+}
+
 function deadFrameEmitsNoHooks(): void {
 	const tag = "deadFrameEmitsNoHooks";
 	const dir = freshDir("deadframe");
@@ -624,12 +641,12 @@ function deadFrameEmitsNoHooks(): void {
 		if (!f.endsWith(".c")) continue;
 		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
 		for (const owner of ["deadClosure", "deadAsync", "deadGen"]) {
-			if (text.contains(`dollarEnv_${owner}_sharedDestroy_(`)) {
+			if (emitsFrameDestroy(text, owner)) {
 				fail(tag, `${f} emits the frame hooks of ${owner}, which nothing calls`);
 				return;
 			}
 		}
-		if (text.contains("dollarEnv_liveClosure_sharedDestroy_(")) liveHooks = true;
+		if (emitsFrameDestroy(text, "liveClosure")) liveHooks = true;
 	}
 	if (!liveHooks) {
 		fail(tag, "the frame hooks of liveClosure, which main calls, are missing");

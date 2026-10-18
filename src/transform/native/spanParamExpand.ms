@@ -12,8 +12,6 @@
 // Two passes:
 //   Pass 1 (Declarations): For each FunctionDecl with Span<T> params:
 //     - Replace Span<T> param with two params (T* name_data, int64_t name_len)
-//     - Inject shadowing local: const name = { data: name_data, len: name_len }
-//     - Body stays untouched — references name as a Span struct via the local
 //
 //   Pass 2 (Call Sites): For each call of an extern whose declared type has Span<T> params, in any module:
 //     - If arg is ObjectLiteral (from spanLower): extract data/len fields into two args
@@ -25,16 +23,14 @@
 // V1 limitation: top-level FunctionDecl only. Span in closures/function-pointer types
 // emits a diagnostic.
 
-import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
-import { createPtr, createSpan, getSysType, copyTypeShallow } from "../../checker/types";
+import { Node, NodeKind, FunctionDeclData, Symbol, CallExprData, ObjectLiteralData, ArrayLiteralData, Type, TypeKind, DeclKind, BlockStmtData } from "../../ast/node";
+import { createPtr, getSysType, createSpan, copyTypeShallow } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { secondRead } from "../lowering/spanLower";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
-import {
-	makeVarDecl, makeTypedIdent, makeObjectLiteral, makeMember,
-	makeConditional, makeBinary, makeNumber, makeNull,
-} from "../util";
+import { makeMember, makeConditional, makeBinary, makeNumber, makeNull } from "../util";
+import { overloadWinner } from "../../checker/symbol";
 
 // Track which functions had Span params expanded (by function name → param indices)
 interface ExpandedParam {
@@ -176,38 +172,6 @@ function expandFunctionDecl(node: Node): void {
 	const flat = flattenSpanFormals(fnType, spanParams);
 	node.nodeType = flat;
 	if (node.resolvedSym != null && node.resolvedSym.symbolType == fnType) node.resolvedSym.symbolType = flat;
-
-	// Inject shadowing locals at top of body
-	if (d.fnBody != null && d.fnBody.kind == NodeKind.BlockStmt) {
-		const bd = d.fnBody.data as BlockStmtData;
-		const loc = node.location;
-
-		// Insert in reverse order so they appear in original param order
-		let si = spanParams.length - 1;
-		while (si >= 0) {
-			const ep = spanParams[si];
-			const spanType = createSpan(ep.elemType);
-
-			// const name = { data: name_data, len: name_len }
-			const dataRef = makeTypedIdent(ep.paramName + "_data", createPtr(ep.elemType), loc);
-			const lenRef = makeTypedIdent(ep.paramName + "_len", getSysType(TypeKind.Int64), loc);
-			const initObj = makeObjectLiteral(["data", "len"], [dataRef, lenRef], loc);
-			initObj.nodeType = spanType;
-			const shadowDecl = makeVarDecl(ep.paramName, initObj, DeclKind.Const, loc);
-			shadowDecl.nodeType = spanType;
-
-			// Prepend to body statements
-			const newStmts: Node[] = [shadowDecl];
-			let bi = 0;
-			while (bi < bd.statements.length) {
-				newStmts.push(bd.statements[bi]);
-				bi = bi + 1;
-			}
-			bd.statements = newStmts;
-
-			si = si - 1;
-		}
-	}
 
 }
 

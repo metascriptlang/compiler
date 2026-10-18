@@ -57,12 +57,12 @@ import { CheckerContext, Severity, addError, addErrorFullRange, createContext } 
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
-import { lookupModuleCtx } from "../../checker/instantiate";
 import { isUnresolvedType } from "../../checker/types";
+import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
-import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -71,7 +71,8 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { valueToExpansion, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
+import { takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType, valueToExpansion } from "./bridge";
+import { symbolCarried } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { ModuleGraph } from "../../module/graph";
@@ -308,9 +309,10 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 			properties: symValues, keys: symKeys, keyLocations: [],
 		}, loc));
 	}
-	if (node.resolvedSym != null && node.flags.has(NodeFlag.BoundSym)) {
+	const carried = symbolCarried(node);
+	if (carried != null) {
 		keys.push("symHandle");
-		values.push(mkNumber(registerBoundSym(node.resolvedSym), loc));
+		values.push(mkNumber(registerBoundSym(carried), loc));
 	}
 
 	return createNodeAt(NodeKind.ObjectLiteral, {
@@ -1697,6 +1699,7 @@ let _macroBuildsGraph: ModuleGraph = null as unknown as ModuleGraph;
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
 
 function inMacroBuildsCompilation(ctx: CheckerContext): boolean {
+	if (engineCompiling()) return true;
 	if (ctx.moduleGraph != null) return ctx.moduleGraph == _macroBuildsGraph;
 	return _macroBuildsGraph == null && ctx == _macroBuildsCtx;
 }
@@ -1765,9 +1768,9 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	}
 	if (params.length > decl.macroDeclParams.length) paramTypes.push("Node");
 	const emptyDefaults: Node[] = [];
-	const nodeInScope = lookupSymbol(regCtx.table, "Node") != null;
+	const nodeInScope = isMetaNodeSym(lookupSymbol(regCtx.table, "Node"));
 	const macroFn = createNode(NodeKind.FunctionDecl, {
-		fnName: "__macroBody",
+		fnName: "$macro:body",
 		params: params,
 		fnParamTypes: paramTypes,
 		fnBody: fnBody,
@@ -1780,7 +1783,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	const result = callMacroEngineCompiler(program, ctx, "__macroBody", regCtx);
+	const result = callMacroEngineCompiler(program, ctx, "$macro:body", regCtx);
 	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {
@@ -2280,6 +2283,7 @@ registerComptimeHelperPreparer((decl: Node): void => {
 
 import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
+import { isMetaNodeSym } from "./nodeSym";
 
 test "expand pass is no-op when no user macros" {
 	// Build a tiny Program manually to avoid the parseSource → check round trip
