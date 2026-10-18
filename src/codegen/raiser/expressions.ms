@@ -2084,7 +2084,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	}
 
 	// .length — string vs array
-	if (d.property == "length") {
+	if (d.property == "length" && !isRecordOperand(d.object)) {
 		const objReg = compileExpr(s, d.object);
 		const dest = allocReg(s);
 		if (exprIsString(s, d.object)) {
@@ -2103,21 +2103,30 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	return dest;
 }
 
+function isRecordOperand(node: Node): boolean {
+	const t = peelToStructOrUnion(node.nodeType);
+	return t != null && t.kind == TypeKind.Struct;
+}
+
+function isDeclaredMethodCall(callee: Node): boolean {
+	return callee.resolvedSym != null && callee.resolvedSym.symbolKind == SymbolKind.Method;
+}
+
 function isArrayPush(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
+	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
 	return d.property == "push";
 }
 
 function isArraySetLengthCall(s: RaiserCompState, node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
+	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
 	if (d.property != "setLength") return false;
 	return !exprIsString(s, d.object);
 }
 
 function isToStringCall(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
+	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
 	return d.property == "toString";
 }
