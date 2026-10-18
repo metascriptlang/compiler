@@ -911,7 +911,6 @@ export function rejectCharUnary(ctx: CheckerContext, op: string, t: Type | null,
 export function textlessValue(t: Type | null): string {
 	if (t == null) return "";
 	if (t.kind == TypeKind.Void) return "a 'void' value has no text — a void call produces no value; call it on its own line";
-	if (t.kind == TypeKind.Never) return "a 'never' value has no text — the expression never produces a value";
 	return "";
 }
 
