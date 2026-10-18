@@ -1683,3 +1683,37 @@ test "engine: an update statement keeps no old value and an update used as a val
 		assert inst.op != RaiserOpcode.Move, disasmFunc(loop);
 	}
 }
+
+// --- Destinations: a value bound for a known register is computed into it ---
+
+function countOp(f: RaiserFunction, op: RaiserOpcode): number {
+	let n = 0;
+	for (const inst of f.code) {
+		if (inst.op == op) n = n + 1;
+	}
+	return n;
+}
+
+test "engine: a call argument, a local assignment and a branch value land without a Move" {
+	const fib = compiledFunc("function fib(n: int32): int32 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
+	assert countOp(fib, RaiserOpcode.Move) == 0, disasmFunc(fib);
+	const asg = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 1; x = a + b; x = x + a; return x; } console.log(`${f(1, 2)}`);", "f");
+	assert countOp(asg, RaiserOpcode.Move) == 0, disasmFunc(asg);
+	const tern = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 0; x = a < b ? a + 1 : b + 2; return x; } console.log(`${f(1, 2)}`);", "f");
+	assert countOp(tern, RaiserOpcode.Move) == 1, disasmFunc(tern);
+	const glob = compiledFunc("let g: int64 = 5; function h(a: int64, b: int64): int64 { return a + b; } function f(a: int64): int64 { return h(g, a * 2); } console.log(`${f(1)}`);", "f");
+	assert countOp(glob, RaiserOpcode.Move) == 0, disasmFunc(glob);
+}
+
+test "engine: a destination the expression reads, or a merge of branches, keeps its value" {
+	const ctx = evalOrcVM("function h(a: int64, b: int64, c: int64): int64 { return a * 100 + b * 10 + c; }"
+		+ " function k(a: int64, b: int64): int64 { return a - b; }"
+		+ " function t(a: int64, b: int64, p: boolean, q: boolean): string {"
+		+ " let x: int64 = a; x = b + x; let y: int64 = a; y = k(y, b); let z: int64 = a; z = p ? z + 1 : z + 2;"
+		+ " let u: int64 = b; u = (p && q) ? u : u * 2; let w: boolean = p; w = q || p; let v: int64 = a; v = k(v, v) + v;"
+		+ " return `${x} ${y} ${z} ${u} ${w} ${v} ${h(a, a + b, p ? b : a)} ${h(b, k(a, b), a - b)}`; }"
+		+ " let g1: int64 = 3; let g2: float64 = 2.5; let ff: float64 = 1.5; ff = g2 * ff;"
+		+ " console.log(t(1, 2, true, false)); console.log(t(4, 3, false, true)); console.log(`${h(g1, g1 + 1, g1 * 2)} ${ff}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "3 -1 2 4 true 1 132 189\n7 1 6 6 true 4 474 311\n346 3.75\n", ctx.output;
+}

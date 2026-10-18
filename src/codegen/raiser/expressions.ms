@@ -29,7 +29,7 @@ import {
 	isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType,
+	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType, landResult,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
 
@@ -396,6 +396,12 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 
 // --- Expression compilation ---
 // Returns the register holding the result.
+
+function compileExprInto(s: RaiserCompState, node: Node, target: number): void {
+	const startPc = codeLen(s);
+	const firstTemp = s.nextReg;
+	landResult(s, target, startPc, firstTemp, compileExpr(s, node));
+}
 
 export function compileExpr(s: RaiserCompState, node: Node): int32 {
 	if (carriesBigInt(node.nodeType)) return refuseBigInt(s, node);
@@ -939,6 +945,8 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
 			return emitTrapNil(s, msg);
 		}
+		const startPc = codeLen(s);
+		const firstTemp = s.nextReg;
 		const srcReg = emitValueCopy(s, compileExpr(s, d.right), d.left.nodeType);
 		if (d.left.kind == NodeKind.Identifier) {
 			const global = resolveGlobal(s, d.left.resolvedSym);
@@ -948,7 +956,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 			}
 			const targetReg = resolveLocal(s, d.left.resolvedSym);
 			if (targetReg >= 0) {
-				emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, srcReg, 0));
+				landResult(s, targetReg, startPc, firstTemp, srcReg);
 				return targetReg;
 			}
 		}
@@ -1172,22 +1180,19 @@ function compileLogicalExpr(s: RaiserCompState, node: Node): int32 {
 	const dest = allocReg(s);
 
 	// Compile left operand
-	const lReg = compileExpr(s, d.left);
-	emitInst(s, raiserABC(RaiserOpcode.Move, dest, lReg, 0));
+	compileExprInto(s, d.left, dest);
 
 	if (d.operator == "&&") {
 		// a && b: if a is falsy, skip b (result = a)
 		const jumpPastB = emitBranchIfFalsy(s, dest);
-		const rReg = compileExpr(s, d.right);
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest, rReg, 0));
+		compileExprInto(s, d.right, dest);
 		patchJumpTo(s, jumpPastB, codeLen(s));
 	} else {
 		// a || b: if a is falsy, evaluate b. If truthy, skip b.
 		const jumpToB = emitBranchIfFalsy(s, dest);
 		const jumpPastB = emitJumpPlaceholder(s);
 		patchJumpTo(s, jumpToB, codeLen(s));
-		const rReg = compileExpr(s, d.right);
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest, rReg, 0));
+		compileExprInto(s, d.right, dest);
 		patchJumpTo(s, jumpPastB, codeLen(s));
 	}
 
@@ -1292,11 +1297,7 @@ function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
 	const argCount = args.length;
 	for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
 	for (let i = 0; i < argCount; i = i + 1) {
-		const argReg = compileExpr(s, args[i]);
-		const targetReg = dest + 1 + i;
-		if (argReg != targetReg) {
-			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
-		}
+		compileExprInto(s, args[i], dest + 1 + i);
 	}
 }
 
@@ -1649,14 +1650,11 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	const argRegs: int32[] = [thisReg];
-	for (const a of d.arguments) argRegs.push(compileExpr(s, a));
 	const dest = allocReg(s);
-	for (let i = 0; i < argRegs.length; i += 1) allocReg(s);
-	for (let i = 0; i < argRegs.length; i += 1) {
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
-	}
-	emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argRegs.length));
+	for (let i = 0; i <= d.arguments.length; i += 1) allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, thisReg, 0));
+	for (let i = 0; i < d.arguments.length; i += 1) compileExprInto(s, d.arguments[i], dest + 2 + i);
+	emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length + 1));
 	return dest;
 }
 
@@ -1669,18 +1667,14 @@ function overriddenMethodName(sym: Symbol | null): string {
 
 function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: string): int32 {
 	const d = node.data as CallExprData;
-	const argRegs: int32[] = [];
-	for (const a of d.arguments) argRegs.push(compileExpr(s, a));
+	const dest = allocReg(s);
+	for (let i = 0; i < d.arguments.length; i += 1) allocReg(s);
+	for (let i = 0; i < d.arguments.length; i += 1) compileExprInto(s, d.arguments[i], dest + 1 + i);
 	const closureReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, closureReg, argRegs[0], addConst(s, raiserString(methodName))));
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, closureReg, dest + 1, addConst(s, raiserString(methodName))));
 	const fnReg = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnReg, closureReg, addConst(s, raiserString("fn"))));
-	const dest = allocReg(s);
-	for (let i = 0; i < argRegs.length; i += 1) allocReg(s);
-	for (let i = 0; i < argRegs.length; i += 1) {
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
-	}
-	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnReg, argRegs.length));
+	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnReg, d.arguments.length));
 	return dest;
 }
 
@@ -1699,21 +1693,23 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const envConstIdx = addConst(s, raiserString("env"));
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, envReg, closureReg, envConstIdx));
 
-	// Precompile all args into temp registers
-	const argRegs: number[] = [];
+	// Allocate dest + (argCount+1) slots (worst case: env + args) and compute each argument into its slot
+	let argCount = 0;
+	for (const a of d.arguments) {
+		if (a.nodeType == null || a.nodeType.kind != TypeKind.Void) argCount = argCount + 1;
+	}
+	const totalArgs = argCount + 1;
+	const dest = allocReg(s);
+	for (let i = 0; i < totalArgs; i = i + 1) { allocReg(s); }
+	let slot = 0;
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
 		if (d.arguments[i].nodeType != null && d.arguments[i].nodeType!.kind == TypeKind.Void) {
 			if (d.arguments[i].kind != NodeKind.Identifier) compileExpr(s, d.arguments[i]);
 			continue;
 		}
-		argRegs.push(compileExpr(s, d.arguments[i]));
+		compileExprInto(s, d.arguments[i], dest + 1 + slot);
+		slot = slot + 1;
 	}
-	const argCount = argRegs.length;
-
-	// Allocate dest + (argCount+1) slots (worst case: env + args)
-	const totalArgs = argCount + 1;
-	const dest = allocReg(s);
-	for (let i = 0; i < totalArgs; i = i + 1) { allocReg(s); }
 
 	// Runtime check: if env is -1 (non-capturing sentinel), skip env passing
 	const sentinelReg = allocReg(s);
@@ -1723,18 +1719,12 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const jumpToNoEnv = emitJumpPlaceholder(s);
 
 	// WITH ENV path: real args first, then env LAST (Standard reference parity: closure calling convention)
-	for (let i = 0; i < argCount; i = i + 1) {
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
-	}
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + argCount, envReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, totalArgs));
 	const jumpPastNoEnv = emitJumpPlaceholder(s);
 
 	// NO ENV path: just real args, no env
 	patchJumpTo(s, jumpToNoEnv, codeLen(s));
-	for (let i = 0; i < argCount; i = i + 1) {
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
-	}
 	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, argCount));
 
 	patchJumpTo(s, jumpPastNoEnv, codeLen(s));
@@ -1750,14 +1740,12 @@ function compileConditionalExpr(s: RaiserCompState, node: Node): int32 {
 	const toAlt = condJumps(s, d.ternaryCondition, false);
 
 	// Consequent
-	const consReg = compileExpr(s, d.ternaryConsequent);
-	emitInst(s, raiserABC(RaiserOpcode.Move, dest, consReg, 0));
+	compileExprInto(s, d.ternaryConsequent, dest);
 	const jumpPastAlt = emitJumpPlaceholder(s);
 
 	// Alternate
 	patchJumpsTo(s, toAlt, codeLen(s));
-	const altReg = compileExpr(s, d.ternaryAlternate);
-	emitInst(s, raiserABC(RaiserOpcode.Move, dest, altReg, 0));
+	compileExprInto(s, d.ternaryAlternate, dest);
 
 	patchJumpTo(s, jumpPastAlt, codeLen(s));
 	return dest;

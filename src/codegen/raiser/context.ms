@@ -3,7 +3,7 @@
 
 import {
 	RaiserOpcode, RaiserInstruction,
-	raiserABC, raiserABx, raiserAx
+	raiserABC, raiserABx, raiserAx, getSignedAx
 } from "../../raiser/bytecode";
 import { RaiserValue, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
@@ -509,4 +509,60 @@ export function emitTrapNil(s: RaiserCompState, message: string): int32 {
 	const reg = allocReg(s);
 	emitLoadConst(s, reg, raiserNil());
 	return reg;
+}
+
+// --- Destinations ---
+
+function writesResultAfterReading(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.LoadConst | RaiserOpcode.LoadGlobal | RaiserOpcode.LoadField | RaiserOpcode.LoadIndex
+			| RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64
+			| RaiserOpcode.ModI64 | RaiserOpcode.NegI64
+			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
+			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
+			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
+			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt
+			| RaiserOpcode.IsKind => true,
+		_ => false,
+	};
+}
+
+function skipsInstructions(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64
+			| RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64
+			| RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64
+			| RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr
+			| RaiserOpcode.BltU64 | RaiserOpcode.BleU64 => true,
+		_ => false,
+	};
+}
+
+// The code from `startPc` computed `reg` and nothing else is read of it afterwards, so the
+// instruction that wrote it can write `target` instead when it is the last one, reads its operands
+// before writing, and no jump of the expression lands past it (a merge of branches has several writers).
+function lastWriteMayRetarget(s: RaiserCompState, startPc: int32, reg: int32): boolean {
+	const end = s.code.length;
+	if (end <= startPc) return false;
+	const last = s.code[end - 1];
+	if (last.a != reg || !writesResultAfterReading(last.op)) return false;
+	for (let i = startPc; i < end - 1; i = i + 1) {
+		const inst = s.code[i];
+		if (inst.op == RaiserOpcode.Jump && i + 1 + getSignedAx(inst) >= end) return false;
+		if (skipsInstructions(inst.op) && i + 1 + inst.c >= end) return false;
+	}
+	return true;
+}
+
+// `reg` is where an expression compiled from `startPc` left its value, `firstTemp` the first register
+// that expression could allocate: the value is moved to `target` unless its writer can aim there.
+export function landResult(s: RaiserCompState, target: number, startPc: int32, firstTemp: int32, reg: int32): void {
+	if (reg == target) return;
+	if (reg >= firstTemp && lastWriteMayRetarget(s, startPc, reg)) {
+		s.code[s.code.length - 1].a = target;
+		return;
+	}
+	emitInst(s, raiserABC(RaiserOpcode.Move, target, reg, 0));
 }
