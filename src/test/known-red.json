@@ -6,14 +6,12 @@
     "762-bitSetMacro [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [js]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [orc]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
-    "catchBindingAcrossSuspendWithFinally [parity]": {"since":"1bb3c76a2","note":"card 2026-10-18-raiser-async-finally-after-caught-raise.md; a raise across a suspend point loses the finally or its rejection on the Raiser; red on main 1bb3c76a2, measured 2026-10-19"},
     "execFileStartFailure [esm]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: node gives ENOENT for a directory, not EACCES; red on main 1bb3c76a2, measured 2026-10-19"},
     "execFileStartFailure [js]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: node gives ENOENT for a directory, not EACCES; red on main 1bb3c76a2, measured 2026-10-19"},
     "execMissingProgram [c]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
     "execMissingProgram [danger]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
     "execMissingProgram [orc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
     "execMissingProgram [raiser]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
-    "finallyReraiseAcrossSuspend [raiser]": {"since":"1bb3c76a2","note":"card 2026-10-18-raiser-async-finally-after-caught-raise.md; a raise across a suspend point loses the finally or its rejection on the Raiser; red on main 1bb3c76a2, measured 2026-10-19"},
     "genericDeclarationEmitsOnlyInstances [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-static-member-in-generic-constructor.md; red on main 80207ca9c as well, the raiser lane never ran when ae964f7b3 landed it; recorded for release 0.3.2, 2026-10-12"}
   },
   "flaky": {
