@@ -203,7 +203,7 @@ function keyTypeOfCollection(t: Type | null): Type | null {
 export function emitCollectionFromPairs(gen: JSGenerator, node: Node): boolean {
 	const d = node.data as CallExprData;
 	const sym = d.callee.resolvedSym;
-	if (sym == null || (sym.name != "mapFromPairs" && sym.name != "hashMapFromPairs")) return false;
+	if (sym == null || sym.builtinKind != "MapFromPairs") return false;
 	if (sym.nativeName == null || sym.nativeName == "" || d.arguments.length != 2) return false;
 	const shape = valueKeyShape(keyTypeOfCollection(node.nodeType));
 	if (shape == null) return false;

@@ -11,7 +11,7 @@ Deterministic reference counting for the C backend: `analyzeProgram(program, che
 - **A `Ptr<T>` variable is never moved into an owning slot** — it holds a borrow; at sink and return materialization `sinkClassify` treats a `Ptr` to a counted Ref as the pointee, so it is copied (incref) and the destination's decref stays balanced. A `Ptr` to a non-Ref pointee (malloc, FFI) is untouched.
 - **A variable read inside a `finally` is never moved out before it** — `collectFinallyVars` blocks the move.
 - **Cleanup is scope-based and LIFO** — tracked variables are destroyed in reverse at scope exit; a scope that can throw wraps its body in `try/finally` with the RC declarations hoisted and null-initialized; a generator state body skips the wrapper.
-- **`__envP*` parameters are left alone** — the closure machinery owns them.
+- **The closure env parameter is left alone by its type** — `_envP` is a `Ptr<void>` with no RC, so the injector never tracks it; the closure machinery owns the env.
 
 ## File map
 

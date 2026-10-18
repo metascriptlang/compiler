@@ -82,8 +82,8 @@ test "void: a bare bind is accepted" {
 	assert accepted(V + "const n = f();");
 }
 
-test "void: string concatenation is accepted" {
-	assert accepted(V + "const n = f(); const s = \"x\" + n;");
+test "void: string concatenation is refused" {
+	assert refusedWith(V + "const n = f(); const s = \"x\" + n;", "has no text");
 }
 
 test "void: console.log of a void bind is accepted" {

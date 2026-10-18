@@ -12,104 +12,40 @@
 //   cyclicType()           — cycle detection for ORC
 //   checkSelfAssignment()  — early return on dest === src
 //
-// Generates up to 6 hooks per type + TypeInfo:
+// Generates up to 6 hooks per type:
 //   =destroy   TypeName_destroy(self)            — cleanup RC fields
 //   =copy      TypeName_copy(dest, src)          — deep copy (assign + incref)
 //   =sink      TypeName_sink(dest, src)          — move (transfer ownership)
 //   =wasMoved  TypeName_wasMoved(self)           — zero RC handles after move
 //   =dup       TypeName_dup(src): TypeName       — clone (init + copy, return)
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
-//   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, createNodeAt, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
-import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, storesNothing } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
-import { genericParamsOf, classParentOf, createUnionInOrder } from "../../checker/types";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
+import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
+import { attachedOpSym, isRuntimeProcSym, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { lookupInstanceHook } from "../../checker/instantiate";
+import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext, newSym, addError, lookupUserHook, getGlobalTypeOwner } from "../../checker/context";
+import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName, hasExtensionByName, getExtFnType, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
-import { parseInput } from "../testUtil";
+import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
 
-// ===== Global Hook Ownership Registry =====
-// Reference parity: attachedOps[] is global — hooks generated once per canonical type.
-// First module to need a type's hooks generates the bodies; other modules skip.
-// Consuming modules get extern forward declarations via ensureDrcProto in codegen.
-//
-// TypeInfo ownership is tracked SEPARATELY from hook ownership because the
-// emission triggers differ: hooks can be emitted by any module that references
-// the type (DRC correctness only requires one definition); TypeInfo must be
-// emitted by the DEFINING module to match codegen's cross-module extern
-// conventions. Without this split, a consumer module that claims hooks first
-// would also block the defining module from emitting the TypeInfo global
-// (observed as `undefined symbol: _SymbolTypeInfo` link errors).
-let _globalHookOwners: NameSet = createNameSet();
-let _globalTypeInfoOwners: NameSet = createNameSet();
 let _jsProgramScope = false;
-
-export function setGlobalHookOwners(owners: NameSet): void {
-	_globalHookOwners = owners;
-	_globalTypeInfoOwners = createNameSet();
-	_jsProgramScope = false;
-	resetHookSyms();
-}
 
 // A JS bundle is one module scope, so its modules share the claim C makes over
 // one image; a split file sees only its own top level and keeps its own copy.
 export function setJsProgramScope(on: boolean): void {
 	_jsProgramScope = on;
-	_globalHookOwners = createNameSet();
 }
 
-export function hookOwnerMark(): int32 {
-	return _globalHookOwners.items.length as int32;
-}
-
-export function hookOwnersFrom(mark: int32): string[] {
-	const taken: string[] = [];
-	for (let i = mark; i < _globalHookOwners.items.length; i += 1) taken.push(_globalHookOwners.items[i]);
-	return taken;
-}
-
-export function replayHookOwners(names: string[]): void {
-	for (const name of names) nameSetAdd(_globalHookOwners, name);
-}
-
-export function typeInfoOwnerMark(): int32 {
-	return _globalTypeInfoOwners.items.length as int32;
-}
-
-export function typeInfoOwnersFrom(mark: int32): string[] {
-	const taken: string[] = [];
-	for (let i = mark; i < _globalTypeInfoOwners.items.length; i += 1) taken.push(_globalTypeInfoOwners.items[i]);
-	return taken;
-}
-
-export function replayTypeInfoOwners(names: string[]): void {
-	for (const name of names) nameSetAdd(_globalTypeInfoOwners, name);
-}
-
-function isGloballyOwned(typeName: string): boolean {
-	return nameSetContains(_globalHookOwners, typeName);
-}
-
-function claimGlobal(typeName: string): void {
-	nameSetAdd(_globalHookOwners, typeName);
-}
-
-function isTypeInfoGloballyOwned(typeName: string): boolean {
-	return nameSetContains(_globalTypeInfoOwners, typeName);
-}
-
-function claimGlobalTypeInfo(typeName: string): void {
-	nameSetAdd(_globalTypeInfoOwners, typeName);
+export function resetLiftedOps(): void {
+	resetHookSyms();
 }
 
 // ===== Lift Context (reference TLiftCtx) =====
@@ -120,6 +56,7 @@ class LiftCtx {
 	generated: NameSet;    // fully generated types (dedup)
 	trivial: NameSet;
 	generating: NameSet;   // currently generating (cycle guard)
+	helperOps: HashMap<string, Symbol>;
 	collector: Node[];
 	cyclicCache: NameSet;     // types confirmed cyclic
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
@@ -127,7 +64,7 @@ class LiftCtx {
 	refCellTraces: Type[];
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
-	refusedArrayElems: NameSet;
+	refusedArrayElems: HashSet<Type>;
 	jsBackend: boolean;
 }
 
@@ -155,8 +92,8 @@ function hookCName(typeName: string, t: Type | null, lctx: LiftCtx): string {
 // Check both local (this module) and global (any module) registries.
 // Struct/Union fields can't form direct cycles (infinite size), so cycles always go through
 // Ref/Ptr which has its own handler in fillBody. Safe to check only `generated`.
-function namedTypeHasHooks(typeName: string, lctx: LiftCtx): boolean {
-	return nameSetContains(lctx.generated, typeName) || isGloballyOwned(typeName);
+function namedTypeHasHooks(t: Type, lctx: LiftCtx): boolean {
+	return nameSetContains(lctx.generated, opTypeKey(t)) || hasLiftedOp(t, AttachedOp.AttachedDestructor);
 }
 
 // Unwrap a GenericInstance to (mangledName, concreteStructBody) for hook generation.
@@ -200,8 +137,9 @@ function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 		body.typeNames = src.typeNames;
 		body.typeExtra = src.typeExtra;
 		body.typeFlags = src.typeFlags;
+		spelled(body);
 	} else {
-		body = createStruct(mangledName, src.typeNames, src.typeChildren, isStructType(src));
+		body = spelled(createStruct(mangledName, src.typeNames, src.typeChildren, isStructType(src)));
 	}
 	return { mangledName, body };
 }
@@ -228,17 +166,24 @@ function hookSuffix(hook: string): string {
 
 // Reference parity (sfGeneratedOp): mark a generated function node so DRC skips injection.
 // Reference sets sfGeneratedOp on the symbol in produceSym/symPrototype.
-function markGeneratedOp(fnNode: Node, name: string): Symbol {
-	const sym = hookComplete(name, fnNode.nodeType);
+function liftOp(fnNode: Node, t: Type, orig: Type, op: AttachedOp, name: string): Symbol {
+	if (orig != t && getOpByKey(t, op) == null) {
+		const proto = getOpByKey(orig, op);
+		if (proto != null) bindOpByKey(t, op, proto);
+	}
+	const sym = liftedOp(t, op, name, fnNode.nodeType);
+	sym.state = SymbolState.Checked;
 	fnNode.resolvedSym = sym;
 	return sym;
 }
 
-function markLifecycleOp(fnNode: Node, name: string, hook: string): Symbol {
-	const sym = hookComplete(name, fnNode.nodeType);
-	fnNode.resolvedSym = sym;
+function liftHelperOp(fnNode: Node, name: string, hook: string, lctx: LiftCtx): Symbol {
+	const sym = makeSymbol(name, SymbolKind.Function, fnNode.nodeType, false);
+	setFlag(sym, SymbolFlag.GeneratedOp);
 	if (hook == "destroy") setFlag(sym, SymbolFlag.DestroyOp);
 	else if (hook == "wasMoved") setFlag(sym, SymbolFlag.WasMovedOp);
+	fnNode.resolvedSym = sym;
+	lctx.helperOps.set(name, sym);
 	return sym;
 }
 
@@ -252,14 +197,6 @@ function aliasLiftedOps(orig: Type, canon: Type): void {
 	aliasOpByKey(orig, canon, AttachedOp.AttachedDup);
 }
 
-function checkLiftedOps(canon: Type, cName: string): void {
-	checkOpByKey(canon, AttachedOp.AttachedDestructor, cName + "Destroy");
-	checkOpByKey(canon, AttachedOp.AttachedAsgn, cName + "Copy");
-	checkOpByKey(canon, AttachedOp.AttachedSink, cName + "Sink");
-	checkOpByKey(canon, AttachedOp.AttachedWasMoved, cName + "WasMoved");
-	checkOpByKey(canon, AttachedOp.AttachedTrace, cName + "Trace");
-	checkOpByKey(canon, AttachedOp.AttachedDup, cName + "Dup");
-}
 
 // Set hook function param/return types to concrete Types.
 // Reference parity: symPrototype sets dest.typ/src.typ directly, never string names.
@@ -402,10 +339,15 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node
 	};
 }
 
+function liftSym(lctx: LiftCtx, kind: SymbolKind, name: string, t: Type | null, mutable: boolean = false): Symbol {
+	if (lctx.checkerCtx == null) throw new Error(`internal: lifted symbol '${name}' has no checker context to mint it from`);
+	const sym = newSym(lctx.checkerCtx, kind, name, t);
+	if (mutable) setFlag(sym, SymbolFlag.Mutable);
+	return sym;
+}
+
 function liftTempSym(lctx: LiftCtx, name: string, t: Type | null): Symbol {
-	const sym = lctx.checkerCtx != null
-		? newSym(lctx.checkerCtx, SymbolKind.Temp, name, t)
-		: makeSymbol(name, SymbolKind.Temp, t, false);
+	const sym = liftSym(lctx, SymbolKind.Temp, name, t);
 	sym.state = SymbolState.Checked;
 	return sym;
 }
@@ -691,10 +633,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (resolvedName != "") {
 				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
-					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					const fieldCName = hookCName(resolvedName, fieldType, lctx);
-					if (namedTypeHasHooks(fieldCName, lctx)) {
+					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
@@ -764,8 +704,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (unwrapped.mangledName != "") {
 				if (hook != "trace" || isCyclicType(unwrapped.body, lctx, visited)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
-					const monoCName = hookCName(unwrapped.mangledName, unwrapped.body, lctx);
-					if (namedTypeHasHooks(monoCName, lctx)) {
+					if (namedTypeHasHooks(unwrapped.body, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
@@ -793,10 +732,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				stringOp(hook, xf, yf, fieldName, buf, loc);
 			} else if (fieldType.typeName != "") {
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
-					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					const unionCName = hookCName(fieldType.typeName, fieldType, lctx);
-					if (namedTypeHasHooks(unionCName, lctx)) {
+					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
@@ -810,7 +747,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
-			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType.typeName, lctx, fieldType)) {
+			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType, lctx)) {
 				if (hook != "trace") {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					namedObjOp(hook, fieldType, xf, yf, buf, loc);
@@ -923,7 +860,7 @@ function isTaggedUnion(t: Type): boolean {
 function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return false;
 	const probe = newBuf();
-	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
+	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	if (objType.kind == TypeKind.Union) {
 		if (!isTagCarriedUnion(objType)) return false;
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
@@ -953,11 +890,9 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 
 // ===== Inheritance Helper (Standard reference pattern) =====
 
-function getBaseClass(typeName: string, lctx: LiftCtx): string {
-	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
-	if (sym == null) return "";
-	if (sym.symbolKind != SymbolKind.Class) return "";
-	return classBaseName(unwrapRef(sym.symbolType));
+function classSymOf(t: Type | null): Symbol | null {
+	if (t == null || t.sym == null || t.sym.symbolKind != SymbolKind.Class) return null;
+	return t.sym;
 }
 
 function liftInstanceBaseOps(orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
@@ -965,26 +900,29 @@ function liftInstanceBaseOps(orig: Type, lctx: LiftCtx, loc: SourceLocation): vo
 	if (base != null && unwrapRef(base).kind == TypeKind.GenericInstance) liftTypeOps(base, lctx, loc);
 }
 
-function classBaseName(classStruct: Type): string {
-	const base = classStruct.kind == TypeKind.Struct ? classStruct.typeExtra : null;
-	if (base == null) return "";
-	const body = base.kind == TypeKind.Ref && base.typeReturn != null ? base.typeReturn : base;
-	if (body.kind == TypeKind.GenericInstance) return monoInstanceName(body);
-	return body.kind == TypeKind.Struct ? body.typeName : "";
+function baseClassOf(t: Type): Type | null {
+	if (classSymOf(t) == null || t.typeExtra == null) return null;
+	const base = unwrapRef(t.typeExtra);
+	return base.kind == TypeKind.Struct && base.typeName != "" ? base : null;
 }
 
-function baseClassType(typeName: string, lctx: LiftCtx): Type {
-	const inner = unwrapRef(lookupSymbol(lctx.checkerCtx.table, typeName).symbolType);
-	const base = inner.typeExtra;
-	if (base == null) throw new Error(`internal: class '${typeName}' reached its base hook call without a base type`);
-	return unwrapRef(base);
+function baseSymOf(base: Type): Symbol {
+	const sym = base.sym;
+	if (sym == null || (sym.symbolKind != SymbolKind.Class && sym.symbolKind != SymbolKind.Interface)) {
+		throw new Error(`internal: base '${base.typeName}' reached hook generation without a class or interface symbol`);
+	}
+	return sym;
+}
+
+function ensureClassHooks(body: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	ensureHooks(body.typeName, body, baseSymOf(body).symbolType, body, true, lctx, loc);
 }
 
 // ===== User-Defined Hook Dispatch (Reference considerUserDefinedOp) =====
 // Maps each lifecycle op to its user-facing method name. A user hook is any
 // method/extension with that name on the receiver type — class methods and
 // free-function extensions both land in the extension registry (collectPass),
-// keyed by (receiverTypeName, methodName) with the real callable sym attached.
+// each with the real callable sym attached; the receiver is the extension's first-parameter type.
 // Reference: Nim binds `=destroy`/`=copy`/… to the type and getAttachedOp
 // retrieves by type — never by reconstructing a symbol name.
 
@@ -1000,83 +938,69 @@ function userHookMethodName(hook: string): string {
 	};
 }
 
-function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx, objType: Type | null): Symbol | null {
+function getUserDefinedHookSym(type: Type, hook: string, lctx: LiftCtx): Symbol | null {
 	const methodName = userHookMethodName(hook);
 	if (methodName == "") return null;
-	if (lctx.checkerCtx == null || lctx.checkerCtx.extensionRegistry == null) return null;
+	const instHook = lookupInstanceHook(type, methodName);
+	if (instHook != null) return instHook;
+	const declSym = unwrapRef(type).sym;
+	if (lctx.checkerCtx == null) return null;
 	// A type may carry duplicate registry entries reached through different import
 	// paths — distinct Symbol instances whose modulePath differs only by spelling
 	// (e.g. `crypto/index` vs `crypto/tls/../index`), each mangling to a different
 	// C name. Reference rule: a type-bound op is defined in the type's own module.
 	// Prefer the sym whose module matches the type's so the emitted call resolves
 	// to the emitted definition (a stale-path sym links to an undefined symbol).
-	let typeModulePath = objType != null && objType.sym != null ? objType.sym.modulePath : "";
-	if (typeModulePath == "") {
-		const typeSym = lookupSymbol(lctx.checkerCtx.table, typeName);
-		if (typeSym != null) typeModulePath = typeSym.modulePath;
-	}
-	const bound = lookupUserHook(typeModulePath != "" ? typeModulePath : getGlobalTypeOwner(typeName), typeName, methodName);
-	if (bound != null) return bound;
+	const typeModulePath = declSym != null ? declSym.modulePath : "";
+	const registry = pickBodyCtx(typeModulePath, lctx.checkerCtx).extensionRegistry;
+	if (registry == null) return null;
 	let fallback: Symbol | null = null;
-	for (const m of lctx.checkerCtx.extensionRegistry.methods) {
-		if (m.receiverTypeName != typeName || m.methodName != methodName || m.isStatic) continue;
-		if (m.sym == null) continue;
+	for (const m of findAllExtensionsByName(registry, methodName)) {
+		if (m.isStatic || m.sym == null) continue;
+		if (declSym == null || extReceiverSym(m) != declSym) continue;
 		if (typeModulePath != "" && m.sym.modulePath == typeModulePath) return m.sym;
 		if (fallback == null) fallback = m.sym;
 	}
 	if (fallback != null) return fallback;
-	return lookupInstanceHook(typeName, methodName);
+	return null;
 }
 
-function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx, objType: Type | null): boolean {
-	return getUserDefinedHookSym(typeName, hook, lctx, objType) != null;
+function hasUserDefinedHook(type: Type, hook: string, lctx: LiftCtx): boolean {
+	return getUserDefinedHookSym(type, hook, lctx) != null;
 }
 
 // Reference parity: declaring any lifecycle hook makes the type need lifecycle
 // management (Nim sets tfHasAsgn in bindTypeHook). A handle-only type (e.g. a
 // uint32 GPU buffer) has no RC fields, so typeNeedsHooks alone would skip it —
 // the user hook would then never be wired into <T>Destroy.
-function hasAnyUserHook(typeName: string, lctx: LiftCtx, objType: Type | null): boolean {
-	return hasUserDefinedHook(typeName, "destroy", lctx, objType)
-		|| hasUserDefinedHook(typeName, "copy", lctx, objType)
-		|| hasUserDefinedHook(typeName, "sink", lctx, objType)
-		|| hasUserDefinedHook(typeName, "wasMoved", lctx, objType)
-		|| hasUserDefinedHook(typeName, "dup", lctx, objType)
-		|| hasUserDefinedHook(typeName, "trace", lctx, objType);
+function hasAnyUserHook(t: Type, lctx: LiftCtx): boolean {
+	return hasUserDefinedHook(t, "destroy", lctx)
+		|| hasUserDefinedHook(t, "copy", lctx)
+		|| hasUserDefinedHook(t, "sink", lctx)
+		|| hasUserDefinedHook(t, "wasMoved", lctx)
+		|| hasUserDefinedHook(t, "dup", lctx)
+		|| hasUserDefinedHook(t, "trace", lctx);
 }
 
-function baseTypeOf(typeName: string, lctx: LiftCtx): Type | null {
-	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
-	return sym != null && sym.symbolType != null ? unwrapRef(sym.symbolType) : null;
-}
-
-function baseHookOwner(typeName: string, hook: string, lctx: LiftCtx): string {
-	let a = getBaseClass(typeName, lctx);
-	while (a != "") {
-		const own = hasUserDefinedHook(a, hook, lctx, baseTypeOf(a, lctx));
+function baseHookOwner(t: Type, hook: string, lctx: LiftCtx): Type | null {
+	let a = baseClassOf(t);
+	while (a != null) {
+		const own = hasUserDefinedHook(a, hook, lctx);
 		const takes = hook == "destroy" || hook == "wasMoved"
 			? own
-			: own || hasUserDefinedHook(a, "destroy", lctx, baseTypeOf(a, lctx));
+			: own || hasUserDefinedHook(a, "destroy", lctx);
 		if (takes) {
 			if (hook != "trace") return a;
-			const sym = lookupSymbol(lctx.checkerCtx.table, a);
-			if (sym != null && isCyclicType(unwrapRef(sym.symbolType), lctx, createNameSet())) return a;
-			return "";
+			return isCyclicType(a, lctx, createNameSet()) ? a : null;
 		}
-		a = getBaseClass(a, lctx);
+		a = baseClassOf(a);
 	}
-	return "";
+	return null;
 }
 
-function classFieldCount(className: string, lctx: LiftCtx): number {
-	const sym = lookupSymbol(lctx.checkerCtx.table, className);
-	if (sym == null || sym.symbolType == null) return 0;
-	return unwrapRef(sym.symbolType).typeNames.length;
-}
-
-function callBaseHook(owner: string, hook: string, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	ensureHooksByName(owner, lctx, loc, null);
-	const ownerRef = lookupSymbol(lctx.checkerCtx.table, owner).symbolType;
+function callBaseHook(owner: Type, hook: string, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	ensureClassHooks(owner, lctx, loc);
+	const ownerRef = baseSymOf(owner).symbolType;
 	const a1 = makeHiddenSubConv(makeIdentResolved(s1, loc), ownerRef, loc);
 	const args: Node[] = [a1];
 	if (hook == "trace") {
@@ -1084,7 +1008,7 @@ function callBaseHook(owner: string, hook: string, s1: Symbol, s2: Symbol, lctx:
 	} else if (hook == "copy" || hook == "sink") {
 		args.push(makeHiddenSubConv(makeIdentResolved(s2, loc), ownerRef, loc));
 	}
-	const op = requireOpByKey(unwrapRef(ownerRef), attachedOpOf(hook));
+	const op = requireOpByKey(owner, attachedOpOf(hook));
 	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(op, null, loc), args, loc), loc));
 }
 
@@ -1178,10 +1102,10 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			// Generate per-variant arm body
 			const armBuf = newBuf();
 			const vName = "v" + vi.toString();
-			const h1 = makeSymbol(s1.name, SymbolKind.Variable, s1.symbolType, false);
+			const h1 = liftSym(lctx, SymbolKind.Variable, s1.name, s1.symbolType);
 			const h2 = hook == "trace"
-				? makeSymbol(s2.name, SymbolKind.Variable, createPtr(voidType()), false)
-				: (s2.name == s1.name ? h1 : makeSymbol(s2.name, SymbolKind.Variable, s2.symbolType, false));
+				? liftSym(lctx, SymbolKind.Variable, s2.name, createPtr(voidType()))
+				: (s2.name == s1.name ? h1 : liftSym(lctx, SymbolKind.Variable, s2.name, s2.symbolType));
 			if (scalar) {
 				buildScalarArmBody(hook, h1, h2, vName, objType.typeChildren[vi], lctx, armBuf, loc);
 			} else {
@@ -1193,8 +1117,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 				// Dedup: sink hook internally dispatches destroy — reuse already-generated destroy helpers
 				const suffix = hookSuffix(hook);
 				const helperName = `${typeName}_${vName}${suffix}`;
-				if (!nameSetContains(lctx.generated, helperName)) {
-					nameSetAdd(lctx.generated, helperName);
+				if (!lctx.helperOps.has(helperName)) {
 					const isTrace = hook == "trace";
 					let helperFn: Node | null = null;
 					if (isTrace) {
@@ -1207,7 +1130,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 					}
 					setHookParamType(helperFn, 0, h1.symbolType);
 					if (!isUnary || isTrace) setHookParamType(helperFn, 1, h2.symbolType);
-					markLifecycleOp(helperFn, helperName, hook);
+					liftHelperOp(helperFn, helperName, hook, lctx);
 					lctx.collector.push(helperFn);
 				}
 
@@ -1219,7 +1142,9 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const callArgs: Node[] = (isUnary && hook != "trace")
 				? [a1]
 				: [a1, a2];
-				const callStmt = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym(helperName, attachedOpOf(hook)), null, loc), callArgs, loc), loc);
+				const helperSym = lctx.helperOps.get(helperName);
+				if (helperSym == null) throw new Error(`internal: union variant helper '${helperName}' has no symbol`);
+				const callStmt = makeExprStmt(makeCall(makeTypedIdentResolved(helperSym, null, loc), callArgs, loc), loc);
 				chain = makeIf(cond, makeBlock([callStmt], loc), chain, loc);
 			}
 		}
@@ -1343,19 +1268,19 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 // classType is non-null for class types (= sym.symbolType = Ref<Struct>),
 // null for value types. When non-null, param types use classType so codegen
 // emits Doc* instead of Doc — matching the pointer the runtime passes.
-function generateHook(hook: string, typeName: string, cName: string, objType: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
+function generateHook(hook: string, typeName: string, cName: string, objType: Type, subject: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const buf = newBuf();
 	const isTrace = hook == "trace";
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
 	const hookParamT = classType != null ? classType : createVar(objType);
-	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
 	const n2 = match (hook) {
 		"trace" => "callback",
 		"destroy" | "wasMoved" => "self",
 		_ => "src",
 	};
 	const s2Type = isTrace ? createPtr(voidType()) : hookParamT;
-	const s2 = n2 == s1.name ? s1 : makeSymbol(n2, SymbolKind.Variable, s2Type, false);
+	const s2 = n2 == s1.name ? s1 : liftSym(lctx, SymbolKind.Variable, n2, s2Type);
 
 	// Self-assignment guard for binary hooks (copy, sink): compare the raw
 	// param pointers — Ref params are pointers already, Var<T> params read as
@@ -1379,7 +1304,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// overflows the stack (see resolvePass owning-self-referential-field warning) —
 	// a user hook lets the author traverse iteratively instead. The author is
 	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
-	const hookSym = getUserDefinedHookSym(typeName, hook, lctx, objType);
+	const hookSym = getUserDefinedHookSym(subject, hook, lctx);
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
@@ -1391,18 +1316,12 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
 		}
-	} else if (hook == "sink" && hasUserDefinedHook(typeName, "destroy", lctx, objType)) {
+	} else if (hook == "sink" && hasUserDefinedHook(subject, "destroy", lctx)) {
 		genOpCall(requireOpByKey(objType, AttachedOp.AttachedDestructor), "destroy", makeIdentResolved(s1, loc), null as unknown as Node, buf, loc);
 		buf.items.push(makeExprStmt(makeAssign(hookParamDeref(s1, loc), hookParamDeref(s2, loc), loc), loc));
 	} else {
-		// Inheritance: ensure base class hooks exist (Implementation parity).
-		// ensureHooksByName does sym lookup + dispatch to unified ensureHooks —
-		// base classes are always declared so always reach ensureHooks.
-		const baseTypeName = getBaseClass(typeName, lctx);
-		const baseCName = hookCName(baseTypeName, null, lctx);
-		if (baseTypeName != "") {
-			ensureHooksByName(baseTypeName, lctx, loc, null);
-		}
+		const base = baseClassOf(objType);
+		if (base != null) ensureClassHooks(base, lctx, loc);
 
 		// Param accessors (Reference liftdestructors.nim:1340): deref at the
 		// use site — Ref unwraps to Struct, Var<T> unwraps the T*. The trace
@@ -1411,8 +1330,8 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		const x2 = isTrace ? makeIdentResolved(s2, loc) : hookParamDeref(s2, loc);
 
 		const fieldsFlattened = objType.typeFlags.has(TypeFlag.HasInheritedFields);
-		const owner = fieldsFlattened ? baseHookOwner(typeName, hook, lctx) : "";
-		const firstOwn = owner != "" ? classFieldCount(owner, lctx) : 0;
+		const owner = fieldsFlattened ? baseHookOwner(objType, hook, lctx) : null;
+		const firstOwn = owner != null ? owner.typeNames.length : 0;
 		if (objType.kind == TypeKind.Union) {
 			if (isPrimitiveOnlyUnion(objType)) {
 				primitiveUnionOp(hook, objType, x1, x2, buf, loc);
@@ -1428,17 +1347,17 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
-			if (owner != "") {
+			if (owner != null) {
 				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
-			} else if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
-				genOpCall(requireOpByKey(baseClassType(typeName, lctx), AttachedOp.AttachedDestructor), hook, x1, x2, buf, loc);
+			} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
+				genOpCall(requireOpByKey(base, AttachedOp.AttachedDestructor), hook, x1, x2, buf, loc);
 			}
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
-			if (owner != "") {
+			if (owner != null) {
 				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
-			} else if (!fieldsFlattened && baseTypeName != "" && namedTypeHasHooks(baseCName, lctx)) {
-				genOpCall(requireOpByKey(baseClassType(typeName, lctx), attachedOpOf(hook)), hook, x1, x2, buf, loc);
+			} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
+				genOpCall(requireOpByKey(base, attachedOpOf(hook)), hook, x1, x2, buf, loc);
 			}
 			for (let i = firstOwn; i < objType.typeNames.length; i += 1) {
 				if (!fieldStored(objType, i)) continue;
@@ -1481,7 +1400,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	}
 	// trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
 	if (isTrace) setHookParamType(fnNode, 1, createPtr(voidType()));
-	const sym = markLifecycleOp(fnNode, cName + suffix, hook);
+	const sym = liftOp(fnNode, objType, objType, attachedOpOf(hook), cName + suffix);
 	lctx.collector.push(fnNode);
 	return sym;
 }
@@ -1489,74 +1408,20 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 // ===== Ensure Type Hooks — unified entry (handles named class/interface,
 // named struct, anonymous struct, generic instance, union) =====
 //
-// Single dispatch replaces the old `ensureTypeHooks(typeName)` /
-// `ensureTypeHooksForType(objType, refType)` pair. Prior dual-path design had
-// a DRY violation that caused a race: Path B (walker-driven) could claim
-// global ownership for a named class (e.g. Symbol) before Path A
-// (ClassDecl-driven) emitted the `<T>TypeInfo` global, leaving link errors on
-// `msAllocTyped(sizeof(T), &TTypeInfo)` call sites. See
-// `docs/KNOWN-ISSUES.md` / memory `project_actor_toplevel_bug.md` for context.
-//
 // Contract:
 //   - `typeName` — required (anonymous types with typeName === "" can't name hooks; early return).
 //   - `objType` — the struct/union type whose fields the hooks walk.
 //   - `refType` — non-null iff caller already knows this is a Ref<Struct> (class/interface).
 //     When null, the function looks up the symbol by name and infers class/interface status.
-//   - Claims `lctx.generated` + `_globalHookOwners` atomically at the *end* of a
-//     successful emission — never mid-flight, never before TypeInfo is emitted.
 
-// Emit a minimal msTypeInfo for a class/interface with no RC fields. Needed so
-// `msAllocTyped(sizeof(T), &TTypeInfo)` links; destroyFn / traceFn are null.
-function emitMinimalTypeInfo(cName: string, typeName: string, objType: Type, loc: SourceLocation, lctx: LiftCtx): void {
-	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
-	const baseTypeName = classBaseName(objType);
-	if (baseTypeName != "") {
-		keys.push("base");
-		vals.push(makeString(baseTypeName, loc));
-	}
-	keys.push("display");
-	vals.push(typeInfoDisplay(typeName, lctx, loc));
-	const obj = makeObjectLiteral(keys, vals, loc);
-	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
-}
-
-// Emit the full msTypeInfo for a class/interface with RC fields. destroyFn
-// points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
-function emitFullTypeInfo(cName: string, typeName: string, objType: Type, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
-	const traceFn = hasCycles ? makeTypedIdentResolved(attachedOpSym(cName + "Trace", AttachedOp.AttachedTrace), null, loc) : makeNull(loc);
-	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(attachedOpSym(cName + "Destroy", AttachedOp.AttachedDestructor), null, loc)];
-	const baseTypeName = classBaseName(objType);
-	if (baseTypeName != "") {
-		keys.push("base");
-		vals.push(makeString(baseTypeName, loc));
-	}
-	keys.push("display");
-	vals.push(typeInfoDisplay(typeName, lctx, loc));
-	const obj = makeObjectLiteral(keys, vals, loc);
-	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
-}
-
-function typeInfoDisplay(typeName: string, lctx: LiftCtx, loc: SourceLocation): Node {
-	const names: string[] = [];
-	let current = typeName;
-	while (current != "") {
-		names.push(current);
-		current = getBaseClass(current, lctx);
-	}
-	const entries: Node[] = [];
-	for (let i = names.length - 1; i >= 0; i -= 1) entries.push(makeString(names[i], loc));
-	return createNodeAt(NodeKind.ArrayLiteral, { elements: entries }, loc);
-}
 
 // Emit the <T>Dup hook. Ref types (class/interface) get the incref shortcut;
 // value types copy through <T>Copy. Signature identical to the paired Ref/val
 // dup emission in the old Path A / Path B, just deduplicated.
 function emitDup(typeName: string, cName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const dupStmts: Node[] = [];
-	const srcSym = makeSymbol("src", SymbolKind.Variable, classType != null ? classType : objType, false);
-	const resultSym = makeSymbol("$result", SymbolKind.Variable, classType != null ? classType : objType, true);
+	const srcSym = liftSym(lctx, SymbolKind.Variable, "src", classType != null ? classType : objType);
+	const resultSym = liftSym(lctx, SymbolKind.Variable, "$result", classType != null ? classType : objType, true);
 	const resultDecl = makeVarDecl("$result", makeIdentResolved(srcSym, loc), DeclKind.Let, loc);
 	resultDecl.resolvedSym = resultSym;
 	if (isRef) {
@@ -1574,53 +1439,36 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 	const dupType = classType != null ? classType : objType;
 	setHookParamType(dupNode, 0, dupType);
 	setHookReturnType(dupNode, dupType);
-	const sym = markGeneratedOp(dupNode, cName + "Dup");
+	const sym = liftOp(dupNode, objType, objType, AttachedOp.AttachedDup, cName + "Dup");
 	lctx.collector.push(dupNode);
 	return sym;
 }
 
-// `emitTypeInfo` gates whether this call should push the `<T>TypeInfo`
-// global + init to the collector. Only the DEFINING module should emit —
-// consumer modules (walker-driven) still emit hooks (in the first-claimer
-// pattern) but skip TypeInfo to avoid duplicate-symbol link errors with
-// codegen's `ensureTypeInfoDef` path. processDecl passes `true`;
-// scanForAnonStructTypes / fillBody field-recursion pass `false`.
-function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type, emitTypeInfo: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type, declaring: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	// ----- Guards (order matches old ensureTypeHooks for perf parity) -----
 	if (typeName == "") return;
 	if (hasGenericParams(objType)) return;
 	const cName = hookCName(typeName, objType, lctx);
-	if (nameSetContains(lctx.generated, cName) || nameSetContains(lctx.trivial, cName)) {
-		checkLiftedOps(objType, cName);
+	const typeId = opTypeKey(objType);
+	if (nameSetContains(lctx.generated, typeId) || nameSetContains(lctx.trivial, typeId)) {
 		aliasLiftedOps(orig, objType);
 		return;
 	}
-	// Global dedup. Split: hooks-owned blocks hook emission, TypeInfo-owned
-	// blocks TypeInfo emission. When defining module (emitTypeInfo=true) sees
-	// hooks-owned but !typeInfo-owned, it still needs to enter and emit the
-	// TypeInfo — that's the race the unified entry fixes. Otherwise skip.
-	const hooksOwned = isGloballyOwned(cName);
-	if (hooksOwned) {
-		checkLiftedOps(objType, cName);
+	if (hasLiftedOp(objType, AttachedOp.AttachedDestructor)) {
 		aliasLiftedOps(orig, objType);
+		return;
 	}
-	if (hooksOwned && (!emitTypeInfo || isTypeInfoGloballyOwned(cName))) return;
-	if (nameSetContains(lctx.generating, cName)) return;
-	nameSetAdd(lctx.generating, cName);
+	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(orig, lctx))) return;
+	if (nameSetContains(lctx.generating, typeId)) return;
+	nameSetAdd(lctx.generating, typeId);
 	liftInstanceBaseOps(orig, lctx, loc);
 
 	// ----- Resolve category via symbol lookup (matches old ensureTypeHooks) -----
 	let isClassOrInterface = refType != null;
 	let isCrossModuleClass = false;
 	if (lctx.checkerCtx != null) {
-		const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
+		const sym = objType.sym;
 		if (sym != null) {
-			if (sym.symbolKind == SymbolKind.TypeAlias
-				&& sym.symbolType != null
-				&& sym.symbolType.kind == TypeKind.Ref) {
-				nameSetAdd(lctx.generated, cName);
-				return;
-			}
 			if (sym.symbolKind == SymbolKind.Class
 				|| sym.symbolKind == SymbolKind.Actor
 				|| sym.symbolKind == SymbolKind.Interface) {
@@ -1631,33 +1479,12 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		}
 	}
 
-	// Lambda-lifted env InterfaceDecls (`$Env_*`) have no registered symbol.
-	// They're heap-allocated ref types → must use HiddenDeref on `self` in hook
-	// bodies. Synthesize a Ref wrapper so the classType path runs.
-	if (typeName.length > 5 && typeName.startsWith("$Env_")) {
-		isClassOrInterface = true;
-		if (refType == null) refType = createRef(objType);
-		isCrossModuleClass = false;
-	}
-
-	if (objType.kind == TypeKind.Distinct ? !hasAnyUserHook(typeName, lctx, objType) : objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return;
-
-	// Cross-module class/interface: defer to defining module. Consumer-path
-	// callers (emitTypeInfo=false) mark as seen locally and bail; the defining
-	// module's processDecl (emitTypeInfo=true) emits both hooks and TypeInfo.
-	if (isCrossModuleClass && !emitTypeInfo) {
-		checkLiftedOps(objType, cName);
+	if (isCrossModuleClass && !declaring) {
 		aliasLiftedOps(orig, objType);
-		nameSetAdd(lctx.generated, cName);
+		nameSetAdd(lctx.generated, typeId);
 		return;
 	}
 
-	const shouldEmitHooks = !hooksOwned;
-	// Union covers `Ref<Union>` wrapped via TypeAlias (e.g. JsonValue) — see fixedbugs/bug037.
-	const isHeapAllocated = isClassOrInterface || objType.kind == TypeKind.Union;
-	const shouldEmitTypeInfo = emitTypeInfo && isHeapAllocated && !isTypeInfoGloballyOwned(cName);
-
-	// No RC fields → minimal TypeInfo only (for class/interface) and skip hooks.
 	// Exception (Nim parity, `produceSym` in liftdestructors.nim:1180): plain
 	// value-type Struct still emits empty-body hooks so container iteration
 	// (e.g. `HashSet__numberDestroy` calling `HashSetEntry__numberDestroy` per
@@ -1673,15 +1500,11 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	// unconditionally-emitted per-field call, so the empty-body hook must exist to link.
 	// Primitive/string unions (`type X = "a" | "b"` → msString) still skip — their hooks
 	// would touch `_tag` on a non-tagged value.
-	if (!typeNeedsHooks(objType, lctx, loc) && !hasAnyUserHook(typeName, lctx, objType)) {
+	if (!typeNeedsHooks(objType, lctx, loc) && !hasAnyUserHook(orig, lctx)) {
 		const isPlainValueAggregate = !isClassOrInterface
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
 		if (!isPlainValueAggregate) {
-			if (shouldEmitTypeInfo) {
-				emitMinimalTypeInfo(cName, typeName, objType, loc, lctx);
-				claimGlobalTypeInfo(cName);
-			}
-			nameSetAdd(lctx.trivial, cName);
+			nameSetAdd(lctx.trivial, typeId);
 			return;
 		}
 	}
@@ -1689,289 +1512,91 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	const classType = isClassOrInterface ? refType : null;
 	let hasCycles = false;
 
-	if (shouldEmitHooks) {
-		const destroySym = generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
-		const copySym = generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedAsgn, copySym);
-		const sinkSym = generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
-		const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
-		setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
-		setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
-		setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
-		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   wasMovedSym);
+	for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {
+		liftedOp(objType, attachedOpOf(hook), cName + hookSuffix(hook), null);
+	}
+	const destroySym = generateHook("destroy",  typeName, cName, objType, orig, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
+	const copySym = generateHook("copy",     typeName, cName, objType, orig, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedAsgn, copySym);
+	const sinkSym = generateHook("sink",     typeName, cName, objType, orig, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
+	const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, orig, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
+	setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
+	setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
+	setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
+	setAttachedOp(objType, AttachedOp.AttachedWasMoved,   wasMovedSym);
 
-		const visited: NameSet = createNameSet();
-		hasCycles = isCyclicType(objType, lctx, visited);
-		if (hasCycles) {
-			const traceSym = generateHook("trace", typeName, cName, objType, classType, lctx, loc);
-			setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
-			setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
-		}
-
-		const userDup = getUserDefinedHookSym(typeName, "dup", lctx, objType);
-		if (userDup != null) {
-			bindOpByKey(objType, AttachedOp.AttachedDup, userDup);
-			setAttachedOp(objType, AttachedOp.AttachedDup, userDup);
-		} else {
-			const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
-			setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
-			setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
-		}
-		aliasLiftedOps(orig, objType);
-
-		claimGlobal(cName);
-	} else if (shouldEmitTypeInfo) {
-		// Hooks live elsewhere but we still need hasCycles to populate TypeInfo.
-		const visited: NameSet = createNameSet();
-		hasCycles = isCyclicType(objType, lctx, visited);
+	const visited: NameSet = createNameSet();
+	hasCycles = isCyclicType(objType, lctx, visited);
+	if (hasCycles) {
+		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
+		setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 
-	if (shouldEmitTypeInfo) {
-		emitFullTypeInfo(cName, typeName, objType, hasCycles, lctx, loc);
-		claimGlobalTypeInfo(cName);
+	const userDup = getUserDefinedHookSym(orig, "dup", lctx);
+	if (userDup != null) {
+		bindOpByKey(objType, AttachedOp.AttachedDup, userDup);
+		setAttachedOp(objType, AttachedOp.AttachedDup, userDup);
+	} else {
+		const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
+		setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
 	}
+	aliasLiftedOps(orig, objType);
 
-	nameSetAdd(lctx.generated, cName);
+	nameSetAdd(lctx.generated, typeId);
 }
-
-// ===== (Removed: `ensureTypeHooks` and `ensureTypeHooksForType`.)
-//
-// Both old entry points replaced by the unified `ensureHooks(typeName, objType,
-// refType, emitTypeInfo, lctx, loc)` above. The old names lived here
-// historically but diverged — one emitted TypeInfo, the other didn't, and
-// the guard registry could race between them. See the block comment on
-// `ensureHooks` for the semantics.
 
 // ===== Auto-Generated == (reference parity: generic proc `==`*[T: tuple|object]) =====
 // Generates TypeName_eq(a, b): boolean with field-by-field comparison.
 // Reference implementation uses compile-time `fields()` magic iterator unrolling; we do the same here
 // by iterating typeNames/typeChildren at transform time.
 
-function isPayloadUnion(t: Type): boolean {
-	if (t.kind != TypeKind.Union) return false;
-	if (!isPrimitiveOnlyUnion(t)) return false;
-	for (const m of t.typeChildren) {
-		if (m == null || m.kind == TypeKind.Null) return false;
-	}
-	return true;
-}
-
-function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, lctx: LiftCtx, loc: SourceLocation): Node {
+function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, loc: SourceLocation): Node {
 	let acc = makeBinary(makeMember(clonePath(aField, loc), "_tag", loc), "===", makeMember(clonePath(bField, loc), "_tag", loc), loc);
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
 		const vName = `v${vi}`;
-		const memberEq = fieldEqExpr(makeMember(clonePath(aField, loc), vName, loc), makeMember(clonePath(bField, loc), vName, loc), u.typeChildren[vi], lctx, loc);
+		const memberEq = unionMemberEq(makeMember(clonePath(aField, loc), vName, loc), makeMember(clonePath(bField, loc), vName, loc), u.typeChildren[vi], loc);
 		const inactive = makeBinary(makeMember(clonePath(aField, loc), "_tag", loc), "!==", makeNumber(vi, loc), loc);
 		acc = makeBinary(acc, "&&", makeBinary(inactive, "||", memberEq, loc), loc);
 	}
 	return acc;
 }
 
-function nullableEqJS(aField: Node, bField: Node, payload: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	const aPresent = makeBinary(clonePath(aField, loc), "!==", makeNull(loc), loc);
-	const bPresent = makeBinary(clonePath(bField, loc), "!==", makeNull(loc), loc);
-	const payloadEq = fieldEqExpr(clonePath(aField, loc), clonePath(bField, loc), payload, lctx, loc);
-	const bothEqual = makeBinary(makeBinary(aPresent, "&&", bPresent, loc), "&&", payloadEq, loc);
-	return makeBinary(makeBinary(aField, "===", bField, loc), "||", bothEqual, loc);
+function unionMemberEq(aMember: Node, bMember: Node, memberType: Type, loc: SourceLocation): Node {
+	if (isStringLike(memberType)) {
+		return makeCall(runtimeRef("msStringEquals", loc), [aMember, bMember], loc);
+	}
+	return makeBinary(aMember, "===", bMember, loc);
 }
 
-function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	if (fieldType.kind == TypeKind.Set) {
-		const repr = setRepr(fieldType);
-		if (repr != null) return fieldEqExpr(aField, bField, repr, lctx, loc);
-	}
-	if (isMaybeType(fieldType)) {
-		ensureCarrierEq(fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	if (fieldType.kind == TypeKind.Struct && fieldType.typeName != "") {
-		ensureStructEq(fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	if (fieldType.kind == TypeKind.SizedArray) {
-		ensureSizedArrayEq(fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
-	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
-	if (fieldType.kind == TypeKind.Tuple) {
-		const tn = tupleTypeName(fieldType);
-		ensureTupleEq(tn, fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	if (fieldType.kind == TypeKind.GenericInstance) {
-		const gi = unwrapGenericInstance(fieldType);
-		if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
-			ensureInstanceEq(gi.mangledName, gi.body, fieldType, lctx, loc);
-			return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-		}
-	}
-	if (lctx.jsBackend) {
-		return makeBinary(aField, "===", bField, loc);
-	}
-	// String fields — reference parity: genStrEquals → eqStrings().
-	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
-	if (isStringLike(fieldType)) {
-		return makeCall(runtimeRef("msStringEquals", loc), [aField, bField], loc);
-	}
-	// bigint fields are msBigInt* — `===` would answer identity, not value.
-	if (fieldType.kind == TypeKind.BigInt) {
-		return makeBinary(makeCall(runtimeRef("msBigIntCmp", loc), [aField, bField], loc), "===", makeNumber(0, loc), loc);
-	}
-	if (isPayloadUnion(fieldType)) {
-		return payloadUnionEqExpr(aField, bField, fieldType, lctx, loc);
-	}
-	// Array fields — arrays are C structs, can't use ==.
-	// JavaScript semantics: === is reference equality (same object).
-	// Compare data pointers — same backing store = same array.
-	// Deep comparison belongs in stdlib (e.g. deepEqual).
-	if (fieldType.kind == TypeKind.Array) {
-		const pA = makeMember(aField, "p", loc);
-		const pB = makeMember(bField, "p", loc);
-		return makeBinary(pA, "===", pB, loc);
-	}
-	// Closure fields — compare function pointer and environment separately (reference parity)
-	if (fieldType.kind == TypeKind.Function) {
-		const fnA = makeMember(aField, "fn", loc);
-		const fnB = makeMember(bField, "fn", loc);
-		const envA = makeMember(aField, "env", loc);
-		const envB = makeMember(bField, "env", loc);
-		return makeBinary(makeBinary(fnA, "===", fnB, loc), "&&", makeBinary(envA, "===", envB, loc), loc);
-	}
-	// For all other types (primitives, enums, etc): use === directly
-	return makeBinary(aField, "===", bField, loc);
-}
+// ===== Ensure Eq (on-demand: only for unions actually compared) =====
 
-function generateEq(typeName: string, objType: Type, orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	// Build: function TypeName_eq(a: TypeName, b: TypeName): boolean {
-	//   if (a.field1 !== b.field1) return false;
-	//   if (a.field2 !== b.field2) return false;
-	//   ...
-	//   return true;
-	// }
-	const buf: Node[] = [];
-	const aSym = makeSymbol("a", SymbolKind.Variable, objType, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, objType, false);
-	for (let i = 0; i < objType.typeNames.length; i += 1) {
-		const fieldName = objType.typeNames[i];
-		const fieldType = objType.typeChildren[i];
-		const aField = makeMember(makeTypedIdentResolved(aSym, objType, loc), fieldName, loc);
-		const bField = makeMember(makeTypedIdentResolved(bSym, objType, loc), fieldName, loc);
-
-		// Generate: if (!fieldEq) return false;
-		const eqExpr = fieldEqExpr(aField, bField, fieldType, lctx, loc);
-		const notEq = makeUnary("!", eqExpr, loc);
-		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
-	}
-	buf.push(makeReturn(makeBool(true, loc), loc));
-	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
-	setHookParamType(eqFn, 0, objType);
-	setHookParamType(eqFn, 1, objType);
-	setOpByKey(objType, AttachedOp.AttachedEq, markGeneratedOp(eqFn, typeName + "Eq"));
-	if (orig != objType) aliasOpByKey(orig, objType, AttachedOp.AttachedEq);
-	lctx.collector.push(eqFn);
-}
-
-// ===== Ensure Eq (on-demand: only for struct/interface types actually compared) =====
-
-function claimEq(key: string, lctx: LiftCtx): boolean {
+function claimEq(t: Type, op: AttachedOp, lctx: LiftCtx): boolean {
+	const key = opKey(t, op);
 	if (nameSetContains(lctx.generated, key)) return false;
 	nameSetAdd(lctx.generated, key);
 	if (lctx.jsBackend && !_jsProgramScope) return true;
-	if (isGloballyOwned(key)) return false;
-	claimGlobal(key);
-	return true;
+	return !hasLiftedOp(t, op);
 }
 
-function ensureInstanceEq(mangledName: string, body: Type, orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	if (!claimEq(mangledName + "Eq", lctx)) {
-		checkOpByKey(body, AttachedOp.AttachedEq, mangledName + "Eq");
-		aliasOpByKey(orig, body, AttachedOp.AttachedEq);
-		return;
-	}
-	generateEq(mangledName, body, orig, lctx, loc);
-}
-
-function ensureStructEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
-	const cName = hookCName(t.typeName, t, lctx);
-	if (claimEq(cName + "Eq", lctx)) generateEq(cName, t, t, lctx, loc);
-	else checkOpByKey(t, AttachedOp.AttachedEq, cName + "Eq");
+function ensureUnionEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const cName = t.typeName == "" ? anonUnionCName(t) : hookCName(t.typeName, t, lctx);
+	if (claimEq(t, AttachedOp.AttachedEq, lctx)) generateUnionEq(cName, t, lctx, loc);
 	return cName + "Eq";
 }
 
-function ensureSizedArrayEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
-	const name = sizedArrayHookName(t);
-	if (claimEq(name + "Eq", lctx)) generateSizedArrayEq(name, t, lctx, loc);
-	else checkOpByKey(t, AttachedOp.AttachedEq, name + "Eq");
-	return name + "Eq";
-}
-
-function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	const elem = t.typeReturn;
-	if (elem == null) throw new Error(`internal: fixed array '${name}' has no element type`);
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
-	const counter = "$i_" + lctx.tempCounter.toString();
-	lctx.tempCounter = lctx.tempCounter + 1;
-	const ai = makeArrayAccess(makeTypedIdentResolved(aSym, t, loc), makeIdent(counter, loc), loc);
-	const bi = makeArrayAccess(makeTypedIdentResolved(bSym, t, loc), makeIdent(counter, loc), loc);
-	ai.nodeType = elem;
-	bi.nodeType = elem;
-	const differs = makeUnary("!", fieldEqExpr(ai, bi, elem, lctx, loc), loc);
-	const next = makeBinary(makeIdent(counter, loc), "+", makeNumber(1, loc), loc);
-	const step = makeBlock([
-		makeIf(differs, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc),
-		makeExprStmt(makeAssign(makeIdent(counter, loc), next, loc), loc),
-	], loc);
-	const length = makeNumber(t.typeValue as number, loc);
-	const bound = makeBinary(makeIdent(counter, loc), "<", length, loc);
-	const buf: Node[] = [
-		makeVarDecl(counter, makeNumber(0, loc), DeclKind.Let, loc),
-		makeWhile(bound, step, loc),
-		makeReturn(makeBool(true, loc), loc),
-	];
-	const body = makeBlock(buf, loc);
-	const eqFn = makeFnDecl(name + "Eq", [aSym, bSym], [name, name], body, "", "boolean", loc);
+function generateUnionEq(typeName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
+	const same = payloadUnionEqExpr(makeTypedIdentResolved(aSym, t, loc), makeTypedIdentResolved(bSym, t, loc), t, loc);
+	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock([makeReturn(same, loc)], loc), "", "boolean", loc);
 	setHookParamType(eqFn, 0, t);
 	setHookParamType(eqFn, 1, t);
-	setOpByKey(t, AttachedOp.AttachedEq, markGeneratedOp(eqFn, name + "Eq"));
-	lctx.collector.push(eqFn);
-}
-
-function ensureCarrierEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
-	const carrierName = typeNameOf(t);
-	if (!claimEq(carrierName + "Eq", lctx)) {
-		checkOpByKey(t, AttachedOp.AttachedEq, carrierName + "Eq");
-		return carrierName + "Eq";
-	}
-	if (lctx.jsBackend && isMaybeType(t)) {
-		generateNullableEqJS(carrierName, t, lctx, loc);
-	} else {
-		generateEq(carrierName, t, t, lctx, loc);
-	}
-	return carrierName + "Eq";
-}
-
-function generateNullableEqJS(
-	carrierName: string,
-	t: Type,
-	lctx: LiftCtx,
-	loc: SourceLocation,
-): void {
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
-	const a = makeTypedIdentResolved(aSym, null, loc);
-	const b = makeTypedIdentResolved(bSym, null, loc);
-	const compare = nullableEqJS(a, b, unwrapMaybeType(t), lctx, loc);
-	const body = makeBlock([makeReturn(compare, loc)], loc);
-	const names = [carrierName, carrierName];
-	const eqFn = makeFnDecl(carrierName + "Eq", [aSym, bSym], names, body, "", "boolean", loc);
-	setHookParamType(eqFn, 0, t);
-	setHookParamType(eqFn, 1, t);
-	setOpByKey(t, AttachedOp.AttachedEq, markGeneratedOp(eqFn, carrierName + "Eq"));
+	liftOp(eqFn, t, t, AttachedOp.AttachedEq, typeName + "Eq");
 	lctx.collector.push(eqFn);
 }
 
@@ -1986,8 +1611,8 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
-	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
-	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, hookParamT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
+	const s2 = isUnary ? s1 : liftSym(lctx, SymbolKind.Variable, "src", hookParamT);
 
 	if (!isUnary) {
 		buf.items.push(makeIf(
@@ -2016,14 +1641,14 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	const paramType = createVar(t);
 	setHookParamType(fnNode, 0, paramType);
 	if (!isUnary) setHookParamType(fnNode, 1, paramType);
-	setOpByKey(t, attachedOpOf(hook), markLifecycleOp(fnNode, tupleName + suffix, hook));
+	liftOp(fnNode, t, t, attachedOpOf(hook), tupleName + suffix);
 	lctx.collector.push(fnNode);
 }
 
 // Probe whether any tuple element emits cleanup (mirror typeNeedsHooks for structs).
 function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	const probe = newBuf();
-	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
+	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const visited: NameSet = createNameSet();
 		fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "_" + i.toString(), t.typeChildren[i], lctx, probe, visited, loc);
@@ -2043,25 +1668,24 @@ function ensureAnonUnionHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): stri
 	}
 	if (allPrimitive) return "";
 	const name = anonUnionCName(t);
-	if (!nameSetContains(lctx.generated, name) && !isGloballyOwned(name)) {
+	if (!nameSetContains(lctx.generated, opTypeKey(t)) && !hasLiftedOp(t, AttachedOp.AttachedDestructor)) {
 		if (!typeNeedsHooks(t, lctx, loc)) return "";
 		ensureHooks(name, t, null as unknown as Type, t, false, lctx, loc);
 	}
-	return namedTypeHasHooks(name, lctx) ? name : "";
+	return namedTypeHasHooks(t, lctx) ? name : "";
 }
 
 function ensureTupleHooks(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
-	if (nameSetContains(lctx.generated, tupleName) || isGloballyOwned(tupleName)) {
-		checkLiftedOps(t, tupleName);
-		nameSetAdd(lctx.generated, tupleName);
+	const typeId = opTypeKey(t);
+	if (nameSetContains(lctx.generated, typeId) || hasLiftedOp(t, AttachedOp.AttachedDestructor)) {
+		nameSetAdd(lctx.generated, typeId);
 		return;
 	}
-	if (nameSetContains(lctx.generating, tupleName)) return;
+	if (nameSetContains(lctx.generating, typeId)) return;
 	if (!tupleNeedsHooks(t, lctx, loc)) return;
-	nameSetAdd(lctx.generating, tupleName);
-	nameSetAdd(lctx.generated, tupleName);
-	claimGlobal(tupleName);
+	nameSetAdd(lctx.generating, typeId);
+	nameSetAdd(lctx.generated, typeId);
 	generateTupleHook("destroy",  tupleName, t, lctx, loc);
 	generateTupleHook("copy",     tupleName, t, lctx, loc);
 	generateTupleHook("sink",     tupleName, t, lctx, loc);
@@ -2072,7 +1696,7 @@ function sizedArrayNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	const elem = t.typeReturn;
 	if (elem == null) return false;
 	const probe = newBuf();
-	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
+	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "", elem, lctx, probe, createNameSet(), loc);
 	return probe.items.length > 0;
 }
@@ -2083,8 +1707,8 @@ function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftC
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
-	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
-	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, hookParamT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
+	const s2 = isUnary ? s1 : liftSym(lctx, SymbolKind.Variable, "src", hookParamT);
 	if (!isUnary) {
 		buf.items.push(makeIf(
 			makeBinary(makeIdentResolved(s1, loc), "===", makeIdentResolved(s2, loc), loc),
@@ -2101,38 +1725,26 @@ function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftC
 		: makeFnDecl(name + suffix, [s1, s2], [name, name], makeBlock(buf.items, loc), "", "void", loc);
 	setHookParamType(fnNode, 0, createVar(t));
 	if (!isUnary) setHookParamType(fnNode, 1, createVar(t));
-	setOpByKey(t, attachedOpOf(hook), markLifecycleOp(fnNode, name + suffix, hook));
+	liftOp(fnNode, t, t, attachedOpOf(hook), name + suffix);
 	lctx.collector.push(fnNode);
 }
 
 function ensureSizedArrayHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (t == null || t.kind != TypeKind.SizedArray || t.typeReturn == null) return;
 	const name = sizedArrayHookName(t);
-	if (nameSetContains(lctx.generated, name) || isGloballyOwned(name)) {
-		checkLiftedOps(t, name);
-		nameSetAdd(lctx.generated, name);
+	const typeId = opTypeKey(t);
+	if (nameSetContains(lctx.generated, typeId) || hasLiftedOp(t, AttachedOp.AttachedDestructor)) {
+		nameSetAdd(lctx.generated, typeId);
 		return;
 	}
-	if (nameSetContains(lctx.generating, name)) return;
+	if (nameSetContains(lctx.generating, typeId)) return;
 	if (!sizedArrayNeedsHooks(t, lctx, loc)) return;
-	nameSetAdd(lctx.generating, name);
-	nameSetAdd(lctx.generated, name);
-	claimGlobal(name);
+	nameSetAdd(lctx.generating, typeId);
+	nameSetAdd(lctx.generated, typeId);
 	generateSizedArrayHook("destroy",  name, t, lctx, loc);
 	generateSizedArrayHook("copy",     name, t, lctx, loc);
 	generateSizedArrayHook("sink",     name, t, lctx, loc);
 	generateSizedArrayHook("wasMoved", name, t, lctx, loc);
-}
-
-// On-demand msTuple_<hash>Eq for a tuple compared as a struct/tuple field (fieldEqExpr).
-// Shares the `tupleName + "Eq"` dedup key with operatorLower's pending-ops, so one body.
-function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
-	if (!claimEq(tupleName + "Eq", lctx)) {
-		checkOpByKey(t, AttachedOp.AttachedEq, tupleName + "Eq");
-		return;
-	}
-	generateTupleEq(tupleName, t, lctx, loc);
 }
 
 // ===== Tuple Comparison Operators (reference parity: reference core lines 1973-1996) =====
@@ -2147,38 +1759,11 @@ function tupleField(obj: Node, idx: number, lctx: LiftCtx, loc: SourceLocation):
 	return field;
 }
 
-// Generate element-by-element equality for tuples.
-// Reference: proc `==`*[T: tuple|object](x, y: T): bool =
-//        for a, b in fields(x, y): if a != b: return false
-//        return true
-function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	const buf: Node[] = [];
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
-	let i = 0;
-	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, t, loc), i, lctx, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, t, loc), i, lctx, loc);
-		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
-		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
-		i += 1;
-	}
-	buf.push(makeReturn(makeBool(true, loc), loc));
-	const teqFn = makeFnDecl(tupleName + "Eq", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
-	setHookParamType(teqFn, 0, t);
-	setHookParamType(teqFn, 1, t);
-	setOpByKey(t, AttachedOp.AttachedEq, markGeneratedOp(teqFn, tupleName + "Eq"));
-	lctx.collector.push(teqFn);
-}
-
 // On-demand msTuple_<hash>Lt for a tuple ordered as a tuple field (fieldOrderExpr).
-// Shares the `tupleName + "Lt"` dedup key with operatorLower's pending-ops, so one body.
+// Shares the claim on the tuple's `<` with operatorLower's pending ops, so one body.
 function ensureTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
-	if (!claimEq(tupleName + "Lt", lctx)) {
-		checkOpByKey(t, AttachedOp.AttachedLt, tupleName + "Lt");
-		return;
-	}
+	if (!claimEq(t, AttachedOp.AttachedLt, lctx)) return;
 	generateTupleLt(tupleName, t, lctx, loc);
 }
 
@@ -2211,11 +1796,12 @@ function fieldOrderExpr(aField: Node, bField: Node, fieldType: Type, op: string,
 //        return false    (`<=` returns true)
 function generateTupleOrder(tupleName: string, suffix: string, op: AttachedOp, whenEqual: boolean, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const fieldType = t.typeChildren[i];
+		if (isNullableBigInt(fieldType)) addError(lctx.checkerCtx, "a tuple element of type 'bigint | null' has no order: compare it with null first", loc.line, loc.column);
 		const less = fieldOrderExpr(tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc), tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc), fieldType, "<", lctx, loc);
 		buf.push(makeIf(less, makeBlock([makeReturn(makeBool(true, loc), loc)], loc), null, loc));
 		const greater = fieldOrderExpr(tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc), tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc), fieldType, ">", lctx, loc);
@@ -2226,7 +1812,7 @@ function generateTupleOrder(tupleName: string, suffix: string, op: AttachedOp, w
 	const fn = makeFnDecl(tupleName + suffix, [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(fn, 0, t);
 	setHookParamType(fn, 1, t);
-	setOpByKey(t, op, markGeneratedOp(fn, tupleName + suffix));
+	liftOp(fn, t, t, op, tupleName + suffix);
 	lctx.collector.push(fn);
 }
 
@@ -2248,8 +1834,8 @@ function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: So
 	const buf = newBuf();
 	const hookParamT = hook == "destroy" ? arrayType : createPtr(arrayType);
 	const secondT = isTrace ? createPtr(voidType()) : arrayType;
-	const s1 = makeSymbol(isUnary || isTrace ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
-	const s2 = isUnary ? s1 : makeSymbol(isTrace ? "callback" : "src", SymbolKind.Variable, secondT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary || isTrace ? "self" : "dest", hookParamT);
+	const s2 = isUnary ? s1 : liftSym(lctx, SymbolKind.Variable, isTrace ? "callback" : "src", secondT);
 
 	if (hook == "destroy") {
 		const selfNode = makeIdentResolved(s1, loc);
@@ -2437,39 +2023,32 @@ function scanCtrlFlowForArrayTypes(s: Node, lctx: LiftCtx): void {
 
 // ===== Anonymous Struct Type Scanning =====
 
-// Walk the AST to find anonymous struct types (typeName starts with "__anon").
-// These have no InterfaceDecl so processDecl doesn't see them.
-// Ensures lifecycle hooks are generated so DRC destroy calls link correctly.
-function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocation): void {
-	// Walk entire AST; ensure lifecycle hooks for ANY named struct that needs them.
-	// Covers anonymous structs (__anon*), programmatically-created structs
-	// (e.g. IteratorResult from createIterator), monomorphized class types
-	// (HashMap<K,V>, HashSet<K>), and any other type without a declared AST node.
-	const paramTypes: Type[] = [];
+function scanTypeForOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	while ((t.kind == TypeKind.Var || t.kind == TypeKind.Sink) && t.typeReturn != null) {
+		t = t.typeReturn;
+	}
+	if (lctx.scannedTypes.has(t)) return;
+	lctx.scannedTypes.add(t);
+	if (t.kind == TypeKind.Function) {
+		for (const pt of t.typeChildren) {
+			if (pt != null) scanTypeForOps(pt, lctx, loc);
+		}
+	}
+	liftTypeOps(t, lctx, loc);
+}
+
+function scanForAnonStructTypes(program: Node, lctx: LiftCtx): void {
 	walkNode(program, (node: Node): Node => {
-		if (node.kind == NodeKind.FunctionDecl && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
-			for (const pt of node.nodeType.typeChildren) {
-				if (pt != null) paramTypes.push(pt.kind == TypeKind.Var && pt.typeReturn != null ? pt.typeReturn : pt);
-			}
-		}
-		if (node.nodeType != null && !lctx.scannedTypes.has(node.nodeType)) {
-			lctx.scannedTypes.add(node.nodeType);
-			liftTypeOps(node.nodeType, lctx, node.location);
-		}
+		if (node.nodeType != null) scanTypeForOps(node.nodeType, lctx, node.location);
 		return node;
 	});
-	for (const pt of paramTypes) {
-		if (lctx.scannedTypes.has(pt)) continue;
-		lctx.scannedTypes.add(pt);
-		liftTypeOps(pt, lctx, loc);
-	}
 }
 
 function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type>): Type | null {
 	if (t == null || seen.has(t)) return null;
 	seen.add(t);
 	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
-	if (elem != null && elem.kind == TypeKind.Distinct && elem.typeName != "" && hasAnyUserHook(elem.typeName, lctx, elem)) return elem;
+	if (elem != null && elem.kind == TypeKind.Distinct && hasAnyUserHook(elem, lctx)) return elem;
 	for (const child of t.typeChildren) {
 		const hit = hookedDistinctElement(child, lctx, seen);
 		if (hit != null) return hit;
@@ -2480,8 +2059,8 @@ function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type
 function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (lctx.jsBackend || lctx.checkerCtx == null) return;
 	const elem = hookedDistinctElement(t, lctx, new HashSet<Type>());
-	if (elem == null || nameSetContains(lctx.refusedArrayElems, elem.typeName)) return;
-	nameSetAdd(lctx.refusedArrayElems, elem.typeName);
+	if (elem == null || lctx.refusedArrayElems.has(elem)) return;
+	lctx.refusedArrayElems.add(elem);
 	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
 }
 
@@ -2489,15 +2068,12 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) { liftTypeOps(nullableRef, lctx, loc); return; }
 	refuseArrayOfHookedDistinct(t, lctx, loc);
-		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
-		// with the defining module's emission or codegen's ensureTypeInfoDef.
-		//
 		// Skip match-type variant structs (typeName like "Alias.Key") — their
 		// hooks are emitted via the parent Union's `<Union>_v<N>` helper
 		// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
 		// invalid C identifier anyway).
 		if (t.kind == TypeKind.Struct && t.typeName != ""
-			&& t.typeName.indexOf(".") < 0) {
+			&& t.typeName.indexOf(".") < 0 && hasTypeIdentity(t)) {
 			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
 		} else if (t.kind == TypeKind.Struct && t.typeName == ""
 			&& t.typeNames.length > 0
@@ -2545,7 +2121,7 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 		if (t.kind == TypeKind.Array
 			|| (t.kind == TypeKind.Ref && t.typeReturn != null
 				&& t.typeReturn.kind == TypeKind.Array)) {
-			scanTypeForArrays(t, lctx, new HashSet<Type>());
+			scanRootForArrays(t, lctx);
 		}
 		// A bare tuple local (reassigned or dropped) needs the same named hooks, but
 		// fillBody only emits them for tuples that appear as a struct field — pre-register
@@ -2565,7 +2141,6 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 
 // Look up the declared type's sym and dispatch to `ensureHooks`. Pulled out of
 // processDecl's match arms so all three decl kinds share one resolve+dispatch.
-// processDecl is the DEFINING-module path — passes emitTypeInfo=true.
 function namesAnotherType(sym: Symbol, objType: Type, typeName: string): boolean {
 	return sym.symbolKind == SymbolKind.TypeAlias
 		&& sym.symbolType.kind != TypeKind.Ref
@@ -2573,53 +2148,39 @@ function namesAnotherType(sym: Symbol, objType: Type, typeName: string): boolean
 		&& objType.typeName != typeName;
 }
 
-function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation, declSym: Symbol | null): void {
-	if (typeName == "") return;
+function declNameForError(node: Node): string {
+	if (node.kind == NodeKind.ClassDecl) return (node.data as ClassDeclData).className;
+	if (node.kind == NodeKind.TypeAliasDecl) return (node.data as TypeAliasDeclData).aliasName;
+	return (node.data as InterfaceDeclData).interfaceName;
+}
+
+function ensureDeclaredHooks(sym: Symbol | null, node: Node, lctx: LiftCtx): void {
 	if (lctx.checkerCtx == null) return;
-	// Local (block-scoped) type decls are invisible to a module-scope name
-	// lookup by the time transforms run — their scope is closed. The lifted
-	// decl node still holds the symbol, so fall back to it. Not for a generic
-	// instance: its hooks come from its instantiation (fixedbugs/bug335).
-	let sym = lookupSymbol(lctx.checkerCtx.table, typeName);
-	if (sym == null && declSym != null && declSym.name == typeName && declSym.instantiatedFrom == null) sym = declSym;
-	if (sym != null && sym.symbolType != null) {
-		// TypeAlias-to-Ref: ensureHooks' category resolver handles it (same skip path).
-		const objType = unwrapRef(sym.symbolType);
-		if (objType == null) return;
-		if (namesAnotherType(sym, objType, typeName)) return;
-		const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor || sym.symbolKind == SymbolKind.Interface)
-			? sym.symbolType
-			: null as unknown as Type;
-		ensureHooks(typeName, objType, refType, objType, true, lctx, loc);
-		return;
+	if (sym == null) {
+		if (node.nodeType == null || node.nodeType.typeFlags.has(TypeFlag.Spelled)) return;
+		throw new Error(`internal: ${node.kind as number} declaration '${declNameForError(node)}' at ${node.location.line}:${node.location.column} reached hook generation without a symbol`);
 	}
-	// Sym not in checker table. This happens for lambda-lifting synthesized
-	// InterfaceDecls (env structs, typeName starts with "dollarEnv_") —
-	// transform pass synthesizes the decl AST node but doesn't register the
-	// symbol. Dispatch to ensureHooks' naming-convention fallback. Need objType
-	// from the InterfaceDecl's nodeType — caller is processDecl which already
-	// has the node, but we don't get it here. Use ensureHooks with a minimal
-	// placeholder — the naming-convention branch inside `ensureHooks` will
-	// short-circuit if it can't infer the type.
-	//
-	// Rather than plumb node through, fall through: scanForAnonStructTypes
-	// will visit references to this env type anyway (via Ref<Env> nodeType)
-	// and emit correctly via its Ref branch.
+	if (sym.symbolType == null || sym.instantiatedFrom != null) return;
+	const objType = unwrapRef(sym.symbolType);
+	if (objType == null) return;
+	if (sym.symbolKind == SymbolKind.TypeAlias && sym.symbolType.kind == TypeKind.Ref) return;
+	if (namesAnotherType(sym, objType, sym.name)) return;
+	const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor || sym.symbolKind == SymbolKind.Interface)
+		? sym.symbolType
+		: null as unknown as Type;
+	ensureHooks(sym.name, objType, refType, objType, true, lctx, node.location);
 }
 
 function processDecl(stmt: Node, lctx: LiftCtx): void {
 	match (stmt.kind) {
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
-			const d = stmt.data as InterfaceDeclData;
-			ensureHooksByName(d.interfaceName, lctx, stmt.location, stmt.resolvedSym);
+			ensureDeclaredHooks(stmt.resolvedSym, stmt, lctx);
 		},
 		NodeKind.ClassDecl => {
-			const d = stmt.data as ClassDeclData;
-			ensureHooksByName(d.className, lctx, stmt.location, stmt.resolvedSym);
+			ensureDeclaredHooks(stmt.resolvedSym, stmt, lctx);
 		},
 		NodeKind.TypeAliasDecl => {
-			const d = stmt.data as TypeAliasDeclData;
-			ensureHooksByName(d.aliasName, lctx, stmt.location, stmt.resolvedSym);
+			ensureDeclaredHooks(stmt.resolvedSym, stmt, lctx);
 		},
 		NodeKind.ExportDecl => {
 			const ed = stmt.data as ExportDeclData;
@@ -2627,6 +2188,26 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 		},
 		_ => {},
 	};
+}
+
+// A user hook declared for a distinct type binds to that type (reference bindHookToType accepts
+// tyDistinct), so the distinct owns lifted ops of its own, lifted in the module that declares it.
+function liftDistinctUserHooks(lctx: LiftCtx): void {
+	const cc = lctx.checkerCtx;
+	if (cc == null || cc.extensionRegistry == null) return;
+	for (const hook of ["destroy", "copy", "sink", "wasMoved", "trace"]) {
+		const methodName = userHookMethodName(hook);
+		if (!hasExtensionByName(cc.extensionRegistry, methodName)) continue;
+		for (const m of findAllExtensionsByName(cc.extensionRegistry, methodName)) {
+			if (m.isStatic || m.sym == null || m.sym.modulePath != cc.modulePath) continue;
+			const fnType = getExtFnType(m);
+			if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) continue;
+			let formal = fnType.typeChildren[0];
+			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref) && formal.typeReturn != null) formal = formal.typeReturn;
+			if (formal.kind != TypeKind.Distinct || formal.sym == null || formal.sym.modulePath != cc.modulePath) continue;
+			ensureHooks(formal.sym.name, formal, null as unknown as Type, formal, true, lctx, makeLoc(0, 0));
+		}
+	}
 }
 
 // ===== Main Entry Point =====
@@ -2638,6 +2219,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		generated: createNameSet(),
 		trivial: createNameSet(),
 		generating: createNameSet(),
+		helperOps: new HashMap<string, Symbol>(),
 		collector: [],
 		cyclicCache: createNameSet(),
 		nonCyclicCache: createNameSet(),
@@ -2645,59 +2227,38 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refCellTraces: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
-		refusedArrayElems: createNameSet(),
+		refusedArrayElems: new HashSet<Type>(),
 		jsBackend: jsBackend,
 	};
 }
 
-// Comparison operators operatorLower routed to generated functions: tuple ==/</<=,
-// struct ==, and == on types with no symbol (Maybe carriers, generic struct instances).
-// reference parity: reference core:1973 (==), :1980 (<=), :1989 (<) for tuples.
+// Comparison operators operatorLower routed to generated functions: tuple ordering and
+// payload-union ==. reference parity: reference core:1980 (<=), :1989 (<) for tuples.
 function tupleCompareOp(suffix: string): AttachedOp {
 	return match (suffix) {
 		"Lt" => AttachedOp.AttachedLt,
-		"Le" => AttachedOp.AttachedLe,
-		_ => AttachedOp.AttachedEq,
+		_ => AttachedOp.AttachedLe,
 	};
 }
 
 function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocation): void {
 	for (const pending of ctx.pendingTupleOps) {
 		for (const op of pending.ops) {
-			if (!claimEq(pending.tupleName + op, lctx)) {
-				checkOpByKey(pending.tupleType, tupleCompareOp(op), pending.tupleName + op);
+			if (!claimEq(pending.tupleType, tupleCompareOp(op), lctx)) {
 				continue;
 			}
 			match (op) {
-				"Eq" => { generateTupleEq(pending.tupleName, pending.tupleType, lctx, loc); },
 				"Lt" => { generateTupleLt(pending.tupleName, pending.tupleType, lctx, loc); },
 				"Le" => { generateTupleLe(pending.tupleName, pending.tupleType, lctx, loc); },
 				_ => {},
 			};
 		}
 	}
-	for (const valueType of ctx.pendingValueEqs) {
-		if (valueType.kind == TypeKind.SizedArray) {
-			ensureSizedArrayEq(valueType, lctx, loc);
-		} else {
-			ensureStructEq(valueType, lctx, loc);
-		}
-	}
-	for (const carrierType of ctx.pendingCarrierEqs) {
-		if (carrierType.kind == TypeKind.GenericInstance) {
-			const gi = unwrapGenericInstance(carrierType);
-			if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
-				ensureInstanceEq(gi.mangledName, gi.body, carrierType, lctx, loc);
-				continue;
-			}
-		}
-		if (typeNameOf(carrierType) == "") continue;
-		ensureCarrierEq(carrierType, lctx, loc);
+	for (const unionType of ctx.pendingUnionEqs) {
+		ensureUnionEq(unionType, lctx, loc);
 	}
 }
 
-// JS runs no lifetime hooks, but its == on value types calls the same
-// generated Eq; the reference's liftdestructors carries its own per-target flag.
 export function liftDestructors(program: Node, ctx: TransformContext, withHooks: boolean): Node {
 	if (ctx.checkerCtx == null) return program;
 
@@ -2708,11 +2269,11 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 		for (const stmt of pd.programStmts) {
 			processDecl(stmt, lctx);
 		}
+		liftDistinctUserHooks(lctx);
 
 		// Scan for anonymous struct types (from ObjectLiterals with no declaration).
 		// These have typeName like "__anon..." set by the checker but no InterfaceDecl.
-		const defaultLoc2 = makeLoc(0, 0);
-		scanForAnonStructTypes(program, lctx, defaultLoc2);
+		scanForAnonStructTypes(program, lctx);
 
 		// Scan for standalone array type usage
 		for (const stmt of pd.programStmts) {
@@ -2724,6 +2285,7 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 	}
 	liftComparisons(ctx, lctx, makeLoc(0, 0));
 
+
 	for (const decl of lctx.collector) {
 		pd.programStmts.push(decl);
 	}
@@ -2734,15 +2296,11 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 // ===== Tests =====
 
 function liftWithChecker(input: string): Node {
-	// Reset global registries for isolated test runs (both hooks + TypeInfo,
-	// matching setGlobalHookOwners so cross-test state doesn't leak).
-	_globalHookOwners = createNameSet();
-	_globalTypeInfoOwners = createNameSet();
 	resetHookSyms();
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
-	const ctx = createTransformContextWithChecker(checkerCtx);
+	const ctx = checkedCtx(checkerCtx);
 	return liftDestructors(pr.value, ctx, true);
 }
 
@@ -2768,17 +2326,25 @@ function generatedFnCount(input: string): number {
 	return count;
 }
 
-// Run the full lower→lift pipeline so `===` in the source drives on-demand Eq generation.
+// Run the full lower→lift pipeline so a union `==` in the source drives on-demand Eq generation.
 function liftWithCompare(input: string): Node {
-	_globalHookOwners = createNameSet();
-	_globalTypeInfoOwners = createNameSet();
 	resetHookSyms();
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
-	const ctx = createTransformContextWithChecker(checkerCtx);
+	const ctx = checkedCtx(checkerCtx);
 	const lowered = lowerOperators(pr.value, ctx);
 	return liftDestructors(lowered, ctx, true);
+}
+
+test "a payload union compared with == gets one generated Eq on C" {
+	const src = "type NamedU = int32 | string; function same(a: NamedU, b: NamedU): boolean { return a == b; }";
+	assert hasGeneratedFnIn(liftWithCompare(src), "Eq");
+}
+
+test "a struct compared with == gets no generated Eq: the std equality compares its fields" {
+	const src = "struct Point { x: int32; y: int32; } function same(a: Point, b: Point): boolean { return a == b; }";
+	assert !hasGeneratedFnIn(liftWithCompare(src), "PointEq");
 }
 
 function hasGeneratedFnIn(prog: Node, fnSuffix: string): boolean {
@@ -2797,8 +2363,7 @@ function hasGeneratedFn(input: string, fnSuffix: string): boolean {
 	return hasGeneratedFnIn(liftWithChecker(input), fnSuffix);
 }
 
-// Check if a TypeInfo variable was generated
-function hasTypeInfo(input: string, typeName: string): boolean {
+function declaresTypeInfo(input: string, typeName: string): boolean {
 	const prog = liftWithChecker(input);
 	const pd = prog.data as ProgramData;
 	for (const stmt of pd.programStmts) {
@@ -2809,6 +2374,16 @@ function hasTypeInfo(input: string, typeName: string): boolean {
 	}
 	return false;
 }
+
+test "the lifter declares no TypeInfo for an interface with a managed field" { assert !declaresTypeInfo("interface Token { value: string; }", "Token"); }
+
+test "the lifter declares no TypeInfo for a primitive-only interface" { assert !declaresTypeInfo("interface Point { x: number; y: number; }", "Point"); }
+
+test "the lifter declares no TypeInfo for a primitive-only struct" { assert !declaresTypeInfo("struct Point { x: number; y: number; }", "Point"); }
+
+test "an alias spelling of an anonymous object type does not claim the structural type's hooks" { assert generatedFnCount("type Named = { name: string }; function f(a: Named[]): number { return a.length; } const xs: Named[] = [{ name: \"a\" }];") > 0; }
+
+test "an anonymous object type used through two aliases gets one hook set" { assert generatedFnCount("type A = { name: string }; type B = { name: string }; const a: A = { name: \"x\" }; const b: B = { name: \"y\" }; const xs: A[] = [a]; const ys: B[] = [b];") == generatedFnCount("type A = { name: string }; const a: A = { name: \"x\" }; const xs: A[] = [a];"); }
 
 test "primitive-only no hooks" { assert generatedFnCount("interface Point { x: number; y: number; }") == 0; }
 
@@ -2833,13 +2408,6 @@ test "exported interface" { assert generatedFnCount("export interface Token { va
 test "no interfaces passthrough" { assert generatedFnCount("const x = 1;") == 0; }
 // =trace: Function fields are cyclic (closures capture refs)
 test "trace NOT generated for flat string" { assert !hasGeneratedFn("interface Token { value: string; }", "TokenTrace"); }
-// TypeInfo generated alongside hooks
-test "typeInfo generated" { assert hasTypeInfo("interface Token { value: string; }", "Token"); }
-
-// Interface is now Ref type — always needs typeInfo for msAllocTyped (even primitive-only)
-test "typeInfo generated for primitive-only interface" { assert hasTypeInfo("interface Point { x: number; y: number; }", "Point"); }
-// Struct (value type) with only primitives does NOT need typeInfo
-test "typeInfo NOT generated for primitive-only struct" { assert !hasTypeInfo("struct Point { x: number; y: number; }", "Point"); }
 // Inheritance: child with own hookable field + base both generate hooks
 test "inheritance generates parent hooks" {
 	const src = "interface Base { name: string; } class Child extends Base { extra: string; }";
@@ -2860,18 +2428,6 @@ test "eq NOT generated for uncompared struct" {
 	assert !hasGeneratedFn("struct Point { x: number; y: number; }", "PointEq");
 }
 
-test "eq generated on-demand for compared struct" {
-	const src = "struct Point { x: number; y: number; } function f(a: Point, b: Point): boolean { return a === b; }";
-	assert hasGeneratedFnIn(liftWithCompare(src), "PointEq");
-}
-
-test "eq transitive to nested struct field when outer compared" {
-	const src = "struct Inner { a: number; } struct Outer { i: Inner; } function f(a: Outer, b: Outer): boolean { return a === b; }";
-	assert hasGeneratedFnIn(liftWithCompare(src), "OuterEq");
-	assert hasGeneratedFnIn(liftWithCompare(src), "InnerEq");
-}
-
-// Interfaces are reference types — `===` is pointer equality, no structural Eq is lifted.
 test "eq NOT generated for interface" {
 	assert !hasGeneratedFn("interface Token { value: string; }", "TokenEq");
 }
@@ -2903,4 +2459,26 @@ test "class copy guard compares param idents not param slots" {
 
 test "value copy guard compares param pointers" {
 	assert copyGuardOperandKind("struct SWrap { data: string; }", "SWrapCopy") == NodeKind.Identifier;
+}
+
+test "the parameters of a lifted hook are minted with an owner ordinal" {
+	const prog = liftWithChecker("interface Wrap { data: string; }");
+	let checked = 0;
+	for (const stmt of (prog.data as ProgramData).programStmts) {
+		if (stmt.kind != NodeKind.FunctionDecl || !(stmt.data as FunctionDeclData).fnName.endsWith("Destroy")) continue;
+		assert stmt.paramSyms != null && stmt.paramSyms[0].item > 0;
+		checked += 1;
+	}
+	assert checked == 1;
+}
+
+test "a lifted symbol cannot be minted without a checker context" {
+	const lctx = newLiftCtx(createTransformContext(), false);
+	let refused = "";
+	try {
+		liftSym(lctx, SymbolKind.Variable, "self", null);
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused.contains("self");
 }

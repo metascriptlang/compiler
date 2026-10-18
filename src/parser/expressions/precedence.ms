@@ -14,7 +14,7 @@ export function getPrecedence(kind: TokenKind): int32 {
 		TokenKind.Plus | TokenKind.Minus => 50,
 		TokenKind.LtLt | TokenKind.GtGt | TokenKind.GtGtGt => 45,
 		TokenKind.Lt | TokenKind.Gt | TokenKind.LtEq | TokenKind.GtEq |
-		TokenKind.In | TokenKind.Instanceof => 40,
+		TokenKind.In | TokenKind.Instanceof | TokenKind.As => 40,
 		TokenKind.EqEq | TokenKind.BangEq | TokenKind.EqEqEq | TokenKind.BangEqEq => 30,
 		TokenKind.Amp => 27,
 		TokenKind.Caret => 25,
@@ -23,7 +23,7 @@ export function getPrecedence(kind: TokenKind): int32 {
 		TokenKind.PipePipe => 10,
 		TokenKind.QuestionQuestion => 8,
 		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
-		TokenKind.StarEq | TokenKind.SlashEq | TokenKind.PercentEq |
+		TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq |
 		TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq |
 		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => 5,
 		TokenKind.PipeGt => 3,
@@ -43,7 +43,7 @@ export function isBinaryOperator(token: Token): boolean {
 		TokenKind.AmpAmp | TokenKind.PipePipe |
 		TokenKind.QuestionQuestion | TokenKind.PipeGt |
 		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
-		TokenKind.StarEq | TokenKind.SlashEq | TokenKind.PercentEq |
+		TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq |
 		TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq |
 		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => true,
 		_ => false,
@@ -56,7 +56,7 @@ export function isRightAssociative(kind: TokenKind): boolean {
 	return match (kind) {
 		TokenKind.StarStar |
 		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
-		TokenKind.StarEq | TokenKind.SlashEq | TokenKind.PercentEq |
+		TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq |
 		TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq |
 		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => true,
 		_ => false,

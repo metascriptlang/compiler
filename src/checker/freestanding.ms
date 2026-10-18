@@ -19,7 +19,7 @@
 
 import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { makeSymbol } from "./symbol";
+import { makeSymbol, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { readonlyDataConstBinding } from "./constFold";
 
 // Single wording shared by both consumers — only the severity differs.
@@ -130,7 +130,8 @@ function moduleBindingOf(node: Node): Node | null {
 
 export function moduleBindingNeedsWritableStorage(node: Node): boolean {
 	const binding = moduleBindingOf(node);
-	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.modulePath == "") return false;
+	if (binding == null || binding.resolvedSym == null || binding.resolvedSym.declNode == null) return false;
+	if (!hasFlag(binding.resolvedSym, SymbolFlag.Global)) return false;
 	const d = binding.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const) return true;
 	if (d.initializer == null) return true;
@@ -257,7 +258,15 @@ function fsVariable(name: string, kind: DeclKind, initializer: Node): Node {
 	}, fsLoc());
 	const sym = makeSymbol(name, SymbolKind.Variable, null, false);
 	sym.modulePath = "test.ms";
+	sym.declNode = node;
+	setFlag(sym, SymbolFlag.Global);
 	node.resolvedSym = sym;
+	return node;
+}
+
+function fsLowered(name: string, kind: DeclKind, initializer: Node): Node {
+	const node = fsVariable(name, kind, initializer);
+	node.resolvedSym.declNode = null as unknown as Node;
 	return node;
 }
 
@@ -281,11 +290,23 @@ test "freestanding: surviving writable module bindings are collected through wra
 	assert hits[1] == nonConstant;
 }
 
+test "freestanding: a binding the compiler lowered into the module is not the author's" {
+	const hoisted = fsLowered("__call_0", DeclKind.Const, fsCall());
+	const counter = fsLowered("__lhs_1", DeclKind.Let, fsNumber(0));
+	assert collectWritableModuleBindings(fsProgram([hoisted, counter])).length == 0;
+}
+
 test "freestanding: scalar module const literals need no writable storage" {
 	const numberConst = fsVariable("limit", DeclKind.Const, fsNumber(12));
 	const boolConst = fsVariable("enabled", DeclKind.Const,
 		createNodeAt(NodeKind.BooleanLiteral, { boolValue: true }, fsLoc()));
 	assert collectWritableModuleBindings(fsProgram([numberConst, boolConst])).length == 0;
+}
+
+test "freestanding: a binding a lowering declares at module scope needs no writable storage" {
+	const temp = fsVariable("__call_0", DeclKind.Const, fsCall());
+	temp.resolvedSym!.symFlags = temp.resolvedSym!.symFlags.excl(SymbolFlag.Global);
+	assert collectWritableModuleBindings(fsProgram([temp])).length == 0;
 }
 
 

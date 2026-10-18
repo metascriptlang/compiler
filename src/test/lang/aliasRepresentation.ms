@@ -142,3 +142,17 @@ test "aliasRepresentation: distinct through a second alias and two type paramete
 	assert distinctInferenceDeep(11 as DistinctInferenceOuter<int32>) == 11;
 	assert distinctInferencePair(5 as DistinctValue<int32>, "x" as DistinctValue<string>) == "x";
 }
+
+export type ExportedPairAlias = [int32, string];
+
+function exportedPairOf(n: int32): ExportedPairAlias {
+	const pairs: ExportedPairAlias[] = [[n, "a"]];
+	const p = pairs[0];
+	return p;
+}
+
+test "aliasRepresentation: an exported tuple alias lifts the tuple's own hooks" {
+	const pairs: ExportedPairAlias[] = [exportedPairOf(9 as int32)];
+	const pair = pairs[0];
+	assert `${pair[0]}${pair[1]}` == "9a";
+}

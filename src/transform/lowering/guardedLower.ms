@@ -12,6 +12,7 @@ import { containsExprKind, mapExprChildren } from "../walker";
 import { lowerForStmt } from "./forLoopLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { Spiller, lowerOperandList, lowerAssign, isAssignOp } from "./operandOrder";
+import { lowerShortCircuitExpr } from "./conditionalExprLower";
 import { makeIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull, makeIf, makeAssign, makeBool, makeUnary, makeBreak, extractBodyStmts } from "../util";
 
 export type KindHoister = (node: Node, hoisted: Node[], ctx: TransformContext) => Node;
@@ -23,7 +24,7 @@ export function hoistGuarded(expr: Node, kind: NodeKind, hoistKind: KindHoister,
 		if (bd.operator == "&&" || bd.operator == "||") {
 			bd.left = hoistGuarded(bd.left, kind, hoistKind, hoisted, ctx);
 			if (containsExprKind(bd.right, kind)) {
-				return lowerGuardedShortCircuit(expr, hoisted, ctx);
+				return lowerShortCircuitExpr(expr, hoisted, ctx);
 			}
 			return expr;
 		}
@@ -51,31 +52,6 @@ export function hoistGuarded(expr: Node, kind: NodeKind, hoistKind: KindHoister,
 	if (lowerOperandList(sp, expr, hoisted)) return expr;
 	mapExprChildren(expr, (child: Node): Node => hoistGuarded(child, kind, hoistKind, hoisted, ctx));
 	return expr;
-}
-
-// a && rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = rhs; } else { $scres = $sclhs; }
-// a || rhs → const $sclhs = a; let $scres; if ($sclhs) { $scres = $sclhs; } else { $scres = rhs; }
-export function lowerGuardedShortCircuit(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	const bd = expr.data as BinaryExprData;
-	const loc = expr.location;
-	const lhsSym = freshTempSym(ctx, "sclhs", bd.left.nodeType);
-	const lhsDecl = makeVarDecl(lhsSym.name, bd.left, DeclKind.Const, loc);
-	lhsDecl.resolvedSym = lhsSym;
-	hoisted.push(lhsDecl);
-
-	const resSym = freshTempSym(ctx, "scres", expr.nodeType);
-	const resDecl = makeVarDecl(resSym.name, makeNull(loc), DeclKind.Let, loc);
-	resDecl.resolvedSym = resSym;
-	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
-	hoisted.push(resDecl);
-
-	const rhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), bd.right, loc), loc);
-	const lhsAssign = makeExprStmt(makeAssign(makeIdentResolved(resSym, loc), makeIdentResolved(lhsSym, loc), loc), loc);
-	const isAnd = bd.operator == "&&";
-	const thenBlk = makeBlock([isAnd ? rhsAssign : lhsAssign], loc);
-	const elseBlk = makeBlock([isAnd ? lhsAssign : rhsAssign], loc);
-	hoisted.push(makeIf(makeIdentResolved(lhsSym, loc), thenBlk, elseBlk, loc));
-	return makeIdentResolved(resSym, loc);
 }
 
 // c ? a : b → let $gtern; if (c) { $gtern = a; } else { $gtern = b; }

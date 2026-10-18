@@ -3,9 +3,9 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { isAffineAwaitable, createFunction, createClosureType, createStruct, createArray, createPtr, createVar, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
-import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
+import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
@@ -129,6 +129,63 @@ export function makeValueShareFn(t: Type, ctx: TransformContext, loc: SourceLoca
 	return pair;
 }
 
+export function makeLocalDecl(sym: Symbol, init: Node, t: Type, loc: SourceLocation): Node {
+	const decl = makeVarDecl(sym.name, init, DeclKind.Const, loc);
+	decl.nodeType = t;
+	decl.resolvedSym = sym;
+	return decl;
+}
+
+// The statements of a future's value-drop routine: take whatever the slot still
+// holds into a local, and the local's scope exit runs the value's own destructor.
+// A reader that took the value left the slot empty.
+export function makeValueDropStmts(t: Type, futSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node[] {
+	const voidPtrType = createPtr(voidType());
+	const stmts: Node[] = [];
+	if (boxedInFuture(t)) {
+		const rawSym = mintSym(ctx, SymbolKind.Variable, "$raw", voidPtrType);
+		const take = makeCall(runtimeRef("msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = voidPtrType;
+		stmts.push(makeLocalDecl(rawSym, take, voidPtrType, loc));
+		const unbox = makeCall(runtimeRef("msUnboxStruct", loc), [makeTypedIdentResolved(rawSym, voidPtrType, loc)], loc);
+		unbox.nodeType = t;
+		const held = makeBinary(makeTypedIdentResolved(rawSym, voidPtrType, loc), "!=", makeNull(loc), loc);
+		held.nodeType = booleanType();
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeIf(held, makeBlock([makeLocalDecl(droppedSym, unbox, t, loc)], loc), null, loc));
+	} else {
+		const take = makeCall(runtimeRef(inlineInFuture(t) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = t;
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeLocalDecl(droppedSym, take, t, loc));
+	}
+	return stmts;
+}
+
+// drop(fut) for a future of `t` that generated code completes, as a
+// closure without an environment over a generated top-level function (the builtin
+// pass runs after lambda lifting). A result the future does not own (a number)
+// gets the empty closure, which the runtime reads as "nothing to drop".
+export function makeFutureDropClosure(t: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
+	const voidPtrType = createPtr(voidType());
+	const closureType = createClosureType([voidPtrType], ["fut"], voidType());
+	const pair = (fnValue: Node): Node => {
+		const lit = makeObjectLiteral(["fn", "env"], [fnValue, makeNull(loc)], loc);
+		lit.flags = lit.flags.incl(NodeFlag.Closure);
+		lit.nodeType = closureType;
+		return lit;
+	};
+	if (t == null || !ownedInFuture(t)) return pair(makeNull(loc));
+	const sym = mintSym(ctx, SymbolKind.Function, "$drop" + _shareFnDecls.length.toString(), null);
+	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
+	const fnNode = makeFnDecl(sym.name, [futSym], ["Ptr<void>"], makeBlock(makeValueDropStmts(t, futSym, ctx, loc), loc), "", "void", loc);
+	fnNode.nodeType = createFunction([voidPtrType], ["fut"], voidType());
+	sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_shareFnDecls.push(fnNode);
+	return pair(makeTypedIdentResolved(sym, fnNode.nodeType, loc));
+}
+
 export function makeOwnsValueCheck(fut: Node, loc: SourceLocation): Node {
 	const call = makeCall(runtimeRef("msFutureOwnsValue", loc), [fut], loc);
 	call.nodeType = booleanType();
@@ -163,7 +220,7 @@ export function unboxFnNameForType(t: Type | null): string {
 		TypeKind.Boolean => "msUnboxBool",
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Enum => "msUnboxInt32",
+			| TypeKind.Enum | TypeKind.Module => "msUnboxInt32",
 		TypeKind.String => "msUnboxString",
 		_ => "",
 	};
@@ -305,14 +362,22 @@ export function bindCompilerFuncs(declared: HashMap<string, Symbol>, identCache:
 export function runtimeProcSym(procName: string): Symbol {
 	const declared = _compilerFuncs.get(procName);
 	if (declared != null) return declared;
+	throw new Error(`internal: system module needs '${procName}'`);
+}
+
+export function generatedProcSym(procName: string): Symbol {
 	const existing = _runtimeSyms.get(procName);
 	if (existing != null) return existing;
-	if (_runtimeProcsSealed) throw new Error(`internal: runtime proc '${procName}' first requested while C modules are emitted in parallel`);
+	if (_runtimeProcsSealed) throw new Error(`internal: generated proc '${procName}' first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
 	setFlag(sym, SymbolFlag.ImportC);
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
+}
+
+export function generatedRef(procName: string, loc: SourceLocation): Node {
+	return makeTypedIdentResolved(generatedProcSym(procName), null, loc);
 }
 
 export type CompilerFuncScope = { funcs: HashMap<string, Symbol>, syms: HashMap<string, Symbol>, cache: IdentCache | null };
@@ -347,13 +412,9 @@ export function isRuntimeProcCall(node: Node, procName: string): boolean {
 export function runtimeRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
 }
-export function opProcSym(name: string): Symbol {
-	const hook = lookupHookSym(name);
-	return hook != null ? hook : runtimeProcSym(name);
-}
 
 export function attachedOpSym(name: string, op: AttachedOp): Symbol {
-	const sym = opProcSym(name);
+	const sym = runtimeProcSym(name);
 	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
 	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
 	return sym;
@@ -370,7 +431,7 @@ export function cloneIdent(node: Node, loc: SourceLocation): Node {
 export function makeTypedIdentResolved(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
 	n.resolvedSym = sym;
-	if (t != null) { n.nodeType = t; }
+	n.nodeType = t != null ? t : sym.symbolType;
 	return n;
 }
 
@@ -407,6 +468,11 @@ export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 		n.nodeType = t;
 		return n;
 	}
+	if (k == TypeKind.Module) {
+		const unit = makeNumber(0, loc);
+		unit.nodeType = getSysType(TypeKind.Uint8);
+		return unit;
+	}
 	// Boolean → false
 	if (k == TypeKind.Boolean) {
 		return makeBool(false, loc);
@@ -436,6 +502,20 @@ export function makeVarDecl(varName: string, init: Node, declKind: DeclKind, loc
 
 export function makeExprStmt(exprNode: Node, loc: SourceLocation): Node {
 	return createNode(NodeKind.ExprStmt, { expr: exprNode }, syntheticToken(loc));
+}
+
+export function counterType(ctx: TransformContext): Type {
+	return ctx.jsBackend || ctx.raiserBackend ? int32Type() : getSysType(TypeKind.Int64);
+}
+
+export function makeCounterStep(counter: Symbol, t: Type, loc: SourceLocation): Node {
+	const target = makeIdentResolved(counter, loc);
+	target.nodeType = t;
+	const current = makeIdentResolved(counter, loc);
+	current.nodeType = t;
+	const next = makeBinary(current, "+", makeNumber(1, loc), loc);
+	next.flags = next.flags.incl(NodeFlag.NoOverflowCheck);
+	return makeExprStmt(makeAssign(target, next, loc), loc);
 }
 
 export function makeReturn(arg: Node | null, loc: SourceLocation): Node {
@@ -533,6 +613,16 @@ export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	if (obj != null && obj.nodeType != null) {
 		if ((obj.nodeType.kind == TypeKind.Array || obj.nodeType.kind == TypeKind.String) && prop == "length") {
 			n.nodeType = int32Type();
+		} else if (obj.nodeType.kind == TypeKind.Ref && obj.nodeType.typeReturn != null && obj.nodeType.typeReturn.kind == TypeKind.Array && prop == "length") {
+			n.nodeType = int32Type();
+		} else if (obj.nodeType.kind == TypeKind.String && (prop == "byteLength" || prop == "unicodeLength")) {
+			n.nodeType = int32Type();
+		} else if ((obj.nodeType.kind == TypeKind.SizedArray || obj.nodeType.kind == TypeKind.Span) && prop == "length") {
+			n.nodeType = int32Type();
+		} else if ((obj.nodeType.kind == TypeKind.SizedArray || obj.nodeType.kind == TypeKind.Span) && prop == "data" && obj.nodeType.typeReturn != null) {
+			n.nodeType = obj.nodeType.typeReturn;
+		} else if (obj.nodeType.kind == TypeKind.Enum) {
+			n.nodeType = obj.nodeType;
 		} else if (isResult(obj.nodeType)) {
 			if (prop == "ok") { n.nodeType = booleanType(); }
 			else if (prop == "value" && getResultOkType(obj.nodeType) != null) { n.nodeType = getResultOkType(obj.nodeType); }
@@ -571,9 +661,12 @@ export function makeAssign(leftNode: Node, rightNode: Node, loc: SourceLocation)
 
 export function makeArrayAccess(obj: Node, idx: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.ArrayAccess, { array: obj, index: idx }, syntheticToken(loc));
-	if (obj != null && obj.nodeType != null && obj.nodeType.kind == TypeKind.Array) {
-		if (obj.nodeType.typeReturn != null) {
-			n.nodeType = obj.nodeType.typeReturn;
+	if (obj != null && obj.nodeType != null) {
+		const ot = obj.nodeType;
+		if ((ot.kind == TypeKind.Array || ot.kind == TypeKind.SizedArray || ot.kind == TypeKind.Span) && ot.typeReturn != null) {
+			n.nodeType = ot.typeReturn;
+		} else if (ot.kind == TypeKind.String) {
+			n.nodeType = charType();
 		}
 	}
 	return n;
@@ -636,7 +729,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 		nameLocation: loc,
 		interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length),
 	}, syntheticToken(loc));
-	n.nodeType = createStruct(name, fields, resolvedTypes, true);
+	n.nodeType = spelled(createStruct(name, fields, resolvedTypes, true));
 	return n;
 }
 
@@ -736,64 +829,6 @@ export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLoca
 // varOnly=true: only DeclKind.Var (for varHoist). varOnly=false: all decls (for generatorLower).
 // Handles: BlockStmt, IfStmt, WhileStmt, TryCatchStmt, DoWhileStmt, SwitchStmt/SwitchCase.
 
-export function collectDeclNames(node: Node, ns: NameSet, varOnly: boolean): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			if (!varOnly || d.declKind == DeclKind.Var) {
-				nameSetAdd(ns, d.declName);
-			}
-			collectDeclNames(d.initializer, ns, varOnly);
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			let i = 0;
-			while (i < d.statements.length) {
-				collectDeclNames(d.statements[i], ns, varOnly);
-				i += 1;
-			}
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectDeclNames(d.consequent, ns, varOnly);
-			collectDeclNames(d.alternate, ns, varOnly);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			collectDeclNames(d.whileBody, ns, varOnly);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			collectDeclNames(d.tryBody, ns, varOnly);
-			collectDeclNames(d.catchBody, ns, varOnly);
-			collectDeclNames(d.finallyBody, ns, varOnly);
-		},
-		NodeKind.DoWhileStmt => {
-			const d = node.data as DoWhileStmtData;
-			collectDeclNames(d.doBody, ns, varOnly);
-		},
-		NodeKind.SwitchStmt => {
-			const d = node.data as SwitchStmtData;
-			let si = 0;
-			while (si < d.switchCases.length) {
-				collectDeclNames(d.switchCases[si], ns, varOnly);
-				si += 1;
-			}
-		},
-		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			let ci = 0;
-			while (ci < d.caseStmts.length) {
-				collectDeclNames(d.caseStmts[ci], ns, varOnly);
-				ci += 1;
-			}
-		},
-		_ => {},
-	};
-}
-
 // ===== DeclKind Helpers =====
 
 // Convert boolean isConst flag → DeclKind enum (for AST nodes that still use boolean flags)
@@ -829,45 +864,52 @@ export function extractBodyStmts(body: Node): Node[] {
 	return result;
 }
 
-test "a runtime proc query mints no symbol" {
+test "a runtime proc is the declared symbol and an undeclared name is refused" {
 	const savedFuncs = _compilerFuncs;
 	const savedSyms = _runtimeSyms;
 	const savedCache = _runtimeIdentCache;
-	const cache = createIdentCache();
-	bindCompilerFuncs(new HashMap<string, Symbol>(), cache);
+	const declared = new HashMap<string, Symbol>();
+	const probe = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
+	declared.set("msProbeAccess", probe);
+	bindCompilerFuncs(declared, createIdentCache());
 	const other = makeSymbol("msOther", SymbolKind.Function, null, false);
-	assert !isRuntimeProcSym(other, "msProbeAccess");
 	const sameName = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
 	setFlag(sameName, SymbolFlag.ImportC);
-	sameName.nameId = getIdentId(cache, "msProbeAccess");
+	assert runtimeProcSym("msProbeAccess") == probe;
+	assert isRuntimeProcSym(probe, "msProbeAccess");
+	assert !isRuntimeProcSym(other, "msProbeAccess");
 	assert !isRuntimeProcSym(sameName, "msProbeAccess");
-	assert _runtimeSyms.size == 0;
-	const minted = runtimeProcSym("msProbeAccess");
-	assert isRuntimeProcSym(minted, "msProbeAccess");
-	assert !isRuntimeProcSym(sameName, "msProbeAccess");
-	assert _runtimeSyms.size == 1;
-	_compilerFuncs = savedFuncs;
-	_runtimeSyms = savedSyms;
-	_runtimeIdentCache = savedCache;
-}
-
-test "a sealed runtime proc table serves known procs and refuses a new one" {
-	const savedFuncs = _compilerFuncs;
-	const savedSyms = _runtimeSyms;
-	const savedCache = _runtimeIdentCache;
-	bindCompilerFuncs(new HashMap<string, Symbol>(), createIdentCache());
-	const known = runtimeProcSym("msSealKnown");
-	sealRuntimeProcs(true);
-	const again = runtimeProcSym("msSealKnown");
 	let refused = "";
 	try {
 		runtimeProcSym("msSealNew");
 	} catch (e) {
 		refused = e.message;
 	}
+	assert refused == "internal: system module needs 'msSealNew'";
+	assert _runtimeSyms.size == 0;
+	_compilerFuncs = savedFuncs;
+	_runtimeSyms = savedSyms;
+	_runtimeIdentCache = savedCache;
+}
+
+test "a generated proc is minted once per name and a sealed table refuses a new one" {
+	const savedFuncs = _compilerFuncs;
+	const savedSyms = _runtimeSyms;
+	const savedCache = _runtimeIdentCache;
+	bindCompilerFuncs(new HashMap<string, Symbol>(), createIdentCache());
+	const known = generatedProcSym("msGenKnown");
+	assert isRuntimeProcSym(known, "msGenKnown");
+	sealRuntimeProcs(true);
+	const again = generatedProcSym("msGenKnown");
+	let refused = "";
+	try {
+		generatedProcSym("msGenNew");
+	} catch (e) {
+		refused = e.message;
+	}
 	sealRuntimeProcs(false);
 	assert again == known;
-	assert refused.contains("msSealNew");
+	assert refused.contains("msGenNew");
 	_compilerFuncs = savedFuncs;
 	_runtimeSyms = savedSyms;
 	_runtimeIdentCache = savedCache;

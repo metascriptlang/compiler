@@ -120,25 +120,5 @@ export class Number {
 	static readonly NaN: float64 = 1e308 * 10.0 - 1e308 * 10.0;
 }
 
-export {
-	decimalEnd,
-	digitValue,
-	infinity,
-	isDigitByte,
-	msStringParseFloat,
-	notANumber,
-	powerOfTwoDigitsToNumber,
-	radixShift,
-	skipSpace,
-	spaceLength,
-	startsInfinity,
-	trailingSpaceLength,
-} from "./parse";
 import { stringToNumber } from "./parse";
-export {
-	digitsText,
-	exactIntegerLimit,
-	halfUlp,
-	radixDigits,
-} from "./radix";
 import { checkedRadix, float64RadixText, int64RadixText, uint64RadixText } from "./radix";

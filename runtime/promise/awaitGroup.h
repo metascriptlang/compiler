@@ -349,7 +349,7 @@ static inline void msAwaitSlotWait(void* sp) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     /* Re-increment ONLY if the decrement took: the count saturates at 0 and a
      * nested help-first chain reaches it routinely, so an unconditional Inc
-     * adds a count nobody removed and strands the exit drain. */
+     * adds a count nobody removed. */
     bool dec = msIsPoolWorker && msPoolBusyDec();  /* available to help while waiting */
     while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
         if (msPoolHelpOne()) continue;

@@ -5,10 +5,10 @@
 // This transform only does the structural AST rewrite (MemberExpr → direct call).
 // No registry re-lookup needed — follows reference pattern where sem resolves UFCS.
 
-import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol, TypeKind, SourceLocation } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeTypedIdentResolved, makeCall } from "../util";
+import { makeTypedIdentResolved, makeCall, makeMember } from "../util";
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
 import { inferredType, createFunction } from "../../checker/types";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
@@ -50,7 +50,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
 	if (node.flags.has(NodeFlag.ExtStatic)) {
-		const newCall = makeCall(makeTypedIdentResolved(sym, null, loc), call.arguments, loc);
+		const newCall = makeCall(staticCallee(member.object, sym, loc), call.arguments, loc);
 		newCall.nodeType = node.nodeType;
 		return newCall;
 	}
@@ -64,6 +64,25 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	const newCall = makeCall(makeTypedIdentResolved(sym, null, loc), newArgs, loc);
 	newCall.nodeType = node.nodeType;
 	return newCall;
+}
+
+function namespaceOf(receiver: Node): Node | null {
+	if (receiver.kind != NodeKind.MemberExpr) return null;
+	const ns = (receiver.data as MemberExprData).object;
+	const viaNamespace = (ns.resolvedSym != null && ns.resolvedSym.symbolKind == SymbolKind.Module)
+		|| (ns.nodeType != null && ns.nodeType.kind == TypeKind.Module);
+	return viaNamespace ? ns : null;
+}
+
+// A static method of a class read through a namespace stays a read through that
+// namespace: on split ES modules a bare name would import the module statically.
+function staticCallee(receiver: Node, sym: Symbol, loc: SourceLocation): Node {
+	const ns = namespaceOf(receiver);
+	if (ns == null) return makeTypedIdentResolved(sym, null, loc);
+	const callee = makeMember(ns, sym.name, loc);
+	callee.resolvedSym = sym;
+	callee.nodeType = sym.symbolType;
+	return callee;
 }
 
 // ===== Entry Point =====
@@ -101,7 +120,6 @@ function setupExtensionCtx(input: string, ext: ExtensionMethod): Node {
 function makeTrimExt(): ExtensionMethod {
 	const ext: ExtensionMethod = {
 		methodName: "trim",
-		receiverTypeName: "string",
 		sourcePath: "",
 		fnType: createFunction([], [], inferredType()),
 		isStatic: false,
@@ -113,7 +131,6 @@ function makeTrimExt(): ExtensionMethod {
 function makePushExt(): ExtensionMethod {
 	const ext: ExtensionMethod = {
 		methodName: "push",
-		receiverTypeName: "Array",
 		sourcePath: "",
 		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: false,
@@ -185,7 +202,6 @@ test "static extension no receiver prepend" {
 	const cc = createContext();
 	const ext: ExtensionMethod = {
 		methodName: "floor",
-		receiverTypeName: "Math",
 		sourcePath: "",
 		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: true,

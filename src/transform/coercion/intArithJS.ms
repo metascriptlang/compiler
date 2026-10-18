@@ -19,21 +19,18 @@
 // its own C backend: 4294967295² is 1 in C and 0 in JS. Math.imul is exact, so
 // MS uses it. See NIM-REF CG-13.
 //
-// Signed overflow is deliberately absent: C-debug traps on it (measured, rc=255
-// with a source location) and C-danger is undefined behaviour that is not even
-// self-consistent — `+` did not wrap while `*` did. There is no value to match,
-// so emitting a wrap here would invent a specification the C backend does not
-// have. It belongs to the check tier.
+// Signed + - *, unary minus and steps, and char steps, stop on overflow (msOverflow*), as the
+// C backend's checkedArith.h does; unlike C, --danger keeps the check here.
 //
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr, isRuntimeProcCall } from "../util";
+import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr, isRuntimeProcCall, generatedRef } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
@@ -50,6 +47,8 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	if (base != "") return compoundAsInteger(node, d, base, ctx);
 	if (d.operator == "/" || d.operator == "%" || d.operator == "**") return divideAsInteger(node, d);
 	if (isShiftOp(d.operator) && subIntKind(d.left.nodeType) != TypeKind.Unknown) return shiftAtLeftWidth(node, d);
+	const signed = signedType(node.nodeType);
+	if (signed != null && wrapsAtWidth(d.operator) && !node.flags.has(NodeFlag.NoOverflowCheck)) return overflowChecked(node, signed, node.location);
 	const narrow = subIntKind(node.nodeType);
 	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);
@@ -85,9 +84,42 @@ function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: 
 	const call = makeCall(runtimeRef(prefix + suffix, loc), [left, right], loc);
 	call.nodeType = createPrimitive(hk);
 	const narrow = subIntKind(t);
-	if (narrow != TypeKind.Unknown) return wrapTo(call, narrow, loc);
+	if (narrow != TypeKind.Unknown) return isSignedKind(narrow) ? overflowChecked(call, t, loc) : wrapTo(call, narrow, loc);
 	if (resultType != null) call.nodeType = resultType;
 	return call;
+}
+
+// A double product of two int32 operands may round, but never back into range,
+// so the test needs no Math.imul.
+function overflowChecked(inner: Node, t: Type, loc: SourceLocation): Node {
+	const suffix = match (t.kind) {
+		TypeKind.Int8 => "I8",
+		TypeKind.Int16 => "I16",
+		TypeKind.Int32 => "I32",
+		TypeKind.Char => "Char",
+		_ => "I64",
+	};
+	const call = makeCall(runtimeRef("msOverflow" + suffix, loc), [inner], loc);
+	call.nodeType = t;
+	return call;
+}
+
+function signedType(t: Type | null): Type | null {
+	const r = peelToRepr(t);
+	return r != null && isSignedKind(r.kind) ? r : null;
+}
+
+function isLiteral(n: Node): boolean {
+	let e = n;
+	while (e.kind == NodeKind.HiddenStdConv) e = (e.data as HiddenStdConvData).convExpr;
+	return e.kind == NodeKind.NumberLiteral || e.kind == NodeKind.BigIntLiteral;
+}
+
+function stepOne(t: Type, loc: SourceLocation): Node {
+	if (t.kind != TypeKind.Int64) return makeNumber(1, loc);
+	const one = createNodeAt(NodeKind.BigIntLiteral, { bigintValue: "1n" }, loc);
+	one.nodeType = t;
+	return one;
 }
 
 function is64(kind: TypeKind): boolean {
@@ -176,6 +208,7 @@ function unaryAsUnsigned(node: Node): Node {
 	if (t == null) return node;
 	const d = node.data as UnaryExprData;
 	if (d.unaryOp != "-" && d.unaryOp != "~") return node;
+	if (d.unaryOp == "-" && isSignedKind(t.kind)) return isLiteral(d.operand) ? node : overflowChecked(node, t, node.location);
 	const narrow = subIntKind(t);
 	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
 	if (t.kind != TypeKind.Uint32) return node;
@@ -187,7 +220,7 @@ function unaryAsUnsigned(node: Node): Node {
 export function needsIntegerUpdateRewrite(d: UpdateExprData): boolean {
 	const t = peelToRepr(d.updateArg.nodeType);
 	if (t == null) return false;
-	return t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64 || subIntKind(t) != TypeKind.Unknown;
+	return t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64 || t.kind == TypeKind.Char || isSignedKind(t.kind) || subIntKind(t) != TypeKind.Unknown;
 }
 
 // A postfix step reads back the value before the step: on a wrapping width that
@@ -196,7 +229,7 @@ function updateAtWidth(node: Node, ctx: TransformContext): Node {
 	const d = node.data as UpdateExprData;
 	const t = peelToRepr(d.updateArg.nodeType);
 	if (t == null) return node;
-	if (subIntKind(t) == TypeKind.Unknown && t.kind != TypeKind.Uint32) return node;
+	if (subIntKind(t) == TypeKind.Unknown && t.kind != TypeKind.Uint32 && t.kind != TypeKind.Char && !isSignedKind(t.kind)) return node;
 	const readBack = cloneIfPure(d.updateArg);
 	if (readBack == null) {
 		if (ctx.checkerCtx != null) {
@@ -206,6 +239,13 @@ function updateAtWidth(node: Node, ctx: TransformContext): Node {
 	}
 	const loc = node.location;
 	const step = d.updateOp == "++" ? "+" : "-";
+	if (isSignedKind(t.kind) || t.kind == TypeKind.Char) {
+		const checked = makeBinary(d.updateArg, "=", overflowChecked(makeBinary(readBack, step, stepOne(t, loc), loc), t, loc), loc);
+		if (d.isPrefix) return checked;
+		const before = makeBinary(checked, d.updateOp == "++" ? "-" : "+", stepOne(t, loc), loc);
+		before.nodeType = t;
+		return before;
+	}
 	const stored = makeBinary(d.updateArg, "=", atWidth(makeBinary(readBack, step, makeNumber(1, loc), loc), t, loc), loc);
 	if (d.isPrefix) return stored;
 	return atWidth(makeBinary(stored, d.updateOp == "++" ? "-" : "+", makeNumber(1, loc), loc), t, loc);
@@ -230,7 +270,7 @@ function wrapsOnUint32(op: string): boolean {
 // already gone by the time any mask sees the result. Math.imul is an exact
 // 32-bit multiply; it answers signed, so the width mask still follows.
 function exactMul(left: Node, right: Node, loc: SourceLocation): Node {
-	return makeCall(makeMember(runtimeRef("Math", loc), "imul", loc), [left, right], loc);
+	return makeCall(makeMember(generatedRef("Math", loc), "imul", loc), [left, right], loc);
 }
 
 function compoundBaseOf(op: string): string {
@@ -240,6 +280,7 @@ function compoundBaseOf(op: string): string {
 		"+=" => "+",
 		"-=" => "-",
 		"*=" => "*",
+		"**=" => "**",
 		"&=" => "&",
 		"|=" => "|",
 		"^=" => "^",
@@ -257,7 +298,8 @@ export function needsIntegerCompoundRewrite(d: BinaryExprData): boolean {
 	if (t == null || !isIntConvKind(t.kind)) return false;
 	if (isShiftOp(base)) return is64(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32);
 	if (base == "&" || base == "|" || base == "^") return t.kind == TypeKind.Uint32;
-	if ((base == "/" || base == "%") && !cannotRaise(d.right, t)) return true;
+	if (base == "**" || ((base == "/" || base == "%") && !cannotRaise(d.right, t))) return true;
+	if (wrapsAtWidth(base) && isSignedKind(t.kind)) return true;
 	if (base == "%" || is64(t.kind)) return false;
 	return base == "/" || t.kind == TypeKind.Uint32 || subIntKind(t) != TypeKind.Unknown;
 }
@@ -270,7 +312,7 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		return node;
 	}
 	if (!needsIntegerCompoundRewrite(d) || (is64(t.kind) && isShiftOp(base))) return node;
-	const checked = (base == "/" || base == "%") && !cannotRaise(d.right, t);
+	const checked = base == "**" || ((base == "/" || base == "%") && !cannotRaise(d.right, t));
 	const unsigned = t.kind == TypeKind.Uint32;
 	const narrow = subIntKind(t);
 	const readBack = cloneIfPure(d.left);
@@ -281,6 +323,9 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		return node;
 	}
 	if (checked) return makeBinary(d.left, "=", checkedIntOp(base, readBack, d.right, t, d.left.nodeType, node.location), node.location);
+	if (wrapsAtWidth(base) && isSignedKind(t.kind)) {
+		return makeBinary(d.left, "=", overflowChecked(makeBinary(readBack, base, d.right, node.location), t, node.location), node.location);
+	}
 	if (isShiftOp(base) || base == "&" || base == "|" || base == "^") {
 		const bin = makeBinary(readBack, base, d.right, node.location);
 		const stored = isShiftOp(base) && narrow != TypeKind.Unknown ? shiftAtLeftWidth(bin, bin.data as BinaryExprData) : binaryAsUnsigned(bin);

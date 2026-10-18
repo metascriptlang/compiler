@@ -92,6 +92,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.SameLoc => "SameLoc",
 		RaiserOpcode.InstanceOf => "InstanceOf",
 		RaiserOpcode.ObjConv => "ObjConv",
+		RaiserOpcode.BTruthy => "BTruthy",
+		RaiserOpcode.NarrowS => "NarrowS",
 		RaiserOpcode.CallHost => "CallHost",
 		RaiserOpcode.IsKind => "IsKind",
 		RaiserOpcode.Trap => "Trap",
@@ -99,6 +101,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Spawn => "Spawn",
 		RaiserOpcode.Await => "Await",
 		RaiserOpcode.Sleep => "Sleep",
+		RaiserOpcode.ModuleImport => "ModuleImport",
 		RaiserOpcode.FutureNew => "FutureNew",
 		RaiserOpcode.FutureSettle => "FutureSettle",
 		RaiserOpcode.FutureFail => "FutureFail",
@@ -113,7 +116,7 @@ export function opName(op: RaiserOpcode): string {
 // --- Format helpers ---
 
 function isABxOp(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch;
+	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch || op == RaiserOpcode.ModuleImport;
 }
 
 function isAxOp(op: RaiserOpcode): boolean {

@@ -31,6 +31,7 @@ export class ParserState {
 	noArrowReturnType: int32;
 	trailingDecls: Node[];
 	splits: TokenSplit[];
+	sawImportCall: boolean;
 }
 
 export interface TokenSplit {
@@ -39,7 +40,7 @@ export interface TokenSplit {
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [] };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, noArrowReturnType: 0, trailingDecls: [], splits: [], sawImportCall: false };
 }
 
 export interface ParserMark {
@@ -271,6 +272,20 @@ export function consumeSemicolon(state: ParserState): void {
 	addError(state, `';' expected before '${current(state).value}' at line ${current(state).line}`);
 }
 
+export function expectCloser(state: ParserState, open: Token, close: TokenKind): void {
+	if (current(state).kind == close) {
+		advance(state);
+		return;
+	}
+	const closeText = match (close) {
+		TokenKind.RParen => ")",
+		TokenKind.RBracket => "]",
+		TokenKind.RBrace => "}",
+		_ => `${close}`,
+	};
+	addError(state, `Expected '${closeText}' to close the '${open.value}' opened at line ${open.line}, column ${open.column}`);
+}
+
 // Skip balanced delimiter pairs: parens, braces, brackets.
 // Consumes the opening token and everything through the matching close.
 // Caller must ensure current token is `open` before calling.
@@ -290,14 +305,21 @@ export function skipBalanced(state: ParserState, open: TokenKind, close: TokenKi
 // Handles >> and >>> for nested generics like Result<Array<number>>
 export function skipGenericParams(state: ParserState): void {
 	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) { return; }
+	const open = current(state);
 	advance(state);
 	let depth = 1;
-	while (!isAtEnd(state) && depth > 0) {
+	let nest = 0;
+	while (depth > 0) {
 		splitAngleAssign(state);
-		if (current(state).kind == TokenKind.Lt) { depth += 1; }
-		if (current(state).kind == TokenKind.Gt) { depth -= 1; }
-		if (current(state).kind == TokenKind.GtGt) { depth -= 2; }
-		if (current(state).kind == TokenKind.GtGtGt) { depth -= 3; }
+		const k = current(state).kind;
+		if (isAtEnd(state) || (nest == 0 && (k == TokenKind.Semicolon || k == TokenKind.RParen || k == TokenKind.RBracket || k == TokenKind.RBrace))) {
+			addError(state, `Expected '>' to close the type arguments opened at line ${open.line}, column ${open.column}`);
+			return;
+		}
+		if (k == TokenKind.LParen || k == TokenKind.LBracket || k == TokenKind.LBrace) nest += 1;
+		if (k == TokenKind.RParen || k == TokenKind.RBracket || k == TokenKind.RBrace) nest -= 1;
+		if (k == TokenKind.Lt) { depth += 1; }
+		depth -= angleCloserWidth(k);
 		advance(state);
 	}
 }
@@ -555,172 +577,14 @@ export function consumePendingTypeArg(state: ParserState): string {
 	return ta;
 }
 
-// ===== Generic Type Instantiation Registry =====
-// Checker records instantiations (e.g., Box<number>) here.
-// Codegen reads this to emit concrete struct definitions.
-// DRC-safe: string fields only, module-level side-channel.
-// Lives in parser/context to avoid heavy checker imports in codegen (DRC #22/#26).
-// Uses GenericDeclEntry[] as backing store (reuses existing interface to avoid new union members).
-
-// Store instantiation: baseName + typeArgKey + mangledName + fieldNamesJoined + fieldTypesJoined
-// Encoded in GenericDeclEntry as: key=mangledName, val=baseName+"|"+typeArgKey, fieldNames=..., fieldTypes=...
-
-interface GenericTypeInstStore {
-	keys: string[];       // mangledName entries
-	baseNames: string[];
-	typeArgKeys: string[];
-	fieldNames: string[];  // "|"-joined field names per entry
-	fieldTypes: string[];  // "|"-joined field types per entry
-	preludes: boolean[];
-}
-
-function createGenericTypeInstStore(): GenericTypeInstStore {
-	return { keys: [], baseNames: [], typeArgKeys: [], fieldNames: [], fieldTypes: [], preludes: [] };
-}
-
-let _genericTypeInstStore: GenericTypeInstStore = createGenericTypeInstStore();
-
-export function resetGenericTypeInsts(): void {
-	_genericTypeInstStore = createGenericTypeInstStore();
-}
-
-export function resetAllSideChannels(): void {
-	resetGenericTypeInsts();
-}
-
-export function addGenericTypeInst(baseName: string, typeArgKey: string, mangledName: string, fieldNamesJoined: string, fieldTypesJoined: string, prelude: boolean): void {
-	// Dedup: skip if same baseName + typeArgKey already exists
-	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
-		if (_genericTypeInstStore.baseNames[i] == baseName && _genericTypeInstStore.typeArgKeys[i] == typeArgKey) return;
-	}
-	_genericTypeInstStore.keys.push(mangledName);
-	_genericTypeInstStore.baseNames.push(baseName);
-	_genericTypeInstStore.typeArgKeys.push(typeArgKey);
-	_genericTypeInstStore.fieldNames.push(fieldNamesJoined);
-	_genericTypeInstStore.fieldTypes.push(fieldTypesJoined);
-	_genericTypeInstStore.preludes.push(prelude);
-}
-
-export interface GenericTypeInstRow {
-	key: string;
-	baseName: string;
-	typeArgKey: string;
-	fieldNames: string;
-	fieldTypes: string;
-	prelude: boolean;
-}
-
-export function genericTypeInstMark(): int32 {
-	return _genericTypeInstStore.keys.length;
-}
-
-export function takeGenericTypeInstsFrom(mark: int32): GenericTypeInstRow[] {
-	const rows: GenericTypeInstRow[] = [];
-	const store = _genericTypeInstStore;
-	for (let i = mark; i < store.keys.length; i += 1) {
-		rows.push({ key: store.keys[i], baseName: store.baseNames[i], typeArgKey: store.typeArgKeys[i], fieldNames: store.fieldNames[i], fieldTypes: store.fieldTypes[i], prelude: store.preludes[i] });
-	}
-	while (store.keys.length > mark) {
-		store.keys.pop();
-		store.baseNames.pop();
-		store.typeArgKeys.pop();
-		store.fieldNames.pop();
-		store.fieldTypes.pop();
-		store.preludes.pop();
-	}
-	return rows;
-}
-
-export function addGenericTypeInstRow(row: GenericTypeInstRow): void {
-	addGenericTypeInst(row.baseName, row.typeArgKey, row.key, row.fieldNames, row.fieldTypes, row.prelude);
-}
-
-export function getGenericTypeInstCount(): int32 {
-	return _genericTypeInstStore.keys.length;
-}
-
-export function getGenericTypeInstMangledName(idx: int32): string {
-	return _genericTypeInstStore.keys[idx];
-}
-
-export function getGenericTypeInstBaseName(idx: int32): string {
-	return _genericTypeInstStore.baseNames[idx];
-}
-
-export function getGenericTypeInstTypeArgKey(idx: int32): string {
-	return _genericTypeInstStore.typeArgKeys[idx];
-}
-
-export function getGenericTypeInstFieldNames(idx: int32): string {
-	return _genericTypeInstStore.fieldNames[idx];
-}
-
-export function getGenericTypeInstFieldTypes(idx: int32): string {
-	return _genericTypeInstStore.fieldTypes[idx];
-}
-
-export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): int32 {
-	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
-		if (_genericTypeInstStore.baseNames[i] == baseName && _genericTypeInstStore.typeArgKeys[i] == typeArgKey) return i;
-	}
-	return -1;
-}
-
-// Count pipe-separated segments in a string
-function pipeCount(s: string): int32 {
-	if (s == "") return 0;
-	let count = 1;
-	for (let i = 0; i < s.length; i += 1) {
-		const ch = s[i];
-		if (ch == "|") count += 1;
-	}
-	return count;
-}
-
-// Get the nth pipe-separated segment (0-based)
-function pipeAt(s: string, idx: int32): string {
-	let count = 0;
-	let start = 0;
-	for (let i = 0; i < s.length; i += 1) {
-		const ch = s[i];
-		if (ch == "|") {
-			if (count == idx) {
-				let result = "";
-				for (let j = start; j < i; j += 1) { result = result + s[j]; }
-				return result;
-			}
-			count += 1;
-			start = i + 1;
-		}
-	}
-	if (count == idx) {
-		let result = "";
-		for (let j = start; j < s.length; j += 1) { result = result + s[j]; }
-		return result;
-	}
-	return "";
-}
-
-export function getGenericTypeInstFieldCount(instIdx: int32): int32 {
-	return pipeCount(_genericTypeInstStore.fieldNames[instIdx]);
-}
-
-export function getGenericTypeInstFieldNameAt(instIdx: int32, fieldIdx: int32): string {
-	return pipeAt(_genericTypeInstStore.fieldNames[instIdx], fieldIdx);
-}
-
-export function getGenericTypeInstFieldTypeAt(instIdx: int32, fieldIdx: int32): string {
-	return pipeAt(_genericTypeInstStore.fieldTypes[instIdx], fieldIdx);
-}
 
 // DefaultParamStore DELETED — defaults now stored on FunctionDeclData.fnDefaults
 // and read via resolvedSym.declNode (see checkExprPass.ms:fillDefaultArgsForNode)
 
 // ===== Conditional-compilation defines =====
 // The table the `when` chain is resolved against (src/compiler/defines.ms, a port of
-// Nim condsyms.nim). Deliberately NOT part of resetAllSideChannels: this is build
-// CONFIGURATION owned by the driver, not per-parse state that must not leak between
-// files. The driver sets it once per compilation; tests set and reset it explicitly.
+// Nim condsyms.nim). This is build CONFIGURATION owned by the driver, not
+// per-parse state that must not leak between files. The driver sets it once per compilation; tests set and reset it explicitly.
 let _parserDefines: DefineTable = createDefineTable();
 
 export function setParserDefines(t: DefineTable): void { _parserDefines = t; }

@@ -49,7 +49,7 @@ import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
-import { lowerStringTruthiness } from "./coercion/stringTruthiness";
+import { lowerStringTruthiness, instanceFieldInitializers, lowerMovedFieldInitTruthiness } from "./coercion/stringTruthiness";
 import { eraseBrandTypes } from "./coercion/brandErase";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
 import { lowerDestructuring } from "./desugar/destructuringLower";
@@ -68,6 +68,8 @@ import { lowerJsVarParam } from "./lowering/jsVarParamLower";
 import { lowerJsPointers } from "./lowering/jsPointerLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
+import { lowerAsyncModuleBody } from "./lowering/asyncModuleBody";
+import { lowerNamespaceValues } from "./lowering/namespaceValueLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
@@ -90,6 +92,7 @@ import { lowerOperators, bindCollectionKeyOps } from "./lowering/operatorLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { lowerStringOps } from "./native/stringOpLower";
 import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
+import { planModuleTdz } from "./lowering/moduleTdz";
 import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { spanLower } from "./lowering/spanLower";
 import { spanParamExpand } from "./native/spanParamExpand";
@@ -104,23 +107,25 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
-import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
 import { lowerEnumToString } from "./native/enumToStringLower";
 
-// An instance field initializer is evaluated by the constructor, so its `?.` and `??`
-// bind their temps there, after lowerCtorInit has moved it; on C the moved expression
-// also spills what a folded null comparison would drop.
+// An instance field initializer is evaluated by the constructor, so its `?.`, `??` and
+// truthiness tests bind their temps there, after lowerCtorInit has moved it; on C the moved
+// expression also spills what a folded null comparison would drop.
 function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
-	const result = lowerNullishCoalesce(lowerOptionalChain(lowerCtorInit(program, ctx), ctx), ctx);
+	const inits: Node[] = ctx.jsBackend ? [] : instanceFieldInitializers(program);
+	const moved = lowerMovedFieldInitTruthiness(lowerCtorInit(program, ctx), ctx, inits);
+	const result = lowerNullishCoalesce(lowerOptionalChain(moved, ctx), ctx);
 	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
 }
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false, asyncModuleBody: boolean = false): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
 	ctx.preserveModuleConstants = preserveModuleConstants;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	let result = eraseBrandTypes(program);
+	if (!jsBackend) { result = planModuleTdz(result, ctx); }
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
@@ -150,7 +155,9 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
+	if (asyncModuleBody) { result = lowerAsyncModuleBody(result, ctx); }
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
+	if (!jsBackend) { result = lowerNamespaceValues(result); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
 	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); }
 	result = lowerPointerAddresses(result, ctx, !jsBackend);
@@ -212,11 +219,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// into its bit before any backend sees the operator.
 	result = lowerBitSet(result, ctx);
 	result = lowerDCE(result, ctx);
-	if (jsBackend) { result = resolveRuntimeIdents(result, ctx); }
-	// Must trail resolveRuntimeIdents: the synthesized `Math` receiver has to
-	// stay unbound, or it resolves to the prelude's own `class Math` and gets
-	// mangled as a module global. The 64-bit pass runs first so the width
-	// passes below never see the nodes it consumed.
+	// The 64-bit pass runs first so the width passes below never see the nodes
+	// it consumed.
 	if (jsBackend) { result = refuseUnfoldedSizeofJS(result, ctx); }
 	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
 	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }

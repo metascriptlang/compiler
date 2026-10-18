@@ -63,8 +63,8 @@ const c: char = 'A';
 `;
 
 const SRC_CODE_CHAR = `
-const c: char = "A".code;
-const d: char = 'A'.code;
+const c: char = "A".code as char;
+const d: char = 'A'.code as char;
 `;
 
 test "a single-quoted letter is a string, so it does not fit a char slot" {
@@ -72,7 +72,7 @@ test "a single-quoted letter is a string, so it does not fit a char slot" {
 	assert text.contains("'string' is not assignable to type 'char'"), "'A' into char must fail the checker: " + text;
 }
 
-test "a letter's code fits a char slot from either quote" {
+test "a letter's code becomes a char with as char from either quote" {
 	const result = checkOnly(SRC_CODE_CHAR);
-	assert result.errors.length == 0, "\"A\".code into char must check: " + result.errors.join("\n");
+	assert result.errors.length == 0, "\"A\".code as char must check: " + result.errors.join("\n");
 }

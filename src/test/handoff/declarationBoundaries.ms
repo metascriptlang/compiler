@@ -1,12 +1,15 @@
 import { checkSource, strictErrorCount, warningCount } from "./helpers";
 import { compileToC, compileToCWithStd, compileToJS } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
-import { resetAllSideChannels } from "../../parser/context";
 import { checkProgramWithRegistry } from "../../checker/checkPass";
 import { getPreludeContext } from "../../checker/orchestrator";
 import { ExportRegistry, Severity } from "../../checker/context";
 import { Module, ModuleGraph } from "../../module/graph";
 import { NodeKind, ProgramData, FunctionDeclData, BlockStmtData, ExprStmtData, MatchExprData, createNodeAt } from "../../ast/node";
+import { resetBuildState } from "../../compiler/buildSession";
+import { MapEntry, createMapProvider, loadModuleGraph, canonicalModulePath } from "../../module/loader";
+import { checkModuleGraph } from "../../checker/orchestrator";
+import { lookupModuleCtx } from "../../checker/instantiate";
 
 test "declarationBoundaries: inheritance follows acyclic paths, not a depth limit" {
 	const cases0 = [
@@ -102,7 +105,7 @@ test "declarationBoundaries: nonvoid functions close every reachable exit" {
 		{ name: "an arrow that falls off is refused whether its return type is written, contextual or inferred", source: "function takeCb(cb: (n: int32) => boolean): boolean { return cb(1); }\nconst r = takeCb((n) => { if (n > 0) { return true; } });\n", expected: -1 },
 		{ name: "an arrow that falls off is refused whether its return type is written, contextual or inferred", source: "const inferred = (flag: boolean) => { if (flag) { return 1; } };\n", expected: -1 },
 		{ name: "a never function whose end is reachable is refused", source: "function nv(flag: boolean): never { if (flag) { throw new Error(\"x\"); } }\n", expected: -1 },
-		{ name: "a body whose every path returns, throws or never returns stays accepted", source: "function fail(msg: string): never { throw new Error(msg); }\nfunction a(flag: boolean): int32 { if (flag) { return 1; } else { return 2; } }\nfunction b(flag: boolean): int32 { while (true) { if (flag) return 1; } }\nfunction c(flag: boolean): int32 { if (flag) return 1; throw new Error(\"x\"); }\nfunction d(flag: boolean): int32 { if (flag) return 1; fail(\"no\"); }\nfunction e(k: int32): string { switch (k) { case 1: return \"a\"; default: return \"b\"; } }\nfunction m(k: int32): int32 { match (k) { 1 => { return 1; }, _ => { return 2; } } }\nfunction f(flag: boolean): void { if (flag) { return; } }\nfunction h(flag: boolean): int32 | void { if (flag) return 1; }\nasync function g(flag: boolean): Promise<void> { if (flag) return; }\nfunction nv(): never { while (true) { } }\nconst ok = (flag: boolean) => { if (flag) { return 1; } return 2; };\n", expected: 0 },
+		{ name: "a body whose every path returns, throws or never returns stays accepted", source: "function fail(msg: string): never { throw new Error(msg); }\nfunction a(flag: boolean): int32 { if (flag) { return 1; } else { return 2; } }\nfunction b(flag: boolean): int32 { while (true) { if (flag) return 1; } }\nfunction c(flag: boolean): int32 { if (flag) return 1; throw new Error(\"x\"); }\nfunction d(flag: boolean): int32 { if (flag) return 1; fail(\"no\"); }\nfunction e(k: int32): string { switch (k) { case 1: return \"a\"; default: return \"b\"; } }\nfunction m(k: int32): int32 { match (k) { 1 => { return 1; }, _ => { return 2; } } }\nfunction f(flag: boolean): void { if (flag) { return; } }\nasync function g(flag: boolean): Promise<void> { if (flag) return; }\nfunction nv(): never { while (true) { } }\nconst ok = (flag: boolean) => { if (flag) { return 1; } return 2; };\n", expected: 0 },
 	];
 	for (const item of cases) {
 		const errors = strictErrorCount(item.source);
@@ -155,7 +158,6 @@ test "declaration boundaries: null aliases warn once without changing the accept
 
 function builtMatchErrors(source: string): int32 {
 	checkSource("const warm: int32 = 0;");
-	resetAllSideChannels();
 	const parsed = parseSource(source);
 	if (!parsed.ok) return -1;
 	const fn = (parsed.value.data as ProgramData).programStmts[0];
@@ -242,4 +244,29 @@ test "declarationBoundaries: a generic type is written with its type arguments w
 		assert result.ok == (item.message == ""), item.name + ": " + error;
 		assert item.message == "" || error.indexOf(item.message, 0) >= 0, item.name + ": " + error;
 	}
+}
+
+// b.ms declares its own `Base` under the exported `Mid`; a.ms names a class `Base` too.
+function inheritanceErrors(entrySource: string): string[] {
+	resetBuildState();
+	const entries: MapEntry[] = [
+		{ entryPath: canonicalModulePath("/declarationBoundaries/a.ms"), entrySource },
+		{ entryPath: canonicalModulePath("/declarationBoundaries/b.ms"), entrySource: "class Base { tag(): string { return \"b\"; } }\nexport class Mid extends Base { }\n" },
+	];
+	checkModuleGraph(loadModuleGraph(entries[0].entryPath, createMapProvider(entries)), "");
+	const ctx = lookupModuleCtx(entries[0].entryPath);
+	const messages: string[] = [];
+	if (ctx == null) { messages.push("no module context"); return messages; }
+	for (const e of ctx.errors) messages.push(e.message);
+	return messages;
+}
+
+test "declarationBoundaries: an imported parent's own base is no cycle through a local class spelled the same" {
+	const messages = inheritanceErrors("import { Mid } from \"./b\";\nclass Base extends Mid { }\nconst s = new Base().tag();\n");
+	assert messages.length == 0, messages.join("\n");
+}
+
+test "declarationBoundaries: a local chain onto an imported parent is no cycle one level deeper" {
+	const messages = inheritanceErrors("import { Mid } from \"./b\";\nclass Top extends Mid { }\nclass Base extends Top { }\nconst s = new Base().tag();\n");
+	assert messages.length == 0, messages.join("\n");
 }

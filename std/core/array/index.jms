@@ -1,3 +1,5 @@
+export { toString } from "./shared";
+
 // MetaScript Array Prelude — JavaScript Backend.
 // Array methods bind to native JS dispatch as element-typed UFCS extensions on
 // T[]. The `extern class Array` method form does NOT resolve for arrays (array

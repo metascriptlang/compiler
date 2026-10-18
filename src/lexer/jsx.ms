@@ -16,7 +16,7 @@ import { scanString, scanTemplateContinuation } from "./scanner";
 function isExprPositionToken(k: TokenKind): boolean {
 	return match (k) {
 		TokenKind.Eof | TokenKind.Assign
-		| TokenKind.PlusEq | TokenKind.MinusEq | TokenKind.StarEq | TokenKind.SlashEq | TokenKind.PercentEq
+		| TokenKind.PlusEq | TokenKind.MinusEq | TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq
 		| TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq | TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq
 		| TokenKind.EqEq | TokenKind.EqEqEq | TokenKind.BangEq | TokenKind.BangEqEq
 		| TokenKind.AmpAmp | TokenKind.PipePipe | TokenKind.Question | TokenKind.QuestionQuestion

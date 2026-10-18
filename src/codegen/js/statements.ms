@@ -58,6 +58,11 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 		DeclKind.Var => { emit(gen, "var "); },
 		_ => { emit(gen, "let "); },
 	};
+	emitVariableBinding(gen, node);
+}
+
+function emitVariableBinding(gen: JSGenerator, node: Node): void {
+	const d = node.data as VariableDeclData;
 	emit(gen, jsSymbolName(gen, node.resolvedSym, d.declName));
 	if (d.initializer != null) {
 		emit(gen, " = ");
@@ -91,6 +96,14 @@ function emitStaticStorageDecl(gen: JSGenerator, node: Node): void {
 	emit(gen, "if (!" + guard + ") { " + guard + " = true; " + slot + " = ");
 	emitNode(gen, d.initializer);
 	emit(gen, "; }\n");
+}
+
+export function emitModuleStorageDecl(gen: JSGenerator, node: Node): void {
+	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias)) return;
+	gen.staticSlots.push("let " + jsSymbolName(gen, node.resolvedSym, (node.data as VariableDeclData).declName) + ";\n");
+	emitIndent(gen);
+	emitVariableBinding(gen, node);
+	emit(gen, ";\n");
 }
 
 export function emitVariableDecl(gen: JSGenerator, node: Node): void {

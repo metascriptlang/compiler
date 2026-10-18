@@ -8,8 +8,6 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-// Walks t.nodeType (synthesized type-AST per SERIALIZE Phase A1). Refs/Ptrs
-// unwrap via TypeGeneric (modifierToAst maps to TypeGeneric with base name).
 //
 // V1 supported field types — atomic (string, boolean, number, float*, intN,
 // uintN, enum, type alias) + nested named struct/interface. Arrays / unions /
@@ -23,16 +21,50 @@
 // std/serialize/discDetect.ms and is shared with JSON encode.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, implementationOf } from "../discDetect";
 // bindSym targets — the macros bind every emitted name in THIS module's scope,
 // so the user imports nothing but the entry macro. encode lives in encoder.ms
 // (not the index hub) precisely so binding it cannot cycle. See SERIALIZE.md §11.
-import { cborBool, cborText, cborTextMap, cborInt, cborFloat, _cborEnumName } from "./builder";
+import { cborBool, cborText, cborTextMap, cborInt, cborFloat, cborArray, _cborEnumName,
+	cborArrayOfStrings, cborArrayOfBooleans, cborArrayOfNumbers, cborArrayOfFloat32,
+	cborArrayOfInt8, cborArrayOfInt16, cborArrayOfInt32, cborArrayOfInt64,
+	cborArrayOfUint8, cborArrayOfUint16, cborArrayOfUint32 } from "./builder";
 import { encode } from "./encoder";
+import { CborValue } from "./types";
+
+export function _cborArrayOfInts<T>(arr: T[]): CborValue {
+	const items: CborValue[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		items.push(cborInt(arr[i] as int64));
+		i = i + 1;
+	}
+	return cborArray(items);
+}
+
+export function _cborArrayOfEnums<T>(arr: T[], ords: int32[], names: string[]): CborValue {
+	const items: CborValue[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		items.push(_cborEnumName(arr[i] as int32, ords, names));
+		i = i + 1;
+	}
+	return cborArray(items);
+}
+
+export function _cborArrayOfStructs<T>(arr: T[]): CborValue {
+	const items: CborValue[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		items.push(cborValueOf(arr[i]));
+		i = i + 1;
+	}
+	return cborArray(items);
+}
 
 export macro cborValueOf(t: Node): Node {
 	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
-	let tt = t.nodeType;
+	let tt = implementationOf(t);
 	if (tt.kind == NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
 	}
@@ -43,7 +75,7 @@ export macro cborValueOf(t: Node): Node {
 	// Builtin elements → per-type fast helpers (cborArrayOfX).
 	// TypeObject element (struct/interface) → `_cborArrayOfStructs<T>` generic.
 	if (tt.kind == NodeKind.TypeArray) {
-		const elemType: Node = tt.typExprElement;
+		const elemType: Node = implementationOf(tt.typExprElement);
 		let en: string = "";
 		let elemIsStruct: boolean = false;
 		if (elemType.kind == NodeKind.EnumDecl) {
@@ -56,7 +88,7 @@ export macro cborValueOf(t: Node): Node {
 			}
 			return {
 				kind: NodeKind.CallExpr, line: t.line, column: t.column,
-				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_cborArrayOfEnums" },
+				callee: bindSym("_cborArrayOfEnums"),
 				arguments: [t,
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names }],
@@ -67,6 +99,7 @@ export macro cborValueOf(t: Node): Node {
 		}
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
+			elemIsStruct = namesStruct(elemType);
 		} else if (elemType.kind == NodeKind.TypeObject) {
 			elemIsStruct = true;
 			en = elemType.typExprTypeName;
@@ -76,7 +109,10 @@ export macro cborValueOf(t: Node): Node {
 		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element.
 			const peeled: Node = elemType.typExprArgs[0];
-			if (peeled.kind == NodeKind.TypeObject) {
+			if (namesStruct(peeled)) {
+				elemIsStruct = true;
+				en = peeled.name;
+			} else if (peeled.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = peeled.typExprTypeName;
 				if (en == "") {
@@ -99,12 +135,7 @@ export macro cborValueOf(t: Node): Node {
 				kind: NodeKind.CallExpr,
 				line: t.line,
 				column: t.column,
-				callee: {
-					kind: NodeKind.Identifier,
-					line: t.line,
-					column: t.column,
-					name: "_cborArrayOfStructs",
-				},
+				callee: bindSym("_cborArrayOfStructs"),
 				arguments: [t],
 			};
 		}
@@ -113,40 +144,28 @@ export macro cborValueOf(t: Node): Node {
 				kind: NodeKind.CallExpr,
 				line: t.line,
 				column: t.column,
-				callee: {
-					kind: NodeKind.Identifier,
-					line: t.line,
-					column: t.column,
-					name: "_cborArrayOfInts",
-				},
+				callee: bindSym("_cborArrayOfInts"),
 				arguments: [t],
 			};
 		}
 		// Builtin atomic element → per-element-type fast helper.
 		// IF-ELSE not match: macro VM string-match dispatch always picks `_`.
-		let helperName: string = "cborArrayOfInt64";
-		if (en == "string") helperName = "cborArrayOfStrings";
-		else if (en == "boolean") helperName = "cborArrayOfBooleans";
-		else if (en == "number") helperName = "cborArrayOfNumbers";
-		else if (en == "float64") helperName = "cborArrayOfNumbers";
-		else if (en == "float32") helperName = "cborArrayOfFloat32";
-		else if (en == "int8") helperName = "cborArrayOfInt8";
-		else if (en == "int16") helperName = "cborArrayOfInt16";
-		else if (en == "int32") helperName = "cborArrayOfInt32";
-		else if (en == "int64") helperName = "cborArrayOfInt64";
-		else if (en == "uint8") helperName = "cborArrayOfUint8";
-		else if (en == "uint16") helperName = "cborArrayOfUint16";
-		else if (en == "uint32") helperName = "cborArrayOfUint32";
+		let helper: Node = bindSym("cborArrayOfInt64");
+		if (en == "string") helper = bindSym("cborArrayOfStrings");
+		else if (en == "boolean") helper = bindSym("cborArrayOfBooleans");
+		else if (en == "number" || en == "float64") helper = bindSym("cborArrayOfNumbers");
+		else if (en == "float32") helper = bindSym("cborArrayOfFloat32");
+		else if (en == "int8") helper = bindSym("cborArrayOfInt8");
+		else if (en == "int16") helper = bindSym("cborArrayOfInt16");
+		else if (en == "int32") helper = bindSym("cborArrayOfInt32");
+		else if (en == "uint8") helper = bindSym("cborArrayOfUint8");
+		else if (en == "uint16") helper = bindSym("cborArrayOfUint16");
+		else if (en == "uint32") helper = bindSym("cborArrayOfUint32");
 		return {
 			kind: NodeKind.CallExpr,
 			line: t.line,
 			column: t.column,
-			callee: {
-				kind: NodeKind.Identifier,
-				line: t.line,
-				column: t.column,
-				name: helperName,
-			},
+			callee: helper,
 			arguments: [t],
 		};
 	}

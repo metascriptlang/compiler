@@ -1,5 +1,5 @@
 // @stdout: 123 18446744073709552000 -9007199254740992 9007199254740996
-// @xfail(raiser): cannot compile node kind BigIntLiteral at comptime (inbox 2026-10-09-raiser-bigint-literal-at-comptime-in-1117)
+// @xfail(raiser): bigint is not supported on the Raiser VM (inbox 2026-10-09-raiser-bigint-literal-at-comptime-in-1117)
 // note: Number() of a bigint rounds to the nearest float64, ties to even, as TS does.
 
 const small: bigint = 123n;

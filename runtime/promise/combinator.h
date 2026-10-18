@@ -101,6 +101,13 @@ typedef struct {
  * Takes the Ref<Array> cell pointer (Promise<void>[]) — reads ->p->data and ->len. */
 void* msPromiseAny(msRefArray* futures);
 
+/* A future completed by generated code owns its result when it completes on the owner
+ * thread (Amendment O): readers copy it and the future drops what is left. A pool
+ * worker completes across threads, where the one reader takes the value. */
+static inline void msFutureOwnResult(msFuture* out, msClosure drop) {
+    if (drop.fn != NULL && !msIsPoolWorker) msFutureSetValueDrop(out, drop);
+}
+
 /* ===== Promise.then / .catch / .finally ===== */
 
 /* Type tags for typed callback dispatch.
@@ -341,8 +348,10 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
  *                                          box, free the box, NULL the slot
  *                  An owning input (valueDrop set) keeps its value: the share routine
  *                  the caller passes, share(dstPtr, fut), copies it into the slot.
- *   arrDestroyFn — destroy fn for the result array cell's TypeInfo (releases collected
- *                  elements and frees the payload when the consumer's last ref drops)
+ *   arrTI        — pointer to the result array cell's TypeInfo (its destroyFn releases the
+ *                  collected elements and frees the payload when the consumer's last ref
+ *                  drops); generated instances take it from the demand emitter, the runtime
+ *                  instances below define their own through MS_PROMISE_ALL_FOR
  *
  * Result future is msFuture_ptr* (generic) whose value field holds the result array
  * as a refcounted heap CELL (msAllocTyped, lean Ref<Array> rep): msRefHeader + arrType.
@@ -352,13 +361,13 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
 static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
 
 #define MS_PROMISE_ALL_FOR(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrDestroyFn) \
-    MS_PROMISE_ALL_FOR_NAMED(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrDestroyFn, #arrType "PallCell")
-
-#define MS_PROMISE_ALL_FOR_NAMED(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrDestroyFn, cellName) \
     static msTypeInfo elemFutType##_allArrTI = { \
-        .name = cellName, \
+        .name = #arrType "PallCell", \
         .destroyFn = (msDestroyProc)(arrDestroyFn), \
     }; \
+    MS_PROMISE_ALL_FOR_TI(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, &elemFutType##_allArrTI)
+
+#define MS_PROMISE_ALL_FOR_TI(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrTI) \
     typedef struct elemFutType##_allState { \
         msFuture* result; \
         elemFutType** inputs; \
@@ -407,6 +416,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
             } else { \
                 msDecref(s->arr); \
             } \
+            msDecref(s->result); \
             free(s->inputs); \
             free(s); \
         } \
@@ -417,7 +427,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         elemFutType** futures = (arr != NULL && arr->p != NULL) ? (elemFutType**)arr->p->data : NULL; \
         msFuture* result = (msFuture*)msFutureCreate(); \
         result->base.valueDestructor = msPromiseAllArrRelease; \
-        arrType* resultArr = (arrType*)msAllocTyped(sizeof(arrType), &elemFutType##_allArrTI); \
+        arrType* resultArr = (arrType*)msAllocTyped(sizeof(arrType), (arrTI)); \
         resultArr->len = count; \
         resultArr->p = NULL; \
         if (count == 0 || futures == NULL) { \
@@ -434,6 +444,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); } \
         elemFutType##_allState* state = (elemFutType##_allState*)calloc(1, sizeof(elemFutType##_allState)); \
         state->result = result; \
+        msIncref(result); \
         state->inputs = inputsCopy; \
         state->arr = resultArr; \
         state->share = share; \

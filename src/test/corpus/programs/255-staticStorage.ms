@@ -1,4 +1,3 @@
-// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // @maxrss: 30
 // @stdout: static-storage PASS
 // note: `static const`/`static let` — a declaration written inside a body whose storage lives at module scope. Runtime proof that the unit guard (src/test/handoff/macroExpansionBoundary.ms) cannot give: if the slot were a frame local the initializer would re-run and `once1()` would return A1/A2/A3; if the analyzer still queued module-scope storage for scope-exit destroy (the missing sfGlobal arm of the reference's per-declaration destroy routing, fixed 2026-08-10) the RC-typed slot would be freed after the first call and the second read would be a use-after-free. The RC type is load-bearing — an int-typed slot needs no cleanup and passes even when the routing is wrong. `builds` counts initializer runs: 1 for the `static const` plus 2 for the two `static let` calls, on every lane. Also pins that two functions declaring the SAME source name (`t`) get distinct module-scope slots — the reference mangles a proc-level global by unique symbol id, MS by declaration site. Parity C↔JS is the point: both backends implement the split independently.
@@ -12,6 +11,7 @@ function mk(tag: string): string {
 
 // Storage at module scope, initializer run once.
 function once1(): string { static const t = mk("A"); return t; }
+function onceLiteral(): string { static const text = "held"; return text; }
 
 // Same storage class, `let` spelling: keeps the reference's per-call init.
 function perCall(): string { static let t = mk("B"); return t; }
@@ -32,6 +32,7 @@ function main(): void {
 	if (once1() != "A1") ok = false;
 	if (once1() != "A1") ok = false;
 	if (once1() != "A1") ok = false;
+	if (onceLiteral() != "held" || onceLiteral() != "held") ok = false;
 
 	if (perCall() != "B2") ok = false;
 	if (perCall() != "B3") ok = false;

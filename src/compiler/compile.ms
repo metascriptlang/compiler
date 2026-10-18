@@ -7,14 +7,13 @@ import { writeStderr } from "std/io";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
-import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity } from "../checker/context";
+import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
-import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait } from "../codegen/js/jsgen";
+import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
 import { createJSHelpers, escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
@@ -26,38 +25,36 @@ import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
+import { getParserDefines, setParserDefines } from "../parser/context";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises, resetRaises } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
+import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
 import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
-import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
-import { sealRuntimeProcs } from "../transform/util";
+import { getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
+import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
-import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
-import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
+import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
-import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
-import { setGlobalHookOwners, setJsProgramScope, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
-import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
+import { createTransformContextWithChecker } from "../transform/context";
+import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
+import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
-import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
-import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
-import { GenericTypeInstRow, addGenericTypeInstRow, getParserDefines, setParserDefines } from "../parser/context";
+import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
@@ -422,7 +419,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks, opts.appMode);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -526,6 +523,7 @@ function writeStdGraphDeps(graph: ModuleGraph, key: string, stamp: string): void
 		let ii = 0;
 		while (ii < m.imports.length) {
 			const ie = m.imports[ii];
+			if (ie.dynamic) return;
 			const names: string[] = [];
 			let ni = 0;
 			while (ni < ie.names.length) { names.push(ie.names[ni]); ni = ni + 1; }
@@ -571,7 +569,6 @@ interface A2Timers {
 	mono: number;
 	macro: number;
 	xform: number;
-	refine: number;
 	native: number;
 	analyze: number;
 	lower: number;
@@ -588,10 +585,10 @@ interface A2Job {
 	timers: A2Timers;
 	diagnostics: ModuleError[];
 	instances: Node[];
-	typeInstances: GenericTypeInstRow[];
 	cloneInput: boolean;
 	ran: boolean;
 	claims: LowerClaims;
+	asyncModuleBody: boolean;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -632,9 +629,6 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 
 function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
-	const typeInfoMark = typeInfoOwnerMark();
-	const ownerMark = hookOwnerMark();
-	const hookMark = hookSymMark();
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -645,7 +639,6 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const errBase = ctx.errors.length;
 	if (opts.verbose) verboseLog(`transforming ${modPath}`);
-	for (const row of job.typeInstances) addGenericTypeInstRow(row);
 	const _tm0 = performance.now();
 	const monoed = monomorphizeProgram(program, ctx);
 	validateTypedAST(ctx, monoed);
@@ -673,18 +666,15 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const hcrSlot = job.hcrSlot;
 	const _tx0 = performance.now();
-	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0);
+	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0, job.asyncModuleBody);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 	nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 	nativeCtx.objChecks = opts.mode != MODE_DANGER;
-	const _tr0 = performance.now();
-	const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
-	job.timers.refine = job.timers.refine + (performance.now() - _tr0);
 	const _tn0 = performance.now();
-	const nativeTransformed = transformForNative(typeRefined, nativeCtx);
+	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
@@ -708,7 +698,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: hookOwnersFrom(ownerMark), hooks: hookSymsFrom(hookMark), ops: opsFrom(keyedOpMark) };
+	job.claims = { ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -719,6 +709,7 @@ interface ModuleEmissionJob {
 	modPath: string;
 	weight: int32;
 }
+
 
 class ModuleEmissionResult {
 	slot: int32 = 0;
@@ -1342,6 +1333,7 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 }
 
 function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false): void {
+	retainCheckedInstances(moduleCtxs);
 	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null, classesBesideGeneric);
 }
 
@@ -1413,23 +1405,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	// Project root for deriving module IDs
 	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
 
-	// Build import source → module ID mapping for all modules
-	// This maps how modules reference each other (import specifier) to the __mod["id"] key
-	const modIdValues: string[] = [];
-	const modIdKeys: string[] = [];
-	for (const modPath of graph.loadOrder) {
-		const mod = findModule(graph, modPath);
-		if (mod == null) continue;
-		const moduleId = replaceExt(relative(projectRoot, modPath), "");
-		modIdKeys.push(modPath);
-		modIdValues.push(moduleId);
-		// Also register the import specifier form (e.g., "std/process" for "std/process/index")
-		for (const imp of mod.imports) {
-			modIdKeys.push(imp.sourceSpecifier);
-			modIdValues.push(moduleId);
-		}
-	}
-
 	// Collect all external @import entries (from .jms files), dedup by modulePath
 	const extImportKeys: string[] = [];
 	const extImportNames: string[][] = [];
@@ -1492,6 +1467,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 
 	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
+	const dynamicPlan = planDynamicModules(graph, entryPath, unitPaths, config.stdPath);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
@@ -1512,23 +1488,12 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
-		// Build per-module import specifier → module ID mapping
-		const localMapKeys: string[] = [];
-		const localMapValues: string[] = [];
-		for (let gi = 0; gi < modIdKeys.length; gi += 1) {
-			localMapKeys.push(modIdKeys[gi]);
-			localMapValues.push(modIdValues[gi]);
-		}
-		for (const imp of mod.imports) {
-			const resolvedId = replaceExt(relative(projectRoot, imp.sourcePath), "");
-			localMapKeys.push(imp.sourceSpecifier);
-			localMapValues.push(resolvedId);
-		}
-
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
-		const isPrelude = moduleId.startsWith("std/core/");
-		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers);
-		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
+		const result = generateJSBundleModule(transformed, modPath, opts.sourcemap, helpers, dynamicPlan);
+		if (hasTopLevelAwait(transformed)) {
+			anyTopLevelAwait = true;
+			if (dynamicPlan.lazy.has(modPath)) dynamicPlan.topLevelAwait.add(modPath);
+		}
 		if (modPath == entryPath) entryExports = bundleExportList(result.exportedNames, result.exportedLocals, reexports);
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;
@@ -1557,6 +1522,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	}
 	// Same reason as generateJSModule: node must meet module syntax before a top-level await.
 	if (extImportKeys.length == 0 && anyTopLevelAwait) output = output + "export {};\n";
+	output = output + bundleModuleEvaluator(dynamicPlan);
 	const headerLines = opts.sourcemap ? countNewlines(output) : 0 as int32;
 	output = output + bundle + entryExports;
 
@@ -1593,7 +1559,14 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
 		);
 	}
-	if (opts.targetOs == "bare" || opts.targetOs == "solana") return [];
+	if (opts.targetOs == "solana") {
+		return processCompileDirectives(
+			"runtime/freestanding/musl/pow.c\nruntime/freestanding/musl/pow_data.c\nruntime/freestanding/musl/exp_data.c", ".", includePaths, allFlags,
+			opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose,
+			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
+		);
+	}
+	if (opts.targetOs == "bare") return [];
 
 	let rtFiles = "";
 	if (opts.targetOs == "emcc") {
@@ -1619,6 +1592,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	}
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
+	rtFiles = rtFiles + "\n" + "runtime/promise/moduleEval.c";
 	if (opts.isHcr) rtFiles = rtFiles + "\n" + "runtime/hcr.c";
 
 	if (rtFiles == "") return [];
@@ -1666,15 +1640,13 @@ function hcrModuleId(modPath: string, root: string, stdPath: string, deps: DepsS
 	return "";
 }
 
-function hcrFunctionSymbol(info: ExportedSymInfo, fn: Symbol): string {
-	if (info.name == "main") return safeName(info.name);
+function hcrFunctionSymbol(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
 	if (fn.nativeName != "") return fn.nativeName;
 	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
 	return mangleProcName(fn.name, mangleModuleName(fn.modulePath), fn.disamb);
 }
-function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
-	if (info.name == "main") return safeName(info.name);
+function hcrFunctionSlot(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
 	if (fn.nativeName != "") return fn.nativeName;
 	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
@@ -1686,7 +1658,7 @@ function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info
 	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
 	if (hasGenericParams(fn.symbolType) || hasFlag(fn, SymbolFlag.CompileTime)) return Result.ok(null);
 	if (fn.declNode != null && fn.declNode.kind == NodeKind.FunctionDecl && isGenericFn((fn.declNode.data as FunctionDeclData).fnFlags)) return Result.ok(null);
-	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
+	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(fn)));
 	return Result.ok(null);
 }
 
@@ -1798,6 +1770,7 @@ function buildHcrCandidateAbi(
 	}
 	return Result.ok({ candidate, modulePaths });
 }
+
 
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
@@ -1945,29 +1918,6 @@ function linkHcrImages(
 	}
 }
 
-function hcrTypeInfoNames(program: Node | null, modPath: string): string[] {
-	const names: string[] = [];
-	if (program == null) return names;
-	const moduleName = mangleModuleName(modPath);
-	for (const stmt of (program.data as ProgramData).programStmts) {
-		let decl = stmt;
-		if (decl.kind == NodeKind.DecoratedDecl) {
-			const decorated = decl.data as DecoratedDeclData;
-			if (decorated.decoratedNode != null) decl = decorated.decoratedNode;
-		}
-		if (decl.kind == NodeKind.ExportDecl) {
-			const exported = decl.data as ExportDeclData;
-			if (exported.exportedDecl != null) decl = exported.exportedDecl;
-		}
-		let name = "";
-		if (decl.kind == NodeKind.ClassDecl) name = (decl.data as ClassDeclData).className;
-		else if (decl.kind == NodeKind.InterfaceDecl) name = (decl.data as InterfaceDeclData).interfaceName;
-		if (name == "" || name.startsWith("$") || name.indexOf("__", 0) >= 0) continue;
-		names.push(mangleQualified(name, moduleName));
-	}
-	return names;
-}
-
 function hcrTypeLayoutKeys(program: Node | null): string[] {
 	const pairs: string[] = [];
 	if (program == null) return pairs;
@@ -2009,6 +1959,8 @@ function hcrRootFunctions(modulePaths: string[]): Symbol[] {
 			roots.push(info.sym);
 		}
 	}
+	const uninitialized = compilerFuncSym("msModuleBindingUninitialized");
+	if (uninitialized != null) roots.push(uninitialized);
 	return roots;
 }
 
@@ -2034,15 +1986,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	}
 	for (const info of facts.typeInfoOrder) {
 		for (const module of modules) {
-			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
-		}
-	}
-	for (const info of aliveSet.instanceTypeInfos) {
-		if (info.inCore) continue;
-		for (const module of modules) {
-			if (!info.demanders.includes(module.modulePath)) continue;
-			module.typeInfos.push(info.cName);
-			break;
+			if (info.owner == module.modulePath && !info.moduleLocal && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
 		}
 	}
 	for (const module of modules) {
@@ -2490,8 +2434,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 // Reference parity: global hook ownership registry shared across all modules.
 // First module to need a type's DRC hooks generates them; others get extern protos.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
-const sharedHookOwners = createNameSet();
-setGlobalHookOwners(sharedHookOwners);
+resetLiftedOps();
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
@@ -2627,7 +2570,7 @@ setGlobalHookOwners(sharedHookOwners);
 
 
 	// PROFILE: sub-phase timings summed across all modules.
-	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, refine: 0, native: 0, analyze: 0, lower: 0 };
+	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, native: 0, analyze: 0, lower: 0 };
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
 	// created during a later module's check is OWNED by its defining module (set in
@@ -2671,6 +2614,7 @@ setGlobalHookOwners(sharedHookOwners);
 			if (keeps) homes.set(instNode, modPath);
 		}
 	}
+	retainCheckedInstances(checkedModCtxs(checkedMods));
 	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep, homes);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
@@ -2678,7 +2622,6 @@ setGlobalHookOwners(sharedHookOwners);
 		const path = hcrModulePaths[i];
 		const checkedProgram = programByPath.has(path) ? programByPath.get(path) : null;
 		const program = session.keep && checkedProgram != null ? programWithInstances(checkedProgram, instancesByOwner.get(path)) : checkedProgram;
-		hcrModules[i].typeInfos = hcrTypeInfoNames(program, path);
 		hcrModules[i].typeKeys = hcrTypeLayoutKeys(program);
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
@@ -2686,33 +2629,9 @@ setGlobalHookOwners(sharedHookOwners);
 	const checkedPaths: string[] = [];
 	for (const cm of checkedMods) checkedPaths.push(cm.modPath);
 	const lowerOrder = coreBeforeImages(checkedPaths, reloadable);
-	const firstModule = lowerOrder.length > 0 ? checkedMods[lowerOrder[0]].modPath : "";
-	const typeRowsOf = new HashMap<string, GenericTypeInstRow[]>();
-	const sharedOrder: string[] = [];
-	const sharedFromReloadable: GenericTypeInstRow[] = [];
-	for (const path of graph.loadOrder) {
-		if (!reloadable.includes(path) || path == firstModule) {
-			sharedOrder.push(path);
-			continue;
-		}
-		const own: GenericTypeInstRow[] = [];
-		for (const row of moduleTypeInstanceRows(session.check, path)) {
-			if (row.prelude) sharedFromReloadable.push(row);
-			else own.push(row);
-		}
-		typeRowsOf.set(path, own);
-	}
-	const sharedRows = collectTypeInstanceRows(session.check, sharedOrder);
-	const sharedKeys = new HashSet<string>();
-	for (const row of sharedRows) sharedKeys.add(row.baseName + "|" + row.typeArgKey);
-	for (const row of sharedFromReloadable) {
-		const key = row.baseName + "|" + row.typeArgKey;
-		if (sharedKeys.has(key)) continue;
-		sharedKeys.add(key);
-		sharedRows.push(row);
-	}
-	typeRowsOf.set(firstModule, sharedRows);
-	const noTypeRows: GenericTypeInstRow[] = [];
+	const lazyPlan = planDynamicModules(graph, entryPath, checkedPaths, config.stdPath);
+	const asyncBodies = new HashSet<string>();
+	for (const cm of checkedMods) if (lazyPlan.lazy.has(cm.modPath) && hasTopLevelAwait(cm.program)) asyncBodies.add(cm.modPath);
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
@@ -2729,8 +2648,7 @@ setGlobalHookOwners(sharedHookOwners);
 		}
 		for (const cm of checkedMods) {
 			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
-			const rows = typeRowsOf.get(cm.modPath);
-			if (rows != null && rows.length > 0) fingerprint = fingerprint + "#types:" + typeInstanceRowsFingerprint(rows);
+			if (asyncBodies.has(cm.modPath)) fingerprint = fingerprint + "#asyncBody";
 			ownerFingerprints.set(cm.modPath, fingerprint);
 			if (session.check.rechecked.has(cm.modPath) || !session.lowerFingerprints.has(cm.modPath)) continue;
 			if (session.lowerFingerprints.get(cm.modPath) != fingerprint) {
@@ -2758,10 +2676,11 @@ setGlobalHookOwners(sharedHookOwners);
 			timers: a2t,
 			diagnostics: [],
 			instances: routed != null ? routed : [],
-			typeInstances: typeRowsOf.get(modPath) ?? noTypeRows,
+
 			cloneInput: session.keep,
 			ran: false,
-			claims: { typeInfos: [], owners: [], hooks: [], ops: [] },
+			claims: { ops: [] },
+			asyncModuleBody: asyncBodies.has(modPath),
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -2770,7 +2689,7 @@ setGlobalHookOwners(sharedHookOwners);
 				session.loweredCount = session.loweredCount + 1;
 				const previous = session.lowerClaims.get(modPath);
 				if (previous != null && !sameClaims(previous, job.claims)) {
-					session.staleReason = `the hooks or TypeInfos claimed by ${modPath} changed`;
+					session.staleReason = `the operations lifted by ${modPath} changed`;
 					return BuildStatus.Stale;
 				}
 				session.lowerClaims.set(modPath, job.claims);
@@ -2779,9 +2698,6 @@ setGlobalHookOwners(sharedHookOwners);
 			} else {
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
-					replayTypeInfoOwners(claims.typeInfos);
-					replayHookOwners(claims.owners);
-					replayHookSyms(claims.hooks);
 					replayOps(claims.ops);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
@@ -2829,7 +2745,7 @@ setGlobalHookOwners(sharedHookOwners);
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
 	if (opts.showTime) {
-		console.log(`    mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms refine=${a2t.refine}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
+		console.log(`    mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
 	}
 
 	// Gate: stop before codegen if any type errors (standard compiler parity).
@@ -2879,7 +2795,7 @@ setGlobalHookOwners(sharedHookOwners);
 	if (fsWritableHits.length > 0) {
 		let fsReported = 0;
 		for (const h of fsWritableHits) {
-			if (!aliveSetHasDecl(aliveSet, h.modPath, h.name, h.sym)) continue;
+			if (!aliveSetHasDecl(aliveSet, h.sym, h.name)) continue;
 			renderModuleError(h.modPath, h.source, {
 				message: h.message,
 				line: h.line,
@@ -3102,6 +3018,8 @@ setGlobalHookOwners(sharedHookOwners);
 			aliveModules.push(mp);
 		}
 	}
+	const dynamicPlan = planDynamicModules(graph, entryPath, aliveModules, config.stdPath);
+	for (const mp of asyncBodies) dynamicPlan.topLevelAwait.add(mp);
 
 	// Skip link step if --emit=c (only writing C source files)
 	if (opts.emitC && opts.isHcr) {
@@ -3110,13 +3028,13 @@ setGlobalHookOwners(sharedHookOwners);
 		for (const mp of aliveModules) {
 			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
 		}
-		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs));
+		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs, dynamicPlan));
 		printDiag(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) continue;
 			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(mp)}.c`;
-			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath));
+			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)));
 			printDiag(`${green("  Wrote")} ${bold(imagePath)}`);
 		}
 		printDiag(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
@@ -3132,6 +3050,7 @@ setGlobalHookOwners(sharedHookOwners);
 			opts.targetOs,
 			opts.appMode == "lib" || opts.appMode == "staticlib",
 			moduleOutputs,
+			dynamicPlan,
 		);
 		const emitDir = emitDirOf(opts);
 		const dispPath = `${emitDir}/_dispatch.c`;
@@ -3160,7 +3079,7 @@ setGlobalHookOwners(sharedHookOwners);
 		for (const mp of aliveModules) {
 			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
 		}
-		pushDispatcherJob(cJobs, oSlots, "_hcrcore", genHcrCoreDispatcher(coreModules, moduleOutputs), coreFlags, opts);
+		pushDispatcherJob(cJobs, oSlots, "_hcrcore", genHcrCoreDispatcher(coreModules, moduleOutputs, dynamicPlan), coreFlags, opts);
 		hcrCoreSlot = oSlots.length - 1;
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
@@ -3168,7 +3087,7 @@ setGlobalHookOwners(sharedHookOwners);
 				console.log(`${error("error")}: internal: HCR module '${mp}' produced no C output`);
 				throw new Error(BUILD_STOPPED);
 			}
-			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(mp)}`, genHcrImageDispatcher(output, mp == entryPath), imageFlags, opts);
+			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(mp)}`, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)), imageFlags, opts);
 			hcrImageSlots.push(oSlots.length - 1);
 		}
 	} else {
@@ -3179,6 +3098,7 @@ setGlobalHookOwners(sharedHookOwners);
 			opts.targetOs,
 			opts.appMode == "lib" || opts.appMode == "staticlib",
 			moduleOutputs,
+			dynamicPlan,
 		);
 		dispatcherSlot = oSlots.length;
 		pushDispatcherJob(cJobs, oSlots, "_dispatch", dispatcherSource, allFlags, opts);
@@ -3356,8 +3276,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 // Reference parity: global hook ownership registry shared across all modules.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
-const sharedHookOwners = createNameSet();
-setGlobalHookOwners(sharedHookOwners);
+resetLiftedOps();
 	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
@@ -3418,8 +3337,7 @@ setGlobalHookOwners(sharedHookOwners);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 		nativeCtx.objChecks = opts.mode != MODE_DANGER;
-		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
-		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
+		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
@@ -3735,6 +3653,8 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const moduleSmaps: SourceInfo[] = [];
 	const moduleNeededMods: string[][] = [];
 	const moduleNeededNames: string[][][] = [];
+	const moduleNamespaceMods: string[][] = [];
+	const moduleNamespaceNames: string[][][] = [];
 	const moduleExported: string[][] = [];
 	const moduleTestNames: string[][] = [];
 	const moduleTestFuncs: string[][] = [];
@@ -3774,28 +3694,31 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		moduleSmaps.push(res.smap);
 		moduleNeededMods.push(res.neededModules);
 		moduleNeededNames.push(res.neededNames);
+		moduleNamespaceMods.push(res.namespaceModules);
+		moduleNamespaceNames.push(res.namespaceNames);
 		moduleExported.push(res.exportedNames);
 		moduleTestNames.push(res.testNames);
 		moduleTestFuncs.push(res.testFuncs);
 	}
 
-	// Forced exports: names other modules reference that this module didn't
-	// export (private helpers reachable from generic bodies, caller-side
-	// instances reused by later modules). A name needed here but not defined
-	// here is a compiler bug — node fails loudly at the gate, by design.
+	// Forced exports: names other modules reference or read through a namespace
+	// object that this module didn't export (private helpers reachable from
+	// generic bodies, caller-side instances reused by later modules). A name
+	// needed here but not defined here is a compiler bug — node fails loudly at
+	// the gate, by design.
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const forced: string[] = [];
+		const demanded: string[] = [];
 		for (let vi = 0; vi < unitPaths.length; vi += 1) {
-			if (vi == ui) continue;
 			for (let mi = 0; mi < moduleNeededMods[vi].length; mi += 1) {
-				if (moduleNeededMods[vi][mi] != unitPaths[ui]) continue;
-				for (const n of moduleNeededNames[vi][mi]) {
-					let already = false;
-					for (const e of moduleExported[ui]) { if (e == n) { already = true; } }
-					for (const f of forced) { if (f == n) { already = true; } }
-					if (!already) forced.push(n);
-				}
+				if (vi != ui && moduleNeededMods[vi][mi] == unitPaths[ui]) for (const n of moduleNeededNames[vi][mi]) demanded.push(n);
 			}
+			for (let mi = 0; mi < moduleNamespaceMods[vi].length; mi += 1) {
+				if (moduleNamespaceMods[vi][mi] == unitPaths[ui]) for (const n of moduleNamespaceNames[vi][mi]) demanded.push(n);
+			}
+		}
+		for (const n of demanded) {
+			if (!moduleExported[ui].includes(n) && !forced.includes(n)) forced.push(n);
 		}
 		let code = moduleCodes[ui];
 		if (forced.length > 0) {
@@ -3974,6 +3897,10 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		if (opts.verbose) verboseLog("compiling " + modPath);
 		const checked = graphCheckedModule(graph, modPath, mod, opts);
 		checked.ctx.errors = [];
+		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
+			refuseBigIntOnRaiser(checked.ctx, checked.program);
+			exitOnCheckerErrors(checked.ctx, modPath, mod.rawSource);
+		}
 		unitPaths.push(modPath);
 		unitPrograms.push(checked.program);
 		unitCtxs.push(checked.ctx);
@@ -3988,8 +3915,8 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
 		txCtx.rangeChecks = opts.mode != MODE_DANGER;
-		const refined = refineTypes(comptimeResolved, txCtx, graphRegistry);
-		const transformed = transformForRaiser(refined, modCtx);
+		const transformed = transformForRaiser(comptimeResolved, modCtx);
+		if (mod != null) exitOnCheckerErrors(modCtx, unitPaths[i], mod.rawSource);
 
 		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };
 		modules.push(input);
@@ -4000,7 +3927,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	// through the same registry — load it first or both see an empty table.
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules);
+	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath));
 	// Comptime parity: queued bytecode-compile errors are collected and
 	// reported, not fatal — std module bodies the program never calls can
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks

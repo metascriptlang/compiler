@@ -3,28 +3,29 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ProgramData, PropertyDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind, MethodDeclData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, getProperty, peelToStructOrUnion } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, factClaimGeneric, factSkipTypeInfo,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
+	setLocalSymName, factClaimGeneric, scopeMangledParam,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp, zeroInit, defineDeferredElements } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
-import { isDrcLifecycleName, copiesInline, inlineDeclOf } from "./forward";
+import { copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
-// genGenericTypeInsts lives in index.ms for the same reason.
 
 // ===== genDecl — main declaration dispatcher =====
+
+
 
 
 export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
@@ -95,7 +96,6 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (sym != null && hasFlag(sym, SymbolFlag.CompileTime)) return;
 
 	// Module-qualified name (Standard reference implementation parity)
-	const isMain = d.fnName == "main";
 	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || d.fnFlags == "extern" || d.fnFlags.indexOf("extern", 0) >= 0;
 	const ovIdx = sym != null ? sym.overloadIdx : 0;
 	let name = mangledFunctionName(sym, d.fnName, ovIdx);
@@ -108,7 +108,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	const fnType = node.nodeType;
 	if (fnType == null) return;
 	if (hasGenericParams(fnType) || isGenericFn(d.fnFlags)) return;
-	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym != null && sym.name.indexOf("__") >= 0;
+	const isGenericInstance = sym != null && sym.instantiatedFrom != null;
 	if (g.preparingDeclarations) {
 		if (isGenericInstance && g.preparationFacts != null
 				&& (!g.preparationFacts.genericOwners.has(name) || sym.modulePath == g.modulePath)) {
@@ -122,13 +122,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 
 	// DRC lifecycle hooks have fixed ABI — skip struct-aware promotion.
-	// Detection: (1) name pattern (TypeNameDestroy etc.) for user-named types;
-	// (2) GeneratedOp flag for compiler-synthesized hooks whose name clashes
-	// with the `ms*` runtime prefix exclusion in isDrcLifecycleName (e.g.
-	// anonymous structs emitted as `msAnon_<hash>Destroy`). markGeneratedOp
-	// only flags real lifecycle hooks, so the suffix re-check is unnecessary.
-	const isDrcHookFn = isDrcLifecycleName(name)
-		|| (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp));
+	const isDrcHookFn = sym != null && hasFlag(sym, SymbolFlag.GeneratedOp);
 	const protoMutBits: int32 = sym != null ? sym.mutatedParams : 0;
 
 	const instanceAlreadyEmitted = isGenericInstance && (g.emittedInstances.has(name)
@@ -143,7 +137,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
 	const hcrCoreCallable = sym != null && sym.modulePath != "" && g.emissionFacts.hcrCoreUnits.has(g.modulePath);
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
-	const isPublicLinkage = isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
+	const isPublicLinkage = isExported || isExternFn || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
 	const linkage = isPublicLinkage ? "" : (sym != null ? "MS_LIB_PRIVATE " : "static ");
 	const outOfLine = sym != null && hasFlag(sym, SymbolFlag.NoInline) ? "__attribute__((noinline)) " : "";
 	const prefix = inlineCopy ? "static inline " : exportPrefix + outOfLine + linkage;
@@ -237,7 +231,7 @@ export function registerDeclCName(g: CGen, node: Readonly<Node>): void {
 	const sym = declTypeSym(n);
 	if (sym == null) return;
 	const cn = mangledTypeName(sym, sym.name);
-	typeCacheSet(g.typeCache, "cname:" + sym.name, cn);
+	typeCacheSet(g.typeCache, "decl:" + cn, cn);
 	typeCacheSet(g.typeCache, "bare:" + cn, sym.name);
 }
 
@@ -330,7 +324,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// globals. Reachable because checkClassDecl resolves the class name to
 	// the same-named Function symbol.
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
-		genStaticFieldGlobals(g, d, node.resolvedSym);
+		genStaticFieldGlobals(g, d);
 		return;
 	}
 
@@ -341,7 +335,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	}
 
 	if (node.nodeType != null && hasGenericParams(node.nodeType)) {
-		genStaticFieldGlobals(g, d, node.resolvedSym);
+		genStaticFieldGlobals(g, d);
 		return;
 	}
 
@@ -350,15 +344,8 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + name;
 	const typeAlreadyDeclared = nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey);
-	// Always record ownership — declaredThings is the module's declaration claim,
-	// used by ensureTypeInfoDef to decide which module emits msTypeInfo definitions.
-	// The struct body emission below is separately guarded by typeAlreadyDeclared
-	// to avoid re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
-	genStaticFieldGlobals(g, d, node.resolvedSym);
-	const parent = node.nodeType != null ? classParentOf(node.nodeType) : null;
-	const parentInstance = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
-	if (parentInstance != null && parentInstance.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, getTypeDesc(g, parentInstance), parentInstance);
+	genStaticFieldGlobals(g, d);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
@@ -393,15 +380,6 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		add(types, structDef);
 		addNewline(types);
 	}
-
-	// Emit methods (always, even if struct was already declared). ConstructorDecl
-	// never reaches this loop — methodToFunction lifts it out of classBody into a
-	// top-level `<Class>_init` FunctionDecl (mono instances included).
-	for (const member of d.classBody) {
-		if (member.kind == NodeKind.MethodDecl) {
-			genMethodAsFunction(g, member, name);
-		}
-	}
 }
 
 function initializerLiteralType(literal: Readonly<Node>, declType: Type | null): Type | null {
@@ -410,22 +388,23 @@ function initializerLiteralType(literal: Readonly<Node>, declType: Type | null):
 
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
-function staticFieldSymOf(owner: Symbol | null, qualifiedName: string): Symbol | null {
-	if (owner == null) return null;
-	for (const sf of owner.staticFields) {
-		if (sf.name == qualifiedName) return sf;
-	}
-	return null;
-}
-
-function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbol | null): void {
+function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 	for (const member of d.classBody) {
+		const inner = member.kind == NodeKind.DecoratedDecl ? (member.data as DecoratedDeclData).decoratedNode : member;
+		if (inner != null && (inner.kind == NodeKind.MethodDecl || inner.kind == NodeKind.ConstructorDecl)) {
+			addCGenError(g, `internal: callable member in class '${d.className}' reached C codegen before methodToFunction`, inner.location.line, inner.location.column);
+			return;
+		}
 		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic) { continue; }
 		const cType = member.nodeType != null ? getTypeDesc(g, member.nodeType) : "double";
-		const qualifiedName = d.className + "." + pd.propName;
-		const globalName = staticFieldCName(staticFieldSymOf(owner, qualifiedName), qualifiedName);
+		const fieldSym = member.resolvedSym;
+		if (fieldSym == null || !hasFlag(fieldSym, SymbolFlag.Static)) {
+			addCGenError(g, `internal: static field '${d.className}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
+			return;
+		}
+		const globalName = staticFieldCName(fieldSym);
 		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
 		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {
@@ -446,72 +425,6 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbo
 				},
 			};
 		}
-	}
-}
-
-// ===== Method as Free Function =====
-
-function genMethodAsFunction(g: CGen, node: Readonly<Node>, className: string): void {
-	const d = node.data as MethodDeclData;
-	// Use sym.name directly — matches how extensionMethodLower constructs the call name.
-	// Avoids safeName mismatch (e.g. "abort" → "abort_" on declaration but not call site).
-	const fallbackName = `${className}_${safeName(d.methodName)}`;
-	const methodOvIdx = node.resolvedSym != null ? node.resolvedSym.overloadIdx : 0;
-	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym != null && node.resolvedSym.name != "") ? node.resolvedSym.name : fallbackName, methodOvIdx);
-	const methodType = node.nodeType;
-	// Skip emission of generic method bodies (mirror the same guard in
-	// genFunctionDecl). When a generic static method is mono-instantiated for
-	// concrete T (Bug 10 fix), the mono instance lands in `_pendingInstances`
-	// as a synthesized FunctionDecl and gets emitted by the regular function
-	// path. The original generic method body — with deferred MacroInvocation
-	// or `void*` typed params from unresolved T — would otherwise emit broken
-	// C alongside the working mono instance. Type-level (GenericParam in
-	// tree) plus flag-level (`gen:` marker on methodFlags) — either skips.
-	if (hasGenericParams(methodType)) return;
-	if (isGenericFn(d.methodFlags)) return;
-	if (d.methodFlags == "extern" || d.methodFlags.indexOf("extern", 0) >= 0) return;
-	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC)) return;
-	const cRetType = getTypeDesc(g, methodType.typeReturn);
-	// NRVO: methods returning large value-types (Result<T,E>, struct, tuple)
-	// must be emitted with `void` return + first param `Type* __result`. Caller
-	// codegen unconditionally injects `&dest` as the first argument when the
-	// return type is NRVO-qualified — without this, the function signature
-	// mismatches the call ABI and the receiver gets a stack pointer that
-	// dereferences into garbage. Mirrors `genFunctionDecl` line ~154.
-	const nrvo = isNrvoReturnType(methodType.typeReturn, methodType);
-	const actualRetType = nrvo ? "void" : cRetType;
-
-	// Fallback path. Post-`methodToFunction` transform (Phase 3, !jsBackend),
-	// MethodDecl no longer reaches codegen — it's lifted into a top-level
-	// FunctionDecl that goes through `genFunctionDecl`. This branch only fires
-	// if a future generic / extern / mono path leaks a MethodDecl past the
-	// transform. Kept as a no-op-equivalent emitter so we don't crash; if a
-	// param-promotion drift surfaces here, the right fix is to extend the
-	// transform's coverage, not to mirror logic into this branch.
-	let paramList = "";
-	if (nrvo) {
-		paramList = cRetType + "* __result";
-		if (d.methodParams.length > 0) paramList = paramList + ", ";
-	}
-	for (let i = 0; i < d.methodParams.length; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
-		const pType = getTypeDesc(g, methodType.typeChildren[i]);
-		paramList = paramList + `${pType} ${safeName(d.methodParams[i])}`;
-	}
-	if (paramList == "") paramList = "void";
-
-	const proto = `${actualRetType} ${methodName}(${paramList})`;
-	addLine(sec(g, CSection.ProcHeaders), proto + ";");
-
-	if (d.methodBody != null) {
-		const p = createProc(methodName, null);
-		if (nrvo) p.isNrvo = true;
-		genStmt(g, p, d.methodBody);
-		const procs = sec(g, CSection.Procs);
-		addLine(procs, proto + " {");
-		emitProcBody(p, procs);
-		addLine(procs, "}");
-		addNewline(procs);
 	}
 }
 
@@ -556,8 +469,11 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	// Global variable declarations go to GlobalVars section
 	if (node.kind == NodeKind.VariableDecl) {
 		if (isComptimeOnlyVarDecl(node)) return;
-		genGlobalVar(g, node);
-		return;
+		if (!isInitProcLocal(node)) {
+			genGlobalVar(g, node);
+			return;
+		}
+		if (g.preparingDeclarations) return;
 	}
 	// Handle top-level directives
 	if (node.kind == NodeKind.ExprStmt) {
@@ -592,32 +508,16 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	}
 }
 
+function isInitProcLocal(node: Readonly<Node>): boolean {
+	return node.resolvedSym != null && !hasFlag(node.resolvedSym, SymbolFlag.Global);
+}
+
 // ===== Global Variable Declaration =====
 
 function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as VariableDeclData;
-	// Mangling policy for module-level `const`/`let`:
-	//
-	// - Regular vars: emit with module-qualified C name (`NAME__<moduleName>Oms`) so
-	//   two modules declaring same-named constants (e.g. `MAX_TIME` in cursors.ms and
-	//   varpartitions.ms) don't produce duplicate C globals at link time. Matches
-	//   what cross-module extern emission (`expressions.ms`) + identifier references
-	//   emit, so one mangled symbol per binary.
-	//
-	// - TypeInfo vars (name ending in "TypeInfo"): INTENTIONALLY bypass mangling and
-	//   use the raw `safeName`. These are emitted as `__attribute__((weak))` (see
-	//   `genTypeInfoVar`) so when module A defines `PointTypeInfo` and module B also
-	//   needs it (e.g. typeof lookup), the linker collapses the two weak definitions
-	//   into one symbol. Cross-module type identity relies on matching the raw name —
-	//   mangling would break that invariant.
-	//
-	// Detection is NAME-based (suffix match). Risk: a user-declared variable named
-	// e.g. `MyCustomTypeInfo` would also bypass mangling. Rare in practice (the suffix
-	// convention is ORC-internal); revisit if collision reports surface.
-	const nameLen = d.declName.length;
-	const isTypeInfo = nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) == "TypeInfo";
 	const isModuleSlot = isModuleGlobalVar(node.resolvedSym);
-	const varName = isTypeInfo || !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
+	const varName = !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName
 	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
 	// sym.nativeName here: that field is an extern/FFI marker — codegen uses
@@ -625,30 +525,12 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	// (discoverCallExpr short-circuit), which would break closure calls on any
 	// module-level `let fn: (..) => T` variable.
 
-	// Detect TypeInfo vars from destructorLifting (ORC runtime RTTI)
-	if (isTypeInfo) {
-		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
-		if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-		if (g.aliveSet.computed && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
-			const skipBase = d.declName.slice(0, nameLen - 8);
-			if (g.preparingDeclarations) {
-				if (g.preparationFacts == null) return;
-				factSkipTypeInfo(g.preparationFacts, skipBase);
-				const skipCBase = typeInfoCBase(g, d, skipBase);
-				if (skipCBase != "") factSkipTypeInfo(g.preparationFacts, skipCBase);
-			}
-			return;
-		}
-		if (g.preparingDeclarations) return;
-		genTypeInfoVar(g, d, varName);
-		return;
-	}
 
 	if (g.preparingDeclarations) return;
 	const cType = getTypeDesc(g, node.nodeType);
-	// Slots that are not module globals (DRC/transform temps hoisted to top level) keep a
-	// bare name that repeats across modules (per-module tempCounter) — static linkage is
-	// what makes them collision-free; nothing outside this module can reference them.
+	// Slots that are not module globals keep a bare name that can repeat across modules —
+	// static linkage is what makes them collision-free; nothing outside this module can
+	// reference them.
 	const staticPfx = isModuleSlot ? "" : "static ";
 	// Literal initializers → fold to C global initializer. This makes the global
 	// READY at program load time instead of waiting for Init000 dispatch order.
@@ -755,7 +637,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return true;
 	const body = cType.slice(0, cType.length - 1);
 	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
 	const od = d.initializer.data as ObjectLiteralData;
@@ -784,11 +666,12 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const bakeStmts = readProcStmts(p);
 	clearProcBuffers(p);
 	if (!closuresOk || !literalsOk || bakeLocals.length > 0 || bakeStmts.length > 0) return false;
-	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${body}TypeInfo;`);
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, &${body}TypeInfo, 0 }, { ${braced} } };`);
+	const typeInfo = typeInfoRef(g, node.nodeType);
+	const viaRegistry = isHcrImageModule(g, g.modulePath);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { ${braced} } };`);
+	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
-	ensureTypeInfoDef(g, body, node.nodeType);
 	return true;
 }
 
@@ -799,7 +682,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
 	if (arrT == null || arrT.kind != TypeKind.Array) return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
@@ -810,106 +693,43 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	return true;
 }
 
-// ===== TypeInfo Variable (from destructorLifting) =====
-// Emits msTypeInfo declaration to GlobalVars and field assignments to DatInit.
-
-function typeInfoCBase(g: CGen, d: Readonly<VariableDeclData>, baseName: string): string {
-	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
-		const od = d.initializer.data as ObjectLiteralData;
-		for (let i = 0; i < od.keys.length; i += 1) {
-			const v = od.properties[i];
-			if (od.keys[i] == "cname" && v.kind == NodeKind.StringLiteral) return mangle((v.data as StringLiteralData).value);
-		}
-	}
-	return typeCacheGet(g.typeCache, "cname:" + baseName);
-}
-
-function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string): void {
-	// Extract base type name: strip "TypeInfo" suffix (8 chars)
-	const baseName = d.declName.slice(0, d.declName.length - 8);
-	const cBase = typeInfoCBase(g, d, baseName);
-	const infoName = (cBase != "") ? cBase + "TypeInfo" : varName;
-	// Mark as defined so ensureTypeInfoDef doesn't duplicate
-	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
-	if (cBase != "") {
-		typeCacheSet(g.forwTypeCache, "typeInfoDef:" + cBase, cBase);
-	}
-
-	// Non-static: other modules reference via extern for cross-module new.
-	// $-generated types never leave their module — static keeps same-named
-	// sibling-module envs apart.
-	const linkage = isCompilerGenCName(g, baseName) ? "static msTypeInfo " : "msTypeInfo ";
-	const viaRegistry = infoName.endsWith("TypeInfo") && hcrTypeInfoRef(g, infoName.slice(0, infoName.length - 8));
-	if (!viaRegistry) addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
-
-	// Emit field assignments to DatInit (runs before user code)
-	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
-		const od = d.initializer.data as ObjectLiteralData;
-		const datInit = sec(g, CSection.DatInit);
-		const p = createProc("__datinit", null);
-
-		for (let i = 0; i < od.keys.length; i += 1) {
-			const key = od.keys[i];
-			if (key == "cname") {
-				continue;
-			} else if (key == "name") {
-				// name field: emit C string literal (const char*), not msString
-				addLine(datInit, `  ${infoName}.name = "${baseName}";`);
-			} else if (key == "destroyFn") {
-				// destroyFn: cast to msDestroyProc (void(*)(void*)) for C type safety
-				const val = genExpr(g, p, od.properties[i]);
-				if (val == "MS_NIL" || val == "NULL") {
-					addLine(datInit, `  ${infoName}.destroyFn = NULL;`);
-				} else {
-					addLine(datInit, `  ${infoName}.destroyFn = (msDestroyProc)${val};`);
-				}
-			} else if (key == "traceFn") {
-				// traceFn: cast to msTraceProc (void(*)(void*, void*)) for C type safety
-				const val = genExpr(g, p, od.properties[i]);
-				if (val == "MS_NIL" || val == "NULL") {
-					addLine(datInit, `  ${infoName}.traceFn = NULL;`);
-				} else {
-					addLine(datInit, `  ${infoName}.traceFn = (msTraceProc)${val};`);
-				}
-			} else if (key == "base") {
-				const bn = od.properties[i];
-				let rawBase = "";
-				if (bn.kind == NodeKind.StringLiteral) rawBase = (bn.data as StringLiteralData).value;
-				if (rawBase != "") {
-					const cParent = typeCacheGet(g.typeCache, "cname:" + rawBase);
-					const parentName = (cParent != "") ? cParent : rawBase;
-					ensureTypeInfo(g, parentName);
-					addLine(datInit, `  ${infoName}.base = &${parentName}TypeInfo;`);
-				}
-			} else if (key == "display") {
-				const entries = (od.properties[i].data as ArrayLiteralData).elements;
-				const displayName = infoName + "Display";
-				addLine(sec(g, CSection.GlobalVars), `static const msTypeInfo* ${displayName}[${entries.length}];`);
-				for (let slot = 0; slot < entries.length; slot += 1) {
-					if (slot == entries.length - 1) {
-						addLine(datInit, `  ${displayName}[${slot}] = &${infoName};`);
-					} else {
-						const rawName = (entries[slot].data as StringLiteralData).value;
-						const cName = typeCacheGet(g.typeCache, "cname:" + rawName);
-						const entryName = cName != "" ? cName : rawName;
-						ensureTypeInfo(g, entryName);
-						addLine(datInit, `  ${displayName}[${slot}] = &${entryName}TypeInfo;`);
-					}
-				}
-				addLine(datInit, `  ${infoName}.depth = ${entries.length - 1};`);
-				addLine(datInit, `  ${infoName}.display = ${displayName};`);
-			} else {
-				// isCyclic: use genExpr directly
-				const val = genExpr(g, p, od.properties[i]);
-				addLine(datInit, `  ${infoName}.${key} = ${val};`);
+function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {
+	match (init.kind) {
+		NodeKind.NumberLiteral => {
+			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
+		},
+		NodeKind.BooleanLiteral => {
+			return cBoolLiteral((init.data as BooleanLiteralData).boolValue);
+		},
+		NodeKind.HiddenStdConv => {
+			return readonlyDataBracedInit(g, (init.data as HiddenStdConvData).convExpr, t);
+		},
+		NodeKind.ArrayLiteral => {
+			const ad = init.data as ArrayLiteralData;
+			const elemT = t != null && t.kind == TypeKind.SizedArray ? t.typeReturn : null;
+			let parts = "";
+			for (const e of ad.elements) {
+				const part = readonlyDataBracedInit(g, e, elemT);
+				if (part == "") return "";
+				parts = parts.length == 0 ? part : parts + ", " + part;
 			}
-		}
-	}
+			const arrayBraced = `{ ${parts} }`;
+			return t != null && t.kind == TypeKind.SizedArray ? `{ ${arrayBraced} }` : arrayBraced;
+		},
+		NodeKind.ObjectLiteral => {
+			const od = init.data as ObjectLiteralData;
+			let parts = "";
+			for (let i = 0; i < od.properties.length; i += 1) {
+				const part = readonlyDataBracedInit(g, od.properties[i], null);
+				if (part == "") return "";
+				const kv = `.${mangleFieldName(od.keys[i])} = ${part}`;
+				parts = parts.length == 0 ? kv : parts + ", " + kv;
+			}
+			return `{ ${parts} }`;
+		},
+		_ => { return ""; },
+	};
 }
-
-// isNrvoReturnType in types.ms (shared, Type-based NRVO detection)
-
-// ===== Tests =====
 
 import { createCGen, assembleOutput, scopeMangledParam } from "./context";
 import { CheckerContext, GcMode, isGenericFn } from "../../checker/context";
@@ -931,7 +751,6 @@ function declOutput(input: string): string {
 
 test "simple function" {
 	const result = declOutput("function foo(): void { return; }");
-	// genDecl with null CheckerContext may produce minimal output; covered by E2E tests
 	assert result.length >= 0;
 }
 
@@ -962,6 +781,5 @@ test "const global" {
 
 test "NRVO function signature" {
 	const result = declOutput("interface Point { x: number; y: number; } function makePoint(): Point { return { x: 0, y: 0 }; }");
-	// Should have void return + __result param in the output
 	assert result.length > 50;
 }

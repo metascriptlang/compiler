@@ -1,7 +1,7 @@
-import { Node, NodeKind, SymbolKind, getImpl, childCount, childAt, symKind, intValue } from "std/meta";
+import { Node, NodeKind, SymbolKind, getImpl, childCount, childAt, symKind, intValue, floatValue, isFloatLiteral } from "std/meta";
 
 function firstNumber(n: Node): string {
-	if (n.kind == NodeKind.NumberLiteral) return String(intValue(n));
+	if (n.kind == NodeKind.NumberLiteral) return isFloatLiteral(n) ? String(floatValue(n)) : String(intValue(n));
 	for (let i = 0; i < childCount(n); i++) {
 		const found = firstNumber(childAt(n, i));
 		if (found != "") return found;

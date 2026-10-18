@@ -13,16 +13,16 @@
 import { isExecutable } from "../fs";
 import {
 	ProcessError, ProcessErrorKind,
-	spawnFailed, notFound, nonZeroExit, signalTerminated, pipeError,
+	spawnFailed, startFailed, errnoName, notFound, nonZeroExit, signalTerminated, pipeError,
 } from "./errors";
 
 // Re-export error types so callers do `import { exec, ProcessError } from "std/process"`.
 export { ProcessError, ProcessErrorKind } from "./errors";
-export { processError, spawnFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
+export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;
-extern function msProcessExit(code: number): void;
+extern function msProcessExit(code: number): never;
 extern function msProcessCwd(): string;
 extern function msProcessExecFile(path: string, args: string[]): number;
 extern function msProcessSpawnSync(command: string): string;
@@ -31,6 +31,7 @@ extern function msProcSpawnGetSignal(): int32;
 extern function msProcSpawnGetStderr(): string;
 extern function msProcSpawnGetOk(): int32;
 extern function msProcSpawnGetPipeOk(): int32;
+extern function msProcSpawnGetErrno(): int32;
 extern function msProcessGetEnv(name: string): string;
 extern function msProcessSetEnv(name: string, value: string): number;
 extern function msProcessUnsetEnv(name: string): number;
@@ -58,7 +59,7 @@ export const argv: string[] = buildArgv();
 // Process control
 // =============================================================================
 
-export function exit(code: number): void {
+export function exit(code: number): never {
 	msProcessExit(code);
 }
 
@@ -140,7 +141,7 @@ export function execFileCapture(path: string, args: string[] = [], cwd: string =
 	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
-		return Result.err(spawnFailed(path, "fork/exec failed"));
+		return Result.err(startFailed(path, errnoName(msProcSpawnGetErrno())));
 	}
 	const pipeOk = msProcSpawnGetPipeOk();
 	if (pipeOk == 0) {
@@ -165,6 +166,7 @@ export interface ExecFileResult {
 	signal: int32;
 	output: string;
 	errorOutput: string;
+	startErrno: int32;
 }
 
 // Like execFileCapture, but a child that ran reports every stream and status
@@ -178,6 +180,7 @@ export function execFileResult(path: string, args: string[] = [], cwd: string = 
 		signal: msProcSpawnGetSignal(),
 		output: stdoutText,
 		errorOutput: msProcSpawnGetStderr(),
+		startErrno: msProcSpawnGetErrno(),
 	};
 }
 

@@ -8,6 +8,7 @@ import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 import { mangleModuleName } from "../c/names";
+import { DynamicModulePlan } from "../../module/graph";
 
 
 // ===== JS Generator =====
@@ -32,13 +33,9 @@ export class JSGenerator {
 	indentLevel: int32;
 	jsImports: JsImportEntry[];
 	bundleMode: boolean;
-	bundleIsPrelude: boolean; // true if current module is std/core/* (global scope, skip imports)
 	exportedNames: string[];
 	bundleExportLocals: string[];
 	importedNames: string[]; // track const-destructured names to avoid redeclaration in IIFEs
-	// Maps import source specifier → resolved module ID for __mod["id"] lookups
-	importSourceToModuleId: string[];
-	importSourceToModuleIdKeys: string[];
 	thisName: string;
 	staticSlots: string[]; // module-scope storage for `static` decls written inside bodies
 	helpers: JSHelpers;
@@ -57,6 +54,9 @@ export class JSGenerator {
 	neededModules: string[];    // cross-module references collected during emission
 	neededNames: string[][];
 	neededLocals: string[][];   // the binding each needed name takes in this module
+	moduleRequests: string;     // source imports and re-exports, in source order, hoisted in front of the body
+	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
+	namespaceNames: string[][];
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
@@ -71,20 +71,21 @@ export class JSGenerator {
 	pendingLine: int32;       // 1-based .ms line, 0 = nothing pending
 	pendingCol: int32;
 	pendingName: int32;
-	// True while emitting an ActorDecl's synthesized class: the constructor
-	// prologue stamps the synthetic pid and instance field defaults are
+	// The synthetic pid field while emitting an ActorDecl's synthesized class:
+	// the constructor prologue stamps it and instance field defaults are
 	// emitted as JS class fields (the tier-1 actor surface).
-	inActorDecl: boolean;
+	actorHandle: Node | null;
+	dynamicPlan: DynamicModulePlan;
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], bundleExportLocals: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [],
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
+		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], moduleRequests: "", namespaceModules: [], namespaceNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
 		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32,
-		inActorDecl: false };
+		actorHandle: null, dynamicPlan: new DynamicModulePlan() };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): string {
@@ -106,6 +107,16 @@ export function recordNeededImport(gen: JSGenerator, modulePath: string, name: s
 	gen.neededNames[at].push(name);
 	gen.neededLocals[at].push(local);
 	return local;
+}
+
+export function recordNamespaceExport(gen: JSGenerator, modulePath: string, name: string): void {
+	let at = gen.namespaceModules.indexOf(modulePath);
+	if (at < 0) {
+		gen.namespaceModules.push(modulePath);
+		gen.namespaceNames.push([]);
+		at = gen.namespaceModules.length - 1;
+	}
+	if (!gen.namespaceNames[at].includes(name)) gen.namespaceNames[at].push(name);
 }
 
 function importBindingTaken(gen: JSGenerator, local: string): boolean {

@@ -7,6 +7,7 @@
 // suppresses codegen; MS name === JS name binds without a `from` clause
 // (same convention as `console` in core/system/index.jms).
 
+@builtin("Promise")
 export extern class Promise<T> {
 	static extern all<T>(promises: Promise<T>[]): Promise<T[]>;
 	static extern race<T>(promises: Promise<T>[]): Promise<T>;
@@ -16,6 +17,7 @@ export extern class Promise<T> {
 	static extern reject(error: Error): Promise<never>;
 
 	extern then(callback: (value: T) => void): Promise<void>;
+	extern catch(callback: (error: string) => void): Promise<void> from "#.catch((e) => (#)(typeof e?.message === 'string' ? e.message : e))";
 }
 
 // spawn on js is SCHEDULING, not parallelism — the documented Node-semantics
@@ -26,8 +28,23 @@ export extern class Promise<T> {
 // is deliberately NOT built until a real workload demands it).
 extern function msNewPromise<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> from "new Promise(#)";
 
+@compilerFunc
 export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
 	return msNewPromise<T>(executor);
+}
+
+extern function msQueueJob(job: () => void): void from "queueMicrotask(#)";
+
+export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+	return msNewPromise<T>((resolve: (value: T) => void, reject: (reason: Error) => void): void => {
+		msQueueJob((): void => {
+			try {
+				callThen(thenable, resolve, reject);
+			} catch (e) {
+				reject(e);
+			}
+		});
+	});
 }
 
 @builtin("PromiseSpawn")

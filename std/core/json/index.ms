@@ -73,7 +73,7 @@ export function _jsonArrayOfInts<T>(arr: Readonly<Span<T>>): JsonValue {
 	return jsonArray(items);
 }
 
-export function _jsonArrayOfStructs<T>(arr: Readonly<Span<T>>): JsonValue {
+export function _jsonArrayOfValues<T>(arr: Readonly<Span<T>>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -81,6 +81,11 @@ export function _jsonArrayOfStructs<T>(arr: Readonly<Span<T>>): JsonValue {
 		i = i + 1;
 	}
 	return jsonArray(items);
+}
+
+export function _jsonNullable<T>(v: T | null): JsonValue {
+	if (v == null) return jsonNull();
+	return jsonValueOf(v);
 }
 
 export function _jsonArrayOfEnums<T>(arr: Readonly<Span<T>>, ords: int32[], names: string[]): JsonValue {

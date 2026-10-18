@@ -1,7 +1,8 @@
 // Update Expression Lowering — statement `x++` becomes `x += 1` (Nim mInc -> binaryStmt `+=`).
 
 import { Node, NodeKind, ExprStmtData, UpdateExprData, BinaryExprData } from "../../ast/node";
-import { TransformContext, createTransformContext } from "../context";
+import { TransformContext } from "../context";
+import { makeCtx } from "../testUtil";
 import { walkNode } from "../walker";
 import { makeExprStmt, makeBinary, makeNumber } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
@@ -32,7 +33,7 @@ export function lowerUpdateExpr(program: Node, ctx: TransformContext): Node {
 function innerExprKindAfterUpdate(input: string): NodeKind {
 	const result = parseInput(input);
 	if (!result.ok) return NodeKind.Program;
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	const prog = lowerUpdateExpr(result.value, ctx);
 	const stmts = getStmts(prog);
 	if (stmts.length == 0) return NodeKind.Program;
@@ -44,7 +45,7 @@ function innerExprKindAfterUpdate(input: string): NodeKind {
 function updateOperatorAfter(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "";
-	const prog = lowerUpdateExpr(result.value, createTransformContext());
+	const prog = lowerUpdateExpr(result.value, makeCtx());
 	const stmts = getStmts(prog);
 	if (stmts.length == 0 || stmts[0].kind != NodeKind.ExprStmt) return "";
 	const sd = stmts[0].data as ExprStmtData;

@@ -1,6 +1,6 @@
 import { platform } from "std/process";
-import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, classParentOf } from "./types";
-import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf } from "./types";
+import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -25,10 +25,8 @@ export interface JsImportEntry {
 export interface ExportedSymInfo {
 	name: string;
 	sym: Symbol;
-	extReceiverType: string;
-	extIsStatic: boolean;
-	overloadExtReceiverTypes: string[];
-	overloadExtIsStatic: boolean[];
+	ext: ExtensionMethod | null;
+	overloadExts: (ExtensionMethod | null)[];
 	converterTargetType: Type | null;
 }
 
@@ -39,48 +37,17 @@ export interface ModuleExports {
 
 export interface ExportRegistry {
 	entries: ModuleExports[];
-	nameIndex: HashMap<string, ExportedSymInfo[]>;  // name → all exports with that name (cross-module)
 	moduleIndex: HashMap<string, number>;  // modulePath → index in entries[]
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [], nameIndex: new HashMap<string, ExportedSymInfo[]>(), moduleIndex: new HashMap<string, number>() };
-}
-
-function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
-	for (const sym of exports) {
-		if (sym.name.length == 0) continue;
-		const bucket = registry.nameIndex.get(sym.name);
-		if (bucket != null) {
-			bucket.push(sym);
-		} else {
-			registry.nameIndex.set(sym.name, [sym]);
-		}
-	}
-}
-
-export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
-	for (const sym of exports) {
-		if (sym.name.length == 0) continue;
-		const bucket = registry.nameIndex.get(sym.name);
-		if (bucket == null) continue;
-		let ri = 0;
-		while (ri < bucket.length) {
-			if (bucket[ri] == sym) {
-				bucket.splice(ri, 1);
-			} else {
-				ri += 1;
-			}
-		}
-		if (bucket.length == 0) registry.nameIndex.delete(sym.name);
-	}
+	return { entries: [], moduleIndex: new HashMap<string, number>() };
 }
 
 export function registerModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
 	const entry: ModuleExports = { modulePath, symbols: exports };
 	registry.moduleIndex.set(modulePath, registry.entries.length);
 	registry.entries.push(entry);
-	addToNameIndex(registry, exports);
 }
 
 // Replace existing module's exports (Phase 2 updates Phase 1 placeholders)
@@ -88,9 +55,7 @@ export function updateModuleExports(registry: ExportRegistry, modulePath: string
 	const i = registry.moduleIndex.get(modulePath);
 	if (i != null) {
 		const e = registry.entries[i];
-		removeFromNameIndex(registry, e.symbols);
 		e.symbols = exports;
-		addToNameIndex(registry, exports);
 		return;
 	}
 	registerModuleExports(registry, modulePath, exports);
@@ -102,13 +67,6 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 		return registry.entries[i];
 	}
 	return null as unknown as ModuleExports;
-}
-
-// O(1) cross-module lookup by name — returns all exports with that name across all modules.
-export function findExportsByName(registry: ExportRegistry, name: string): ExportedSymInfo[] {
-	const arr = registry.nameIndex.get(name);
-	if (arr != null) return arr;
-	return [];
 }
 
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
@@ -123,35 +81,12 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 // ===== Export Info Builder (shared by orchestrator + loadPreludeSubModules) =====
 
 export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistry, modulePath: string, ctx: CheckerContext, exportedName: string = ""): ExportedSymInfo {
-	// Extension receiver metadata for primary symbol
-	let extRecv = "";
-	let extStatic = false;
-	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) {
-		const ext = findExtensionByType(extensionRegistry, sym.name, sym.symbolType);
-		if (ext != null) {
-			extRecv = ext.receiverTypeName;
-			extStatic = ext.isStatic;
-		} else {
-			// Class methods: mangled name (GPUInstance_release) doesn't match
-			// extension entry (release). Fall back to symbol identity match.
-			const extSym = findExtensionBySym(extensionRegistry, sym);
-			if (extSym != null) {
-				extRecv = extSym.receiverTypeName;
-				extStatic = extSym.isStatic;
-			}
-		}
-	}
+	let primaryExt: ExtensionMethod | null = null;
+	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) primaryExt = findExtensionBySym(extensionRegistry, sym, exportedName);
 
-	const ovExtRecvs: string[] = [];
-	const ovExtStatics: boolean[] = [];
+	const ovExts: (ExtensionMethod | null)[] = [];
 	for (const ov of sym.overloads) {
-		let ovExt: ExtensionMethod | null = null;
-		if (extensionRegistry != null) {
-			ovExt = findExtensionByType(extensionRegistry, sym.name, ov.symbolType);
-			if (ovExt == null && extRecv != "") ovExt = findExtensionBySym(extensionRegistry, ov);
-		}
-		ovExtRecvs.push(ovExt != null ? ovExt.receiverTypeName : "");
-		ovExtStatics.push(ovExt != null ? ovExt.isStatic : false);
+		ovExts.push(extensionRegistry != null ? findExtensionBySym(extensionRegistry, ov) : null);
 	}
 
 	let mConverterTargetType: Type = null as unknown as Type;
@@ -162,8 +97,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 
 	return {
 		name: exportedName != "" ? exportedName : sym.name, sym,
-		extReceiverType: extRecv, extIsStatic: extStatic,
-		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
+		ext: primaryExt, overloadExts: ovExts,
 		converterTargetType: mConverterTargetType,
 	};
 }
@@ -176,14 +110,20 @@ export function exportSym(ctx: CheckerContext, sym: Symbol): void {
 
 export function exportSymAs(ctx: CheckerContext, sym: Symbol, name: string): void {
 	setFlag(sym, SymbolFlag.Exported);
-	if (ctx.interfSet.has(sym)) return;
-	ctx.interfSet.add(sym);
-	ctx.interf.push(sym);
-	if (name != sym.name) ctx.interfNames.set(sym, name);
+	if (!ctx.interfSet.has(sym)) {
+		ctx.interfSet.add(sym);
+		ctx.interf.push(sym);
+		ctx.interfNames.set(sym, [name]);
+		return;
+	}
+	const names = exportedNamesOf(ctx, sym);
+	if (names.includes(name)) return;
+	names.push(name);
+	ctx.interfNames.set(sym, names);
 }
 
-function exportedNameOf(ctx: CheckerContext, sym: Symbol): string {
-	return ctx.interfNames.get(sym) ?? sym.name;
+function exportedNamesOf(ctx: CheckerContext, sym: Symbol): string[] {
+	return ctx.interfNames.get(sym) ?? [sym.name];
 }
 
 export function noteImported(ctx: CheckerContext, sym: Symbol): void {
@@ -214,7 +154,7 @@ export function isExportedBy(ctx: CheckerContext, sym: Symbol): boolean {
 
 function pushExport(ctx: CheckerContext, modulePath: string, exports: ExportedSymInfo[], covered: HashSet<Symbol>, sym: Symbol): void {
 	if (covered.has(sym)) return;
-	exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx, exportedNameOf(ctx, sym)));
+	for (const name of exportedNamesOf(ctx, sym)) exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx, name));
 	covered.add(sym);
 	for (const ov of sym.overloads) covered.add(ov);
 }
@@ -255,7 +195,6 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 //   Storing the same Type in both causes double-decref on destruction (DRC double ownership).
 export class ExtensionMethod {
 	methodName: string;
-	receiverTypeName: string;
 	sourcePath: string;
 	fnType: Type;           // fallback only — use getExtFnType(ext), never read directly
 	isStatic: boolean;
@@ -265,7 +204,6 @@ export class ExtensionMethod {
 
 export class ExtensionRegistry {
 	methods: ExtensionMethod[];
-	staticReceivers: string[];
 	// methods[] chained by methodName in registration order (-1 ends a chain);
 	// registerExtension and truncateExtensions keep it in step with methods[].
 	byNameHead: HashMap<string, int32>;
@@ -276,7 +214,7 @@ export class ExtensionRegistry {
 
 export function createExtensionRegistry(): ExtensionRegistry {
 	return {
-		methods: [], staticReceivers: [],
+		methods: [],
 		byNameHead: new HashMap<string, int32>(), byNameTail: new HashMap<string, int32>(),
 		byNameNext: [], byNamePrev: [],
 	};
@@ -285,22 +223,23 @@ export function createExtensionRegistry(): ExtensionRegistry {
 // Create an ExtensionMethod with proper ownership invariant enforced.
 // When sym is provided, fnType is set to noneType() — sym.symbolType is authoritative.
 // This prevents double-decref when both fnType and sym.symbolType reference the same Type.
-export function createExtMethod(methodName: string, receiverTypeName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
+export function createExtMethod(methodName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
 	return {
-		methodName, receiverTypeName, sourcePath,
+		methodName, sourcePath,
 		fnType: sym != null ? noneType() : fnType,
 		isStatic, sym, scopeDepth,
 	};
 }
 
-let _userHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
-
-export function resetUserHooks(): void {
-	_userHooks = new HashMap<string, Symbol>();
-	_defaultsCheckedAtDeclaration = new HashSet<Node>();
+export function reexportExt(ext: ExtensionMethod, methodName: string, sourcePath: string, sym: Symbol, scopeDepth: number): ExtensionMethod {
+	return createExtMethod(methodName, sourcePath, ext.fnType, ext.isStatic, sym, scopeDepth);
 }
 
 let _defaultsCheckedAtDeclaration: HashSet<Node> = new HashSet<Node>();
+
+export function resetDefaultsCheckedAtDeclaration(): void {
+	_defaultsCheckedAtDeclaration = new HashSet<Node>();
+}
 
 export function noteDefaultCheckedAtDeclaration(def: Node): void {
 	_defaultsCheckedAtDeclaration.add(def);
@@ -310,21 +249,11 @@ export function defaultCheckedAtDeclaration(def: Node): boolean {
 	return _defaultsCheckedAtDeclaration.has(def);
 }
 
-export function bindUserHook(typeName: string, hookName: string, sym: Symbol): void {
-	if (sym.modulePath == "") return;
-	_userHooks.set(sym.modulePath + "|" + typeName + "." + hookName, sym);
-}
-
-export function lookupUserHook(ownerModule: string, typeName: string, hookName: string): Symbol | null {
-	if (ownerModule == "") return null;
-	return _userHooks.get(ownerModule + "|" + typeName + "." + hookName);
-}
-
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
 	// Dedup by sym identity first (cheap fast-path).
 	if (method.sym != null) {
 		for (const existing of registry.methods) {
-			if (existing.sym == method.sym) return;
+			if (existing.sym == method.sym && existing.methodName == method.methodName) return;
 		}
 	}
 	// Stronger dedup: same logical extension may register through multiple
@@ -336,9 +265,9 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 	if (method.sym != null && method.sym.modulePath != "") {
 		for (const other of registry.methods) {
 			if (other.sym != null
+					&& other.methodName == method.methodName
 					&& other.sym.name == method.sym.name
 					&& other.sym.modulePath == method.sym.modulePath
-					&& other.receiverTypeName == method.receiverTypeName
 					&& other.isStatic == method.isStatic
 					&& other.sym.location.line == method.sym.location.line
 					&& other.sym.location.column == method.sym.location.column) {
@@ -357,12 +286,6 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 		registry.byNameHead.set(method.methodName, idx);
 	}
 	registry.byNameTail.set(method.methodName, idx);
-	if (method.isStatic) {
-		for (const known of registry.staticReceivers) {
-			if (known == method.receiverTypeName) return;
-		}
-		registry.staticReceivers.push(method.receiverTypeName);
-	}
 }
 
 // Drop every extension registered after the first `count` (instantiation
@@ -386,45 +309,27 @@ export function truncateExtensions(registry: ExtensionRegistry, count: int32): v
 	registry.byNamePrev.length = count;
 }
 
-export function findExtension(registry: ExtensionRegistry, receiverTypeName: string, methodName: string): ExtensionMethod {
-	let i = registry.byNameHead.get(methodName) ?? -1;
-	while (i >= 0) {
-		const m = registry.methods[i];
-		if (m.receiverTypeName == receiverTypeName) return m;
-		i = registry.byNameNext[i];
-	}
-	return null as unknown as ExtensionMethod;
-}
-
 // hasExtensionByName — check if ANY extension has this method name (any receiver)
 export function hasExtensionByName(registry: ExtensionRegistry, methodName: string): boolean {
 	return registry.byNameHead.has(methodName);
 }
 
-// findExtensionByType — find extension matching method name + fnType identity (for overload export)
-export function findExtensionByType(registry: ExtensionRegistry, methodName: string, fnType: Type): ExtensionMethod {
-	let i = registry.byNameHead.get(methodName) ?? -1;
-	while (i >= 0) {
-		const m = registry.methods[i];
-		if (m.fnType == fnType) return m;
-		i = registry.byNameNext[i];
-	}
-	return null as unknown as ExtensionMethod;
-}
-
 // findExtensionBySym — match by symbol identity (not name).
 // Class method symbols have mangled names (GPUInstance_release) but their extension
 // registry entries use original names (release). Symbol identity bridges the mismatch.
-export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol): ExtensionMethod {
+export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol, name: string = ""): ExtensionMethod {
+	let first: ExtensionMethod | null = null;
 	for (const m of registry.methods) {
-		if (m.sym != null && m.sym == sym) return m;
+		if (m.sym == null || m.sym != sym) continue;
+		if (name == "" || m.methodName == name) return m;
+		if (first == null) first = m;
 	}
-	return null as unknown as ExtensionMethod;
+	return first as unknown as ExtensionMethod;
 }
 
 // findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
 // Standard reference pattern: candidates are collected by name, then filtered by type compatibility
-// at the call site using isAssignable (not string comparison on receiverTypeName).
+// at the call site using isAssignable (not a name comparison).
 let _faeCount: float64 = 0;
 let _faeTime: float64 = 0;
 export function findAllExtensionsByNameProfile(): float64[] { return [_faeCount, _faeTime]; }
@@ -445,12 +350,24 @@ function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: s
 	return results;
 }
 
-export function hasStaticExtForReceiver(registry: ExtensionRegistry, receiverName: string): boolean {
-	if (receiverName == "") return false;
-	for (const known of registry.staticReceivers) {
-		if (known == receiverName) return true;
+// An alias is transparent in type identity, so a receiver written through one
+// owns the same static extensions as the type it denotes.
+function denotedOwner(sym: Symbol): Symbol {
+	if (sym.symbolKind != SymbolKind.TypeAlias || sym.symbolType == null) return sym;
+	return nominalTypeSym(sym.symbolType) ?? sym;
+}
+
+export function isStaticExtOf(ext: ExtensionMethod, owner: Symbol): boolean {
+	if (!ext.isStatic || ext.sym == null || ext.sym.staticOwner == null) return false;
+	return denotedOwner(ext.sym.staticOwner) == denotedOwner(owner);
+}
+
+export function filterStaticExtsByOwner(exts: ExtensionMethod[], owner: Symbol): ExtensionMethod[] {
+	const results: ExtensionMethod[] = [];
+	for (const e of exts) {
+		if (isStaticExtOf(e, owner)) results.push(e);
 	}
-	return false;
+	return results;
 }
 
 // ===== Canonical Extension Type (Standard reference symbol type equivalent) =====
@@ -491,7 +408,7 @@ function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol, export
 		if (cands[i].sym == sym) return;
 		i = i + 1;
 	}
-	cands.push(createExtMethod(sym.name, "", "", noneType(), false, sym, 1));
+	cands.push(createExtMethod(sym.name, "", noneType(), false, sym, 1));
 }
 
 function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): ExtensionMethod {
@@ -515,11 +432,11 @@ function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): 
 	return best;
 }
 
-export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
+export function resolveOperatorCall(table: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
 	return resolveOperatorCallAt(table, null, registry, methodName, argTypes);
 }
 
-export function resolveOperatorCallAt(table: SymbolTable, instantiation: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
+export function resolveOperatorCallAt(table: SymbolTable | null, instantiation: SymbolTable | null, registry: ExtensionRegistry, methodName: string, argTypes: Type[]): ExtensionMethod {
 	const cands: ExtensionMethod[] = [];
 	if (registry != null) {
 		const exts = findAllExtensionsByName(registry, methodName);
@@ -579,24 +496,10 @@ export function stripReceiverParam(fnType: Type): Type {
 
 // ===== Receiver Matching (shared by checker + LSP) =====
 // Standard reference pattern: compare nominal types by identity using isAssignable,
-// not string-based receiverTypeName comparison.
+// not a name comparison.
 
 export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boolean {
-	// Static extensions: string-based matching (receiver not in typeChildren)
-	if (ext.isStatic) {
-		if (ext.receiverTypeName == typeNameOf(objType)) return true;
-		// Type-alias fallback (mirrors the instance-branch fallback below): when
-		// the receiver expression is `Buffer` (a `type Buffer = string` alias),
-		// objType resolves to the underlying `string` and typeNameOf returns
-		// "string", but objType.sym is the Buffer alias symbol (stamped by
-		// collectTypeAlias). Without this, static extensions like Buffer.alloc()
-		// fail to match, NodeFlag.ExtCall isn't set, extensionMethodLower skips
-		// the rewrite, and codegen emits buggy closure dispatch.
-		if (objType != null && objType.sym != null
-				&& objType.sym.symbolKind == SymbolKind.TypeAlias
-				&& ext.receiverTypeName == objType.sym.name) return true;
-		return false;
-	}
+	if (ext.isStatic) return false;
 	if (objType == null) return false;
 	// Instance extensions: type-based matching on first param (sym.typ is authoritative).
 	const fnType = getExtFnType(ext);
@@ -646,32 +549,10 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		return isAssignable(objElem, recvElem);
 	}
 	if (recvNominal != null && objNominal != null) return sameInstanceArgs(recvT, objT);
-	// Name-based matching for well-known types and monomorphized generics.
-	// Monomorphized types have names like "Map__string,string" — match base name "Map".
-	const recvName = receiverType.kind == TypeKind.Ptr ? typeNameOf(receiverType) : ext.receiverTypeName;
-	if (recvName != "") {
-		const objName = typeNameOf(objType);
-		if (recvName == objName) return true;
-		// Check base name for monomorphized generics: "Map__string,string" → "Map"
-		const sepPos = findChar(objName, "_");
-		if (sepPos > 0 && sepPos + 1 < objName.length && objName.charAt(sepPos + 1) == "_") {
-			const baseName = objName.slice(0, sepPos);
-			if (recvName == baseName) return true;
-		}
-		// Type-alias fallback: typeNameOf returns the canonical primitive name
-		// (e.g. "string" for `type Buffer = string`), losing the alias. The alias
-		// symbol is preserved on objType.sym (stamped by collectTypeAlias). Mirror
-		// the static fallback in checkExprPass.ms so instance method dispatch
-		// `s.method()` resolves extensions registered against the alias name.
-		if (objType.sym != null
-				&& objType.sym.symbolKind == SymbolKind.TypeAlias
-				&& recvName == objType.sym.name) return true;
-		// Nominal mismatch: both have names but they differ → not a match.
-		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
-		if (objName != "") return false;
-		if (objType.kind == TypeKind.Ref && objType.typeReturn != null && objType.typeReturn.kind == TypeKind.Struct) return false;
-	}
-	return isAssignable(objType, receiverType);
+	if (recvNominal != null || objNominal != null) return false;
+	const recvObj = addressed(recvT);
+	if (recvObj.kind == TypeKind.Union && recvObj.typeName != "") return sameType(recvObj, addressed(objT));
+	return typeRelation(addressed(withoutReadonlyView(recvT)), addressed(withoutReadonlyView(objT))) != TypeRelation.None;
 }
 
 function instanceArgs(t: Type): Type[] | null {
@@ -696,8 +577,8 @@ function sameInstanceArgs(recv: Type, obj: Type): boolean {
 	return true;
 }
 
-function nominalTypeSym(t: Type): Symbol | null {
-	let s = addressed(t);
+export function nominalTypeSym(t: Type): Symbol | null {
+	let s = addressed(peelThrough(t, PEEL_ALIAS) ?? t);
 	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) {
 		s = s.typeExtra;
 		if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
@@ -715,6 +596,47 @@ export function refusesTypeAsValue(ctx: CheckerContext, node: Node, sym: Symbol,
 		: `'${name}' only refers to a type, but is being used as a value here`;
 	addError(ctx, msg, node.location.line, node.location.column);
 	return true;
+}
+
+function extReceiverFormal(ext: ExtensionMethod): Type | null {
+	if (ext.isStatic) return null;
+	const fnType = getExtFnType(ext);
+	if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) return null;
+	return addressed(withoutReadonlyView(fnType.typeChildren[0]));
+}
+
+export function declaredTypeSym(t: Type): Symbol | null {
+	const nominal = nominalTypeSym(t);
+	if (nominal != null) return nominal;
+	const s = addressed(t);
+	if ((s.kind == TypeKind.Union || s.kind == TypeKind.Distinct) && s.sym != null && s.sym.symbolKind == SymbolKind.TypeAlias) return s.sym;
+	return null;
+}
+
+// The declaration that owns the extension's receiver: its first parameter's type, never a spelling.
+export function extReceiverSym(ext: ExtensionMethod): Symbol | null {
+	const formal = extReceiverFormal(ext);
+	return formal == null ? null : declaredTypeSym(formal);
+}
+
+// True when the extension is declared for exactly `t` (not for a base of it, not by assignability).
+export function extDeclaresReceiver(ext: ExtensionMethod, t: Type): boolean {
+	const formal = extReceiverFormal(ext);
+	if (formal == null) return false;
+	const obj = addressed(withoutReadonlyView(t));
+	if (formal.kind == TypeKind.GenericParam || formal.kind == TypeKind.Unknown || isUnresolvedType(formal)) return false;
+	const formalSym = nominalTypeSym(formal);
+	if (formalSym != null) return formalSym == nominalTypeSym(obj);
+	if (sameType(formal, obj)) return true;
+	if (!hasGenericParams(formal)) return false;
+	const eb = createUnifyBindings();
+	unifyType(formal, obj, eb);
+	return eb.names.length > 0;
+}
+
+export function extReceiverDisplay(ext: ExtensionMethod): string {
+	const formal = extReceiverFormal(ext);
+	return formal == null ? "" : typeNameOf(formal);
 }
 
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
@@ -766,6 +688,19 @@ export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): Ex
 			if (catchAll == null) catchAll = ext;
 		}
 		if (catchAll != null) return catchAll;
+		cur = classBaseStruct(cur);
+		depth += 1;
+	}
+	return null as unknown as ExtensionMethod;
+}
+
+export function findDeclaredExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
+	let cur: Type | null = objType;
+	let depth = 0;
+	while (cur != null && depth < 64) {
+		for (const ext of exts) {
+			if (extDeclaresReceiver(ext, cur) && isReceiverMatch(ext, cur)) return ext;
+		}
 		cur = classBaseStruct(cur);
 		depth += 1;
 	}
@@ -868,6 +803,28 @@ export function resetDispatchRegistry(): void {
 
 export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
 	return _dispBySym.get(sym) ?? null;
+}
+
+export function dispatchDeclaredEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	const entries = _dispByClass.get(classSym);
+	if (entries == null) return null;
+	for (const entry of entries) {
+		if (entry.methodName == methodName) return entry;
+	}
+	return null;
+}
+
+export function dispatchMethodOf(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	let cur: Type | null = classSym.symbolType;
+	let d = 0;
+	while (cur != null && d < 64) {
+		const own = classOwnSym(cur);
+		const entry = own != null ? dispatchDeclaredEntry(own, methodName) : null;
+		if (entry != null) return entry;
+		cur = classBaseStruct(cur);
+		d += 1;
+	}
+	return null;
 }
 
 function classOwnSym(t: Type): Symbol | null {
@@ -1059,27 +1016,21 @@ export function isNativePattern(native: string): boolean {
 	return findChar(native, "#") >= 0 || findChar(native, "@") >= 0 || findChar(native, "(") >= 0;
 }
 
-export function getExtReceiverName(flags: string): string {
-	const seg = findFlagSegment(flags, "ext:");
-	if (seg == "") return "";
-	const rest = seg.slice(4, seg.length);
-	const colonPos = findChar(rest, ":");
-	if (colonPos <= 0) return "";
-	return rest.slice(0, colonPos);
-}
-
 export const LIFECYCLE_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
 
 export function isLifecycleHookName(name: string): boolean {
 	return LIFECYCLE_HOOK_NAMES.includes(name);
 }
 
-export function declaresLifecycleHook(ctx: CheckerContext, typeName: string): boolean {
+export function declaresLifecycleHook(ctx: CheckerContext, typeSym: Symbol): boolean {
 	const registry = ctx.extensionRegistry;
 	if (registry == null) return false;
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
 		for (const m of findAllExtensionsByName(registry, hookName)) {
-			if (m.receiverTypeName == typeName && !m.isStatic && m.sym != null && m.sym.modulePath == ctx.modulePath) return true;
+			const decl = m.sym != null ? m.sym.declNode : null;
+			if (m.isStatic || decl == null || decl.kind != NodeKind.FunctionDecl || m.sym!.modulePath != ctx.modulePath) continue;
+			const receiver = getExtReceiverType((decl.data as FunctionDeclData).fnFlags);
+			if (receiver != "" && lookupSymbol(ctx.table, receiver) == typeSym) return true;
 		}
 	}
 	return false;
@@ -1244,6 +1195,11 @@ export function sgSortRecords(records: SgSymRecord[]): void {
 	}
 }
 
+export interface CheckedInstantiation {
+	sym: Symbol;
+	concreteTypes: Type[];
+}
+
 // LSP DiagnosticSeverity parity
 export enum Severity {
 	Error,    // 1 in LSP
@@ -1286,8 +1242,9 @@ export class CheckerContext {
 	                               // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
 	                               // Cross-compile detected via `targetOs !== platform`.
 	targetInfo: TargetInfo;
+	appMode: string;
 	currentFunction: Symbol | null;   // innermost function (for return type validation)
-	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
+	currentActor: Symbol | null;
 	staticBlockClass: Symbol | null;
 	staticBlockPending: Node[];
 	readonlyBoundary: Cursor<Scope>;
@@ -1301,6 +1258,8 @@ export class CheckerContext {
 	currentModule: Module;
 	exportRegistry: ExportRegistry;
 	adoptedDecls: HashMap<Node, Symbol>;
+	adoptedParams: HashMap<Node, Symbol[]>;
+	boundIdents: HashMap<Node, Symbol>;
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
 	macroConverters: MacroConverter[];              // in-scope compile-time converters, registration order
@@ -1329,10 +1288,11 @@ export class CheckerContext {
 	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
+	tryGuardedFunction: Symbol | null; // function whose body is inside a try that has a catch or finally
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
-	procInstCache: HashMap<Symbol, Symbol[]>;
-	typeInstCache: HashMap<Symbol, Symbol[]>;
+	procInstCache: HashMap<Symbol, CheckedInstantiation[]>;
+	typeInstCache: HashMap<Symbol, CheckedInstantiation[]>;
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
@@ -1341,6 +1301,7 @@ export class CheckerContext {
 	typeExprSlot: Node;          // the operand being checked where a type name is accepted (a member's object, `new`'s callee, `instanceof`'s right side, a subscript's object); anywhere else a type name is not a value
 	calleeExpr: Node;            // the callee of the call being checked: a @comptime routine named there is folded, named anywhere else it is a run-time value
 	conversionOperand: Node;     // the operand of the numeric `as` being checked: a ternary or `??` there converts each arm the target does not take implicitly, as converting the joined value would
+	conversionTarget: Type;
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
 	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
 	nextItem: int32;
@@ -1351,12 +1312,13 @@ export class CheckerContext {
 	instantiatingCtx: CheckerContext;
 	interf: Symbol[];
 	interfSet: HashSet<Symbol>;
-	interfNames: HashMap<Symbol, string>;
+	interfNames: HashMap<Symbol, string[]>;
 	importSet: HashSet<Symbol>;
 	shadowedImports: HashMap<Symbol, Symbol>;
 	usedImports: HashSet<Symbol>;
 	preludeInterf: HashMap<string, Symbol[]>;
 	preludeExports: HashSet<Symbol>;
+	preludeModuleScopes: HashMap<string, Symbol[]>;
 	ownModules: HashSet<string>;
 }
 
@@ -1370,8 +1332,9 @@ export function createContext(): CheckerContext {
 		gcMode: GcMode.Orc,
 		targetOs: platform,
 		targetInfo: hostTargetInfo(),
+		appMode: "console",
 		currentFunction: null,
-		currentActorName: "",
+		currentActor: null,
 		staticBlockClass: null,
 		staticBlockPending: [],
 		readonlyBoundary: null as unknown as Cursor<Scope>,
@@ -1385,6 +1348,8 @@ export function createContext(): CheckerContext {
 		currentModule: null as unknown as Module,
 		exportRegistry: createExportRegistry(),
 		adoptedDecls: new HashMap<Node, Symbol>(),
+		adoptedParams: new HashMap<Node, Symbol[]>(),
+		boundIdents: new HashMap<Node, Symbol>(),
 		compilerFuncs: new HashMap<string, Symbol>(),
 		extensionRegistry: createExtensionRegistry(),
 		macroConverters: [],
@@ -1413,10 +1378,11 @@ export function createContext(): CheckerContext {
 		affineTracker: createAffineTracker(),
 		strictNullChecks: false,
 		inTryExpr: false,
+		tryGuardedFunction: null,
 		genericInstDepth: 0,
 		generatedInstances: [],
-		procInstCache: new HashMap<Symbol, Symbol[]>(),
-		typeInstCache: new HashMap<Symbol, Symbol[]>(),
+		procInstCache: new HashMap<Symbol, CheckedInstantiation[]>(),
+		typeInstCache: new HashMap<Symbol, CheckedInstantiation[]>(),
 		pendingHoisted: [],
 		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
@@ -1431,16 +1397,18 @@ export function createContext(): CheckerContext {
 		typeExprSlot: null as unknown as Node,
 		calleeExpr: null as unknown as Node,
 		conversionOperand: null as unknown as Node,
+		conversionTarget: null as unknown as Type,
 		preludeCtx: null as unknown as CheckerContext,
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
-		interfNames: new HashMap<Symbol, string>(),
+		interfNames: new HashMap<Symbol, string[]>(),
 		importSet: new HashSet<Symbol>(),
 		shadowedImports: new HashMap<Symbol, Symbol>(),
 		usedImports: new HashSet<Symbol>(),
 		preludeInterf: new HashMap<string, Symbol[]>(),
 		preludeExports: new HashSet<Symbol>(),
+		preludeModuleScopes: new HashMap<string, Symbol[]>(),
 		ownModules: new HashSet<string>(),
 	};
 }
@@ -1641,35 +1609,23 @@ test "create empty" {
 
 test "register and find" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const m: ExtensionMethod = { methodName: "trim", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
-	const found = findExtension(r, "string", "trim");
-	assert found != null;
-	assert found.methodName == "trim";
+	const found = findAllExtensionsByName(r, "trim");
+	assert found.length == 1;
+	assert found[0].methodName == "trim";
 }
 
 test "not found" {
 	const r = createExtensionRegistry();
-	const found = findExtension(r, "string", "nope");
-	assert found == null;
-}
-
-test "namespace receiver is name-keyed, not kind-keyed" {
-	const r = createExtensionRegistry();
-	const inst: ExtensionMethod = { methodName: "trim", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const stat: ExtensionMethod = { methodName: "fromCharCode", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
-	registerExtension(r, inst);
-	registerExtension(r, stat);
-	assert hasStaticExtForReceiver(r, "String");
-	assert !hasStaticExtForReceiver(r, "helper");
-	assert !hasStaticExtForReceiver(r, "");
+	assert findAllExtensionsByName(r, "nope").length == 0;
 }
 
 test "extension name lookups keep registration order across truncation" {
 	const r = createExtensionRegistry();
-	const a: ExtensionMethod = { methodName: "m", receiverTypeName: "A", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const x: ExtensionMethod = { methodName: "other", receiverTypeName: "A", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const b: ExtensionMethod = { methodName: "m", receiverTypeName: "B", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const a: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const x: ExtensionMethod = { methodName: "other", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const b: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, a);
 	registerExtension(r, x);
 	registerExtension(r, b);
@@ -1677,18 +1633,36 @@ test "extension name lookups keep registration order across truncation" {
 	assert both.length == 2;
 	assert both[0] == a;
 	assert both[1] == b;
-	assert findExtension(r, "B", "m") == b;
 	truncateExtensions(r, 2);
 	assert findAllExtensionsByName(r, "m").length == 1;
-	assert findExtension(r, "B", "m") == null;
+	assert findAllExtensionsByName(r, "m")[0] == a;
 	assert hasExtensionByName(r, "other");
 	truncateExtensions(r, 0);
 	assert !hasExtensionByName(r, "m");
 	assert !hasExtensionByName(r, "other");
-	const c: ExtensionMethod = { methodName: "m", receiverTypeName: "C", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const c: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, c);
 	assert findAllExtensionsByName(r, "m").length == 1;
 	assert findAllExtensionsByName(r, "m")[0] == c;
+}
+
+function staticExtOf(owner: Symbol | null): ExtensionMethod {
+	const sym = makeSymbol("m", SymbolKind.Function, noneType(), false);
+	sym.staticOwner = owner;
+	return { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym };
+}
+
+test "static ext filter keeps only statics owned by that symbol" {
+	const owner = makeSymbol("T", SymbolKind.Class, noneType(), false);
+	const sameNamed = makeSymbol("T", SymbolKind.Class, noneType(), false);
+	const mine = staticExtOf(owner);
+	const theirs = staticExtOf(sameNamed);
+	const ownerless = staticExtOf(null);
+	const inst: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: makeSymbol("m", SymbolKind.Function, noneType(), false) };
+	inst.sym!.staticOwner = owner;
+	const got = filterStaticExtsByOwner([mine, theirs, ownerless, inst], owner);
+	assert got.length == 1;
+	assert got[0] == mine;
 }
 
 test "create empty registry" {
@@ -1699,7 +1673,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1717,42 +1691,11 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
 	assert found == null;
-}
-
-function namedExportInfo(name: string): ExportedSymInfo {
-	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
-}
-
-test "the name index keeps registration order across export updates" {
-	const r = createExportRegistry();
-	const a1 = namedExportInfo("dup");
-	const b1 = namedExportInfo("dup");
-	const c1 = namedExportInfo("dup");
-	const b2 = namedExportInfo("dup");
-	registerModuleExports(r, "/src/a.ms", [a1]);
-	registerModuleExports(r, "/src/b.ms", [b1]);
-	registerModuleExports(r, "/src/c.ms", [c1]);
-	updateModuleExports(r, "/src/b.ms", [b2]);
-	const hits = findExportsByName(r, "dup");
-	assert hits.length == 3;
-	assert hits[0] == a1;
-	assert hits[1] == c1;
-	assert hits[2] == b2;
-	const shared = namedExportInfo("twice");
-	registerModuleExports(r, "/src/d.ms", [shared, shared]);
-	assert findExportsByName(r, "twice").length == 2;
-	updateModuleExports(r, "/src/d.ms", []);
-	assert findExportsByName(r, "twice").length == 0;
-	updateModuleExports(r, "/src/a.ms", []);
-	const rest = findExportsByName(r, "dup");
-	assert rest.length == 2;
-	assert rest[0] == c1;
-	assert rest[1] == b2;
 }
 
 test "extractGenericNames single" {
@@ -1824,12 +1767,6 @@ test "isExtensionFlag pipe-delimited" {
 	assert isExtensionFlag("gen:T|ext:self:Array");
 }
 
-test "getExtReceiverName" {
-	assert getExtReceiverName("ext:s:string") == "s";
-	assert getExtReceiverName("async|ext:self:Array") == "self";
-	assert getExtReceiverName("") == "";
-}
-
 test "getExtReceiverType" {
 	assert getExtReceiverType("ext:s:string") == "string";
 	assert getExtReceiverType("async|ext:self:Array") == "Array";
@@ -1865,83 +1802,28 @@ test "getStaticExtTypeName" {
 
 test "static extension in registry" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: noneType(), isStatic: true, sym: null };
+	const m: ExtensionMethod = { methodName: "floor", sourcePath: "", fnType: noneType(), isStatic: true, sym: null };
 	registerExtension(r, m);
-	const found = findExtension(r, "Math", "floor");
-	assert found != null;
-	assert found.isStatic;
+	const found = findAllExtensionsByName(r, "floor");
+	assert found.length == 1;
+	assert found[0].isStatic;
 }
 
 test "instance extension isStatic false" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: noneType(), isStatic: false, sym: null };
+	const m: ExtensionMethod = { methodName: "trim", sourcePath: "", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
-	const found = findExtension(r, "string", "trim");
-	assert found != null;
-	assert !found.isStatic;
+	const found = findAllExtensionsByName(r, "trim");
+	assert found.length == 1;
+	assert !found[0].isStatic;
 }
 
-// ===== Global type-owner registry (compilation-wide) =====
-// bare type name → declaring modulePath, recorded at collect time for every
-// module-level type decl. Codegen's mangledTypeName consults this when a Type
-// lost its sym (macro-wire / mono round-trips are FLAT and drop identity) so
-// the consumer still derives the owner's qualified C name. A name claimed by
-// two different modules is ambiguous — resolution then keeps the bare name
-// (pre-existing behavior for that corner).
+import { createUnion, numberType, stringType } from "./types";
 
-const AMBIGUOUS_OWNER = "\u0001AMBIGUOUS";
-
-const _globalTypeOwners: Map<string, string> = new Map<string, string>();
-
-export function recordGlobalTypeOwner(name: string, modulePath: string): void {
-	if (name == "" || modulePath == "") return;
-	const prev = _globalTypeOwners.get(name);
-	if (prev == null) {
-		_globalTypeOwners.set(name, modulePath);
-		return;
-	}
-	if (prev != modulePath) {
-		_globalTypeOwners.set(name, AMBIGUOUS_OWNER);
-	}
-}
-
-export function getGlobalTypeOwner(name: string): string {
-	const v = _globalTypeOwners.get(name);
-	if (v == null || v == AMBIGUOUS_OWNER) return "";
-	return v;
-}
-
-// Shape-keyed variant: two modules may declare the same type NAME with
-// different fields (the coarse map goes ambiguous) — the field list usually
-// still identifies the owner. Recorded at ensureShaped, when fields exist.
-
-const _globalTypeShapes: Map<string, string> = new Map<string, string>();
-
-export function recordGlobalTypeShape(name: string, shapeKey: string, modulePath: string): void {
-	if (name == "" || shapeKey == "" || modulePath == "") return;
-	const key = name + "|" + shapeKey;
-	const prev = _globalTypeShapes.get(key);
-	if (prev == null) {
-		_globalTypeShapes.set(key, modulePath);
-		return;
-	}
-	if (prev != modulePath) {
-		_globalTypeShapes.set(key, AMBIGUOUS_OWNER);
-	}
-}
-
-export function getGlobalTypeOwnerByShape(name: string, shapeKey: string): string {
-	const v = _globalTypeShapes.get(name + "|" + shapeKey);
-	if (v == null || v == AMBIGUOUS_OWNER) return "";
-	return v;
-}
-
-test "a type name two modules declare has no global owner" {
-	recordGlobalTypeOwner("AmbigOwnerProbe", "/one/a.ms");
-	assert getGlobalTypeOwner("AmbigOwnerProbe") == "/one/a.ms";
-	recordGlobalTypeOwner("AmbigOwnerProbe", "/two/b.ms");
-	assert getGlobalTypeOwner("AmbigOwnerProbe") == "";
-	recordGlobalTypeShape("AmbigShapeProbe", "x", "/one/a.ms");
-	recordGlobalTypeShape("AmbigShapeProbe", "x", "/two/b.ms");
-	assert getGlobalTypeOwnerByShape("AmbigShapeProbe", "x") == "";
+test "a named union is owned by its declaring alias symbol, an anonymous one by none" {
+	const named = createUnion([numberType(), stringType()]);
+	assert declaredTypeSym(named) == null;
+	const alias = makeSymbol("U", SymbolKind.TypeAlias, named, false);
+	named.sym = alias;
+	assert declaredTypeSym(named) == alias;
 }

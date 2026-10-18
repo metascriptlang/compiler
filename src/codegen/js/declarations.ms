@@ -6,11 +6,11 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
+import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
+import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
-import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
@@ -75,15 +75,15 @@ function classEmitsShell(node: Node): boolean {
 	return false;
 }
 
-export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
-	// Skip extern functions — they're type declarations, not runtime code.
-	// The actual implementation comes from @import (e.g., node:process).
+function emittableFunctionDecl(node: Node): boolean {
 	const d = node.data as FunctionDeclData;
-	if (isExternFlag(d.fnFlags)) return;
-	// Tier 1: body-less overload signatures are typecheck-only, skip emission
-	if (d.fnFlags.indexOf("overload", 0) >= 0) return;
-	if (isGenericRoutine(node, d.fnFlags)) return;
-	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return;
+	if (isExternFlag(d.fnFlags) || d.fnFlags.indexOf("overload", 0) >= 0 || isGenericFn(d.fnFlags)) return false;
+	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return false;
+	return node.nodeType == null || !hasGenericParams(node.nodeType);
+}
+
+export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
+	if (!emittableFunctionDecl(node)) return;
 	emitIndent(gen);
 	emitFunctionDeclInner(gen, node);
 }
@@ -149,7 +149,7 @@ export function classEmitsNoJs(node: Node): boolean {
 	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
 }
 
-function emitClassDeclInner(gen: JSGenerator, node: Node): void {
+function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = false): void {
 	const d = node.data as ClassDeclData;
 	if (classEmitsNoJs(node)) return;
 	if (!classEmitsShell(node)) {
@@ -159,8 +159,9 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	const generic = isGenericClass(node);
-	emit(gen, "class ");
-	emit(gen, jsSymbolName(gen, node.resolvedSym, d.className));
+	const name = jsSymbolName(gen, node.resolvedSym, d.className);
+	emit(gen, assigned ? `${name} = class ` : "class ");
+	emit(gen, name);
 	if (d.classExtends != "") {
 		emit(gen, " extends ");
 		emit(gen, jsBaseClassName(gen, node, d.classExtends));
@@ -183,12 +184,12 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 				const pd = member.data as PropertyDeclData;
 				if (pd.propIsStatic) {
 					emitStaticPropertyDecl(gen, member);
-				} else if (gen.inActorDecl) {
+				} else if (gen.actorHandle != null) {
 					// Actor instance fields emit as JS class fields, in
 					// declaration order, running before any constructor body —
 					// the same defaults-then-ctor order as the C runtime.
 					emitIndent(gen);
-					if (pd.propName == "pid" && pd.propInitializer == null) {
+					if (member == gen.actorHandle) {
 						// Synthetic registration field (see emitActorDecl).
 						// Self-bootstrapping: a program may use actors WITHOUT
 						// importing std/actor, so the registrar installs itself
@@ -227,10 +228,34 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
-	emit(gen, "}\n");
+	emit(gen, assigned ? "};\n" : "}\n");
+	if (assigned) return;
 	for (const member of staticMethods) {
 		emitStaticMethodFn(gen, d.className, member);
 	}
+}
+
+export function classEvaluatesStatics(node: Node): boolean {
+	if (node.kind != NodeKind.ClassDecl || classEmitsNoJs(node) || !classEmitsShell(node)) return false;
+	for (const member of (node.data as ClassDeclData).classBody) {
+		if (member.kind == NodeKind.BlockStmt) return true;
+		if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic && (member.data as PropertyDeclData).propInitializer != null) return true;
+	}
+	return false;
+}
+
+export function emitDeferredClassBinding(gen: JSGenerator, node: Node): void {
+	const d = node.data as ClassDeclData;
+	emitIndent(gen);
+	emit(gen, `let ${jsSymbolName(gen, node.resolvedSym, d.className)};\n`);
+	for (const member of d.classBody) {
+		if (member.kind == NodeKind.MethodDecl && (member.data as MethodDeclData).methodIsStatic) emitStaticMethodFn(gen, d.className, member);
+	}
+}
+
+export function emitDeferredClassValue(gen: JSGenerator, node: Node): void {
+	emitIndent(gen);
+	emitClassDeclInner(gen, node, true);
 }
 
 function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): void {
@@ -293,10 +318,10 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 		nameLocation: d.nameLocation,
 	} as ClassDeclData, node.location);
 	cls.resolvedSym = node.resolvedSym;
-	gen.inActorDecl = true;
+	gen.actorHandle = pidField;
 	emitIndent(gen);
 	emitClassDeclInner(gen, cls);
-	gen.inActorDecl = false;
+	gen.actorHandle = null;
 }
 
 // ===== Method Declaration =====
@@ -364,11 +389,10 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	if (gen.multiFile) {
 		const spec = lookupImportSpec(gen, d.importSource);
 		if (spec == "") return;
-		emitIndent(gen);
 		if (d.importNames.length == 1 && d.importNames[0] == "*") {
-			emit(gen, `import * as ${d.importAliases[0]} from "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `import * as ${d.importAliases[0]} from "${spec}";\n`;
 		} else {
-			emit(gen, `import "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `import "${spec}";\n`;
 		}
 		return;
 	}
@@ -410,6 +434,24 @@ function recordBundleExport(gen: JSGenerator, name: string, local: string): void
 	gen.bundleExportLocals.push(local);
 }
 
+function bundleDefaultLocal(gen: JSGenerator): string {
+	return mangleQualified("default", mangleModuleName(gen.sourceFile));
+}
+
+function emitBundleDefaultExport(gen: JSGenerator, exprStmt: Node, declaration: string): void {
+	const local = bundleDefaultLocal(gen);
+	emitIndent(gen);
+	emit(gen, `${declaration}${local} = `);
+	emitCopyOnRead(gen, (exprStmt.data as ExprStmtData).expr);
+	emit(gen, ";\n");
+	recordBundleExport(gen, "default", local);
+}
+
+export function emitDeferredDefaultExport(gen: JSGenerator, node: Node): void {
+	gen.staticSlots.push(`let ${bundleDefaultLocal(gen)};\n`);
+	emitBundleDefaultExport(gen, (node.data as ExportDeclData).exportedDecl, "");
+}
+
 export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ExportDeclData;
 	const inner = d.exportedDecl;
@@ -425,8 +467,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		if (gen.multiFile) {
 			const spec = lookupImportSpec(gen, imp.importSource);
 			if (spec == "") return;
-			emitIndent(gen);
-			emit(gen, `export * from "${spec}";\n`);
+			gen.moduleRequests = gen.moduleRequests + `export * from "${spec}";\n`;
 			return;
 		}
 		if (imp.importNames.length == 1 && imp.importNames[0] == "*") {
@@ -447,20 +488,12 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	// Compile-time-only — no runtime JS (mirrors the bare-decl skip in jsgen.ms)
 	if (inner.kind == NodeKind.MacroDecl) return;
 	if (inner.kind == NodeKind.ComptimeBlock) return;
-	if (inner.kind == NodeKind.FunctionDecl && inner.resolvedSym != null && hasFlag(inner.resolvedSym, SymbolFlag.CompileTime)) return;
-	// Skip extern functions — imported via @import, not compiled
-	if (inner.kind == NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
-	if (inner.kind == NodeKind.FunctionDecl && isGenericRoutine(inner, (inner.data as FunctionDeclData).fnFlags)) return;
+	if (inner.kind == NodeKind.FunctionDecl && !emittableFunctionDecl(inner)) return;
 	if (inner.kind == NodeKind.ClassDecl && !classEmitsShell(inner)) { emitClassDecl(gen, inner); return; }
 	const isDefault = node.flags.has(NodeFlag.ExportDefault);
 	if (gen.bundleMode) {
 		if (isDefault && inner.kind == NodeKind.ExprStmt) {
-			const local = mangleQualified("default", mangleModuleName(gen.sourceFile));
-			emitIndent(gen);
-			emit(gen, `const ${local} = `);
-			emitCopyOnRead(gen, (inner.data as ExprStmtData).expr);
-			emit(gen, ";\n");
-			recordBundleExport(gen, "default", local);
+			emitBundleDefaultExport(gen, inner, "const ");
 			return;
 		}
 		let declName = "";

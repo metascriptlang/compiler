@@ -521,13 +521,19 @@ if (f()) {}                 // cannot be tested for truthiness (also while/for/t
 const n = f();
 const s = n + 1;            // operator '+' cannot be applied to 'void'
 const b = n === 1;          // 'void' and 'number' have no overlap
+const t = "n=" + n;         // a 'void' value has no text (also `${f()}`, String(f()), a never value)
+function g(): int32 | void  // 'int32 | void' puts void in a union, and void is no value — write 'int32 | null'
 ```
+
+The last two are refused where TypeScript accepts them (TS prints `undefined`; C printed
+`<object>` without calling, JS `undefined`, the Raiser `null`), on C, JS and the Raiser alike
+(measured 2026-10-16, candidate of `wt/type-refusals`; pins `checker3pass/scenarios/textOfVoid.ms`,
+`checker3pass/scenarios/voidInUnion.ms`).
 
 Forgiven, observing the null carrier — identical output on C and JS:
 
 ```typescript
 const n = f();              // bind: n is void, carrier null
-console.log("n=" + n);      // n=null
 const eq = n === null;      // true
 const m = n;                // chained bind carries null too
 let x: void = f(); x = f(); // void slot, re-assignment stays legal
@@ -1044,6 +1050,29 @@ function or class, or an enum, directly or through a re-export, is a compile err
 Extension functions stay out of the bundle's exports because their export is module visibility.
 Exports of other modules stay internal, and `--split` output is unaffected. Measured 2026-10-14 with
 node 24.1 by `src/test/guard/jsBundleEntryExports.ms`.
+
+**Dynamic `import()`.** `await import("./x")` gives the namespace of `./x`, typed
+`Promise<typeof import("./x")>`. A module that only `import()` reaches runs its body at the first
+import, in a later task and never inside the call. Imports issued while it evaluates share that one
+evaluation. A body that throws, or whose top-level await rejects, rejects that import and every later
+one with the same error. With a top-level await, the import settles once the body and every module it
+imports have settled. The specifier must be a string literal; `--app=lib` and targets without an event
+loop refuse `import()` (`src/test/handoff/dynamicImport.ms`). Pinned by the corpus programs
+`dynamicImport*` on c, orc, js, esm and raiser.
+
+When a module body starts another `import()`, the place of that second body relative to the outer
+importer's continuation is host-defined under `--split`: native ES modules load it after the
+continuation, while C and the bundle evaluate it before the continuation. Measured
+2026-10-17 with node 24.1 on `main` → `import("./a")`, where `a`'s body calls `import("./b")`:
+
+| lane | stdout |
+|---|---|
+| C | `start` `a body` `b body` `main got 1` `a got 2` |
+| JS bundle | `start` `a body` `b body` `main got 1` `a got 2` |
+| `--split` (5 of 5 runs) | `start` `a body` `main got 1` `b body` `a got 2` |
+
+The Raiser stops on this program with "deadlock: no runnable strand" (inbox card
+`2026-10-16-raiser-import-awaited-inside-a-module-body-deadlocks`).
 
 ### Converter Declarations
 
@@ -1734,6 +1763,14 @@ union stays whole and a call on it is rejected. Inside the branch the narrowed v
 directly as an operand, callee, condition or receiver; no `as` is needed (an explicit
 `v as int32` remains a no-op there).
 
+Separate `if (typeof x === "...")` branches each test the original stored union tag
+after the preceding branch rejoins; narrowing a read never changes the storage
+representation. `src/test/corpus/programs/sequentialTypeof.ms` printed
+`n:8 s:hi b:yes b:no` with `./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/sequentialTypeof.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/sequentialTypeof.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/sequentialTypeof.ms`
+(source tree `80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`).
+
 ### Struct Field Type Checking
 
 Object literal construction validates field types against the expected struct type (Gap 1).
@@ -1982,6 +2019,9 @@ an alias too), `spawn(work)` with `async function work()` is refused at the call
 `await work()` or `await spawn(() => workSync())`, and an async body whose return is itself a
 promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
 flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
+
+`await` takes a thenable as TypeScript does, through the `then` protocol (see
+["`then` — thenable adoption"](#then--thenable-adoption)).
 
 #### Promise Chaining (.then / .catch / .finally)
 
@@ -2880,13 +2920,13 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
 
 - **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
-- **Literals**: there is no char literal: `'A'` is a one-character `string`, as in TypeScript, and `const c: char = 'A'` is `Type 'string' is not assignable to type 'char'`. Write the code: `const c: char = "A".code` is 65 on C, JS and the Raiser (measured 2026-10-06).
-- **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
+- **Literals**: there is no char literal: `'A'` is a one-character `string`, as in TypeScript, and `const c: char = 'A'` is `Type 'string' is not assignable to type 'char'`. Write the code and convert it: `const c: char = "A".code as char` prints `A` in a template on C, JS and the Raiser (measured 2026-10-16).
+- **Numeric**: `char` compares with a char or a number (`c == 65`, `c < d`) and converts with `as`, but takes no part in arithmetic: `c + 1`, `i + c` (any int, float or `number` width), `c + d`, `total += c` and `-c` are `operator '+' cannot be applied to 'char' and 'int32': a char is not a number — convert it with an explicit 'as int32'`; write `(c as int32) + 1`, and `((c as int32) + 1) as char` to get a char back (measured 2026-10-16, candidate of `wt/type-refusals`, the same refusal on C, JS and the Raiser; pinned by `checker3pass/scenarios/charArithmetic.ms`). No implicit conversion crosses between `char` and another number either: `const c: char = 65` and `const n: int32 = c` are `implicit int32 → char conversion crosses between char and a number — write an explicit 'as char'` (and its mirror) on C, JS and the Raiser. Pinned by `checker3pass/scenarios/charAcceptsOnlyChar.ms`.
 - **No `as` between text and numbers**: `s[i] as int32`, `s as char`, `s as boolean` and `n as string` are checker errors (`cannot convert string to int32 — …`) on C, JS and the Raiser, as in TypeScript and Nim; read `s.charCodeAt(i)` or `s.byteAt(i)`, or format with `String(n)`. `"0xff" as bigint` still parses. Measured 2026-10-06, pinned by `checker3pass/scenarios/textConversions.ms`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
 
 ```typescript
-const c: char = "A".code;   // 65
+const c: char = "A".code as char;   // A
 const s = "héllo";
 const first = s[0];        // "h" — string, TS semantics
 const b: int32 = s.byteAt(1); // 0xC3 — first byte of é, byte tier
@@ -3468,6 +3508,23 @@ const p: Person = { name: "Alice", age: 30 };
 p.toString()              // plain JSON (no colors)
 ```
 
+Dynamic-array `.toString()` uses comma-separated element text. An empty array
+becomes `""`; an empty nested array or `null` element leaves an empty field
+between separators; a declared element `toString` takes precedence. The
+portable declaration is `std/core/array/shared.ms` `toString`. On source tree
+`80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`, the three commands
+`./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/arrayText.ms`
+each printed `1,2,3|ab,c||1,2,,3|a,,b|label:x,label:y`.
+
+`String(xs)` and `` `${xs}` `` use that same checked method. On tree
+`4e18eddad4d988ba10db163a62ddd34142cdd369`,
+`./msc-n2s-static-stage2 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-static-stage2 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-static-stage2 run --target=raiser src/test/corpus/programs/arrayText.ms`
+also printed `1,2,3 1,2,3 1,2,,3 1,2,,3 a,,b a,,b label:x,label:y label:x,label:y`.
+
 #### Custom String Format via Extension Methods
 
 Override the default format for any type by defining a `toString` extension method:
@@ -3565,6 +3622,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
 | `converter f(v: T): U` (a routine, not a method — [Converter Declarations](#converter-declarations)) | `expr` → `f(expr)` | T meets a slot, argument, `as U` or operand of type U |
 | `valueOf(this T): U` | `expr` → `expr.valueOf()` | a read of T fails: value slot, operand, condition, missing member, index, `switch`, `as` |
+| `then(this T, onFulfilled: (v: U) => void, onRejected?: (e: Error) => void): void` | `x` → `promiseFromThenable(x, …)`, a `Promise<U>` | T meets a site where a promise adopts a value: `await`, an async function's return, `Promise.resolve`, an element of `Promise.all`/`race`/`any` |
 
 **Order**: a position that needs one form tries the protocol for that form before `valueOf` — a converter
 to `U` for a slot of type `U`, for `as U` and for an operand beside a `U`, `toItems` for `for..of` — and
@@ -3620,6 +3678,47 @@ path (store it in a local first). Corpus `orderingThroughValueOf` runs every acc
 Consequences: `const c2 = count`, `id(count)`, `[count]`, `nn ?? count` and `() => count` in a
 `() => Accessor<T>` slot keep the accessor; `console.log(count)` and `String(count)` print the handle
 (write `${count}` or `count.toString()`); `typeof count` inspects the handle.
+
+##### `then` — thenable adoption
+
+A type with a `then` that takes a callback is a thenable, and every site where a promise adopts a
+value adopts it as the `Promise<U>` its `then` describes, `U` being the parameter of `onFulfilled`:
+
+```ms
+class Deferred {
+	then(onFulfilled: (v: int32) => void, onRejected: (e: Error) => void): void { ... }
+}
+
+const a = await new Deferred();                                     // int32
+async function load(): Promise<int32> { return new Deferred(); }    // settles with what then delivers
+const p = Promise.resolve(new Deferred());                          // Promise<int32>
+const all = await Promise.all([new Deferred(), fetchCount()]);     // int32[]
+```
+
+The name is JavaScript's, as `toString` and `valueOf` keep theirs, because its sites are JavaScript's
+thenable-adoption sites. A type opts in with a method, an inherited method, a function-typed field (an
+interface member too), or an extension; an extension counts only on the type its receiver names, so a
+generic `then<T>(this x: T, ...)` makes no type a thenable. Strings and primitives never are.
+
+At every site `then` is called from a queued job, after the caller's next statement, never inside the
+adopting expression; `onFulfilled` settles with its argument, `onRejected` and a throwing `then` reject
+with the error, and only the first settlement counts. Corpus `awaitUserThenable`, `awaitThenableOrder`,
+`thenableAdoptionSites`, `thenableCombinators` and `thenableAdoptionOrder` run the shapes on C and JS.
+
+Refused, each at its site with the reason:
+
+- a `then` whose `onFulfilled` receives something awaitable (a promise or another thenable): a promise
+  never holds a promise; or receives a type parameter: declare the type its callback receives;
+- a `then` whose first parameter is not a callback, or whose `onRejected` takes something other than
+  `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
+- `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
+  instantiated with one): write `Promise<U>`;
+- `return thenable` inside a `try` that has a catch or finally, since the catch would not see the
+  rejection: write `return await`;
+- a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
+  what the callback returns;
+- an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
+  promise; and a combinator over a `Thenable[]` variable: thenables are adopted from an array literal.
 
 ##### `getDynamicField` — opt-in dynamic member access
 

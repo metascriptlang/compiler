@@ -1,0 +1,20 @@
+// Checker-only declarations: the VM has no arbitrary-precision integer, and
+// src/checker/bigIntOnRaiser.ms refuses every bigint value before anything runs.
+
+export extern function BigInt(v: string): bigint;
+export extern function BigInt(v: float64): bigint;
+export extern function BigInt(v: boolean): bigint;
+export extern function BigInt(v: int8): bigint;
+export extern function BigInt(v: int16): bigint;
+export extern function BigInt(v: int32): bigint;
+export extern function BigInt(v: int64): bigint;
+export extern function BigInt(v: uint8): bigint;
+export extern function BigInt(v: uint16): bigint;
+export extern function BigInt(v: uint32): bigint;
+export extern function BigInt(v: uint64): bigint;
+export extern function BigInt(v: char): bigint;
+export extern function BigInt(v: bigint): bigint;
+
+export extern function toString(this b: bigint, radix: int32 = 10): string;
+export extern function asIntN(this typeof BigInt, bits: int64, b: bigint): bigint;
+export extern function asUintN(this typeof BigInt, bits: int64, b: bigint): bigint;

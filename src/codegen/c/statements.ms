@@ -3,7 +3,7 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind, NewExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { statementCanRaise, callCanRaise } from "../../checker/raises";
@@ -443,7 +443,7 @@ function genStaticStorageVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonl
 	}
 	if (cType == "") cType = "double";
 	if (cType == "void") cType = "void*";
-	addLine(sec(g, CSection.GlobalVars), `static ${cType} ${slot};`);
+	if (!nameSetHas(g.declaredGlobals, slot)) addLine(sec(g, CSection.GlobalVars), `static ${cType} ${slot};`);
 	nameSetAdd(g.declaredGlobals, slot);
 	if (d.initializer == null) return;
 	if (d.declKind != DeclKind.Const) {
@@ -944,19 +944,6 @@ function emitErrorGoto(p: CProc): void {
 
 function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as ThrowStmtData;
-	if (d.throwArg.kind == NodeKind.NewExpr) {
-		const ne = d.throwArg.data as NewExprData;
-		const callee = ne.newCallee;
-		let calleeName = "";
-		if (callee.resolvedSym != null) calleeName = callee.resolvedSym.name;
-		else if (callee.kind == NodeKind.Identifier) calleeName = (callee.data as IdentifierData).name;
-		if (calleeName == "Error") {
-			emitStmtsLine(p, "msCurrException = (msException*)(" + genExpr(g, p, d.throwArg) + ");");
-			emitStmtsLine(p, "msErr = MS_TRUE;");
-			emitErrorGoto(p);
-			return;
-		}
-	}
 	const argType = d.throwArg.nodeType;
 	if (argType != null && argType.kind == TypeKind.String) {
 		emitStmtsLine(p, "msThrow(" + genExpr(g, p, d.throwArg) + ");");

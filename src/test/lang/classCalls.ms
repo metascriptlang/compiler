@@ -278,6 +278,18 @@ test "classCalls: a static and an instance method may share a name" {
 	assert s.of("x") == "inst:x";
 }
 
+class MixedOverloadBox {
+	describe(n: int32): string { return "int:" + n.toString(); }
+}
+
+function describe(this b: MixedOverloadBox, s: string): string { return "ext:" + s; }
+
+test "classCalls: a class method and an extension of its name overload together" {
+	const b = new MixedOverloadBox();
+	assert b.describe(5) == "int:5";
+	assert b.describe("x") == "ext:x";
+}
+
 test "classCalls: overloaded methods may differ in return type" {
 	const b = new MethodOverloadBox();
 	assert b.pick(4) == 5;
@@ -300,6 +312,20 @@ test "classCalls: this in a two-parameter generic constructor is its instance" {
 	const p = new ConstructorInstancePair<int32, string>(7, "z");
 	assert p.ks.length == 2;
 	assert p.vs[1] == "z";
+}
+
+class OwnParamBox<T> {
+	v: T;
+	constructor(v: T) { this.v = v; }
+	keepClassParam<U>(u: U): T { return this.v; }
+	applyBoth<U>(f: (x: T) => U): U { return f(this.v); }
+}
+
+test "classCalls: a method with its own type parameter keeps the class's from the receiver" {
+	const b = new OwnParamBox<int32>(21 as int32);
+	assert b.keepClassParam<string>("q") == 21;
+	assert b.applyBoth<string>((x: int32): string => `n${x * 2}`) == "n42";
+	assert new OwnParamBox<string>("ab").applyBoth((x: string): int32 => x.length as int32) == 2;
 }
 
 test "classCalls: a method without a return annotation returns what its body returns" {

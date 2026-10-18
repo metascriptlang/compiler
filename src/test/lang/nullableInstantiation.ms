@@ -275,3 +275,18 @@ test "nullableInstantiation: a nullable HashMap key keeps null apart from the em
 	assert m.delete("");
 	assert m.has(null) && !m.has("");
 }
+
+function narrowedNullSource(b: boolean): number | null { return b ? 42 : null; }
+class NarrowedNullCell { v: number | null = null; }
+const narrowedNullModule = narrowedNullSource(true);
+
+test "nullableInstantiation: a nullable narrowed to its value still compares with null" {
+	const r = narrowedNullSource(true);
+	if (r == null) throw new Error("null");
+	assert r != null && null != r && !(r == null);
+	if (narrowedNullModule == null) throw new Error("null");
+	assert narrowedNullModule != null;
+	const c = new NarrowedNullCell();
+	c.v = 5;
+	assert c.v != null && c.v == 5 && !(null == c.v);
+}

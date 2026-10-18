@@ -2,7 +2,7 @@ import { compileToCWithStd } from "../helpers";
 
 test "macro reflection: object field names and types" {
 	const result = compileToCWithStd(`
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, getTypeImpl } from "std/meta";
 
 interface User { name: string; age: int32; }
 
@@ -10,6 +10,10 @@ export macro fieldsOf(t: Node): Node {
 	let tt = t.nodeType;
 	if (tt.kind === NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
+	}
+	const impl = tt.kind === NodeKind.Identifier ? getTypeImpl(tt) : null;
+	if (impl !== null) {
+		tt = impl.kind === NodeKind.TypeGeneric ? impl.typExprArgs[0] : impl;
 	}
 	let names: string = "";
 	if (tt.kind === NodeKind.TypeObject) {
@@ -109,7 +113,7 @@ function main(): void {
 
 test "macro reflection: reflected nodes cross typed helper parameters" {
 	const result = compileToCWithStd(`
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, getTypeImpl } from "std/meta";
 
 interface User { name: string; age: int32; }
 
@@ -121,6 +125,10 @@ export macro viaHelper(t: Node): Node {
 	let tt = t.nodeType;
 	if (tt.kind === NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
+	}
+	const impl = tt.kind === NodeKind.Identifier ? getTypeImpl(tt) : null;
+	if (impl !== null) {
+		tt = impl.kind === NodeKind.TypeGeneric ? impl.typExprArgs[0] : impl;
 	}
 	const kind: NodeKind = describeType(tt);
 	if (kind !== NodeKind.TypeObject) { error("helper lost reflected node kind", t); }
@@ -137,7 +145,7 @@ function main(): void {
 }
 
 const witnessValidationSource = `
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, getTypeImpl } from "std/meta";
 
 interface Style { width: number; color: string; }
 
@@ -145,6 +153,10 @@ export macro checkKeys(w: Node, obj: Node): Node {
 	let tt = w.nodeType;
 	if (tt.kind === NodeKind.TypeGeneric) {
 		tt = tt.typExprArgs[0];
+	}
+	const impl = tt.kind === NodeKind.Identifier ? getTypeImpl(tt) : null;
+	if (impl !== null) {
+		tt = impl.kind === NodeKind.TypeGeneric ? impl.typExprArgs[0] : impl;
 	}
 	if (obj.kind === NodeKind.ObjectLiteral && tt.kind === NodeKind.TypeObject) {
 		let i = 0;

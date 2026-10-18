@@ -4,5 +4,5 @@ const MAX: uint64 = 18446744073709551615;
 const q: uint64 = MAX / 10;
 const lo: int64 = -9223372036854775807 - 1;
 const hi: int64 = 9223372036854775807;
-const c: char = "A".code;
+const c: char = "A".code as char;
 console.log(`${String(q)} ${String(MAX)} ${String(lo)} ${String(hi)} | ${q} ${MAX} ${lo} ${hi} | ${String(c)} ${String(q).length}`);

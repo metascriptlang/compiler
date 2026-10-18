@@ -55,7 +55,7 @@ import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator ca
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
 import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
-import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
+import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
@@ -63,7 +63,7 @@ import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../.
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { translateCHeader } from "../../module/cimport/emit";
-import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph } from "../../module/loader";
+import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount } from "../../checker/context";
@@ -246,7 +246,6 @@ function dbInvalidateExports(db: TransAmDb, fileId: int32): void {
 function removeExportEntry(registry: ExportRegistry, path: string): void {
 	for (let i = 0; i < registry.entries.length; i = i + 1) {
 		if (registry.entries[i].modulePath == path) {
-			removeFromNameIndex(registry, registry.entries[i].symbols);
 			for (let j = i; j < registry.entries.length - 1; j = j + 1) {
 				registry.entries[j] = registry.entries[j + 1];
 			}
@@ -551,6 +550,7 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 
 		entries.push(createImportEntry(imp.importNames, imp.importAliases, resolvedPath, imp.importSource));
 	}
+	for (const specifier of collectImportCalls(program)) entries.push(createImportEntry([], [], dbResolveImport(db, filePath, specifier), specifier, true));
 	return entries;
 }
 
@@ -1249,7 +1249,7 @@ test "exported static extension carries its signature" {
 	dbEnsureExportsRegistered(db, "/test/use.ms", visited, 0);
 	const make = findExportedSymbol(db.exportRegistry, "/test/box.ms", "make");
 	assert make != null;
-	assert make.extIsStatic;
+	assert make.ext != null && make.ext.isStatic;
 	assert make.sym.symbolType.kind == TypeKind.Function;
 	assert make.sym.symbolType.typeChildren.length == 2;
 }

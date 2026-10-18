@@ -1,6 +1,6 @@
 // @exit: 1
 // @stdout: value 18446744073709551617 not in range -2147483648 .. 2147483647
-// @xfail(raiser): error: cannot compile node kind BigIntLiteral
+// @xfail(raiser): bigint is not supported on the Raiser VM
 
 function main(): void {
 	const b: bigint[] = [18446744073709551617n];
