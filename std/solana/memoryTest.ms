@@ -1,4 +1,4 @@
-import { InstructionAccount, SeedSlice, SignerSeeds } from "./addressTables";
+import { SeedSlice, SignerSeeds } from "./addressTables";
 import {
 	msSolCompare,
 	msSolCopy,
@@ -7,7 +7,6 @@ import {
 	msSolLoadU32,
 	msSolLoadU64,
 	msSolLoadU8,
-	msSolMetasAddress,
 	msSolSeedsAddress,
 	msSolSignersAddress,
 	msSolSpanAddress,
@@ -98,15 +97,27 @@ test "a signer table shares the seed layout" {
 	assert signers[0].length == 6;
 }
 
+when (js) {
+	import { msSolMetasAddress } from "./memory";
+
+	struct Meta {
+		key: uint64;
+		writable: uint8;
+		signer: uint8;
+	}
+}
+
 test "an instruction account table holds the key word and the two flag bytes of each 16-byte entry" {
-	let metas: InstructionAccount[2] = [{ key: 4096, writable: 1, signer: 0 }, { key: 8192, writable: 0, signer: 1 }];
-	const at = msSolMetasAddress(metas);
-	assert msSolLoadU64(at) == 4096 && msSolLoadU8(at + 8) == 1 && msSolLoadU8(at + 9) == 0;
-	assert msSolLoadU64(at + 16) == 8192 && msSolLoadU8(at + 24) == 0 && msSolLoadU8(at + 25) == 1;
-	msSolStoreU8(at + 25, 0);
-	msSolStoreU8(at + 24, 1);
-	msSolStoreU64(at + 16, 12288);
-	assert metas[1].signer == 0 && metas[1].writable == 1 && metas[1].key == 12288;
+	when (js) {
+		let metas: Meta[2] = [{ key: 4096, writable: 1, signer: 0 }, { key: 8192, writable: 0, signer: 1 }];
+		const at = msSolMetasAddress(metas);
+		assert msSolLoadU64(at) == 4096 && msSolLoadU8(at + 8) == 1 && msSolLoadU8(at + 9) == 0;
+		assert msSolLoadU64(at + 16) == 8192 && msSolLoadU8(at + 24) == 0 && msSolLoadU8(at + 25) == 1;
+		msSolStoreU8(at + 25, 0);
+		msSolStoreU8(at + 24, 1);
+		msSolStoreU64(at + 16, 12288);
+		assert metas[1].signer == 0 && metas[1].writable == 1 && metas[1].key == 12288;
+	}
 }
 
 test "copy, fill and compare work between tables and byte buffers" {

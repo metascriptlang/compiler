@@ -1,4 +1,4 @@
-import { InstructionAccount, SeedSlice, SignerSeeds } from "./addressTables";
+import { SeedSlice, SignerSeeds } from "./addressTables";
 
 @emit(`
 const msSolMemPage = 4096n;
@@ -370,7 +370,7 @@ export function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 
 	unreachable;
 }
 
-export function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 {
+export function msSolMetasAddress<T>(table: Readonly<Span<T>>): uint64 {
 	@emit(`return msSolMemSpanAddress(${table});`);
 	unreachable;
 }
