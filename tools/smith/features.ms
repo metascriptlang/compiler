@@ -213,22 +213,22 @@ export const W_DEFAULTS: int32[] = [
 	20, 20, 50, 30,
 ];
 
-const W_GROUPS: int32[][] = [
-	[0, 5],
-	[6, 13],
-	[14, 20],
-	[21, 23],
-	[24, 28],
-	[29, 33],
-	[34, 37],
-	[38, 44],
-	[45, 49],
-	[50, 57],
-	[58, 60],
-	[61, 63],
-	[64, 69],
-	[70, 71],
-	[72, 77],
+const W_GROUPS: W[][] = [
+	[W.ExprLeaf, W.ExprCall],
+	[W.StmtLet, W.StmtReturn],
+	[W.FamClosure, W.FamOwn],
+	[W.ClosureNamed, W.ClosureIife],
+	[W.ClosureDecl, W.ClosureRoutine],
+	[W.GenericId, W.GenericBox],
+	[W.AggField, W.AggEq],
+	[W.AggStruct, W.AggPoke],
+	[W.CollIndex, W.CollRest],
+	[W.CollDecl, W.CollFixed],
+	[W.StrSize, W.StrTest],
+	[W.StrDecl, W.StrAssign],
+	[W.StrConcat, W.StrEdit],
+	[W.OwnField, W.OwnHeld],
+	[W.OwnDecl, W.OwnSink],
 ];
 
 export enum Plant {
@@ -387,9 +387,9 @@ function weightIndex(key: string): int32 {
 function weightsSound(w: int32[]): Result<boolean, string> {
 	for (const g of W_GROUPS) {
 		let sum = 0;
-		for (let i = g[0]; i <= g[1]; i++) { sum += w[i]; }
+		for (let i = g[0] as int32; i <= (g[1] as int32); i++) { sum += w[i]; }
 		if (sum == 0) {
-			return Result.err(W_KEYS[g[0]] + " .. " + W_KEYS[g[1]] + " are all 0; one must be positive");
+			return Result.err(W_KEYS[g[0] as int32] + " .. " + W_KEYS[g[1] as int32] + " are all 0; one must be positive");
 		}
 	}
 	return Result.ok(true);
@@ -568,6 +568,18 @@ test "weight keys and defaults line up with the enum" {
 	assert W_KEYS.length == (W.UnionLen as int32) + 1;
 	assert W_KEYS[W.StmtBreak as int32] == "w.stmt.break";
 	assert W_KEYS[W.GenericBox as int32] == "w.generic.box";
+}
+
+test "the weight groups tile the grouped keys and each holds one prefix" {
+	let next = W.ExprLeaf as int32;
+	for (const g of W_GROUPS) {
+		assert (g[0] as int32) == next;
+		const first = W_KEYS[g[0] as int32];
+		const prefix = first.slice(0, first.lastIndexOf(".") + 1);
+		for (let i = g[0] as int32; i <= (g[1] as int32); i++) { assert W_KEYS[i].startsWith(prefix); }
+		next = (g[1] as int32) + 1;
+	}
+	assert next == (W.ExprFam as int32);
 }
 
 test "an unknown key is refused" {
