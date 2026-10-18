@@ -80,8 +80,6 @@ export interface RaiserStrand {
 	resultFuture: int64;   // future this strand completes when it finishes; -1 for main
 	safePoints: number[];
 	currentException: RaiserValue;
-	unwinding: boolean;
-	savedIp: number;
 }
 
 export interface RaiserStrands {
@@ -213,12 +211,8 @@ export interface RaiserVM {
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
 	// Exception state of the running strand. safePoints holds the pending try
 	// handlers of the CURRENT function only — a call stashes them on the frame.
-	// savedIp is the instruction a `finally` must return to when it ends: the
-	// Throw that is still unwinding, or the Ret that is still returning.
 	safePoints: number[];
 	currentException: RaiserValue;
-	unwinding: boolean;
-	savedIp: number;
 	diagMessage: string;
 	diagLine: number;
 	diagColumn: number;
@@ -255,8 +249,6 @@ interface RaiserRun {
 	current: number;
 	safePoints: number[];
 	currentException: RaiserValue;
-	unwinding: boolean;
-	savedIp: number;
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -308,7 +300,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const mainSafePoints: number[] = [];
 	const globals: RaiserValue[] = [];
 	for (let i = 0; i < mod.globalCount; i += 1) globals.push(raiserNil());
-	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil() };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
@@ -317,7 +309,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, frameFloor: 0, suspendedRuns: [] };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, frameFloor: 0, suspendedRuns: [] };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -446,7 +438,7 @@ function suspendRun(vm: RaiserVM): void {
 		exitValue: vm.exitValue, error: vm.error, diagMessage: vm.diagMessage, diagLine: vm.diagLine, diagColumn: vm.diagColumn,
 		diagEndLine: vm.diagEndLine, diagEndColumn: vm.diagEndColumn, loopCount: vm.loopCount, globals: vm.globals, regs: vm.regs,
 		callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, sched: vm.sched, current: vm.current,
-		safePoints: vm.safePoints, currentException: vm.currentException, unwinding: vm.unwinding, savedIp: vm.savedIp,
+		safePoints: vm.safePoints, currentException: vm.currentException,
 	});
 	const frames: RaiserCallFrame[] = [];
 	vm.callStack = { items: frames };
@@ -481,8 +473,6 @@ function resumeRun(vm: RaiserVM, run: RaiserRun): void {
 	vm.current = run.current;
 	vm.safePoints = run.safePoints;
 	vm.currentException = run.currentException;
-	vm.unwinding = run.unwinding;
-	vm.savedIp = run.savedIp;
 }
 
 // --- Strand scheduling ---
@@ -491,11 +481,9 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.sched.strands.items.length = 0;
 	const result = raiserNil();
 	vm.safePoints.length = 0;
-	vm.unwinding = false;
-	vm.savedIp = -1;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
-	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException, unwinding: false, savedIp: -1 };
+	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.sched.nextStrandId = 1;
@@ -644,8 +632,6 @@ function unwindFrame(vm: RaiserVM): void {
 }
 
 function unhandledException(vm: RaiserVM): void {
-	vm.unwinding = false;
-	vm.savedIp = -1;
 	const body = moduleBodyOf(vm, vm.current);
 	if (body >= 0) {
 		moduleBodyFinish(vm, body, RaiserModuleJobKind.Rejected, vm.currentException);
@@ -676,6 +662,17 @@ function unhandledException(vm: RaiserVM): void {
 	vmError(vm, `unhandled exception: ${msg}`);
 }
 
+const FINALLY_NORMAL: int64 = 0;
+const FINALLY_RAISE: int64 = 1;
+const FINALLY_RETURN: int64 = 2;
+
+function enterFinally(vm: RaiserVM, fin: RaiserInstruction, kind: int64, value: RaiserValue): void {
+	setReg(vm, vm.baseReg + fin.a, raiserInt(kind));
+	const held = raiserNil();
+	copyValueInto(held, value);
+	setReg(vm, vm.baseReg + fin.a + 1, held);
+}
+
 // Landing on a Catch ends the unwind; landing on a Finally runs it and comes
 // back through FinallyEnd. Out of frames means nobody handled it.
 function unwindStep(vm: RaiserVM): void {
@@ -689,8 +686,6 @@ function unwindStep(vm: RaiserVM): void {
 			}
 			const meta = getFuncInst(func, sp);
 			if (meta.op == RaiserOpcode.Catch) {
-				vm.unwinding = false;
-				vm.savedIp = -1;
 				// Bind the caught value into the register the handler names,
 				// now rather than later: a throw inside the handler body
 				// overwrites currentException.
@@ -701,6 +696,7 @@ function unwindStep(vm: RaiserVM): void {
 				return;
 			}
 			if (meta.op == RaiserOpcode.Finally) {
+				enterFinally(vm, meta, FINALLY_RAISE, vm.currentException);
 				vm.ip = sp + 1;
 				return;
 			}
@@ -727,8 +723,10 @@ function cleanUpOnReturn(vm: RaiserVM): number {
 	const meta = getFuncInst(func, sp);
 	if (meta.op == RaiserOpcode.Catch) sp = sp + getBx(meta);
 	if (sp < 0 || sp >= getFuncCodeLen(func)) return -1;
-	if (getFuncInst(func, sp).op != RaiserOpcode.Finally) return -1;
+	const fin = getFuncInst(func, sp);
+	if (fin.op != RaiserOpcode.Finally) return -1;
 	vm.safePoints.length = n - 1;
+	enterFinally(vm, fin, FINALLY_RETURN, raiserInt((vm.ip - 1) as int64));
 	return sp + 1;
 }
 
@@ -758,12 +756,8 @@ function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
 }
 
 function vmHandleThrow(vm: RaiserVM, inst: RaiserInstruction): void {
-	if (!vm.unwinding && vmTakeMacroError(vm, getReg(vm, vm.baseReg + inst.a))) return;
-	if (!vm.unwinding) {
-		copyValueInto(vm.currentException, getReg(vm, vm.baseReg + inst.a));
-		vm.unwinding = true;
-	}
-	vm.savedIp = vm.ip - 1;
+	if (vmTakeMacroError(vm, getReg(vm, vm.baseReg + inst.a))) return;
+	copyValueInto(vm.currentException, getReg(vm, vm.baseReg + inst.a));
 	unwindStep(vm);
 }
 
@@ -772,8 +766,6 @@ function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 	f.errorObserved = true;
 	if (f.record >= 0) copyValueInto(vm.currentException, moduleErrorForReader(vm, f.record));
 	else copyValueInto(vm.currentException, f.error.kind == RaiserValueKind.Nil ? raiserString(f.errorMsg) : copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error));
-	vm.unwinding = true;
-	vm.savedIp = vm.ip - 1;
 	unwindStep(vm);
 }
 
@@ -790,8 +782,6 @@ function strandSave(vm: RaiserVM): void {
 	s.loopCount = vm.loopCount;
 	s.safePoints = vm.safePoints;
 	s.currentException = vm.currentException;
-	s.unwinding = vm.unwinding;
-	s.savedIp = vm.savedIp;
 }
 
 function strandResume(vm: RaiserVM, idx: number): void {
@@ -808,8 +798,6 @@ function strandResume(vm: RaiserVM, idx: number): void {
 	vm.loopCount = s.loopCount;
 	vm.safePoints = s.safePoints;
 	vm.currentException = s.currentException;
-	vm.unwinding = s.unwinding;
-	vm.savedIp = s.savedIp;
 	s.status = RaiserStrandStatus.Running;
 }
 
@@ -907,7 +895,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return id;
 }
@@ -951,7 +939,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as number, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as number, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return fut;
 }
@@ -963,14 +951,6 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 // stackless; a strand carries its whole frame stack, so one mechanism covers
 // all three — and `await` works at any call depth here.
 function vmHandleAwait(vm: RaiserVM, inst: RaiserInstruction): void {
-	// A finally between here and the handler hands control back to this
-	// instruction; the raise it started is still in flight, so continue it
-	// instead of reading the future again.
-	if (vm.unwinding) {
-		vm.savedIp = vm.ip - 1;
-		unwindStep(vm);
-		return;
-	}
 	const base = vm.baseReg;
 	const v = getReg(vm, base + inst.b);
 	if (v.kind != RaiserValueKind.Future) {
@@ -1079,7 +1059,7 @@ function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return vm.sched.strands.items.length - 1;
 }
@@ -1130,8 +1110,6 @@ function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
 	vm.callStack.items.length = 0;
 	const sp: number[] = [];
 	vm.safePoints = sp;
-	vm.unwinding = false;
-	vm.savedIp = -1;
 	vm.funcIdx = funcIdx;
 	vm.baseReg = 0;
 	vm.ip = 0;
@@ -1792,13 +1770,19 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.Finally) {
 			// Only reached when the guarded region completed without raising.
 			popSafePoint(vm);
+			enterFinally(vm, inst, FINALLY_NORMAL, raiserNil());
 		} else if (op == RaiserOpcode.FinallyEnd) {
-			if (vm.unwinding) {
-				vm.savedIp = -1;
+			const kind = getReg(vm, base + inst.a);
+			const held = getReg(vm, base + inst.a + 1);
+			if (kind.kind != RaiserValueKind.Int) {
+				vmError(vm, `FinallyEnd reached without its Finally: R[${inst.a}] holds no routing`);
+			} else if (kind.intVal == FINALLY_RAISE) {
+				copyValueInto(vm.currentException, held);
 				unwindStep(vm);
-			} else if (vm.savedIp >= 0) {
-				vm.ip = vm.savedIp;
-				vm.savedIp = -1;
+			} else if (kind.intVal == FINALLY_RETURN) {
+				vm.ip = held.intVal as number;
+			} else if (kind.intVal != FINALLY_NORMAL) {
+				vmError(vm, `FinallyEnd: unknown routing ${kind.intVal}`);
 			}
 		} else if (op == RaiserOpcode.Throw) {
 			vmHandleThrow(vm, inst);
@@ -1860,7 +1844,6 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	// Leaving a guarded region: its finally runs first and comes back here.
 	const finIp = cleanUpOnReturn(vm);
 	if (finIp >= 0) {
-		vm.savedIp = vm.ip - 1;
 		vm.ip = finIp;
 		return;
 	}
@@ -2612,8 +2595,6 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 			return;
 		}
 		copyValueInto(vm.currentException, raiserString(raised));
-		vm.unwinding = true;
-		vm.savedIp = vm.ip - 1;
 		unwindStep(vm);
 		return;
 	}
@@ -3655,14 +3636,15 @@ function execHostRaiseInCatch(fatal: boolean): RaiserVM {
 		[
 			raiserABx(RaiserOpcode.Try, 0, 3),
 			raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
-			raiserAx(RaiserOpcode.Jump, 3),
-			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserAx(RaiserOpcode.Jump, 4),
+			raiserABx(RaiserOpcode.Catch, 1, 4),
+			raiserABx(RaiserOpcode.Try, 0, 3),
 			raiserABC(RaiserOpcode.Print, 1, 0, 0),
-			raiserAx(RaiserOpcode.Jump, 1),
-			raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 0),
+			raiserABC(RaiserOpcode.Finally, 8, 0, 0),
 			raiserABx(RaiserOpcode.LoadConst, 2, 1),
 			raiserABC(RaiserOpcode.Print, 2, 0, 0),
-			raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+			raiserABC(RaiserOpcode.FinallyEnd, 8, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
 		[raiserString("raise"), raiserString("finally")]
@@ -3674,7 +3656,6 @@ test "a fatal host error bypasses the guest catch and finally" {
 	const vm = execHostRaiseInCatch(true);
 	assert vm.error == "host failure";
 	assert vm.output == "";
-	assert !vm.unwinding;
 	assert takeHostRaise() == null;
 	assert !hostRaiseIsFatal();
 }
@@ -4472,8 +4453,9 @@ test "a strand parked on a timer is not a deadlock, one parked on a future nobod
 
 // --- Exceptions ---
 // Every layout below is the one codegen emits: Try points at the handler
-// metadata, the normal path jumps to Finally (which pops the safepoint), and
-// the catch body jumps PAST Finally because the unwinder already popped it.
+// metadata, the normal path jumps to Finally (which pops the safepoint); with
+// a finally clause the catch body runs under its own Try →Finally, without
+// one it jumps past FinallyEnd because the unwinder already popped the Try.
 
 test "throw lands in the enclosing catch, then the finally runs" {
 	const vm = execModule(makeTestModule(
@@ -4481,14 +4463,15 @@ test "throw lands in the enclosing catch, then the finally runs" {
 			raiserABx(RaiserOpcode.Try, 0, 4),
 			raiserABx(RaiserOpcode.LoadConst, 0, 0),
 			raiserABC(RaiserOpcode.Throw, 0, 0, 0),
-			raiserAx(RaiserOpcode.Jump, 3),
-			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserAx(RaiserOpcode.Jump, 4),
+			raiserABx(RaiserOpcode.Catch, 1, 4),
+			raiserABx(RaiserOpcode.Try, 0, 3),
 			raiserABC(RaiserOpcode.Print, 1, 0, 0),
-			raiserAx(RaiserOpcode.Jump, 1),
-			raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 0),
+			raiserABC(RaiserOpcode.Finally, 8, 0, 0),
 			raiserABx(RaiserOpcode.LoadConst, 2, 1),
 			raiserABC(RaiserOpcode.Print, 2, 0, 0),
-			raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+			raiserABC(RaiserOpcode.FinallyEnd, 8, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
 		[raiserInt(5), raiserInt(9)]
@@ -4505,14 +4488,15 @@ test "no throw skips the catch and still runs the finally" {
 			raiserABx(RaiserOpcode.Try, 0, 4),
 			raiserABx(RaiserOpcode.LoadConst, 0, 0),
 			raiserABC(RaiserOpcode.Print, 0, 0, 0),
-			raiserAx(RaiserOpcode.Jump, 3),
-			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserAx(RaiserOpcode.Jump, 4),
+			raiserABx(RaiserOpcode.Catch, 1, 4),
+			raiserABx(RaiserOpcode.Try, 0, 3),
 			raiserABC(RaiserOpcode.Print, 1, 0, 0),
-			raiserAx(RaiserOpcode.Jump, 1),
-			raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 0),
+			raiserABC(RaiserOpcode.Finally, 8, 0, 0),
 			raiserABx(RaiserOpcode.LoadConst, 2, 1),
 			raiserABC(RaiserOpcode.Print, 2, 0, 0),
-			raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+			raiserABC(RaiserOpcode.FinallyEnd, 8, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 		],
 		[raiserInt(7), raiserInt(9)]
@@ -4541,12 +4525,12 @@ test "a throw unwinds out of the callee into the caller's catch" {
 		raiserABC(RaiserOpcode.Call, 1, 1, 0),
 		raiserABx(RaiserOpcode.LoadConst, 3, 0),
 		raiserABC(RaiserOpcode.Print, 3, 0, 0),
-		raiserAx(RaiserOpcode.Jump, 4),
+		raiserAx(RaiserOpcode.Jump, 3),
 		raiserABx(RaiserOpcode.Catch, 2, 3),
 		raiserABC(RaiserOpcode.Print, 2, 0, 0),
-		raiserAx(RaiserOpcode.Jump, 1),
-		raiserABC(RaiserOpcode.Finally, 0, 0, 0),
-		raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 2),
+		raiserABC(RaiserOpcode.Finally, 6, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 6, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 	];
 	const boomCode: RaiserInstruction[] = [
@@ -4570,12 +4554,12 @@ test "a finally on the way out runs before the outer catch sees the throw" {
 		raiserABC(RaiserOpcode.Call, 1, 1, 0),
 		raiserABx(RaiserOpcode.LoadConst, 3, 0),
 		raiserABC(RaiserOpcode.Print, 3, 0, 0),
-		raiserAx(RaiserOpcode.Jump, 4),
+		raiserAx(RaiserOpcode.Jump, 3),
 		raiserABx(RaiserOpcode.Catch, 2, 3),
 		raiserABC(RaiserOpcode.Print, 2, 0, 0),
-		raiserAx(RaiserOpcode.Jump, 1),
-		raiserABC(RaiserOpcode.Finally, 0, 0, 0),
-		raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+		raiserAx(RaiserOpcode.Jump, 2),
+		raiserABC(RaiserOpcode.Finally, 6, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 6, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 	];
 	// inner: try { throw 8 } finally { print 6 } — no catch, so the safepoint
@@ -4585,10 +4569,10 @@ test "a finally on the way out runs before the outer catch sees the throw" {
 		raiserABx(RaiserOpcode.LoadConst, 0, 0),
 		raiserABC(RaiserOpcode.Throw, 0, 0, 0),
 		raiserAx(RaiserOpcode.Jump, 0),
-		raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+		raiserABC(RaiserOpcode.Finally, 2, 0, 0),
 		raiserABx(RaiserOpcode.LoadConst, 1, 1),
 		raiserABC(RaiserOpcode.Print, 1, 0, 0),
-		raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 2, 0, 0),
 		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
 	];
 	const fMain = createRaiserFunction("main", mainCode, [raiserInt(0)], 0, 0, 8);
@@ -4606,12 +4590,12 @@ test "a throw in a spawned strand fails its future and re-raises in the reader" 
 	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
 	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 5, 4));
 	mainCode.push(raiserABC(RaiserOpcode.Print, 5, 0, 0));
-	mainCode.push(raiserAx(RaiserOpcode.Jump, 4));
+	mainCode.push(raiserAx(RaiserOpcode.Jump, 3));
 	mainCode.push(raiserABx(RaiserOpcode.Catch, 6, 3));
 	mainCode.push(raiserABC(RaiserOpcode.Print, 6, 0, 0));
-	mainCode.push(raiserAx(RaiserOpcode.Jump, 1));
-	mainCode.push(raiserABC(RaiserOpcode.Finally, 0, 0, 0));
-	mainCode.push(raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0));
+	mainCode.push(raiserAx(RaiserOpcode.Jump, 2));
+	mainCode.push(raiserABC(RaiserOpcode.Finally, 10, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.FinallyEnd, 10, 0, 0));
 	mainCode.push(raiserABC(RaiserOpcode.Halt, 6, 0, 0));
 	const mainConsts = closurePairConsts(1);
 	mainConsts.push(raiserInt(0));
