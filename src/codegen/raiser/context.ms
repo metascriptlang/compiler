@@ -295,6 +295,10 @@ export function patchJumpTo(s: RaiserCompState, idx: int32, target: int32): void
 	s.code[idx] = raiserAx(RaiserOpcode.Jump, offset);
 }
 
+export function patchJumpsTo(s: RaiserCompState, jumps: int32[], target: int32): void {
+	for (const j of jumps) patchJumpTo(s, j, target);
+}
+
 export function codeLen(s: RaiserCompState): int32 {
 	return s.code.length;
 }

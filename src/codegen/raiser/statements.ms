@@ -15,13 +15,13 @@ import { raiserNil, raiserInt, raiserString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declaredSymbol, regIsFixedLocal,
-	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
+	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst,
 } from "./context";
-import { compileExpr, exprIsString } from "./expressions";
+import { compileExpr, compileExprForEffect, condJumps, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue } from "./valueCopy";
 
 // --- Statement compilation ---
@@ -45,7 +45,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				const mi = d.expr.data as MacroInvocationData;
 				if (mi.macroName != "emit") { return; }
 			}
-			compileExpr(s, d.expr);
+			compileExprForEffect(s, d.expr);
 		},
 		NodeKind.BlockStmt => { compileBlock(s, node); },
 		NodeKind.VariableDecl => { compileVariableDecl(s, node); },
@@ -183,18 +183,19 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 
 function compileIfStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as IfStmtData;
-	const condReg = compileExpr(s, d.condition);
-	const jumpToElse = emitBranchIfFalsy(s, condReg);
+	const toElse = condJumps(s, d.condition, false);
 
 	compileStmt(s, d.consequent);
 
-	if (d.alternate != null) {
+	const alternate = d.alternate;
+	const emptyElse = alternate != null && alternate.kind == NodeKind.BlockStmt && (alternate.data as BlockStmtData).statements.length == 0;
+	if (alternate != null && !emptyElse) {
 		const jumpPastElse = emitJumpPlaceholder(s);
-		patchJumpTo(s, jumpToElse, codeLen(s));
-		compileStmt(s, d.alternate);
+		patchJumpsTo(s, toElse, codeLen(s));
+		compileStmt(s, alternate);
 		patchJumpTo(s, jumpPastElse, codeLen(s));
 	} else {
-		patchJumpTo(s, jumpToElse, codeLen(s));
+		patchJumpsTo(s, toElse, codeLen(s));
 	}
 }
 
@@ -210,12 +211,7 @@ function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
 	patchLoopContinues(s);
 
 	// Condition at the end — loop back if truthy
-	const condReg = compileExpr(s, d.doCondition);
-	const exitJump = emitBranchIfFalsy(s, condReg);
-	const backOffset = loopStart - codeLen(s) - 1;
-	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
-
-	patchJumpTo(s, exitJump, codeLen(s));
+	patchJumpsTo(s, condJumps(s, d.doCondition, true), loopStart);
 	patchLoopBreaks(s);
 }
 
@@ -226,8 +222,7 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.whileLabel);
 
-	const condReg = compileExpr(s, d.whileCondition);
-	const exitJump = emitBranchIfFalsy(s, condReg);
+	const exitJumps = condJumps(s, d.whileCondition, false);
 
 	compileStmt(s, d.whileBody);
 
@@ -238,7 +233,7 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
 
 	// Patch exit + break jumps
-	patchJumpTo(s, exitJump, codeLen(s));
+	patchJumpsTo(s, exitJumps, codeLen(s));
 	patchLoopBreaks(s);
 }
 
@@ -257,10 +252,9 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 	pushLoop(s, loopStart, d.forLabel);
 
 	// Condition
-	let exitJump = -1;
+	let exitJumps: int32[] = [];
 	if (d.forCondition != null) {
-		const condReg = compileExpr(s, d.forCondition);
-		exitJump = emitBranchIfFalsy(s, condReg);
+		exitJumps = condJumps(s, d.forCondition, false);
 	}
 
 	// Body
@@ -270,7 +264,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 
 	// Update
 	if (d.forUpdate != null) {
-		compileExpr(s, d.forUpdate);
+		compileExprForEffect(s, d.forUpdate);
 	}
 
 	// Jump back to condition
@@ -278,9 +272,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
 
 	// Patch exit + break jumps
-	if (exitJump >= 0) {
-		patchJumpTo(s, exitJump, codeLen(s));
-	}
+	patchJumpsTo(s, exitJumps, codeLen(s));
 	patchLoopBreaks(s);
 }
 

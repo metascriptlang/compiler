@@ -15,7 +15,8 @@ import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx } from "../../raiser/bytecode";
+import { disasmFunc } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
@@ -1504,4 +1505,181 @@ test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {
 	const ctx = evalOrcVM("struct S { n: int32; } let s: S = { n: 3 }; const raw = s as Ptr<void>; const p = raw as Ptr<S>; p[].n = 4; console.log(`${s.n}`);");
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "4\n";
+}
+
+// --- Conditions: a comparison in condition position is one compare-and-skip ---
+
+function compiledFunc(code: string, name: string): RaiserFunction {
+	const mod = compileForOrc(code);
+	for (const f of mod.functions) {
+		if (f.name == name) return f;
+	}
+	unreachable;
+	return mod.functions[0];
+}
+
+function backJumpSpan(f: RaiserFunction): number {
+	for (let i = 0; i < f.code.length; i = i + 1) {
+		if (f.code[i].op == RaiserOpcode.Jump && getSignedAx(f.code[i]) < 0) return -getSignedAx(f.code[i]);
+	}
+	return 0;
+}
+
+test "engine: a for loop tests its bound with one compare-and-skip and keeps no old value of i++" {
+	const sum = compiledFunc("function sum(n: int64): int64 { let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { s += i; } return s; } console.log(`${sum(10)}`);", "sum");
+	const text = disasmFunc(sum);
+	assert backJumpSpan(sum) == 6, text;
+	assert !text.includes("; true") && !text.includes("; false"), text;
+	const fl = compiledFunc("function sum(n: float64): float64 { let s: float64 = 0.0; for (let i: float64 = 0.0; i < n; i++) { s += i; } return s; } console.log(`${sum(10.0)}`);", "sum");
+	assert backJumpSpan(fl) == 6, disasmFunc(fl);
+	const wh = compiledFunc("function f(n: int64): int64 { let i: int64 = 0; while (i < n) { i++; } return i; } console.log(`${f(3)}`);", "f");
+	assert backJumpSpan(wh) == 5, disasmFunc(wh);
+	const st = compiledFunc("function f(a: string, b: string): int64 { let i: int64 = 0; while (a < b && i < 3) { i++; } return i; } console.log(`${f('a', 'b')}`);", "f");
+	assert !disasmFunc(st).includes("; true"), disasmFunc(st);
+}
+
+test "engine: an if on a comparison emits no bool constant and no compare against zero" {
+	const f = compiledFunc("function f(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${f(1, 2)}`);", "f");
+	const text = disasmFunc(f);
+	assert f.code[0].op == RaiserOpcode.BltI64 && f.code[1].op == RaiserOpcode.Jump, text;
+}
+
+function condForms(op: string, ty: string, a: string, b: string): string {
+	const A = `(a ${op} b)`;
+	const variants = [A, `!${A}`, `${A} && t`, `${A} || f`, `t && ${A}`, `f || ${A}`, `!(${A} && t)`, `!(${A} || f)`, `!${A} || f`, `!${A} && t`, `(${A} && t) || f`, `${A} && ${A}`, `${A} || ${A}`, `!!${A}`, `(${A} || f) && (t && ${A})`];
+	let body = "";
+	for (const c of variants) {
+		body = body + ` if (${c}) { r = r + '1'; } else { r = r + '0'; }`
+			+ ` r = r + ((${c}) ? '1' : '0');`
+			+ ` w = '0'; while (${c}) { w = '1'; break; } r = r + w;`
+			+ ` n = 0; do { n = n + 1; } while ((${c}) && n < 3); r = r + (n > 1 ? '1' : '0');`
+			+ ` fc = '0'; for (let k = 0; (${c}) && k < 1; k++) { fc = '1'; } r = r + fc;`;
+	}
+	return `function chk(a: ${ty}, b: ${ty}, t: boolean, f: boolean): string { let r = ''; let w = '0'; let n = 0; let fc = '0';${body} return r; }`
+		+ ` const as: ${ty}[] = [${a}]; const bs: ${ty}[] = [${b}];`
+		+ ` for (let i = 0; i < as.length; i++) { console.log(chk(as[i], bs[i], true, false)); }`;
+}
+
+function expectedForms(truth: boolean): string {
+	const negated = [false, true, false, false, false, false, true, true, true, true, false, false, false, false, false];
+	let out = "";
+	for (const neg of negated) {
+		const bit = (truth != neg) ? "1" : "0";
+		out = out + bit + bit + bit + bit + bit;
+	}
+	return out;
+}
+
+function condTruth(op: string, a: float64, b: float64): boolean {
+	return match (op) {
+		"==" => a == b,
+		"!=" => a != b,
+		"<" => a < b,
+		"<=" => a <= b,
+		">" => a > b,
+		_ => a >= b,
+	};
+}
+
+function condTruthStr(op: string, a: string, b: string): boolean {
+	return match (op) {
+		"==" => a == b,
+		"!=" => a != b,
+		"<" => a < b,
+		"<=" => a <= b,
+		">" => a > b,
+		_ => a >= b,
+	};
+}
+
+function numericCondsFailure(ty: string, aLits: string[], bLits: string[], aVals: float64[], bVals: float64[]): string {
+	for (const op of ["==", "!=", "<", "<=", ">", ">="]) {
+		const ctx = evalOrcVM(condForms(op, ty, aLits.join(", "), bLits.join(", ")));
+		if (ctx.error != "") return `${ty} ${op}: ${ctx.error}`;
+		let want = "";
+		for (let i = 0; i < aVals.length; i++) want = want + expectedForms(condTruth(op, aVals[i], bVals[i])) + "\n";
+		if (ctx.output != want) return `${ty} ${op}: ${ctx.output}`;
+	}
+	return "";
+}
+
+test "engine: every comparison drives if, ternary, while, do-while, for, &&, || and ! on int64" {
+	const failure = numericCondsFailure("int64", ["1", "2", "2", "-1", "5"], ["2", "1", "2", "1", "-5"], [1, 2, 2, -1, 5], [2, 1, 2, 1, -5]);
+	assert failure == "", failure;
+}
+
+test "engine: every comparison drives every condition form on float64, NaN included" {
+	const nan = "(0.0 / 0.0)";
+	const failure = numericCondsFailure("float64", ["1.5", "2.5", "2.5", nan, "1.0", nan, "-0.0"], ["2.5", "1.5", "2.5", "1.0", nan, nan, "0.0"],
+		[1.5, 2.5, 2.5, 0.0 / 0.0, 1.0, 0.0 / 0.0, -0.0], [2.5, 1.5, 2.5, 1.0, 0.0 / 0.0, 0.0 / 0.0, 0.0]);
+	assert failure == "", failure;
+}
+
+test "engine: every comparison drives every condition form on narrow unsigned ints" {
+	const failure = numericCondsFailure("uint8", ["1", "200", "255", "0"], ["2", "100", "255", "255"], [1, 200, 255, 0], [2, 100, 255, 255]);
+	assert failure == "", failure;
+}
+
+test "engine: unsigned 64-bit ordering in a condition is unsigned" {
+	for (const op of ["<", "<=", ">", ">="]) {
+		const ctx = evalOrcVM(condForms(op, "uint64", "1, 0xFFFFFFFFFFFFFFFF, 1", "0xFFFFFFFFFFFFFFFF, 1, 1"));
+		assert ctx.error == "", ctx.error;
+		const wantTruth = match (op) {
+			"<" => [true, false, false],
+			"<=" => [true, false, true],
+			">" => [false, true, false],
+			_ => [false, true, true],
+		};
+		let want = "";
+		for (const w of wantTruth) want = want + expectedForms(w) + "\n";
+		assert ctx.output == want, `uint64 ${op}: ${ctx.output}`;
+	}
+}
+
+test "engine: every comparison drives every condition form on strings" {
+	const aVals = ["a", "b", "a", "", "ab"];
+	const bVals = ["b", "a", "a", "a", "a"];
+	for (const op of ["==", "!=", "<", "<=", ">", ">="]) {
+		const ctx = evalOrcVM(condForms(op, "string", aVals.map((x) => `'${x}'`).join(", "), bVals.map((x) => `'${x}'`).join(", ")));
+		assert ctx.error == "", `string ${op}: ${ctx.error}`;
+		let want = "";
+		for (let i = 0; i < aVals.length; i++) want = want + expectedForms(condTruthStr(op, aVals[i], bVals[i])) + "\n";
+		assert ctx.output == want, `string ${op}: ${ctx.output}`;
+	}
+}
+
+test "engine: null comparisons, bool variables and calls drive conditions" {
+	const ctx = evalOrcVM("function g(x: string | null, t: boolean): string { let r = '';"
+		+ " if (x === null) { r = r + 'a'; } else { r = r + 'b'; }"
+		+ " if (x !== null) { r = r + 'c'; } else { r = r + 'd'; }"
+		+ " r = r + ((x === null) ? 'e' : 'f');"
+		+ " if (x !== null && t) { r = r + 'g'; } else { r = r + 'h'; }"
+		+ " if (!(x === null) || !t) { r = r + 'i'; } else { r = r + 'j'; }"
+		+ " let n = 0; while (x === null && n < 1) { n = n + 1; } r = r + `${n}`; return r; }"
+		+ " function yes(): boolean { return true; } function no(): boolean { return false; }"
+		+ " let s: string | null = 's'; let z: string | null = null;"
+		+ " console.log(g(z, true)); console.log(g(s, true)); console.log(g(s, false));"
+		+ " let q = 0; if (yes() && !no()) { q = q + 1; } if (no() || yes()) { q = q + 1; } if (!yes()) { q = q + 10; } console.log(`${q}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "adehj1\nbcfgi0\nbcfhi0\n2\n", ctx.output;
+}
+
+test "engine: an if without an else leaves no jump to the next instruction" {
+	const g = compiledFunc("function g(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${g(1, 2)}`);", "g");
+	for (const inst of g.code) {
+		assert !(inst.op == RaiserOpcode.Jump && getSignedAx(inst) == 0), disasmFunc(g);
+	}
+}
+
+test "engine: an update statement keeps no old value and an update used as a value still returns it" {
+	const ctx = evalOrcVM("class C { n: int32 = 5; } const c = new C(); const xs: int32[] = [7]; let i = 0;"
+		+ " i++; ++i; c.n++; xs[0]--; for (let k = 0; k < 2; k++) { i--; }"
+		+ " const a = i++; const b = ++i; const d = c.n++; const e = xs[0]--;"
+		+ " console.log(`${i} ${a} ${b} ${c.n} ${d} ${xs[0]} ${e}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "2 0 2 7 6 5 6\n", ctx.output;
+	const loop = compiledFunc("function f(n: int64): int64 { let i: int64 = 0; i++; return i; } console.log(`${f(1)}`);", "f");
+	for (const inst of loop.code) {
+		assert inst.op != RaiserOpcode.Move, disasmFunc(loop);
+	}
 }
