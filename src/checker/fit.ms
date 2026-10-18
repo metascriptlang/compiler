@@ -2217,11 +2217,12 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	// pointer. Into the declared union itself the fit is an identity pass;
 	// stamping the position's type as the union keeps every downstream repr
 	// decision (address-of at the call, return/NRVO shape) identical to an
-	// un-narrowed reference. Any other union numbers its members differently,
-	// so the member is projected out and tagged again.
+	// un-narrowed reference. Any other slot union numbers its members differently,
+	// so the member is projected out and tagged again. A slotless target (a
+	// string-literal union) takes the member through the narrowed read's projection.
 	const declared = declaredTagUnionOf(expr);
 	if (declared != null) {
-		if (formal.kind != TypeKind.Union) return null as unknown as Node;
+		if (!isSlotUnion(formal)) return null as unknown as Node;
 		if (sameType(declared, formal)) {
 			expr.nodeType = formal;
 			return expr;
