@@ -447,9 +447,7 @@ function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
 	// Pick the right C runtime function based on element type
 	let fn = "msGenericArraySetLen";
 	if (elemType != null) {
-		if (isNumeric(elemType)) {
-			fn = "msNumberArraySetLen";
-		} else if (elemType.kind == TypeKind.String) {
+		if (elemType.kind == TypeKind.String) {
 			fn = "msStringArraySetLen";
 		} else {
 			// One source of truth for the ref family (atomic cells, Actor handles,

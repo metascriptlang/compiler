@@ -423,6 +423,36 @@ export function escapeJSString(s: string): string {
 	return result;
 }
 
+function isJsIdentifierName(name: string): boolean {
+	if (name.byteLength == 0) return false;
+	for (let i = 0; i < name.byteLength; i += 1) {
+		const b = name.byteAt(i);
+		const letter = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code)
+			|| b == "_".code || b == "$".code;
+		if (!letter && (i == 0 || b < "0".code || b > "9".code)) return false;
+	}
+	return true;
+}
+
+export function jsPropertyKey(name: string): string {
+	return isJsIdentifierName(name) ? name : "\"" + escapeJSString(name) + "\"";
+}
+
+export function jsPropertyAccess(name: string, optional: boolean = false): string {
+	if (isJsIdentifierName(name)) return (optional ? "?." : ".") + name;
+	return (optional ? "?.[" : "[") + jsPropertyKey(name) + "]";
+}
+
+export function identFromKey(key: string): string {
+	let out = "";
+	for (let i = 0; i < key.byteLength; i += 1) {
+		const b = key.byteAt(i);
+		const isAlnum = (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
+		out = isAlnum ? out + key.byteSlice(i, i + 1) : out + "_" + b.toString(16).padStart(2, "0");
+	}
+	return out;
+}
+
 // ===== Import Path Conversion =====
 
 export function convertImportPath(path: string): string {
@@ -468,6 +498,30 @@ test "escapeJSString keeps astral runs, escapes lone surrogates" {
 	assert escapeJSString(astral) == astral;
 	assert escapeJSString(fromCodePoint(55296)) == "\\" + "ud800";
 	assert escapeJSString(fromCodePoint(57343)) == "\\" + "udfff";
+}
+
+test "jsPropertyKey quotes exactly the names that are not identifiers" {
+	assert jsPropertyKey("plain") == "plain";
+	assert jsPropertyKey("$_a9") == "$_a9";
+	assert jsPropertyKey("data-probe") == "\"data-probe\"";
+	assert jsPropertyKey("42") == "\"42\"";
+	assert jsPropertyKey("1e3") == "\"1e3\"";
+	assert jsPropertyKey("") == "\"\"";
+	assert jsPropertyKey("q\"b\\s") == "\"q\\\"b\\\\s\"";
+	assert jsPropertyKey("é") == "\"é\"";
+}
+
+test "jsPropertyAccess brackets a name that is not an identifier" {
+	assert jsPropertyAccess("plain") == ".plain";
+	assert jsPropertyAccess("plain", true) == "?.plain";
+	assert jsPropertyAccess("aria-label") == "[\"aria-label\"]";
+	assert jsPropertyAccess("aria-label", true) == "?.[\"aria-label\"]";
+}
+
+test "identFromKey spells every byte below 0x10 with two hex digits" {
+	assert identFromKey("a:b") == "a_3ab";
+	assert identFromKey("\x01" + "f") == "_01f";
+	assert identFromKey("\x01" + "f") != identFromKey("\x1f");
 }
 
 test "convertImportPath" {

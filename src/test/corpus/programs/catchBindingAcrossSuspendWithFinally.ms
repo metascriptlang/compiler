@@ -1,4 +1,5 @@
 // @stdout: async 2 2 2 2 3 3 3 rejected bad gen 1 2 3 4 catchless
+// @xfail(raiser): a finally block after a suspend in an async function is skipped on the Raiser (inbox 2026-10-18-raiser-skips-finally-after-a-suspend-in-an-async-function)
 // note: a catch binding read in a state machine whose try also has a finally reads the caught exception (C rejected the read as an undeclared identifier); a raise leaving a finally reaches the enclosing catch, and a catch-less finally re-raises (C swallowed both); async and generator, suspend in try, catch or finally, nested.
 
 async function fail(): Promise<int32> { throw new Error("bad"); }

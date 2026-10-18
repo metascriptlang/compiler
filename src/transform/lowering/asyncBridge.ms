@@ -78,7 +78,7 @@ import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture, makeVal
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
 // Promise<T> so DRC's cross-pass contract holds; codegen extracts T via awaitedType.
-function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
+export function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	if (inlineInFuture(innerType)) {
 		const inlineCall = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		inlineCall.nodeType = promiseTypeFor(innerType);
@@ -209,13 +209,21 @@ export function promiseSettleStmts(call: Node, ctx: TransformContext): Node {
 	futDecl.nodeType = promiseType;
 	futDecl.resolvedSym = futSym;
 	const value = isVoid ? null : cd.arguments[1];
-	const completion: Node[] = [];
-	if (!isVoid && ownedInFuture(inner)) {
-		completion.push(makeExprStmt(makeCall(runtimeRef("msFutureOwnResult", loc), [makeTypedIdentResolved(futSym, promiseType, loc), makeFutureDropClosure(inner, ctx, loc)], loc), loc));
-	}
-	for (const s of makeFutureCompleteStmts(value, isVoid, promiseType, inner, loc, futSym, ctx)) completion.push(s);
-	const complete = makeBlock(completion, loc);
+	const complete = makeBlock(ownedCompletion(futSym, inner, value, promiseType, loc, ctx), loc);
 	return makeBlock([futDecl, makeIf(futurePending(futSym, promiseType, loc), complete, null, loc)], loc);
+}
+
+// The statements that complete `fut` with `written` by the writer contract an async
+// function's return uses: the future owns the value it is completed with, so each
+// reader that is not the last copies it.
+export function ownedCompletion(futSym: Symbol, held: Type | null, written: Node | null, promiseType: Type, loc: SourceLocation, ctx: TransformContext): Node[] {
+	const isVoid = held == null || held.kind == TypeKind.Void || written == null;
+	const out: Node[] = [];
+	if (!isVoid && ownedInFuture(held)) {
+		out.push(makeExprStmt(makeCall(runtimeRef("msFutureOwnResult", loc), [makeTypedIdentResolved(futSym, promiseType, loc), makeFutureDropClosure(held, ctx, loc)], loc), loc));
+	}
+	for (const s of makeFutureCompleteStmts(written, isVoid, promiseType, held, loc, futSym, ctx)) out.push(s);
+	return out;
 }
 
 export function promiseFailStmts(call: Node, ctx: TransformContext): Node {

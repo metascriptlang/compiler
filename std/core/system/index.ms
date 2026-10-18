@@ -149,7 +149,7 @@ extern function msModuleAsyncBody(fut: Ptr<void>): void;
 extern function msFutureOwnResult(fut: Ptr<void>, drop: Ptr<void>): void;
 
 @compilerFunc @builtin("SinkBoxStruct")
-extern function msSinkBoxStruct(val: Ptr<void>): Ptr<void>;
+extern function msSinkBoxStruct(sink val: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("UnboxStruct")
 extern function msUnboxStruct(box: Ptr<void>): Ptr<void>;

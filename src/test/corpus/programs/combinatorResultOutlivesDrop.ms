@@ -12,8 +12,6 @@
 //   whether or not the caller kept the result. A dropped race/all/any/allSettled result
 //   used to be freed by the caller while its inputs were pending, and the next input to
 //   settle completed freed memory (heap-use-after-free every run under ASan).
-//   The Error slack is the rejections nothing awaits: a failed future never releases
-//   its error (inbox 2026-10-06-catch-handler-never-destroys-the-error).
 //   The dropped race's rejecting input waits on its winner: a dropped race that
 //   rejects is an unhandled rejection, and timers alone do not order its inputs (node
 //   fires a later-made 2 ms timer before a 1 ms one when its loop runs late).

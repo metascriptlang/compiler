@@ -1,5 +1,4 @@
 // @stdout: string-literal-union ok 9
-// @xfail(raiser): overloaded class methods run the last-declared body on the Raiser (arc name-to-symbol, corpus 258-classMethodOverload)
 // note: a string literal argument ranks an overload whose parameter is a string-literal union by its own literal, in either declaration order and on a method, while a parameter of type `string` keeps taking it. Same output on C and JS.
 let wrong = "";
 let rows = 0;

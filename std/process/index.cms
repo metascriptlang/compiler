@@ -32,11 +32,14 @@ extern function msProcSpawnGetStderr(): string;
 extern function msProcSpawnGetOk(): int32;
 extern function msProcSpawnGetPipeOk(): int32;
 extern function msProcSpawnGetErrno(): int32;
+extern function msProcSpawnGetUnsupported(): int32;
 extern function msProcessGetEnv(name: string): string;
 extern function msProcessSetEnv(name: string, value: string): number;
 extern function msProcessUnsetEnv(name: string): number;
 extern function msProcessPlatform(): string;
 extern function msProcessArch(): string;
+
+const NO_SPAWN = "ENOSYS: process spawning is not supported on this target";
 
 // =============================================================================
 // Command-line arguments
@@ -93,7 +96,7 @@ export function exec(command: string): Result<string, ProcessError> {
 	const stdoutText = msProcessSpawnSync(command);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
-		return Result.err(spawnFailed(command, "fork/exec failed"));
+		return Result.err(spawnFailed(command, msProcSpawnGetUnsupported() != 0 ? NO_SPAWN : "fork/exec failed"));
 	}
 	const pipeOk = msProcSpawnGetPipeOk();
 	if (pipeOk == 0) {
@@ -141,7 +144,7 @@ export function execFileCapture(path: string, args: string[] = [], cwd: string =
 	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
-		return Result.err(startFailed(path, errnoName(msProcSpawnGetErrno())));
+		return Result.err(startFailed(path, msProcSpawnGetUnsupported() != 0 ? NO_SPAWN : errnoName(msProcSpawnGetErrno())));
 	}
 	const pipeOk = msProcSpawnGetPipeOk();
 	if (pipeOk == 0) {

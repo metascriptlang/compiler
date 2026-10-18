@@ -115,6 +115,47 @@ export function mangle(name: string): string {
 	return result;
 }
 
+const ESCAPED_PREFIX = "X_";
+
+function isAsciiAlnum(b: int32): boolean {
+	return (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
+}
+
+function keepsMangledSpelling(name: string): boolean {
+	if (name.byteLength == 0 || name.startsWith(ESCAPED_PREFIX)) return false;
+	let hasDollar = false;
+	for (let i = 0; i < name.byteLength; i += 1) {
+		const b = name.byteAt(i);
+		if (b == "$".code) {
+			hasDollar = true;
+		} else if (!(isAsciiAlnum(b) || b == "_".code) || (i == 0 && b >= "0".code && b <= "9".code)) {
+			return false;
+		}
+	}
+	if (name.indexOf("dollar") < 0) return true;
+	return !hasDollar && !name.endsWith("_");
+}
+
+function escapedPropertyName(name: string): string {
+	let out = ESCAPED_PREFIX;
+	for (let i = 0; i < name.byteLength; i += 1) {
+		const b = name.byteAt(i);
+		out = isAsciiAlnum(b) && b != "X".code
+			? out + name.byteSlice(i, i + 1)
+			: out + "X" + b.toString(16).toUpperCase().padStart(2, "0");
+	}
+	return out;
+}
+
+export function mangleProperty(name: string): string {
+	return keepsMangledSpelling(name) ? mangle(name) : escapedPropertyName(name);
+}
+
+export function mangleSeparatedProperty(name: string): string {
+	const kept = mangleProperty(name);
+	return kept.indexOf("__") >= 0 ? escapedPropertyName(name) : kept;
+}
+
 // ===== Character Ordinal =====
 // Mangles uppercase, underscore, and special chars to decimal ASCII ordinals.
 // Prevents clashes with Z (path sep) and O (dot) special meanings.
@@ -368,9 +409,16 @@ export function mangledGlobalName(sym: Symbol | null, name: string): string {
 // ===== Field Name — minimal mangling (no module prefix) =====
 
 export function mangleFieldName(name: string): string {
-	const mangled = mangle(name);
+	const mangled = mangleProperty(name);
 	if (isCKeyword(mangled) || isCMacroName(mangled)) return mangled + "_0";
+	if (spellsAnEscapedKeyword(mangled)) return escapedPropertyName(name);
 	return mangled;
+}
+
+function spellsAnEscapedKeyword(mangled: string): boolean {
+	if (!mangled.endsWith("_0")) return false;
+	const stem = mangled.slice(0, mangled.length - 2);
+	return isCKeyword(stem) || isCMacroName(stem);
 }
 
 // Note: local variable unique naming happens in `fillLocalName` (statements.ms),
@@ -552,6 +600,46 @@ test "a stdlib function name is a valid field name" {
 test "keyword field" {
 	assert mangleFieldName("int") == "int_0";
 	assert mangleFieldName("return") == "return_0";
+}
+
+test "a property name mangle spells unambiguously keeps that spelling" {
+	assert mangleProperty("plain") == "plain";
+	assert mangleProperty("_private") == "_private";
+	assert mangleProperty("aminusb_") == "aminusb_";
+	assert mangleProperty("X1") == "X1";
+	assert mangleProperty("$x") == "dollarx_";
+	assert mangleProperty("$state1") == "dollarstate1_";
+	assert mangleFieldName("$up") == "dollarup_";
+}
+
+test "any other property name is spelled byte by byte behind X_" {
+	assert mangleProperty("data-probe") == "X_dataX2Dprobe";
+	assert mangleProperty("é") == "X_XC3XA9";
+	assert mangleProperty("Xa-") == "X_X58aX2D";
+	assert mangleProperty("42") == "X_42";
+	assert mangleProperty("") == "X_";
+}
+
+function distinctSpellings(names: string[], spell: (name: string) => string): boolean {
+	for (let i = 0; i < names.length; i += 1) {
+		for (let j = i + 1; j < names.length; j += 1) {
+			if (spell(names[i]) == spell(names[j])) return false;
+		}
+	}
+	return true;
+}
+
+test "a separated property name never holds the separator" {
+	assert mangleSeparatedProperty("s__y") == "X_sX5FX5Fy";
+	assert mangleSeparatedProperty("$__x") == "X_X24X5FX5Fx";
+	assert mangleSeparatedProperty("_q") == "_q";
+	assert mangleSeparatedProperty("a_") == "a_";
+	assert mangleSeparatedProperty("data-probe") == "X_dataX2Dprobe";
+}
+
+test "property names mangle merges get distinct spellings" {
+	assert distinctSpellings(["é", "è", "a-b", "aminusb_", "a+b", "aplusb_", "$x", "dollarx_", "$$", "$dollar", "42", "X42", "X_42", "", "empty_", "a b", "aspaceb_"], mangleProperty);
+	assert distinctSpellings(["int", "int_0", "errno", "errno_0", "X_int", "int_"], mangleFieldName);
 }
 
 test "normal name" { assert safeName("foo") == "foo"; }

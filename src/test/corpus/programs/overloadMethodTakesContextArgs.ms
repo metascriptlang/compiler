@@ -1,5 +1,4 @@
 // @stdout: method-context ok 10
-// @xfail(raiser): overloaded class methods run the last-declared body on the Raiser (arc name-to-symbol, corpus 258-classMethodOverload)
 // note: an object literal or an arrow passed to an overloaded method is checked against the overload it fits, not against the first-declared method: a struct literal picks the method taking that struct over a zero-argument one, an untyped arrow picks the callback overload over a `string` one, in either declaration order, and an arrow whose return does not fit the first callback overload falls to the next. Same output on C and JS.
 interface Box { n: number; }
 let wrong = "";

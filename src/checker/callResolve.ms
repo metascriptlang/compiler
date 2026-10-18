@@ -1876,6 +1876,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		ctx.pendingSpawnThunk = false;
 		let argType = d.arguments[ai].nodeType;
 		const bindsTypeParam = _isGenericCall && _formal != null && hasGenericParams(_formal);
+		if (bindsTypeParam && argType != null) argType = storedTypeOfNullRead(d.arguments[ai], argType, argType);
 		// Tier 1: narrow direct enum member access to its EnumLiteral form for call checking.
 		if (!bindsTypeParam && argType != null && argType.kind == TypeKind.Enum) {
 			const argNode = d.arguments[ai];
@@ -3421,6 +3422,7 @@ function validateOverloadSigs(ctx: CheckerContext, sym: Symbol, impl: Symbol, ca
 function checkArgWithExpected(ctx: CheckerContext, arg: Node, expected: Type | null): Type {
 	callCheckExpr(ctx, arg, expected);
 	let argType = arg.nodeType;
+	if (argType != null && expected != null && hasGenericParams(expected)) argType = storedTypeOfNullRead(arg, argType, argType);
 	if (argType != null && argType.kind == TypeKind.Enum
 			&& arg.resolvedSym != null
 			&& arg.resolvedSym.symbolKind == SymbolKind.EnumMember

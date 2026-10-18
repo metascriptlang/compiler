@@ -1,5 +1,4 @@
 // @stdout: overload-literal-method ok 8
-// @xfail(raiser): overloaded class methods run the last-declared body on the Raiser (arc name-to-symbol, corpus 258-classMethodOverload)
 // note: a literal argument to an overloaded instance or static method takes the winning overload's parameter type, as it does for a single definition and for an overloaded function: `[]`, `[1, 2]` and `[1.5]` into `number[]`, and `int32[]` against `number[]` or `int32` against `number` picks the same overload in either declaration order. Same output on C and JS.
 let wrong = "";
 let rows = 0;

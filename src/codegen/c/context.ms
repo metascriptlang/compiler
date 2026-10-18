@@ -7,6 +7,7 @@ import { Node, Type, Symbol } from "../../ast/node";
 import { CheckerContext, CheckerError, Severity } from "../../checker/context";
 import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -640,6 +641,13 @@ export function aliveSetAddModule(aliveSet: AliveSet, modulePath: string): void 
 export function aliveSetHasNamed(aliveSet: AliveSet, modulePath: string, name: string): boolean {
 	for (const sym of aliveSet._syms) {
 		if (sym.name == name && sym.modulePath == modulePath) return true;
+	}
+	return false;
+}
+
+export function aliveSetImportsC(aliveSet: AliveSet, cName: string): boolean {
+	for (const sym of aliveSet._syms) {
+		if (hasFlag(sym, SymbolFlag.ImportC) && sym.nativeName == cName) return true;
 	}
 	return false;
 }

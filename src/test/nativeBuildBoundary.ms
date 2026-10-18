@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, or all");
 	exit(2);
 }
 
@@ -737,6 +737,123 @@ function runUpcastCast(): void {
 	record("a derived interface, a structural match and a class reach their base as a cast pointer", "1 1 5 4 4", value(dir));
 }
 
+function toolPresent(exe: string): boolean {
+	return execFileCapture(exe, ["--version"]).ok;
+}
+
+function runEmccArgvFs(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-argv-fs: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-argv-fs`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"import { readFile, writeFile, mkdir, exists, readDir, remove } from \"std/fs\";",
+		"import { argv } from \"std/process\";",
+		"const parts: string[] = [`argc=${argv.length - 1}`];",
+		"for (let i = 1; i < argv.length; i++) parts.push(argv[i]);",
+		"writeFile(\"note.txt\", \"kept\");",
+		"const back = readFile(\"note.txt\");",
+		"parts.push(back.ok ? back.value : \"read failed\");",
+		"mkdir(\"sub\");",
+		"writeFile(\"sub/inner.txt\", \"x\");",
+		"parts.push(readDir(\"sub\").join(\",\"));",
+		"remove(\"sub/inner.txt\");",
+		"parts.push(`${exists(\"sub/inner.txt\")} ${exists(\"note.txt\")}`);",
+		"console.log(parts.join(\"|\"));",
+		"",
+	].join("\n"));
+	const built = command(dir, "emcc-argv-fs", compiler, ["build", "main.ms", "--os=emcc", "--passL=-sNODERAWFS=1", "--output=probe.js"]);
+	need(built.code == 0, "emcc-argv-fs build");
+	const none = command(dir, "emcc-argv-fs-none", "node", ["probe.js"]);
+	record("an emcc program reads no arguments and uses the file system", "argc=0|kept|inner.txt|false true", none.stdout.trim());
+	const two = command(dir, "emcc-argv-fs-two", "node", ["probe.js", "one", "two words"]);
+	record("an emcc program receives its arguments in order", "argc=2|one|two words|kept|inner.txt|false true", two.stdout.trim());
+}
+
+function runEmccJspi(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-jspi: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-jspi`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/spawnOnly.ms`, [
+		"function sq(n: int32): int32 { return n * n; }",
+		"async function settled(): Promise<int32> {",
+		"\treturn await new Promise<int32>((resolve) => resolve(await spawn(() => sq(7))));",
+		"}",
+		"console.log(`${await settled()}`);",
+		"",
+	].join("\n"));
+	put(`${dir}/timer.ms`, [
+		"function waitSync(n: int32): int32 {",
+		"\treturn await new Promise<int32>((resolve) => setTimeout(() => resolve(n), 5));",
+		"}",
+		"let total = 0;",
+		"for (let i = 1; i <= 6; i++) total += waitSync(i);",
+		"console.log(`total=${total}`);",
+		"",
+	].join("\n"));
+	const plain = command(dir, "emcc-jspi-spawn", compiler, ["build", "spawnOnly.ms", "--os=emcc", "--output=spawnOnly.js"]);
+	need(plain.code == 0, "emcc-jspi spawn-only build");
+	const plainJs = readFile(`${dir}/spawnOnly.js`);
+	recordTrue("an emcc program with no timer links no stack suspension", plainJs.ok && plainJs.value.indexOf("Suspending") < 0 && plainJs.value.indexOf("asyncify") < 0);
+	record("an emcc program with no timer awaits a promise and a spawn", "49", command(dir, "emcc-jspi-spawn-run", "node", ["spawnOnly.js"]).stdout.trim());
+	const timed = command(dir, "emcc-jspi-timer", compiler, ["build", "timer.ms", "--os=emcc", "--output=timer.js"]);
+	need(timed.code == 0, "emcc-jspi timer build");
+	const timedJs = readFile(`${dir}/timer.js`);
+	recordTrue("an emcc program with a timer links JSPI", timedJs.ok && timedJs.value.indexOf("WebAssembly.Suspending") >= 0 && timedJs.value.indexOf("asyncify_start_unwind") < 0);
+	const jspiByDefault = execFileCapture("node", ["-e", "process.exit(typeof WebAssembly.Suspending == 'function' ? 0 : 1)"]).ok;
+	const nodeArgs = jspiByDefault ? ["timer.js"] : ["--experimental-wasm-jspi", "timer.js"];
+	record("an emcc program waits on a timer from sync code", "total=21", command(dir, "emcc-jspi-timer-run", "node", nodeArgs).stdout.trim());
+	put(`${dir}/rawSleep.ms`, "extern function msSleepMs(ms: int32): void;\nmsSleepMs(5);\nconsole.log(\"slept\");\n");
+	const raw = command(dir, "emcc-jspi-raw", compiler, ["build", "rawSleep.ms", "--os=emcc", "--output=rawSleep.js"]);
+	need(raw.code == 0, "emcc-jspi raw sleep build");
+	const rawJs = readFile(`${dir}/rawSleep.js`);
+	recordTrue("an emcc program that sleeps through a runtime extern links JSPI", rawJs.ok && rawJs.value.indexOf("WebAssembly.Suspending") >= 0);
+	const rawArgs = jspiByDefault ? ["rawSleep.js"] : ["--experimental-wasm-jspi", "rawSleep.js"];
+	record("an emcc program sleeps through a runtime extern", "slept", command(dir, "emcc-jspi-raw-run", "node", rawArgs).stdout.trim());
+}
+
+function runEmccWatchProcess(): void {
+	if (!toolPresent("emcc") || !toolPresent("node")) {
+		console.log("skip emcc-watch-process: emcc and node are both required on PATH");
+		return;
+	}
+	const dir = `${root}/emcc-watch-process`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, [
+		"import { watch } from \"std/fs/watch\";",
+		"import { exec, execFileCapture } from \"std/process\";",
+		"const w = watch(\".\", false);",
+		"const e = exec(\"echo hi\");",
+		"const f = execFileCapture(\"echo\", [\"hi\"]);",
+		"console.log([",
+		"\tw.ok ? \"watch ok\" : w.error.message,",
+		"\te.ok ? `exec ${e.value.trim()}` : e.error.message,",
+		"\tf.ok ? `execFile ${f.value.trim()}` : f.error.message,",
+		"].join(\"|\"));",
+		"",
+	].join("\n"));
+	const built = command(dir, "emcc-watch-process", compiler, ["build", "main.ms", "--os=emcc", "--passL=-sNODERAWFS=1", "--output=probe.js"]);
+	need(built.code == 0, "emcc-watch-process build");
+	const browser = command(dir, "emcc-watch-process-run", "node", ["probe.js"]);
+	record(
+		"an emcc program links watch and process spawn and each reports it is unsupported",
+		"file watching has no backend for this platform yet|spawn failed: ENOSYS: process spawning is not supported on this target|spawnSync echo ENOSYS: process spawning is not supported on this target",
+		browser.stdout.trim(),
+	);
+	const native = command(dir, "emcc-watch-process-native", compiler, ["build", "main.ms", "--output=native"]);
+	need(native.code == 0, "emcc-watch-process native build");
+	const ran = command(dir, "emcc-watch-process-native-run", `${dir}/native`, []);
+	record("the same program on the host watches and spawns", "watch ok|exec hi|execFile hi", ran.stdout.trim());
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -747,6 +864,9 @@ if (group == "project-cache" || group == "all") runProjectCache();
 if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
 if (group == "upcast-cast" || group == "all") runUpcastCast();
+if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
+if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
+if (group == "emcc-jspi" || group == "all") runEmccJspi();
 
 let failures = 0;
 console.log(`root ${root}`);

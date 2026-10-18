@@ -22,7 +22,7 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -1570,10 +1570,9 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 
 	let rtFiles = "";
 	if (opts.targetOs == "emcc") {
-		// Single-threaded: Asyncify-based async. spawn/Actor not yet supported.
-		rtFiles = "runtime/promise/dispatchEmcc.c";
+		rtFiles = "runtime/promise/dispatchEmcc.c\nruntime/promise/pool.c\nruntime/promise/awaitGroup.c";
 	} else if (opts.targetOs == "wasm") {
-		rtFiles = "runtime/promise/dispatchWasm.c";
+		rtFiles = "runtime/promise/dispatchWasm.c\nruntime/promise/pool.c\nruntime/promise/awaitGroup.c";
 	} else {
 		// Desktop: full dispatcher + thread pool + selectors
 		rtFiles = "runtime/promise/dispatchFull.c";
@@ -1584,12 +1583,8 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorEpoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/promise/selectorPoll.c";
 		rtFiles = rtFiles + "\n" + "runtime/actor/actor.c";
-		if (opts.targetOs == "windows") {
-			rtFiles = rtFiles + "\n" + "runtime/fs/windows.c";
-		} else {
-			rtFiles = rtFiles + "\n" + "runtime/fs/posix.c";
-		}
 	}
+	rtFiles = rtFiles + "\n" + (opts.targetOs == "windows" ? "runtime/fs/windows.c" : "runtime/fs/posix.c");
 
 	rtFiles = rtFiles + "\n" + "runtime/promise/drain.c";
 	rtFiles = rtFiles + "\n" + "runtime/promise/moduleEval.c";
@@ -3182,16 +3177,17 @@ resetLiftedOps();
 
 	const tD = performance.now();
 
-	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module or a timer alive)
+	// Emscripten: a wait from sync code suspends the wasm stack only through a sleep or a
+	// pending timer (spawn runs inline here), so JSPI is linked exactly when one of those
+	// runtime entries is reachable; a JSPI build does not load where the browser lacks JSPI.
 	if (opts.targetOs == "emcc" && aliveSet.computed) {
-		let hasAsync = false;
-		for (const mp of aliveModules) {
-			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
-			if (mp.endsWith("core/system/index.ms") && (aliveSetHasNamed(aliveSet, mp, "setTimeout") || aliveSetHasNamed(aliveSet, mp, "setInterval"))) hasAsync = true;
+		let suspends = false;
+		for (const entry of ["msSleepMs", "msSleepAsync", "msSetTimeout", "msSetInterval"]) {
+			if (aliveSetImportsC(aliveSet, entry)) suspends = true;
 		}
-		if (hasAsync) {
-			linkFlags = appendFlag(linkFlags, "-sASYNCIFY");
-			if (opts.verbose) verboseLog("  async detected → enabling Asyncify");
+		if (suspends) {
+			linkFlags = appendFlag(linkFlags, "-sJSPI");
+			if (opts.verbose) verboseLog("  sleep or timer reachable → enabling JSPI");
 		}
 	}
 

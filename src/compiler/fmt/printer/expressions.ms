@@ -242,11 +242,11 @@ export function printArrayAccess(node: Node, options: FormatOptions): Doc {
 function needsQuote(key: string): boolean {
 	if (key.length == 0) return true;
 	const first = key.charCodeAt(0);
-	if (!((first >= "a".code && first <= "z".code) || (first >= "A".code && first <= "Z".code) || first == "_".code)) return true;
+	if (!((first >= "a".code && first <= "z".code) || (first >= "A".code && first <= "Z".code) || first == "_".code || first == "$".code)) return true;
 	let j = 1;
 	while (j < key.length) {
 		const ch = key.charCodeAt(j);
-		if (!((ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code) || (ch >= "0".code && ch <= "9".code) || ch == "_".code)) return true;
+		if (!((ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code) || (ch >= "0".code && ch <= "9".code) || ch == "_".code || ch == "$".code)) return true;
 		j = j + 1;
 	}
 	return false;
