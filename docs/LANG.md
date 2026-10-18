@@ -586,6 +586,17 @@ function fail(msg: string): never {
 }   // error: 'fail' returns 'never' but can reach the end of its body
 ```
 
+A bare `return;` beside `return <value>;` in a function without a return annotation makes the
+return type nullable, and the bare return gives `null`: `function f(c: boolean) { if (c) return; return 3; }`
+is `int32 | null` (TypeScript: `number | undefined`, and `undefined` is `null` here), and an async one is
+`Promise<int32 | null>`. A function whose only returns are bare stays `void`. Where the return type is
+written, a bare `return;` is accepted when that type holds `null` (it gives `null`) and refused when it
+needs a value (`'f' returns 'int32', and a bare 'return;' gives no value: return a value, or write the
+return type as 'int32 | null'`). Measured 2026-10-18 on C drc, orc, danger, JS and ESM (corpus
+`bareReturnBesideValueReturn`: int32, string, a class, either order, nested in a loop, an arrow,
+async through `await` and `.then`; checker3pass `bareReturnInValueFunction`). Not measured: the Raiser, and a bare return in a
+function typed `unknown`.
+
 A call to a function or method declared `never` ends the flow as `throw` does, so a guard
 `if (!r.ok) { stop("no"); }` narrows the code after it, in a loop of any depth and in a macro body
 (`error(...)` returns `never`); verified 2026-10-06, corpus `neverCallEndsFlow` and
