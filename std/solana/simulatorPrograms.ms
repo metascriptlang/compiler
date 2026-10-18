@@ -1,10 +1,12 @@
-import { msSolFill, msSolLoadU8, msSolLoadU32, msSolLoadU64, msSolStoreU64, msSolStringAddress, msSolStringLength } from "./memory";
-
-extern function msSolDataRoom(record: uint64): uint64;
-when (c) {
-	@emit("void msSolHostFaultAt(uint64_t result, uint64_t text, uint64_t length);");
-}
-extern function msSolHostFaultAt(result: uint64, text: uint64, length: uint64): void;
+import {
+	msSolDataRoom,
+	msSolFill,
+	msSolHostRaise,
+	msSolLoadU8,
+	msSolLoadU32,
+	msSolLoadU64,
+	msSolStoreU64,
+} from "./memory";
 
 const REFUSED: uint64 = 0xffffffffffffffff;
 const NOT_SIMULATED: uint64 = 0xfffffffffffffffe;
@@ -39,7 +41,7 @@ interface SystemAccount {
 }
 
 function fault(result: uint64, text: string): void {
-	msSolHostFaultAt(result, msSolStringAddress(text), msSolStringLength(text));
+	msSolHostRaise(result, text);
 }
 
 function refuses(text: string): uint64 {

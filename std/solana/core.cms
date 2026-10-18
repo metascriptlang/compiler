@@ -5,7 +5,6 @@ import {
 	msSolAccountCount,
 	msSolAccountSlot,
 	msSolCurveValidatePoint,
-	msSolDataRoom,
 	msSolGetClock,
 	msSolGetReturnData,
 	msSolInstructionData,
@@ -26,6 +25,7 @@ import {
 } from "./kernel";
 import {
 	msSolCopy,
+	msSolDataRoom,
 	msSolFill,
 	msSolLoadU16,
 	msSolLoadU32,

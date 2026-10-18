@@ -327,12 +327,6 @@ uint64_t msSolHostResizeRecord(uint64_t record, uint64_t space);
 uint64_t msSolHostAnyByteIn(uint64_t bytes, uint64_t from, uint64_t to);
 uint64_t msSolHostSystemInvoke(uint64_t header);
 
-void msSolHostFaultAt(uint64_t result, uint64_t text, uint64_t length) {
-    char line[sizeof(msSolHostFaultText)];
-    snprintf(line, sizeof(line), "%.*s", (int)length, (const char*)(uintptr_t)text);
-    msSolHostFault(result, line);
-}
-
 #define MS_SOL_HOST_LAMPORTS_PER_BYTE_YEAR 3480ULL
 #define MS_SOL_HOST_RENT_EXEMPTION_YEARS 2
 

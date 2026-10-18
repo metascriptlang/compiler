@@ -1,9 +1,7 @@
-import { msSolLoadU8, msSolLoadU64, msSolStoreU8 } from "./memory";
+import { msSolHostRaise, msSolLoadU8, msSolLoadU64, msSolStoreU8 } from "./memory";
 import { sha256 } from "std/crypto/sha256";
 import { isEdwardsPoint } from "std/crypto/ed25519/point";
 import { MAX_SEEDS, NO_BUMP, derivedDigest, findAddress, isOffCurve, seedsFit } from "./simulatorCryptoCore";
-
-extern function msSolHostRaise(code: uint64, text: string): void;
 
 const REFUSED: uint64 = 0xffffffffffffffff;
 const NOT_SIMULATED: uint64 = 0xfffffffffffffffe;

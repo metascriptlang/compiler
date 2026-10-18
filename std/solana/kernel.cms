@@ -23,7 +23,6 @@ export extern function msSolInstructionDataLength(): uint64;
 export extern function msSolProgramId(): uint64;
 export extern function msSolSetResult(code: uint64): void;
 export extern function msSolScratch(size: uint64): uint64;
-export extern function msSolDataRoom(record: uint64): uint64;
 export extern function msSolResult(): uint64;
 export extern function msSolLog(address: uint64, length: uint64): void;
 export extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
