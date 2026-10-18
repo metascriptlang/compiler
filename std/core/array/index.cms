@@ -13,11 +13,14 @@
 //   - LSP hover/completion
 // NOTE: The actual array type is TypeKind.Array (compiler magic).
 // This class declaration is for symbol visibility only — resolveAnnotation
-// handles "Array<T>" as a keyword, and .length is resolved by the checker's
+// builds "Array<T>" from its @builtin tag, and .length is resolved by the checker's
 // special case (checkExprPass.ms), not from this struct field.
+@builtin("Array")
 export class Array<T> {
 	length: number;
 }
+
+export { toString } from "./shared";
 
 // ===== Number Array =====
 

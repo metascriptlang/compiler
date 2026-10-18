@@ -1,6 +1,6 @@
 import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
-import { classDeclNodeOf, parentClassSymOf, lookupSymbol, Scope } from "./symbol";
-import { CheckerContext, addError } from "./context";
+import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
+import { CheckerContext, addError, extReceiverSym } from "./context";
 import { skipModifier, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
@@ -188,7 +188,7 @@ export function methodOwnerClass(ctx: CheckerContext, method: Symbol): Symbol | 
 	if (decl == null || decl.kind != NodeKind.MethodDecl || ctx.extensionRegistry == null) return null;
 	for (const ext of ctx.extensionRegistry.methods) {
 		if (ext.sym != method) continue;
-		const owner = lookupSymbol(ctx.table, ext.receiverTypeName);
+		const owner = ext.isStatic ? method.staticOwner : extReceiverSym(ext);
 		return owner != null && isClassLike(owner) ? owner : null;
 	}
 	return null;

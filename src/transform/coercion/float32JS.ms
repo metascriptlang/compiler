@@ -6,7 +6,7 @@ import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeMember, makeArrayAccess, makeNumber, runtimeRef } from "../util";
+import { makeBinary, makeCall, makeMember, makeArrayAccess, makeNumber, generatedRef } from "../util";
 import { cloneIfPure } from "./intArithJS";
 
 export function lowerFloat32JS(program: Node, ctx: TransformContext): Node {
@@ -33,7 +33,7 @@ function isFloat32(t: Type | null): boolean {
 }
 
 function fround(inner: Node): Node {
-	const call = makeCall(makeMember(runtimeRef("Math", inner.location), "fround", inner.location), [inner], inner.location);
+	const call = makeCall(makeMember(generatedRef("Math", inner.location), "fround", inner.location), [inner], inner.location);
 	call.nodeType = createPrimitive(TypeKind.Float32);
 	return call;
 }

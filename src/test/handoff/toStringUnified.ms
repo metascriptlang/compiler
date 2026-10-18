@@ -92,8 +92,7 @@ test "struct toString produces a JSON string" {
 	const src = "interface Point { x: number; y: number; }\nconst p: Point = { x: 1, y: 2 };\nconst s = p.toString();";
 	const result = compileToC(src);
 	assert result.ok;
-	// Struct toString lowers to the json-object + stringify path (not a passthrough).
-	assert result.value.contains("stringify");
+	assert result.value.contains("valueDump");
 }
 
 // ===== User extension overrides default =====

@@ -79,6 +79,7 @@ export enum TypeFlag {
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 	HasGenericParam,
 	BorrowDot,
+	Spelled,              // the compiler spelled this name from an owner and arguments: it is the identity and no declaring symbol exists
 	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
 }
 
@@ -259,6 +260,7 @@ export class Symbol {
 	item: int32;
 	instantiatedFrom: Symbol | null;
 	borrowedFrom: Symbol | null;
+	staticOwner: Symbol | null;
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====
@@ -297,6 +299,8 @@ export enum NodeFlag {
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
 	OptionalChainEnd, // parser: last link of a run that starts at `?.` — the null test covers every link from the `?.` to here
+	AssertedNull,  // checker: `null as T` folded to a typed null literal; its value is the asserted T, so an assignment narrows to T
+	UserOpStores,  // checker: this compound assignment calls its base operator's declared routine and stores the result in its target
 	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
 }
 

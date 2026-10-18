@@ -8,7 +8,7 @@
 // narrowing for let-variables ships in Phase 6.
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, NodeFlag, DeclKind,
 	FlowNode, FlowFlag, FlowList, FlowReduceLabelData,
 	Type, TypeKind,
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
@@ -19,14 +19,14 @@ import {
 } from "../ast/node";
 import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
-	detectUnionDiscriminant, findVariantByDiscriminant,
+	detectUnionDiscriminant, enumMemberLiteralOf,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
-	nullableUnionOf, hasGenericParams, symGenericParams, genericInstanceMembers,
+	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
 	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
 	classAncestorInstance, isNullableShape,
 } from "./types";
-import { typeRelation, TypeRelation, sameType } from "./compat";
+import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 // ===== FlowType =====
@@ -65,7 +65,6 @@ interface SharedFlowEntry {
 // fixed-point terminate.
 interface FlowLoopInfo {
 	loopNode: FlowNode;
-	refKey: string;
 	types: Type[];
 }
 
@@ -73,7 +72,6 @@ export interface FlowState {
 	reference: Node;                 // the reference expression whose type we're computing
 	declaredType: Type;              // the declared (pre-narrowing) type of the reference
 	depth: int32;                    // recursion guard; TypeScript caps at 2000
-	refKey: string;                  // cached getFlowCacheKey(reference); "" means not yet computed; "@nondotted" means unnarrowable
 	sharedFlows: SharedFlowEntry[];  // per-query Shared-flow cache
 	flowLoopStack: FlowLoopInfo[];   // in-progress loop analyses (re-entry detection)
 	reduceLabels: FlowReduceLabelData[];
@@ -91,54 +89,26 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 		reference: refNode,
 		declaredType: declaredType,
 		depth: 0,
-		refKey: "",
 		sharedFlows: [],
 		flowLoopStack: [],
 		reduceLabels: [],
 	};
 }
 
-// Reference cache key. Used to distinguish loop analyses for different
-// references that share the same loop label. Returns the sentinel
-// "@nondotted" when the reference isn't a simple identifier or dotted
-// member-chain — non-dotted references bypass the loop cache entirely
-// (matches the reference `writeFlowCacheKey`).
-function getFlowCacheKey(refNode: Node): string {
-	if (refNode == null) return "@nondotted";
-	return writeFlowCacheKey(refNode);
+function isDottedReference(node: Node | null): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier) return true;
+	if (node.kind == NodeKind.MemberExpr) return isDottedReference((node.data as MemberExprData).object);
+	return false;
 }
 
-function writeFlowCacheKey(node: Node): string {
-	if (node == null) return "@nondotted";
-	match (node.kind) {
-		NodeKind.Identifier => {
-			const d = node.data as IdentifierData;
-			// Prefer symbol identity via a stable string form — the symbol
-			// pointer address isn't accessible in MetaScript, but the symbol's
-			// name + modulePath is unique enough for query-scoped caching.
-			if (node.resolvedSym != null) {
-				return "sym:" + node.resolvedSym.name + "@" + node.resolvedSym.modulePath;
-			}
-			return "name:" + d.name;
-		},
-		NodeKind.MemberExpr => {
-			const d = node.data as MemberExprData;
-			const base = writeFlowCacheKey(d.object);
-			if (base == "@nondotted") return "@nondotted";
-			return base + "." + d.property;
-		},
-		_ => { return "@nondotted"; },
-	};
-	return "@nondotted";
-}
-
-// The FlowLoopInfo on the stack for this (loopNode, refKey) that already holds a type.
+// The FlowLoopInfo on the stack for this loopNode that already holds a type.
 // Used to detect re-entry during back-edge recursion.
-function findPopulatedLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode, refKey: string): FlowLoopInfo {
+function findPopulatedLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode): FlowLoopInfo {
 	let i = 0;
 	while (i < stack.length) {
 		const info = stack[i];
-		if (info.loopNode == loopNode && info.refKey == refKey && info.types.length > 0) return info;
+		if (info.loopNode == loopNode && info.types.length > 0) return info;
 		i = i + 1;
 	}
 	return null as unknown as FlowLoopInfo;
@@ -183,10 +153,6 @@ function isMatchingReference(source: Node, target: Node): boolean {
 	if (source.kind != target.kind) return false;
 	match (source.kind) {
 		NodeKind.Identifier => {
-			// Symbol identity is required. If either side lacks resolvedSym
-			// (e.g., the reference wasn't visited by the checker yet, or it's
-			// synthetic) we conservatively return false — this means we
-			// might miss a narrowing, but we'll never apply the wrong one.
 			if (source.resolvedSym == null || target.resolvedSym == null) {
 				return false;
 			}
@@ -242,33 +208,14 @@ function isMatchingIndex(a: Node | null, b: Node | null): boolean {
 
 // ===== Literal value extraction =====
 //
-// To compare `x.kind === "circle"` against union variants, we pull the
-// literal value out of the AST. Supports string literals, enum-member
-// references (both the original `K.Member` form and the post-checker
-// mangled `K_Member` identifier form), and null.
+// To compare `x.kind === "circle"` against union variants, read the literal
+// value the compared expression denotes: a string literal, or a string-literal
+// type the checker gave it.
 
-function extractLiteralString(node: Node): string {
-	if (node == null) return "";
-	match (node.kind) {
-		NodeKind.StringLiteral => {
-			const d = node.data as StringLiteralData;
-			return d.value;
-		},
-		NodeKind.Identifier => {
-			// Enum member after checker rewrite: MemberExpr `K.A` becomes
-			// Identifier `K_A`. We return the raw name; findVariantByDiscriminant
-			// uses bareAfterDelim("_") to strip the enum prefix.
-			const d = node.data as IdentifierData;
-			return d.name;
-		},
-		NodeKind.MemberExpr => {
-			// Enum member before checker rewrite: `K.A`
-			const d = node.data as MemberExprData;
-			return d.property;
-		},
-		_ => { return ""; },
-	};
-	return "";
+function stringLiteralValueOf(node: Node): string | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.StringLiteral) return (node.data as StringLiteralData).value;
+	return node.nodeType != null && node.nodeType.kind == TypeKind.StringLiteral ? node.nodeType.typeName : null;
 }
 
 function isNullLiteral(node: Node): boolean {
@@ -794,7 +741,7 @@ function withoutSubclasses(types: Type[]): Type[] {
 // back-edges (e.g., the end of the body, `continue` jumps).
 //
 // Algorithm:
-//   1. If we're already analyzing this (loopNode, refKey) pair — i.e., the
+//   1. If we're already analyzing this loopNode — i.e., the
 //      current call recursed into the same loop via a back-edge — return a
 //      union of the types accumulated so far, marked incomplete. This breaks
 //      the infinite recursion while producing a conservative result.
@@ -809,18 +756,14 @@ function withoutSubclasses(types: Type[]): Type[] {
 // stabilizes within finitely many back-edge visits.
 
 function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
-	// Compute the reference cache key on first use.
-	if (state.refKey == "") {
-		state.refKey = getFlowCacheKey(state.reference);
-	}
 	// Non-dotted references can't be meaningfully narrowed across loops —
 	// conservatively return declared type.
-	if (state.refKey == "@nondotted") {
+	if (!isDottedReference(state.reference)) {
 		return flowType(state.declaredType, false);
 	}
-	// Re-entry detection: if this (loopNode, refKey) is already on the
+	// Re-entry detection: if this loopNode is already on the
 	// stack, return the current accumulated union.
-	const existing = findPopulatedLoopInfo(state.flowLoopStack, flow, state.refKey);
+	const existing = findPopulatedLoopInfo(state.flowLoopStack, flow);
 	if (existing != null) {
 		return flowType(unionOfTypes(existing.types, state.declaredType), true);
 	}
@@ -830,7 +773,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	// up at the LIST TAIL, while the back-edge sits at the head. To establish
 	// baseline narrowing without re-entering the loop label, we must walk
 	// pre-loop FIRST. Collect into an array and reverse.
-	const info: FlowLoopInfo = { loopNode: flow, refKey: state.refKey, types: [] };
+	const info: FlowLoopInfo = { loopNode: flow, types: [] };
 	let firstAnteType: FlowType = null as unknown as FlowType;
 	let widened = false;
 	let subtypeReduction = false;
@@ -1310,12 +1253,13 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (d.left == null) return null;
 		if (patternWritesInto(d.left, refNode)) return declared;
 		if (d.operator != "=") return null;
-		if (!isMatchingReference(d.left, refNode)) {
-			return assignsUncheckedName(d.left, refNode) ? declared : null;
+		if (d.left.kind == NodeKind.Identifier && d.left.resolvedSym == null) {
+			throw new Error(`internal: assignment to '${(d.left.data as IdentifierData).name}' at ${d.left.location.line}:${d.left.location.column} reached flow narrowing with no symbol bound by position`);
 		}
+		if (!isMatchingReference(d.left, refNode)) return null;
 		const rhs = skipHiddenConv(d.right);
 		if (rhs == null || rhs.nodeType == null) return declared;
-		return constrainToDeclared(rhs.nodeType, declared);
+		return constrainToDeclared(assignedValueType(rhs), declared);
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
@@ -1327,15 +1271,14 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (refNode.kind != NodeKind.Identifier) return null;
 		const sym = refNode.resolvedSym;
 		if (sym == null || sym.declNode != node) return null;
-		return constrainToDeclared(init.nodeType, declared);
+		return constrainToDeclared(assignedValueType(init), declared);
 	}
 	return null;
 }
 
-function assignsUncheckedName(left: Node, refNode: Node): boolean {
-	if (left.kind != NodeKind.Identifier || refNode.kind != NodeKind.Identifier) return false;
-	if (left.resolvedSym != null) return false;
-	return (left.data as IdentifierData).name == (refNode.data as IdentifierData).name;
+function assignedValueType(value: Node): Type {
+	const t = value.nodeType!;
+	return value.kind == NodeKind.NullLiteral && !value.flags.has(NodeFlag.AssertedNull) && isNullableShape([t]) ? nullType() : t;
 }
 
 function stripHidden(n: Node | null): Node | null {
@@ -1358,10 +1301,6 @@ function sameLocation(part: Node | null, target: Node): boolean {
 	if (p == null || t == null) return false;
 	if (isMatchingReference(p, t)) return true;
 	if (p.kind != t.kind) return false;
-	if (t.kind == NodeKind.Identifier) {
-		return t.resolvedSym == null
-			&& (t.data as IdentifierData).name == (p.data as IdentifierData).name;
-	}
 	if (t.kind == NodeKind.MemberExpr) {
 		const pd = p.data as MemberExprData;
 		const td = t.data as MemberExprData;
@@ -1736,13 +1675,15 @@ export function narrowTypeByDiscriminantProperty(
 	}
 	const info = detectUnionDiscriminant(t, propName);
 	if (info.discField == "") return t;
-	const litValue = extractLiteralString(valueExpr);
-	if (litValue == "") return t;
 	let variantIdx = -1;
 	if (info.isStringDU) {
+		const litValue = stringLiteralValueOf(valueExpr);
+		if (litValue == null) return t;
 		variantIdx = findVariantByStringDiscriminant(t, info.discField, litValue);
 	} else {
-		variantIdx = findVariantByDiscriminant(t, litValue);
+		const lit = enumMemberLiteralOf(valueExpr);
+		if (lit == null) return t;
+		variantIdx = findVariantByEnumMember(t, lit);
 	}
 	if (variantIdx < 0) return t;
 	if (t.typeChildren == null || variantIdx >= t.typeChildren.length) return t;

@@ -1,7 +1,7 @@
 // A captured parameter is COPIED into the closure env, never addressed.
 
 import { fullPipeline } from "./helpers";
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJSWithStd } from "../helpers";
 import { Node, NodeKind, ProgramData, InterfaceDeclData, TypeKind } from "../../ast/node";
 
 const VIEW_CAPTURE = "cannot be captured as it would violate memory safety";
@@ -12,11 +12,11 @@ function refusedWith(r: Result<string, string>, needle: string): boolean {
 }
 
 function refusedOnBothBackends(src: string, needle: string): boolean {
-	return refusedWith(compileToC(src), needle) && refusedWith(compileToJS(src), needle);
+	return refusedWith(compileToC(src), needle) && refusedWith(compileToJSWithStd(src), needle);
 }
 
 function acceptedOnBothBackends(src: string): boolean {
-	return compileToC(src).ok && compileToJS(src).ok;
+	return compileToC(src).ok && compileToJSWithStd(src).ok;
 }
 
 function findEnvDecl(prog: Node): Node {

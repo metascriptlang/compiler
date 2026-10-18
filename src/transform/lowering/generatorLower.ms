@@ -27,9 +27,9 @@ import {
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { mapChildren } from "../walker";
-import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
-import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError } from "../context";
+import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
 	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
@@ -38,7 +38,7 @@ import {
 	makeTryCatch, makeCatchSym, makeMoveExpr,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { numberType, createPtr, createPrimitive, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, createPtr, createPrimitive, numberType, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
@@ -319,7 +319,7 @@ function makeDoneResult(loc: SourceLocation, resultType: Type | null): Node {
 
 export function makeStateAssign(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {
 	return makeExprStmt(
-		makeAssign(makeTypedIdentResolved(stateSym, numberType(), loc), makeNumber(stateNum, loc), loc),
+		makeAssign(makeIdentResolved(stateSym, loc), makeNumber(stateNum, loc), loc),
 		loc,
 	);
 }
@@ -1050,9 +1050,9 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 	// Build IteratorResult<T> type for stamping yield/return literals
 	const iterResultType = buildIterResultType(returnNodeType);
-	const stateSym = makeSymbol("$state", SymbolKind.Variable, numberType(), true);
+	const stateSym = newLoweredSym(ctx, SymbolKind.Variable, "$state", int32Type(), true);
 	setFlag(stateSym, SymbolFlag.StateMachine);
-	const curExcSym = makeSymbol("$curExc", SymbolKind.Variable, null as unknown as Type, true);
+	const curExcSym = newLoweredSym(ctx, SymbolKind.Variable, "$curExc", null as unknown as Type, true);
 
 	// 4. Split at yield points
 	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
@@ -1253,7 +1253,7 @@ function splitErrorsFor(src: string): int32 {
 	checkProgram(parsed.value);
 	const ctx = makeCtx();
 	lowerGenerator(parsed.value, ctx);
-	return ctx.errors.length as int32;
+	return ctx.checkerCtx.errors.length as int32;
 }
 
 test "a yield inside an expression is reported, not passed through" { assert splitErrorsFor("function* gen() { const v = (yield 1) + 1; }") == 1; }
@@ -1268,11 +1268,11 @@ test "a hoisted local without its symbol is refused, not rebuilt by name" {
 	const locals = createSymSet();
 	const ctx = makeCtx();
 	collectStateLocals(body, ctx, locals);
-	assert ctx.errors.length == 1;
+	assert ctx.checkerCtx.errors.length == 1;
 	assert locals.items.length == 0;
 }
 
-function hoistedDeclsOf(src: string): Node[] {
+function hoistedDeclsOf(src: string, name: string = "x"): Node[] {
 	const parsed = parseInput(src);
 	if (!parsed.ok) return [];
 	checkProgram(parsed.value);
@@ -1280,7 +1280,7 @@ function hoistedDeclsOf(src: string): Node[] {
 	const fd = (parsed.value.data as ProgramData).programStmts[0].data as FunctionDeclData;
 	const out: Node[] = [];
 	for (const s of (fd.fnBody.data as BlockStmtData).statements) {
-		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && s.resolvedSym.name == "x") out.push(s);
+		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && s.resolvedSym.name == name) out.push(s);
 	}
 	return out;
 }
@@ -1289,4 +1289,12 @@ test "two same-named locals of a generator are hoisted one slot each" {
 	const decls = hoistedDeclsOf("function* gen(f: boolean): Iterator<string> { if (f) { const x: string = \"s\"; yield x; yield x; } else { const x: int32 = 4; yield x.toString(); yield x.toString(); } }");
 	assert decls.length == 2;
 	assert decls[0].resolvedSym != decls[1].resolvedSym;
+}
+
+test "a generator's state and current-exception variables are minted with their module's identity" {
+	const src = "function* gen(): Iterator<number> { try { yield 1; } catch (e) { yield 2; } }";
+	const states = hoistedDeclsOf(src, "$state");
+	const excs = hoistedDeclsOf(src, "$curExc");
+	assert states.length == 1 && excs.length == 1;
+	assert states[0].resolvedSym.item > 0 && excs[0].resolvedSym.item > 0;
 }

@@ -309,7 +309,7 @@ export function createResult(okType: Type, errType: Type): Type {
 	base.typeName = "Result";
 	base.typeExtra = booleanType();
 	base.typeNames = ["ok", "true", "false"];
-	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn);
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn).incl(TypeFlag.Spelled);
 	return createGenericInstance(base, [okType, errType]);
 }
 
@@ -319,6 +319,7 @@ export function createPromise(innerType: Type | null): Type {
 	base.typeName = "Promise";
 	base.typeNames = [];
 	base.typeChildren = [];
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.Spelled);
 	return createGenericInstance(base, [innerType!]);
 }
 
@@ -338,14 +339,14 @@ export function createSpawnHandle(innerType: Type | null): Type {
 	// createGenericInstance propagates base.typeFlags onto the produced
 	// GenericInstance so isAffineAwaitable(t) can detect spawn-origin Promises
 	// anywhere they flow.
-	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound);
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound).incl(TypeFlag.Spelled);
 	return createGenericInstance(base, [innerType!]);
 }
 
 // Iterator<T> — return type of function* generators. Wraps yield type T.
 // At runtime: { next: () => { value: T, done: boolean } }
 export function createIteratorResult(yieldType: Type): Type {
-	const genericBase = createStruct("IteratorResult", ["value", "done"], [createGenericParam("T"), createPrimitive(TypeKind.Boolean)], false);
+	const genericBase = spelled(createStruct("IteratorResult", ["value", "done"], [createGenericParam("T"), createPrimitive(TypeKind.Boolean)], false));
 	const gi = createGenericInstance(genericBase, [yieldType]);
 	instantiateGenericBody(gi, "T");
 	return gi;
@@ -353,13 +354,13 @@ export function createIteratorResult(yieldType: Type): Type {
 
 export function createIterator(yieldType: Type): Type {
 	const nextFnType = createClosureType([], [], createIteratorResult(yieldType));
-	const iter = createStruct("Iterator", ["next"], [nextFnType], false);
+	const iter = spelled(createStruct("Iterator", ["next"], [nextFnType], false));
 	return iter;
 }
 
 export function isIterator(t: Type | null): boolean {
 	if (t == null) return false;
-	return t.typeName == "Iterator";
+	return t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "Iterator";
 }
 
 export function getIteratorNextFnType(t: Type | null): Type | null {
@@ -387,7 +388,7 @@ export function getIteratorYieldType(t: Type): Type | null {
 export function isResult(t: Type | null): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Result) return true;
-	return t.kind == TypeKind.GenericInstance && t.typeName == "Result";
+	return t.kind == TypeKind.GenericInstance && t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "Result";
 }
 
 // Result's ok-type / err-type live on the GenericInstance's `typeChildren`
@@ -472,7 +473,7 @@ export function isAwaitable(t: Type | null): boolean {
 	if (t == null) return false;
 	const p = peelThrough(t, PEEL_ALIAS);
 	if (p == null || p.kind != TypeKind.GenericInstance) return false;
-	if (p.typeName == "Promise") return true;
+	if (p.typeFlags.has(TypeFlag.Spelled) && p.typeName == "Promise") return true;
 	// REPROMISE T2 Stage A: @affineAwaitable-annotated types carry both bits.
 	if (p.typeFlags.has(TypeFlag.AwaitableAffine)) return true;
 	return false;
@@ -917,7 +918,7 @@ export function getDiscriminantName(t: Type | null): string {
 
 // Tier 2: detect if a Union type has a discriminant field matching `fieldName`.
 // Returns { isStringDU, discField } — the caller can use these to pick the right
-// variant-finding function (findVariantByDiscriminant vs findVariantByStringDiscriminant).
+// variant-finding function (findVariantByEnumMember vs findVariantByStringDiscriminant).
 // Checks enum-based DUs first, then string-literal DUs.
 export interface DiscriminantInfo {
 	isStringDU: boolean;
@@ -972,28 +973,6 @@ function findVariantByFieldNameInner(unionType: Type | null, fieldName: string):
 			}
 		}
 		i = i + 1;
-	}
-	return -1;
-}
-
-// Index of a narrowed variant within its declaring union — identity first
-// (flow narrowing returns the union's own typeChildren element), then identity
-// after peeling Ref wrappers (TS-style DU variants are Ref<interface>), then
-// typeName (variants are stamped "<Alias>.<Key>" / interface names, unique per union).
-export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): int32 {
-	if (unionType == null || unionType.typeChildren == null || variantType == null) return -1;
-	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
-		if (unionType.typeChildren[i] == variantType) return i;
-	}
-	const target = peelToStruct(variantType);
-	if (target == null) return -1;
-	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
-		if (peelToStruct(unionType.typeChildren[i]) == target) return i;
-	}
-	if (target.typeName == "") return -1;
-	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
-		const v = peelToStruct(unionType.typeChildren[i]);
-		if (v != null && v.typeName == target.typeName) return i;
 	}
 	return -1;
 }
@@ -1061,66 +1040,6 @@ function stringSlotOf(formal: Type, value: Type): int32 {
 		if (!held) return -1;
 	}
 	return slot;
-}
-
-export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
-	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
-	if (exprType.kind != TypeKind.Struct) return primitiveMemberIndexInUnion(formal, exprType);
-	// Identity/name first; a named variant resolves there. Union variants are
-	// often ANONYMOUS object types while the value carries a type ALIAS name
-	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
-	// structural match the object-literal path uses to pick its variant.
-	const byIdentity = duVariantIndexOfType(formal, exprType) as int32;
-	if (byIdentity >= 0) return byIdentity;
-	const names = exprType.typeNames;
-	if (names == null || names.length == 0) return -1;
-	// Candidates that survive the type comparison are the same structural type;
-	// they share a layout only when their storage matches, else refuse.
-	const types = exprType.typeChildren;
-	let found: int32 = -1;
-	let vi: int32 = 0;
-	for (const member of formal.typeChildren) {
-		const child = peelToStruct(member);
-		if (child != null && child.typeNames != null && child.typeNames.length == names.length) {
-			let same = true;
-			for (let fi = 0; fi < names.length; fi += 1) {
-				if (child.typeNames[fi] != names[fi]) { same = false; break; }
-			}
-			if (same && types != null && child.typeChildren != null
-					&& child.typeChildren.length == types.length) {
-				for (let fi = 0; fi < types.length; fi += 1) {
-					const want = types[fi];
-					const have = child.typeChildren[fi];
-					if (want == null || have == null) continue;
-					if (want.kind != have.kind || want.typeName != have.typeName) { same = false; break; }
-					if (want.kind == TypeKind.EnumLiteral && want.typeNames.join(",") != have.typeNames.join(",")) { same = false; break; }
-				}
-			}
-			if (same) {
-				if (found < 0) {
-					found = vi;
-				} else if (formal.typeChildren[found].kind != member.kind) {
-					return -1;
-				}
-			}
-		}
-		vi += 1;
-	}
-	return found;
-}
-
-// `A | null` meeting `A | B | null`: the same subtyping one level down, under
-// the Maybe carrier. Returns the payload's slot in the wider union, or -1.
-export function maybePayloadWidenSlot(source: Type | null, target: Type | null): int32 {
-	if (source == null || target == null) return -1;
-	if (!isMaybeType(source) || !isMaybeType(target)) return -1;
-	const narrow = source.typeReturn;
-	const wide = target.typeReturn;
-	if (narrow == null || wide == null) return -1;
-	if (wide.kind != TypeKind.Union || wide.typeChildren == null) return -1;
-	if (narrow.kind == TypeKind.Union && !isAllStringLiteralUnion(narrow)) return -1;
-	if (unwrapRefNullUnion(wide) != null) return -1;
-	return variantIndexInUnion(wide, unwrapRef(narrow));
 }
 
 // Layout name for prefix/field signatures: literal types collapse to their base
@@ -1233,24 +1152,19 @@ export function duSharedFieldSlotDiffers(unionType: Type | null, fieldName: stri
 	return false;
 }
 
-// Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
-// typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
-// Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.
-export function findVariantByDiscriminant(unionType: Type | null, enumValue: string): int32 {
-	if (unionType == null || unionType.typeNames == null || unionType.typeNames.length < 2) return -1;
-	const queryBare = bareAfterDelim(enumValue, ".");
-	// Also handle underscore-mangled form: checkMemberExpr rewrites EnumType.Member to EnumType_Member
-	const queryBareUnderscore = bareAfterDelim(enumValue, "_");
-	let i = 1;
-	while (i < unionType.typeNames.length) {
-		const stored = unionType.typeNames[i];
-		if (stored == enumValue) return i - 1;
-		const storedBare = bareAfterDelim(stored, ".");
-		if (storedBare == queryBare) return i - 1;
-		if (storedBare == queryBareUnderscore) return i - 1;
-		i = i + 1;
-	}
-	return -1;
+// The member of `enumT` a discriminated union's variant key names; the key is
+// the member as the declaration spelled it, bare or qualified by its enum.
+export function variantKeyMember(enumT: Type, key: string): int32 {
+	return enumT.typeNames.indexOf(bareAfterDelim(key, ".")) as int32;
+}
+
+// The enum literal an expression denotes: the checked member reference carries it
+// on its Symbol, or as its own type where the context asked for the literal.
+export function enumMemberLiteralOf(node: Node | null): Type | null {
+	if (node == null) return null;
+	const sym = node.resolvedSym;
+	if (sym != null && sym.symbolKind == SymbolKind.EnumMember && isEnumLiteral(sym.symbolType)) return sym.symbolType;
+	return isEnumLiteral(node.nodeType) ? node.nodeType : null;
 }
 
 // Tier 2: detect a string-literal discriminant field shared by every variant of the union.
@@ -1497,7 +1411,7 @@ export function collectStringDiscriminantValues(unionType: Type | null, discFiel
 }
 
 // Variant keys in `typeChildren` order — the shape typeNames[1..] must carry for
-// `findVariantByDiscriminant` (dotted `Enum.Member`, same form the match-type DU
+// `variantKeyMember` (dotted `Enum.Member`, same form the match-type DU
 // declaration stores).
 export function collectEnumDiscriminantValues(unionType: Type | null, discFieldName: string): string[] {
 	return collectLiteralDiscriminantValues(unionType, discFieldName, TypeKind.EnumLiteral);
@@ -1588,7 +1502,7 @@ export function createMaybeType(inner: Type): Type {
 	t.typeName = "Maybe_" + key;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
-	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe);
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe).incl(TypeFlag.Spelled);
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateToOwner(t, inner);
 	if (!_queryCachesReadOnly) {
@@ -1662,9 +1576,9 @@ export function lockedCellName(payload: Type | null): string {
 }
 
 export function createLockedCell(payload: Type | null): Type {
-	return createStruct(lockedCellName(payload),
+	return spelled(createStruct(lockedCellName(payload),
 		["lockNext", "lockServing", "value"],
-		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true);
+		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true));
 }
 
 export function createLocked(payload: Type | null): Type {
@@ -2049,7 +1963,7 @@ export function createBitSet(elem: Type): Type {
 	t.typeName = "BitSet";
 	t.typeReturn = elem;
 	t.typeValue = bitSetMemberCount(elem);
-	return t;
+	return spelled(t);
 }
 
 export function createBrandDistinct(brandKey: string, inner: Type): Type {
@@ -2185,30 +2099,6 @@ export function genericParamNamesOf(params: string): string {
 	const names: string[] = [];
 	for (const param of splitTopLevel(params, ",")) names.push(splitTopLevel(param, ":")[0].trim());
 	return names.join(",");
-}
-
-export function declFieldNamesJoined(decl: Node | null): string {
-	const d = peelDeclWrapper(decl);
-	if (d == null) return "";
-	if (d.kind == NodeKind.InterfaceDecl || d.kind == NodeKind.StructDecl) return (d.data as InterfaceDeclData).interfaceFields.join("|");
-	if (d.kind != NodeKind.ClassDecl) return "";
-	const names: string[] = [];
-	for (const m of (d.data as ClassDeclData).classBody) {
-		if (m.kind == NodeKind.PropertyDecl) names.push((m.data as PropertyDeclData).propName);
-	}
-	return names.join("|");
-}
-
-export function declFieldTypesJoined(decl: Node | null): string {
-	const d = peelDeclWrapper(decl);
-	if (d == null) return "";
-	if (d.kind == NodeKind.InterfaceDecl || d.kind == NodeKind.StructDecl) return (d.data as InterfaceDeclData).interfaceFieldTypes.join("|");
-	if (d.kind != NodeKind.ClassDecl) return "";
-	const types: string[] = [];
-	for (const m of (d.data as ClassDeclData).classBody) {
-		if (m.kind == NodeKind.PropertyDecl) types.push((m.data as PropertyDeclData).propType);
-	}
-	return types.join("|");
 }
 
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
@@ -2431,7 +2321,7 @@ export function destrObjectRestType(srcType: Type | null, taken: string[]): Type
 		if (ft == null) return null;
 		types.push(ft);
 	}
-	return createStruct(anonStructName(names, types), names, types, false);
+	return spelled(createStruct(anonStructName(names, types), names, types, false));
 }
 
 // StringLiteral: a specific string value as a type (TypeScript parity).
@@ -2857,18 +2747,69 @@ export function tupleTypeName(t: Type | null): string {
 	return "msTuple_" + _stdHashToBase36(key);
 }
 
+export function spelled(t: Type): Type {
+	t.typeFlags = t.typeFlags.incl(TypeFlag.Spelled);
+	return t;
+}
+
+export function hasTypeIdentity(t: Type): boolean {
+	return t.sym != null || t.typeFlags.has(TypeFlag.Spelled)
+		|| (t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden));
+}
+
+export function nominalTypeKey(t: Type): string {
+	const sym = t.sym;
+	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
+	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
+	return t.typeName;
+}
+
+export function isNominalKind(k: TypeKind): boolean {
+	return k == TypeKind.Struct || k == TypeKind.Union || k == TypeKind.Enum || k == TypeKind.Distinct;
+}
+
+function genericHeadKey(gi: Type): string {
+	let base: Type | null = gi.typeExtra;
+	let hops = 0;
+	while (base != null && hops < 8
+			&& (base.kind == TypeKind.Ref || base.kind == TypeKind.Ptr || base.kind == TypeKind.GenericInstance)) {
+		base = base.kind == TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
+		hops = hops + 1;
+	}
+	if (base != null && base.typeName != "") return nominalTypeKey(base);
+	return gi.typeName;
+}
+
 // Structural key for tuple naming. tupleTypeName is the SINGLE source of the
 // msTuple_<hash> name, so this key need only be internally stable.
 function typeKey(t: Type): string {
+	return typeKeyIn(t, []);
+}
+
+// `keying` holds the types whose keys are being built, so a type met again inside its own key ends
+// it; each key owns its list because modules are emitted on parallel workers.
+function typeKeyIn(t: Type, keying: Type[]): string {
 	if (t == null) return "null";
+	for (let i = 0; i < keying.length; i += 1) {
+		if (keying[i] == t) return "rec" + (keying.length - i).toString();
+	}
+	keying.push(t);
+	defer keying.pop();
+	return typeKeyInner(t, keying);
+}
+
+function typeKeyInner(t: Type, keying: Type[]): string {
+	if (t == null) return "null";
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(t.typeReturn, keying);
+	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.GenericInstance) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
-			let k = t.typeName + "<";
+			let k = genericHeadKey(t) + "<";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (t.typeChildren[i] != null ? typeKey(t.typeChildren[i]) : "any");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
 			return k + ">";
@@ -2883,14 +2824,14 @@ function typeKey(t: Type): string {
 		TypeKind.Float32 => "float32",
 		TypeKind.BigInt => "bigint",
 		TypeKind.Array => {
-			return "Array(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
+			return "Array(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Tuple => {
 			let k = "tuple:";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + typeKey(t.typeChildren[i]);
+				k = k + typeKeyIn(t.typeChildren[i], keying);
 				i += 1;
 			}
 			return k;
@@ -2900,39 +2841,49 @@ function typeKey(t: Type): string {
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + (t.typeChildren[i] != null ? typeKey(t.typeChildren[i]) : "any");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
 				i += 1;
 			}
-			return k + ")_" + (t.typeReturn != null ? typeKey(t.typeReturn) : "void");
+			return k + ")_" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "void");
 		},
 		TypeKind.Union => {
 			let k = "union(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + "|";
-				k = k + (t.typeChildren[i] != null ? typeKey(t.typeChildren[i]) : "null");
+				k = k + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "null");
 				i += 1;
 			}
 			return k + ")";
 		},
 		TypeKind.Span => {
-			return "Span(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
+			return "Span(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Set => {
-			return "BitSet(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
+			return "BitSet(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.SizedArray => {
-			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")";
+			return "SizedArray" + t.typeValue.toString() + "(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")";
 		},
 		TypeKind.Ref => {
 			const inner = refSubstInner(t);
-			return refWrapperName(t) + "Ref(" + (inner != null ? typeKey(inner) : "any") + ")";
+			return refWrapperName(t) + "Ref(" + (inner != null ? typeKeyIn(inner, keying) : "any") + ")";
 		},
-		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
-		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
-		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
-		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
-		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
+		TypeKind.Ptr => "Ptr(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
+		TypeKind.Borrow => "Borrow(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
+		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
+		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
+		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKeyIn(t.typeReturn, keying) : "any") + ")",
+		TypeKind.Struct => {
+			let k = "anon(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + ",";
+				k = k + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + (t.typeChildren[i] != null ? typeKeyIn(t.typeChildren[i], keying) : "any");
+				i += 1;
+			}
+			return k + ")";
+		},
 		_ => t.kind.toString(),
 	};
 }
@@ -2944,6 +2895,11 @@ export function isStructType(t: Type | null): boolean {
 	if (t.kind == TypeKind.Alias) return isStructType(t.typeReturn);
 	if (t.kind != TypeKind.Struct) return false;
 	return t.typeFlags.has(TypeFlag.IsStruct);
+}
+
+// The actor's handle: the member resolveActor appends after the declared state.
+export function actorHandleIndex(t: Type): int32 {
+	return t.sym != null && t.sym.symbolKind == SymbolKind.Actor && t.typeNames.length > 0 ? t.typeNames.length - 1 : -1;
 }
 
 export function isMaybeType(t: Type | null): boolean {
@@ -3021,7 +2977,9 @@ export function unknownRefusal(t: Type | null): UnknownRefusal {
 }
 
 function isClassOrInterfaceObject(ref: Type): boolean {
-	if (isAtomicRef(ref) || getBuiltinKind(ref) != "") return false;
+	if (isAtomicRef(ref)) return false;
+	const builtin = getBuiltinKind(ref);
+	if (builtin != "" && builtin != "MetaNode") return false;
 	if (ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor) return false;
 	const body = ref.typeReturn;
 	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance);
@@ -3121,7 +3079,7 @@ function classBodyOf(t: Type | null): Type | null {
 
 // Whether a value of `t` is an instance of some instantiation of the class `cls`.
 export function derivesFromClass(t: Type | null, cls: Symbol): boolean {
-	if (isAwaitable(t)) return cls.name == "Promise";
+	if (isAwaitable(t)) return cls.builtinKind == "Promise";
 	let cur = classBodyOf(t);
 	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
 		if (classOrigin(cur.sym) == classOrigin(cls)) return true;
@@ -3505,6 +3463,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Curs
 	// identity bit (set at createUnion) that must survive the rebuild or mono'd
 	// generic-union payloads lose their DU ownership marker.
 	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }
 
@@ -3615,6 +3574,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
+				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete, active);
 				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
@@ -3705,6 +3665,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
+				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(copy, names, concretes, active);
 				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
@@ -3777,6 +3738,7 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: 
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
 	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }
 
@@ -3952,8 +3914,8 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 			if (ca.kind == TypeKind.Null) { unifyType(formal.typeReturn, cb, bindings); return; }
 		}
 	}
-	if (formal.kind == TypeKind.Union && concrete.kind != TypeKind.Union) {
-		unifyIntoUnion(formal, concrete, bindings);
+	if (formal.kind == TypeKind.Union && concrete.kind != TypeKind.Union && !isMaybeType(concrete)) {
+		unifyIntoUnionFormal(formal, concrete, bindings);
 		return;
 	}
 	// Structural match — same kind, recurse into children
@@ -4002,27 +3964,34 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 }
 
-function unifyIntoUnion(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+// One value into a union formal: a member it already is binds nothing, a generic member
+// that infers from it takes it, and otherwise the union's one bare type parameter does.
+function unifyIntoUnionFormal(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+	const base = literalBase(concrete);
 	let naked: Type | null = null;
 	let nakedCount = 0;
-	const before = bindings.names.length;
-	for (const member of formal.typeChildren) {
-		if (member == null) continue;
-		if (member.kind == TypeKind.GenericParam) {
-			naked = member;
+	for (const m of formal.typeChildren) {
+		if (m == null) continue;
+		if (m.kind == TypeKind.GenericParam) {
+			naked = m;
 			nakedCount += 1;
-		} else if (isLeafNamed(member, concrete)) {
+		} else if (!hasGenericParams(m) && isMemberItself(m, base)) {
 			return;
-		} else {
-			unifyType(member, concrete, bindings);
 		}
 	}
-	if (nakedCount == 1 && bindings.names.length == before) unifyType(naked, concrete, bindings);
+	for (const m of formal.typeChildren) {
+		if (m == null || m.kind == TypeKind.GenericParam || !hasGenericParams(m)) continue;
+		const before = bindings.names.length;
+		unifyType(m, concrete, bindings);
+		if (bindings.names.length > before) return;
+	}
+	if (nakedCount == 1 && naked != null) unifyType(naked, concrete, bindings);
 }
 
-function isLeafNamed(member: Type, concrete: Type): boolean {
-	return member.kind == concrete.kind && member.typeName == concrete.typeName
-		&& member.typeChildren.length == 0 && member.typeReturn == null;
+function isMemberItself(member: Type, value: Type): boolean {
+	if (member == value) return true;
+	if (isPrimitiveKind(member.kind)) return member.kind == value.kind;
+	return member.sym != null && member.sym == value.sym;
 }
 
 export function hasGenericParams(t: Type | null): boolean {
@@ -4345,6 +4314,16 @@ export function typeNameOf(t: Type | null): string {
 	_tnoTime = _tnoTime + (performance.now() - _n0);
 	return r;
 }
+
+let _displayingUnions: Type[] = [];
+
+function isDisplaying(t: Type): boolean {
+	for (const open of _displayingUnions) {
+		if (open == t) return true;
+	}
+	return false;
+}
+
 function typeNameOfInner(t: Type | null): string {
 	if (t == null) return "";
 	// Reference parity: ownership modifiers are transparent — unwrap before naming.
@@ -4407,12 +4386,14 @@ function typeNameOfInner(t: Type | null): string {
 			// Children are rendered for display, so use typeDisplayName so a
 			// `null` member shows as "null" instead of an empty segment that
 			// would produce "string |  | int32".
-			if (t2.typeChildren.length > 0) {
+			if (t2.typeChildren.length > 0 && !(t2.typeName != "" && isDisplaying(t2))) {
+				_displayingUnions.push(t2);
 				let display = "";
 				for (const child of t2.typeChildren) {
 					if (display != "") display = display + " | ";
 					display = display + typeDisplayName(child);
 				}
+				_displayingUnions.pop();
 				return prefix + display;
 			}
 			return prefix + t2.typeName;
@@ -4452,6 +4433,7 @@ function typeDisplayNameInner(t: Type | null): string {
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
 	if (isReadonlyView(t)) return "Readonly<" + typeDisplayName(withoutReadonlyView(t)) + ">";
+	if (isIterator(t)) return "Iterator<" + typeDisplayName(getIteratorYieldType(t)) + ">";
 	// A generic instance erases to its base name, so two different
 	// instantiations render identically ("expected X, got X"). Spell the type
 	// arguments the user wrote.
@@ -4943,10 +4925,16 @@ test "getProperty" {
 	assert getProperty(numberType(), "x").kind == TypeKind.Inferred;
 }
 
+function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
+	const t = createStruct(name, names, types, isValue);
+	t.sym = makeSymbol(name, SymbolKind.Struct, t, false);
+	return t;
+}
+
 test "a ref-carrying union is viewable" {
-	const leaf = createRef(createStruct("Leaf", ["v"], [int32Type()], false));
-	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
-	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const leaf = createRef(declaredStruct("Leaf", ["v"], [int32Type()], false));
+	const pair = declaredStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = declaredStruct("NameData", ["label"], [stringType()], true);
 	const structUnion = createUnion([pair, name]);
 	assert !isReadonlyView(structUnion);
 	assert isReadonlyView(createReadonlyView(structUnion));
@@ -4954,8 +4942,8 @@ test "a ref-carrying union is viewable" {
 }
 
 test "a union of ref variants is viewable" {
-	const namedA = createRef(createStruct("NamedA", ["leaf"], [createRef(createStruct("Leaf", ["v"], [int32Type()], false))], false));
-	const namedB = createRef(createStruct("NamedB", ["label"], [stringType()], false));
+	const namedA = createRef(declaredStruct("NamedA", ["leaf"], [createRef(declaredStruct("Leaf", ["v"], [int32Type()], false))], false));
+	const namedB = createRef(declaredStruct("NamedB", ["label"], [stringType()], false));
 	const classUnion = createUnion([namedA, namedB]);
 	assert isReadonlyView(createReadonlyView(classUnion));
 }
@@ -5097,6 +5085,21 @@ test "unify mismatched kinds" {
 	const b = createUnifyBindings();
 	unifyType(createArray(createGenericParam("T")), numberType(), b);
 	assert b.names.length == 0;
+}
+
+test "a value into a union formal binds its bare type parameter unless it is a member already" {
+	const nullable = createUnion([createGenericParam("T"), nullType()]);
+	const bare = createUnifyBindings();
+	unifyType(nullable, int32Type(), bare);
+	assert bare.names.length == 1;
+	assert bare.types[0].kind == TypeKind.Int32;
+	const member = createUnifyBindings();
+	unifyType(nullable, nullType(), member);
+	assert member.names.length == 0;
+	const elements = createUnifyBindings();
+	unifyType(createUnion([createGenericParam("T"), createArray(createGenericParam("T"))]), createArray(int32Type()), elements);
+	assert elements.names.length == 1;
+	assert elements.types[0].kind == TypeKind.Int32;
 }
 
 test "unify concrete no bindings" {
@@ -5445,4 +5448,51 @@ test "a defaulted binding sheds null" {
 	assert destrDefaultedType(createUnion([stringType(), nullType()])) == stringType();
 	assert destrDefaultedType(int32Type()) == int32Type();
 	assert destrDefaultedType(null) == null;
+}
+
+import { makeSymbol } from "./symbol";
+
+test "a tuple names its nominal members by declaring symbol" {
+	const a = createStruct("TupleCell", ["text"], [stringType()], false);
+	a.sym = makeSymbol("TupleCell", SymbolKind.Struct, a, false);
+	a.sym.modulePath = "/m/a.ms";
+	const b = createStruct("TupleCell", ["count"], [int32Type()], false);
+	b.sym = makeSymbol("TupleCell", SymbolKind.Struct, b, false);
+	b.sym.modulePath = "/m/b.ms";
+	const sameAsA = createStruct("TupleCell", ["text"], [stringType()], false);
+	sameAsA.sym = a.sym;
+	assert tupleTypeName(createTuple([a, int32Type()])) != tupleTypeName(createTuple([b, int32Type()]));
+	assert tupleTypeName(createTuple([a, int32Type()])) == tupleTypeName(createTuple([sameAsA, int32Type()]));
+}
+
+test "a tuple refuses a named member that has no declaring symbol" {
+	const orphan = createStruct("OrphanCell", ["v"], [int32Type()], false);
+	let refused = "";
+	try {
+		tupleTypeName(createTuple([orphan, int32Type()]));
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused.contains("OrphanCell");
+}
+
+test "a named type has identity only from its symbol or the Spelled flag" {
+	function refusal(t: Type): string {
+		try {
+			nominalTypeKey(t);
+			return "";
+		} catch (e) {
+			return e.message;
+		}
+	}
+	const lookalike = createStruct("{x: number}", ["x"], [numberType()], false);
+	assert refusal(lookalike).contains("{x: number}");
+	const anon = createStruct("__anon1__xn", ["x"], [numberType()], false);
+	assert refusal(anon).contains("__anon1__xn");
+	const mangled = createStruct("Box__number", ["v"], [numberType()], true);
+	assert refusal(mangled).contains("Box__number");
+	assert nominalTypeKey(spelled(mangled)) == "Box__number";
+	assert nominalTypeKey(spelled(anon)) == "__anon1__xn";
+	assert hasTypeIdentity(createMaybeType(stringType()));
+	assert hasTypeIdentity(createLockedCell(numberType()));
 }

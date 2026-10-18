@@ -22,7 +22,7 @@ export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTe
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;
-extern function msProcessExit(code: number): void;
+extern function msProcessExit(code: number): never;
 extern function msProcessCwd(): string;
 extern function msProcessExecFile(path: string, args: string[]): number;
 extern function msProcessSpawnSync(command: string): string;
@@ -59,7 +59,7 @@ export const argv: string[] = buildArgv();
 // Process control
 // =============================================================================
 
-export function exit(code: number): void {
+export function exit(code: number): never {
 	msProcessExit(code);
 }
 

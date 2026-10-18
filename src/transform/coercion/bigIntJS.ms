@@ -20,7 +20,7 @@ import { TokenKind, createToken } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
+import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
 import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 import { cloneIfPure } from "./intArithJS";
@@ -348,24 +348,24 @@ function unaryAsBigInt(node: Node): Node {
 // ===== Emission helpers =====
 
 function bigIntOf(inner: Node, loc: SourceLocation): Node {
-	const call = makeCall(runtimeRef("BigInt", loc), [inner], loc);
+	const call = makeCall(generatedRef("BigInt", loc), [inner], loc);
 	call.nodeType = createPrimitive(TypeKind.Int64);
 	return call;
 }
 
 function numberOf(inner: Node, loc: SourceLocation): Node {
-	const call = makeCall(runtimeRef("Number", loc), [inner], loc);
+	const call = makeCall(generatedRef("Number", loc), [inner], loc);
 	call.nodeType = createPrimitive(TypeKind.Float64);
 	return call;
 }
 
 function mathTrunc(inner: Node, loc: SourceLocation): Node {
-	return makeCall(makeMember(runtimeRef("Math", loc), "trunc", loc), [inner], loc);
+	return makeCall(makeMember(generatedRef("Math", loc), "trunc", loc), [inner], loc);
 }
 
 function asN(unsigned: boolean, bits: int32, inner: Node, loc: SourceLocation): Node {
 	const fn = unsigned ? "asUintN" : "asIntN";
-	return makeCall(makeMember(runtimeRef("BigInt", loc), fn, loc), [makeNumber(bits, loc), inner], loc);
+	return makeCall(makeMember(generatedRef("BigInt", loc), fn, loc), [makeNumber(bits, loc), inner], loc);
 }
 
 function asTyped(node: Node, kind: TypeKind): Node {

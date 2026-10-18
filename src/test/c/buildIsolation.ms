@@ -2,17 +2,16 @@ import { env } from "std/process";
 import { compileToC } from "../helpers";
 import { resetBuildState } from "../../compiler/buildSession";
 import { buildPreludeContext, preludeContextFor } from "../../checker/checkPass";
-import { ctorDefaultsMark } from "../../checker/symbol";
+import { ctorRoutineMark } from "../../checker/ctorRoutine";
 import { dispatchEntryCount } from "../../checker/context";
 import { duVariantRegistry, TargetInfo } from "../../checker/types";
-import { getGenericTypeInstCount } from "../../parser/context";
 
 const MAP_SRC = "const m = new Map<string, int32>();\nm.set(\"k\", 1);\nconst s = new HashSet<string>([\"a\"]);\nconsole.log(m.get(\"k\"), s.size);\n";
 const CLASS_SRC = "class A { v: int32; constructor(v: int32 = 3) { this.v = v; } f(): int32 { return this.v; } }\nclass B extends A { f(): int32 { return this.v + 1; } }\nconst x: A = new B();\nconsole.log(x.f());\n";
 const DU_SRC = "type Shape = { kind: \"c\", r: float64 } | { kind: \"s\", w: float64 };\nfunction area(s: Shape): float64 { return s.kind == \"c\" ? s.r * s.r : s.w * s.w; }\nconsole.log(area({ kind: \"c\", r: 2.0 }));\n";
 
 function perBuildTables(): string {
-	return `${getGenericTypeInstCount()}|${duVariantRegistry().length}|${ctorDefaultsMark()}|${dispatchEntryCount()}`;
+	return `${duVariantRegistry().length}|${ctorRoutineMark()}|${dispatchEntryCount()}`;
 }
 
 function sameC(a: Result<string, string>, b: Result<string, string>): boolean {

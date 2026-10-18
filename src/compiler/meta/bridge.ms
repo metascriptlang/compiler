@@ -24,7 +24,7 @@ import {
 	// Type system (for mapTypeToAst — Phase A1 SERIALIZE)
 	Type, TypeKind, TypeFlag, CallingConvention,
 	// Symbol — Day 9 SERIALIZE: surface name + kind to macro VM
-	Symbol, SymbolKind, SymbolState, NodeFlag,
+	Symbol, SymbolKind, SymbolState, NodeFlag, noFieldDecorators,
 	// Literals
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
@@ -62,9 +62,9 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
+import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
-import { hasFlag, isFrameValue, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner, isFrameValue } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { collectDeclaredNames } from "../../checker/instantiate";
 import { int64Bits } from "../../utils/stdBackport";
@@ -236,12 +236,13 @@ function collectFieldDecorators(t: Type): Node[][] {
 // a type without one (interface, anon struct) gets empty arrays.
 function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
+	const handle = actorHandleIndex(t);
 	const node = createNodeAt(NodeKind.TypeObject, {
-		typExprFieldNames: t.typeNames,
-		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited, impl),
+		typExprFieldNames: handle >= 0 ? [t.typeNames[handle]] : t.typeNames,
+		typExprFieldTypes: mapTypes(handle >= 0 ? [t.typeChildren[handle]] : t.typeChildren, loc, visited, impl),
 		typExprIndexKey: null as unknown as Node,
 		typExprIndexValue: null as unknown as Node,
-		typExprFieldDecorators: collectFieldDecorators(t),
+		typExprFieldDecorators: handle >= 0 ? noFieldDecorators(1) : collectFieldDecorators(t),
 		typExprTypeName: t.typeName,
 	}, loc);
 	if (t.sym != null) {
@@ -413,6 +414,14 @@ function fallbackTypeName(t: Type, loc: SourceLocation): Node {
 	return atomicTypeNode(nameOrDefault(t, "<unmapped-type>"), loc);
 }
 
+function isNamedNominalStruct(t: Type): boolean {
+	return t.kind == TypeKind.Struct && !isMaybeType(t) && t.sym != null && t.typeName != "";
+}
+
+function isAskedTypeBehindItsRef(visited: Type[], t: Type): boolean {
+	return visited.length == 1 && visited[0].kind == TypeKind.Ref && visited[0].typeReturn == t;
+}
+
 // Internal dispatch — threads the `visited` stack for cycle detection.
 // Aliases peel transparently. Already-visiting Types emit a name-only Identifier
 // to break the cycle (e.g., `Tree { children: Tree[] }` → outer Tree expands,
@@ -428,6 +437,14 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 		const result = atomicTypeNode(atomicName, loc);
 		result.nodeType = t;
 		return result;
+	}
+
+	// A shape unfolds only the type it was asked about: a named struct met inside
+	// another shape is its name, and a macro asks getTypeImpl of that node to unfold it.
+	if (visited.length > 0 && isNamedNominalStruct(t) && !isAskedTypeBehindItsRef(visited, t)) {
+		const named = namedTypeNode(t.typeName, t.sym, loc);
+		named.nodeType = t;
+		return named;
 	}
 
 	// Cycle break — emit name placeholder and stop descending.
@@ -741,11 +758,6 @@ function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, hand
 // reads back the SAME field names. When adding/removing fields in NodeData,
 // update BOTH dispatchers, or round-trip serialization will silently corrupt nodes.
 //
-// EXCEPTION — `nodeType` field (Day 8 SERIALIZE):
-// Forward-only by design. nodeToValue emits `nodeType` (synthesized type AST)
-// for macros to read. valueToNode/readNodeFromObject deliberately IGNORE the
-// field — checker re-resolves types on macro output, so reverse path would be
-// dead work and risk shape drift. DO NOT add a paired read.
 
 // Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
 // HiddenSubConv) so a macro sees the source-form AST, not the C-codegen
@@ -1583,9 +1595,13 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 				// The argument's type survives the wire twice: the Type through its
 				// bound-type handle, the type-AST Node form in nodeTypeAst.
 				if (out != null) {
+					const typeHandle = heapObjectGetField(objHeap, handle, "typeHandle");
+					if (typeHandle.kind == RaiserValueKind.Int) out.nodeType = boundTypeAt(typeHandle.intVal as int32);
+					else if (typeHandle.kind == RaiserValueKind.Float) out.nodeType = boundTypeAt(typeHandle.floatVal as int32);
 					const ntField = heapObjectGetField(objHeap, handle, "nodeType");
 					if (ntField.kind == RaiserValueKind.Object) {
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
+						if (out.nodeType == null && out.nodeTypeAst.nodeType != null) out.nodeType = out.nodeTypeAst.nodeType;
 					}
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
@@ -3867,6 +3883,35 @@ test "nodeToValue — self-referential nodeType (Tree) terminates via cycle brea
 	assert kindVal.intVal == NodeKind.TypeObject as int64;
 }
 
+test "nested macro type queries keep the originating nominal field after two expansions" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const child = makeStructType("Payload", ["count"], [makePrimType(TypeKind.Int32)]);
+	const childSym = makeSymbol("Payload", SymbolKind.Struct);
+	childSym.symbolType = child;
+	child.sym = childSym;
+	const other = makeStructType("Payload", ["label"], [makePrimType(TypeKind.String)]);
+	const otherSym = makeSymbol("Payload", SymbolKind.Struct);
+	otherSym.symbolType = other;
+	other.sym = otherSym;
+	const outer = makeStructType("Container", ["field"], [child]);
+	const value = createNodeAt(NodeKind.Identifier, { name: "container" }, loc);
+	value.nodeType = outer;
+	const first = valueToNode(nodeToValue(value, objH, arrH), objH, arrH, loc);
+	const shallow = mapTypeToAst(first.nodeType, loc);
+	const fieldType = (shallow.data as TypeObjectData).typExprFieldTypes[0];
+	assert fieldType.kind == NodeKind.Identifier;
+	const field = createNodeAt(NodeKind.MemberExpr, { object: first, property: "field", isOptional: false }, loc);
+	field.nodeTypeAst = fieldType;
+	const forwarded = valueToNode(nodeToValue(field, objH, arrH), objH, arrH, loc);
+	const repeated = valueToNode(nodeToValue(forwarded, objH, arrH), objH, arrH, loc);
+	assert repeated.nodeType == child && repeated.nodeType != other;
+	const impl = mapTypeToAst(repeated.nodeType, loc, true);
+	assert impl.kind == NodeKind.TypeObject;
+	assert (impl.data as TypeObjectData).typExprFieldNames[0] == "count";
+}
+
 test "valueToNode — restores nodeType from its bound-type handle" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
@@ -3950,6 +3995,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		item: 0 as int32,
 		instantiatedFrom: null,
 		borrowedFrom: null,
+		staticOwner: null,
 	};
 }
 

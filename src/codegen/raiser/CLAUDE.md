@@ -10,15 +10,15 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 | `context.ms` | `RaiserCompState`, emit helpers, register allocator, loop and scope state |
 | `expressions.ms` / `statements.ms` | `compileExpr` / `compileStmt` |
 | `rgen.ms` | `generateRaiser`, `generateRaiserProject`, class compilation, tests |
-| `eval.ms` | full-pipeline evaluation, project and class integration tests |
+| `eval.ms` | full-pipeline evaluation and its tests |
 | `valueCopy.ms` | static `Type` → flat `RaiserCopyPlan`, `CopyValue` emission |
 
 ## Rules
 
 - **AST knowledge lives here, the VM has none** — this directory imports the types of `src/raiser/bytecode`, `value` and `module` and hands over a `RaiserModule`; `src/raiser/` never sees a node.
 - **A site known bad at compile time queues a warning AND emits `Trap`** — unresolvable identifier, unsupported node kind, `new` without a constructor, unsupported compound-assign or update target; reaching one at runtime is a fatal vmError, not a catchable raise.
-- **Collection order defines `funcIdx`, and `projectDecls[funcIdx]` must describe that same declaration** — functions and enums of all modules first, then classes (methods before their constructor), then builtins; bodies compile on demand (`resolveFunc → demandBody(funcIdx)` fills `functions[funcIdx]` in place), so a body nobody demands is never compiled and its warnings never fire.
-- **Routine lookup uses the resolved symbol's module path and original name** — raw spelling is only the fallback of single-program compilation, and a call through a name a local or parameter binds is a closure call, whatever routine shares the spelling (eval "a call through a local closure calls the closure …").
+- **Collection order defines `funcIdx`, and `projectDecls[funcIdx]` must describe that same declaration** — functions and enums of all modules first, then classes (methods before their constructor); bodies compile on demand (`resolveRoutine → demandBody(funcIdx)` fills `functions[funcIdx]` in place), so a body nobody demands is never compiled and its warnings never fire.
+- **Routines and locals are found by the Symbol the checker bound** — a function, a method, each overload, a class's `<Class>_new` and `<Class>_init` by the class Symbol and `<Class>_init` also by the constructor's Symbol `super(...)` binds, a local by its declaring Symbol; a name with no routine Symbol finds nothing, and a call through a name a local or parameter binds is a closure call, whatever routine shares the spelling (corpus `258-classMethodOverload`, `localNamedLikeAnExtension`).
 - **Each module-level variable owns one VM global slot** — initializers run in dependency order, an imported module initializes once per project run, the entry module last.
 - **`CopyValue` gives arrays and structs value semantics** — every compiled function carries a flat copy-plan table, applied at assignment, argument, return and container-store boundaries; shared references and `Span` are preserved.
 - **An assignment into a location that already holds a struct or an array writes into that object** (`emitValueAssign`, NIM-REF CG-40) — an element, a field, a global or local binding, `p[]` and a `ref` parameter, so every pointer to the location keeps seeing it; an array takes the source length first; a parameter or a for-of binding is a view and rebinds; an empty location takes a copy.
@@ -45,8 +45,9 @@ Each probed on `msc run --target=raiser`:
 ```bash
 msc test src/codegen/raiser/rgen.ms    # parse → codegen → VM
 msc test src/codegen/raiser/eval.ms    # parse → check → transform → codegen → VM
+msc test src/test/handoff/raiserProjectImage.ms   # checked module graph → project image → VM
 ```
 
 ## Not verified here
 
-Both test commands pass. The rules from "Routine lookup" to "Pending generic instances" are carried over from the previous text and were not exercised one by one.
+The three test commands pass. The rules from "Each module-level variable" to "Pending generic instances" are carried over from the previous text and were not exercised one by one.

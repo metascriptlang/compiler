@@ -23,10 +23,62 @@ when (!bare && !solana) {
 
 	// The operator forms are synthesized by src/transform/native/bigIntOpLower.ms
 	// and reach C as bare calls against the header above.
+	when (mscDeclaresRuntime) {
+		@compilerFunc
+		extern function msBigIntAdd(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntSub(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntMul(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntDiv(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntMod(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntPow(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntAnd(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntOr(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntXor(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntShl(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntShr(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntNeg(a: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntNot(a: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntCmp(a: bigint, b: bigint): int32;
+		@compilerFunc
+		extern function msBigIntCompareFloat64(a: bigint, d: float64, unordered: int32): int32;
+		@compilerFunc
+		extern function msFloat64CompareBigInt(d: float64, a: bigint, unordered: int32): int32;
+		@compilerFunc
+		extern function msBigIntIsZero(a: bigint): boolean;
+		@compilerFunc
+		extern function msBigIntToInt64(a: bigint): int64;
+		@compilerFunc
+		extern function msBigIntToDebugString(a: bigint): string;
+	}
+	@compilerFunc
 	extern function msBigIntToString(b: bigint, radix: int32): string;
+	@compilerFunc
 	extern function msBigIntToFloat64(b: bigint): float64;
+	@compilerFunc
+	extern function msBigIntToFloat32(b: bigint): float32;
+	@compilerFunc
+	extern function msBigIntToSigned(b: bigint, bits: int32): int64;
+	@compilerFunc
 	extern function msBigIntFromFloat64(v: float64): bigint;
+	@compilerFunc
 	extern function msBigIntFromLit(s: string): bigint;
+	@compilerFunc
+	extern function msBigIntFromInt64(v: int64): bigint;
+	@compilerFunc
+	extern function msBigIntFromUint64(v: uint64): bigint;
 	extern function msBigIntAsIntN(bits: int64, b: bigint): bigint;
 	extern function msBigIntAsUintN(bits: int64, b: bigint): bigint;
 	extern function msBigIntParses(s: string): boolean;
@@ -86,8 +138,6 @@ when (!bare && !solana) {
 		if (b == null) return false;
 		return b != 0n;
 	}
-
-	extern function msBigIntToDebugString(b: bigint): string;
 
 	@compilerFunc
 	function msBigIntDebugText(b: bigint | null): string {

@@ -163,3 +163,24 @@ test "unionPayloads: as reads the slot that widening wrote for an array or a gen
 	assert (eitherBox(false) as PayloadBox<int32>).held + 1 == 42;
 	assert (eitherBox(true) as PayloadBox<string>).held == "s";
 }
+
+class NullReadSpot { n: int32 = 1; }
+class NullReadMark { m: int32 = 2; }
+class NullReadHolder { at: NullReadSpot | null = null; }
+
+function nullReadName(v: NullReadMark | NullReadSpot | null): string { return v == null ? "null" : "set"; }
+
+const nullReadModule: NullReadSpot | null = null;
+
+test "a reference narrowed to null widens from the type it stores" {
+	const local: NullReadSpot | null = null;
+	const holder = new NullReadHolder();
+	holder.at = null;
+	let widened: NullReadMark | NullReadSpot | null = local;
+	assert nullReadName(local) == "null";
+	assert nullReadName(nullReadModule) == "null";
+	assert nullReadName(holder.at) == "null";
+	assert nullReadName(widened) == "null";
+	widened = new NullReadSpot();
+	assert nullReadName(widened) == "set";
+}

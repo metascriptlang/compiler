@@ -94,6 +94,12 @@ function parseStatementCore(state: ParserState): NodeResult {
 			decoratedNode: decl,
 		}, token);
 		stampEnd(state, node);
+		const inside: Token[] = [];
+		for (const comment of decl.comments) {
+			if (comment.line > decl.location.endLine) node.comments.push(comment);
+			else inside.push(comment);
+		}
+		decl.comments = inside;
 		return Result.ok(attachComments(state, node));
 	}
 

@@ -8,20 +8,20 @@
 //   main(argc, argv) → MsMain → MsPreMainInner (DatInit) → MsMainInner (Init)
 
 import { Node, NodeKind, ProgramData, SymbolKind, TypeKind, VariableDeclData, ObjectLiteralData } from "../../ast/node";
-import { getProperty } from "../../checker/types";
+import { getProperty, createFunction, voidType, createStruct, createPrimitive } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
-import { CheckerContext, CheckerError, GcMode, findExportedSymbol } from "../../checker/context";
+import { CheckerContext, CheckerError, GcMode, findExportedSymbol, createContext } from "../../checker/context";
 import {
-	CGen, CSection, AliveSet, CEmissionFacts, Builder,
+	CGen, CSection, AliveSet, CEmissionFacts, TypeInfoKind, Builder,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
 	replayFactWrites,
 } from "./context";
 import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
-import { mangleModuleName } from "./names";
+import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
-import { defineDeferredElements, emitOwnedTypeInfos, refArrayCellName, isHcrImageModule } from "./types";
+import { emitOwnedTypeInfos, refArrayCellName, arcCellName, promiseAllCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 import { DynamicModulePlan } from "../../module/graph";
 
@@ -88,7 +88,12 @@ export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts,
 function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void {
 	for (const info of demands.typeInfos) {
 		if (facts.typeInfos.has(info.key)) continue;
-		info.cName = refArrayCellName(info.cell.typeReturn!);
+		info.cName = match (info.kind) {
+			TypeInfoKind.RefArrayCell => refArrayCellName(info.subject.typeReturn!),
+			TypeInfoKind.ArcCell => arcCellName(info.subject),
+			TypeInfoKind.PromiseAllCell => promiseAllCellName(info.subject),
+			_ => typeInfoCName(info.subject),
+		};
 		facts.typeInfos.set(info.key, info);
 		facts.typeInfoOrder.push(info);
 	}
@@ -714,13 +719,7 @@ test "generateCModule produces code without dispatcher" {
 
 
 
-import { SymbolKind } from "../../ast/node";
-import { createFunction, voidType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
-import { createContext } from "../../checker/context";
-import { aliveSetAdd } from "./context";
-import { mangledFunctionName, mangledTypeName } from "./names";
-import { ensureTypeInfoDef } from "./types";
 
 test "generic module emission preserves defining owner under permutations" {
 	const parsed = parseSource("function generic__i32(): void {}");
@@ -733,6 +732,7 @@ test "generic module emission preserves defining owner under permutations" {
 	node.nodeType = fnType;
 	node.resolvedSym = makeSymbol("generic__i32", SymbolKind.Function, fnType, false);
 	node.resolvedSym.modulePath = "owner.ms";
+	node.resolvedSym.instantiatedFrom = makeSymbol("generic", SymbolKind.Function, fnType, false);
 	pd.programStmts.push(node);
 	const ctx = null as unknown as CheckerContext;
 	const alive = createAliveSet();
@@ -758,36 +758,19 @@ test "generic module emission preserves defining owner under permutations" {
 	assert standalone == original[1].code;
 }
 
-test "TypeInfo facts use emission DCE predicates before any module emits" {
-	const parsed = parseSource("class Hidden {} const HiddenTypeInfo = 0; const AliveTypeInfo = 0;");
-	assert parsed.ok;
-	if (!parsed.ok) return;
-	const ctx = createContext();
-	const path = "owner.ms";
-	const node = (parsed.value.data as ProgramData).programStmts[0];
-	node.resolvedSym = makeSymbol("Hidden", SymbolKind.Class, null, false);
-	node.resolvedSym.modulePath = path;
-	const alive = createAliveSet();
-	alive.computed = true;
-	aliveSetAdd(alive, path, "AliveTypeInfo");
+test "TypeInfo demands merge by canonical key and take the object's C name" {
+	const body = createStruct("Merged", ["v"], [createPrimitive(TypeKind.String)], true);
+	body.sym = makeSymbol("Merged", SymbolKind.Interface, body, false);
+	body.sym.modulePath = "owner.ms";
+	const first = createAliveSet();
+	const second = createAliveSet();
+	const key = objectTypeInfoKey(body, "user.ms");
+	first.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "owner.ms", cName: "", destroy: null, trace: null, baseKey: "", moduleLocal: false });
+	second.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "other.ms", cName: "", destroy: null, trace: null, baseKey: "", moduleLocal: false });
 	const facts = new CEmissionFacts();
-	prepareCModuleEmission(parsed.value, ctx, path, alive, facts);
-	const qualified = mangledTypeName(node.resolvedSym, "Hidden");
-	assert facts.skippedTypeInfos.has("Hidden");
-	assert facts.skippedTypeInfos.has(qualified);
-	assert !facts.skippedTypeInfos.has("Alive");
-	const consumer = createCGen(ctx, "consumer.ms");
-	consumer.emissionFacts = facts;
-	const before = consumer.errors.length;
-	ensureTypeInfoDef(consumer, qualified, null);
-	assert consumer.errors.length == before + 1;
-	assert consumer.errors[before].message.indexOf("reachability marked it dead") >= 0;
-	const unfiltered = new CEmissionFacts();
-	prepareCModuleEmission(parsed.value, ctx, path, createAliveSet(), unfiltered);
-	assert !unfiltered.skippedTypeInfos.has("Hidden");
-	ctx.gcMode = GcMode.Manual;
-	const manual = new CEmissionFacts();
-	prepareCModuleEmission(parsed.value, ctx, path, alive, manual);
-	assert !manual.skippedTypeInfos.has("Hidden");
-	assert !manual.skippedTypeInfos.has(qualified);
+	registerTypeInfoDemands(first, facts);
+	registerTypeInfoDemands(second, facts);
+	assert facts.typeInfoOrder.length == 1;
+	assert facts.typeInfoOrder[0].owner == "owner.ms";
+	assert facts.typeInfoOrder[0].cName == typeInfoCName(body);
 }
