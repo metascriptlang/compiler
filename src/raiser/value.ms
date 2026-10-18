@@ -952,3 +952,16 @@ test "clearObjectHeap resets storage" {
 	const h2 = heapAllocObject(heap);
 	assert h2 == 0;
 }
+
+test "a kind below Array holds no handle the counters touch" {
+	const arrays = createArrayHeap();
+	const objects = createStructHeap();
+	heapAllocArray(arrays);
+	heapAllocObject(objects);
+	arrays.arrays[0].rc = 1;
+	objects.objects[0].rc = 1;
+	for (let k = 0; k < (RaiserValueKind.Array as number); k++) rcIncrefHandle(arrays, objects, k as RaiserValueKind, 0);
+	assert arrays.arrays[0].rc == 1 && objects.objects[0].rc == 1;
+	for (let k = 0; k < (RaiserValueKind.Array as number); k++) rcDecrefHandle(arrays, objects, k as RaiserValueKind, 0);
+	assert arrays.arrays[0].rc == 1 && objects.objects[0].rc == 1 && arrays.freeList.length == 0;
+}
