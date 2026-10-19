@@ -5,7 +5,7 @@ import {
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData,
+	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
@@ -78,7 +78,9 @@ export function takeStructAccessors(): Node[] {
 
 function structAccessorDecl(s: Node): Node | null {
 	const inner = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
-	return inner.kind == NodeKind.FunctionDecl && inner.flags.has(NodeFlag.Accessor) ? inner : null;
+	let fn = inner.kind == NodeKind.DecoratedDecl ? (inner.data as DecoratedDeclData).decoratedNode : inner;
+	if (fn != null && fn.kind == NodeKind.ExportDecl) fn = (fn.data as ExportDeclData).exportedDecl;
+	return fn != null && fn.kind == NodeKind.FunctionDecl && fn.flags.has(NodeFlag.Accessor) ? inner : null;
 }
 
 function structAccessorsAfter(stmts: Node[], stmt: Node): Node[] {

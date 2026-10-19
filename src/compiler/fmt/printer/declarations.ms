@@ -398,10 +398,22 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 	]);
 }
 
-function printStructGetter(fn: Node, options: FormatOptions): Doc {
+function printStructGetter(getter: Node, options: FormatOptions): Doc {
+	const parts: Doc[] = [];
+	let fn = getter;
+	if (getter.kind == NodeKind.DecoratedDecl) {
+		const dd = getter.data as DecoratedDeclData;
+		fn = dd.decoratedNode.kind == NodeKind.ExportDecl ? (dd.decoratedNode.data as ExportDeclData).exportedDecl : dd.decoratedNode;
+		for (const dec of dd.decorators) {
+			parts.push(callPrintNode(dec, options));
+			parts.push(dec.location.line != fn.location.line ? docHardLine() : docText(" "));
+		}
+	}
 	const fd = fn.data as FunctionDeclData;
 	const ret = fd.fnReturnType != "" ? ": " + fd.fnReturnType : "";
-	return docGroup([docText("get " + fd.fnName.slice(4, fd.fnName.length) + "()" + ret + " "), callPrintNode(fd.fnBody, options)]);
+	parts.push(docText("get " + fd.fnName.slice(4, fd.fnName.length) + "()" + ret + " "));
+	parts.push(callPrintNode(fd.fnBody, options));
+	return docGroup(parts);
 }
 
 export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
