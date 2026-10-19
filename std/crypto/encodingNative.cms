@@ -1,0 +1,16 @@
+@include("runtime/crypto/hash.h");
+
+import { encodeHex, encodeBase64 } from "./encoding";
+
+extern function msCryptoHashBuffer(algorithm: string, data: string): string;
+
+@exportName("msCryptoHashString")
+export function encodedHash(algorithm: string, data: string, encoding: string): string {
+	const digest = msCryptoHashBuffer(algorithm, data);
+	return encoding == "base64" ? encodeBase64(digest.asBytes()) : encodeHex(digest.asBytes());
+}
+
+@exportName("msCryptoToBase64")
+export function base64String(data: string): string {
+	return encodeBase64(data.asBytes());
+}

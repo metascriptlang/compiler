@@ -2,7 +2,7 @@
 
 import { sha256, sha512, sha384, sha1, md5, hash, hmac, randomBytes, randomInt, randomUUID,
 	timingSafeEqual, createHash, createHmac, isHashSupported, init,
-	toHex, fromHex, toBase64, fromBase64 } from "std/crypto";
+	toHex, fromHex, toBase64, fromBase64, hashBuffer, hmacBuffer } from "std/crypto";
 
 test "crypto codecs preserve raw binary strings" {
 	const bytes: uint8[] = [];
@@ -23,6 +23,48 @@ test "crypto base64 encodes all tail lengths and UTF-8" {
 		assert toBase64(plain[i]) == encoded[i];
 		assert fromBase64(encoded[i]) == plain[i];
 	}
+}
+
+test "crypto hash and hmac digest encoding uses the shared codecs" {
+	for (const algorithm of ["sha256", "sha512", "sha1", "md5"]) {
+		const rawHash = hashBuffer(algorithm, "\0hé😀");
+		const rawHmac = hmacBuffer(algorithm, "key\0é", "\0hé😀");
+		assert rawHash.ok;
+		assert rawHmac.ok;
+		for (const encoding of ["hex", "base64", "", "unknown"]) {
+			const digest = hash(algorithm, "\0hé😀", encoding);
+			const mac = hmac(algorithm, "key\0é", "\0hé😀", encoding);
+			assert digest.ok;
+			assert mac.ok;
+			if (rawHash.ok && digest.ok) {
+				const expected = encoding == "base64"
+					? toBase64(rawHash.value) : toHex(rawHash.value);
+				assert digest.value == expected;
+			}
+			if (rawHmac.ok && mac.ok) {
+				const expected = encoding == "base64"
+					? toBase64(rawHmac.value) : toHex(rawHmac.value);
+				assert mac.value == expected;
+			}
+		}
+	}
+}
+
+test "streaming hash digest encoding consumes its context once" {
+	for (const algorithm of ["sha256", "sha512", "sha1", "md5"]) {
+		for (const encoding of ["hex", "base64", "", "unknown"]) {
+			const hasher = createHash(algorithm);
+			hasher.update("\0h");
+			hasher.update("é😀");
+			const expected = hash(algorithm, "\0hé😀", encoding);
+			assert expected.ok;
+			if (expected.ok) assert hasher.digest(encoding) == expected.value;
+			assert hasher.digest(encoding) == "";
+			assert hasher.digestBuffer() == "";
+		}
+	}
+	assert createHash("bogus").digest() == "";
+	assert createHmac("bogus", "").digest() == "";
 }
 
 test "crypto codecs retain malformed input results" {

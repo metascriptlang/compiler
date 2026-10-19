@@ -1,5 +1,7 @@
 @include("runtime/crypto/hash.h");
 
+import "./encodingNative";
+
 // mbedTLS include paths + minimal config
 @passC("-Iruntime/crypto");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/include");
@@ -44,11 +46,9 @@ extern function msCryptoInit(): boolean;
 extern function msCryptoCleanup(): void;
 
 // Hashing
-extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
 extern function msCryptoHashBuffer(algorithm: string, data: string): string;
 
 // HMAC
-extern function msCryptoHmacString(algorithm: string, key: string, data: string, encoding: string): string;
 extern function msCryptoHmacBuffer(algorithm: string, key: string, data: string): string;
 
 // Random
@@ -62,14 +62,12 @@ extern function msCryptoTimingSafeEqual(a: string, b: string): boolean;
 // Streaming hash (int64 handle wrappers)
 extern function msCryptoHashInitHandle(algorithm: string): int64;
 extern function msCryptoHashUpdateHandle(ctx: int64, data: string): void;
-extern function msCryptoHashFinalHandle(ctx: int64, encoding: string): string;
 extern function msCryptoHashFinalBufferHandle(ctx: int64): string;
 extern function msCryptoHashFreeHandle(ctx: int64): void;
 
 // Streaming HMAC (int64 handle wrappers)
 extern function msCryptoHmacInitHandle(algorithm: string, key: string): int64;
 extern function msCryptoHmacUpdateHandle(ctx: int64, data: string): void;
-extern function msCryptoHmacFinalHandle(ctx: int64, encoding: string): string;
 extern function msCryptoHmacFinalBufferHandle(ctx: int64): string;
 extern function msCryptoHmacFreeHandle(ctx: int64): void;
 
@@ -104,12 +102,13 @@ export function cleanup(): void {
 
 // ===== Hash Functions =====
 
+function encodeDigest(data: string, encoding: string): string {
+	return encoding == "base64" ? toBase64(data) : toHex(data);
+}
+
 export function hash(algorithm: string, data: string, encoding: string = "hex"): Result<string, CryptoError> {
-	const result = msCryptoHashString(algorithm, data, encoding);
-	if (result == "") {
-		return Result.err(hashFailed(algorithm, "Hash computation failed"));
-	}
-	return Result.ok(result);
+	const result = try hashBuffer(algorithm, data);
+	return Result.ok(encodeDigest(result, encoding));
 }
 
 export function sha256(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha256", data, encoding); }
@@ -134,11 +133,8 @@ export function hmac(
 	data: string,
 	encoding: string = "hex"
 ): Result<string, CryptoError> {
-	const result = msCryptoHmacString(algorithm, key, data, encoding);
-	if (result == "") {
-		return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
-	}
-	return Result.ok(result);
+	const result = try hmacBuffer(algorithm, key, data);
+	return Result.ok(encodeDigest(result, encoding));
 }
 
 export function hmacBuffer(algorithm: string, key: string, data: string): Result<string, CryptoError> {
@@ -202,9 +198,7 @@ export class Hasher {
 		if (this._ctx == 0) {
 			return "";
 		}
-		const result = msCryptoHashFinalHandle(this._ctx, encoding);
-		this._ctx = 0;
-		return result;
+		return encodeDigest(this.digestBuffer(), encoding);
 	}
 
 	digestBuffer(): string {
@@ -245,9 +239,7 @@ export class Hmac {
 		if (this._ctx == 0) {
 			return "";
 		}
-		const result = msCryptoHmacFinalHandle(this._ctx, encoding);
-		this._ctx = 0;
-		return result;
+		return encodeDigest(this.digestBuffer(), encoding);
 	}
 
 	digestBuffer(): string {

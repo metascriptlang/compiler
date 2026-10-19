@@ -34,10 +34,6 @@ msString msCryptoHashBuffer(msString algorithm, msString data);
 
 /* ===== HMAC ===== */
 
-/* HMAC of string data with string key, return encoded result.
- * Returns empty string on error. */
-msString msCryptoHmacString(msString algorithm, msString key, msString data, msString encoding);
-
 /* HMAC of raw data with raw key, return raw bytes as msString buffer.
  * Returns empty string on error. */
 msString msCryptoHmacBuffer(msString algorithm, msString key, msString data);
@@ -70,9 +66,6 @@ msCryptoHashCtx* msCryptoHashInit(msString algorithm);
 /* Feed data into streaming hash */
 void msCryptoHashUpdate(msCryptoHashCtx* ctx, msString data);
 
-/* Finalize and get encoded hash. Frees context. */
-msString msCryptoHashFinal(msCryptoHashCtx* ctx, msString encoding);
-
 /* Finalize and get raw hash bytes. Frees context. */
 msString msCryptoHashFinalBuffer(msCryptoHashCtx* ctx);
 
@@ -89,9 +82,6 @@ msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key);
 
 /* Feed data into streaming HMAC */
 void msCryptoHmacUpdate(msCryptoHmacCtx* ctx, msString data);
-
-/* Finalize and get encoded HMAC. Frees context. */
-msString msCryptoHmacFinal(msCryptoHmacCtx* ctx, msString encoding);
 
 /* Finalize and get raw HMAC bytes. Frees context. */
 msString msCryptoHmacFinalBuffer(msCryptoHmacCtx* ctx);
@@ -113,9 +103,6 @@ static inline int64_t msCryptoHashInitHandle(msString algorithm) {
 static inline void msCryptoHashUpdateHandle(int64_t ctx, msString data) {
     msCryptoHashUpdate(HASH_CTX_FROM_HANDLE(ctx), data);
 }
-static inline msString msCryptoHashFinalHandle(int64_t ctx, msString encoding) {
-    return msCryptoHashFinal(HASH_CTX_FROM_HANDLE(ctx), encoding);
-}
 static inline msString msCryptoHashFinalBufferHandle(int64_t ctx) {
     return msCryptoHashFinalBuffer(HASH_CTX_FROM_HANDLE(ctx));
 }
@@ -128,9 +115,6 @@ static inline int64_t msCryptoHmacInitHandle(msString algorithm, msString key) {
 }
 static inline void msCryptoHmacUpdateHandle(int64_t ctx, msString data) {
     msCryptoHmacUpdate(HMAC_CTX_FROM_HANDLE(ctx), data);
-}
-static inline msString msCryptoHmacFinalHandle(int64_t ctx, msString encoding) {
-    return msCryptoHmacFinal(HMAC_CTX_FROM_HANDLE(ctx), encoding);
 }
 static inline msString msCryptoHmacFinalBufferHandle(int64_t ctx) {
     return msCryptoHmacFinalBuffer(HMAC_CTX_FROM_HANDLE(ctx));
