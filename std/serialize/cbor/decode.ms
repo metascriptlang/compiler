@@ -19,11 +19,48 @@
 // memory). The macro body stays monolithic; AST construction is inlined.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey, pickAtomicAccessor, unwrapType } from "../discDetect";
-import { _cborEnumOrd, getDynamicField, asString, asBoolean, asNumber, asInt64 } from "./accessors";
+import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, unwrapType, implementationOf } from "../discDetect";
+import { _cborEnumOrd, getDynamicField, asString, asBoolean, asNumber, asInt64,
+	cborToStringArray, cborToBooleanArray, cborToNumberArray, cborToFloat32Array,
+	cborToInt8Array, cborToInt16Array, cborToInt32Array, cborToInt64Array,
+	cborToUint8Array, cborToUint16Array, cborToUint32Array } from "./accessors";
+import { CborKind, CborValue } from "./types";
+
+export function _cborToEnumArray<T>(cv: CborValue, witness: T | null, ords: int32[], names: string[]): T[] {
+	const out: T[] = [];
+	if (cv == null || cv.kind != CborKind.Array) return out;
+	let i = 0;
+	while (i < cv.items.length) {
+		out.push(_cborEnumOrd(cv.items[i], ords, names) as T);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _cborToIntArray<T>(cv: CborValue, witness: T | null): T[] {
+	const out: T[] = [];
+	if (cv == null || cv.kind != CborKind.Array) return out;
+	let i = 0;
+	while (i < cv.items.length) {
+		out.push(asInt64(cv.items[i]) as T);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function _cborToStructArray<T>(cv: CborValue, witness: T | null): T[] {
+	const out: T[] = [];
+	if (cv == null || cv.kind != CborKind.Array) return out;
+	let i = 0;
+	while (i < cv.items.length) {
+		out.push(cborValueToStruct(cv.items[i], witness));
+		i = i + 1;
+	}
+	return out;
+}
 
 export macro cborValueToStruct(cv: Node, witness: Node): Node {
-	let tt = witness.nodeType;
+	let tt = implementationOf(witness);
 	// Peel `T | null` Union → T (single non-null variant). For multi-variant
 	// unions (DU), keep tt as TypeUnion and fall through to the DU branch
 	// below. Mirrors JSON decode B-2.3 shape.
@@ -36,7 +73,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			nonNullCount = nonNullCount + 1;
 		}
 		if (nonNullCount == 1 && firstNonNull != null) {
-			tt = firstNonNull;
+			tt = implementationOf(firstNonNull);
 		}
 		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below
 	}
@@ -186,7 +223,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 	let i = 0;
 	while (i < fields.length) {
 		const fname: string = fields[i];
-		const ftype: Node = fieldTypes[i];
+		const ftype: Node = implementationOf(fieldTypes[i]);
 
 		// Nested struct field: peel Ref<Struct> → TypeObject, then emit a
 		// recursive cborValueToStruct call with the witness
@@ -251,7 +288,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			arrCore = arrCore.typExprArgs[0];
 		}
 		if (arrCore.kind == NodeKind.TypeArray) {
-			const elemType: Node = arrCore.typExprElement;
+			const elemType: Node = implementationOf(arrCore.typExprElement);
 			let en: string = "";
 			let elemIsStruct: boolean = false;
 			if (elemType.kind == NodeKind.EnumDecl) {
@@ -265,7 +302,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				keyNodes.push(fname);
 				valueNodes.push({
 					kind: NodeKind.CallExpr, line: cv.line, column: cv.column,
-					callee: { kind: NodeKind.Identifier, line: cv.line, column: cv.column, name: "_cborToEnumArray" },
+					callee: bindSym("_cborToEnumArray"),
 					arguments: [
 						{ kind: NodeKind.CallExpr, line: cv.line, column: cv.column, callee: bindSym("getDynamicField"), arguments: [cv, { kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: fname }] },
 						{ kind: NodeKind.NullLiteral, line: cv.line, column: cv.column, nullPlaceholder: true },
@@ -278,6 +315,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			}
 			if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
+				elemIsStruct = namesStruct(elemType);
 			} else if (elemType.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
 				en = elemType.typExprTypeName;
@@ -287,7 +325,10 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			} else if (elemType.kind == NodeKind.TypeGeneric) {
 				let peeled: Node = unwrapType(elemType);
 				if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
-				if (peeled.kind == NodeKind.TypeObject) {
+				if (namesStruct(peeled)) {
+					elemIsStruct = true;
+					en = peeled.name;
+				} else if (peeled.kind == NodeKind.TypeObject) {
 					elemIsStruct = true;
 					en = peeled.typExprTypeName;
 					if (en == "") {
@@ -329,17 +370,11 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 					column: cv.column,
 					nullPlaceholder: true,
 				};
-				const helperName: string = elemIsStruct ? "_cborToStructArray" : "_cborToIntArray";
 				const arrCall: Node = {
 					kind: NodeKind.CallExpr,
 					line: cv.line,
 					column: cv.column,
-					callee: {
-						kind: NodeKind.Identifier,
-						line: cv.line,
-						column: cv.column,
-						name: helperName,
-					},
+					callee: elemIsStruct ? bindSym("_cborToStructArray") : bindSym("_cborToIntArray"),
 					arguments: [getCall, witnessNode],
 				};
 				keyNodes.push(fname);
@@ -349,33 +384,22 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			}
 
 			// IF-ELSE not match (Raiser VM string-match bug, see memory).
-			let arrHelper: string = "cborToInt64Array";
-			if (en == "string") arrHelper = "cborToStringArray";
-			else if (en == "boolean") arrHelper = "cborToBooleanArray";
-			else if (en == "number") arrHelper = "cborToNumberArray";
-			else if (en == "float64") arrHelper = "cborToNumberArray";
-			else if (en == "float32") arrHelper = "cborToFloat32Array";
-			else if (en == "int8") arrHelper = "cborToInt8Array";
-			else if (en == "int16") arrHelper = "cborToInt16Array";
-			else if (en == "int32") arrHelper = "cborToInt32Array";
-			else if (en == "int64") arrHelper = "cborToInt64Array";
-			else if (en == "uint8") arrHelper = "cborToUint8Array";
-			else if (en == "uint16") arrHelper = "cborToUint16Array";
-			else if (en == "uint32") arrHelper = "cborToUint32Array";
-			// Identifier-callee form: `arrHelper(getDynamicField(cv, "f"))`.
-			// Extension-dispatch via MemberExpr fails to resolve in the
-			// monomorphized macro-expansion scope (Bug 53 family); positional
-			// call resolves directly via the symbol table.
+			let arrHelper: Node = bindSym("cborToInt64Array");
+			if (en == "string") arrHelper = bindSym("cborToStringArray");
+			else if (en == "boolean") arrHelper = bindSym("cborToBooleanArray");
+			else if (en == "number" || en == "float64") arrHelper = bindSym("cborToNumberArray");
+			else if (en == "float32") arrHelper = bindSym("cborToFloat32Array");
+			else if (en == "int8") arrHelper = bindSym("cborToInt8Array");
+			else if (en == "int16") arrHelper = bindSym("cborToInt16Array");
+			else if (en == "int32") arrHelper = bindSym("cborToInt32Array");
+			else if (en == "uint8") arrHelper = bindSym("cborToUint8Array");
+			else if (en == "uint16") arrHelper = bindSym("cborToUint16Array");
+			else if (en == "uint32") arrHelper = bindSym("cborToUint32Array");
 			const arrFieldAccess: Node = {
 				kind: NodeKind.CallExpr,
 				line: cv.line,
 				column: cv.column,
-				callee: {
-					kind: NodeKind.Identifier,
-					line: cv.line,
-					column: cv.column,
-					name: arrHelper,
-				},
+				callee: arrHelper,
 				arguments: [
 					{
 						kind: NodeKind.CallExpr,

@@ -38,7 +38,7 @@ async function run(): Promise<void> {
 
 function main(): void {
 	run();
-	for (let i: int32 = 0 as int32; i < 50 as int32; i = (i + 1) as int32) {
+	for (let i: int32 = 0 as int32; i < (50 as int32); i = (i + 1) as int32) {
 		msIoRunOnce(10);
 	}
 }

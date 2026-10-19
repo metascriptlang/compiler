@@ -145,6 +145,14 @@ function parseTypeAtom(state: ParserState): Node {
 		return parseTypeAtom(state);
 	}
 
+	if (token.kind == TokenKind.Typeof) {
+		advance(state);
+		const operandAt = state.position;
+		skipTypeQueryOperand(state);
+		const operandText = collectTokenText(state, operandAt, state.position);
+		return createNode(NodeKind.Identifier, { name: operandText }, state.tokens[operandAt]);
+	}
+
 	// Function type: (a: T, b: U) => R
 	if (token.kind == TokenKind.LParen) {
 		return applyArraySuffix(state, parseTypeFunctionOrParen(state));
@@ -507,6 +515,16 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	// No '?' consumption — that's the whole point
 }
 
+function skipTypeQueryOperand(state: ParserState): void {
+	if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+	advance(state);
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
+		advance(state);
+		if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+		advance(state);
+	}
+}
+
 function skipTypeAtom(state: ParserState): void {
 	const token = current(state);
 
@@ -514,6 +532,12 @@ function skipTypeAtom(state: ParserState): void {
 		addError(state, distinctMisplacedMessage(token.line));
 		advance(state);
 		skipTypeAtom(state);
+		return;
+	}
+
+	if (token.kind == TokenKind.Typeof) {
+		advance(state);
+		skipTypeQueryOperand(state);
 		return;
 	}
 
@@ -622,6 +646,22 @@ test "a closer joined to = leaves the =" {
 	assert skipsTo("Array<number>= x", TokenKind.Assign);
 	assert skipsTo("Result<Array<number>>= x", TokenKind.Assign);
 	assert skipsTo("A<B<Array<number>>>= x", TokenKind.Assign);
+}
+
+function unclosedTypeArgsStopAt(input: string, stopKind: TokenKind): boolean {
+	const lr = lex(input);
+	if (!lr.ok) return false;
+	const state = createState(lr.value);
+	skipTypeAnnotation(state);
+	return current(state).kind == stopKind && state.errors.length == 1 && state.errors[0].includes("Expected '>' to close the type arguments");
+}
+
+test "unclosed type arguments end at the statement or the enclosing bracket with an error" {
+	assert unclosedTypeArgsStopAt("int32 < b; console.log(r);", TokenKind.Semicolon);
+	assert unclosedTypeArgsStopAt("T < b) { f(); }", TokenKind.RParen);
+	assert unclosedTypeArgsStopAt("Box<Box<int32> < b];", TokenKind.RBracket);
+	assert unclosedTypeArgsStopAt("Map<string, (x: int32) => void", TokenKind.Eof);
+	assert skipsType("Map<string, { a: int32; b: (x: int32) => void }>");
 }
 
 test "array in generic arg" { assert skipsType("Result<Node[], string>"); }

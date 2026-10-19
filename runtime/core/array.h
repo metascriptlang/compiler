@@ -216,6 +216,7 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
  * Uses a helper macro to avoid comma-in-braced-initializer issues with C preprocessor.
  * Usage: msGenericArrayPush(&arr, value) where value can be a compound literal. */
 #define msArrDataOr0(p_) ((p_) ? (p_)->data : NULL)
+#define msArrDataAt(p_, i_) ((p_) ? (p_)->data + (i_) : NULL)
 
 #define msGenericArrayPush(arr_ptr, ...) do { \
 	__typeof__((arr_ptr)->p->data[0]) msPushedValue_ = (__VA_ARGS__); \

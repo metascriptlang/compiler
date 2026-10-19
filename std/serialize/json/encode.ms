@@ -8,25 +8,23 @@
 // for non-atomic field types — the outer macro's return AST contains an inner
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
-// Walks t.nodeType (synthesized type-AST per SERIALIZE Phase A1). Refs/Ptrs
-// unwrap via TypeGeneric (modifierToAst maps to TypeGeneric with base name).
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, parseDiscKey, unwrapType } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, unwrapType, implementationOf } from "../discDetect";
 
 export macro jsonValueOf(t: Node): Node {
-	let tt = unwrapType(t.nodeType);
+	let tt = implementationOf(t);
 	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
 	// Builtin elements → per-type fast helpers (jsonArrayOfX).
-	// TypeObject element (struct/interface) → `_jsonArrayOfStructs<T>` generic.
-	// IIFE-closure / function / union element types remain rejected.
+	// Struct/interface or union element → `_jsonArrayOfValues<T>`, which re-expands jsonValueOf per element.
+	// IIFE-closure / function element types remain rejected.
 	if (tt.kind == NodeKind.TypeArray) {
-		const elemType: Node = tt.typExprElement;
+		const elemType: Node = implementationOf(tt.typExprElement);
 		// Identifier element name — empty if elem is TypeObject (struct).
 		let en: string = "";
-		let elemIsStruct: boolean = false;
+		let elemByValueOf: boolean = false;
 		if (elemType.kind == NodeKind.EnumDecl) {
 			const ords: Node[] = [];
 			const names: Node[] = [];
@@ -50,8 +48,11 @@ export macro jsonValueOf(t: Node): Node {
 		}
 		if (elemType.kind == NodeKind.Identifier) {
 			en = elemType.name;
+			elemByValueOf = namesStruct(elemType);
+		} else if (elemType.kind == NodeKind.TypeUnion) {
+			elemByValueOf = true;
 		} else if (elemType.kind == NodeKind.TypeObject) {
-			elemIsStruct = true;
+			elemByValueOf = true;
 			en = elemType.typExprTypeName;
 			if (en == "") {
 				error("jsonValueOf: anonymous struct element arrays unsupported (must name struct via interface/class)", t);
@@ -60,8 +61,11 @@ export macro jsonValueOf(t: Node): Node {
 			// Ref<Struct> wrapper around struct element
 			let peeled: Node = unwrapType(elemType);
 			if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
-			if (peeled.kind == NodeKind.TypeObject) {
-				elemIsStruct = true;
+			if (namesStruct(peeled)) {
+				elemByValueOf = true;
+				en = peeled.name;
+			} else if (peeled.kind == NodeKind.TypeObject) {
+				elemByValueOf = true;
 				en = peeled.typExprTypeName;
 				if (en == "") {
 					error("jsonValueOf: anonymous struct element arrays unsupported", t);
@@ -81,7 +85,7 @@ export macro jsonValueOf(t: Node): Node {
 		}
 
 		// Struct/interface element → generic struct helper (recursive macro re-expansion at mono-time).
-		if (elemIsStruct) {
+		if (elemByValueOf) {
 			return {
 				kind: NodeKind.CallExpr,
 				line: t.line,
@@ -90,7 +94,7 @@ export macro jsonValueOf(t: Node): Node {
 					kind: NodeKind.Identifier,
 					line: t.line,
 					column: t.column,
-					name: "_jsonArrayOfStructs",
+					name: "_jsonArrayOfValues",
 				},
 				arguments: [t],
 			};
@@ -151,6 +155,15 @@ export macro jsonValueOf(t: Node): Node {
 	//   "enum"    → MemberExpr(EnumName, MemberName) pattern, jsonString member name
 	//   default   → StringLiteral pattern, jsonString variantKey value
 	if (tt.kind == NodeKind.TypeUnion) {
+		for (const m of tt.typExprMembers) {
+			if (m.kind == NodeKind.Identifier && m.name == "null") {
+				return {
+					kind: NodeKind.CallExpr, line: t.line, column: t.column,
+					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "_jsonNullable" },
+					arguments: [t],
+				};
+			}
+		}
 		// V3 — Tagged union (DU) encoding. Auto-detect disc info via shared
 		// helper (combines bridge-populated fields + TS-style fallback).
 		// info.variants pairs each disc key with its peeled variant struct

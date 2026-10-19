@@ -21,9 +21,12 @@
 import { Node, NodeKind, TypeUnionData, TypeGenericData, TypeObjectData, IdentifierData,
 	StringLiteralData, BooleanLiteralData,
 	CallExprData, MemberExprData, TypeAssertionData,
-	TypeKind, getTypeImpl, typeKind,
 	createNodeAt, makeLoc,
-	SourceLocation } from "std/meta";
+	SourceLocation, getTypeImpl, TypeKind, typeKind } from "std/meta";
+
+export function namesStruct(n: Node): boolean {
+	return n.kind == NodeKind.Identifier && typeKind(n) == TypeKind.Struct;
+}
 
 export function unwrapType(n: Node): Node {
 	if (n.kind != NodeKind.TypeGeneric) return n;
@@ -168,10 +171,10 @@ export function pickAtomicAccessor(tn: string): AtomicAccessor {
 	return { methodName, needsCast, castType: needsCast ? tn : "" };
 }
 
-// Peel Ref<Struct> → Struct for variant inspection. Variants come from
-// tt.typExprMembers; generic-instance variants land as TypeGeneric wrappers.
-function peelVariant(vRaw: Node): Node {
-	return unwrapType(vRaw);
+export function implementationOf(value: Node): Node {
+	const variant = getTypeImpl(value);
+	if (variant == null) throw new Error("the type node has no checked implementation");
+	return variant;
 }
 
 // Find disc-field literal value for a peeled variant. Returns "" if the
@@ -230,13 +233,13 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 	// definition has multiple variants; with only 1 the inner-loop never
 	// iterates and we'd vacuously pick variant[0]'s first field as disc.
 	if (discField == "" && realMembers.length >= 2) {
-		const v0: Node = peelVariant(realMembers[0]);
+		const v0: Node = implementationOf(realMembers[0]);
 		if (v0.kind == NodeKind.TypeObject) {
 			const v0d: TypeObjectData = v0 as TypeObjectData;
 			for (const candidate of v0d.typExprFieldNames) {
 				let foundInAll: boolean = true;
 				for (let vi = 1; vi < realMembers.length; vi = vi + 1) {
-					const v: Node = peelVariant(realMembers[vi]);
+					const v: Node = implementationOf(realMembers[vi]);
 					if (v.kind != NodeKind.TypeObject) { foundInAll = false; break; }
 					const vd: TypeObjectData = v as TypeObjectData;
 					let inV: boolean = false;
@@ -260,12 +263,12 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 	const variants: DiscVariant[] = [];
 	if (ttd.variantKeys.length > 0) {
 		for (let vi = 0; vi < ttd.variantKeys.length; vi = vi + 1) {
-			const member: Node = peelVariant(ttd.typExprMembers[vi]);
+			const member: Node = implementationOf(ttd.typExprMembers[vi]);
 			variants.push({ key: ttd.variantKeys[vi], member });
 		}
 	} else if (discField != "") {
 		for (const vRaw of realMembers) {
-			const member: Node = peelVariant(vRaw);
+			const member: Node = implementationOf(vRaw);
 			const key: string = extractVariantKey(member, discField);
 			if (key != "") {
 				variants.push({ key, member });

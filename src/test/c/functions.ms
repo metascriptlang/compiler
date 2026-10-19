@@ -13,6 +13,14 @@ test "E2E C: function with call" {
 	assert c.value.contains("return");
 }
 
+test "E2E C: console.warn and console.error call their stderr writers" {
+	const c = compileToC("console.warn(\"w\", 1);\nconsole.error(\"e\");\nconsole.log(\"l\");");
+	assert c.ok;
+	assert c.value.contains("msWarnln(");
+	assert c.value.contains("msEprintln(");
+	assert c.value.contains("msPrintln(");
+}
+
 test "E2E C: recursive function" {
 	const src = "function fib(n: number): number {\n  if (n <= 1) { return n; }\n  return fib(n - 1) + fib(n - 2);\n}\nconst r = fib(10);";
 	const c = compileToC(src);
@@ -26,6 +34,13 @@ test "E2E C: void function" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("void noop__");
+}
+
+test "E2E C: a function named main is module-qualified like any other" {
+	const c = compileToC("function main(): void { }\nmain();");
+	assert c.ok;
+	assert c.value.contains("void main__");
+	assert !c.value.contains("void main_(");
 }
 
 test "E2E C: function returns expression" {

@@ -8,9 +8,8 @@ import {
 	CallExprData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	ArrayLiteralData, ObjectLiteralData, NewExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
-import { makeSymbol } from "../../checker/symbol";
 import { isStructType } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, newLoweredSym } from "../context";
 import { makeVarDecl, makeTypedIdentResolved, makeBinary, isValueLayoutType } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 
@@ -18,6 +17,10 @@ export type Spiller = { ctx: TransformContext, has: (n: Node) => boolean, lower:
 
 export function isVoidType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Void;
+}
+
+export function isNeverType(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Never;
 }
 
 export function isAssignOp(op: string): boolean {
@@ -36,7 +39,7 @@ function isCallKind(e: Node): boolean {
 export function bindTemp(sp: Spiller, init: Node, declKind: DeclKind, t: Type | null, pre: Node[], loc: SourceLocation): Symbol {
 	const name = "__ord_" + sp.ctx.tempCounter.toString();
 	sp.ctx.tempCounter += 1;
-	const sym = makeSymbol(name, SymbolKind.Variable, t, declKind != DeclKind.Const);
+	const sym = newLoweredSym(sp.ctx, SymbolKind.Variable, name, t, declKind != DeclKind.Const);
 	const decl = makeVarDecl(name, init, declKind, loc);
 	decl.nodeType = t;
 	decl.resolvedSym = sym;
@@ -50,7 +53,7 @@ export function tempRef(sym: Symbol, loc: SourceLocation): Node {
 
 // A value aggregate stays in place: a temp copy would take the writes a call
 // or a store makes through it. JS reads before an await: NIM-REF TR-24.
-function snapshotsLikeJs(t: Type | null): boolean {
+export function snapshotsLikeJs(t: Type | null): boolean {
 	if (t == null) return false;
 	const k = t.kind;
 	if (k == TypeKind.Void || k == TypeKind.Array || k == TypeKind.SizedArray || k == TypeKind.Span
@@ -73,7 +76,7 @@ function isStorageRead(e: Node): boolean {
 	return e.kind == NodeKind.ArrayAccess;
 }
 
-function readsBeforeHoist(e: Node): boolean {
+export function readsBeforeHoist(e: Node): boolean {
 	if (e.kind == NodeKind.TypeAssertion) return readsBeforeHoist((e.data as TypeAssertionData).asExpr);
 	if (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.HiddenSubConv) return readsBeforeHoist((e.data as HiddenStdConvData).convExpr);
 	return (isStorageRead(e) || e.kind == NodeKind.ConditionalExpr) && snapshotsLikeJs(e.nodeType);

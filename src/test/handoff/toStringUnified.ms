@@ -1,10 +1,10 @@
 // Unified .toString() pipeline tests
 //
-// Every type has a compiler-provided default .toString().
+// Every type except a distinct has a compiler-provided default .toString().
 // User-defined extension methods take priority.
 // Pipeline: checker accepts → stringConcatFlatten emits → builtinLower resolves
 
-import { compileToC } from "../helpers";
+import { compileToC, refusedOnEveryBackend } from "../helpers";
 import { checkSource } from "./helpers";
 import { hasErrors } from "../../checker/context";
 
@@ -92,8 +92,7 @@ test "struct toString produces a JSON string" {
 	const src = "interface Point { x: number; y: number; }\nconst p: Point = { x: 1, y: 2 };\nconst s = p.toString();";
 	const result = compileToC(src);
 	assert result.ok;
-	// Struct toString lowers to the json-object + stringify path (not a passthrough).
-	assert result.value.contains("stringify");
+	assert result.value.contains("valueDump");
 }
 
 // ===== User extension overrides default =====
@@ -104,4 +103,21 @@ test "user toString extension overrides struct default" {
 	assert result.ok;
 	// Should use the user extension, not __toString_Point
 	assert result.value.contains("toString");
+}
+
+// ===== A distinct has no default text =====
+
+test "a distinct turned into text without a toString is refused on every backend" {
+	const uses = ["`t=${s}`", "String(s)", "\"c=\" + s", "s.toString()", "s"];
+	for (const use of uses) {
+		const small = refusedOnEveryBackend(`type Small = distinct int8;\nconst s = 5 as Small;\nconsole.log(${use});`, "cannot turn Small into text");
+		assert small == "", use + " → " + small;
+		const name = refusedOnEveryBackend(`type Name = distinct string;\nconst s = "ann" as Name;\nconsole.log(${use});`, "cannot turn Name into text");
+		assert name == "", use + " → " + name;
+	}
+}
+
+test "a distinct converted to its base still turns into text" {
+	const result = compileToC("type Small = distinct int8;\nconst s = 5 as Small;\nconsole.log(`${s as int8} ${String(s as int8)}`);");
+	assert result.ok, result.ok ? "" : result.error;
 }

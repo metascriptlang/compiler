@@ -26,7 +26,8 @@ import { createState, getParserDefines, setParserDefines } from "../parser/conte
 import { definedValue, createDefineTable, initDefines } from "../compiler/defines";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
-import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
+import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, CallExprData, IdentifierData, StringLiteralData } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { readFile, writeFile, ensureDir, realpath, readDir } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
@@ -600,6 +601,9 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 			}
 		}
 	}
+	if (parseState.sawImportCall) {
+		for (const specifier of collectImportCalls(program)) processImport(graph, mod, specifier, [], [], 0, true, provider, config, useConfig);
+	}
 
 	// Done loading — mark ready, add to topological order
 	finalizeModule(graph, mod, path);
@@ -694,7 +698,30 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 
 function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider: SourceProvider, config: ResolverConfig, useConfig: int32): void {
 	const d = node.data as ImportDeclData;
-	const specifier = d.importSource;
+	processImport(graph, mod, d.importSource, d.importNames, d.importAliases, node.location != null ? node.location.line : 0, false, provider, config, useConfig);
+}
+
+export function collectImportCalls(program: Node): string[] {
+	const specifiers: string[] = [];
+	const visit = (n: Node): void => {
+		if (n.kind == NodeKind.CallExpr) {
+			const d = n.data as CallExprData;
+			if (isImportKeyword(d.callee) && d.arguments.length > 0 && d.arguments[0].kind == NodeKind.StringLiteral) {
+				const specifier = (d.arguments[0].data as StringLiteralData).value;
+				if (specifiers.indexOf(specifier) < 0) specifiers.push(specifier);
+			}
+		}
+		forEachChild(n, visit);
+	};
+	visit(program);
+	return specifiers;
+}
+
+export function isImportKeyword(callee: Node): boolean {
+	return callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "import";
+}
+
+function processImport(graph: ModuleGraph, mod: Module, specifier: string, importNames: string[], importAliases: string[], line: int32, dynamic: boolean, provider: SourceProvider, config: ResolverConfig, useConfig: int32): void {
 
 	if (useConfig == 0) {
 		// Bare mode: skip std, resolve .ms only
@@ -717,15 +744,15 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		}
 		resolved = moduleIdentity(resolved, config, provider);
 
-		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
+		const entry = createImportEntry(importNames, importAliases, resolved, specifier, dynamic);
 		mod.imports.push(entry);
 		const preCircCount = graph.circularDeps.length;
 		const _loadResult = loadModule(graph, resolved, provider, config, 0);
 		// Enrich circular dep with import site info if a new cycle was just detected
 		if (graph.circularDeps.length > preCircCount) {
 			const lastDep = graph.circularDeps[graph.circularDeps.length - 1];
-			lastDep.importLine = node.location != null ? node.location.line : 0;
-			lastDep.importNames = d.importNames;
+			lastDep.importLine = line;
+			lastDep.importNames = importNames;
 		}
 	} else {
 		// Config-aware mode: resolve all imports including std/
@@ -749,14 +776,14 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		}
 		resolved = moduleIdentity(resolved, config, provider);
 
-		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
+		const entry = createImportEntry(importNames, importAliases, resolved, specifier, dynamic);
 		mod.imports.push(entry);
 		const preCircCount2 = graph.circularDeps.length;
 		const _loadResult = loadModule(graph, resolved, provider, config, 1);
 		if (graph.circularDeps.length > preCircCount2) {
 			const lastDep2 = graph.circularDeps[graph.circularDeps.length - 1];
-			lastDep2.importLine = node.location != null ? node.location.line : 0;
-			lastDep2.importNames = d.importNames;
+			lastDep2.importLine = line;
+			lastDep2.importNames = importNames;
 		}
 	}
 }

@@ -17,7 +17,8 @@ import { isPointerType, getTypeDesc } from "../../codegen/c/types";
 import { createCGen } from "../../codegen/c/context";
 import { checkSource } from "./helpers";
 import { resolveSimpleTypeStr } from "../../transform/util";
-import { createTransformContext, freshTempSym } from "../../transform/context";
+import { createTransformContextWithChecker, freshTempSym } from "../../transform/context";
+import { createContext } from "../../checker/context";
 
 test "Inferred is its own kind, not Pending, not None, not user unknown" {
 	assert inferredType().kind == TypeKind.Inferred;
@@ -54,7 +55,7 @@ test "producer: empty annotation resolves to None, not Pending" {
 
 test "producer: an untyped transform temp carries None, not Pending" {
 	// Group A flip — transform/context.ms freshTempSym null fallback.
-	const ctx = createTransformContext();
+	const ctx = createTransformContextWithChecker(createContext());
 	const sym = freshTempSym(ctx, "probe", null);
 	assert sym.symbolType.kind == TypeKind.None;
 }

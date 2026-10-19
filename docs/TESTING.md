@@ -297,6 +297,44 @@ Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
   reported inside `std/**` means the builder is older than the commit that
   introduced it (`git log -S'<Name>' -- src/checker`); rebuild `./msc` with the
   installed `msc`.
+- **Bootstrap-only std guards:** keep `when (mscDeclaresRuntime)` until one sync
+  cycle after the compiler change lands and every builder can read the guarded
+  declarations. The capability is defined in `src/compiler/defines.ms`; the
+  guarded runtime declarations are not optional behavior for the new compiler.
+- **A source-matched binary can still carry its builder's codegen bugs.** When
+  the change fixes codegen or lowering used by the compiler itself, build stage 1
+  with the previous builder, then build the candidate with stage 1. Keep both
+  binaries at the tree root so each reads this tree's support files:
+
+  ```bash
+  ./msc build src/index.ms --gc=drc --danger --lto=off --output=msc-stage1
+  ./msc-stage1 build src/index.ms --gc=drc --danger --lto=off --output=msc-stage2
+  ```
+
+  Measured 2026-10-04: earlier old-builder candidates failed corpus
+  1031/1032/1034 on Raiser; the stage-2 candidate of source tree
+  `f88ea688515a01a79ddbff3043dd7c95a9fb0c3f` passed them on C, ORC, danger,
+  JS, ESM and Raiser. Program 1031's Raiser output starts
+  `0.10000000149011612 1 16777216 16777216 0.10000000149011612`;
+  1032 starts `0.10000000149011612 0.01666666753590107 0.3333333432674408`.
+  Run with `MSC=<stage-2 binary> MSCORPUS_ONLY=1031-float32Parity,1032-float32ConstantSlots,1034-numericIntoUnionMember MSCORPUS_RAISER=1 ./msc run src/test/corpus/run.ms`.
+  This is local bootstrap/parity evidence, not an installed-binary or release
+  fixpoint claim, nor an isolation of every source/bootstrap change between the
+  earlier candidates and this tree. Syncing remains a separate operation.
+
+  A second measured bootstrap on source tree
+  `80e7b14e66bc590e0a38b4ce1bbf181cc9d29977` used
+  `./msc-n2s-roots3 build src/index.ms --gc=drc --danger --lto=off --cc=clang --output=msc-n2s-staticfix`,
+  then the same command with `./msc-n2s-staticfix` as builder and
+  `--output=msc-n2s-static-stage2`. Both built 349 modules. Stage 1 compiled
+  the corrected Symbol-keyed Raiser global code but
+  `./msc-n2s-staticfix run --target=raiser src/test/corpus/programs/255-staticStorage.ms`
+  printed `static-storage FAIL builds=9`. The same command using
+  `./msc-n2s-static-stage2` printed `static-storage PASS`. A native probe
+  of the corrected Raiser source emitted the value global and its guard with
+  `LoadGlobal` / `StoreGlobal` on both slots.
+  C/DRC, C/ORC and JS printed `static-storage PASS`; SAN subset 255 passed
+  1/1. This is not an installed-binary, HCR or whole-gate verdict.
 
 Other rules that make these numbers real:
 

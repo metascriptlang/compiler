@@ -54,6 +54,38 @@ macro recursiveFields(value: Node): Node {
 	return { kind: NodeKind.StringLiteral, line: value.line, column: value.column, value: childShape.typExprFieldNames.join(",") };
 }
 
+macro forwardedQueryField(value: Node): Node {
+	const shape = getTypeImpl(value);
+	if (shape == null || shape.kind != NodeKind.TypeObject) error("a forwarded member lost its checked type", value);
+	return { kind: NodeKind.StringLiteral, line: value.line, column: value.column, value: shape.typExprFieldNames.join(",") };
+}
+
+macro forwardQueryField(value: Node): Node {
+	const shape = getTypeImpl(value);
+	if (shape == null || shape.kind != NodeKind.TypeObject) error("the enclosing value lost its checked type", value);
+	const field: Node = {
+		kind: NodeKind.MemberExpr,
+		line: value.line,
+		column: value.column,
+		object: value,
+		property: "inner",
+		nodeType: shape.typExprFieldTypes[0],
+	};
+	return {
+		kind: NodeKind.CallExpr,
+		line: value.line,
+		column: value.column,
+		callee: { kind: NodeKind.Identifier, line: value.line, column: value.column, name: "forwardedQueryField" },
+		arguments: [field],
+	};
+}
+
+test "a reflected field passed to another macro retains its original checked type" {
+	const pair: QueryPair<int32> = { value: 7, label: "seven" };
+	const nested: QueryNest<int32> = { inner: pair, label: "outer" };
+	assert forwardQueryField(nested) == "value,label";
+}
+
 test "implementation query substitutes integer generic fields" {
 	const integer: int32 = 7;
 	const pair: QueryPair<int32> = { value: integer, label: "seven" };

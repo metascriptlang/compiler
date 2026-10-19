@@ -465,6 +465,22 @@ int32_t msBigIntCmp(const msBigInt* a, const msBigInt* b) {
 	return (int32_t)mbedtls_mpi_cmp_mpi(&a->v, &b->v);
 }
 
+int32_t msBigIntCompareFloat64(const msBigInt* a, double d, int32_t unordered) {
+	if (isnan(d)) return unordered;
+	if (isinf(d)) return d > 0 ? -1 : 1;
+	double whole = floor(d);
+	msBigInt* w = msBigIntFromFloat64(whole);
+	int32_t c = msBigIntCmp(a, w);
+	msDecref(w);
+	if (c != 0) return c;
+	return whole == d ? 0 : -1;
+}
+
+int32_t msFloat64CompareBigInt(double d, const msBigInt* a, int32_t unordered) {
+	if (isnan(d)) return unordered;
+	return -msBigIntCompareFloat64(a, d, 0);
+}
+
 bool msBigIntIsZero(const msBigInt* a) {
 	return mbedtls_mpi_cmp_int(&a->v, 0) == 0;
 }

@@ -1,14 +1,14 @@
 // std/process — Raiser tier. Same surface as index.cms: kernels are host
 // bridges (hostTable.ms), everything else is portable MS carried verbatim.
-// exit() is the one exception — Tier 0, not Tier 1: the call site is
-// intercepted by the Raiser codegen and emits Halt (Nim's VM likewise has
-// no quit op), so the declaration below exists for the checker only,
-// mirroring the push/setLength pattern.
+// exit() is the one exception — Tier 0, not Tier 1: its `Exit` tag makes the
+// Raiser codegen emit Halt at the call site, so the declaration below exists
+// for the checker only.
 
 export { ProcessError, ProcessErrorKind } from "./errors";
-export { processError, spawnFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
+export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
 
 import { isExecutable } from "../fs";
+import { startFailed, errnoName } from "./errors";
 
 extern function msProcessCwd(): string from "msProcessCwd";
 extern function msProcessPlatform(): string from "msProcessPlatform";
@@ -25,9 +25,10 @@ extern function msProcSpawnGetSignal(): int32 from "msProcSpawnGetSignal";
 extern function msProcSpawnGetStderr(): string from "msProcSpawnGetStderr";
 extern function msProcSpawnGetOk(): int32 from "msProcSpawnGetOk";
 extern function msProcSpawnGetPipeOk(): int32 from "msProcSpawnGetPipeOk";
+extern function msProcSpawnGetErrno(): int32 from "msProcSpawnGetErrno";
 
-// Intercepted by the codegen to Halt(code) — never executed as a call.
-export function exit(code: number): void {}
+@builtin("Exit")
+export extern function exit(code: number): never;
 
 export const argv: string[] = msProcessArgv();
 
@@ -68,7 +69,7 @@ export function execFileCapture(path: string, args: string[] = [], cwd: string =
 	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
 	const ok = msProcSpawnGetOk();
 	if (ok == 0) {
-		return Result.err(spawnFailed(path, "fork/exec failed"));
+		return Result.err(startFailed(path, errnoName(msProcSpawnGetErrno())));
 	}
 	const pipeOk = msProcSpawnGetPipeOk();
 	if (pipeOk == 0) {
@@ -93,6 +94,7 @@ export interface ExecFileResult {
 	signal: int32;
 	output: string;
 	errorOutput: string;
+	startErrno: int32;
 }
 
 // Like execFileCapture, but a child that ran reports every stream and status
@@ -106,6 +108,7 @@ export function execFileResult(path: string, args: string[] = [], cwd: string = 
 		signal: msProcSpawnGetSignal(),
 		output: stdoutText,
 		errorOutput: msProcSpawnGetStderr(),
+		startErrno: msProcSpawnGetErrno(),
 	};
 }
 

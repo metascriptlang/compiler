@@ -41,7 +41,7 @@ function main(): void { console.log(outer(1, 2).n); }
 `);
 	assert c.ok;
 	assert c.value.contains("(*__result).inner.a = a;");
-	assert c.value.contains("(*__result).n = (a + b);");
+	assert c.value.contains("(*__result).n = msAddI32(a, b);");
 	assert !c.value.contains("_lit");
 }
 

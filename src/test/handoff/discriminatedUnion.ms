@@ -4,9 +4,17 @@
 import { checkSource, strictErrorCount, hasError } from "./helpers";
 import { compileToC } from "../helpers";
 import { hasErrors } from "../../checker/context";
-import { isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "../../checker/types";
+import { isDiscriminatedUnion, getDiscriminantName, createEnumLiteral } from "../../checker/types";
+import { findVariantByEnumMember } from "../../checker/compat";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeFlag } from "../../ast/node";
+import { CheckerContext } from "../../checker/context";
+import { Type, TypeFlag } from "../../ast/node";
+
+function variantOf(ctx: CheckerContext, t: Type, enumName: string, member: string): int32 {
+	const enumSym = lookupSymbol(ctx.table, enumName);
+	if (enumSym == null) throw new Error(`no enum '${enumName}'`);
+	return findVariantByEnumMember(t, createEnumLiteral(enumSym.symbolType, member));
+}
 
 test "parse discriminated union type alias" {
 	const ctx = checkSource("enum Color { Red, Green, Blue }\ntype Shape = match (color: Color) {\n\tColor.Red => { radius: number },\n\tColor.Green => { width: number, height: number },\n\tColor.Blue => { side: number },\n};");
@@ -35,24 +43,35 @@ test "discriminated union type has discriminant metadata" {
 	const t = dataSym.symbolType;
 	assert isDiscriminatedUnion(t);
 	assert getDiscriminantName(t) == "kind";
-	assert findVariantByDiscriminant(t, "Kind.A") == 0;
-	assert findVariantByDiscriminant(t, "Kind.B") == 1;
+	assert variantOf(ctx, t, "Kind", "A") == 0;
+	assert variantOf(ctx, t, "Kind", "B") == 1;
 }
 
 test "discriminated union rejects invalid enum member" {
 	assert hasError("enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.C => { y: string },\n};", "not a member");
 }
 
-test "findVariantByDiscriminant matches unqualified names" {
-	const ctx = checkSource("enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n};");
+test "a variant key spelled bare names the same member as a qualified one" {
+	const ctx = checkSource("enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tA => { x: number },\n\tKind.B => { y: string },\n};");
 	assert ctx != null;
+	assert !hasErrors(ctx);
 	const dataSym = lookupSymbol(ctx.table, "Data");
 	assert dataSym != null;
 	const t = dataSym.symbolType;
-	// Stored as "Kind.A" — should match bare "A" too
-	assert findVariantByDiscriminant(t, "A") == 0;
-	assert findVariantByDiscriminant(t, "B") == 1;
-	assert findVariantByDiscriminant(t, "C") == -1;
+	assert variantOf(ctx, t, "Kind", "A") == 0;
+	assert variantOf(ctx, t, "Kind", "B") == 1;
+}
+
+test "a variant is found by the member's enum, not by its spelling" {
+	const ctx = checkSource("enum Kind { Round_One, One }\nenum Other { Round_One }\ntype Data = match (kind: Kind) {\n\tKind.One => { x: number },\n\tKind.Round_One => { y: string },\n};");
+	assert ctx != null;
+	assert !hasErrors(ctx);
+	const dataSym = lookupSymbol(ctx.table, "Data");
+	assert dataSym != null;
+	const t = dataSym.symbolType;
+	assert variantOf(ctx, t, "Kind", "Round_One") == 1;
+	assert variantOf(ctx, t, "Kind", "One") == 0;
+	assert variantOf(ctx, t, "Other", "Round_One") == -1;
 }
 
 test "direct field access on discriminated union — unique field" {
@@ -120,7 +139,7 @@ test "single variant discriminated union" {
 	const dataSym = lookupSymbol(ctx.table, "Data");
 	assert dataSym != null;
 	assert isDiscriminatedUnion(dataSym.symbolType);
-	assert findVariantByDiscriminant(dataSym.symbolType, "Kind.Only") == 0;
+	assert variantOf(ctx, dataSym.symbolType, "Kind", "Only") == 0;
 }
 
 test "shared field across variants resolves without error" {
@@ -158,7 +177,7 @@ test "many-variant discriminated union" {
 	const sym = lookupSymbol(ctx.table, "Expr");
 	assert sym != null;
 	assert isDiscriminatedUnion(sym.symbolType);
-	assert findVariantByDiscriminant(sym.symbolType, "Op.Mod") == 4;
+	assert variantOf(ctx, sym.symbolType, "Op", "Mod") == 4;
 }
 
 test "empty variant body" {
@@ -205,7 +224,7 @@ test "a struct match declares the union the type form declares, as a value" {
 	const tv = lookupSymbol(asType.table, "Data").symbolType;
 	assert isDiscriminatedUnion(sv);
 	assert getDiscriminantName(sv) == "kind";
-	assert findVariantByDiscriminant(sv, "Kind.B") == 1;
+	assert variantOf(asStruct, sv, "Kind", "B") == 1;
 	assert sv.typeFlags.has(TypeFlag.ValueUnion);
 	assert !tv.typeFlags.has(TypeFlag.ValueUnion);
 }

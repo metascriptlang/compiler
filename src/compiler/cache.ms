@@ -425,10 +425,6 @@ function dependencyToken(raw: string, escaped: boolean): string {
 	return out + raw.byteSlice(from, raw.byteLength);
 }
 
-export function nativeDependenciesKnown(srcPath: string, compileCmd: string): boolean {
-	return nativeDependencyPaths(srcPath, compileCmd).length > 0;
-}
-
 export function registerNativeDependencies(srcPath: string, compileCmd: string): void {
 	registerNativeProjectDep(srcPath);
 	for (const path of nativeDependencyPaths(srcPath, compileCmd)) registerNativeProjectDep(path);
@@ -521,7 +517,7 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 	return result;
 }
 
-export function publishFirstCompile(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number): Result<string, string> {
+export function publishNativeObject(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number): Result<string, string> {
 	const dependencies = nativeDependencyPaths(srcPath, compileCmd);
 	let settled = dependencies.length > 0;
 	// cc read these before they are hashed here: one written since the compile started may
@@ -530,11 +526,11 @@ export function publishFirstCompile(srcPath: string, compileCmd: string, oFile: 
 		const modified = modifiedTime(path);
 		if (modified < 0 || modified >= Math.floor(startedSeconds)) settled = false;
 	}
-	if (!settled) {
+	const resolvedFp = settled ? computeFingerprint(srcPath, compileCmd) : fp;
+	if (resolvedFp == fp) {
 		writeCompileCache(oFile, fp);
 		return Result.ok(oFile);
 	}
-	const resolvedFp = computeFingerprint(srcPath, compileCmd);
 	const resolved = stableOFileFp(srcPath, resolvedFp);
 	const tmp = `${resolved}.tmp.${performance.now()}`;
 	if (!copyFile(oFile, tmp).ok || !renameReplace(tmp, resolved)) {

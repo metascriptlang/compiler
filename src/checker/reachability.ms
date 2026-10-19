@@ -1,70 +1,32 @@
 // Global Dead Code Elimination — Reachability Analysis
 //
-// Computes an AliveSet of symbols by walking ASTs from roots (main, top-level
-// stmts, test decls, exported symbols); symbol-less TypeInfo and hook
-// declarations are still keyed "modulePath:name".
+// Computes an AliveSet of symbols by walking ASTs from roots (top-level
+// stmts, test decls, exported symbols).
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
+	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, IdentifierData, ExprStmtData, MacroInvocationData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { runtimeProcSym } from "../transform/util";
 import { getDeclName } from "./collectPass";
-import {
-	AliveSet,
-	CTypeInfoDemand,
-	CInstanceTypeInfo,
-	createAliveSet,
-	aliveSetAdd,
-	aliveSetAddSym,
-	aliveSetHasSym,
-	aliveSetAddModule,
-	aliveSetHas,
-	aliveSetHasDecl,
-	aliveSetHasModule,
-	aliveSetModuleCount,
-} from "../codegen/c/context";
+import { isBuiltinDirective } from "./decoratorHelpers";
+import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
-import { hasFlag, SymbolFlag, lookupCtorDefaults } from "./symbol";
-import { classParentOf, hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
+import { refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, promiseAllCellKey, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
+import { ctorRoutineOf } from "./ctorRoutine";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { checkedInstanceOf, sameInstanceArgs } from "./instantiate";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
 	if (!aliveSet.computed) return true;
-	return aliveSetHasDecl(aliveSet, modulePath, (node.data as FunctionDeclData).fnName, node.resolvedSym);
+	const name = (node.data as FunctionDeclData).fnName;
+	const sym = node.resolvedSym;
+	return aliveSetHasDecl(aliveSet, sym, name);
 }
-
-// ===== Global Name Index =====
-// Pre-built name→modulePath index for O(1) cross-module lookup.
-// Replaces the O(n*m) linear scan of all modules for unresolved identifiers.
-// Built once at the start of computeAliveSet.
-let _nameIndex: HashMap<string, string> = new HashMap<string, string>();
-
-function nameIndexBuild(programs: Node[], paths: string[]): void {
-	_nameIndex = new HashMap<string, string>();
-	for (let m = 0; m < programs.length; m += 1) {
-		const prog = programs[m];
-		if (prog == null) continue;
-		const pd = prog.data as ProgramData;
-		const modPath = paths[m];
-		for (const stmt of pd.programStmts) {
-			if (stmt == null) continue;
-			const name = getDeclName(stmt);
-			if (name != "" && !_nameIndex.has(name)) {
-				_nameIndex.set(name, modPath);
-			}
-		}
-	}
-}
-
-function nameIndexLookup(name: string): string {
-	const v = _nameIndex.get(name);
-	if (v != null) return v;
-	return "";
-}
-
 // ===== Declaration Index =====
 // "modulePath:name" → its first top-level declaration; _declNext chains the
 // overloads of one key in statement order. The first program of a path owns it.
@@ -153,15 +115,6 @@ function walkBody(node: Node, modulePath: string): void {
 	// Identifier — mark its declaration alive
 	if (k == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
-		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp) && sym.modulePath == "") {
-			noteOpUse(sym, modulePath);
-			markAndWalk(modulePath, sym.name);
-			const hookMod = nameIndexLookup(sym.name);
-			if (hookMod != "" && hookMod != modulePath) {
-				markAndWalk(hookMod, sym.name);
-			}
-			return;
-		}
 		if (sym != null) markReferenced(sym, modulePath);
 		return;
 	}
@@ -172,6 +125,10 @@ function walkBody(node: Node, modulePath: string): void {
 		const magic = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : "";
 		if (magic == "BoxRefArray" && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
 			markRefArrayCell(cd.arguments[0].nodeType, modulePath);
+		} else if (magic == "BoxArc" && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
+			markArcCell(cd.arguments[0].nodeType, modulePath);
+		} else if (magic == "BoxLocked" && node.nodeType != null && node.nodeType.typeReturn != null) {
+			markArcCell(node.nodeType.typeReturn, modulePath);
 		} else if (magic == "PromiseAllFor" && node.nodeType != null) {
 			markPromiseAllResult(node.nodeType, modulePath);
 		}
@@ -188,14 +145,12 @@ function walkBody(node: Node, modulePath: string): void {
 		for (const arg of nd.newArguments) {
 			walkBody(arg, modulePath);
 		}
-		markTypeInfoEdge(node, modulePath);
+		markAllocationInfo(node.nodeType, modulePath);
 		return;
 	}
 
-	// ObjectLiteral — allocation site: the emitted C references <T>TypeInfo,
-	// whose initializer references <T>Destroy/<T>Trace (TypeInfo→hook edge).
 	if (k == NodeKind.ObjectLiteral) {
-		markTypeInfoEdge(node, modulePath);
+		markAllocationInfo(node.nodeType, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
@@ -211,16 +166,15 @@ function walkBody(node: Node, modulePath: string): void {
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
-
 	if (k == NodeKind.TypeAssertion && node.flags.has(NodeFlag.ObjCheck)) {
-		markTypeInfoEdge(node, modulePath);
+		markObjectTypeInfo(node.nodeType, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
 
 	if (k == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "instanceof") {
 		const rhs = (node.data as BinaryExprData).right;
-		markTypeInfoOf(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType, modulePath);
+		markObjectTypeInfo(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
@@ -246,7 +200,7 @@ function moveCellOwnerIntoCore(key: string, demander: string): void {
 		if (!_imageModules.has(demand.owner)) return;
 		demand.owner = demander;
 		aliveSetAddModule(_aliveSet, demander);
-		markReferenced(demand.destroy, demander);
+		if (demand.destroy != null) markReferenced(demand.destroy, demander);
 		if (demand.trace != null) markReferenced(demand.trace, demander);
 		return;
 	}
@@ -263,15 +217,28 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
-		if (destroy.modulePath != "") owner = destroy.modulePath;
+		const destroyHome = hasFlag(destroy, SymbolFlag.ImportC) ? "" : destroy.modulePath;
+		if (destroyHome != "") owner = destroyHome;
 		if (trace != null) owner = trace.modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { cell: createRef(arrT), key, owner, cName: "", destroy, trace };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", moduleLocal: false };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	markReferenced(destroy, owner);
 	if (trace != null) markReferenced(trace, owner);
+}
+
+function markArcCell(pointee: Type, modulePath: string): void {
+	const key = arcCellKey(pointee);
+	if (_aliveSet.typeInfoKeys.has(key)) return;
+	const destroy = arrayElementNeedsCleanup(pointee) ? getOpByKey(pointee, AttachedOp.AttachedDestructor) : null;
+	const owner = _singleModule != "" ? _singleModule : modulePath;
+	_aliveSet.typeInfoKeys.add(key);
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner, cName: "", destroy, trace: null, baseKey: "", moduleLocal: false };
+	_aliveSet.typeInfos.push(demand);
+	aliveSetAddModule(_aliveSet, owner);
+	if (destroy != null) markReferenced(destroy, owner);
 }
 
 function markPromiseAllResult(resultType: Type, modulePath: string): void {
@@ -279,153 +246,101 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 	if (collected != null && collected.kind == TypeKind.Ref && collected.typeReturn != null) collected = collected.typeReturn;
 	if (collected == null || collected.kind != TypeKind.Array || collected.typeReturn == null) return;
 	const elem = collected.typeReturn;
-	if (elem.kind != TypeKind.Struct || elem.typeName == "" || !hasAsgnFlag(elem)) return;
-	markReferenced(requireOpByKey(createArray(elem), AttachedOp.AttachedDestructor), modulePath);
+	if (promiseAllShape(elem) == PromiseAllShape.None) return;
+	const arrT = createArray(elem);
+	const key = promiseAllCellKey(arrT);
+	if (_aliveSet.typeInfoKeys.has(key)) return;
+	let destroy = runtimeProcSym("msNumberArrayDestroy");
+	let owner = _singleModule != "" ? _singleModule : modulePath;
+	if (elem.kind == TypeKind.Struct && elem.typeName != "" && hasAsgnFlag(elem)) {
+		destroy = requireOpByKey(arrT, AttachedOp.AttachedDestructor);
+		if (_singleModule == "" && destroy.modulePath != "") owner = destroy.modulePath;
+		markReferenced(destroy, owner);
+	}
+	_aliveSet.typeInfoKeys.add(key);
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.PromiseAllCell, subject: arrT, key, owner, cName: "", destroy, trace: null, baseKey: "", moduleLocal: false };
+	_aliveSet.typeInfos.push(demand);
+	aliveSetAddModule(_aliveSet, owner);
 }
 
-// Union narrow/project sites make codegen emit variant Copy/Destroy calls by
-// name with no AST edge — any walked node typed Union pins its variants' hooks.
+// Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST edge.
 function markUnionHookEdges(t: Type): void {
 	for (const vt of t.typeChildren) {
 		if (vt == null) continue;
 		let vbase = vt;
 		if ((vt.kind == TypeKind.Ref || vt.kind == TypeKind.Ptr) && vt.typeReturn != null) vbase = vt.typeReturn;
-		const vn = hookBaseCName(vbase.typeName, vbase, null);
-		if (vn.length == 0) continue;
-		for (const hn of [vn + "Copy", vn + "Destroy", vn + "Trace"]) {
-			const h = nameIndexLookup(hn);
-			if (h != "") {
-				markAndWalk(h, hn);
-			}
-		}
+		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedAsgn));
+		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedDestructor));
+		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedTrace));
 	}
 	if (t.typeName.length > 0) {
-		const un = hookBaseCName(t.typeName, t, null);
-		for (const uhn of [un + "Copy", un + "Sink", un + "WasMoved"]) {
-			const uh = nameIndexLookup(uhn);
-			if (uh != "") {
-				markAndWalk(uh, uhn);
-			}
-		}
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedAsgn));
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedSink));
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedWasMoved));
 	}
 }
 
-// Allocation site → <T>TypeInfo edge. The emitted allocation references the
-// type's TypeInfo global, whose initializer references <T>Destroy/<T>Trace —
-// the only AST path to ref-type hooks (msDecref dispatches through TypeInfo
-// at runtime, so no direct call site exists). Mirrors codegen's on-demand
-// TypeInfo emission: mark only when the TypeInfo decl really exists.
-function markTypeInfoEdge(node: Node, modulePath: string): void {
-	markTypeInfoOf(node.nodeType, modulePath);
-}
-
-function markTypeInfoHooks(t: Type, modulePath: string): void {
-	const destroy = getOpByKey(t, AttachedOp.AttachedDestructor) ?? getAttachedOp(t, AttachedOp.AttachedDestructor);
-	if (destroy != null) markReferenced(destroy, modulePath);
-	const trace = getOpByKey(t, AttachedOp.AttachedTrace) ?? getAttachedOp(t, AttachedOp.AttachedTrace);
-	if (trace != null) markReferenced(trace, modulePath);
-}
-
-function noteInstanceTypeInfo(cName: string, type: Type, modulePath: string): void {
-	if (_imageModules.size == 0) return;
-	let info = _aliveSet.instanceTypeInfoByName.get(cName);
-	if (info == null) {
-		const first: CInstanceTypeInfo = { cName, type, demanders: [], inCore: false };
-		_aliveSet.instanceTypeInfoByName.set(cName, first);
-		_aliveSet.instanceTypeInfos.push(first);
-		info = first;
-	}
-	if (!_imageModules.has(modulePath)) info.inCore = true;
-	else if (!info.demanders.includes(modulePath)) info.demanders.push(modulePath);
+function markOpEdge(op: Symbol | null): void {
+	if (op != null) markSymAndWalk(op, "");
 }
 
 function markRematerializedMemberTypeInfo(conv: Type | null, modulePath: string): void {
 	if (conv == null || conv.kind == TypeKind.Union) return;
 	const member = unwrapPointerLikeForVariant(conv);
-	if (member != null && member != conv && member.kind == TypeKind.Struct) markTypeInfoOf(member, modulePath);
+	if (member != null && member != conv && member.kind == TypeKind.Struct) markObjectTypeInfo(member, modulePath);
 }
 
-function markTypeInfoOf(type: Type | null, modulePath: string): void {
-	if (type == null) return;
-	let t = peelTransparentInstance(type);
+function opOwner(op: Symbol | null, fallback: string): string {
+	if (op == null) return fallback;
+	const home = opHome(op, fallback);
+	return home != "" ? home : fallback;
+}
+
+function markAllocationInfo(allocated: Type | null, modulePath: string): void {
+	if (allocated == null) return;
+	let t = peelTransparentInstance(allocated);
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) t = nullableRef;
-	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
-		if (t.typeReturn != null) {
-			t = t.typeReturn;
-		} else if (t.typeChildren.length > 0 && t.typeChildren[0] != null) {
-			t = t.typeChildren[0];
-		} else {
-			return;
-		}
+	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) markObjectTypeInfo(t, modulePath);
+}
+
+function markObjectTypeInfo(type: Type | null, modulePath: string): void {
+	const subject = typeInfoSubject(type);
+	if (subject == null) return;
+	if (subject.sym != null && hasFlag(subject.sym, SymbolFlag.ImportC)) return;
+	const key = objectTypeInfoKey(subject, modulePath);
+	if (_aliveSet.typeInfoKeys.has(key)) return;
+	const isPrivate = isPrivateTypeInfoSubject(subject);
+	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
+	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
+	let owner = _singleModule != "" ? _singleModule : modulePath;
+	if (!isPrivate && _singleModule == "") {
+		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
+		else owner = opOwner(destroy, modulePath);
 	}
-	if (t.kind != TypeKind.Struct && t.kind != TypeKind.TypeReference && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Union) return;
-	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0) {
-		const mono = monoInstanceName(t);
-		noteInstanceTypeInfo(mono, t, modulePath);
-		for (const hn of [mono + "TypeInfo", mono + "Destroy", mono + "Trace"]) {
-			const h = nameIndexLookup(hn);
-			if (h != "") {
-				markAndWalk(h, hn);
-			}
-		}
-		markTypeInfoHooks(t, modulePath);
-		markTypeInfoOf(classParentOf(t), modulePath);
+	_aliveSet.typeInfoKeys.add(key);
+	let baseKey = "";
+	const base = classBaseOf(subject);
+	if (base != null) {
+		markObjectTypeInfo(base, modulePath);
+		baseKey = objectTypeInfoKey(typeInfoSubject(base)!, modulePath);
 	}
-	if (t.kind == TypeKind.Union) {
-		markUnionHookEdges(t);
-	}
-	if (t.kind == TypeKind.Struct && (isAnonTypeName(t.typeName) || t.typeName.startsWith("__anon")) && t.typeNames.length > 0) {
-		const an = isAnonTypeName(t.typeName) ? anonTypeName(t) : t.typeName;
-		for (const hn of [an + "Destroy", an + "Trace"]) {
-			const h = nameIndexLookup(hn);
-			if (h != "") {
-				markAndWalk(h, hn);
-			}
-		}
-		markTypeInfoHooks(t, modulePath);
-		return;
-	}
-	const tn = t.typeName;
-	if (tn.length == 0) return;
-	const tiName = tn + "TypeInfo";
-	// The name index maps a name to ONE home, so a type name declared by several
-	// modules resolves to an arbitrary one; the type's own symbol is the identity
-	// that says which module's TypeInfo this allocation demands.
-	if (t.sym != null && t.sym.modulePath != "") {
-		markAndWalk(t.sym.modulePath, tiName);
-	}
-	const home = nameIndexLookup(tiName);
-	if (home != "") {
-		markAndWalk(home, tiName);
-	}
-	if (t.kind != TypeKind.Struct) return;
-	const sharedInstance = t.sym != null && (t.sym.instantiatedFrom != null || hasGenericParams(t.sym.symbolType));
-	if (t.sym != null && t.sym.instantiatedFrom != null) noteInstanceTypeInfo(tn, t, modulePath);
-	markTypeInfoHooks(t, sharedInstance ? modulePath : (t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath)));
-	let bt = t.typeExtra;
-	let depth = 0;
-	while (bt != null && depth < 64) {
-		let inner = bt;
-		if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
-		if (inner.kind == TypeKind.GenericInstance) {
-			markTypeInfoOf(inner, modulePath);
-			bt = classParentOf(inner);
-			depth += 1;
-			continue;
-		}
-		if (inner.kind != TypeKind.Struct || inner.typeName == "") break;
-		const btiName = inner.typeName + "TypeInfo";
-		if (inner.sym != null && inner.sym.modulePath != "") {
-			markAndWalk(inner.sym.modulePath, btiName);
-		}
-		const bHome = nameIndexLookup(btiName);
-		if (bHome != "") {
-			markAndWalk(bHome, btiName);
-		}
-		bt = inner.typeExtra;
-		depth += 1;
-	}
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, moduleLocal: isPrivate };
+	_aliveSet.typeInfos.push(demand);
+	aliveSetAddModule(_aliveSet, owner);
+	if (destroy != null) markReferenced(destroy, owner);
+	if (trace != null) markReferenced(trace, owner);
+}
+
+function classBaseOf(subject: Type): Type | null {
+	let parent: Type | null = null;
+	if (subject.kind == TypeKind.Struct) parent = subject.typeExtra;
+	else if (subject.kind == TypeKind.GenericInstance && runtimeClassSym(subject) != null) parent = classParentOf(subject);
+	if (parent == null) return null;
+	const inner = parent.kind == TypeKind.Ref && parent.typeReturn != null ? parent.typeReturn : parent;
+	if (inner.kind == TypeKind.GenericInstance) return inner;
+	if (inner.kind != TypeKind.Struct || inner.typeName == "") return null;
+	return inner;
 }
 
 // Walk all children of a node generically via shared forEachChild
@@ -435,15 +350,10 @@ function walkChildrenGeneric(node: Node, modulePath: string): void {
 	});
 }
 
-// Mark a symbol alive and walk its body if not already visited.
-// Walks ALL overloads with the same name (not just the first).
-function markAndWalk(modulePath: string, name: string): void {
+function walkNamedDecls(modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
 	if (visitedHas(key)) return;
 	visitedAdd(key);
-	aliveSetAdd(_aliveSet, modulePath, name);
-
-	// Walk ALL declarations with this name (handles overloaded functions)
 	let di = _declHead.get(key) ?? -1;
 	while (di >= 0) {
 		walkDecl(di);
@@ -458,7 +368,7 @@ function markDispatchOverrides(dde: DispMethodEntry | null): void {
 	if (dde == null || dde.overloaded) return;
 	for (const ov of dispatchOverridesFor(dde.classSym, dde.methodName)) {
 		markSymAndWalk(ov.sym, ov.sym.modulePath);
-		markAndWalk(ov.classSym.modulePath, ov.classSym.name + "TypeInfo");
+		markObjectTypeInfo(ov.classSym.symbolType, ov.classSym.modulePath);
 	}
 }
 
@@ -494,11 +404,11 @@ function markSymAndWalk(sym: Symbol, modulePath: string): void {
 	_visitedSyms.add(sym);
 	aliveSetAddSym(_aliveSet, sym);
 	const home = sym.modulePath != "" ? sym.modulePath : modulePath;
-	aliveSetAddModule(_aliveSet, home);
+	if (home != "") aliveSetAddModule(_aliveSet, home);
 	markDispatchOverrides(dispatchEntryFor(sym));
 	let di = _symDeclHead.get(sym) ?? -1;
 	if (di < 0 && sym.instantiatedFrom != null) {
-		markInstanceCopy(sym.instantiatedFrom, sym.name);
+		markInstanceCopy(sym);
 		return;
 	}
 	while (di >= 0) {
@@ -507,22 +417,27 @@ function markSymAndWalk(sym: Symbol, modulePath: string): void {
 	}
 }
 
-function markInstanceCopy(generic: Symbol, name: string): void {
-	let di = _instDeclHead.get(generic) ?? -1;
+function markInstanceCopy(sym: Symbol): void {
+	const checked = checkedInstanceOf(sym);
+	let di = _instDeclHead.get(sym.instantiatedFrom!) ?? -1;
 	while (di >= 0) {
-		if (_declNodes[di].resolvedSym.name == name) walkDecl(di);
+		const copy = _declNodes[di].resolvedSym!;
+		if (sameInstanceArgs(checkedInstanceOf(copy).concreteTypes, checked.concreteTypes)) {
+			aliveSetAddSym(_aliveSet, copy);
+			walkDecl(di);
+		}
 		di = _instDeclNext[di];
 	}
 }
 
-function markClassInit(classDecl: Node, modulePath: string, className: string): void {
-	const entry = classDecl.resolvedSym != null ? lookupCtorDefaults(classDecl.resolvedSym, className) : null;
-	if (entry != null && entry.initSym != null) markSymAndWalk(entry.initSym, modulePath);
+function markClassInit(classDecl: Node, modulePath: string): void {
+	const routine = classDecl.resolvedSym != null ? ctorRoutineOf(classDecl.resolvedSym) : null;
+	if (routine != null) markSymAndWalk(routine, modulePath);
 }
 
 function markRootDecl(decl: Node, modulePath: string): void {
-	if (decl.resolvedSym != null) markSymAndWalk(decl.resolvedSym, modulePath);
-	else markAndWalk(modulePath, topDeclName(decl));
+	if (decl.resolvedSym == null) throw new Error(`internal: root declaration '${topDeclName(decl)}' of ${modulePath} has no symbol`);
+	markSymAndWalk(decl.resolvedSym, modulePath);
 }
 
 function walkDecl(di: int32): void {
@@ -535,14 +450,14 @@ function walkDecl(di: int32): void {
 		aliveSetAddSym(_aliveSet, found.resolvedSym);
 		markDispatchOverrides(dispatchEntryFor(found.resolvedSym));
 	} else {
-		aliveSetAdd(_aliveSet, modulePath, name);
+		throw new Error(`internal: declaration '${name}' of ${modulePath} reached reachability without a symbol`);
 	}
 	aliveSetAddModule(_aliveSet, modulePath);
 	if (found.nodeType != null && hasGenericParams(found.nodeType)) return;
 	walkBody(found, modulePath);
 	// Codegen lowers `super(args)` to `<Parent>_init(this, args)` with no AST
 	// edge, so a live class keeps its init alive, as `new C(...)` needs.
-	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath, name);
+	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath);
 	// Actors: actorLower erased the NewExpr before this walk runs, so
 	// no allocation-site edge fires — but a spawned actor's TypeInfo
 	// is always demanded.
@@ -550,10 +465,7 @@ function walkDecl(di: int32): void {
 		|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
 			&& found.resolvedSym.symbolKind == SymbolKind.Actor);
 	if (isActorOrigin) {
-		const acName = hookBaseCNameOfSym(name, found.resolvedSym);
-		markAndWalk(modulePath, name + "TypeInfo");
-		markAndWalk(modulePath, acName + "Destroy");
-		markAndWalk(modulePath, acName + "Trace");
+		markObjectTypeInfo(found.resolvedSym.symbolType, modulePath);
 	}
 }
 
@@ -587,7 +499,6 @@ function topDeclName(decl: Node): string {
 const ANY_EXPORT = "*";
 
 function declaredNameAlive(modulePath: string, name: string): boolean {
-	if (aliveSetHas(_aliveSet, modulePath, name)) return true;
 	let di = _declHead.get(modulePath + ":" + name) ?? -1;
 	while (di >= 0) {
 		const sym = _declNodes[di].resolvedSym;
@@ -659,6 +570,20 @@ function markSideEffectImportsAlive(graph: ModuleGraph): void {
 	}
 }
 
+function markImportedInitModulesAlive(graph: ModuleGraph, entryPath: string, initModules: HashSet<string>): void {
+	const seen = new HashSet<string>();
+	const pending: string[] = [entryPath];
+	while (pending.length > 0) {
+		const path = pending.pop();
+		if (seen.has(path)) continue;
+		seen.add(path);
+		if (initModules.has(path)) aliveSetAddModule(_aliveSet, path);
+		const mod = findModule(graph, path);
+		if (mod == null) continue;
+		for (const imp of mod.imports) pending.push(imp.sourcePath);
+	}
+}
+
 function markImportedModulesAlive(graph: ModuleGraph): void {
 	let known: int32 = -1;
 	while (aliveSetModuleCount(_aliveSet) != known) {
@@ -691,10 +616,10 @@ export function computeAliveSet(
 	for (const path of imageModules) _imageModules.add(path);
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
-	nameIndexBuild(programs, paths);
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
 	const globalDestroys: GlobalDestroysBlock[] = [];
+	const initModules = new HashSet<string>();
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {
@@ -707,39 +632,18 @@ export function computeAliveSet(
 			if (stmt == null) continue;
 
 			// Unwrap DecoratedDecl (module-level @passC/@passL/... wrap the next
-			// decl) so name/kind roots below see the real decl — topDecl
-			// already unwraps; the root scan must too or a decorated `main` is
-			// invisible and the whole entry module goes dead.
+			// decl) so the kind roots below see the real decl.
 			let bare = stmt;
 			if (bare.kind == NodeKind.DecoratedDecl) {
 				const ddw = bare.data as DecoratedDeclData;
 				if (ddw.decoratedNode != null) bare = ddw.decoratedNode;
 			}
 
-			// Root 1: main() in entry module
-			if (modulePath == entryPath && bare.kind == NodeKind.FunctionDecl) {
-				const fd = bare.data as FunctionDeclData;
-				if (fd.fnName == "main") {
-					markRootDecl(bare, modulePath);
+			if (bare.kind == NodeKind.FunctionDecl) {
+				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
+					markSymAndWalk(bare.resolvedSym, modulePath);
 					continue;
 				}
-			}
-			// Also check exported main under ExportDecl
-			if (modulePath == entryPath && bare.kind == NodeKind.ExportDecl) {
-				const ed = bare.data as ExportDeclData;
-				if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.FunctionDecl) {
-					const fd = ed.exportedDecl.data as FunctionDeclData;
-					if (fd.fnName == "main") {
-						markRootDecl(ed.exportedDecl, modulePath);
-						continue;
-					}
-				}
-			}
-
-			// Root 2: HCR root functions.
-			if (bare.kind == NodeKind.FunctionDecl && bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-				markSymAndWalk(bare.resolvedSym, modulePath);
-				continue;
 			}
 
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
@@ -763,6 +667,7 @@ export function computeAliveSet(
 			}
 			if (isTopLevelStatement(initStmt)) {
 				walkBody(bare, modulePath);
+				if (!isBuiltinDirectiveStmt(initStmt)) initModules.add(modulePath);
 				continue;
 			}
 
@@ -777,12 +682,13 @@ export function computeAliveSet(
 					markRootDecl(decl, modulePath);
 				} else {
 					const name = getDeclName(bare);
-					if (name != "") markAndWalk(modulePath, name);
+					if (name != "") walkNamedDecls(modulePath, name);
 				}
 			}
 		}
 	}
 
+	markImportedInitModulesAlive(graph, entryPath, initModules);
 	markImportedModulesAlive(graph);
 	while (markAliveGlobalDestroys(globalDestroys)) markImportedModulesAlive(graph);
 	return takeReachability();
@@ -814,7 +720,6 @@ function takeReachability(): AliveSet {
 	_imageModules = new HashSet<string>();
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
-	_nameIndex = new HashMap<string, string>();
 	_declHead = new HashMap<string, int32>();
 	_declNodes = [];
 	_declNext = [];
@@ -832,7 +737,6 @@ export function collectModuleTypeInfoDemands(program: Node, modulePath: string):
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	_singleModule = modulePath;
-	nameIndexBuild([program], [modulePath]);
 	declIndexBuild([program], [modulePath]);
 	for (const stmt of (program.data as ProgramData).programStmts) {
 		const decl = topDecl(stmt);
@@ -862,11 +766,15 @@ function isTopLevelStatement(node: Node): boolean {
 	return false;
 }
 
+function isBuiltinDirectiveStmt(node: Node): boolean {
+	if (node.kind != NodeKind.ExprStmt) return false;
+	const expr = (node.data as ExprStmtData).expr;
+	return expr.kind == NodeKind.MacroInvocation && isBuiltinDirective((expr.data as MacroInvocationData).macroName);
+}
+
 function varDeclNeedsRuntimeInit(node: Node): boolean {
 	const d = node.data as VariableDeclData;
 	if (d.initializer == null) return false;
-	const n = d.declName;
-	if (n.length > 8 && n.slice(n.length - 8, n.length) == "TypeInfo") return false;
 	const k = d.initializer.kind;
 	if (k == NodeKind.NumberLiteral) return false;
 	if (k == NodeKind.BooleanLiteral) return false;
@@ -971,7 +879,8 @@ test "endsWith helper" {
 
 test "empty programs produce empty alive set" {
 	const aliveSet = computeAliveSet([], [], "/entry.ms", false, createModuleGraph());
-	assert aliveSet.entries.length == 0;
+	assert aliveSet.computed;
+	assert aliveSet.typeInfos.length == 0;
 }
 
 test "a computed alive set that marked no name still drops a module nothing reaches" {
@@ -995,23 +904,104 @@ test "a computed alive set keeps the side-effect imports of the entry and their 
 
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
-import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
-import { aliveSetHas } from "../codegen/c/context";
+import { spelled, createStruct, createRef, createUnion, nullType, stringType } from "./types";
+import { liftedOp, resetHookSyms, objectTypeInfoKey } from "../codegen/c/types";
 import { makeSymbol, setFlag } from "./symbol";
-import { ExprStmtData } from "../ast/node";
 
-test "nullable reference allocation keeps its concrete TypeInfo alive" {
-	const parsed = parseSource("const HolderTypeInfo = 0; let value = { label: \"held\" };");
+function allocationOf(source: string): Node {
+	const parsed = parseSource(source);
+	if (!parsed.ok) throw new Error(parsed.error);
+	return parsed.value;
+}
+
+function declaredClass(name: string, modulePath: string, fields: string[], base: Type | null): Type {
+	const body = createStruct(name, fields, [stringType()], true);
+	body.sym = makeSymbol(name, SymbolKind.Interface, body, false);
+	body.sym.modulePath = modulePath;
+	if (base != null) body.typeExtra = createRef(base);
+	return body;
+}
+
+test "nullable reference allocation demands its concrete TypeInfo from the declaring module" {
+	const program = allocationOf("let value = { label: \"held\" };");
+	const allocation = ((program.data as ProgramData).programStmts[0].data as VariableDeclData).initializer;
+	const body = declaredClass("Holder", "owner.ms", ["label"], null);
+	allocation.nodeType = createUnion([createRef(body), nullType()]);
+	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
+	assert alive.typeInfos.length == 1;
+	assert alive.typeInfos[0].key == objectTypeInfoKey(body, "user.ms");
+	assert alive.typeInfos[0].owner == "owner.ms";
+}
+
+test "an allocation demands its base class TypeInfo and names it" {
+	const program = allocationOf("let value = { label: \"held\" };");
+	const allocation = ((program.data as ProgramData).programStmts[0].data as VariableDeclData).initializer;
+	const parent = declaredClass("Parent", "parent.ms", ["label"], null);
+	const child = declaredClass("Child", "child.ms", ["label"], parent);
+	allocation.nodeType = createRef(child);
+	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
+	assert alive.typeInfos.length == 2;
+	let childInfo: CTypeInfoDemand | null = null;
+	for (const info of alive.typeInfos) {
+		if (info.owner == "child.ms") childInfo = info;
+	}
+	assert childInfo != null;
+	assert childInfo!.baseKey == objectTypeInfoKey(parent, "user.ms");
+}
+
+test "a lambda environment class is local to the module that lifted it" {
+	const program = allocationOf("let value = { label: \"held\" };");
+	const allocation = ((program.data as ProgramData).programStmts[0].data as VariableDeclData).initializer;
+	const env = spelled(createStruct("$Env_run_shared", ["label"], [stringType()], true));
+	allocation.nodeType = createRef(env);
+	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
+	assert alive.typeInfos.length == 1;
+	assert alive.typeInfos[0].moduleLocal;
+	assert alive.typeInfos[0].owner == "user.ms";
+	assert alive.typeInfos[0].key == objectTypeInfoKey(env, "user.ms");
+	assert objectTypeInfoKey(env, "user.ms") != objectTypeInfoKey(env, "other.ms");
+}
+
+function bindIdentifiers(node: Node, name: string, sym: Symbol): void {
+	if (node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == name) node.resolvedSym = sym;
+	forEachChild(node, (child: Node): void => {
+		bindIdentifiers(child, name, sym);
+	});
+}
+
+test "a generated op is alive through the symbol that references it" {
+	const parsed = parseSource("hookDestroy(); function hookDestroy(): void {} function deadDestroy(): void {}");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	resetHookSyms();
+	const liveBody = createStruct("HookLive", ["v"], [stringType()], true);
+	liveBody.sym = makeSymbol("HookLive", SymbolKind.Interface, liveBody, false);
+	const deadBody = createStruct("HookDead", ["v"], [stringType()], true);
+	deadBody.sym = makeSymbol("HookDead", SymbolKind.Interface, deadBody, false);
+	const live = liftedOp(liveBody, AttachedOp.AttachedDestructor, "hookDestroy", null);
+	const dead = liftedOp(deadBody, AttachedOp.AttachedDestructor, "deadDestroy", null);
+	const stmts = (parsed.value.data as ProgramData).programStmts;
+	stmts[1].resolvedSym = live;
+	stmts[2].resolvedSym = dead;
+	bindIdentifiers(stmts[0], "hookDestroy", live);
+	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());
+	assert aliveSetHasSym(alive, live);
+	assert !aliveSetHasSym(alive, dead);
+}
+
+test "a function named main is alive only through a reference" {
+	const parsed = parseSource("function main(): void {} function used(): void {} used();");
 	assert parsed.ok;
 	if (!parsed.ok) return;
 	const stmts = (parsed.value.data as ProgramData).programStmts;
-	const allocation = (stmts[1].data as VariableDeclData).initializer;
-	assert allocation != null;
-	if (allocation == null) return;
-	const body = createStruct("Holder", ["label"], [stringType()], true);
-	allocation.nodeType = createUnion([createRef(body), nullType()]);
-	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());
-	assert aliveSetHas(alive, "owner.ms", "HolderTypeInfo");
+	const main = makeSymbol("main", SymbolKind.Function, null, false);
+	const used = makeSymbol("used", SymbolKind.Function, null, false);
+	stmts[0].resolvedSym = main;
+	stmts[1].resolvedSym = used;
+	bindIdentifiers(stmts[2], "used", used);
+	const alive = computeAliveSet([parsed.value], ["entry.ms"], "entry.ms", false, createModuleGraph());
+	assert aliveSetHasSym(alive, used);
+	assert !aliveSetHasSym(alive, main);
 }
 
 function generatedHookProgram(source: string, hookName: string): Node | null {
@@ -1057,13 +1047,19 @@ function importGraph(edges: string[][]): ModuleGraph {
 }
 
 function moduleAlive(graph: ModuleGraph, modulePath: string): boolean {
+	const impl = allocationOf("function add(): void {}");
+	const add = (impl.data as ProgramData).programStmts[0];
+	add.resolvedSym = makeSymbol("add", SymbolKind.Function, null, false);
 	_aliveSet = createAliveSet();
 	_aliveSet.computed = true;
-	aliveSetAdd(_aliveSet, "/main.ms", "main");
-	aliveSetAdd(_aliveSet, "/impl.ms", "add");
+	declIndexBuild([impl], ["/impl.ms"]);
+	aliveSetAddModule(_aliveSet, "/main.ms");
+	aliveSetAddModule(_aliveSet, "/impl.ms");
+	aliveSetAddSym(_aliveSet, add.resolvedSym);
 	markImportedModulesAlive(graph);
 	const alive = aliveSetHasModule(_aliveSet, modulePath);
 	_aliveSet = createAliveSet();
+	declIndexBuild([], []);
 	return alive;
 }
 

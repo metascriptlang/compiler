@@ -25,7 +25,7 @@ export function noteRounds(count: int32): int32 {
 		notes.push({ body: "n" + i, weight: i });
 		let kept = notes;
 		kept.push({ body: "m" + i, weight: 1 });
-		for (const note of kept) total += note.weight + note.body.length as int32;
+		for (const note of kept) total += note.weight + (note.body.length as int32);
 		total += notes.length as int32;
 	}
 	return total;

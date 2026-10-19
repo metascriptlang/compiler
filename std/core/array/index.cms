@@ -13,11 +13,14 @@
 //   - LSP hover/completion
 // NOTE: The actual array type is TypeKind.Array (compiler magic).
 // This class declaration is for symbol visibility only — resolveAnnotation
-// handles "Array<T>" as a keyword, and .length is resolved by the checker's
+// builds "Array<T>" from its @builtin tag, and .length is resolved by the checker's
 // special case (checkExprPass.ms), not from this struct field.
+@builtin("Array")
 export class Array<T> {
 	length: number;
 }
+
+export { toString } from "./shared";
 
 // ===== Number Array =====
 
@@ -281,6 +284,10 @@ export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
 	}
 }
 
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
+	arr.sortBy(cmp);
+}
+
 /**
  * Calls a function on every element in order and returns the results as a new array.
  * @param fn Mapper receiving the element and its index.
@@ -366,7 +373,7 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	return false;
 }
 
-export { lastIndexOf, findIndex, findLastIndex } from "./shared";
+export { lastIndexOf, findIndex, findLastIndex, filter, some, find } from "./shared";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	const n = view.length;

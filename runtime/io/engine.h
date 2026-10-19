@@ -23,6 +23,12 @@
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+#define MS_IO_HAS_ENGINE 0
+#else
+#define MS_IO_HAS_ENGINE 1
+#endif
+
 /* ===== Operation Types ===== */
 
 typedef enum {
@@ -82,15 +88,16 @@ void* msIoSendString(msIoEngine* e, int fd, msString data);
 #define MS_FS_WATCH_UNSUPPORTED (-2)
 
 #if defined(_WIN32) || (defined(__linux__) && !defined(MS_USE_EPOLL)) || (defined(__APPLE__) && TARGET_OS_OSX)
+#define MS_FS_WATCH_BACKEND 1
 int32_t msFsWatchOpen(msIoEngine* e, msString path);
 int32_t msFsWatchLastError(void);
 void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive);
 void msFsWatchClose(int32_t handle);
 int32_t msFsWriteSettled(msString path);
 #else
+#define MS_FS_WATCH_BACKEND 0
 #include <stdio.h>
 #include <stdlib.h>
-static inline int32_t msFsWatchOpen(msIoEngine* e, msString path) { (void)e; (void)path; return MS_FS_WATCH_UNSUPPORTED; }
 static inline int32_t msFsWatchLastError(void) { return 0; }
 static inline void msFsWatchUnsupported(void) {
 	fprintf(stderr, "std/fs/watch: file watching has no backend for this platform yet\n");
@@ -163,6 +170,7 @@ static inline void* msIoSend_ms(int32_t fd, msString data) {
 	return msIoSendString(msGetIoEngine(), fd, data);
 }
 
+#if MS_FS_WATCH_BACKEND
 static inline int32_t msFsWatchOpen_ms(msString path) {
 	return msFsWatchOpen(msGetIoEngine(), path);
 }
@@ -170,6 +178,15 @@ static inline int32_t msFsWatchOpen_ms(msString path) {
 static inline void* msIoWatchNext_ms(int32_t handle, int32_t recursive) {
 	return msIoWatchNext(msGetIoEngine(), handle, recursive);
 }
+#else
+static inline int32_t msFsWatchOpen_ms(msString path) { (void)path; return MS_FS_WATCH_UNSUPPORTED; }
+
+static inline void* msIoWatchNext_ms(int32_t handle, int32_t recursive) {
+	(void)handle; (void)recursive;
+	msFsWatchUnsupported();
+	return NULL;
+}
+#endif
 
 static inline int32_t msFsWriteSettled_ms(msString path) {
 	return msFsWriteSettled(path);
@@ -177,11 +194,15 @@ static inline int32_t msFsWriteSettled_ms(msString path) {
 
 /* Poll engine + dispatcher together (for async server event loops) */
 static inline int32_t msIoRunOnce(int32_t timeoutMs) {
-	msIoEngine* eng = msGetIoEngineIfExists();
 	int32_t did = 0;
+#if MS_IO_HAS_ENGINE
+	msIoEngine* eng = msGetIoEngineIfExists();
 	if (eng != NULL) {
 		did = (int32_t)msIoEnginePoll(eng, timeoutMs);
 	}
+#else
+	(void)timeoutMs;
+#endif
 	/* Also drain dispatcher callbacks/timers */
 	extern bool msRunOnce(int timeoutMs);
 	msRunOnce(0);

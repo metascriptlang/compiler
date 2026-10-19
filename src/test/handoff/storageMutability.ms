@@ -296,6 +296,20 @@ test "an async or generator function refuses a view or ref parameter" {
 	}
 }
 
+test "an async or generator function keeps a view parameter its body never reads" {
+	const accepted = [
+		"async function g(b: Span<int32>): Promise<int32> { const f = (b: int32): int32 => b + 1; return f(2); }",
+		"function* g(xs: Span<int32>): Iterator<int32> { for (const n of [1, 2]) { const xs = n * 10; yield xs; } }",
+		"async function g(b: Span<int32>): Promise<int32> { return 1; }",
+	];
+	for (const body of accepted) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/suspparam.ms", entrySource: body }], "test/suspparam.ms");
+		assert c.ok, body + (c.ok ? "" : " — " + c.error);
+		assert !js.startsWith("ERROR:"), body + " — " + js;
+	}
+}
+
 test "a view local does not live across an await or a yield" {
 	const refused = [
 		"async function f(a: uint8[]): Promise<int32> { const v: Readonly<Span<uint8>> = a; const h = spawn((): int32 => 1); await h; return v[0] as int32; }",

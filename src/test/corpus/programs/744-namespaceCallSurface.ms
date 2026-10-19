@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Undefined variable 'BigInt'
+// @xfail(raiser): bigint is not supported on the Raiser VM
 // @stdout: namespace call surface done
 
 // One name carries two surfaces: a call (`String(x)`, `BigInt(s)`) and a set of

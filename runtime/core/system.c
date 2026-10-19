@@ -111,8 +111,10 @@ void msExit(int32_t code) {
 	exit((int)code);
 }
 
+int32_t msModuleEvalDepth = 0;
+
 void msTestErrorFlag(void) {
-	if (!msErr || msCurrException == NULL) return;
+	if (!msErr || msCurrException == NULL || msModuleEvalDepth > 0) return;
 	msString m = ((msError*)msCurrException)->message;
 	fputs("Error: unhandled exception: ", stderr);
 	if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
@@ -134,8 +136,15 @@ void msFutureRaiseFrom(msFutureBase* f) {
 		msClearOrphanFailure(f);
 	}
 	void* err = (f != NULL) ? f->error : NULL;
-	if (f != NULL) f->error = NULL;
+	if (f != NULL && f->crossThreadPublished) f->error = NULL;
+	else msIncRef(err);
 	msRaiseAwaitedError(err);
+}
+
+void msFutureDropError(msFutureBase* f) {
+	void* err = f->error;
+	f->error = NULL;
+	msDecref(err);
 }
 
 void (*msFatalTrap)(void) = NULL;

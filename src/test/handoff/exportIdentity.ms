@@ -1,4 +1,4 @@
-import { CheckerContext, ExtensionRegistry, buildExportInfo, createExportRegistry, findExportsByName, registerModuleExports } from "../../checker/context";
+import { CheckerContext, ExtensionRegistry, buildExportInfo, createExportRegistry, findExportedSymbol, registerModuleExports } from "../../checker/context";
 import { makeSymbol } from "../../checker/symbol";
 import { createNodeAt, NodeKind, SymbolKind, makeLoc, Symbol } from "../../ast/node";
 import { inferredType } from "../../checker/types";
@@ -37,13 +37,14 @@ test "export identity: same-named declarations in different modules remain disti
 		const rightInfo = buildExportInfo(right, null as unknown as ExtensionRegistry, "right.ms", null as unknown as CheckerContext);
 		registerModuleExports(registry, "left.ms", [leftInfo]);
 		registerModuleExports(registry, "right.ms", [rightInfo]);
-		const found = findExportsByName(registry, "Shared");
-		assert found.length == 2, kind.toString();
-		assert found[0].sym == left, kind.toString();
-		assert found[1].sym == right, kind.toString();
-		assert found[0].sym != found[1].sym, kind.toString();
-		assert found[0].sym.declNode.kind == kind;
-		assert found[1].sym.declNode.kind == kind;
+		const fromLeft = findExportedSymbol(registry, "left.ms", "Shared");
+		const fromRight = findExportedSymbol(registry, "right.ms", "Shared");
+		assert fromLeft != null && fromRight != null, kind.toString();
+		assert fromLeft.sym == left, kind.toString();
+		assert fromRight.sym == right, kind.toString();
+		assert fromLeft.sym != fromRight.sym, kind.toString();
+		assert fromLeft.sym.declNode.kind == kind;
+		assert fromRight.sym.declNode.kind == kind;
 	}
 }
 
@@ -56,12 +57,12 @@ test "export identity: an exported alias does not rename or clone the defining s
 		const registry = createExportRegistry();
 		const aliased = buildExportInfo(original, null as unknown as ExtensionRegistry, "owner.ms", null as unknown as CheckerContext, "PublicAlias");
 		registerModuleExports(registry, "owner.ms", [aliased]);
-		const found = findExportsByName(registry, "PublicAlias");
-		assert found.length == 1, kind.toString();
-		assert found[0].sym == original;
+		const found = findExportedSymbol(registry, "owner.ms", "PublicAlias");
+		assert found != null, kind.toString();
+		assert found.sym == original;
 		assert original.name == "Original";
 		assert original.declNode.kind == kind;
-		assert findExportsByName(registry, "Original").length == 0;
+		assert findExportedSymbol(registry, "owner.ms", "Original") == null;
 	}
 }
 
@@ -137,6 +138,42 @@ test "export identity: fit follows the declaration of a generic or enum, not its
 	for (const item of cases) {
 		assert fitsOnBothBackends(item.libSource, item.imported), item.name + ": imported";
 		assert refusedInMain(item.libSource, item.redeclared), item.name + ": redeclared";
+	}
+}
+
+const IMPORT_FIRST_PATH = "test/exportIdentity/first.ms";
+const IMPORT_SECOND_PATH = "test/exportIdentity/second.ms";
+const IMPORT_HUB_PATH = "test/exportIdentity/hub.ms";
+
+function importEntries(mainSource: string): MapEntry[] {
+	return [
+		{ entryPath: IMPORT_FIRST_PATH, entrySource: "export function pick(): int32 { return 1; }\n" },
+		{ entryPath: IMPORT_SECOND_PATH, entrySource: "export function pick(): int32 { return 2; }\n" },
+		{ entryPath: IMPORT_HUB_PATH, entrySource: `export { pick } from "./first";\n` },
+		{ entryPath: IDENTITY_MAIN_PATH, entrySource: mainSource },
+	];
+}
+
+test "import identity: one name bound to two imported declarations is refused" {
+	const sources = [
+		`import { pick } from "./first";\nimport { pick } from "./second";\nconsole.log(pick());\n`,
+		`import { pick as p } from "./first";\nimport { pick as p } from "./second";\nconsole.log(p());\n`,
+	];
+	for (const mainSource of sources) {
+		const cCode = compileProjectToC(importEntries(mainSource), IDENTITY_MAIN_PATH);
+		assert cCode.startsWith("ERROR: check [") && cCode.contains("Duplicate identifier"), mainSource;
+	}
+}
+
+test "import identity: one declaration imported twice, directly or through a re-export, binds once" {
+	const sources = [
+		`import { pick } from "./first";\nimport { pick } from "./first";\nconsole.log(pick());\n`,
+		`import { pick } from "./first";\nimport { pick } from "./hub";\nconsole.log(pick());\n`,
+	];
+	for (const mainSource of sources) {
+		const cCode = compileProjectToC(importEntries(mainSource), IDENTITY_MAIN_PATH);
+		const jsCode = compileProjectToJS(importEntries(mainSource), IDENTITY_MAIN_PATH);
+		assert !cCode.startsWith("ERROR") && !jsCode.startsWith("ERROR"), mainSource;
 	}
 }
 

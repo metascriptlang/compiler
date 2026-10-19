@@ -51,6 +51,10 @@ import {
 	boxString, boxInt, boxFloat, boxBool,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
+import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
+import { nodeKindName } from "../../ast/fieldspec";
+import { NodeKind, TypeKind, SymbolKind } from "../../ast/node";
+import { distinctNumericBase, enumMemberValue } from "../../checker/types";
 
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
@@ -229,6 +233,7 @@ let _spawnExitCode: number = 0;
 let _spawnSignal: number = 0;
 let _spawnOk: number = 0;
 let _spawnPipeOk: number = 1;
+let _spawnErrno: number = 0;
 
 // ProcessErrorKind: SpawnFailed=0, NotFound=1, NonZeroExit=2,
 // SignalTerminated=3, PipeError=4, Unknown=5
@@ -270,6 +275,10 @@ function _bridgeMsProcSpawnGetOk(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsProcSpawnGetPipeOk(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnPipeOk);
+}
+
+function _bridgeMsProcSpawnGetErrno(args: RaiserValue[]): RaiserValue {
+	return boxInt(_spawnErrno);
 }
 
 function _bridgeMsProcSpawnGetExitCode(args: RaiserValue[]): RaiserValue {
@@ -343,6 +352,7 @@ function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
 	_spawnSignal = r.signal;
 	_spawnOk = r.started ? 1 : 0;
 	_spawnPipeOk = r.pipeOk ? 1 : 0;
+	_spawnErrno = r.startErrno;
 	return boxString(_spawnStdout);
 }
 
@@ -681,45 +691,100 @@ function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
 	return boxFloat(performance.now());
 }
 
-// Literal value accessors. Each one FIXES the representation of its result the
-// way Nim's opcNIntVal/opcNFloatVal do (vm.nim:1867-1881, decodeB(rkInt/rkFloat)):
-// the VM's arithmetic and compare opcodes are typed (AddI64 vs AddF64, BltI64 vs
-// BltF64) and the Raiser picks them from the STATIC type of the expression, so a
-// single accessor declared `: number` that returned Int for one literal and Float
-// for another would have its operands read through the wrong opcode — measured as
-// a value that prints "8" and then compares as 0. One static type, one register
-// kind; ask isFloatLiteral first, exactly as Nim asks the node kind.
+function isWireNode(objHeap: RaiserObjectHeap, n: RaiserValue, kind: NodeKind): boolean {
+	if (n.kind != RaiserValueKind.Object) return false;
+	const k = heapObjectGetField(objHeap, n.intVal, "kind");
+	return k.kind == RaiserValueKind.Int && k.intVal == (kind as int64);
+}
+
+function isTypedAsFloat(objHeap: RaiserObjectHeap, h: int64): boolean {
+	const t = boundTypeOfObject(objHeap, h);
+	const repr = distinctNumericBase(t) ?? t;
+	return repr != null && (repr.kind == TypeKind.Float32 || repr.kind == TypeKind.Float64 || repr.kind == TypeKind.Number);
+}
+
 function _bridgeMsNodeIsFloatLiteral(args: RaiserValue[]): RaiserValue {
 	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxBool(false);
 	const objHeapOrNull = activeHostObjectHeap();
 	if (objHeapOrNull == null) return boxBool(false);
 	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	const v = heapObjectGetField(objHeap, args[0].intVal, "value");
-	return boxBool(v.kind == RaiserValueKind.Float);
+	return boxBool(isWireNode(objHeap, args[0], NodeKind.NumberLiteral) && (wireLiteralIsFloat(objHeap, args[0].intVal) || isTypedAsFloat(objHeap, args[0].intVal)));
+}
+
+function wireNodeKindText(objHeap: RaiserObjectHeap, n: RaiserValue): string {
+	if (n.kind != RaiserValueKind.Object) return "null";
+	const kind = heapObjectGetField(objHeap, n.intVal, "kind");
+	return kind.kind == RaiserValueKind.Int ? nodeKindName(kind.intVal as NodeKind) : "a node without a kind";
+}
+
+function enumMemberOrdinal(objHeap: RaiserObjectHeap, n: RaiserValue): RaiserValue {
+	const sym = n.kind == RaiserValueKind.Object ? boundSymOfObject(objHeap, n.intVal) : null;
+	if (sym == null || sym.symbolKind != SymbolKind.EnumMember || sym.symbolType == null) return raiserNil();
+	const enumType = sym.symbolType.kind == TypeKind.EnumLiteral && sym.symbolType.typeReturn != null ? sym.symbolType.typeReturn : sym.symbolType;
+	const index: int32 = enumType.kind == TypeKind.Enum ? enumType.typeNames.indexOf(sym.name) as int32 : -1;
+	return index < 0 ? raiserNil() : raiserInt(enumMemberValue(enumType, index) as int64);
 }
 
 function _bridgeMsNodeIntValue(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxInt(0);
-	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull == null) return boxInt(0);
-	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	return boxInt(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
+	const objHeap = activeHostObjectHeap();
+	if (objHeap == null || args.length < 1) {
+		raiseFromHost("intValue needs an integer literal node", true);
+		return raiserInt(0);
+	}
+	const n = args[0];
+	const ordinal = enumMemberOrdinal(objHeap, n);
+	if (ordinal.kind == RaiserValueKind.Int) return ordinal;
+	if (!isWireNode(objHeap, n, NodeKind.NumberLiteral)) {
+		raiseFromHost("intValue needs an integer literal or an enum member, got " + wireNodeKindText(objHeap, n), true);
+		return raiserInt(0);
+	}
+	if (wireLiteralIsFloat(objHeap, n.intVal)) {
+		raiseFromHost("intValue needs an integer literal, got a float literal; read it with floatValue", true);
+		return raiserInt(0);
+	}
+	const refusal = wireLiteralIntegerRefusal(objHeap, n.intVal);
+	if (refusal != "") {
+		raiseFromHost("intValue: " + refusal, true);
+		return raiserInt(0);
+	}
+	return raiserInt(wireLiteralInteger(objHeap, n.intVal));
 }
 
 function _bridgeMsNodeFloatValue(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxFloat(0.0);
-	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull == null) return boxFloat(0.0);
-	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	return boxFloat(unboxInt(heapObjectGetField(objHeap, args[0].intVal, "value")));
+	const objHeap = activeHostObjectHeap();
+	if (objHeap == null || args.length < 1) {
+		raiseFromHost("floatValue needs a float literal node", true);
+		return boxFloat(0.0);
+	}
+	const n = args[0];
+	if (!isWireNode(objHeap, n, NodeKind.NumberLiteral)) {
+		raiseFromHost("floatValue needs a float literal, got " + wireNodeKindText(objHeap, n), true);
+		return boxFloat(0.0);
+	}
+	if (!wireLiteralIsFloat(objHeap, n.intVal) && !isTypedAsFloat(objHeap, n.intVal)) {
+		raiseFromHost("floatValue needs a float literal, got an integer literal; read it with intValue", true);
+		return boxFloat(0.0);
+	}
+	return boxFloat(wireLiteralFloat(objHeap, n.intVal));
 }
 
 function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
-	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) return boxString("");
-	const objHeapOrNull = activeHostObjectHeap();
-	if (objHeapOrNull == null) return boxString("");
-	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	return boxString(unboxString(heapObjectGetField(objHeap, args[0].intVal, "value")));
+	const objHeap = activeHostObjectHeap();
+	if (objHeap == null || args.length < 1) {
+		raiseFromHost("stringValue needs a string literal node", true);
+		return boxString("");
+	}
+	const n = args[0];
+	if (isWireNode(objHeap, n, NodeKind.Identifier)) {
+		const sym = boundSymOfObject(objHeap, n.intVal);
+		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) return boxString(sym.name);
+		return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "name")));
+	}
+	if (!isWireNode(objHeap, n, NodeKind.StringLiteral)) {
+		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(objHeap, n), true);
+		return boxString("");
+	}
+	return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "value")));
 }
 
 function bridgeMsStringToLower(args: RaiserValue[]): RaiserValue {
@@ -835,6 +900,15 @@ function _bridgeMsCheckRangeI32(args: RaiserValue[]): RaiserValue {
 	return v.kind == RaiserValueKind.Float ? raiserInt(v.floatVal as int64) : v;
 }
 
+function _bridgeMsCheckRangeI32FromU64(args: RaiserValue[]): RaiserValue {
+	const v = args[0];
+	if (v.intVal >= 0) return _bridgeMsCheckRangeI32(args);
+	const lo = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int64 : args[1].intVal;
+	const hi = args[2].kind == RaiserValueKind.Float ? args[2].floatVal as int64 : args[2].intVal;
+	raiseFromHost(`value ${v.intVal as uint64} not in range ${lo} .. ${hi}`, true);
+	return v;
+}
+
 function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
 	if (args[0].kind == RaiserValueKind.Nil) raiseFromHost(unboxString(args[1]) + unboxString(args[2]) + "'", true);
 	return args[0];
@@ -857,6 +931,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
 	registerHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
 	registerHostFn("msCheckRangeI32", _bridgeMsCheckRangeI32, HostCapability.Pure);
+	registerHostFn("msCheckRangeI32FromU64", _bridgeMsCheckRangeI32FromU64, HostCapability.Pure);
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);
@@ -886,6 +961,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessSpawnSync",    _bridgeMsProcessSpawnSync);
 	registerHostFn("msProcSpawnGetOk",      _bridgeMsProcSpawnGetOk);
 	registerHostFn("msProcSpawnGetPipeOk",  _bridgeMsProcSpawnGetPipeOk);
+	registerHostFn("msProcSpawnGetErrno",   _bridgeMsProcSpawnGetErrno);
 	registerHostFn("msProcSpawnGetExitCode", _bridgeMsProcSpawnGetExitCode);
 	registerHostFn("msProcSpawnGetSignal",  _bridgeMsProcSpawnGetSignal);
 	registerHostFn("msProcSpawnGetStderr",  _bridgeMsProcSpawnGetStderr);
@@ -963,6 +1039,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("sqrt",  _bridgeSqrt, HostCapability.Pure);
 	registerHostFn("cbrt",  _bridgeCbrt, HostCapability.Pure);
 	registerHostFn("pow",   _bridgePow, HostCapability.Pure);
+	registerHostFn("msPowF64", _bridgePow, HostCapability.Pure);
 	registerHostFn("exp",   _bridgeExp, HostCapability.Pure);
 	registerHostFn("expm1", _bridgeExpm1, HostCapability.Pure);
 	registerHostFn("log",   _bridgeLog, HostCapability.Pure);
@@ -991,6 +1068,7 @@ export function ensureHostTableLoaded(): void {
 
 import { raiserInt, raiserFloat, raiserString, RaiserValueKind } from "../../raiser/value";
 import { lookupHostFn, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
+import { int64Bits } from "../../utils/stdBackport";
 
 test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();
@@ -1029,6 +1107,18 @@ test "the enum range bridge raises for a float outside the range without convert
 	assert (takeHostRaise() ?? "").endsWith(" not in range 0 .. 2");
 	assert _bridgeMsCheckRangeI32([raiserFloat(2.5), raiserInt(0), raiserInt(2)]).intVal == 2;
 	assert takeHostRaise() == null;
+}
+
+test "the enum range bridge for a uint64 source reports a value past int64 unsigned and refuses it" {
+	takeHostRaise();
+	_bridgeMsCheckRangeI32FromU64([raiserInt(int64Bits(9223372036854775808)), raiserInt(0), raiserInt(2)]);
+	assert takeHostRaise() == "value 9223372036854775808 not in range 0 .. 2";
+	_bridgeMsCheckRangeI32FromU64([raiserInt(int64Bits(18446744073709551613)), raiserInt(-5), raiserInt(1)]);
+	assert takeHostRaise() == "value 18446744073709551613 not in range -5 .. 1";
+	assert _bridgeMsCheckRangeI32FromU64([raiserInt(1), raiserInt(-5), raiserInt(1)]).intVal == 1;
+	assert takeHostRaise() == null;
+	_bridgeMsCheckRangeI32FromU64([raiserInt(2), raiserInt(-5), raiserInt(1)]);
+	assert takeHostRaise() == "value 2 not in range -5 .. 1";
 }
 
 test "ensureHostTableLoaded is idempotent" {

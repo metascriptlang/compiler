@@ -1,0 +1,3 @@
+@include("./ffi.h");
+
+export extern function spanThenOutElsewhere(xs: Readonly<Span<uint8>>, out w: uint64): void from "corpusSpanThenOut";

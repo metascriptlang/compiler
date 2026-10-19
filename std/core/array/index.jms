@@ -1,3 +1,5 @@
+export { toString } from "./shared";
+
 // MetaScript Array Prelude — JavaScript Backend.
 // Array methods bind to native JS dispatch as element-typed UFCS extensions on
 // T[]. The `extern class Array` method form does NOT resolve for arrays (array
@@ -23,7 +25,7 @@ export function at<T>(this arr: Vec<T>, idx: number): T {
 }
 export extern function indexOf<T>(this arr: Vec<T>, value: T): number from "#.indexOf(#)";
 export extern function includes<T>(this arr: Vec<T>, value: T): boolean from "#.includes(#)";
-export { lastIndexOf, findIndex, findLastIndex } from "./shared";
+export { lastIndexOf, findIndex, findLastIndex, filter, some, find } from "./shared";
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	@emit(`var i = ${view}.base.indexOf(${value}, ${view}.off);
 	return i >= 0 && i < ${view}.off + ${view}.len ? i - ${view}.off : -1;`);
@@ -45,6 +47,7 @@ export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
 // wrong for numbers.
 export extern function sort(this arr: number[]): void from "#.sort((a, b) => a - b)";
 export extern function sort(this arr: string[]): void from "#.sort()";
+export extern function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void from "#.sort(#)";
 export function fill<T>(this arr: T[], value: T): void {
 	when (needsCopy<T>()) {
 		for (let i = 0; i < arr.length; i += 1) {

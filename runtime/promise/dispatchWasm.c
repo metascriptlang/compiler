@@ -185,16 +185,6 @@ msFuture_void* msSleepAsync(int ms) {
     return f;
 }
 
-void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
-    if (isFail) msFutureFail(fut, error);
-    else {
-        msFutureBase* f = (msFutureBase*)fut;
-        ((msFuture_ptr*)f)->value = value;
-        atomic_store_explicit(&f->finished, true, memory_order_release);
-        msFutureFireCallbacks(f);
-    }
-}
-
 int32_t msGetWakePipeFd(void) { return -1; }
 void msDestroyDispatcher(void) {
     if (gDispatcher) {
@@ -206,14 +196,15 @@ void msDestroyDispatcher(void) {
 }
 
 bool (*msActorPollHook)(void) = NULL;
-int32_t msPoolBusyPeek(void) { return 0; }
 bool msCompletionQueueDrain(void) { return false; }
+/* The producer has already stored the value or error and set finished, as on the
+ * threaded drain: fire the callbacks, never overwrite the stored result. */
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
-    msPostCompletion(fut, NULL, isFail, error);
+    (void)isFail; (void)error;
+    if (fut != NULL) msFutureFireCallbacks((msFutureBase*)fut);
 }
-/* Single-threaded: completes inline, no queue-side ref. Owned == Push. */
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
-    msPostCompletion(fut, NULL, isFail, error);
+    msCompletionQueuePush(fut, isFail, error);
 }
 
 /* ===== Async Stepper (same as dispatchFull.c — no threading needed) ===== */
@@ -230,6 +221,10 @@ void msAsyncCb(void* raw) {
     }
     if (next == NULL) { free(e); return; }
     msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
+}
+
+void msEnsureOwnerDispatcher(void) {
+    (void)msGetDispatcher();
 }
 
 void msAsyncStart(void* retFut, msClosure stepper) {

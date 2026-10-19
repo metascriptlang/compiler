@@ -12,7 +12,7 @@ import {
 } from "../../ast/node";
 import { isViewBinding } from "../../checker/symbol";
 import { isNullableShape, isStructType, needsValueCopy, setRepr, valueCopyRepr } from "../../checker/types";
-import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
+import { emit, emitNode, JSGenerator, jsTypedArrayName, jsPropertyKey, jsPropertyAccess, escapeJSString, identFromKey } from "./emit";
 
 export function jsDefaultValue(t: Type | null): string {
 	return defaultValueOf(t, []);
@@ -29,7 +29,7 @@ function defaultValueOf(declared: Type | null, open: Type[]): string {
 		const fields: string[] = [];
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const v = defaultValueOf(i < t.typeChildren.length ? t.typeChildren[i] : null, open);
-			if (v != "") fields.push(`${t.typeNames[i]}: ${v}`);
+			if (v != "") fields.push(`${jsPropertyKey(t.typeNames[i])}: ${v}`);
 		}
 		open.pop();
 		return fields.length == 0 ? "{}" : `{ ${fields.join(", ")} }`;
@@ -96,24 +96,6 @@ function copyExpr(gen: JSGenerator, t: Type | null, src: string): string {
 	return copyFnName(gen, t as Type) + "(" + src + ")";
 }
 
-function identFromKey(key: string): string {
-	let out = "";
-	let i = 0;
-	while (i < key.byteLength) {
-		const b = key.byteAt(i);
-		const isAlnum = (b >= "a".code && b <= "z".code)
-			|| (b >= "A".code && b <= "Z".code)
-			|| (b >= "0".code && b <= "9".code);
-		if (isAlnum) {
-			out = out + key.byteSlice(i, i + 1);
-		} else {
-			out = out + "_" + b.toString(16);
-		}
-		i += 1;
-	}
-	return out;
-}
-
 function copyFnName(gen: JSGenerator, t: Type): string {
 	const h = gen.helpers;
 	const key = typeKey(t);
@@ -138,7 +120,7 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 			if (i > 0) body = body + ", ";
 			const fname = t.typeNames[i];
 			const ft = i < t.typeChildren.length ? t.typeChildren[i] : null;
-			body = body + fname + ": " + copyExpr(gen, ft, "v." + fname);
+			body = body + jsPropertyKey(fname) + ": " + copyExpr(gen, ft, "v" + jsPropertyAccess(fname));
 			i += 1;
 		}
 		body = body + " };";
@@ -266,7 +248,8 @@ function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
 		while (i < t.typeNames.length) {
 			const f = t.typeNames[i];
 			const ft = i < t.typeChildren.length ? t.typeChildren[i] : null;
-			body = body + "d." + f + " = " + assignExpr(gen, ft, "d." + f, "v." + f) + "; ";
+			const at = jsPropertyAccess(f);
+			body = body + "d" + at + " = " + assignExpr(gen, ft, "d" + at, "v" + at) + "; ";
 			i += 1;
 		}
 	} else if (t.kind == TypeKind.Union) {
@@ -365,7 +348,7 @@ export function emitValueAssign(gen: JSGenerator, left: Node, right: Node): bool
 		const d = left.data as MemberExprData;
 		emit(gen, storeFnName(gen, t as Type) + "(");
 		emitNode(gen, d.object);
-		emit(gen, ", \"" + d.property + "\", ");
+		emit(gen, ", \"" + escapeJSString(d.property) + "\", ");
 		emitNode(gen, right);
 		emit(gen, ")");
 		return true;

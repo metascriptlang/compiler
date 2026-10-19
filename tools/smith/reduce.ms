@@ -5,7 +5,7 @@ import {
 	Identity, firstDiff, firstCompilerError, forbidOf, formatIdentity, hasLine, missingKeep, onlyCompilerError, parseIdentity, presentForbidden, sanLine, throwLine,
 } from "./identity";
 
-const WATCHDOG: string = "my $t = shift; my $pid = fork; if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127; } $SIG{ALRM} = sub { kill 'TERM', -$pid; }; alarm $t; waitpid($pid, 0); exit($? >> 8);";
+const WATCHDOG: string = "my $t = shift; my $pid = fork; if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127; } $SIG{ALRM} = sub { kill 'TERM', -$pid; }; $SIG{TERM} = $SIG{INT} = $SIG{HUP} = sub { kill 'KILL', -$pid; exit 143; }; alarm $t; waitpid($pid, 0); exit($? >> 8);";
 
 struct Ran {
 	exit: int32;
@@ -198,4 +198,13 @@ export function reduceInput(root: string, input: string, identityPath: string, j
 	console.log("  reduced.ms " + (final == "" ? "still shows the identity" : "DOES NOT show the identity: " + final));
 	console.log("  → " + out + "/reduced.ms");
 	return final == "" ? 0 : 1;
+}
+
+test "a killed watchdog takes its command's process group with it" {
+	const script = "perl -e \"$1\" 60 sh -c 'echo $$ > child; exec sleep 60' & w=$!; sleep 1; kill $w; sleep 1; kill -0 $(cat child) 2>/dev/null && echo alive || echo gone";
+	const dir = "/tmp/smith-watchdog-test";
+	ensureDir(dir);
+	const r = execFileResult("sh", ["-c", script, "_", WATCHDOG], dir);
+	removeAll(dir);
+	assert r.output.trim() == "gone";
 }

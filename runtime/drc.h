@@ -259,14 +259,16 @@ static inline bool msDecRefIsLast(void* p) {
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
 	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
-	if ((h->rc & ~MS_RC_MASK) == 0) {
-#ifdef MSGC_ORC
-		if (h->rootIdx >= 0) msUnregisterCycle(p);
-#endif
-		return true;
+	if ((h->rc & ~MS_RC_MASK) != 0) {
+		int32_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
+		bool concurrentDecrefLeftUsLast = (before & ~MS_RC_MASK) == 0;
+		if (!concurrentDecrefLeftUsLast) return false;
+		h->rc += MS_RC_INCREMENT;
 	}
-	h->rc -= MS_RC_INCREMENT;
-	return false;
+#ifdef MSGC_ORC
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+#endif
+	return true;
 }
 
 /* Atomic decref-to-free for Arc<T> (cross-thread shared). The Release on the

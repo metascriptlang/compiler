@@ -155,6 +155,15 @@ test "fieldVisibility: as takes a nullable struct to its payload and still refus
 	assert refused;
 }
 
+test "fieldVisibility: as into a nullable struct relates its payload, named by an alias or not" {
+	const lib = "export struct P { x: int32; }\nexport type MaybeP = P | null;\nexport type Wire = number | string | null;\n";
+	const pre = "import { P, MaybeP, Wire } from \"./lib\";\nconst n: int32 = 5;\nfunction keep(p: P | null): MaybeP { return p as MaybeP; }\nfunction wire(v: number | string | null): Wire { return v as Wire; }\nfunction back(p: MaybeP): P | null { return p as P | null; }\n";
+	assert errorsOf(lib, pre + "const k = keep({ x: 1 });\nconst b = back(k);\nconsole.log(b != null ? b.x : 0, wire(3) == 3);\n").length == 0;
+	const refusal = ": only a struct, a distinct of it, or a struct it extends converts to a struct";
+	assert reports(lib, pre + "const q = n as P | null;\n", "cannot convert int32 to P | null" + refusal);
+	assert reports(lib, pre + "const q = n as MaybeP;\n", "cannot convert int32 to P | null" + refusal);
+}
+
 test "fieldVisibility: as converts a generic struct instance only to itself, a distinct of it or a struct it extends" {
 	const lib = "export struct P { x: int32; }\nexport struct Box<T> { x: int32; }\nexport struct Kept<T> extends P { item: T; }\nexport struct A { a: int32; }\nexport struct B { b: int32; }\nexport type D = distinct Box<A>;\n";
 	const pre = "import { P, Box, Kept, A, B, D } from \"./lib\";\nconst p: P = { x: 3 };\nconst ba: Box<A> = { x: 1 };\nconst k: Kept<A> = { x: 2, item: { a: 4 } };\nfunction same<T>(b: Box<T>): Box<T> { return b as Box<T>; }\n";

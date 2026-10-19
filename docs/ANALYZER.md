@@ -51,7 +51,7 @@ At sink and return materialization points `sinkClassify` classifies a `Ptr<T>` w
 | `throw` | marks `needsTry` on the enclosing scopes |
 | Discarded `f()` result | captured in a temp and registered for cleanup |
 | Variable read inside a `finally` | protected: never moved out before the `finally` runs |
-| `__envP*` parameters | skipped — the closure machinery owns them |
+| The closure env parameter `_envP` | typed `Ptr<void>`, so it carries no RC and is never tracked; the closure machinery owns the env (emitted `void* _envP`, no decref, measured 2026-10-15) |
 | Generator state body | `needsTry` is forced off — no try/finally wrapper |
 
 ## Scope cleanup — `generateCleanup` (`inject.ms`)

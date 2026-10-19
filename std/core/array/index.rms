@@ -1,3 +1,5 @@
+export { toString } from "./shared";
+
 // MetaScript Array Prelude — Raiser Backend
 // Generic T[] methods only: Raiser values are dynamic, so one generic form
 // covers every element type (the C backend monomorphizes per element type
@@ -7,6 +9,7 @@
 // push pattern. The remaining methods are portable MS over those two ops,
 // matching the C kernels' semantics (std/core/array/index.cms).
 
+@builtin("Array")
 export class Array<T> {
 	length: number;
 }
@@ -91,6 +94,10 @@ export function sort(this arr: number[]): void {
 
 export function sort(this arr: string[]): void {
 	arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
+}
+
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
+	arr.sortBy(cmp);
 }
 
 export function join(this arr: Vec<string>, sep: string): string {
@@ -192,7 +199,7 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	return false;
 }
 
-export { lastIndexOf, findIndex, findLastIndex } from "./shared";
+export { lastIndexOf, findIndex, findLastIndex, filter, some, find } from "./shared";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	const n = view.length;

@@ -8,6 +8,8 @@ import { walkNode } from "../walker";
 import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv } from "../util";
 import { createNode } from "../../ast/node";
 import { memberLabels } from "../native/unionProjectLower";
+import { makeSymbol } from "../../checker/symbol";
+import { monoInstanceName } from "../../monomorphize/registry";
 
 // A value moving between two unions is re-tagged member by member: one generated
 // routine per union pair cases on the source's held member, projects it out and
@@ -378,8 +380,10 @@ export function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: Tran
 	} else if (valueKind(member) == "class") {
 		const cls = runtimeClassSym(member.typeReturn);
 		if (cls == null) throw new Error(`internal: the class member '${typeDisplayName(member)}' of '${typeDisplayName(source)}' has no runtime class`);
-		const ref = makeIdentResolved(cls, loc);
-		ref.nodeType = cls.symbolType;
+		const body = member.typeReturn;
+		const tested = body != null && body.kind == TypeKind.GenericInstance ? instanceClassSym(cls, member, body) : cls;
+		const ref = makeIdentResolved(tested, loc);
+		ref.nodeType = tested.symbolType;
 		test = makeBinary(read(valueSym, source, loc), "instanceof", ref, loc);
 	} else {
 		const kind = makeUnary("typeof", read(valueSym, source, loc), loc);
@@ -389,6 +393,15 @@ export function holdsMember(source: Type, valueSym: Symbol, vi: int32, ctx: Tran
 	}
 	test.nodeType = booleanType();
 	return test;
+}
+
+// The class an instantiation is emitted as, named as its instance declaration names it.
+function instanceClassSym(generic: Symbol, member: Type, body: Type): Symbol {
+	const instance = makeSymbol(monoInstanceName(body), SymbolKind.Class, member, false);
+	instance.modulePath = generic.modulePath;
+	instance.symFlags = generic.symFlags;
+	instance.instantiatedFrom = generic;
+	return instance;
 }
 
 function memberMissing(source: Type, target: Type, vi: int32, ctx: TransformContext, loc: SourceLocation): Node {

@@ -25,22 +25,22 @@
 // reference Sym/Type/Node rows by index, the reader materializes the whole
 // graph eagerly, and object identity falls out of "one row = one object".
 
-import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, AttachedOp, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
+import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, createNodeAt, DeclKind, ExternKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData, TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenStdConvData, ExprStmtData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData, VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BlockStmtData, ReturnStmtData, FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ThrowStmtData, TryCatchStmtData, MacroInvocationData, DecoratedDeclData, DeferStmtData, TestDeclData, AssertStmtData, ExternDeclData, MacroDeclData, QuoteExprData, ComptimeBlockData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ProgramData, ActorDeclData, SpliceManyData, JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, RegexLiteralData, IdentifierData, BreakStmtData, ContinueStmtData, UnreachableStmtData } from "../ast/node";
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
 import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType } from "./types";
 import { makeSymbolState } from "./symbol";
-import { attachedOpSym } from "../transform/util";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/defines";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, readDir, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
+import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 
-const PACK_MAGIC = "MSPK2";
+const PACK_MAGIC = "MSPK4";
 
 // Same dual-hash formula as compiler/cache.ms hashContent — keys are written
 // and read by this module only, so the formula just has to be self-consistent.
@@ -152,12 +152,21 @@ export function preludePackStats(): float64[] {
 	return [_keyMs, _loadMs, _writeMs, _lastHit ? 1 : 0];
 }
 
-export function packRoot(): string {
+function packBase(): string {
 	if (env.get("MSC_NO_GLOBAL_CACHE") != "") return "";
 	const home = env.get("HOME");
 	const base = home != "" ? home : env.get("USERPROFILE");
 	if (base == "") return "";
-	return `${base}/.metascript/cache/prelude/${PACK_MAGIC}`;
+	return `${base}/.metascript/cache/prelude`;
+}
+
+// One directory per pack format: compilers that read different formats keep their packs side
+// by side and none deletes another's. Within a format the stamp inside each pack separates
+// compiler builds, and a foreign stamp is a miss, never a deletion.
+export function packRoot(): string {
+	const base = packBase();
+	if (base == "") return "";
+	return `${base}/${PACK_MAGIC}`;
 }
 
 // Default ON (verified: unit 644, suite 3531/3531, corpus parity 814/0/0, SAN
@@ -531,7 +540,7 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
-//   E methodName receiverTypeName sourcePath isStatic scopeDepth symIdx fnTypeIdx
+//   E methodName sourcePath isStatic scopeDepth symIdx fnTypeIdx
 //   C converterSymIdx targetTypeIdx
 //   P compilerFuncName symIdx
 //   D includeDirectives
@@ -652,6 +661,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	for (const members of ctx.preludeInterf.values()) {
 		for (const m of members) enqSym(m, false);
 	}
+	for (const members of ctx.preludeModuleScopes.values()) {
+		for (const m of members) enqSym(m, false);
+	}
 	while (symCursor < syms.length || typeCursor < types.length || nodeCursor < nodes.length) {
 		if (symCursor < syms.length) {
 			const s = syms[symCursor];
@@ -660,6 +672,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			if (s.overloads != null) {
 				for (const ov of s.overloads) enqSym(ov, false);
 			}
+			if (s.staticOwner != null) enqSym(s.staticOwner, false);
 			if (s.staticFields != null) {
 				for (const sf of s.staticFields) enqSym(sf, false);
 			}
@@ -706,12 +719,12 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const c of t.typeChildren) children.push(idxType(c));
 		}
 		const names: string[] = t.typeNames != null ? t.typeNames : [];
-		const opsRaw: (Symbol | null)[] = t.attachedOps != null ? t.attachedOps : [];
-		const ops: string[] = [];
-		for (const o of opsRaw) {
-			ops.push(o != null ? o.name : "");
+		if (t.attachedOps != null) {
+			for (const o of t.attachedOps) {
+				if (o != null) throw new Error(`internal: prelude pack type '${t.typeName}' carries attached op '${o.name}', which exists only after lowering`);
+			}
 		}
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(ops)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -742,7 +755,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const sf of s.staticFields) stf.push(idxSym(sf));
 		}
 		const dp = idxs(s.defaultParams);
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}`);
 	}
 
 	const importIdx: int32[] = [];
@@ -762,7 +775,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
 			const fnRef = ext.sym == null && ext.fnType != null ? idxType(ext.fnType) : -1;
-			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.receiverTypeName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}\t${fnRef}`);
+			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}\t${fnRef}`);
 		}
 	}
 
@@ -783,6 +796,13 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		for (const m of members) idx.push(idxSym(m));
 		lines.push(`U\t${escapeP(spec)}\t${intsCsv(idx)}`);
 	}
+	for (const path of ctx.preludeModuleScopes.keys()) {
+		const members = ctx.preludeModuleScopes.get(path);
+		if (members == null) continue;
+		const idx: int32[] = [];
+		for (const m of members) idx.push(idxSym(m));
+		lines.push(`M\t${escapeP(path)}\t${intsCsv(idx)}`);
+	}
 
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
 	lines.push(`F\t${escapeP(ctx.compilerFlags)}`);
@@ -793,6 +813,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (packDebug) console.log(`[pack] bytes=${blob.byteLength} at ms=${performance.now() - _w0}`);
 	const okw = atomicWritePack(`${root}/${key}.pk`, blob);
 	if (packDebug) console.log(`[pack] write ok=${okw ? 1 : 0} total ms=${performance.now() - _w0}`);
+	collectStaleEntries(packBase(), nowSeconds());
 	_writeMs = _writeMs + (performance.now() - _w0);
 }
 
@@ -1106,6 +1127,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const symOverloadIdx: int32[][] = [];
 	const symStaticIdx: int32[][] = [];
 	const symDeclIdx: int32[] = [];
+	const symOwnerIdx: int32[] = [];
 	const symDpRaw: string[] = [];
 	const inScopeFlags: int32[] = [];
 	const nodeTypeRef: int32[] = [];
@@ -1119,6 +1141,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const convRows: string[][] = [];
 	const compilerFuncRows: string[][] = [];
 	const interfRows: string[][] = [];
+	const moduleScopeRows: string[][] = [];
 	const aliasRows: string[][] = [];
 	let importRow = "";
 	let exportRow = "";
@@ -1143,11 +1166,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			typeReturnIdx.push(f[9].parseInt() as int32);
 			typeExtraIdx.push(f[10].parseInt() as int32);
 			typeSymIdx.push(f[11].parseInt() as int32);
-			const opsRaw = splitCsv(f[12]);
 			t.attachedOps = [];
-			for (let oi = 0; oi < opsRaw.length; oi += 1) {
-				t.attachedOps.push(opsRaw[oi] != "" ? attachedOpSym(opsRaw[oi], oi as int32 as AttachedOp) : null);
-			}
 			types.push(t);
 		} else if (f[0] == "N") {
 			const kind = f[2].parseInt() as int32 as NodeKind;
@@ -1199,6 +1218,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			symDpRaw.push(f[23]);
 			if (f.length > 24) s.disamb = f[24].parseInt() as int32;
 			if (f.length > 25) s.exportName = unescapeP(f[25]);
+			symOwnerIdx.push(f.length > 26 ? f[26].parseInt() as int32 : -1);
 			syms.push(s);
 		} else if (f[0] == "E") {
 			extRows.push(f);
@@ -1208,6 +1228,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			compilerFuncRows.push(f);
 		} else if (f[0] == "U") {
 			interfRows.push(f);
+		} else if (f[0] == "M") {
+			moduleScopeRows.push(f);
 		} else if (f[0] == "K") {
 			aliasRows.push(f);
 		} else if (f[0] == "Y") {
@@ -1257,6 +1279,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			stf.push(syms[k]);
 		}
 		s.staticFields = stf;
+		s.staticOwner = symOwnerIdx[i] >= 0 && symOwnerIdx[i] < syms.length ? syms[symOwnerIdx[i]] : null;
 		s.declNode = symDeclIdx[i] >= 0 && symDeclIdx[i] < nodes.length ? nodes[symDeclIdx[i]] : null as unknown as Node;
 		s.defaultParams = parseNodeArr(symDpRaw[i], nodes);
 	}
@@ -1306,11 +1329,11 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	}
 
 	for (const f of extRows) {
-		const symRef = f[6].parseInt() as int32;
-		const fnRef = f[7].parseInt() as int32;
+		const symRef = f[5].parseInt() as int32;
+		const fnRef = f[6].parseInt() as int32;
 		const extSym = symRef >= 0 && symRef < syms.length ? syms[symRef] : null as unknown as Symbol;
 		const extType = fnRef >= 0 && fnRef < types.length ? types[fnRef] : noneType();
-		const ext = createExtMethod(unescapeP(f[1]), unescapeP(f[2]), unescapeP(f[3]), extType, f[4] == "1", extSym, f[5].parseInt() as int32);
+		const ext = createExtMethod(unescapeP(f[1]), unescapeP(f[2]), extType, f[3] == "1", extSym, f[4].parseInt() as int32);
 		registerExtension(ctx.extensionRegistry, ext);
 	}
 
@@ -1331,6 +1354,13 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		}
 		ctx.preludeInterf.set(unescapeP(f[1]), members);
 		for (const m of members) ctx.preludeExports.add(m);
+	}
+	for (const f of moduleScopeRows) {
+		const members: Symbol[] = [];
+		for (const si of parseIntsCsv(f[2])) {
+			if (si >= 0 && si < syms.length) members.push(syms[si]);
+		}
+		ctx.preludeModuleScopes.set(unescapeP(f[1]), members);
 	}
 
 	ctx.includeDirectives = includeDirectives;
@@ -1449,7 +1479,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		ctx.includeDirectives = "runtime/core/system.h\nruntime/io/streams.h";
 		ctx.compilerFlags = "-Ivendor/x -O2";
 		ctx.compileDirectives = "vendor/crypto/a.c vendor/io/b.c";
-		registerExtension(ctx.extensionRegistry, createExtMethod("pkExt", "string", "std/pk/test.ms", noneType(), true, sym, 0));
+		registerExtension(ctx.extensionRegistry, createExtMethod("pkExt", "std/pk/test.ms", noneType(), true, sym, 0));
 		ctx.compilerFuncs.set("pkRuntimeName", sym);
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");
@@ -1500,6 +1530,34 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 	}
 }
 
+
+test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const sym = makeSymbolState("pkMacro", SymbolKind.Macro, null, false, SymbolState.Hollow);
+		sym.state = SymbolState.Checked;
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
+		const noStmts: Node[] = [];
+		const body = createNodeAt(NodeKind.BlockStmt, { statements: noStmts } as NodeData, makeLoc(3, 1));
+		sym.declNode = createNodeAt(NodeKind.MacroDecl, { macroDeclName: "pkMacro", macroDeclParams: ["value"], macroDeclParamTypes: ["Node"], macroDeclReturnType: "Node", macroDeclBody: body } as NodeData, makeLoc(2, 1));
+		const key = preludePackKey("macro-decl", ".test");
+		writePreludePack(key, PK_STAMP, ctx);
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkMacro"));
+		assert got != null;
+		assert got.declNode != null;
+		assert got.declNode.kind == NodeKind.MacroDecl;
+		const md = got.declNode.data as MacroDeclData;
+		assert md.macroDeclName == "pkMacro";
+		assert md.macroDeclParams.length == 1;
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
 
 test "preludePack: exhaustive per-kind node roundtrip" {
 	const prevHome = pkEnterPrivateCache();
@@ -1762,15 +1820,26 @@ test "preludePack: a format keeps a peer's pack and in-flight write" {
 		writeFile(pending, "peer-owned in-flight write");
 		const key = preludePackKey("format-probe", ".test");
 		writePreludePack(key, PK_STAMP, pkCtxWithOneSym());
-		const loaded = tryLoadPreludePack(key, PK_STAMP);
-		assert loaded != null;
+		assert tryLoadPreludePack(key, PK_STAMP) != null;
+		const own = packRoot();
+		for (const foreign of ["MSPK2", "MSPK9"]) {
+			ensureDir(`${base}/${foreign}`);
+			writeFile(`${base}/${foreign}/${key}.pk`, "another compiler's pack");
+		}
+		assert tryLoadPreludePack(key, PK_STAMP) != null;
+		writePreludePack(key, PK_STAMP, pkCtxWithOneSym());
+		assert exists(`${own}/${key}.pk`);
+		for (const foreign of ["MSPK2", "MSPK9"]) {
+			assert exists(`${base}/${foreign}/${key}.pk`), `${foreign} lost its pack`;
+		}
 		const saved = try readFile(peer) catch "";
 		const inFlight = try readFile(pending) catch "";
+		const currentMarker = try readFile(marker) catch "";
 		assert saved == "peer-owned pack";
 		assert inFlight == "peer-owned in-flight write";
-		const currentMarker = try readFile(marker) catch "";
 		assert currentMarker == "MSPK0";
-		remove(`${packRoot()}/${key}.pk`);
+		remove(`${own}/${key}.pk`);
+		remove(`${own}/${key}.deps`);
 	} finally {
 		remove(peer);
 		remove(pending);

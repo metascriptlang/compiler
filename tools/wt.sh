@@ -186,6 +186,33 @@ pick_builder() {
   return 1
 }
 
+installed_matches() {
+  node -e 'const fs = require("fs"), [l, h] = process.argv.slice(1).map((f) => JSON.parse(fs.readFileSync(f, "utf8")).packages);
+const k = Object.keys(l).filter(Boolean);
+process.exit(k.length === Object.keys(h).length && k.every((p) => h[p] && h[p].version === l[p].version && h[p].integrity === l[p].integrity) ? 0 : 1);' "$1" "$2" 2>/dev/null
+}
+
+provision_solana() {
+  local dir=$1/tools/solana c src="" hand
+  [ -f "$dir/package-lock.json" ] || return 0
+  hand="(cd $dir && npm ci)"
+  command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 || { say "solana: node and npm are needed; install them, then run $hand"; return 1; }
+  while IFS= read -r c; do
+    [ "$c" != "$1" ] && installed_matches "$dir/package-lock.json" "$c/tools/solana/node_modules/.package-lock.json" && { src=$c/tools/solana/node_modules; break; }
+  done < <(printf '%s\n' "$MAIN"; worktrees)
+  if [ -n "$src" ]; then
+    rm -rf "$dir/node_modules"
+    if cp -Rc "$src" "$dir/node_modules" 2>/dev/null || { rm -rf "$dir/node_modules"; cp -R "$src" "$dir/node_modules"; }; then
+      say "solana: node_modules cloned from $src"
+      return 0
+    fi
+    say "solana: cloning $src failed, falling back to npm ci"
+  fi
+  (cd "$dir" && npm ci --prefer-offline --no-audit --no-fund >&2) && return 0
+  say "solana: npm ci failed in $dir; run $hand"
+  return 1
+}
+
 cmd_new() {
   local name=${1:-} rev=${2:-$BASE} w branch dirty
   [ -n "$name" ] || die "new: missing <name>"
@@ -213,6 +240,7 @@ cmd_new() {
   dirty=$(git -C "$w" status --porcelain)
   [ -z "$dirty" ] || die "step status: fresh worktree is not clean:
 $dirty"
+  provision_solana "$w" || die "step solana: tools/solana/node_modules missing in $w"
   seed_card "$name" || die "step card: cannot write $(card_path "$name")"
   printf '%s\n' "$w"
 }

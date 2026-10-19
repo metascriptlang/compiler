@@ -32,3 +32,14 @@ export function pairWith<T>(value: T): int32 {
 	const values: T[] = [value];
 	return own.a + (values.length as int32);
 }
+
+export function rackOf<T>(value: T): Rack<T> {
+	return new Rack<T>(value);
+}
+
+export function maybeRack<T>(value: T): string {
+	const r = new Rack<T | null>(null);
+	const empty = r.slots[0] === null;
+	r.slots[0] = value;
+	return empty && r.slots[0] !== null ? "set" : "lost";
+}
