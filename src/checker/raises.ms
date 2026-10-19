@@ -246,3 +246,35 @@ export function statementCanRaise(value: Readonly<Node>): boolean {
 	const d = value.data as BinaryExprData;
 	return d.operator == "=" && d.right != null && d.right.kind == NodeKind.CallExpr;
 }
+
+// True when running the body can neither set nor observe the error flag: every call is a
+// never-raising runtime or lifecycle routine and nothing throws, awaits, nests a try or jumps out
+// (a jump out of a finally drops the exception in flight, which the error scaffold clears).
+export function bodyIsErrorBlind(node: Node | null): boolean {
+	if (node == null || isNestedRoutine(node)) return true;
+	match (node.kind) {
+		NodeKind.ThrowStmt | NodeKind.NewExpr | NodeKind.AwaitExpr | NodeKind.YieldExpr
+			| NodeKind.TryCatchStmt | NodeKind.MacroInvocation
+			| NodeKind.ReturnStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt => { return false; },
+		NodeKind.CallExpr => { if (classifyCall(node) != CallRaise.Never) return false; },
+		_ => {},
+	};
+	let blind = true;
+	forEachChild(node, (child: Node): void => { if (blind && !bodyIsErrorBlind(child)) blind = false; });
+	return blind;
+}
+
+// Marks each finally block that runs without touching the error flag, so codegen reads the verdict
+// off a node it only holds read-only.
+export function markErrorBlindFinallies(node: Node | null): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.TryCatchStmt) {
+		const fin = (node.data as TryCatchStmtData).finallyBody;
+		if (fin != null && bodyIsErrorBlind(fin)) fin.flags = fin.flags.incl(NodeFlag.CannotRaise);
+	}
+	forEachChild(node, (child: Node): void => { markErrorBlindFinallies(child); });
+}
+
+export function finallyIsErrorBlind(fin: Readonly<Node>): boolean {
+	return fin.flags.has(NodeFlag.CannotRaise);
+}

@@ -6,7 +6,7 @@
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind, NewExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { statementCanRaise, callCanRaise } from "../../checker/raises";
+import { statementCanRaise, callCanRaise, finallyIsErrorBlind } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
@@ -1226,8 +1226,9 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 
 	const errSave = "__oldErr_" + labelId;
 	const excSave = "__oldExc_" + labelId;
-	emitStmtsLine(p, `bool ${errSave} = MS_FALSE;`);
-	if (d.finallyBody != null) {
+	const finallyShieldsError = d.finallyBody != null && !finallyIsErrorBlind(d.finallyBody);
+	if (finallyShieldsError) {
+		emitStmtsLine(p, `bool ${errSave} = MS_FALSE;`);
 		emitStmtsLine(p, `msException* ${excSave} = NULL;`);
 	}
 
@@ -1293,7 +1294,10 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 
 	emitStmtsLine(p, `${finallyLabel}:`);
 
-	if (d.finallyBody != null) {
+	if (d.finallyBody != null && !finallyShieldsError) {
+		emitStmtsLine(p, ";");
+		genStmt(g, p, d.finallyBody);
+	} else if (d.finallyBody != null) {
 		// Run the finally body with the error flag cleared so its own raise-checks
 		// don't misfire, then restore it so a propagating exception keeps propagating.
 		emitStmtsLine(p, `${errSave} = msErr;`);

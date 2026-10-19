@@ -62,6 +62,7 @@ import "./inlineFunctions";
 import "./pointerAddress";
 import "./noinlinePragma";
 import "./forOfCounterEmit";
+import "./finallyScaffoldEmit";
 import "./computedGoto";
 import "./dispatcherMain";
 import "./moduleBindingTdz";
