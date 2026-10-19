@@ -5,7 +5,7 @@ import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, F
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
-import { BinaryExprData, ClassDeclData, DecoratedDeclData, ExportDeclData, IdentifierData, ImportDeclData, InterfaceDeclData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { BinaryExprData, ClassDeclData, DecoratedDeclData, ExportDeclData, IdentifierData, ImportDeclData, InterfaceDeclData, MacroInvocationData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
@@ -3612,6 +3612,15 @@ function assignsModuleBinding(node: Node): boolean {
 	return found;
 }
 
+function emitsRawText(node: Node): boolean {
+	if (node.kind == NodeKind.MacroInvocation && (node.data as MacroInvocationData).macroName == "emit") return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found) found = emitsRawText(child);
+	});
+	return found;
+}
+
 // An instance the declaring module's own check asked for stays in that module:
 // its code needs the instance while the module is still being evaluated.
 function jsInstanceFiles(modulePaths: string[], moduleCtxs: CheckerContext[]): JsInstanceFile[] {
@@ -3626,7 +3635,7 @@ function jsInstanceFiles(modulePaths: string[], moduleCtxs: CheckerContext[]): J
 		for (const node of host.generatedInstances) {
 			const name = jsInstanceBindingName(node);
 			if (name == "") continue;
-			if (ctxOf.get(node.resolvedSym!.modulePath) == host || assignsModuleBinding(node)) {
+			if (ctxOf.get(node.resolvedSym!.modulePath) == host || assignsModuleBinding(node) || emitsRawText(node)) {
 				kept.add(name);
 			} else {
 				asked.push(node);
