@@ -1892,7 +1892,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (extMultiFiltered.length > 1 && literalArgs[ai]) paramExpected = null;
 		if (paramExpected != null && paramExpected.kind == TypeKind.Varargs) {
 			const restElem = getElementType(unwrapRef(unwrapVarargs(paramExpected)));
-			paramExpected = restElem != null && restElem.kind != TypeKind.Inferred ? restElem : null;
+			paramExpected = restElem != null && restElem.kind != TypeKind.Inferred && !isUnknownType(restElem) ? restElem : null;
 		}
 		callCheckExpr(ctx, d.arguments[ai], paramExpected);
 		ctx.pendingSpawnThunk = false;
