@@ -87,7 +87,9 @@ corpus and san run on the programs whose emitted C or JS the change alters.
 Control compilers and matching successful program signatures are shared under
 ~/.metascript/cache/gate-ctl/v1; both sides emit from one fixed source/std workspace.
 Unsealed entries, changed program keys and failed emits are never reused; four
-published control entries are kept. --lanes, --release and blind paths run the lane whole.
+published control entries are kept. --lanes, --release and blind paths run the lane whole;
+such a gate still emits the candidate beside the tests lane and caches it, so the gate after
+its land finds a warm control.
 
 A known red that has turned green fails too: the set is then claiming a failure
 that no longer happens, so drop the entry in the commit that fixed it. Unlike a
@@ -116,7 +118,7 @@ env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
         GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select,
-        select-whole or select-off; select-off has zero seconds and empty counts
+        select-whole, select-off or adopt; select-off has zero seconds and empty counts, adopt only seconds and total
 USAGE
 }
 
@@ -1115,6 +1117,21 @@ emit_sides() {
   emit_candidate "$cand" || { select_whole "candidate emit failed"; return 1; }
   adopt_candidate || { select_whole "candidate cache publication failed"; return 1; }
   trim_controls "$key" "$(control_key HEAD)"
+}
+
+adopt_whole() {
+  local key cand t0=$SECONDS
+  cand_proven && prepare_emit_workspace && CONTROL_SUPPORT=$(control_support "$CTL_WORK") \
+    && key=$(control_key HEAD) || return 0
+  ! control_ready "$(control_dir "$key")" "$key" || return 0
+  cand=$(stage_emit_compiler "$CAND" cand) || return 0
+  rm -rf "$EMIT" && mkdir -p "$EMIT" || return 0
+  stable_programs >"$EMIT/programs"
+  reusable_programs >"$EMIT/ctl.keys" || return 0
+  emit_side "$cand" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
+  adopt_candidate || return 0
+  say "gate: adopt $(fmt_secs $((SECONDS - t0))) · this tree's emits are cached for the next narrowed gate"
+  select_ledger adopt "$((SECONDS - t0))" "" "$(grep -c . "$EMIT/programs" | tr -d ' ')" "" "" ""
 }
 
 std_swap_self_test() (
@@ -2219,10 +2236,12 @@ for phase in "${PHASES[@]}"; do
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
   MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
-  select_pid=""
+  select_pid="" adopt_pid=""
   case " $todo " in *" suite "*|*" tests "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
       (with_slot select_programs; printf '%s %s\n' "$select" "$selected" >"$OUT/select.state") & select_pid=$!
+    elif [ "$select" -eq 0 ] && [ -n "$select_label" ] && [ -x "$CAND" ]; then
+      (with_slot adopt_whole) & adopt_pid=$!
     fi ;;
   esac
   pids="" launched=""
@@ -2244,6 +2263,7 @@ for phase in "${PHASES[@]}"; do
   done
   [ -z "$pids" ] || wait $pids
   if [ -n "$select_pid" ]; then wait "$select_pid"; read -r select selected <"$OUT/select.state"; fi
+  [ -z "$adopt_pid" ] || wait "$adopt_pid"
   for lane in $launched; do
   log="$OUT/$lane.log"
   rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); rc=${rc:-1}
