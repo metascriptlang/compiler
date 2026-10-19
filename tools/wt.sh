@@ -545,6 +545,10 @@ cmd_land() {
   clash=$(main_held "$old" "$(git -C "$w" diff --name-only --no-renames "$old" "$new")")
   [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes; clear it, then land again (no gate ran):
 $(printf '%s\n' "$clash" | sed 's/^/  /')"
+  if [ "$gate" -eq 1 ] && [ -x "$w/msc" ] && ! (cd "$w" && ./msc check src/index.ms >/dev/null 2>&1); then
+    say "land: $w/msc cannot check src/index.ms on $BASE $(git -C "$MAIN" rev-parse --short "$old"); picking a builder again"
+    pick_builder "$w" || die "land: no builder can check src/index.ms at this rev (set MSC_BUILDER)"
+  fi
   verdict="$(git -C "$w" rev-parse --absolute-git-dir)/wt-land-verdict"
   if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && [ -f "$verdict" ] \
     && [ "$(awk '{print $1, $2}' "$verdict")" = "$new $old" ]; then

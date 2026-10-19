@@ -272,5 +272,14 @@ check "S20 k landed with the pruned set" '[ "$rk" = 0 ] && onmain k.txt && [ "$(
 check "S20 the pruned set is its own commit on main" '[ "$(git -C "$R" log -1 --format=%s main)" = "test: drop known-red entries that are green" ] && [ "$(git -C "$R" diff --name-only main~1 main)" = src/test/known-red.json ]'
 check "S20 the gate's pruned file is consumed" '[ ! -e "$T/ws/.wt/wt-k/out/gate/known-red.pruned.json" ]'
 
+echo "== S21 a worktree builder that cannot check the caught-up tree is replaced before the gate"
+setup; mkwt s
+printf '#!/usr/bin/env bash\n# stale\nexit 1\n' >"$T/ws/.wt/wt-s/msc"; chmod +x "$T/ws/.wt/wt-s/msc"
+printf '#!/usr/bin/env bash\n# main builder\nexit 0\n' >"$R/msc"; chmod +x "$R/msc"
+enqueue s
+rs=$(waitfor s 60)
+check "S21 s landed" '[ "$rs" = 0 ] && onmain s.txt'
+check "S21 the worktree builder is main's" 'grep -q "main builder" "$T/ws/.wt/wt-s/msc" && grep -q "picking a builder again" "$MSC_LAND_QUEUE/s.land.log"'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
