@@ -427,7 +427,7 @@ function contextResultSlot(calleeSym: Symbol | null, formal: Type | null, contex
 
 function bindFromExpectedReturn(calleeType: Type, expectedType: Type | null): UnifyBindings {
 	const bindings = createUnifyBindings();
-	if (expectedType != null && calleeType != null && calleeType.typeReturn != null) {
+	if (expectedType != null && !isUnknownType(expectedType) && calleeType != null && calleeType.typeReturn != null) {
 		unifyType(calleeType.typeReturn, expectedType, bindings);
 	}
 	return bindings;
