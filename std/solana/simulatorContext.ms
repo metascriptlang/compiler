@@ -39,14 +39,15 @@ export function tooManyAccounts(input: uint64): boolean {
 	return msSolLoadU64(input) > MAX_ACCOUNTS;
 }
 
-// solana.h msSolParseAccounts: the slot table gets one record address per account, a duplicate's slot is its first
-// record's, and that first record's borrow byte is marked duplicated. Answers the number of accounts.
-@inline export function parseAccounts(input: uint64, table: uint64): uint64 {
-	const kept = msSolLoadU64(input);
-	if (kept > MAX_ACCOUNTS) {
+// The slot table gets one record address per account up to `limit`, a duplicate's slot is its first record's, and
+// that first record's borrow byte is marked duplicated. Answers the number of accounts kept.
+@inline export function parseAccounts(input: uint64, table: uint64, limit: uint64): uint64 {
+	const count = msSolLoadU64(input);
+	if (count > MAX_ACCOUNTS) {
 		msSolHostRaise(REFUSED, "solana input: the loader refuses more than 255 accounts");
 		return 0;
 	}
+	const kept = count < limit ? count : limit;
 	let cursor = input + 8;
 	msSolStoreU64(table, cursor);
 	if (kept <= 1) { return kept; }
@@ -90,10 +91,10 @@ export function tooManyAccounts(input: uint64): boolean {
 
 export function parseInput(input: uint64, table: uint64): ParsedInput {
 	if (tooManyAccounts(input)) {
-		parseAccounts(input, table);
+		parseAccounts(input, table, MAX_ACCOUNTS);
 		return { count: 0, instructionData: 0, programId: 0 };
 	}
-	const count = parseAccounts(input, table);
+	const count = parseAccounts(input, table, MAX_ACCOUNTS);
 	const instructionData = instructionDataOf(input);
 	return { count: count, instructionData: instructionData, programId: instructionData + msSolLoadU64(instructionData - 8) };
 }

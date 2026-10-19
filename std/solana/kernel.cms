@@ -30,8 +30,8 @@ when (solana) {
 
 	// solana.h msSolStart calls these two on the loader's input
 	@exportName("msSolEntryAccounts")
-	export function msSolEntryAccounts(input: uint64, table: uint64): uint64 {
-		return parseAccounts(input, table);
+	export function msSolEntryAccounts(input: uint64, table: uint64, limit: uint64): uint64 {
+		return parseAccounts(input, table, limit);
 	}
 
 	@exportName("msSolEntryInstructionData")

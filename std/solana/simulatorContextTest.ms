@@ -46,7 +46,7 @@ test "an input with no accounts parses to an empty table and the data that follo
 	const input = serializeInput([], [], [1, 2], 0x11);
 	const base = msSolSpanAddress(input);
 	let table: uint64[255] = [];
-	assert parseAccounts(base, msSolWordsAddress(table)) == 0;
+	assert parseAccounts(base, msSolWordsAddress(table), 255) == 0;
 	assert table[0] == base + 8;
 	const parsed = parseInput(base, msSolWordsAddress(table));
 	assert parsed.count == 0 && parsed.instructionData == base + 16 && parsed.programId == base + 18;
@@ -63,6 +63,26 @@ test "repeats past the fourth slot and a lone first record resolve to the first 
 	assert table[1] == table[0] + (recordSize(0) as uint64) && table[2] == table[1] + (recordSize(5) as uint64) && table[3] == table[2] + (recordSize(10) as uint64);
 	assert msSolLoadU8(table[0] + 4) == 2 && msSolLoadU8(table[1] + 4) == 2 && msSolLoadU8(table[2] + 4) == 2 && msSolLoadU8(table[3] + 4) == 2;
 	assert parsed.instructionData == base + 8 + (recordSize(0) + recordSize(5) + recordSize(10) + recordSize(4) + 4 * 8 + 8) as uint64;
+}
+
+test "a table smaller than the instruction keeps its first accounts and leaves the slots past it alone" {
+	for (const firsts of [[0, 1, 2, 3, 4], [0, 1, 0, 2, 1], [0, 0, 0, 0, 0, 0, 0]]) {
+		for (const limit of [1, 2, 5]) {
+			const input = serializeInput(firsts, accountsOf(firsts), [6], 0x44);
+			const base = msSolSpanAddress(input);
+			let table: uint64[255] = [];
+			let full: uint64[255] = [];
+			const fullCount = parseAccounts(base, msSolWordsAddress(full), 255);
+			const input2 = serializeInput(firsts, accountsOf(firsts), [6], 0x44);
+			const base2 = msSolSpanAddress(input2);
+			const kept = parseAccounts(base2, msSolWordsAddress(table), limit as uint64);
+			const expected = limit < firsts.length ? limit : firsts.length;
+			assert kept == (expected as uint64) && fullCount == (firsts.length as uint64);
+			for (let index = 0; index < expected; index++) { assert table[index] - base2 == full[index] - base; }
+			for (let index = expected; index < 255; index++) { assert table[index] == 0; }
+			assert instructionDataOf(base2) - base2 == instructionDataOf(base) - base;
+		}
+	}
 }
 
 test "more than 255 accounts is refused with a fault and no table" {

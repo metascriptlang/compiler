@@ -103,7 +103,7 @@ static inline uint64_t msSolScratch(uint64_t size) {
 
 #ifdef MSOS_SOLANA
 /* std/solana/simulatorContext.ms parses the input, through std/solana/kernel.cms. */
-uint64_t msSolEntryAccounts(uint64_t input, uint64_t table);
+uint64_t msSolEntryAccounts(uint64_t input, uint64_t table, uint64_t limit);
 uint64_t msSolEntryInstructionData(uint64_t input);
 
 static inline void msSolHostRaise(uint64_t code, msString text) {
@@ -115,7 +115,7 @@ static inline void msSolHostRaise(uint64_t code, msString text) {
 static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
     if (!instructionData) instructionData = (const uint8_t*)msSolEntryInstructionData((uint64_t)input);
     msSolanaContext* context = msSolContext();
-    context->accountCount = msSolEntryAccounts((uint64_t)input, (uint64_t)table);
+    context->accountCount = msSolEntryAccounts((uint64_t)input, (uint64_t)table, MS_SOL_MAX_ACCOUNTS);
     context->accountTable = (uint64_t)table;
     context->instructionData = (uint64_t)instructionData;
 }
