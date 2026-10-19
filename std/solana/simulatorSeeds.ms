@@ -18,7 +18,6 @@ const MAX_SEED_LENGTH: uint64 = 32;
 	msSolSeedRowSet(table, at, address, length);
 }
 
-// solana.h msSolSeedStage
 @inline function stage(input: uint64, table: uint64, count: uint64, limit: uint64): boolean {
 	if (count > limit) { return false; }
 	for (let index: uint64 = 0; index < count; index++) {
@@ -39,7 +38,6 @@ const MAX_SEED_LENGTH: uint64 = 32;
 	return longest <= MAX_SEED_LENGTH;
 }
 
-// solana.h msSolSeedTail
 @inline function tail(input: uint64, at: uint64, program: uint64): uint64 {
 	putSlice(input, at, program, 32);
 	const tag = "ProgramDerivedAddress";
@@ -47,13 +45,11 @@ const MAX_SEED_LENGTH: uint64 = 32;
 	return at + 2;
 }
 
-// solana.h msSolSeedSlot
 @inline function slot(input: uint64, at: uint64, bump: uint64, program: uint64): void {
 	putSlice(input, at, bump, 1);
 	tail(input, at + 1, program);
 }
 
-// solana.h msSolKeyIs
 @inline function keyIs(key: uint64, expected: uint64): boolean {
 	return msSolLoadU64(key) == msSolLoadU64(expected) && msSolLoadU64(key + 8) == msSolLoadU64(expected + 8) &&
 		msSolLoadU64(key + 16) == msSolLoadU64(expected + 16) && msSolLoadU64(key + 24) == msSolLoadU64(expected + 24);
@@ -63,7 +59,6 @@ const MAX_SEED_LENGTH: uint64 = 32;
 	return msSolCurveValidatePoint(0, point, 0) != 0;
 }
 
-// solana.h msSolWalkAny
 @noinline function walkAny(input: uint64, at: uint64, out: uint64, bumpOut: uint64): uint64 {
 	for (let counter: uint64 = 255; counter > 0; counter--) {
 		msSolStoreU8(bumpOut, counter as uint8);
@@ -73,7 +68,6 @@ const MAX_SEED_LENGTH: uint64 = 32;
 	return 1;
 }
 
-// solana.h msSolWalkExpected
 @inline function walkExpected(input: uint64, at: uint64, expected: uint64, bumpOut: uint64, out: uint64): uint64 {
 	for (let counter: uint64 = 255; counter > 0; counter--) {
 		msSolStoreU8(bumpOut, counter as uint8);
@@ -84,7 +78,6 @@ const MAX_SEED_LENGTH: uint64 = 32;
 	return 1;
 }
 
-// solana.h msSolWalkCanonical
 @inline function walkCanonical(input: uint64, at: uint64, expected: uint64, bumpOut: uint64, out: uint64): uint64 {
 	for (let counter: uint64 = 255; counter > 0; counter--) {
 		msSolStoreU8(bumpOut, counter as uint8);
@@ -94,7 +87,6 @@ const MAX_SEED_LENGTH: uint64 = 32;
 	return 1;
 }
 
-// solana.h msSolSeedStageInPlace
 @exportName("msSolSeedStageInPlaceAt")
 export function seedStageInPlace(table: uint64, count: uint64, bump: uint64, program: uint64): uint64 {
 	const used = count - 3;
@@ -103,7 +95,7 @@ export function seedStageInPlace(table: uint64, count: uint64, bump: uint64, pro
 	return used;
 }
 
-// solana.h msSolHashAddress; `input` is a frame of 36 words
+// `input` is a frame of 36 words
 @inline function hashAddress(input: uint64, last: uint64, table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64 {
 	msSolStoreU8(last, bump as uint8);
 	const withBump: uint64 = bump <= 255 ? 1 : 0;
@@ -113,7 +105,6 @@ export function seedStageInPlace(table: uint64, count: uint64, bump: uint64, pro
 	return 0;
 }
 
-// solana.h msSolDeriveAddress over the caller's frame
 @exportName("msSolDeriveAddressAt")
 export function deriveAddressAt(input: uint64, last: uint64, table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64 {
 	if (hashAddress(input, last, table, count, bump, program, out) != 0) { return 2; }
@@ -126,7 +117,6 @@ export function deriveAddressAt(input: uint64, last: uint64, table: uint64, coun
 	return deriveAddressAt(msSolWordsAddress(words), msSolSpanAddress(last), table, count, bump, program, out);
 }
 
-// solana.h msSolFindAddress over the caller's frame
 @exportName("msSolFindAddressAt")
 export function findAddressAt(input: uint64, table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64 {
 	if (!stage(input, table, count, MAX_SEEDS - 1)) { return 2; }
@@ -139,7 +129,6 @@ export function findAddressAt(input: uint64, table: uint64, count: uint64, progr
 	return findAddressAt(msSolWordsAddress(words), table, count, program, out, bumpOut);
 }
 
-// solana.h msSolFindExpectedAddress over the caller's frame
 @exportName("msSolFindExpectedAddressAt")
 export function findExpectedAddressAt(input: uint64, hash: uint64, table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64 {
 	if (!stage(input, table, count, MAX_SEEDS - 1)) { return 2; }
@@ -153,7 +142,6 @@ export function findExpectedAddressAt(input: uint64, hash: uint64, table: uint64
 	return findExpectedAddressAt(msSolWordsAddress(words), msSolSpanAddress(hash), table, count, program, expected, bumpOut);
 }
 
-// solana.h msSolFindCanonicalAddress over the caller's frame
 @exportName("msSolFindCanonicalAddressAt")
 export function findCanonicalAddressAt(input: uint64, hash: uint64, table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64 {
 	if (!stage(input, table, count, MAX_SEEDS - 1)) { return 2; }
@@ -167,7 +155,6 @@ export function findCanonicalAddressAt(input: uint64, hash: uint64, table: uint6
 	return findCanonicalAddressAt(msSolWordsAddress(words), msSolSpanAddress(hash), table, count, program, expected, bumpOut);
 }
 
-// solana.h msSolFindExpectedStaged
 @exportName("msSolFindExpectedStagedAt")
 export function findExpectedStagedAt(hash: uint64, table: uint64, used: uint64, expected: uint64): uint64 {
 	if (used >= MAX_SEEDS) { return 2; }
@@ -179,7 +166,6 @@ export function findExpectedStagedAt(hash: uint64, table: uint64, used: uint64, 
 	return findExpectedStagedAt(msSolSpanAddress(hash), table, used, expected);
 }
 
-// solana.h msSolFindCanonicalStaged
 @exportName("msSolFindCanonicalStagedAt")
 export function findCanonicalStagedAt(hash: uint64, table: uint64, used: uint64, expected: uint64): uint64 {
 	if (used >= MAX_SEEDS) { return 2; }
@@ -191,7 +177,6 @@ export function findCanonicalStagedAt(hash: uint64, table: uint64, used: uint64,
 	return findCanonicalStagedAt(msSolSpanAddress(hash), table, used, expected);
 }
 
-// solana.h msSolHashIsStaged
 @exportName("msSolHashIsStagedAt")
 export function hashIsStagedAt(out: uint64, table: uint64, used: uint64, bump: uint64, expected: uint64): uint64 {
 	if (used >= MAX_SEEDS) { return 2; }
