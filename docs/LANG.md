@@ -1055,12 +1055,16 @@ export * from "./utils";
 
 **JS bundle exports.** `msc build --target=js entry.ms` gives the bundle the entry module's export
 list as its ES exports, under the source names: a function, a `const`/`let`, a non-generic class,
-`export default`, and a re-export (`export { x } from`, `export * from`) of one of those, bound to the
-same value. Each exported name is exactly one runtime value: exporting an overload set, a generic
-function or class, or an enum, directly or through a re-export, is a compile error at the `export`.
-Extension functions stay out of the bundle's exports because their export is module visibility.
-Exports of other modules stay internal, and `--split` output is unaffected. Measured 2026-10-14 with
-node 24.1 by `src/test/guard/jsBundleEntryExports.ms`.
+`export default`, an enum, and a re-export (`export { x } from`, `export * from`) of one of those, bound
+to the same value. An enum is exported as the object TS gives it, each member and its name under its
+value: `export enum Mode { On, Off = 5 }` lets a host read `Mode.Off === 5` and `Mode[5] === "Off"`, and
+`--split` exports the same object from the declaring module. Inside the program an enum stays a set of
+constants. Each other exported name is exactly one runtime value: exporting an overload set or a generic
+function or class, directly or through a re-export, is a compile error at the `export`. Extension
+functions stay out of the bundle's exports because their export is module visibility. Exports of other
+modules stay internal. Measured 2026-10-20 with node 24.1 by `src/test/guard/jsBundleEntryExports.ms`
+(an enum declared at the entry with a negative and a repeated value, one re-exported from another
+module, and both through `--split`).
 
 **Dynamic `import()`.** `await import("./x")` gives the namespace of `./x`, typed
 `Promise<typeof import("./x")>`. A module that only `import()` reaches runs its body at the first
