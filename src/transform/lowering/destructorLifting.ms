@@ -2065,6 +2065,10 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (t.kind == TypeKind.GenericInstance) {
+		const seen = peelTransparentInstance(t);
+		if (seen != t) { liftTypeOps(seen, lctx, loc); return; }
+	}
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) { liftTypeOps(nullableRef, lctx, loc); return; }
 	refuseArrayOfHookedDistinct(t, lctx, loc);

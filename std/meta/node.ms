@@ -135,6 +135,7 @@ export enum AttachedOp {
 //                    null = absent). Populated by destructorLifting; see setAttachedOp /
 //                    getAttachedOp in src/checker/types.ms.
 //   sym            — back-pointer to the declaring Symbol (Class/Interface/Enum decls).
+//   typeInst       — a union built as a generic instance's body: that instance, which names it.
 export class Type {
 	kind: TypeKind;
 	typeName: string;
@@ -147,6 +148,7 @@ export class Type {
 	callConv: CallingConvention;
 	attachedOps: (Symbol | null)[];
 	sym: Symbol | null;
+	typeInst: Type | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;
 }

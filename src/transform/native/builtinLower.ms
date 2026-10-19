@@ -287,7 +287,7 @@ function selectUnionText(node: Node, ctx: TransformContext): Node {
 	const args = (node.data as CallExprData).arguments;
 	const loc = node.location;
 	const x = args[0];
-	const xt = x.nodeType!;
+	const xt = peelTransparentInstance(x.nodeType!);
 	const holder = args[1].resolvedSym!;
 	const ut = args[1].nodeType!;
 	const select = ctx.jsBackend ? null : unionTextFn(holder, ut, args, loc, ctx);
