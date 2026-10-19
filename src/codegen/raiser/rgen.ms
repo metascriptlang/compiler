@@ -19,7 +19,7 @@ import {
 	heapArrayGet, heapArrayLen
 } from "../../raiser/value";
 import {
-	RaiserModule, RaiserFunction,
+	RaiserModule, RaiserFunction, RaiserExport,
 	createRaiserFunction, createRaiserModule
 } from "../../raiser/module";
 import { DynamicModulePlan } from "../../module/graph";
@@ -426,7 +426,7 @@ function hasTopLevelAwait(node: Node): boolean {
 	return found;
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan()): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exportsOf: string = ""): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
@@ -440,6 +440,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	const globalEnumMap: RaiserEnumMap = { items: globalEnumMapItems };
 	let funcIdx = 0;
 	const projectDecls: RaiserProjectDecl[] = [];
+	const exports: RaiserExport[] = [];
 	const noNodes: Node[] = [];
 	const noSyms: Symbol[] = [];
 	const nullNode = null as unknown as Node;
@@ -452,7 +453,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			if (fnNode != null && emitsRoutine(fnNode, (fnNode.data as FunctionDeclData).fnFlags)) {
 				const fd = fnNode.data as FunctionDeclData;
 				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
-				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms: runtimeParamSyms(fnNode, fd.fnName), body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
+				const paramSyms = runtimeParamSyms(fnNode, fd.fnName);
+				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms, body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
+				if (modules[mi].modulePath == exportsOf && pd.programStmts[i].kind == NodeKind.ExportDecl) {
+					exports.push({ name: fd.fnName, funcIdx: funcIdx as int32, arity: paramSyms.length });
+				}
 				funcIdx += 1;
 			}
 			const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
@@ -575,6 +580,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		functions.push(initFunc);
 		initIndices.push(functions.length - 1);
 	}
+	for (const exported of exports) demandBody(exported.funcIdx);
 
 	// --- Create synthetic entry function ---
 	// Calls all init functions in order, halts with last result
@@ -595,6 +601,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);
 	compiled.globalCount = globalCount;
+	compiled.exports = exports;
 	for (let ri = 0; ri < plan.records.length; ri += 1) {
 		const path = plan.records[ri];
 		let init: number = -1;
