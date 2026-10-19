@@ -11,7 +11,7 @@ import {
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive,
-	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, clearArrayHeap, clearObjectHeap,
+	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, clearArrayHeap, clearObjectHeap,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -1749,7 +1749,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			RaiserOpcode.SameLoc => {
 				const l = slots[base + ib];
 				const r = slots[base + ic];
-				setRegBool(vm, base + ia, l.kind == r.kind && (l.kind == RaiserValueKind.String ? vmText(vm, l) == vmText(vm, r) : l.intVal == r.intVal && l.floatVal == r.floatVal));
+				setRegBool(vm, base + ia, l.kind == r.kind && (l.kind == RaiserValueKind.String ? heapStringEquals(vm.arrayHeap, l, r) : l.intVal == r.intVal && l.floatVal == r.floatVal));
 			},
 			RaiserOpcode.NegI64 => {
 				const val = slots[base + ib];
@@ -1939,7 +1939,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleStrLen(vm, ia, ib, ic);
 		},
 		RaiserOpcode.StrByteLen => {
-			const value = vmText(vm, getReg(vm, vm.baseReg + ib)).byteLength;
+			const value = heapStringByteLength(vm.arrayHeap, getReg(vm, vm.baseReg + ib));
 			setRegInt(vm, vm.baseReg + ia, value);
 		},
 		RaiserOpcode.StrCharAt => {
@@ -2499,29 +2499,37 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const lhs = getReg(vm, vm.baseReg + ib);
 	const rhs = getReg(vm, vm.baseReg + ic);
+	if (lhs.kind == RaiserValueKind.String && rhs.kind == RaiserValueKind.String) {
+		if (ia == ib && heapStringHeldOnce(vm.arrayHeap, lhs) && rhs.intVal != lhs.intVal) {
+			heapAppend(vm.arrayHeap, lhs.intVal, rhs);
+			return;
+		}
+		setRegRef(vm, vm.baseReg + ia, RaiserValueKind.String, heapConcat(vm.arrayHeap, lhs, rhs).intVal);
+		return;
+	}
 	setRegString(vm, vm.baseReg + ia, raiserToString(vm.arrayHeap, lhs) + raiserToString(vm.arrayHeap, rhs));
 }
 
 function vmHandleEqStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (vmText(vm, getReg(vm, vm.baseReg + ia)) == vmText(vm, getReg(vm, vm.baseReg + ib))) {
+	if (heapStringEquals(vm.arrayHeap, getReg(vm, vm.baseReg + ia), getReg(vm, vm.baseReg + ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
 
 function vmHandleNeStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (vmText(vm, getReg(vm, vm.baseReg + ia)) != vmText(vm, getReg(vm, vm.baseReg + ib))) {
+	if (!heapStringEquals(vm.arrayHeap, getReg(vm, vm.baseReg + ia), getReg(vm, vm.baseReg + ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
 
 function vmHandleLtStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (vmText(vm, getReg(vm, vm.baseReg + ia)) < vmText(vm, getReg(vm, vm.baseReg + ib))) {
+	if (heapStringLess(vm.arrayHeap, getReg(vm, vm.baseReg + ia), getReg(vm, vm.baseReg + ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
 
 function vmHandleLeStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (vmText(vm, getReg(vm, vm.baseReg + ia)) <= vmText(vm, getReg(vm, vm.baseReg + ib))) {
+	if (heapStringLessEq(vm.arrayHeap, getReg(vm, vm.baseReg + ia), getReg(vm, vm.baseReg + ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
@@ -2529,21 +2537,21 @@ function vmHandleLeStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 // --- String method handlers ---
 
 function vmHandleStrLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const length = vmText(vm, getReg(vm, vm.baseReg + ib)).length;
+	const length = heapStringLength(vm.arrayHeap, getReg(vm, vm.baseReg + ib));
 	setRegInt(vm, vm.baseReg + ia, length);
 }
 
 function vmHandleStrCharAt(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const text = vmText(vm, getReg(vm, vm.baseReg + ib));
+	const source = getReg(vm, vm.baseReg + ib);
 	const i = getReg(vm, vm.baseReg + ic).intVal;
-	setRegString(vm, vm.baseReg + ia, i >= 0 && i < text.length ? text.slice(i as int32, (i + 1) as int32) : "");
+	setRegString(vm, vm.baseReg + ia, i >= 0 && i < heapStringLength(vm.arrayHeap, source) ? heapStringSlice(vm.arrayHeap, source, i as int32, (i + 1) as int32) : "");
 }
 
 function vmHandleStrSlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const text = vmText(vm, getReg(vm, vm.baseReg + ib));
+	const source = getReg(vm, vm.baseReg + ib);
 	const start = getReg(vm, vm.baseReg + ic).intVal;
 	const end = getReg(vm, vm.baseReg + ic + 1).intVal;
-	setRegString(vm, vm.baseReg + ia, text.slice(start as int32, end as int32));
+	setRegString(vm, vm.baseReg + ia, heapStringSlice(vm.arrayHeap, source, start as int32, end as int32));
 }
 
 // --- Float value extraction (handles int-to-float promotion) ---

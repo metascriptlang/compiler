@@ -131,9 +131,7 @@ function constHandle(text: string): int64 {
 }
 
 function constText(handle: int64): string {
-	// bound first: .inbox/compiler/2026-10-19-return-of-an-array-element-leaks-a-reference.md
-	const text = constTexts[(-handle - 1) as number];
-	return text;
+	return constTexts[(-handle - 1) as number];
 }
 
 // Module constants and field names are interned, so reading one needs no heap.
@@ -174,9 +172,84 @@ export function heapAllocStoredString(arr: RaiserArrayHeap, text: string): Raise
 export function heapStringText(arr: RaiserArrayHeap, v: RaiserValue): string {
 	if (v.kind != RaiserValueKind.String) return "";
 	if (v.intVal < 0) return constText(v.intVal);
-	// bound first: .inbox/compiler/2026-10-19-return-of-an-array-element-leaks-a-reference.md
-	const text = arr.strings.texts[v.intVal];
-	return text;
+	return arr.strings.texts[v.intVal];
+}
+
+// The operations below read a string where it lives and never hand its text out as an
+// owned copy: a handle below zero selects the constant table, otherwise the strand's
+// heap, and an element read inside an expression is a cursor.
+
+function textTable(arr: RaiserArrayHeap, v: RaiserValue): string[] {
+	return v.kind == RaiserValueKind.String && v.intVal >= 0 ? arr.strings.texts : constTexts;
+}
+
+function textIndex(v: RaiserValue): number {
+	if (v.kind != RaiserValueKind.String) return 0;
+	return (v.intVal >= 0 ? v.intVal : -v.intVal - 1) as number;
+}
+
+export function heapStringEquals(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
+	if (a.intVal == b.intVal) return true;
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return ta[ia] == tb[ib];
+}
+
+export function heapStringLess(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return ta[ia] < tb[ib];
+}
+
+export function heapStringLessEq(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return ta[ia] <= tb[ib];
+}
+
+export function heapStringLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
+	const t = textTable(arr, v);
+	const i = textIndex(v);
+	return t[i].length as int64;
+}
+
+export function heapStringByteLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
+	const t = textTable(arr, v);
+	const i = textIndex(v);
+	return t[i].byteLength as int64;
+}
+
+export function heapStringSlice(arr: RaiserArrayHeap, v: RaiserValue, start: int32, end: int32): string {
+	const t = textTable(arr, v);
+	const i = textIndex(v);
+	return t[i].slice(start, end);
+}
+
+export function heapConcat(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): RaiserValue {
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return heapAllocString(arr, ta[ia] + tb[ib]);
+}
+
+// Appends in place to a heap string; the caller has checked that the destination is
+// held once and that the suffix is not the destination itself.
+export function heapAppend(arr: RaiserArrayHeap, dst: int64, suffix: RaiserValue): void {
+	const texts = arr.strings.texts;
+	const tb = textTable(arr, suffix);
+	const i = textIndex(suffix);
+	texts[dst as number] += tb[i];
+}
+
+export function heapStringHeldOnce(arr: RaiserArrayHeap, v: RaiserValue): boolean {
+	return v.intVal >= 0 && arr.strings.rc[v.intVal] == 1;
 }
 
 export function heapStringLive(arr: RaiserArrayHeap): number {
@@ -207,7 +280,7 @@ export function raiserToBool(arr: RaiserArrayHeap, v: RaiserValue): boolean {
 		RaiserValueKind.Nil => false,
 		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal != 0,
 		RaiserValueKind.Float => v.floatVal != 0.0 && v.floatVal == v.floatVal,
-		RaiserValueKind.String => heapStringText(arr, v).length > 0,
+		RaiserValueKind.String => heapStringLength(arr, v) > 0,
 		RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => true,
 		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => true,
 	};
@@ -225,7 +298,7 @@ export function raiserEqual(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue
 		RaiserValueKind.Nil => true,
 		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Array | RaiserValueKind.Object => a.intVal == b.intVal,
 		RaiserValueKind.Float => a.floatVal == b.floatVal,
-		RaiserValueKind.String => heapStringText(arr, a) == heapStringText(arr, b),
+		RaiserValueKind.String => heapStringEquals(arr, a, b),
 		_ => false,
 	};
 }

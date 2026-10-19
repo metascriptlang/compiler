@@ -1961,3 +1961,37 @@ test "a string a host function stores in the array it builds is held by that arr
 		}
 	}
 }
+
+// --- A self-append extends the register's own string in place ---
+
+const selfAppend = "function grow(): number { let s = \"\"; for (let i = 0; i < 20000; i++) { s = s + \"ab\"; } return s.length; }"
+	+ " console.log(grow() == 40000 ? \"ok\" : \"bad\");";
+
+test "orc: appending to a string held once keeps one heap item" {
+	const vm = evalOrcVM(selfAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.arrayHeap.strings.texts.length == 1, `${vm.arrayHeap.strings.texts.length}`;
+}
+
+test "arena: appending to a string held once keeps one heap item" {
+	const vm = evalArenaVM(selfAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.arrayHeap.strings.texts.length == 1, `${vm.arrayHeap.strings.texts.length}`;
+}
+
+const sharedAppend = "function f(): string { let s = \"a\" + `${1}`; const t = s; s = s + \"x\"; s = s + s; const o = { v: s }; s = s + \"y\"; return t + \"|\" + s + \"|\" + o.v; }"
+	+ " console.log(f());";
+
+test "orc: appending to a string another holder shares leaves the holder unchanged" {
+	const vm = evalOrcVM(sharedAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "a1|a1xa1xy|a1xa1x\n", vm.output;
+}
+
+test "arena: appending to a string another holder shares leaves the holder unchanged" {
+	const vm = evalArenaVM(sharedAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "a1|a1xa1xy|a1xa1x\n", vm.output;
+}
