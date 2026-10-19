@@ -130,6 +130,7 @@ function stripRestParamPrefix(params: string[]): boolean {
 function liftParamModifiers(params: string[], flags: string): string {
 	let outAt = "";
 	let refAt = "";
+	let sinkAt = "";
 	for (let i = 0; i < params.length; i += 1) {
 		if (params[i].length > 4 && params[i].slice(0, 4) == "out:") {
 			params[i] = params[i].slice(4, params[i].length);
@@ -137,22 +138,28 @@ function liftParamModifiers(params: string[], flags: string): string {
 		} else if (params[i].length > 4 && params[i].slice(0, 4) == "ref:") {
 			params[i] = params[i].slice(4, params[i].length);
 			refAt = refAt == "" ? `${i}` : `${refAt},${i}`;
+		} else if (params[i].length > 5 && params[i].slice(0, 5) == "sink:") {
+			params[i] = params[i].slice(5, params[i].length);
+			sinkAt = sinkAt == "" ? `${i}` : `${sinkAt},${i}`;
 		}
 	}
 	if (outAt != "") flags = flags == "" ? `out:${outAt}` : `${flags}|out:${outAt}`;
 	if (refAt != "") flags = flags == "" ? `ref:${refAt}` : `${flags}|ref:${refAt}`;
+	if (sinkAt != "") flags = flags == "" ? `sink:${sinkAt}` : `${flags}|sink:${sinkAt}`;
 	return flags;
 }
 
 function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
-	if (flags == "" || (flags.indexOf("out:") < 0 && flags.indexOf("ref:") < 0)) return;
+	if (flags == "" || (flags.indexOf("out:") < 0 && flags.indexOf("ref:") < 0 && flags.indexOf("sink:") < 0)) return;
 	for (const fp of splitTopLevel(flags, "|")) {
 		const trimFp = fp.trim();
-		if (trimFp.length > 4 && (trimFp.slice(0, 4) == "out:" || trimFp.slice(0, 4) == "ref:")) {
-			for (const ip of splitTopLevel(trimFp.slice(4, trimFp.length), ",")) {
+		const prefixLen = trimFp.slice(0, 5) == "sink:" ? 5 : 4;
+		const prefix = trimFp.slice(0, prefixLen);
+		if (trimFp.length > prefixLen && (prefix == "out:" || prefix == "ref:" || prefix == "sink:")) {
+			for (const ip of splitTopLevel(trimFp.slice(prefixLen, trimFp.length), ",")) {
 				const idx = parseIntStr(ip.trim());
 				if (idx >= 0 && idx < paramTypes.length) {
-					paramTypes[idx] = trimFp.slice(0, 4) == "out:" ? createOutVar(paramTypes[idx]) : createVar(paramTypes[idx]);
+					paramTypes[idx] = prefix == "out:" ? createOutVar(paramTypes[idx]) : prefix == "ref:" ? createVar(paramTypes[idx]) : createSink(paramTypes[idx]);
 				}
 			}
 		}
@@ -220,13 +227,16 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col
 		if (colonIdx > 0) {
 			let name = part.slice(0, colonIdx).trim();
 			let typeText = part.slice(colonIdx + 1, part.length).trim();
+			const isSink = name.startsWith("sink ");
+			if (isSink) name = name.slice(5, name.length).trim();
 			if (name.endsWith("?")) {
 				name = name.slice(0, name.length - 1).trim();
 				typeText = optionalizeTypeString(typeText);
 				if (pi < requiredCount) requiredCount = pi;
 			}
 			paramNames.push(name);
-			paramTypes.push(resolveAnnotation(typeText, ctx, line, col));
+			const annotated = resolveAnnotation(typeText, ctx, line, col);
+			paramTypes.push(isSink ? createSink(annotated) : annotated);
 		} else {
 			paramNames.push("");
 			paramTypes.push(resolveAnnotation(part, ctx, line, col));
@@ -1649,24 +1659,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// Wrap out/ref param types in TypeKind.Var (reference parity: tyVar — both are T* in C)
 	wrapModifierTypes(d.fnFlags, paramTypes);
 
-	if (d.fnFlags != "" && d.fnFlags.indexOf("sink:") >= 0) {
-		if (d.fnFlags.indexOf("extern", 0) < 0) {
-			addError(ctx, `'sink' parameter on '${d.fnName}': only an extern declaration can take ownership of an argument`, node.location.line, node.location.column);
-		}
-		const sinkParts = splitTopLevel(d.fnFlags, "|");
-		for (const sp of sinkParts) {
-			const trimSp = sp.trim();
-			if (trimSp.length > 5 && trimSp.slice(0, 5) == "sink:") {
-				const idxParts = splitTopLevel(trimSp.slice(5, trimSp.length), ",");
-				for (const ip of idxParts) {
-					const idx = parseIntStr(ip.trim());
-					if (idx >= 0 && idx < paramTypes.length) {
-						paramTypes[idx] = createSink(paramTypes[idx]);
-					}
-				}
-			}
-		}
-	}
 	for (let pi = 0; pi < paramTypes.length && pi < d.params.length; pi += 1) {
 		const pLoc = node.paramLocations != null && pi < node.paramLocations.length && node.paramLocations[pi] != null
 			? node.paramLocations[pi] : node.location;
@@ -2448,6 +2440,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 		if (p.slice(0, 4) == "out:" || p.slice(0, 4) == "ref:") addError(ctx, "a constructor parameter cannot be 'out' or 'ref': '" + p.slice(4, p.length) + "'", member.location.line, member.location.column);
 	}
 	const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
+	wrapModifierTypes(liftParamModifiers(cd.ctorParams, ""), paramTypes);
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
 	stripRestParamPrefix(cd.ctorParams);

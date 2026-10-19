@@ -21,7 +21,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
-import { isAssignable, nonNullMemberOfNullable, sameType } from "./compat";
+import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers } from "./compat";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
@@ -1669,6 +1669,21 @@ function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className:
 		d.nameLocation.line, d.nameLocation.column);
 }
 
+function checkOverrideSinkMode(ctx: CheckerContext, d: MethodDeclData, sym: Symbol, className: string, classType: Type): void {
+	if (classType == null || classType.sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return;
+	const base = dispatchOverriddenEntry(classType.sym, d.methodName);
+	if (base == null || base.overloaded || base.sym.symbolType == null || base.sym.symbolType.kind != TypeKind.Function) return;
+	const own = sym.symbolType.typeChildren;
+	const inherited = base.sym.symbolType.typeChildren;
+	if (own.length != inherited.length) return;
+	for (let i = 0; i < own.length; i += 1) {
+		if (!sinkModeDiffers(own[i], inherited[i])) continue;
+		addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}' but parameter ${i} is ${own[i].kind == TypeKind.Sink ? "sink" : "not sink"} where the overridden one is ${own[i].kind == TypeKind.Sink ? "not sink" : "sink"}; an override keeps the ownership mode of every parameter`,
+			d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+}
+
 function checkClassMember(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
 	if (node == null) return;
 	const friends = expansionFriendsOf(ctx, node);
@@ -1719,6 +1734,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
 			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className, classType);
+			if (!d.methodIsStatic) checkOverrideSinkMode(ctx, d, sym, className, classType);
 			refuseAccessorOverField(ctx, node, classType, d.methodName, d.nameLocation);
 			// Skip body check for generic methods (body re-checked per instantiation,
 			// like top-level generic fns at checkFunctionDecl:358).
@@ -2809,6 +2825,9 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			if (paramType != null && paramType.kind == TypeKind.Varargs
 				&& paramType.typeChildren.length > 0) {
 				paramType = paramType.typeChildren[0];
+			}
+			if (paramType != null && paramType.kind == TypeKind.Sink && paramType.typeReturn != null) {
+				paramType = paramType.typeReturn;
 			}
 		}
 		if (param.indexOf("_destr") == 0 && (paramType == null || paramType.kind == TypeKind.Inferred || paramType.kind == TypeKind.Unknown)) {
