@@ -2035,6 +2035,23 @@ an alias too), `spawn(work)` with `async function work()` is refused at the call
 promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
 flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
 
+An async function that declares `Promise<T>` and returns a `Promise<T>` awaits it, as TypeScript
+does: `return g()`, `return Promise.resolve(7)` and `return Promise.reject(new Error("boom"))` mean
+`return await …`. Inside a `try` that has a `catch` or `finally` the same return is refused, because
+TypeScript's catch would not see that promise's rejection:
+
+```typescript
+async function g(): Promise<int32> { return 5; }
+async function f(): Promise<int32> { return g(); }          // await f() gives 5
+async function h(): Promise<int32> {
+    try { return g(); } catch (e) { return 0; }            // error: a returned promise is not awaited inside try — write `return await …` so catch and finally see its result
+}
+```
+
+Measured 2026-10-20 on C (drc, orc) and JS: the three returns print `5`, `7` and `caught boom`, and
+the `try` form is refused with that message (corpus `asyncReturnPromise`, checker3pass
+`promiseFlow`). The Raiser printed the same three results; its `try` refusal was not run.
+
 `await` takes a thenable as TypeScript does, through the `then` protocol (see
 ["`then` — thenable adoption"](#then--thenable-adoption)).
 
@@ -2043,17 +2060,25 @@ flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker
 ```typescript
 fetchUser(42)
     .then((user) => { console.log(user); })
-    .catch((err) => { console.log("failed: " + err); })
+    .catch((err) => { console.log("failed: " + err.message); })
     .finally(() => { cleanup(); });
 ```
 
 | Method | Callback Signature | Returns | Behavior |
 |--------|-------------------|---------|----------|
 | `.then(fn)` | `(value: T) => void` | `Promise<void>` | Called on fulfillment, rejection propagates |
-| `.catch(fn)` | `(error: string) => void` | `Promise<T>` | Called on rejection, fulfillment passes through |
+| `.then(fn, onRejected)` | `(value: T) => void`, `(error: Error) => void` | `Promise<void>` | `onRejected` is called on the input's rejection only; a throw from `fn` rejects the output |
+| `.catch(fn)` | `(error: Error) => void` | `Promise<T>` | Called on rejection, fulfillment passes through |
 | `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved |
 
 All three return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+
+Every rejection reaches its reader as an `Error`: `try { await p } catch (e)`, `.catch` and the
+second callback of `.then` see the same object, a string reason having become an `Error` whose
+`message` is that string. Measured 2026-10-20 on C (drc, orc) and JS with `Promise.reject("boom")`
+and an executor's `reject("boom")`: all six readers print `boom`, and an `Error` subclass reaches
+`.catch` and `.then` with its own field (corpus `rejectionReasonIsAnError`). Not run: `.then` and
+`.catch` on the Raiser, which has no host bridge for them.
 
 #### Promise Combinators (Static Methods)
 
@@ -2074,11 +2099,18 @@ extern function msPromiseAny(promises: Promise<void>[]): Promise<void> from "msP
 #### Promise.resolve / Promise.reject
 
 ```typescript
-extern function msPromiseResolve(val: void): Promise<void> from "msPromiseResolve";
-extern function msPromiseReject(err: void): Promise<void> from "msPromiseReject";
+const done: Promise<int32> = Promise.resolve(7);
+const failed: Promise<int32> = Promise.reject("boom");             // rejects with an Error, message "boom"
+const coded: Promise<int32> = Promise.reject(new CodeError("x", 7)); // an Error subclass passes as it is
+const bad: Promise<int32> = Promise.reject(42);                    // error: only an 'Error' or a 'string' can be thrown, got 'int32'
 ```
 
-Create pre-settled promises. Useful for returning immediate values from functions that must return `Promise<T>`.
+Create pre-settled promises. `Promise.reject` takes what `throw` takes, under the same rule and
+diagnostic: a string becomes an `Error` carrying it, an `Error` passes, and anything else is
+refused. TypeScript accepts any reason; MetaScript has no carrier that keeps every value readable
+as `e.message` on every backend. Its result is a `Promise<never>`, which fits a promise of any
+payload. Measured 2026-10-20 on C (drc, orc) and JS; `Promise.reject("boom")` awaited in a
+try/catch also printed `boom` on the Raiser.
 
 #### new Promise(executor) — Constructor Pattern
 
@@ -2088,12 +2120,18 @@ const p = new Promise<string>((resolve, reject) => {
     if (success) {
         resolve(data);     // settles the promise as fulfilled
     } else {
-        reject("failed");  // settles the promise as rejected
+        reject("failed");  // settles the promise as rejected with an Error, message "failed"
     }
 });
 
 const result = await p;
 ```
+
+`reject` takes a `string | Error` and boxes a string as `Promise.reject` does. An executor that
+annotates it writes `reject: (reason: string | Error) => void`; `reject: (e: Error) => void` does not
+fit, because a callback taking `Error` and one taking `string | Error` are called differently.
+`reject(42)` is refused as an argument mismatch (`got int32, expected Error | string`), not with
+throw's wording, because `reject` is an ordinary callback parameter.
 
 The executor runs **synchronously**. Only the first call to `resolve` or `reject` takes effect — subsequent calls are ignored (settled flag). The constructor is lowered to `msPromiseNew(executor)` by the compiler.
 
