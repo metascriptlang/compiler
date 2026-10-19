@@ -56,10 +56,12 @@ if [ "$1" = --inert ]; then exit "$(cat "$LQ_TEST/inert" 2>/dev/null || echo 0)"
 name=$(git symbolic-ref --short HEAD)
 printf '%s head=%s files=%s par=%s jobs=%s\n' "$name" "$(git rev-parse --short HEAD)" "$(git ls-tree --name-only HEAD | grep -v '^tools$' | paste -sd, -)" "${GATE_PAR:-}" "${MSCORPUS_BUILD_JOBS:-}" >>"$LQ_TEST/gates.log"
 v=$(cat verdict 2>/dev/null || echo green)
+n=$(( $(cat "$LQ_TEST/count.${name#wt/}" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$LQ_TEST/count.${name#wt/}"
 case "$v" in
+  busy3) [ "$n" -gt 3 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; exit 0 ;;
+  busyred) [ "$n" -gt 1 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; echo "gate: RED (tests) 0m01s"; exit 1 ;;
   green) exit 0 ;;
   red) echo "gate: RED (tests) 0m01s"; exit 1 ;;
-  busy) echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75 ;;
   hold) touch "$LQ_TEST/holding.${name#wt/}"; while [ ! -e "$LQ_TEST/release" ]; do sleep 0.2; done; exit 0 ;;
 esac
 EOF
@@ -132,12 +134,18 @@ check "S5 landed after retry" '[ "$rm" = 0 ] && onmain m.txt && onmain other.txt
 check "S5 gated twice" '[ "$(grep -c "^wt/m " "$T/ctl/gates.log")" = 2 ]'
 check "S5 second gate saw other.txt" '[ "$(grep "^wt/m " "$T/ctl/gates.log" | tail -1 | grep -c other\.txt)" = 1 ]'
 
-echo "== S6 gate BUSY is retried, then red after the try limit"
-setup; mkwt y busy
+echo "== S6 gate BUSY is queued again without counting a try, past the try limit, and lands"
+setup; mkwt y busy3
 enqueue y
 ry=$(waitfor y 60)
-check "S6 busy ends red after 3 tries" '[ "$ry" = 1 ] && [ "$(grep -c "^wt/y " "$T/ctl/gates.log")" = 3 ]'
-check "S6 runner log shows retries" '[ "$(grep -c "y: retry" "$MSC_LAND_QUEUE/runner.log")" = 2 ]'
+check "S6 four BUSY-then-green gates land" '[ "$ry" = 0 ] && onmain y.txt && [ "$(grep -c "^wt/y " "$T/ctl/gates.log")" = 4 ]'
+check "S6 no BUSY counted a try" '[ "$(grep -c "y: land, try 1$" "$MSC_LAND_QUEUE/runner.log")" = 4 ] && [ "$(grep -c "y: machine busy" "$MSC_LAND_QUEUE/runner.log")" = 3 ]'
+
+echo "== S6b a red after a BUSY try is red, not mistaken for the earlier BUSY"
+setup; mkwt b2 busyred
+enqueue b2
+rb2=$(waitfor b2 60)
+check "S6b red after one BUSY" '[ "$rb2" = 1 ] && ! onmain b2.txt && [ "$(grep -c "^wt/b2 " "$T/ctl/gates.log")" = 2 ] && grep -q "gate: RED" "$MSC_LAND_QUEUE/b2.red"'
 
 echo "== S7 enqueue with no name from inside the worktree; hyphen names do not collide"
 setup; mkwt alias; mkwt fix-alias
