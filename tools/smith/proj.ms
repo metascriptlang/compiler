@@ -1587,3 +1587,33 @@ test "a function with a default parameter is never called through a namespace im
 	}
 	assert defaults > 0;
 }
+
+test "a generic class is never renamed on import, because an aliased generic class cannot be instantiated" {
+	let generics = 0;
+	let aliased = 0;
+	for (const vector of ["fams=gcls", "fams=generic", "fams=gcls,generic,cls"]) {
+		for (let seed = 1; seed <= 20; seed++) {
+			const files = projectOf(seed as uint64, vector + " modules=4 modshapes=alias");
+			assert files.length > 0;
+			const names: string[] = [];
+			for (const f of files) {
+				for (const line of f.text.split("\n")) {
+					const bare = line.startsWith("export ") ? line.slice(7, line.length) : line;
+					if (!bare.startsWith("class ")) { continue; }
+					const end = bare.indexOf("<");
+					if (end > 0 && end < bare.indexOf(" {")) { names.push(bare.slice(6, end)); generics++; }
+				}
+			}
+			for (const f of files) {
+				for (const line of f.text.split("\n")) {
+					if (!line.startsWith("import {")) { continue; }
+					for (const name of importedNames(line)) {
+						if (name.contains(" as ")) { aliased++; }
+						for (const g of names) { assert !name.startsWith(g + " as "); }
+					}
+				}
+			}
+		}
+	}
+	assert generics > 10 && aliased > 10;
+}
