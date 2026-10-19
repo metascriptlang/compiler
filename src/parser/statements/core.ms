@@ -430,7 +430,8 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 export function parseExprStmt(state: ParserState): NodeResult {
 	const token = current(state);
 	const expr = try parseExpressionFromState(state);
-	consumeSemicolon(state);
+	if (expr.kind != NodeKind.MatchExpr) consumeSemicolon(state);
+	else if (!isAtEnd(state) && current(state).kind == TokenKind.Semicolon) advance(state);
 	return Result.ok(createNode(NodeKind.ExprStmt, { expr }, token));
 }
 

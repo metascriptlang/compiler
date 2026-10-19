@@ -5,7 +5,6 @@ const PRELUDE = "function noop(): void { }\n"
 	+ "class K { m(): void { } }\n";
 
 const VOID_TEXT = "a 'void' value has no text — a void call produces no value; call it on its own line";
-const NEVER_TEXT = "a 'never' value has no text — the expression never produces a value";
 
 function errorsOf(body: string): string {
 	return checkOnly(PRELUDE + body).errors.join("\n");
@@ -32,10 +31,12 @@ test "a void method call in a template is refused" {
 	assert text.contains(VOID_TEXT), "a template over a void method call must fail the checker: " + text;
 }
 
-test "a never value in a template, String() or concatenation is refused" {
-	assert errorsOf("function t(): string { return `x=${fail()}`; }\n").contains(NEVER_TEXT), "a template over never must fail the checker";
-	assert errorsOf("function t(): string { return String(fail()); }\n").contains(NEVER_TEXT), "String(never) must fail the checker";
-	assert errorsOf("function t(): string { return \"y\" + fail(); }\n").contains(NEVER_TEXT), "\"y\" + never must fail the checker";
+test "a never value in a template, String() or concatenation checks, since it raises before any text is made" {
+	for (const body of ["function t(): string { return `x=${fail()}`; }\n", "function t(): string { return String(fail()); }\n",
+		"function t(): string { return \"y\" + fail(); }\n", "function t(x: never): string { return \"Unexpected: \" + x; }\n"]) {
+		const text = errorsOf(body);
+		assert text == "", "text over never must check: " + text;
+	}
 }
 
 test "a void call on its own line and text of values still check" {

@@ -15,7 +15,8 @@ import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset } from "../../raiser/bytecode";
+import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
@@ -1504,4 +1505,350 @@ test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {
 	const ctx = evalOrcVM("struct S { n: int32; } let s: S = { n: 3 }; const raw = s as Ptr<void>; const p = raw as Ptr<S>; p[].n = 4; console.log(`${s.n}`);");
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "4\n";
+}
+
+// --- Conditions: a comparison in condition position is one compare-and-skip ---
+
+function compiledFunc(code: string, name: string): RaiserFunction {
+	const mod = compileForOrc(code);
+	for (const f of mod.functions) {
+		if (f.name == name) return f;
+	}
+	unreachable;
+	return mod.functions[0];
+}
+
+function backJumpSpan(f: RaiserFunction): number {
+	for (let i = 0; i < f.code.length; i = i + 1) {
+		if (f.code[i].op == RaiserOpcode.Jump && getSignedAx(f.code[i]) < 0) return -getSignedAx(f.code[i]);
+	}
+	return 0;
+}
+
+test "engine: a for loop tests its bound with one compare-and-skip and keeps no old value of i++" {
+	const sum = compiledFunc("function sum(n: int64): int64 { let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { s += i; } return s; } console.log(`${sum(10)}`);", "sum");
+	const text = disasmFunc(sum);
+	assert backJumpSpan(sum) == 4, text;
+	assert !text.includes("; true") && !text.includes("; false"), text;
+	const fl = compiledFunc("function sum(n: float64): float64 { let s: float64 = 0.0; for (let i: float64 = 0.0; i < n; i++) { s += i; } return s; } console.log(`${sum(10.0)}`);", "sum");
+	assert backJumpSpan(fl) == 6, disasmFunc(fl);
+	const wh = compiledFunc("function f(n: int64): int64 { let i: int64 = 0; while (i < n) { i++; } return i; } console.log(`${f(3)}`);", "f");
+	assert backJumpSpan(wh) == 3, disasmFunc(wh);
+	const st = compiledFunc("function f(a: string, b: string): int64 { let i: int64 = 0; while (a < b && i < 3) { i++; } return i; } console.log(`${f('a', 'b')}`);", "f");
+	assert !disasmFunc(st).includes("; true"), disasmFunc(st);
+}
+
+test "engine: an if on a comparison emits no bool constant and no compare against zero" {
+	const f = compiledFunc("function f(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${f(1, 2)}`);", "f");
+	const text = disasmFunc(f);
+	assert opName(f.code[0].op) == "BrGeI64" && countNamed(f, "Jump") == 0 && countNamed(f, "LoadConst") == 0, text;
+}
+
+function condForms(op: string, ty: string, a: string, b: string): string {
+	const A = `(a ${op} b)`;
+	const variants = [A, `!${A}`, `${A} && t`, `${A} || f`, `t && ${A}`, `f || ${A}`, `!(${A} && t)`, `!(${A} || f)`, `!${A} || f`, `!${A} && t`, `(${A} && t) || f`, `${A} && ${A}`, `${A} || ${A}`, `!!${A}`, `(${A} || f) && (t && ${A})`];
+	let body = "";
+	for (const c of variants) {
+		body = body + ` if (${c}) { r = r + '1'; } else { r = r + '0'; }`
+			+ ` r = r + ((${c}) ? '1' : '0');`
+			+ ` w = '0'; while (${c}) { w = '1'; break; } r = r + w;`
+			+ ` n = 0; do { n = n + 1; } while ((${c}) && n < 3); r = r + (n > 1 ? '1' : '0');`
+			+ ` fc = '0'; for (let k = 0; (${c}) && k < 1; k++) { fc = '1'; } r = r + fc;`;
+	}
+	return `function chk(a: ${ty}, b: ${ty}, t: boolean, f: boolean): string { let r = ''; let w = '0'; let n = 0; let fc = '0';${body} return r; }`
+		+ ` const as: ${ty}[] = [${a}]; const bs: ${ty}[] = [${b}];`
+		+ ` for (let i = 0; i < as.length; i++) { console.log(chk(as[i], bs[i], true, false)); }`;
+}
+
+function expectedForms(truth: boolean): string {
+	const negated = [false, true, false, false, false, false, true, true, true, true, false, false, false, false, false];
+	let out = "";
+	for (const neg of negated) {
+		const bit = (truth != neg) ? "1" : "0";
+		out = out + bit + bit + bit + bit + bit;
+	}
+	return out;
+}
+
+function condTruth(op: string, a: float64, b: float64): boolean {
+	return match (op) {
+		"==" => a == b,
+		"!=" => a != b,
+		"<" => a < b,
+		"<=" => a <= b,
+		">" => a > b,
+		_ => a >= b,
+	};
+}
+
+function condTruthStr(op: string, a: string, b: string): boolean {
+	return match (op) {
+		"==" => a == b,
+		"!=" => a != b,
+		"<" => a < b,
+		"<=" => a <= b,
+		">" => a > b,
+		_ => a >= b,
+	};
+}
+
+function numericCondsFailure(ty: string, aLits: string[], bLits: string[], aVals: float64[], bVals: float64[]): string {
+	for (const op of ["==", "!=", "<", "<=", ">", ">="]) {
+		const ctx = evalOrcVM(condForms(op, ty, aLits.join(", "), bLits.join(", ")));
+		if (ctx.error != "") return `${ty} ${op}: ${ctx.error}`;
+		let want = "";
+		for (let i = 0; i < aVals.length; i++) want = want + expectedForms(condTruth(op, aVals[i], bVals[i])) + "\n";
+		if (ctx.output != want) return `${ty} ${op}: ${ctx.output}`;
+	}
+	return "";
+}
+
+test "engine: every comparison drives if, ternary, while, do-while, for, &&, || and ! on int64" {
+	const failure = numericCondsFailure("int64", ["1", "2", "2", "-1", "5"], ["2", "1", "2", "1", "-5"], [1, 2, 2, -1, 5], [2, 1, 2, 1, -5]);
+	assert failure == "", failure;
+}
+
+test "engine: every comparison drives every condition form on float64, NaN included" {
+	const nan = "(0.0 / 0.0)";
+	const failure = numericCondsFailure("float64", ["1.5", "2.5", "2.5", nan, "1.0", nan, "-0.0"], ["2.5", "1.5", "2.5", "1.0", nan, nan, "0.0"],
+		[1.5, 2.5, 2.5, 0.0 / 0.0, 1.0, 0.0 / 0.0, -0.0], [2.5, 1.5, 2.5, 1.0, 0.0 / 0.0, 0.0 / 0.0, 0.0]);
+	assert failure == "", failure;
+}
+
+test "engine: every comparison drives every condition form on narrow unsigned ints" {
+	const failure = numericCondsFailure("uint8", ["1", "200", "255", "0"], ["2", "100", "255", "255"], [1, 200, 255, 0], [2, 100, 255, 255]);
+	assert failure == "", failure;
+}
+
+test "engine: unsigned 64-bit ordering in a condition is unsigned" {
+	for (const op of ["<", "<=", ">", ">="]) {
+		const ctx = evalOrcVM(condForms(op, "uint64", "1, 0xFFFFFFFFFFFFFFFF, 1", "0xFFFFFFFFFFFFFFFF, 1, 1"));
+		assert ctx.error == "", ctx.error;
+		const wantTruth = match (op) {
+			"<" => [true, false, false],
+			"<=" => [true, false, true],
+			">" => [false, true, false],
+			_ => [false, true, true],
+		};
+		let want = "";
+		for (const w of wantTruth) want = want + expectedForms(w) + "\n";
+		assert ctx.output == want, `uint64 ${op}: ${ctx.output}`;
+	}
+}
+
+test "engine: every comparison drives every condition form on strings" {
+	const aVals = ["a", "b", "a", "", "ab"];
+	const bVals = ["b", "a", "a", "a", "a"];
+	for (const op of ["==", "!=", "<", "<=", ">", ">="]) {
+		const ctx = evalOrcVM(condForms(op, "string", aVals.map((x) => `'${x}'`).join(", "), bVals.map((x) => `'${x}'`).join(", ")));
+		assert ctx.error == "", `string ${op}: ${ctx.error}`;
+		let want = "";
+		for (let i = 0; i < aVals.length; i++) want = want + expectedForms(condTruthStr(op, aVals[i], bVals[i])) + "\n";
+		assert ctx.output == want, `string ${op}: ${ctx.output}`;
+	}
+}
+
+test "engine: null comparisons, bool variables and calls drive conditions" {
+	const ctx = evalOrcVM("function g(x: string | null, t: boolean): string { let r = '';"
+		+ " if (x === null) { r = r + 'a'; } else { r = r + 'b'; }"
+		+ " if (x !== null) { r = r + 'c'; } else { r = r + 'd'; }"
+		+ " r = r + ((x === null) ? 'e' : 'f');"
+		+ " if (x !== null && t) { r = r + 'g'; } else { r = r + 'h'; }"
+		+ " if (!(x === null) || !t) { r = r + 'i'; } else { r = r + 'j'; }"
+		+ " let n = 0; while (x === null && n < 1) { n = n + 1; } r = r + `${n}`; return r; }"
+		+ " function yes(): boolean { return true; } function no(): boolean { return false; }"
+		+ " let s: string | null = 's'; let z: string | null = null;"
+		+ " console.log(g(z, true)); console.log(g(s, true)); console.log(g(s, false));"
+		+ " let q = 0; if (yes() && !no()) { q = q + 1; } if (no() || yes()) { q = q + 1; } if (!yes()) { q = q + 10; } console.log(`${q}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "adehj1\nbcfgi0\nbcfhi0\n2\n", ctx.output;
+}
+
+test "engine: an if without an else leaves no jump to the next instruction" {
+	const g = compiledFunc("function g(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${g(1, 2)}`);", "g");
+	for (const inst of g.code) {
+		assert !(inst.op == RaiserOpcode.Jump && getSignedAx(inst) == 0), disasmFunc(g);
+	}
+}
+
+test "engine: an update statement keeps no old value and an update used as a value still returns it" {
+	const ctx = evalOrcVM("class C { n: int32 = 5; } const c = new C(); const xs: int32[] = [7]; let i = 0;"
+		+ " i++; ++i; c.n++; xs[0]--; for (let k = 0; k < 2; k++) { i--; }"
+		+ " const a = i++; const b = ++i; const d = c.n++; const e = xs[0]--;"
+		+ " console.log(`${i} ${a} ${b} ${c.n} ${d} ${xs[0]} ${e}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "2 0 2 7 6 5 6\n", ctx.output;
+	const loop = compiledFunc("function f(n: int64): int64 { let i: int64 = 0; i++; return i; } console.log(`${f(1)}`);", "f");
+	for (const inst of loop.code) {
+		assert inst.op != RaiserOpcode.Move, disasmFunc(loop);
+	}
+}
+
+// --- Destinations: a value bound for a known register is computed into it ---
+
+function countOp(f: RaiserFunction, op: RaiserOpcode): number {
+	let n = 0;
+	for (const inst of f.code) {
+		if (inst.op == op) n = n + 1;
+	}
+	return n;
+}
+
+test "engine: a call argument, a local assignment and a branch value land without a Move" {
+	const fib = compiledFunc("function fib(n: int32): int32 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
+	assert countOp(fib, RaiserOpcode.Move) == 0, disasmFunc(fib);
+	const asg = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 1; x = a + b; x = x + a; return x; } console.log(`${f(1, 2)}`);", "f");
+	assert countOp(asg, RaiserOpcode.Move) == 0, disasmFunc(asg);
+	const tern = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 0; x = a < b ? a + 1 : b + 2; return x; } console.log(`${f(1, 2)}`);", "f");
+	assert countOp(tern, RaiserOpcode.Move) == 1, disasmFunc(tern);
+	const glob = compiledFunc("let g: int64 = 5; function h(a: int64, b: int64): int64 { return a + b; } function f(a: int64): int64 { return h(g, a * 2); } console.log(`${f(1)}`);", "f");
+	assert countOp(glob, RaiserOpcode.Move) == 0, disasmFunc(glob);
+}
+
+test "engine: a condition on a float, a string or a negated value jumps on its ToBoolean" {
+	const ctx = evalOrcVM("function t(x: float64, s: string): string {"
+		+ " let r = ''; if (x) r = r + 'x'; if (s) r = r + 's'; if (!x) r = r + 'X'; if (!s) r = r + 'S';"
+		+ " if (x || s) r = r + 'o'; if (x && s) r = r + 'a'; let n = 0; while (x) { n = n + 1; x = 0.0; }"
+		+ " do { n = n + 10; } while (s && n < 5); return `${r} ${n}`; }"
+		+ " const zero = 0.0; console.log(t(zero / zero, '')); console.log(t(0.5, 'a'));");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "XS 10\nxsoa 11\n", ctx.output;
+}
+
+test "engine: a destination the expression reads, or a merge of branches, keeps its value" {
+	const ctx = evalOrcVM("function h(a: int64, b: int64, c: int64): int64 { return a * 100 + b * 10 + c; }"
+		+ " function k(a: int64, b: int64): int64 { return a - b; }"
+		+ " function t(a: int64, b: int64, p: boolean, q: boolean): string {"
+		+ " let x: int64 = a; x = b + x; let y: int64 = a; y = k(y, b); let z: int64 = a; z = p ? z + 1 : z + 2;"
+		+ " let u: int64 = b; u = (p && q) ? u : u * 2; let w: boolean = p; w = q || p; let v: int64 = a; v = k(v, v) + v;"
+		+ " return `${x} ${y} ${z} ${u} ${w} ${v} ${h(a, a + b, p ? b : a)} ${h(b, k(a, b), a - b)}`; }"
+		+ " let g1: int64 = 3; let g2: float64 = 2.5; let ff: float64 = 1.5; ff = g2 * ff;"
+		+ " console.log(t(1, 2, true, false)); console.log(t(4, 3, false, true)); console.log(`${h(g1, g1 + 1, g1 * 2)} ${ff}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "3 -1 2 4 true 1 132 189\n7 1 6 6 true 4 474 311\n346 3.75\n", ctx.output;
+}
+
+test "engine: a body ending in return has no second return, one a jump can reach keeps it" {
+	const plain = compiledFunc("function f(a: int64): int64 { return a + 1; } console.log(`${f(1)}`);", "f");
+	assert plain.code[plain.code.length - 1].op == RaiserOpcode.Ret && countOp(plain, RaiserOpcode.Ret) == 1, disasmFunc(plain);
+	const early = compiledFunc("function f(a: int64): int64 { if (a < 0) { return 0; } return a; } console.log(`${f(1)}`);", "f");
+	assert countOp(early, RaiserOpcode.Ret) == 2, disasmFunc(early);
+	const ctx = evalOrcVM("function loopy(a: int64): int64 { while (a < 10) { if (a == 7) { return a; } a = a + 1; } return -1; }"
+		+ " function onElse(a: int64): int64 { if (a > 0) { return 1; } else { return 2; } }"
+		+ " function noRet(a: int64): void { if (a > 0) { console.log('pos'); } }"
+		+ " function tried(a: int64): int64 { try { return a; } catch (e) { return -2; } }"
+		+ " console.log(`${loopy(1)} ${loopy(8)} ${onElse(1)} ${onElse(-1)} ${tried(5)}`); noRet(1); noRet(-1);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7 -1 1 2 5\npos\n", ctx.output;
+}
+
+// --- A load whose destination holds the last reference to its source ---
+
+test "engine: a field load into the register holding the only reference to its object reads the field first" {
+	const link = "class Link { v: int32; next: Link | null = null; constructor(v: int32) { this.v = v; } } function chain(): Link { const a = new Link(1); const b = new Link(2); b.next = new Link(3); a.next = b; return a; }";
+	const moved = evalOrcVM(`${link} function walk(): int32 { let cur: Link | null = chain(); let seen: int32 = 0; while (cur != null) { seen = seen * 10 + cur.v; cur = move cur.next; } return seen; } console.log(\`\${walk()}\`);`);
+	assert moved.error == "" && moved.output == "123\n", `${moved.error} ${moved.output}`;
+	const plain = evalOrcVM(`${link} function walk(): int32 { let cur: Link | null = chain(); let seen: int32 = 0; while (cur != null) { seen = seen * 10 + cur.v; cur = cur.next; } return seen; } console.log(\`\${walk()}\`);`);
+	assert plain.error == "" && plain.output == "123\n", `${plain.error} ${plain.output}`;
+}
+
+test "engine: an element load into the register holding the only reference to its array reads the element first" {
+	const ctx = evalOrcVM("function inner(): int64 { let a: int64[][] = [[7, 8]]; let b: int64[] = a[0]; return b[1]; } function nest(): number { let g: number[][][] = [[[5]]]; let h: number[][] = g[0]; let k: number[] = h[0]; return k[0]; } console.log(`${inner()} ${nest()}`);");
+	assert ctx.error == "" && ctx.output == "8 5\n", `${ctx.error} ${ctx.output}`;
+}
+
+// --- Immediate operands: an integer literal that fits the 16-bit field rides in the instruction ---
+
+function countNamed(f: RaiserFunction, name: string): number {
+	let n = 0;
+	for (const inst of f.code) {
+		if (opName(inst.op) == name) n = n + 1;
+	}
+	return n;
+}
+
+test "engine: fib, a counting loop and a while on zero use the immediate forms" {
+	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
+	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
+	assert fib.code.length == 8, disasmFunc(fib);
+	const run = compiledFunc("function run(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 5000000; i = i + 1) { s = s + i; } return s; } console.log(`${run()}`);", "run");
+	assert countNamed(run, "LoadInt") == 2 && countNamed(run, "AddI64Imm") == 1, disasmFunc(run);
+	assert countNamed(run, "LoadConst") == 1 && countNamed(run, "BrGeI64") == 1, disasmFunc(run);
+	const wh = compiledFunc("function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${w(3)}`);", "w");
+	assert countNamed(wh, "LoadConst") == 0 && countNamed(wh, "BrEqI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);
+	assert backJumpSpan(wh) == 4, disasmFunc(wh);
+	const ctx = evalOrcVM("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }"
+		+ " function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${fib(15)} ${w(7)}`);");
+	assert ctx.error == "" && ctx.output == "610 7\n", `${ctx.error} ${ctx.output}`;
+}
+
+test "engine: an immediate at the field bound is kept and one past it falls back to the register form" {
+	const f = compiledFunc("function f(y: int64): int64 { return (y + 32767) + (y + 32768) + (y - -32768) + (y - -32769); } console.log(`${f(1)}`);", "f");
+	assert countNamed(f, "AddI64Imm") == 1 && countNamed(f, "SubI64Imm") == 1 && countNamed(f, "AddI64") == 4 && countNamed(f, "SubI64") == 1, disasmFunc(f);
+	const c = compiledFunc("function c(x: int64): int64 { let r: int64 = 0; if (x == 32767) r += 1; if (x == 32768) r += 2; if (x > -32768) r += 4; if (x > -32769) r += 8; return r; } console.log(`${c(1)}`);", "c");
+	assert countNamed(c, "BrNeI64Imm") == 1 && countNamed(c, "BrNeI64") == 1 && countNamed(c, "BrLeI64Imm") == 1 && countNamed(c, "BrLeI64") == 1, disasmFunc(c);
+	const ctx = evalOrcVM("function f(y: int64): int64 { return (y + 32767) + (y + 32768) + (y - -32768) + (y - -32769); }"
+		+ " function c(x: int64): int64 { let r: int64 = 0; if (x == 32767) r += 1; if (x == 32768) r += 2; if (x > -32768) r += 4; if (x > -32769) r += 8; return r; }"
+		+ " console.log(`${f(1)} ${c(32767)} ${c(32768)} ${c(-32768)} ${c(-32769)} ${c(-32770)}`);");
+	assert ctx.error == "" && ctx.output == "131076 13 14 8 0 0\n", `${ctx.error} ${ctx.output}`;
+}
+
+test "engine: an immediate add or sub stops on overflow at int64 and at the narrow width, and takes a negative operand" {
+	const programs = [
+		"function f(x: int64): int64 { return x + 1; } console.log(`${f(9223372036854775807)}`);",
+		"function f(x: int64): int64 { return x - 1; } console.log(`${f(-9223372036854775807 - 1)}`);",
+		"function f(x: int64): int64 { return x - -1; } console.log(`${f(9223372036854775807)}`);",
+		"function f(x: int32): int32 { return x + 1; } console.log(`${f(2147483647)}`);",
+		"function f(x: int8): int8 { return x - 1; } console.log(`${f(-128)}`);",
+	];
+	for (const program of programs) {
+		const ctx = evalOrcVM(program);
+		assert ctx.error.indexOf("over- or underflow") >= 0, program;
+		assert ctx.output == "", program;
+	}
+	const f = compiledFunc("function f(x: int32): int32 { return x + 1; } console.log(`${f(1)}`);", "f");
+	assert countNamed(f, "AddI64Imm") == 1 && countNamed(f, "NarrowS") == 1, disasmFunc(f);
+	const ctx = evalOrcVM("function a(x: int64): int64 { return x + -5; } function b(x: int64): int64 { return x - -5; } function c(x: int32): int32 { return x + 1; }"
+		+ " console.log(`${a(10)} ${b(10)} ${c(2147483646)} ${a(9223372036854775807)} ${b(-9223372036854775807 - 1)}`);");
+	assert ctx.error == "" && ctx.output == "5 15 2147483647 9223372036854775802 -9223372036854775803\n", `${ctx.error} ${ctx.output}`;
+}
+
+test "engine: an unsigned operand keeps its wrapping add and its unsigned compare beside an immediate" {
+	const f = compiledFunc("function f(x: uint64, y: uint32): boolean { const z = y + 1; return x < 5 || z == 0; } console.log(`${f(1, 2)}`);", "f");
+	assert countNamed(f, "BltU64") == 1 && countNamed(f, "BltI64Imm") == 0 && countNamed(f, "AddU64") == 1 && countNamed(f, "AddI64Imm") == 0, disasmFunc(f);
+	assert countNamed(f, "BeqI64Imm") == 1, disasmFunc(f);
+	const ctx = evalOrcVM("function lt(x: uint64): boolean { return x < 5; } function wrap(y: uint32): uint32 { return y + 1; } function zero(x: uint64): boolean { return x == 0; }"
+		+ " console.log(`${lt(18446744073709551615)} ${lt(4)} ${wrap(4294967295)} ${zero(0)} ${zero(18446744073709551615)}`);");
+	assert ctx.error == "" && ctx.output == "false true 0 true false\n", `${ctx.error} ${ctx.output}`;
+}
+
+// --- Compare-and-branch: an integer condition is one instruction carrying its jump target ---
+
+test "engine: an integer condition branches in one instruction and a float one keeps its skip and jump" {
+	const fib = compiledFunc("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
+	assert countNamed(fib, "Jump") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "BltI64Imm") == 0, disasmFunc(fib);
+	assert fib.code.length == 8, disasmFunc(fib);
+	const g = compiledFunc("function g(a: int64, b: int64): int64 { if (a < b) { return 1; } return 2; } console.log(`${g(1, 2)}`);", "g");
+	assert opName(g.code[0].op) == "BrGeI64" && countNamed(g, "Jump") == 0, disasmFunc(g);
+	const dw = compiledFunc("function f(): int64 { let n: int64 = 0; do { n++; } while (n < 10); return n; } console.log(`${f()}`);", "f");
+	assert countNamed(dw, "BrLtI64Imm") == 1 && countNamed(dw, "Jump") == 0, disasmFunc(dw);
+	const mix = compiledFunc("function f(a: int64, b: int64, c: int64): int64 { if (a < b || c == 3) { return 1; } return 2; } console.log(`${f(1, 2, 3)}`);", "f");
+	assert countNamed(mix, "Jump") == 0, disasmFunc(mix);
+	const val = compiledFunc("function f(a: int64, b: int64): boolean { return a < b; } console.log(`${f(1, 2)}`);", "f");
+	assert countNamed(val, "BltI64") == 1 && countNamed(val, "BrGeI64") == 0, disasmFunc(val);
+	const fl = compiledFunc("function f(a: float64, b: float64): int64 { if (a < b) { return 1; } return 2; } console.log(`${f(1.0, 2.0)}`);", "f");
+	assert countNamed(fl, "BltF64") == 1 && countNamed(fl, "Jump") == 1, disasmFunc(fl);
+}
+
+test "engine: a branch over more than 32768 instructions keeps its target and a do-while branches back" {
+	const source = "function f(x: int64): int64 { let s: int64 = 0; if (x < 5) { const a: int64[] = [" + "0,".repeat(20000) + "0]; s = s + a.length; } return s; }"
+		+ " function g(): int64 { let n: int64 = 0; do { n++; } while (n < 20); return n; } console.log(`${f(1)} ${f(9)} ${g()}`);";
+	const f = compiledFunc(source, "f");
+	let span: int64 = 0;
+	for (const inst of f.code) {
+		if (opName(inst.op) == "BrGeI64Imm") span = branchOffset(inst.c);
+	}
+	assert span > 32768, `${span}`;
+	const ctx = evalOrcVM(source);
+	assert ctx.error == "" && ctx.output == "20001 0 20\n", `${ctx.error} ${ctx.output}`;
 }

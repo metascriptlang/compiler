@@ -96,6 +96,10 @@ export function sort(this arr: string[]): void {
 	arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
 }
 
+export function sort<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
+	arr.sortBy(cmp);
+}
+
 export function join(this arr: Vec<string>, sep: string): string {
 	let out = "";
 	for (let i = 0; i < arr.length; i = i + 1) {
@@ -195,7 +199,7 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	return false;
 }
 
-export { lastIndexOf, findIndex, findLastIndex } from "./shared";
+export { lastIndexOf, findIndex, findLastIndex, filter, some, find } from "./shared";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	const n = view.length;

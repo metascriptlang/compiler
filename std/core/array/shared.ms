@@ -35,3 +35,22 @@ export function findLastIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => bool
 	}
 	return -1;
 }
+
+export function filter<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T[] {
+	const out: T[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		if (fn(arr[i], i)) out.push(arr[i]);
+		i = i + 1;
+	}
+	return out;
+}
+
+export function some<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): boolean {
+	return arr.findIndex(fn) >= 0;
+}
+
+export function find<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): T | null {
+	const i = arr.findIndex(fn);
+	return i >= 0 ? arr[i] : null;
+}

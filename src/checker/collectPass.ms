@@ -1,5 +1,6 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
+import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
@@ -648,6 +649,12 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = node.resolvedSym;
 	if (sym == null || sym.symbolKind != SymbolKind.Class) return;
+	d.classBody = expandAutoAccessors(d.classBody);
+	for (const member of d.classBody) {
+		if (member.kind != NodeKind.DecoratedDecl || !isAutoAccessorField((member.data as DecoratedDeclData).decoratedNode)) continue;
+		const field = (member.data as DecoratedDeclData).decoratedNode;
+		addError(ctx, `Accessor field '${(field.data as PropertyDeclData).propName}': a compiler intrinsic decorator does not apply to an accessor field`, field.location.line, field.location.column);
+	}
 	for (const member of d.classBody) {
 		if (member.kind == NodeKind.ConstructorDecl) {
 			setFlag(sym, SymbolFlag.HasConstructor);

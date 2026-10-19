@@ -49,7 +49,7 @@ import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower
 import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } from "../coercion/intArithJS";
 import { isImpureArrayOp } from "./bitSetLower";
 import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
-import { readsBeforeHoist, snapshotsLikeJs } from "./operandOrder";
+import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
 import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
 import { tdzBindingOf } from "./moduleTdz";
@@ -113,6 +113,10 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		if (expr.kind == NodeKind.SpreadExpr) return hoistSpreadOperand(expr, hoisted, ctx);
 	}
 	hoistChildrenInOrder(expr, hoisted, ctx);
+	if (callsToStatements > 0 && isNeverType(expr.nodeType)) {
+		hoisted.push(makeExprStmt(shallowCopy(expr), expr.location));
+		return expr;
+	}
 	if (callsToStatements > 0 && callCanRaise(expr)) return bindToStatement(expr, "call", hoisted, ctx);
 	return expr;
 }
@@ -155,17 +159,22 @@ function callCanRaise(n: Node): boolean {
 	return hasFlag(sym, SymbolFlag.Throws) || !hasFlag(sym, SymbolFlag.ImportC);
 }
 
-function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: TransformContext): Node {
-	const loc = expr.location;
-	const sym = freshOwnedSym(ctx, prefix, expr.nodeType);
-	const value = createNode(expr.kind, expr.data, syntheticToken(loc));
-	value.location = loc;
+function shallowCopy(expr: Node): Node {
+	const value = createNode(expr.kind, expr.data, syntheticToken(expr.location));
+	value.location = expr.location;
 	value.nodeType = expr.nodeType;
 	value.resolvedSym = expr.resolvedSym;
 	value.flags = expr.flags;
 	value.variantSlot = expr.variantSlot;
 	value.typeArg = expr.typeArg;
 	value.typeExpr = expr.typeExpr;
+	return value;
+}
+
+function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: TransformContext): Node {
+	const loc = expr.location;
+	const sym = freshOwnedSym(ctx, prefix, expr.nodeType);
+	const value = shallowCopy(expr);
 	const decl = makeVarDecl(sym.name, value, DeclKind.Const, loc);
 	decl.resolvedSym = sym;
 	if (expr.nodeType != null) { decl.nodeType = expr.nodeType; }

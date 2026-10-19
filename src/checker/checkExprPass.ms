@@ -7,7 +7,7 @@ import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, isIterator, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, isLockedRef, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, getIteratorYieldType, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor } from "./context";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor } from "./context";
 import { isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch, scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates, CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import {
@@ -73,7 +73,7 @@ function bindDeclaredOperator(ctx: CheckerContext, node: Node, op: string, opera
 	for (const t of operands) {
 		if (!operandTypeSettled(t)) return null;
 	}
-	const ext = resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, operands);
+	const ext = resolveUserOperator(ctx, op, operands);
 	if (ext == null || preludeTextOperator(ctx, ext, op, operands)) return null;
 	const fnType = getExtFnType(ext);
 	if (fnType == null || fnType.typeReturn == null) return null;
@@ -210,7 +210,9 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 
 function literalDiscriminantOwner(md: MemberExprData): Type | null {
 	let obj = md.object;
-	while (obj.kind == NodeKind.HiddenDeref) obj = (obj.data as HiddenDerefData).expr;
+	while (obj.kind == NodeKind.HiddenDeref || obj.kind == NodeKind.HiddenSubConv || obj.kind == NodeKind.HiddenStdConv) {
+		obj = obj.kind == NodeKind.HiddenDeref ? (obj.data as HiddenDerefData).expr : (obj.data as HiddenStdConvData).convExpr;
+	}
 	const declared = obj.resolvedSym != null && (obj.kind == NodeKind.Identifier || obj.kind == NodeKind.MemberExpr) ? obj.resolvedSym.symbolType : obj.nodeType;
 	const u = peelToStructOrUnion(declared);
 	if (u == null || u.kind != TypeKind.Union) return null;
@@ -1070,6 +1072,8 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 	}
 	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
+	const savedDefinite = ctx.initTracker.definiteTarget;
+	if (d.operator == "=" || d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") ctx.initTracker.definiteTarget = d.left;
 	if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
 		if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 		checkAssignTarget(ctx, d.left);
@@ -1077,6 +1081,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
 	}
 	ctx.initTracker.assignTarget = null;
+	ctx.initTracker.definiteTarget = savedDefinite;
 	let leftType = d.left.nodeType;
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
@@ -2691,7 +2696,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (readType != null && (readType.kind == TypeKind.Var || readType.kind == TypeKind.Borrow) && readType.typeReturn != null) {
 		readType = readType.typeReturn;
 	}
-	if (ctx.initTracker.leftPartOfAsgn > 0) {
+	if (node == ctx.initTracker.definiteTarget) {
 		node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
 	}
 	const flowType = getFlowTypeOfReference(node, readType);

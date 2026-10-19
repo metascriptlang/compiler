@@ -12,6 +12,7 @@ import { collectOneDirective } from "../../checker/checkPass";
 import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecoratedStmt } from "../../checker/checkerCallbacks";
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
 import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators, resolveDecoratorSymbol } from "../../checker/decoratorHelpers";
+import { expandAutoAccessor, expandAutoAccessors, isAutoAccessorField, autoAccessorStorageName } from "../../checker/autoAccessor";
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { declaringModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -82,6 +83,7 @@ interface ClassPlan {
 	memberInits: MemberInits[];
 	activeInits: MemberInits;
 	staticInits: Node[];
+	accessorParts: Node[];
 }
 
 interface TargetInfo {
@@ -292,6 +294,7 @@ function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
 		memberInits: memberInits,
 		activeInits: null as unknown as MemberInits,
 		staticInits: staticInits,
+		accessorParts: [] as Node[],
 	};
 }
 
@@ -332,6 +335,7 @@ function memberCategory(member: Node): int32 {
 	if (member.kind == NodeKind.MethodDecl) {
 		return (member.data as MethodDeclData).methodIsStatic ? 0 : 1;
 	}
+	if (isAutoAccessorField(member)) return 1;
 	if (member.kind == NodeKind.PropertyDecl) {
 		return (member.data as PropertyDeclData).propIsStatic ? 2 : 3;
 	}
@@ -339,7 +343,11 @@ function memberCategory(member: Node): int32 {
 }
 
 function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
-	const body = planBody(plan);
+	if (!plan.isActor) {
+		const cd = plan.classNode.data as ClassDeclData;
+		cd.classBody = expandAutoAccessors(cd.classBody);
+	}
+	let body = planBody(plan);
 	for (let category = 0; category < 5; category += 1) {
 		for (let i = 0; i < body.length; i += 1) {
 			const member = body[i];
@@ -347,15 +355,28 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const dd = member.data as DecoratedDeclData;
 			const inner = dd.decoratedNode;
 			if (inner == null || memberCategory(inner) != category) continue;
-			recordFieldDecorators(planClassSymbol(plan), dd);
+			const accessor = isAutoAccessorField(inner);
+			if (accessor) plan.accessorParts = expandAutoAccessor(inner);
+			else recordFieldDecorators(planClassSymbol(plan), dd);
 			const stmts: Node[] = [];
-			const inits: MemberInits = { fieldName: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "", isStatic: category == 0 || category == 2, stmts: stmts };
+			const initsField = accessor ? autoAccessorStorageName((inner.data as PropertyDeclData).propName)
+				: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "";
+			const inits: MemberInits = { fieldName: initsField, isStatic: category == 0 || category == 2, stmts: stmts };
 			plan.activeInits = inits;
 			const rewritten = runDecorators(ctx, dd.decorators, inner, plan);
 			plan.activeInits = null as unknown as MemberInits;
 			if (stmts.length > 0) plan.memberInits.push(inits);
 			const kept = intrinsicOnly(ctx, dd.decorators);
-			if (kept.length == 0) {
+			if (accessor) {
+				if (kept.length > 0) {
+					addError(ctx, `Accessor field '${(inner.data as PropertyDeclData).propName}': a compiler intrinsic decorator does not apply to an accessor field`, inner.location.line, inner.location.column);
+				}
+				const parts = plan.accessorParts;
+				plan.accessorParts = [] as Node[];
+				body = withAccessorParts(body, i, parts);
+				(plan.classNode.data as ClassDeclData).classBody = body;
+				i += 2;
+			} else if (kept.length == 0) {
 				body[i] = rewritten;
 			} else {
 				dd.decorators = kept;
@@ -363,6 +384,18 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			}
 		}
 	}
+}
+
+function withAccessorParts(body: Node[], at: int32, parts: Node[]): Node[] {
+	const out: Node[] = [];
+	for (let k = 0; k < body.length; k += 1) {
+		if (k != at) {
+			out.push(body[k]);
+			continue;
+		}
+		for (const p of parts) out.push(p);
+	}
+	return out;
 }
 
 function decoratorPositionValid(target: Node): boolean {
@@ -383,12 +416,6 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 			addError(ctx, "Decorators are not valid here", dec.location.line, dec.location.column);
 			continue;
 		}
-		if (current.flags.has(NodeFlag.Accessor)) {
-			const name = (current.data as MethodDeclData).methodName;
-			addError(ctx, `decorator '${md.macroName}' cannot apply to accessor '${name.slice(0, 3)} ${name.slice(4, name.length)}': decorated getters and setters are not supported`,
-				dec.location.line, dec.location.column);
-			continue;
-		}
 		current = runDecorator(ctx, dec, md, current, plan);
 	}
 	return current;
@@ -397,16 +424,25 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 function targetInfo(target: Node): TargetInfo {
 	if (target.kind == NodeKind.MethodDecl) {
 		const md = target.data as MethodDeclData;
+		if (target.flags.has(NodeFlag.Accessor)) {
+			return { kind: md.methodName.startsWith("get_") ? "getter" : "setter", name: md.methodName.slice(4, md.methodName.length), isStatic: md.methodIsStatic };
+		}
 		return { kind: "method", name: md.methodName, isStatic: md.methodIsStatic };
 	}
 	if (target.kind == NodeKind.PropertyDecl) {
 		const pd = target.data as PropertyDeclData;
-		return { kind: "field", name: pd.propName, isStatic: pd.propIsStatic };
+		return { kind: isAutoAccessorField(target) ? "accessor" : "field", name: pd.propName, isStatic: pd.propIsStatic };
 	}
 	if (target.kind == NodeKind.ActorDecl) {
 		return { kind: "class", name: (target.data as ActorDeclData).actorName, isStatic: false };
 	}
 	return { kind: "class", name: (target.data as ClassDeclData).className, isStatic: false };
+}
+
+function accessorLabel(methodName: string): string {
+	if (methodName.startsWith("get_")) return `getter '${methodName.slice(4, methodName.length)}'`;
+	if (methodName.startsWith("set_")) return `setter '${methodName.slice(4, methodName.length)}'`;
+	return `method '${methodName}'`;
 }
 
 function kindLabel(kind: NodeKind): string {
@@ -530,20 +566,26 @@ function classifyType(t: Type | null): int32 {
 	return shapeNode;
 }
 
-function wrapperSource(isMacro: boolean, paramList: string, shape: int32, arity: int32): string {
+function wrapperSource(isMacro: boolean, signature: string, shape: int32, arity: int32, accessor: boolean, accessorType: string): string {
 	const memberExprKind = NodeKind.MemberExpr as int32;
 	const binaryExprKind = NodeKind.BinaryExpr as int32;
 	const boolLitKind = NodeKind.BooleanLiteral as int32;
-	let s = "function __decoratorApply(value: Node, kind: string, name: string, isStatic: boolean, isPrivate: boolean, metaKeys: string[], metaValues: Node[], inheritedKeys: string[], inheritedValues: Node[], init: Node) {\n";
+	let s = "function __decoratorApply(value: Node, kind: string, name: string, isStatic: boolean, isPrivate: boolean, metaKeys: string[], metaValues: Node[], inheritedKeys: string[], inheritedValues: Node[], init: Node" + (accessor ? ", accGet: Node, accSet: Node" : "") + ") {\n";
 	s = s + "\tconst sink: Node[] = [];\n";
 	s = s + `\tconst get = (recv: Node): Node => ({ kind: ${memberExprKind} as NodeKind, line: recv.line, column: recv.column, object: recv, property: name, isOptional: false });\n`;
 	s = s + `\tconst set = (recv: Node, v: Node): Node => ({ kind: ${binaryExprKind} as NodeKind, line: recv.line, column: recv.column, operator: "=", left: get(recv), right: v });\n`;
 	s = s + `\tconst has = (recv: Node): Node => ({ kind: ${boolLitKind} as NodeKind, line: recv.line, column: recv.column, boolValue: true });\n`;
-	if (isMacro) s = s + `\tconst __dec = (${paramList}) => {};\n`;
+	if (isMacro) s = s + `\tconst __dec = ${signature} => {};\n`;
 	const contextArg = arity >= 2
 		? ", { kind: kind, name: name, static: isStatic, private: isPrivate, metadata: { keys: metaKeys, values: metaValues, inheritedKeys: inheritedKeys, inheritedValues: inheritedValues }, addInitializer: (stmt: Node): void => { sink.push(stmt); }, access: { get: get, set: set, has: has } }"
 		: "";
-	const call = "__callee__(value" + contextArg + ")";
+	if (accessor) s = s + "\tconst target" + (accessorType != "" ? ": " + accessorType : "") + " = { get: accGet, set: accSet };\n";
+	const call = "__callee__(" + (accessor ? "target" : "value") + contextArg + ")";
+	if (accessor && shape != shapeVoid) {
+		s = s + "\tconst r = " + call + ";\n\tconst ri = r.init;\n";
+		s = s + "\treturn { result: null, accGet: r.get, accSet: r.set, accInit: ri == null ? init : ri(init), initializers: sink, metaKeys: metaKeys, metaValues: metaValues };\n}\n";
+		return s;
+	}
 	if (shape == shapeTransformer) {
 		s = s + "\tconst r0 = " + call + ";\n\tconst r = r0(init);\n";
 	} else {
@@ -571,9 +613,10 @@ function buildCallee(sym: Symbol, md: MacroInvocationData, isMacro: boolean, isF
 	return callee;
 }
 
-function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInvocationData, isFactory: boolean, shape: int32, loc: SourceLocation): Node {
+function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInvocationData, isFactory: boolean, shape: int32, accessor: boolean, loc: SourceLocation): Node {
 	const isMacro = sym.symbolKind == SymbolKind.Macro;
 	let paramList = "";
+	let accessorType = "";
 	let macroBody: Node = null as unknown as Node;
 	if (isMacro) {
 		if (decl == null) {
@@ -588,10 +631,13 @@ function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInv
 			paramList = paramList + params[i];
 			if (i < types.length && types[i] != "") paramList = paramList + ": " + types[i];
 		}
+		if (!isFactory && types.length > 0) accessorType = types[0];
 		macroBody = callMacroBodyPreparer(cloneNodeForCheck(macroDecl.macroDeclBody), ctx, sym, sym.name);
 	}
 	const arity = decoratorArity(sym, decl, isMacro, isFactory);
-	const pr = parseSource(wrapperSource(isMacro, paramList, shape, arity));
+	const returnType = macroDeclReturnRaw(decl);
+	const signature = "(" + paramList + ")" + (returnType != "" ? ": " + returnType : "");
+	const pr = parseSource(wrapperSource(isMacro, signature, shape, arity, accessor, accessorType));
 	if (!pr.ok) {
 		addError(ctx, `decorator '${sym.name}': wrapper parse failed: ${pr.error}`, loc.line, loc.column);
 		return null as unknown as Node;
@@ -662,11 +708,12 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		? classifyReturnText(macroReturnText(decl, isFactory))
 		: classifyType(functionReturnType(sym, isFactory));
 	const info = targetInfo(target);
-	if (shape == shapeTransformer && info.kind != "field") {
+	const accessor = info.kind == "accessor";
+	if (shape == shapeTransformer && info.kind != "field" && !accessor) {
 		addError(ctx, `decorator '${name}' returns an initializer function, which only a field decorator may do`, loc.line, loc.column);
 		return target;
 	}
-	const program = buildWrapper(ctx, sym, decl, md, isFactory, shape, loc);
+	const program = buildWrapper(ctx, sym, decl, md, isFactory, shape, accessor, loc);
 	if (program == null) return target;
 	const decoratorSourcePath = sym.modulePath != "" ? sym.modulePath : regCtx.modulePath;
 	const result = callMacroEngineCompiler(program, ctx, applyFnName, regCtx);
@@ -697,16 +744,21 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const inheritedValuesHandle = heapAllocArray(arrHeap);
 	for (const v of plan.inheritedValues) heapArrayPush(arrHeap, inheritedValuesHandle, nodeToValue(v, objHeap, arrHeap));
 	let initVal = raiserNil();
-	if (target.kind == NodeKind.PropertyDecl) {
-		const pd = target.data as PropertyDeclData;
+	const initField = accessor ? plan.accessorParts[0] : target;
+	if (initField.kind == NodeKind.PropertyDecl) {
+		const pd = initField.data as PropertyDeclData;
 		if (pd.propInitializer != null) initVal = nodeToValue(pd.propInitializer, objHeap, arrHeap);
 	}
 	const args: RaiserValue[] = [
-		nodeToValue(target, objHeap, arrHeap),
+		accessor ? raiserNil() : nodeToValue(target, objHeap, arrHeap),
 		raiserString(info.kind), raiserString(info.name), raiserBool(info.isStatic), raiserBool(false),
 		raiserArray(keysHandle), raiserArray(valuesHandle),
 		raiserArray(inheritedKeysHandle), raiserArray(inheritedValuesHandle), initVal,
 	];
+	if (accessor) {
+		args.push(nodeToValue(plan.accessorParts[1], objHeap, arrHeap));
+		args.push(nodeToValue(plan.accessorParts[2], objHeap, arrHeap));
+	}
 	pushActiveMetaCtx(ctx, loc.line, loc.column);
 	const res = callWithComptimeHostPolicy(vm, result.funcIdx, args, decoratorSourcePath);
 	popActiveMetaCtx();
@@ -742,18 +794,43 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	}
 	const rv = heapObjectGetField(objHeap, h, "result");
 	let outNode = target;
-	if (shape == shapeTransformer) {
+	if (accessor) {
+		if (shape != shapeVoid) {
+			const parts = plan.accessorParts;
+			for (let slot = 1; slot <= 2; slot += 1) {
+				const v = heapObjectGetField(objHeap, h, slot == 1 ? "accGet" : "accSet");
+				if (v.kind == RaiserValueKind.Nil) continue;
+				const part = valueToExpansion(v, objHeap, arrHeap, loc, gensym);
+				const wantName = (parts[slot].data as MethodDeclData).methodName;
+				if (part == null || part.kind != NodeKind.MethodDecl || (part.data as MethodDeclData).methodName != wantName) {
+					const got = part == null ? "nothing" : part.kind == NodeKind.MethodDecl ? accessorLabel((part.data as MethodDeclData).methodName) : kindLabel(part.kind);
+					addError(ctx, `decorator '${name}' on accessor '${info.name}' must return a ${accessorLabel(wantName)} as '${slot == 1 ? "get" : "set"}', got ${got}`, loc.line, loc.column);
+					continue;
+				}
+				part.flags = part.flags.incl(NodeFlag.Accessor);
+				markExpansion(ctx, part, friends);
+				parts[slot] = part;
+			}
+			const iv = heapObjectGetField(objHeap, h, "accInit");
+			(parts[0].data as PropertyDeclData).propInitializer = iv.kind == RaiserValueKind.Nil ? (null as unknown as Node) : valueToExpansion(iv, objHeap, arrHeap, loc, gensym);
+			markExpansion(ctx, parts[0], friends);
+		}
+	} else if (shape == shapeTransformer) {
 		const pd = target.data as PropertyDeclData;
 		pd.propInitializer = rv.kind == RaiserValueKind.Nil ? (null as unknown as Node) : valueToExpansion(rv, objHeap, arrHeap, loc, gensym);
 		markExpansion(ctx, target, friends);
 	} else if (shape == shapeNode && rv.kind != RaiserValueKind.Nil) {
 		const replacement = valueToExpansion(rv, objHeap, arrHeap, loc, gensym);
-		if (replacement == null || replacement.kind != target.kind) {
-			const got = replacement == null ? "nothing" : kindLabel(replacement.kind);
-			const want = kindLabel(target.kind);
+		const accessorMethod = target.flags.has(NodeFlag.Accessor);
+		const renamed = accessorMethod && replacement != null && replacement.kind == target.kind
+			&& (replacement.data as MethodDeclData).methodName != (target.data as MethodDeclData).methodName;
+		if (replacement == null || replacement.kind != target.kind || renamed) {
+			const got = replacement == null ? "nothing" : renamed ? accessorLabel((replacement.data as MethodDeclData).methodName) : kindLabel(replacement.kind);
+			const want = accessorMethod ? `${info.kind} '${info.name}'` : kindLabel(target.kind);
 			const article = want == "actor" ? "an" : "a";
 			addError(ctx, `decorator '${name}' on ${article} ${want} must return ${article} ${want} or nothing, got ${got}`, loc.line, loc.column);
 		} else {
+			if (accessorMethod) replacement.flags = replacement.flags.incl(NodeFlag.Accessor);
 			adoptReplacement(target, replacement);
 			markExpansion(ctx, replacement, friends);
 			outNode = replacement;

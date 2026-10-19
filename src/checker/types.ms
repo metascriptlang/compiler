@@ -3321,6 +3321,10 @@ export function skipModifier(t: Type | null): Type | null {
 	return cur;
 }
 
+export function peelSink(t: Type): Type {
+	return t.kind == TypeKind.Sink && t.typeReturn != null ? t.typeReturn : t;
+}
+
 export function isViewType(t: Type | null): boolean {
 	return holdsView(t, new TypeVisitSet());
 }

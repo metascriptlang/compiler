@@ -1,7 +1,7 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedAx } from "./bytecode";
+import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
 import { raiserInt, raiserToString } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -110,6 +110,27 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Finally => "Finally",
 		RaiserOpcode.FinallyEnd => "FinallyEnd",
 		RaiserOpcode.Throw => "Throw",
+		RaiserOpcode.LoadInt => "LoadInt",
+		RaiserOpcode.AddI64Imm => "AddI64Imm",
+		RaiserOpcode.SubI64Imm => "SubI64Imm",
+		RaiserOpcode.BeqI64Imm => "BeqI64Imm",
+		RaiserOpcode.BneI64Imm => "BneI64Imm",
+		RaiserOpcode.BltI64Imm => "BltI64Imm",
+		RaiserOpcode.BleI64Imm => "BleI64Imm",
+		RaiserOpcode.BgtI64Imm => "BgtI64Imm",
+		RaiserOpcode.BgeI64Imm => "BgeI64Imm",
+		RaiserOpcode.BrEqI64 => "BrEqI64",
+		RaiserOpcode.BrNeI64 => "BrNeI64",
+		RaiserOpcode.BrLtI64 => "BrLtI64",
+		RaiserOpcode.BrLeI64 => "BrLeI64",
+		RaiserOpcode.BrGtI64 => "BrGtI64",
+		RaiserOpcode.BrGeI64 => "BrGeI64",
+		RaiserOpcode.BrEqI64Imm => "BrEqI64Imm",
+		RaiserOpcode.BrNeI64Imm => "BrNeI64Imm",
+		RaiserOpcode.BrLtI64Imm => "BrLtI64Imm",
+		RaiserOpcode.BrLeI64Imm => "BrLeI64Imm",
+		RaiserOpcode.BrGtI64Imm => "BrGtI64Imm",
+		RaiserOpcode.BrGeI64Imm => "BrGeI64Imm",
 	};
 }
 
@@ -119,12 +140,26 @@ function isABxOp(op: RaiserOpcode): boolean {
 	return op == RaiserOpcode.LoadConst || op == RaiserOpcode.Try || op == RaiserOpcode.Catch || op == RaiserOpcode.ModuleImport;
 }
 
+function isImmCompare(op: RaiserOpcode): boolean {
+	return op == RaiserOpcode.BeqI64Imm || op == RaiserOpcode.BneI64Imm || op == RaiserOpcode.BltI64Imm
+		|| op == RaiserOpcode.BleI64Imm || op == RaiserOpcode.BgtI64Imm || op == RaiserOpcode.BgeI64Imm;
+}
+
+function isBranchImm(op: RaiserOpcode): boolean {
+	return op == RaiserOpcode.BrEqI64Imm || op == RaiserOpcode.BrNeI64Imm || op == RaiserOpcode.BrLtI64Imm
+		|| op == RaiserOpcode.BrLeI64Imm || op == RaiserOpcode.BrGtI64Imm || op == RaiserOpcode.BrGeI64Imm;
+}
+
 function isAxOp(op: RaiserOpcode): boolean {
 	return op == RaiserOpcode.Jump;
 }
 
 export function disasmInst(inst: RaiserInstruction): string {
 	if (isAxOp(inst.op)) return `${opName(inst.op)} ${getSignedAx(inst)}`;
+	if (inst.op == RaiserOpcode.LoadInt) return `${opName(inst.op)} R${inst.a} #${immValue(inst.b)}`;
+	if (inst.op == RaiserOpcode.AddI64Imm || inst.op == RaiserOpcode.SubI64Imm) return `${opName(inst.op)} R${inst.a} R${inst.b} #${immValue(inst.c)}`;
+	if (isBranchI64(inst.op)) return `${opName(inst.op)} R${inst.a} ${isBranchImm(inst.op) ? `#${immValue(inst.b)}` : `R${inst.b}`} ->${branchOffset(inst.c)}`;
+	if (isImmCompare(inst.op)) return `${opName(inst.op)} R${inst.a} #${immValue(inst.b)} R${inst.c}`;
 	if (isABxOp(inst.op)) return `${opName(inst.op)} R${inst.a} K${getBx(inst)}`;
 	return `${opName(inst.op)} R${inst.a} R${inst.b} R${inst.c}`;
 }
@@ -188,4 +223,15 @@ test "disasmFunc includes constant annotations" {
 	const s = disasmFunc(entry);
 	assert s.length > 0;
 	// Should contain "LoadConst" and the constant value annotation
+}
+
+test "immediate operands print as numbers" {
+	assert disasmInst(raiserABC(RaiserOpcode.LoadInt, 1, immField(-7), 0)) == "LoadInt R1 #-7";
+	assert disasmInst(raiserABC(RaiserOpcode.AddI64Imm, 2, 0, immField(32767))) == "AddI64Imm R2 R0 #32767";
+	assert disasmInst(raiserABC(RaiserOpcode.BltI64Imm, 0, immField(2), 1)) == "BltI64Imm R0 #2 R1";
+}
+
+test "branch operands print the register or the immediate and the offset" {
+	assert disasmInst(raiserABC(RaiserOpcode.BrGeI64, 1, 2, branchField(-4))) == "BrGeI64 R1 R2 ->-4";
+	assert disasmInst(raiserABC(RaiserOpcode.BrLtI64Imm, 0, immField(10), branchField(40000))) == "BrLtI64Imm R0 #10 ->40000";
 }

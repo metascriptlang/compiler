@@ -1,7 +1,7 @@
 // E2E: Classes and Interfaces → C output
 // Classes are instantiated so DCE keeps them.
 
-import { compileToC } from "../helpers";
+import { compileToC, compileToCWithStd } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { formatNode } from "../../compiler/fmt/printer/index";
@@ -100,11 +100,25 @@ p.v = 3;
 console.log(p.v);") == "compiled";
 }
 
-test "E2E C: a decorated accessor is refused, not dropped" {
+test "E2E C: a decorated accessor stays an accessor and keeps its name" {
 	const deco = "import { Node, ClassMethodDecoratorContext } from \"std/meta\";\nmacro logged(value: Node, context: ClassMethodDecoratorContext): Node { return value; }\n";
-	assert accessorError(deco + "class C { @logged get n(): int32 { return 1; } }\nconsole.log(new C().n);").contains("decorator 'logged' cannot apply to accessor 'get n'");
-	assert accessorError(deco + "class C { private _n: int32 = 0; get n(): int32 { return this._n; } @logged set n(v: int32) { this._n = v; } }").contains("cannot apply to accessor 'set n'");
+	const renamer = "import { Node, ClassMethodDecoratorContext } from \"std/meta\";\nmacro rename(value: Node, context: ClassMethodDecoratorContext): Node { value.methodName = \"get_m\"; return value; }\n";
+	assert compileToCWithStd(deco + "class C { @logged get n(): int32 { return 1; } }\nconsole.log(new C().n);").ok;
+	assert compileToCWithStd(deco + "class C { private _n: int32 = 0; get n(): int32 { return this._n; } @logged set n(v: int32) { this._n = v; } }\nconst c = new C();\nc.n = 2;").ok;
+	const renamed = compileToCWithStd(renamer + "class C { @rename get n(): int32 { return 1; } }");
+	assert !renamed.ok;
+	if (!renamed.ok) assert renamed.error.contains("decorator 'rename' on a getter 'n' must return a getter 'n' or nothing, got getter 'm'");
 	assert accessorError(deco + "struct V2 { x: float32; @logged get sum(): float32 { return this.x; } }").contains("Decorated getter 'sum' at line 3 is not supported");
+}
+
+test "E2E C: an accessor field is a typed instance field of a class" {
+	assert accessorError("class C { accessor n: int32 = 1; }\nconst c = new C();\nc.n += 1;\nconsole.log(c.n);") == "compiled";
+	assert accessorError("class C { static accessor n: int32 = 1; }").contains("Accessor field 'n' at line 1 cannot be static");
+	assert accessorError("class C { readonly accessor n: int32 = 1; }").contains("'accessor' modifier cannot be used with 'readonly' modifier");
+	assert accessorError("class C { accessor n = 1; }").contains("Accessor field 'n' at line 1 needs a type annotation");
+	assert accessorError("class C { accessor n(): int32 { return 1; } }").contains("Accessor field 'n' at line 1 cannot be a method");
+	assert accessorError("actor A { accessor n: int32 = 1; }").contains("an accessor field belongs to a class, not to an actor");
+	assert accessorError("class C { accessor: int32 = 1; }\nconst c = new C();\nconsole.log(c.accessor);") == "compiled";
 }
 
 test "E2E C: a compound assignment to an accessor through a call receiver is refused" {
@@ -132,6 +146,13 @@ test "fmt: class accessors print back as get and set" {
 	assert out.contains("get n(): int32"), out;
 	assert out.contains("set n(v: int32)"), out;
 	assert !out.contains("get_n"), out;
+}
+
+test "fmt: an accessor field prints back as written" {
+	const out = fmtSource("class C {\n\tprivate accessor n: int32 = 1;\n\t@paint accessor x: float32 = 0.0;\n}\n");
+	assert out.contains("private accessor n: int32 = 1;"), out;
+	assert out.contains("accessor x: float32 = 0.0;"), out;
+	assert !out.contains("accessor_storage"), out;
 }
 
 test "fmt: struct getters print back inside their struct, in source order" {

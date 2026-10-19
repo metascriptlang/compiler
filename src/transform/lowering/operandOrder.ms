@@ -19,6 +19,10 @@ export function isVoidType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Void;
 }
 
+export function isNeverType(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Never;
+}
+
 export function isAssignOp(op: string): boolean {
 	if (op == "==" || op == "!=" || op == "===" || op == "!==" || op == "<=" || op == ">=") return false;
 	return op.endsWith("=");

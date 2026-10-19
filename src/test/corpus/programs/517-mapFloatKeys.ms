@@ -1,9 +1,9 @@
-// Parity program — a float key finds its entry by `==`, so NaN never matches: a lookup of NaN
-// misses, and each insert of NaN adds an entry of its own. 0 and -0 stay one key. Covers Map,
-// HashMap, Set and HashSet, float32, an alias of number, a Map literal, a key reached through a
-// generic, and a NaN inside a struct key.
+// Parity program — a float key compares by SameValueZero, as a TypeScript Map does: a lookup of
+// NaN finds the NaN entry, and a second insert of NaN overwrites it. 0 and -0 stay one key. A NaN
+// field inside a struct key still compares by `==` and never matches. Covers Map, HashMap, Set
+// and HashSet, float32, an alias of number, a Map literal, a key reached through a generic.
 //
-// @stdout: map=false,-1,4,false,4,10 keys=1.5,NaN,NaN,0 each=2 hashmap=false,2 set=false,3,false,true,2 hashset=false,2 float32=false,2 alias=false,2 literal=false,2 generic=2,1 struct=false,2 cleared=0,true
+// @stdout: map=true,3,3,true,4,5 keys=1.5,0 each=0 hashmap=true,1 set=true,2,true,true,1 hashset=true,1 float32=true,1 alias=true,1 literal=true,1 generic=1,1 struct=false,2 cleared=0,true
 // @exit: 0
 
 type Meters = number;
