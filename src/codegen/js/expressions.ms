@@ -652,7 +652,8 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 	for (let i = 0; i < d.keys.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
 		if (d.keys[i] == "..." && i < d.properties.length && d.properties[i].kind == NodeKind.SpreadExpr) {
-			emitNode(gen, d.properties[i]);
+			emit(gen, "...");
+			emitCopyOnRead(gen, (d.properties[i].data as SpreadExprData).spreadArg);
 			continue;
 		}
 		emit(gen, jsPropertyKey(d.keys[i]));
