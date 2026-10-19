@@ -1,0 +1,34 @@
+@include("runtime/core/string.h");
+@include("stdint.h");
+
+extern function newString(length: int64): string from "msStringNewLen";
+extern function stringCapacity(value: string): int64 from "msStringCapacity";
+extern function prepareStore(ref value: string): void from "msStringPrepareMutation";
+extern const nativeSizeMax: uint64 from "SIZE_MAX";
+extern const stringCapacityMax: uint64 from "MS_CAP_MASK";
+
+export type EncodingIndex = int64;
+
+const STRING_HEADER_AND_TERMINATOR_BYTES: uint64 = 9;
+
+export function newEncodingOutput(length: int64): string {
+	if (length < 0 ||
+		(length as uint64) > nativeSizeMax - STRING_HEADER_AND_TERMINATOR_BYTES ||
+		(length as uint64) > stringCapacityMax) {
+		throw new RangeError("encoding output length exceeds native string capacity");
+	}
+	const result = newString(length);
+	if (stringCapacity(result) < length) throw new Error("encoding output allocation failed");
+	return result;
+}
+
+export function newDecodingOutput(length: int64): uint8[] {
+	if (length < 0) throw new RangeError("decoding output length is negative");
+	return new Array<uint8>(length);
+}
+
+@inline
+export function encodingOutputBytes(ref value: string): Ptr<uint8> {
+	prepareStore(value);
+	return (value as cstring) as Ptr<uint8>;
+}

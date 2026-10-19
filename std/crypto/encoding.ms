@@ -1,11 +1,19 @@
+import {
+	EncodingIndex, newEncodingOutput, newDecodingOutput, encodingOutputBytes,
+} from "./encodingOutput";
+
 export function encodeHex(data: Readonly<Span<uint8>>): string {
+	if (data.length == 0) return "";
 	const digits = "0123456789abcdef".asBytes();
-	const result: uint8[] = [];
+	let result = newEncodingOutput((data.length as int64) * 2);
+	const bytes = encodingOutputBytes(result);
+	let at: EncodingIndex = 0;
 	for (const byte of data) {
-		result.push(digits[byte >> 4]);
-		result.push(digits[byte & 15]);
+		bytes[at] = digits[byte >> 4];
+		bytes[at + 1] = digits[byte & 15];
+		at += 2;
 	}
-	return result.asString();
+	when (c) { return result; } else { return result.asString(); }
 }
 
 function hexDigit(byte: int32): int32 {
@@ -17,30 +25,38 @@ function hexDigit(byte: int32): int32 {
 
 export function decodeHex(text: string): uint8[] {
 	const bytes = text.asBytes();
-	const result: uint8[] = [];
-	if (bytes.length % 2 != 0) return result;
-	for (let i = 0; i < bytes.length; i += 2) {
+	const byteCount = bytes.length as int64;
+	if (byteCount % 2 != 0) return [];
+	const result = newDecodingOutput(byteCount / 2);
+	const inputLength = byteCount as EncodingIndex;
+	for (let i: EncodingIndex = 0; i < inputLength; i += 2) {
 		const hi = hexDigit(bytes[i] as int32);
 		const lo = hexDigit(bytes[i + 1] as int32);
 		if (hi < 0 || lo < 0) return [];
-		result.push(((hi << 4) | lo) as uint8);
+		result[i / 2] = ((hi << 4) | lo) as uint8;
 	}
 	return result;
 }
 
 export function encodeBase64(data: Readonly<Span<uint8>>): string {
+	if (data.length == 0) return "";
 	const digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".asBytes();
-	const result: uint8[] = [];
-	for (let i = 0; i < data.length; i += 3) {
+	let result = newEncodingOutput(((data.length as int64) + 2) / 3 * 4);
+	const bytes = encodingOutputBytes(result);
+	let at: EncodingIndex = 0;
+	const inputLength = data.length as EncodingIndex;
+	for (let i: EncodingIndex = 0; i < inputLength; i += 3) {
+		const remaining = inputLength - i;
 		const a = data[i] as int32;
-		const b = i + 1 < data.length ? data[i + 1] as int32 : 0;
-		const c = i + 2 < data.length ? data[i + 2] as int32 : 0;
-		result.push(digits[a >> 2]);
-		result.push(digits[((a & 3) << 4) | (b >> 4)]);
-		result.push(i + 1 < data.length ? digits[((b & 15) << 2) | (c >> 6)] : "=".code as uint8);
-		result.push(i + 2 < data.length ? digits[c & 63] : "=".code as uint8);
+		const b = remaining > 1 ? data[i + 1] as int32 : 0;
+		const c = remaining > 2 ? data[i + 2] as int32 : 0;
+		bytes[at] = digits[a >> 2];
+		bytes[at + 1] = digits[((a & 3) << 4) | (b >> 4)];
+		bytes[at + 2] = remaining > 1 ? digits[((b & 15) << 2) | (c >> 6)] : "=".code as uint8;
+		bytes[at + 3] = remaining > 2 ? digits[c & 63] : "=".code as uint8;
+		at += 4;
 	}
-	return result.asString();
+	when (c) { return result; } else { return result.asString(); }
 }
 
 function base64Digit(byte: int32): int32 {
@@ -56,23 +72,69 @@ function base64Digit(byte: int32): int32 {
 
 export function decodeBase64(text: string): uint8[] {
 	const bytes = text.asBytes();
-	const result: uint8[] = [];
-	if (bytes.length == 0 || bytes.length % 4 != 0) return result;
-	let length = bytes.length / 4 * 3;
-	if (bytes[bytes.length - 1] == "=".code) length -= 1;
-	if (bytes[bytes.length - 2] == "=".code) length -= 1;
-	for (let i = 0; i < bytes.length; i += 4) {
+	const byteCount = bytes.length as int64;
+	if (byteCount == 0 || byteCount % 4 != 0) return [];
+	const inputLength = byteCount as EncodingIndex;
+	let length = byteCount / 4 * 3;
+	if (bytes[inputLength - 1] == "=".code) length -= 1;
+	if (bytes[inputLength - 2] == "=".code) length -= 1;
+	const result = newDecodingOutput(length);
+	const outputLength = length as EncodingIndex;
+	let at: EncodingIndex = 0;
+	for (let i: EncodingIndex = 0; i < inputLength; i += 4) {
 		const a = base64Digit(bytes[i] as int32);
 		const b = base64Digit(bytes[i + 1] as int32);
 		const c = bytes[i + 2] == "=".code ? 0 : base64Digit(bytes[i + 2] as int32);
 		const d = bytes[i + 3] == "=".code ? 0 : base64Digit(bytes[i + 3] as int32);
 		if (a < 0 || b < 0 || c < 0 || d < 0) return [];
 		const triple = (a << 18) | (b << 12) | (c << 6) | d;
-		if (result.length < length) result.push(((triple >> 16) & 255) as uint8);
-		if (result.length < length) result.push(((triple >> 8) & 255) as uint8);
-		if (result.length < length) result.push((triple & 255) as uint8);
+		if (at < outputLength) { result[at] = ((triple >> 16) & 255) as uint8; at += 1; }
+		if (at < outputLength) { result[at] = ((triple >> 8) & 255) as uint8; at += 1; }
+		if (at < outputLength) { result[at] = (triple & 255) as uint8; at += 1; }
 	}
 	return result;
+}
+
+test "encoding index preserves wide positions" {
+	let position: EncodingIndex = 2147483646;
+	position += 4;
+	assert (position as int64) == 2147483650;
+}
+
+test "encoding output owns its writable bytes" {
+	let output = newEncodingOutput(2);
+	const originalLength = output.length;
+	assert originalLength == 2;
+	const bytes = encodingOutputBytes(output);
+	bytes[0] = 195 as uint8;
+	bytes[1] = 169 as uint8;
+	when (c) {
+		assert output == "é";
+		assert output.length == 1;
+	} else {
+		assert output.asString() == "é";
+	}
+}
+
+test "encoding output rejects negative lengths" {
+	let rejected = false;
+	try {
+		newEncodingOutput(-1);
+	} catch (error) {
+		rejected = error instanceof RangeError;
+	}
+	assert rejected;
+}
+
+when (c) {
+	test "encoding output prepares literal storage before writes" {
+		const original = "ab";
+		let output = original;
+		const bytes = encodingOutputBytes(output);
+		bytes[0] = 99 as uint8;
+		assert output == "cb";
+		assert original == "ab";
+	}
 }
 
 test "hex codec preserves every byte" {
