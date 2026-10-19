@@ -8,7 +8,7 @@ import { isAlwaysTrue } from "./initTracker";
 
 const MAX_CASES: int32 = 10000;
 
-export function isComputedGotoMark(stmt: Node): boolean {
+export function isComputedGotoMark(stmt: Readonly<Node>): boolean {
 	if (stmt.kind != NodeKind.ExprStmt) return false;
 	const expr = (stmt.data as ExprStmtData).expr;
 	return expr.kind == NodeKind.MacroInvocation && (expr.data as MacroInvocationData).macroName == "computedGoto";

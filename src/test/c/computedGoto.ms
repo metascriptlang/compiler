@@ -130,3 +130,55 @@ test "@computedGoto: a declaration cannot carry it" {
 		console.log(f());`);
 	assert c.includes("@computedGoto marks a statement of a while loop body, not a declaration"), c.slice(0, 400);
 }
+
+function countOf(text: string, needle: string): int32 {
+	return (text.split(needle).length - 1) as int32;
+}
+
+const fetchLoop = (marked: boolean, post: string) => `enum Op { A, B, C }
+	function run(code: Op[]): int32 {
+		let pc = 0;
+		let acc: int32 = 0;
+		while (true) {
+			${marked ? "@computedGoto;" : ""}
+			const op = code[pc];
+			pc += 1;
+			switch (op) {
+				case Op.A: acc += 1; break;
+				case Op.B: acc += 2; break;
+				case Op.C: return acc;
+			}
+			${post}
+		}
+	}
+	console.log(run([Op.A, Op.B, Op.C]));`;
+
+test "@computedGoto: a marked loop emits a label table and a dispatch at the end of every case" {
+	const c = emitted(fetchLoop(true, ""));
+	assert countOf(c, "static void* const __cgtbl") == 1, c.slice(0, 600);
+	assert c.includes("&&__cg"), c.slice(0, 600);
+	assert countOf(c, "goto *__cgtbl") == 3, c.slice(0, 600);
+	assert !c.includes("switch (op_"), c.slice(0, 600);
+}
+
+test "@computedGoto: the loop without the mark keeps its C switch" {
+	const c = emitted(fetchLoop(false, ""));
+	assert !c.includes("goto *"), c.slice(0, 600);
+	assert c.includes("switch (op_"), c.slice(0, 600);
+}
+
+test "@computedGoto: a local declared before the switch is declared once and assigned at each dispatch" {
+	const c = emitted(fetchLoop(true, "acc += 0;"));
+	assert countOf(c, "op_1_ = ") == 3, c.slice(0, 800);
+	assert !c.includes("op_2_"), c.slice(0, 800);
+}
+
+test "@computedGoto: a statement after the switch is repeated in every case that falls out of it" {
+	const c = emitted(fetchLoop(true, "acc += 7;"));
+	assert countOf(c, "acc_1_ += 7") == 2 || countOf(c, "msAddAssign(acc_1_, 7)") == 2, c.slice(0, 800);
+}
+
+test "@computedGoto: a statement that cannot be repeated because it holds a label is refused" {
+	const c = emitted(fetchLoop(true, "for (let i = 0; i < 2; i += 1) { if (i == 0) continue; acc += i; }"));
+	assert c.includes("computed goto repeats the statements around the switch, and one of them holds a label"), c.slice(0, 600);
+}

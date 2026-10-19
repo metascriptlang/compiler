@@ -190,6 +190,7 @@ export class CProc {
 	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
 	// here so identifiers created by DRC (which lack resolvedSym) can resolve the unique name.
 	localNameMap: string[];   // parallel arrays: [originalName, uniqueName, ...]
+	reemitting: boolean;  // a statement is being generated again: a local it declares is assigned, never declared
 }
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
@@ -244,6 +245,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		localSyms: [],
 		localSymNames: [],
 		localNameMap: [],
+		reemitting: false,
 	};
 }
 
