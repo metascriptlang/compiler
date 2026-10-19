@@ -363,7 +363,7 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			}
 			for (const dec of decorators) {
 				lead.push(callPrintNode(dec, options));
-				lead.push(ownLine ? docHardLine() : docText(" "));
+				lead.push(ownLine ? docHardLine() : docLine());
 			}
 		}
 		if (attached != null) {
