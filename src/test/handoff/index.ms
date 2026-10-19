@@ -147,6 +147,7 @@ import "./nullFirstTernaryArg";
 import "./fieldVisibility";
 import "./useBeforeAssign";
 import "./outParameterWrites";
+import "./sinkParamModes";
 import "./arrayLengthGrowth";
 import "./relationalOperands";
 import "./typeNameValue";
