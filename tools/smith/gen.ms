@@ -856,7 +856,7 @@ class Gen {
 
 	unary(t: Ty, depth: int32): string {
 		const a = this.expr(t, depth + 1);
-		if (isFloat(t)) { return "(-" + a + ")"; }
+		if (isFloat(t)) { return this.shape == Shape.Ternary ? a : "(-" + a + ")"; }
 		if (!isSigned(t) || this.rng.chance(40)) { return "(~" + a + ")"; }
 		return this.negHelper(t) + "(" + a + ")";
 	}
@@ -938,6 +938,7 @@ class Gen {
 			out = this.binary(t, depth);
 		} else if (kind == 2) {
 			out = this.unary(t, depth);
+			if (isFloat(t) && this.shape == Shape.Ternary) { shape = Shape.Ternary; }
 		} else if (kind == 3) {
 			out = this.convert(t, depth);
 		} else if (kind == 4) {
@@ -11491,7 +11492,7 @@ test "a JSX spread weight at 0 keeps only empty spreads and the stream of the me
 		empty += countOf(text, " {...{}}");
 	}
 	assert empty > 10;
-	const pins: int64[] = [814109091, 302784249, 75423212, 935196815, 943640085, 32448339];
+	const pins: int64[] = [473794068, 772216299, 976424123, 935196815, 943640085, 32448339];
 	const vectors = ["fams=meta ", META_JSX_ONLY];
 	const seeds: uint64[] = [3, 9, 14, 2, 5, 11];
 	for (let v = 0; v < vectors.length; v++) {
@@ -11734,7 +11735,7 @@ test "a zero async result weight keeps its functions and calls out of every prog
 }
 
 test "an async result weight at 0 keeps the stream of the async family without the shape" {
-	const pins: int64[] = [56007945, 985272385, 974582668, 289553570, 269052595, 765366512];
+	const pins: int64[] = [56007945, 985272385, 974582668, 785827362, 398344360, 121206787];
 	const vectors = ["fams=async ", "fams=async types=int32,float64,uint8 stmts=8 w.stmt.fam=80 "];
 	const seeds: uint64[] = [3, 9, 14, 2, 5, 11];
 	for (let v = 0; v < vectors.length; v++) {
@@ -12041,7 +12042,7 @@ test "each gap shape is reached and its weight at 0 removes it" {
 
 test "the gap shapes at weight 0 keep the stream of the generator without them" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=coll", "fams=str", "fams=iter", "types=int8,uint8,uint32,uint64,float64 fams=none", "types=int32,float32,char,bigint,boolean fams=none depth=2"];
-	const pins: int64[] = [133744062, 894288676, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 295138362, 752400772, 172228344, 208305650, 706058020, 346955844, 47405754, 455897030];
+	const pins: int64[] = [133744062, 894288676, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 780017775, 752400772, 172228344, 445957813, 145030451, 656332730, 47405754, 455897030];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + GAP_OFF + " " + TYPE_OFF + " w.meta.spread=0 w.async.result=0");
 		for (let s = 0; s < 2; s++) {
@@ -12205,9 +12206,9 @@ function digest(text: string): int64 {
 test "core weights at 0 keep the stream of the generator without core" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=union", "fams=generic", "fams=agg", "fams=coll", "fams=str", "fams=own", "fams=iter", "types=int8,uint32,float64", "types=int64 fams=none", "types=float64,int32 depth=2", "types=int32 stmts=12 expr=4 trips=16"];
 	const pins: int64[] = [
-		777384880, 838568104, 87231079, 582624134, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
-		412924459, 288809904, 944357120, 370177479, 817021040, 106325321, 660642918, 606921276, 651104178, 2913754,
-		101192644, 178907495, 247101655, 884432220, 429445262, 471485418, 207847309, 349738871,
+		777384880, 838568104, 87231079, 497882655, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
+		412924459, 288809904, 959089982, 370177479, 817021040, 106325321, 718724068, 606921276, 651104178, 2913754,
+		354326690, 178907495, 247101655, 884432220, 429445262, 460525096, 207847309, 349738871,
 	];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + CORE_OFF + " " + TYPE_OFF);
@@ -12489,6 +12490,34 @@ test "a negation is refused over a negation and over a ternary" {
 	assert g.negated("(a ? b : c)") == "";
 }
 
+function negatesTernary(text: string): boolean {
+	let at = text.indexOf("(-(");
+	while (at >= 0) {
+		let depth = 0;
+		for (let i = at + 2; i < text.length; i++) {
+			const c = text.substring(i, i + 1);
+			if (c == "(") { depth++; }
+			if (c == ")") { depth--; if (depth == 0) { break; } }
+			if (depth == 1 && c == "?" && text.substring(i - 1, i) == " " && text.substring(i + 1, i + 2) == " ") { return true; }
+		}
+		at = text.indexOf("(-(", at + 1);
+	}
+	return false;
+}
+
+test "no float negation wraps a ternary (inbox negating-a-ternary-inside-a-nullable-ternary-arm-is-typed-number)" {
+	assert negatesTernary("x = (-((a < b) ? 1.5 : 2.5));");
+	assert !negatesTernary("x = (-(-y)) + (-f(a ? 1 : 2));");
+	const f = withWeights("types=float64,float32 fams=none w.core.stmt=60");
+	let negations = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !negatesTernary(text);
+		if (text.contains("(-(")) { negations++; }
+	}
+	assert negations > 10;
+}
+
 test "a bigint or null local never starts as a plain null" {
 	const f = withWeights(CORE_ALL);
 	let seen = 0;
@@ -12558,7 +12587,7 @@ const GAP_VECTORS = [
 test "the gap weights at 0 keep the stream of the generator without them" {
 	const pins: int64[] = [
 		133744062, 894288676, 709567793, 430927381, 467908320, 469491598, 943975115, 622102701,
-		449176796, 656840684, 649565891, 801577426, 546248524, 513190738, 293039963, 565465550,
+		449176796, 656840684, 649565891, 801577426, 546248524, 513190738, 215550540, 771418514,
 	];
 	for (let v = 0; v < GAP_VECTORS.length; v++) {
 		const f = withWeights(GAP_VECTORS[v] + " " + TYPE_OFF + " " + GAP_OFF + " w.meta.spread=0 w.async.result=0");
