@@ -477,7 +477,13 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const mark = state.trailingDecls.length;
 		const decl = try parseStructDecl(state);
 		for (let i = mark; i < state.trailingDecls.length; i += 1) {
-			state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: state.trailingDecls[i] }, exportToken);
+			const getter = state.trailingDecls[i];
+			if (getter.kind == NodeKind.DecoratedDecl) {
+				const dd = getter.data as DecoratedDeclData;
+				dd.decoratedNode = createNode(NodeKind.ExportDecl, { exportedDecl: dd.decoratedNode }, exportToken);
+			} else {
+				state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: getter }, exportToken);
+			}
 		}
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
@@ -860,6 +866,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 			state.trailingDecls.push(try parseStructAccessor(state, name, genericNames));
 			continue;
 		}
+		const decoratorToken = current(state);
 		const decorators: Node[] = [];
 		while (!isAtEnd(state) && current(state).kind == TokenKind.At) {
 			const dec = try parseMacroInvocation(state);
@@ -870,7 +877,9 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		}
 		if (decorators.length > 0 && nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
 				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
-			return Result.err(`Decorated getter '${peek(state, 1).value}' at line ${current(state).line} is not supported: a struct getter takes no decorators`);
+			const getter = try parseStructAccessor(state, name, genericNames);
+			state.trailingDecls.push(createNode(NodeKind.DecoratedDecl, { decorators, decoratedNode: getter }, decoratorToken));
+			continue;
 		}
 		let visibility = "";
 		const modifier = current(state);

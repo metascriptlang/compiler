@@ -251,10 +251,20 @@ function applyToStatement(ctx: CheckerContext, stmt: Node, after: Node[]): Node 
 	const isClass = decl.kind == NodeKind.ClassDecl;
 	const isActor = decl.kind == NodeKind.ActorDecl;
 	if (!isClass && !isActor) {
-		if (wrapper != null) {
-			runDecorators(ctx, (wrapper.data as DecoratedDeclData).decorators, decl, null as unknown as ClassPlan);
+		if (wrapper == null) return node;
+		const wd = wrapper.data as DecoratedDeclData;
+		if (!isStructGetter(decl)) {
+			runDecorators(ctx, wd.decorators, decl, null as unknown as ClassPlan);
+			return node;
 		}
-		return node;
+		const getter = decorateStructGetter(ctx, wd.decorators, decl);
+		if (node.kind == NodeKind.ExportDecl) (node.data as ExportDeclData).exportedDecl = getter;
+		else node = getter;
+		const kept = intrinsicOnly(ctx, wd.decorators);
+		if (kept.length == 0) return node;
+		wd.decorators = kept;
+		wd.decoratedNode = node;
+		return wrapper;
 	}
 	const plan = newPlan(ctx, decl, isActor);
 	applyToMembers(ctx, plan);
@@ -274,8 +284,25 @@ function applyToStatement(ctx: CheckerContext, stmt: Node, after: Node[]): Node 
 	return node;
 }
 
+function isStructGetter(node: Node): boolean {
+	return node.kind == NodeKind.FunctionDecl && node.flags.has(NodeFlag.Accessor);
+}
+
+function decorateStructGetter(ctx: CheckerContext, decorators: Node[], getter: Node): Node {
+	const plan = newPlan(ctx, getter, false);
+	const decorated = runDecorators(ctx, decorators, getter, plan);
+	const label = accessorLabel((getter.data as FunctionDeclData).fnName);
+	if (plan.staticInits.length > 0) {
+		addError(ctx, `addInitializer on struct ${label} is not supported: a struct has no constructor to run it`, getter.location.line, getter.location.column);
+	}
+	if (plan.metaKeys.length > 0) {
+		addError(ctx, `context.metadata on struct ${label} is not supported: a struct keeps no decorator metadata`, getter.location.line, getter.location.column);
+	}
+	return decorated;
+}
+
 function newPlan(ctx: CheckerContext, decl: Node, isActor: boolean): ClassPlan {
-	const name = isActor ? (decl.data as ActorDeclData).actorName : (decl.data as ClassDeclData).className;
+	const name = getDeclName(decl);
 	const metaKeys: string[] = [];
 	const metaValues: Node[] = [];
 	const inheritedKeys: string[] = [];
@@ -309,7 +336,7 @@ function addInheritedPair(plan: ClassPlan, key: string, value: Node): void {
 function seedInheritedMetadata(ctx: CheckerContext, plan: ClassPlan): void {
 	if (plan == null || plan.seeded) return;
 	plan.seeded = true;
-	if (plan.isActor) return;
+	if (plan.classNode.kind != NodeKind.ClassDecl) return;
 	let parentName = (plan.classNode.data as ClassDeclData).classExtends;
 	let depth = 0;
 	while (parentName != "" && depth < 64) {
@@ -402,7 +429,8 @@ function decoratorPositionValid(target: Node): boolean {
 	return target.kind == NodeKind.ClassDecl
 		|| target.kind == NodeKind.ActorDecl
 		|| target.kind == NodeKind.MethodDecl
-		|| target.kind == NodeKind.PropertyDecl;
+		|| target.kind == NodeKind.PropertyDecl
+		|| isStructGetter(target);
 }
 
 function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, plan: ClassPlan): Node {
@@ -429,6 +457,10 @@ function targetInfo(target: Node): TargetInfo {
 		}
 		return { kind: "method", name: md.methodName, isStatic: md.methodIsStatic };
 	}
+	if (isStructGetter(target)) {
+		const fd = target.data as FunctionDeclData;
+		return { kind: "getter", name: fd.fnName.slice(4, fd.fnName.length), isStatic: false };
+	}
 	if (target.kind == NodeKind.PropertyDecl) {
 		const pd = target.data as PropertyDeclData;
 		return { kind: isAutoAccessorField(target) ? "accessor" : "field", name: pd.propName, isStatic: pd.propIsStatic };
@@ -443,6 +475,16 @@ function accessorLabel(methodName: string): string {
 	if (methodName.startsWith("get_")) return `getter '${methodName.slice(4, methodName.length)}'`;
 	if (methodName.startsWith("set_")) return `setter '${methodName.slice(4, methodName.length)}'`;
 	return `method '${methodName}'`;
+}
+
+function routineName(routine: Node): string {
+	if (routine.kind == NodeKind.FunctionDecl) return (routine.data as FunctionDeclData).fnName;
+	return (routine.data as MethodDeclData).methodName;
+}
+
+function routineIdentity(routine: Node): string {
+	if (routine.kind == NodeKind.FunctionDecl) return `${(routine.data as FunctionDeclData).fnName} ${(routine.data as FunctionDeclData).fnFlags}`;
+	return routineName(routine);
 }
 
 function kindLabel(kind: NodeKind): string {
@@ -823,9 +865,9 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		const replacement = valueToExpansion(rv, objHeap, arrHeap, loc, gensym);
 		const accessorMethod = target.flags.has(NodeFlag.Accessor);
 		const renamed = accessorMethod && replacement != null && replacement.kind == target.kind
-			&& (replacement.data as MethodDeclData).methodName != (target.data as MethodDeclData).methodName;
+			&& routineIdentity(replacement) != routineIdentity(target);
 		if (replacement == null || replacement.kind != target.kind || renamed) {
-			const got = replacement == null ? "nothing" : renamed ? accessorLabel((replacement.data as MethodDeclData).methodName) : kindLabel(replacement.kind);
+			const got = replacement == null ? "nothing" : renamed ? accessorLabel(routineName(replacement)) : kindLabel(replacement.kind);
 			const want = accessorMethod ? `${info.kind} '${info.name}'` : kindLabel(target.kind);
 			const article = want == "actor" ? "an" : "a";
 			addError(ctx, `decorator '${name}' on ${article} ${want} must return ${article} ${want} or nothing, got ${got}`, loc.line, loc.column);
