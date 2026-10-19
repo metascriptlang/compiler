@@ -72,3 +72,4 @@ import "./callResultInPlace";
 import "./websocket";
 import "./websocketServer";
 import "./blockReduce";
+import "./spanParamAbi";
