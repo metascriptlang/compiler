@@ -506,6 +506,8 @@ static inline void msMsgReplyDispatch(void* fut) {
  * the finished future re-fire through msFutureAddCallback's finished-path. */
 static inline void msMsgReplyFail(void* fut) {
     if (fut == NULL) return;
+    /* A completed reply's in-flight ref is released by the drain its completer posted to. */
+    if (atomic_load_explicit(&((msFutureBase*)fut)->finished, memory_order_acquire)) return;
     msFutureFail(fut, NULL);
 #if MS_FUTURE_SUBMIT_REF
     void* f = fut;
@@ -718,7 +720,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
                 return 0;
             }
             /* Resumed: _impl stepper already completed the reply future via
-             * msFutureChain. Clear suspension state, fall through to mailbox drain. */
+             * its reply chain. Clear suspension state, fall through to mailbox drain. */
             atomic_store_explicit(&a->suspendedFut, NULL, memory_order_release);
             a->suspendedReplyFut = NULL;
         }
@@ -909,6 +911,41 @@ static inline void msMsgCompleteVoid(void* fut) {
     atomic_store_explicit(&f->finished, true, memory_order_release);
     msMsgReplyDispatch(fut);
 }
+
+typedef struct { void* src; void* dst; } msMsgReplyChainPair;
+
+#define MS_DEFINE_REPLY_CHAIN(name, valueType) \
+static inline void name##_cb(void* raw, ...) { \
+    typedef struct { msFutureBase base; valueType value; } layout; \
+    msMsgReplyChainPair* pair = (msMsgReplyChainPair*)raw; \
+    layout* src = (layout*)pair->src; \
+    layout* dst = (layout*)pair->dst; \
+    free(pair); \
+    if (atomic_load_explicit(&dst->base.finished, memory_order_acquire)) return; \
+    if (src->base.failed) { \
+        dst->base.error = src->base.error; \
+        src->base.error = NULL; \
+        dst->base.failed = true; \
+    } else { \
+        dst->value = src->value; \
+    } \
+    atomic_store_explicit(&dst->base.finished, true, memory_order_release); \
+    msMsgReplyDispatch(dst); \
+} \
+static inline void name(void* src, void* dst) { \
+    if (src == NULL || dst == NULL) return; \
+    msMsgReplyChainPair* pair = (msMsgReplyChainPair*)malloc(sizeof(msMsgReplyChainPair)); \
+    pair->src = src; \
+    pair->dst = dst; \
+    msFutureAddCallback(src, (msClosure){ .fn = (msClosureFn)name##_cb, .env = (void*)pair }); \
+}
+
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainDouble, double)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainInt32, int32_t)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainInt64, int64_t)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainBool, bool)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainString, msString)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainPtr, void*)
 
 /* Set onTerminate callback (called by actorLower wiring).
  * Takes void* for fn to avoid function pointer type mismatch — _impl takes ActorType* not void*. */
