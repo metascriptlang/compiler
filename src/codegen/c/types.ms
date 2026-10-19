@@ -1154,7 +1154,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind == TypeInfoKind.Object ? typeDisplayName(info.subject) : "";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = 0, .base = ${baseRef}`
+			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = ${viaRegistry && !info.moduleLocal && info.kind == TypeInfoKind.Object ? "MS_TYPE_FLAG_HCR" : "0"}, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);

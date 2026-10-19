@@ -46,7 +46,8 @@ import { transformForNative } from "../transform/native/index";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
-import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
+import { HcrIndirectModule, HcrTypeLayout, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
+import { hcrTypeCounts } from "./hcrCount";
 import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker } from "../transform/context";
@@ -1953,9 +1954,18 @@ function linkHcrImages(
 	}
 }
 
-function hcrTypeLayoutKeys(program: Node | null): string[] {
+function hcrTypeLayoutKeys(layouts: HcrTypeLayout[]): string[] {
 	const pairs: string[] = [];
-	if (program == null) return pairs;
+	for (const layout of layouts) {
+		pairs.push(layout.name);
+		pairs.push(hcrLayoutKey(layout.subject));
+	}
+	return pairs;
+}
+
+function hcrTypeLayouts(program: Node | null): HcrTypeLayout[] {
+	const layouts: HcrTypeLayout[] = [];
+	if (program == null) return layouts;
 	for (const stmt of (program.data as ProgramData).programStmts) {
 		let decl = stmt;
 		if (decl.kind == NodeKind.ExportDecl) {
@@ -1967,10 +1977,9 @@ function hcrTypeLayoutKeys(program: Node | null): string[] {
 		else if (decl.kind == NodeKind.InterfaceDecl) name = (decl.data as InterfaceDeclData).interfaceName;
 		else if (decl.kind == NodeKind.StructDecl) name = (decl.data as StructDeclData).interfaceName;
 		if (name == "" || name.startsWith("$") || decl.resolvedSym == null) continue;
-		pairs.push(name);
-		pairs.push(hcrLayoutKey(decl.resolvedSym.symbolType));
+		layouts.push({ name, subject: decl.resolvedSym.symbolType, byValue: decl.kind == NodeKind.StructDecl });
 	}
-	return pairs;
+	return layouts;
 }
 
 function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
@@ -2013,7 +2022,7 @@ function refuseCoreCallsIntoImageOps(unit: ProcessedModule, imagePaths: string[]
 	}
 }
 
-function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts): void {
+function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts, counted: boolean): void {
 	const imagePaths: string[] = [];
 	for (const module of modules) {
 		imagePaths.push(module.modulePath);
@@ -2034,6 +2043,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 			facts.hcrTypeInfoOwners.set(name, module.moduleId);
 		}
 	}
+	for (let i = 0; i < modules.length; i += 1) modules[i].typeCounts = hcrTypeCounts(modules[i], modules, facts, counted);
 	const owners = new HashMap<string, string>();
 	for (const module of modules) {
 		for (const unit of processed) {
@@ -2067,6 +2077,8 @@ function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], s
 			modulePath: abi.modulePaths[i],
 			typeInfos: [],
 			typeKeys: [],
+			typeLayouts: [],
+			typeCounts: [],
 			imports,
 			beforeReload: [],
 			afterReload: [],
@@ -2657,7 +2669,8 @@ resetLiftedOps();
 		const path = hcrModulePaths[i];
 		const checkedProgram = programByPath.has(path) ? programByPath.get(path) : null;
 		const program = session.keep && checkedProgram != null ? programWithInstances(checkedProgram, instancesByOwner.get(path)) : checkedProgram;
-		hcrModules[i].typeKeys = hcrTypeLayoutKeys(program);
+		hcrModules[i].typeLayouts = hcrTypeLayouts(program);
+		hcrModules[i].typeKeys = hcrTypeLayoutKeys(hcrModules[i].typeLayouts);
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}
@@ -2879,7 +2892,7 @@ resetLiftedOps();
 		}
 		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 	}
-	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts);
+	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc || gcModeOf(opts.gcMode) == GcMode.Orc);
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
