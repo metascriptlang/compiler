@@ -3892,6 +3892,8 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			if (!needed.exportedNames.includes(n) && !fileForced[vi].includes(n)) fileForced[vi].push(n);
 		}
 	}
+	const fileReexports: string[][] = [];
+	for (let vi = 0; vi < fileKeys.length; vi += 1) fileReexports.push([]);
 	for (let vi = 0; vi < fileKeys.length; vi += 1) {
 		const needed = fileResults[vi];
 		for (let mi = 0; mi < needed.neededModules.length; mi += 1) {
@@ -3910,6 +3912,12 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			const ti = fileIndexOf.get(needed.namespaceModules[mi]);
 			if (ti == null) continue;
 			for (const n of needed.namespaceNames[mi]) {
+				const instFile = layout.instanceFileOf.get(n);
+				if (instFile != null && instFile != fileKeys[ti]) {
+					const line = `export { ${n} } from "${relSpecBetween(layout.outRelOf.get(fileKeys[ti])!, layout.outRelOf.get(instFile)!)}";\n`;
+					if (!fileReexports[ti].includes(line)) fileReexports[ti].push(line);
+					continue;
+				}
 				if (!fileResults[ti].exportedNames.includes(n) && !fileForced[ti].includes(n)) fileForced[ti].push(n);
 			}
 		}
@@ -3921,6 +3929,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			forced.sort();
 			code = `${code}export { ${forced.join(", ")} };\n`;
 		}
+		for (const line of fileReexports[fi]) code = `${code}${line}`;
 		const outPath = `${outRoot}/${layout.outRelOf.get(fileKeys[fi])!}`;
 		ensureDir(dirname(outPath));
 		if (opts.sourcemap) {
