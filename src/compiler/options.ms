@@ -413,6 +413,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 	if (opts.targetOs == "solana" && opts.mode == MODE_DANGER) {
 		return Result.err("--danger is refused on --os=solana: it drops the bound, range, object and division checks that guard a program fed adversarial input\n  → use --release, which links with LTO on this target");
 	}
+	if (opts.target == Target.Raiser && (opts.command == "build" || opts.command == "test")) {
+		return Result.err(`msc ${opts.command} has no Raiser output; --target=raiser runs a program: msc run --target=raiser ${opts.inputFile}`);
+	}
 	return Result.ok(null);
 }
 
@@ -525,6 +528,17 @@ test "run: an msc option right after the file is an error that says to move it b
 	}
 	assert opts.target == Target.C;
 	assert opts.extraArgs.length == 0;
+}
+
+test "build and test refuse --target=raiser instead of building C, whichever order the flags come in" {
+	for (const command of ["build", "test"]) {
+		const r = applyArgs(newCliOptions(), [command, "--target=raiser", "a.ms"], 0);
+		assert !r.ok;
+		if (!r.ok) { assert r.error == `msc ${command} has no Raiser output; --target=raiser runs a program: msc run --target=raiser a.ms`; }
+		assert !applyArgs(newCliOptions(), ["--target=vm", command, "a.ms"], 0).ok;
+	}
+	assert applyArgs(newCliOptions(), ["run", "--target=raiser", "a.ms"], 0).ok;
+	assert applyArgs(newCliOptions(), ["check", "--target=raiser", "a.ms"], 0).ok;
 }
 
 test "run: -d: right after the file is an msc option too" {

@@ -421,6 +421,15 @@ export function readProcLocals(p: CProc): string {
 	return p.blocks[0].locals.parts.join("");
 }
 
+// Where a raise inside `p` jumps: the nearest enclosing try, else the BeforeRet_ epilogue.
+export function raiseTarget(p: CProc): string {
+	if (p.nestedTryStmts.length == 0) {
+		p.beforeRetNeeded = true;
+		return "BeforeRet_";
+	}
+	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
+}
+
 // Single funnel for ordinary proc bodies (reference genProcAux parity): drain
 // locals + stmts, then pair the beforeRetNeeded flag with its BeforeRet_ label.
 // Every ordinary-proc emission site MUST go through here — bypassing it emits a

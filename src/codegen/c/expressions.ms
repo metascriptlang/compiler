@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing } from "../../checker/types";
+import { skipModifier, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -18,11 +18,12 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
-import { useHeader, createCGen, createProc, sec, CSection, readProcStmts } from "./context";
+import { useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
+import { newCanRaise } from "../../checker/raises";
 import { GcMode, dispatchOverridesFor, dispatchEntryFor, CheckerContext } from "../../checker/context";
 import { ctorFormalTypes } from "../../checker/ctorRoutine";
 import { monoBaseName } from "../../monomorphize/registry";
@@ -328,11 +329,34 @@ function isRefArrayAccessCall(node: Readonly<Node>): boolean {
 		|| isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccessUnchecked");
 }
 
+function isPlainPath(s: string): boolean {
+	if (s.byteLength == 0) return false;
+	for (let i = 0; i < s.byteLength; i += 1) {
+		const c = s.byteAt(i);
+		const ok = (c >= "a".code && c <= "z".code) || (c >= "A".code && c <= "Z".code) || (c >= "0".code && c <= "9".code) || c == "_".code || c == ".".code;
+		if (!ok) return false;
+	}
+	return true;
+}
+
+function genOpenArrayArgs(g: CGen, p: CProc, arg: string, formal: Type): string {
+	let src = arg;
+	if (!isPlainPath(arg)) {
+		const tmp = getTemp(p, getTypeDesc(g, skipModifier(formal)));
+		emitStmtsLine(p, `${tmp.snippet} = ${arg};`);
+		src = tmp.snippet;
+	}
+	return `${src}.data, ${src}.len`;
+}
+
 // Shared ABI shim for call arguments — reference parity: genArg
 // Single point for struct-aware pointer promotion, pointer/value conversion, and untyped literal handling.
 // mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index for struct-aware promotion.
 export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Readonly<Node>, mutBits: int32, paramIdx: number): string {
 	const formal = unwrapVarargs(paramType);
+	if (formal != null && argNode.kind != NodeKind.HiddenAddr && isOpenArrayParam(formal)) {
+		return genOpenArrayArgs(g, p, arg, formal);
+	}
 	if (formal != null && argNode.kind != NodeKind.HiddenAddr) {
 		const paramIsPtr = isPointerType(formal);
 		const isMutated = (mutBits & (1 << (paramIdx as int32))) != 0;
@@ -1348,14 +1372,11 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				}
 				addLine(sec(g, CSection.ProcHeaders), procHeader(g, initName, createFunction(initParams, initNames, voidType()), null, 0, false) + ";");
 			}
-			g.labels += 1;
-			const newTmp = `_new${g.labels}_`;
-			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
-			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
 			if (ctorChildren == null && d.newArguments.length > 0) {
 				addCGenError(g, `internal: the constructor of '${d.newCallee.resolvedSym.name}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
-			let initArgs = newTmp;
+			// The arguments are evaluated before the object exists, so one that raises leaves nothing to free.
+			let initArgs = "";
 			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
 				const argNode = d.newArguments[ai];
 				let argSnippet = genExpr(g, p, argNode);
@@ -1364,7 +1385,15 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				}
 				initArgs = initArgs + ", " + argSnippet;
 			}
+			g.labels += 1;
+			const newTmp = `_new${g.labels}_`;
+			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
+			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
+			initArgs = newTmp + initArgs;
 			emitStmtsLine(p, `${initName}(${initArgs});`);
+			if (!p.suppressRaiseCheck && newCanRaise(node)) {
+				emitStmtsLine(p, `if (msErr) { msDecrefCyclic(${newTmp}); goto ${raiseTarget(p)}; }`);
+			}
 			ctx.results.push(newTmp);
 			return;
 		}

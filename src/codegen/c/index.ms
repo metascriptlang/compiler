@@ -10,6 +10,7 @@
 import { Node, NodeKind, ProgramData, SymbolKind, TypeKind, VariableDeclData, ObjectLiteralData } from "../../ast/node";
 import { getProperty, createFunction, voidType, createStruct, createPrimitive } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
+import { markErrorBlindFinallies } from "../../checker/raises";
 import { CheckerContext, CheckerError, GcMode, findExportedSymbol, createContext } from "../../checker/context";
 import {
 	CGen, CSection, AliveSet, CEmissionFacts, TypeInfoKind, Builder,
@@ -69,6 +70,7 @@ function prepareEmissionTypes(node: Node, ctx: CheckerContext): void {
 export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, facts: CEmissionFacts): void {
 	if (program == null || program.kind != NodeKind.Program) return;
 	prepareEmissionTypes(program, ctx);
+	markErrorBlindFinallies(program);
 	const g = createCGen(ctx, modulePath);
 	g.aliveSet = aliveSet;
 	g.emissionFacts = facts;

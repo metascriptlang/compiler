@@ -253,6 +253,12 @@ export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Read
 	for (let i = 0; i < count; i += 1) {
 		const typed = i < fnType.typeChildren.length;
 		if (typed && hasNoRuntimeRepr(fnType.typeChildren[i])) continue;
+		if (typed && isOpenArrayParam(fnType.typeChildren[i])) {
+			const elemPtr = getTypeDesc(g, skipModifier(fnType.typeChildren[i])!.typeReturn) + "*";
+			parts.push(named ? `${elemPtr} ${openArrayDataName(safeName(names[i]))}` : elemPtr);
+			parts.push(named ? `int64_t ${openArrayLenName(safeName(names[i]))}` : "int64_t");
+			continue;
+		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		const mut = (mutBits & (1 << (i as int32))) != 0;
 		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
@@ -697,8 +703,7 @@ export function isNilableValueType(t: Type): boolean {
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
 // Determines if a param type should be passed by pointer in C.
 // Reference: skipTypes(typedescInst) strips Sink/Lent before dispatch.
-// Object types over the threshold, tuple same threshold,
-// Result/Union/Span always by pointer.
+// Object types over the threshold, tuple same threshold, Result and Union always.
 function ptrThreshold(tg: TargetInfo): int32 { return tg.floatSize * 3; }
 
 export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
@@ -715,7 +720,7 @@ export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 	return match (inner.kind) {
 		TypeKind.Tuple => sizeOfType(tg, inner) > ptrThreshold(tg),
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
-		TypeKind.Union | TypeKind.Span => true,
+		TypeKind.Union => true,
 		TypeKind.GenericInstance => {
 			const repr = genericInstanceAbiRepr(inner);
 			return repr == inner ? !isAwaitable(inner) : ccgIntroducedPtr(tg, repr);
@@ -723,6 +728,15 @@ export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 		_ => false,
 	};
 }
+
+export function isOpenArrayParam(t: Type | null): boolean {
+	if (t == null || t.kind == TypeKind.Var) return false;
+	const inner = skipModifier(t);
+	return inner != null && inner.kind == TypeKind.Span;
+}
+
+export function openArrayDataName(param: string): string { return param + "Data_0"; }
+export function openArrayLenName(param: string): string { return param + "Len_0"; }
 
 // Mutation forces T* for Struct, Function (msClosure 16B), and small Tuple.
 // Actor lowering sets mutation bits via markValueLayoutParamsAsMutated.
@@ -1900,6 +1914,7 @@ function closureBaseTypeToC(g: CGen, pt: Type): string {
 }
 
 function closureParamTypeToC(g: CGen, pt: Type): string {
+	if (isOpenArrayParam(pt)) return getTypeDesc(g, skipModifier(pt)!.typeReturn) + "*, int64_t";
 	const base = closureBaseTypeToC(g, pt);
 	// Reference parity: ccgIntroducedPtr params are passed by pointer in C
 	if (pt != null && ccgIntroducedPtr(g.target, pt)) return base + "*";
