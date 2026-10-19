@@ -170,3 +170,22 @@ test "equality against a literal narrows a literal union as it narrows a string 
 	assert bySetString("b") == "b!";
 	assert bySetString("a") == "a";
 }
+
+test "a number literal receiver is its base for toString, in text and with a radix" {
+	const one: 1 = 1;
+	assert one.toString() == "1";
+	assert `${one}` == "1";
+	const half: 1.5 = 1.5;
+	assert half.toString() == "1.5";
+	assert `${half}` == "1.5";
+	const set: 1 | 2 = 2;
+	assert set.toString() == "2";
+	assert set.toString(2) == "10";
+	assert `${set}` == "2";
+	const mixed: 1 | 2.5 = 2.5;
+	assert `${mixed}` == "2.5";
+	const neg: -1 | 1 = -1;
+	assert `${neg}` == "-1";
+	const big: 3000000000 = 3000000000;
+	assert big.toString(16) == "b2d05e00";
+}
