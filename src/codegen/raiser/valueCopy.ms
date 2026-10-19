@@ -1,6 +1,6 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, isStructType } from "../../checker/types";
+import { distinctBody, enumMemberValue, isStructType, needsValueCopy, valueCopyRepr } from "../../checker/types";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
@@ -12,14 +12,15 @@ function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	if (valueType != null && valueType.kind == TypeKind.Alias) {
 		return copyPlan(s, valueType.typeReturn);
 	}
-	if (valueType != null && valueType.kind == TypeKind.GenericInstance && isStructType(valueType.typeReturn)) {
-		return copyPlan(s, valueType.typeReturn);
+	if (valueType != null && valueType.kind == TypeKind.GenericInstance) {
+		const repr = valueCopyRepr(valueType);
+		if (repr != valueType) return copyPlan(s, repr);
 	}
 	if (valueType == null) return -1;
 	for (let i = 0; i < s.copyTypes.length; i += 1) {
 		if (s.copyTypes[i] == valueType) return i;
 	}
-	const plan: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [] };
+	const plan: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [] };
 	const index = s.copyPlans.length;
 	s.copyTypes.push(valueType);
 	s.copyPlans.push(plan);
@@ -32,8 +33,24 @@ function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 			plan.names.push(valueType.typeNames[i]);
 			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
 		}
+	} else if (valueType.kind == TypeKind.Union && needsValueCopy(valueType)) {
+		plan.kind = RaiserCopyKind.Union;
+		plan.names.push(valueType.typeNames[0]);
+		for (let i = 0; i < valueType.typeChildren.length; i += 1) {
+			plan.discriminants.push(armDiscriminant(valueType, valueType.typeNames[i + 1]));
+			plan.children.push(copyPlan(s, valueType.typeChildren[i]));
+		}
 	}
 	return index;
+}
+
+function armDiscriminant(union: Type, key: string): int64 {
+	const discriminant = union.typeExtra as Type;
+	if (discriminant.kind == TypeKind.Boolean) return key == "true" ? 1 : 0;
+	const member = key.slice(key.lastIndexOf(".") + 1);
+	const at = discriminant.typeNames.indexOf(member);
+	if (at < 0) throw new Error(`internal: value union '${union.typeName}' names arm '${key}', which is no member of its discriminant enum`);
+	return enumMemberValue(discriminant, at as int32);
 }
 
 export function emitValueCopy(
@@ -50,7 +67,9 @@ export function emitValueCopy(
 
 export function needsValueAssign(s: RaiserCompState, valueType: Type | null): boolean {
 	const index = copyPlan(s, valueType);
-	return index >= 0 && s.copyPlans[index].kind != RaiserCopyKind.Preserve;
+	if (index < 0) return false;
+	const kind = s.copyPlans[index].kind;
+	return kind == RaiserCopyKind.Array || kind == RaiserCopyKind.Object;
 }
 
 function valueShape(t: Type | null): Type | null {
@@ -64,7 +83,8 @@ function valueShape(t: Type | null): Type | null {
 // location's object, so every pointer to the location keeps seeing it (NIM-REF CG-40).
 export function emitValueAssign(s: RaiserCompState, destination: int32, source: int32, valueType: Type | null): int32 {
 	const t = valueShape(valueType);
-	if (t == null || !needsValueAssign(s, t)) return source;
+	if (t == null) return source;
+	if (!needsValueAssign(s, t)) return emitValueCopy(s, source, t);
 	const index = copyPlan(s, t);
 	const result = allocReg(s);
 	const toEnd: int32[] = [];

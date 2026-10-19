@@ -54,6 +54,7 @@ export enum TypeKind {
 	Module,
 	IndexedAccess,
 	KeyOf,
+	NumberLiteral,
 }
 
 // ===== Calling Convention =====
@@ -83,6 +84,7 @@ export enum TypeFlag {
 	BorrowDot,
 	Spelled,              // the compiler spelled this name from an owner and arguments: it is the identity and no declaring symbol exists
 	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
+	ValueUnion,           // a discriminated union declared `struct X = match`: a value, copied where a `type X = match` union is shared
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -306,6 +308,7 @@ export enum NodeFlag {
 	AssertedNull,  // checker: `null as T` folded to a typed null literal; its value is the asserted T, so an assignment narrows to T
 	UserOpStores,  // checker: this compound assignment calls its base operator's declared routine and stores the result in its target
 	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
+	ValueUnion,    // parser: this TypeAliasDecl is a discriminated union written `struct X = match`
 }
 
 // ===== Node Kind Enum =====

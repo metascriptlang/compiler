@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { skipModifier, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing } from "../../checker/types";
+import { skipModifier, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -111,11 +111,17 @@ function literalDiscriminantOf(u: Type): string {
 	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(u);
 }
 
-function unstoredLiteral(object: Readonly<Node>, property: string): string {
+function unstoredLiteral(g: CGen, object: Readonly<Node>, property: string): string {
 	const owner = object.nodeType != null ? peelToStructOrUnion(object.nodeType) : null;
 	if (owner == null || owner.kind != TypeKind.Struct) return "";
 	const ft = getProperty(owner, property);
-	return ft.kind == TypeKind.BooleanLiteral && storesNothing(owner, ft) ? cBoolLiteral(booleanLiteralValue(ft)) : "";
+	if (!storesNothing(owner, ft)) return "";
+	if (ft.kind == TypeKind.BooleanLiteral) return cBoolLiteral(booleanLiteralValue(ft));
+	if (ft.kind != TypeKind.EnumLiteral) return "";
+	const enumT = ft.typeReturn;
+	const member = enumT != null && ft.typeNames.length > 0 ? variantKeyMember(enumT, ft.typeNames[0]) : -1;
+	if (enumT == null || member < 0) throw new Error(`internal: unstored enum literal '${property}' of '${typeDisplayName(owner)}' names no member of its enum`);
+	return `${getTypeDesc(g, enumT)}_${mangle(enumT.typeNames[member])}`;
 }
 
 function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Type, disc: string, tagRead: string): string {
@@ -664,9 +670,7 @@ class ObjLitShape {
 	unionWrapName: string;
 	unionWrapType: Type | null;
 	unionWrapIdx: number;
-	unionDiscKeyIdx: number;
 	isRefUnion: boolean;
-	discFieldInVariant: boolean;
 	fieldsType: Type | null;
 }
 
@@ -678,13 +682,7 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 	let unionWrapName = "";
 	let unionWrapType: Type | null = null;
 	let unionWrapIdx = -1;
-	let unionDiscKeyIdx = -1;
 	let isRefUnion = false;
-	// True when the resolved Union has a literal-disc field that lives in
-	// each variant struct (vs enum-disc match-type where the disc is the
-	// wrapper's `_tag`). Construction must write the disc field instead
-	// of skipping it.
-	let discFieldInVariant = false;
 	if (node.nodeType != null) {
 		// Unwrap Ref<Union> for discriminated union construction
 		let litType = node.nodeType;
@@ -743,9 +741,6 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 					ki = ki + 1;
 				}
 			}
-			unionDiscKeyIdx = discKeyIdx;
-			const dt = litType.typeExtra;
-			discFieldInVariant = dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String);
 			if (discKeyIdx >= 0) {
 				// Discriminated: resolve variant from discriminant value
 				const discValNode = d.properties[discKeyIdx];
@@ -821,7 +816,7 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 		const u = peelToStructOrUnion(unionWrapType);
 		fieldsType = u != null && u.typeChildren != null && unionWrapIdx < u.typeChildren.length ? u.typeChildren[unionWrapIdx] : null;
 	}
-	return { cType, isClassObj, unionWrapName, unionWrapType, unionWrapIdx, unionDiscKeyIdx, isRefUnion, discFieldInVariant, fieldsType };
+	return { cType, isClassObj, unionWrapName, unionWrapType, unionWrapIdx, isRefUnion, fieldsType };
 }
 
 // ===== Iterative genExpr infrastructure =====
@@ -1589,7 +1584,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
 			const md = d.left.data as MemberExprData;
-			if (unstoredLiteral(md.object, md.property) != "") {
+			if (unstoredLiteral(g, md.object, md.property) != "") {
 				ctx.results.push(`((void)${left}, ${right})`);
 				return;
 			}
@@ -1802,7 +1797,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`${obj}.${d.property}`);
 			return;
 		}
-		const unstored = unstoredLiteral(d.object, d.property);
+		const unstored = unstoredLiteral(g, d.object, d.property);
 		if (unstored != "") {
 			ctx.results.push(`((void)(${obj}), ${unstored})`);
 			return;
@@ -2221,7 +2216,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Variant struct → discriminated union: construct with tag + variant slot.
 		// C layouts differ (variant = small struct, union = tagged union with all
 		// variant slots) — a raw cast silently misaligns fields.
-		if (isTagCarriedUnion(d.convType)) {
+		const convUnion = matchUnionBehindInstance(d.convType);
+		if (isTagCarriedUnion(convUnion)) {
 			const srcType = d.convExpr.nodeType;
 			let vi = 0;
 			// Checker-stamped slot wins: union variants are frequently anonymous,
@@ -2231,13 +2227,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			if (stampedSlot > 0) {
 				vi = stampedSlot - 1;
 			} else {
-				for (const child of d.convType.typeChildren) {
+				for (const child of convUnion.typeChildren) {
 					if (srcType != null && srcType.kind == TypeKind.Struct && child.kind == TypeKind.Struct
 						&& child.typeName == srcType.typeName) break;
 					vi += 1;
 				}
 			}
-			if (vi < d.convType.typeChildren.length) {
+			if (vi < convUnion.typeChildren.length) {
 				ctx.results.push(`((${targetC}){._tag=${vi}, .v${vi}=${inner}})`);
 				return;
 			}
@@ -2283,7 +2279,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${payload}, .present=true} : (${targetC}){0})`);
 			return;
 		}
-		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && !isTagCarriedUnion(d.convType)) {
+		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && !isTagCarriedUnion(convUnion)) {
 			const pvi = projSlot - 1;
 			ctx.results.push(`(${inner}).v${pvi}`);
 			return;
@@ -2345,9 +2341,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const unionWrapName = shape.unionWrapName;
 			const unionWrapType = shape.unionWrapType;
 			const unionWrapIdx = shape.unionWrapIdx;
-			const unionDiscKeyIdx = shape.unionDiscKeyIdx;
 			const isRefUnion = shape.isRefUnion;
-			const discFieldInVariant = shape.discFieldInVariant;
 			if (cType != "") {
 				// Reference pattern: allocate temp, zero-init, assign fields
 				const dest = destOf(ctx, node);
@@ -2378,13 +2372,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					emitProcLocalsLine(p, `${cType} ${tmpName};`);
 					emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${cType}));`);
 				}
-				const skipDiscKey = discFieldInVariant ? -1 : unionDiscKeyIdx;
 				const owner = shape.fieldsType != null ? peelToStructOrUnion(shape.fieldsType) : null;
 				let i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(ctx, cc, i);
-					// Skip discriminant key — handled by _tag in union wrap
-					if (i == skipDiscKey) { i += 1; continue; }
 					if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, d.keys[i]))) {
 						if (d.properties[i].kind != NodeKind.BooleanLiteral) emitStmtsLine(p, `(void)(${val});`);
 						i += 1;

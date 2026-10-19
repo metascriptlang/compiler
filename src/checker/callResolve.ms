@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBloc
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt } from "./context";
-import { fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf } from "./fit";
+import { fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -27,7 +27,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, unionHasMemberOfKind, isArrayType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass } from "./types";
+import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass, matchUnionBehindInstance } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -2424,7 +2424,8 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 							argTypes[pi] = args[pi].nodeType!;
 						} else {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
+							const variantRefusal = variantIntoObjectRefusal(args[pi], argTypes[pi], paramType);
+							addError(ctx, variantRefusal != "" ? variantRefusal : "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + unknownReturnRefusal(argTypes[pi], paramType) + returnReprRefusal(argTypes[pi], paramType, wrappedFnText(args[pi])) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}
@@ -2470,12 +2471,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				args[pi] = convNode;
 			}
 			const paramValue = skipModifier(paramType);
-			if (!formalAwaitsBinding && paramValue != null && paramValue.kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+			if (!formalAwaitsBinding && paramValue != null && matchUnionBehindInstance(paramValue).kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
 				const uw = widenVariantToUnion(args[pi], paramValue, argNow);
 				if (uw != null as unknown as Node) args[pi] = uw;
 			}
-			if (paramValue != null && paramValue.kind != TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+			if (paramValue != null && matchUnionBehindInstance(paramValue).kind != TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const pj = narrowUnionToVariant(args[pi], argTypes[pi]);
 				if (pj != null as unknown as Node) args[pi] = pj;
 			}
@@ -2754,7 +2755,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			if (arg == null || arg.nodeType == null) continue;
 			const formal = applySubstitutions(fnType.typeChildren[ai], argBindings);
 			const formalValue = skipModifier(formal);
-			if (formalValue != null && formalValue.kind == TypeKind.Union) {
+			if (formalValue != null && matchUnionBehindInstance(formalValue).kind == TypeKind.Union) {
 				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType);
 				if (uw != null as unknown as Node) cd.arguments[ai] = uw;
 			}
@@ -3244,7 +3245,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 		}
 		const substitutedValue = skipModifier(substituted);
-		if (substitutedValue != null && substitutedValue.kind == TypeKind.Union && arg.nodeType != null) {
+		if (substitutedValue != null && matchUnionBehindInstance(substitutedValue).kind == TypeKind.Union && arg.nodeType != null) {
 			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType);
 			if (uw != null as unknown as Node) {
 				cd.arguments[pi] = uw;
@@ -4921,14 +4922,16 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			let mi = 0;
 			for (const mName of resolvedObjType.typeNames) {
 				if (mName == d.property) {
-					const synthSym = makeSymbol(mName, SymbolKind.Property, resolvedObjType.typeChildren[mi], false);
+					const isUnionMeta = resolvedObjType.kind == TypeKind.Union;
+					const symTy = isUnionMeta ? propType : resolvedObjType.typeChildren[mi];
+					const synthSym = makeSymbol(mName, SymbolKind.Property, symTy, false);
 					synthSym.state = SymbolState.Shaped;
-					if (resolvedObjType.typeChildren[mi].typeName != "") {
-						synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
+					if (!isUnionMeta && symTy.typeName != "") {
+						synthSym.nativeName = symTy.typeName;
 					}
 					inheritContainerInfo(synthSym, memberOwner);
 					node.resolvedSym = synthSym;
-					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + mName.length, synthSym, resolvedObjType.typeChildren[mi], SymbolKind.Property, mName, resolvedObjType.typeName, false);
+					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + mName.length, synthSym, symTy, SymbolKind.Property, mName, resolvedObjType.typeName, false);
 					break;
 				}
 				mi = mi + 1;
@@ -5214,7 +5217,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (d.property == "toString" && isUnresolvedType(propType)) {
 		if (distinctBody(resolvedObjType) != null) addError(ctx, distinctTextRefusal(resolvedObjType), node.location.line, node.location.column);
 		let toStrFnType: Type | null = null;
-		if (isNumeric(resolvedObjType)) {
+		if (isNumeric(widenNumberLiteralType(resolvedObjType))) {
 			toStrFnType = createFunction([int32Type()], ["radix"], stringType());
 			setMinArity(toStrFnType, 0);
 		} else {

@@ -9,14 +9,11 @@
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, implementationOf } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, unwrapType, implementationOf } from "../discDetect";
 
 export macro jsonValueOf(t: Node): Node {
-	// Resolve underlying type-AST node (peel Ref<Struct> wrapper).
 	let tt = implementationOf(t);
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Array field — emit a call to a per-element-type runtime helper.
 	// V2: atomic-builtin, enum/alias, struct/interface elements.
@@ -62,7 +59,8 @@ export macro jsonValueOf(t: Node): Node {
 			}
 		} else if (elemType.kind == NodeKind.TypeGeneric) {
 			// Ref<Struct> wrapper around struct element
-			const peeled: Node = elemType.typExprArgs[0];
+			let peeled: Node = unwrapType(elemType);
+			if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
 			if (namesStruct(peeled)) {
 				elemByValueOf = true;
 				en = peeled.name;

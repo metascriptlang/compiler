@@ -421,7 +421,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		if (extensionOperator(ctx, baseOp, [leftType, leftType]) != null) hasBase = true;
 
 		if (hasBase) {
-			return resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);
+			const derived = resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);
+			if (derived != null) return derived;
 		}
 	}
 

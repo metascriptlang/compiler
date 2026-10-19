@@ -75,6 +75,11 @@ function typeKey(t: Type): string {
 		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
 		return key + ")";
 	}
+	if (t.kind == TypeKind.Union) {
+		let key = "U:" + t.typeName + "(";
+		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
+		return key + ")";
+	}
 	if (t.kind == TypeKind.Set) {
 		const repr = setRepr(t);
 		if (repr != null) return "K:" + typeKey(repr);
@@ -128,6 +133,8 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 			i += 1;
 		}
 		body = body + "];";
+	} else if (t.kind == TypeKind.Union) {
+		body = unionCopyBody(gen, t);
 	} else {
 		const elem = valueCopyRepr(t.typeReturn);
 		const typedName = t.kind == TypeKind.SizedArray && elem != null
@@ -141,6 +148,23 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 		}
 	}
 	return "function " + name + "(v) { if (v === null || v === undefined) return v; " + body + " }\n";
+}
+
+function armDiscriminant(union: Type, key: string): string {
+	const disc = union.typeExtra as Type;
+	if (disc.kind != TypeKind.Enum) return key;
+	const parts = key.split(".");
+	const member = parts[parts.length - 1];
+	const at = disc.typeNames.indexOf(member);
+	return (at < disc.typeChildren.length && disc.typeChildren[at] != null ? disc.typeChildren[at].typeValue : at).toString();
+}
+
+function unionCopyBody(gen: JSGenerator, union: Type): string {
+	let body = "switch (v." + union.typeNames[0] + ") { ";
+	for (let i = 0; i < union.typeChildren.length; i += 1) {
+		body = body + "case " + armDiscriminant(union, union.typeNames[i + 1]) + ": return " + copyFnName(gen, union.typeChildren[i]) + "(v); ";
+	}
+	return body + "default: throw new Error(\"copy of a union whose discriminant matches no arm\"); }";
 }
 
 function isElementRead(n: Node): boolean {
@@ -228,6 +252,8 @@ function buildAssignFn(gen: JSGenerator, t: Type, name: string): string {
 			body = body + "d" + at + " = " + assignExpr(gen, ft, "d" + at, "v" + at) + "; ";
 			i += 1;
 		}
+	} else if (t.kind == TypeKind.Union) {
+		body = "const c = " + copy + "(v); for (const k of Object.keys(d)) delete d[k]; Object.assign(d, c); ";
 	} else if (t.kind == TypeKind.Tuple) {
 		let i = 0;
 		while (i < t.typeChildren.length) {

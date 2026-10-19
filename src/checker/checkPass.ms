@@ -42,7 +42,7 @@ import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineI
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
-import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
+import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
@@ -765,6 +765,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
 		foldUserOperatorConstant(ctx, d.initializer, declType);
 	}
+	if (declType == null && d.initializer != null) d.initializer = widenNumberLiteral(d.initializer);
 	const initType = declType == null && d.initializer != null && d.initializer.nodeType != null
 		? storedTypeOfNullRead(d.initializer, d.initializer.nodeType, d.initializer.nodeType)
 		: d.initializer != null ? d.initializer.nodeType : null;
@@ -2585,6 +2586,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as SwitchStmtData;
 	checkExpr(ctx, d.switchDisc, null);
+	d.switchDisc = widenNumberLiteral(d.switchDisc);
 	// Ref parity: trackCase
 	const oldState = saveInitState(ctx.initTracker);
 	const oldAffine = saveConsumeState(ctx.affineTracker);
@@ -5572,10 +5574,10 @@ test "flow: enum DU narrowing via match-syntax discriminated union" {
 	assert declared.kind == TypeKind.Union;
 	const narrowed = getFlowTypeOfReference(vRef, declared);
 	assert narrowed != null;
-	// Narrowed to the A-variant (has `x`)
-	assert narrowed.kind == TypeKind.Struct;
+	// Narrowed to the A-variant (has `x`), a reference to the object the arm writes
+	assert narrowed.kind == TypeKind.Ref && narrowed.typeReturn != null && narrowed.typeReturn.kind == TypeKind.Struct;
 	let hasX = false;
-	for (const fn of narrowed.typeNames) {
+	for (const fn of narrowed.typeReturn.typeNames) {
 		if (fn == "x") { hasX = true; break; }
 	}
 	assert hasX;

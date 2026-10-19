@@ -320,3 +320,168 @@ test "Result.err for Result<void, E>" {
 	assert !r.ok;
 	if (!r.ok) assert r.error == "boom";
 }
+
+// --- a binding copied from a narrowed Result keeps the narrowed variant ---
+struct CopyKey {
+	b: uint8;
+}
+
+function copyPick(flag: boolean): Result<CopyKey, string> {
+	if (!flag) return Result.err("bad");
+	return Result.ok({ b: 9 });
+}
+
+function copyViaParam(r: Result<CopyKey, string>): int32 {
+	if (r.ok) {
+		const h = r;
+		return h.value.b as int32;
+	}
+	return -1;
+}
+
+function copyWidth(r: Result<CopyKey, string>): int32 {
+	if (r.ok) return r.value.b as int32;
+	return 0;
+}
+
+function copyForward(r: Result<string, int32>): Result<string, int32> {
+	if (r.ok) {
+		const h = r;
+		const q: Result<string, int32> = h;
+		return q;
+	}
+	const e = r;
+	return e;
+}
+
+function copyText(r: Result<string, int32>): string {
+	if (r.ok) {
+		let h = r;
+		return h.value;
+	}
+	return "none";
+}
+
+test "const copy of a narrowed Result reads the variant field" {
+	const got = copyPick(true);
+	let seen = 0;
+	if (got.ok) {
+		const h = got;
+		seen = h.value.b as int32;
+	}
+	assert seen == 9;
+}
+
+test "let copy of a narrowed Result reads the variant field" {
+	const got = copyPick(true);
+	let seen = 0;
+	if (got.ok) {
+		let h = got;
+		seen = h.value.b as int32;
+	}
+	assert seen == 9;
+}
+
+test "copy of a narrowed Result parameter reads the variant field" {
+	assert copyViaParam(copyPick(true)) == 9;
+	assert copyViaParam(copyPick(false)) == -1;
+}
+
+test "copy of the error arm reads error" {
+	const bad = copyPick(false);
+	let seen = "";
+	if (!bad.ok) {
+		const h = bad;
+		seen = h.error;
+	}
+	assert seen == "bad";
+}
+
+test "copy of a narrowed Result passes where a Result is expected" {
+	const got = copyPick(true);
+	let seen = 0;
+	if (got.ok) {
+		const h = got;
+		seen = copyWidth(h);
+	}
+	assert seen == 9;
+}
+
+test "copy of a narrowed Result returns as the Result, other payload types" {
+	assert copyForward(Result.ok("hi")).ok;
+	assert !copyForward(Result.err(7)).ok;
+	assert copyText(Result.ok("hi")) == "hi";
+	assert copyText(Result.err(7)) == "none";
+}
+
+enum CopyKind { A, B }
+
+struct CopyVariantData = match (kind: CopyKind) {
+	CopyKind.A => {},
+	CopyKind.B => { flag: boolean },
+};
+
+type CopyVariant = Ref<CopyVariantData>;
+type CopyPlain = { ok: true; value: CopyVariant } | { ok: false; error: string };
+
+function copyMake(): CopyPlain {
+	const v: CopyVariant = { kind: CopyKind.B, flag: true };
+	return { ok: true, value: v };
+}
+
+test "a nested discriminant test narrows through the narrowed union" {
+	const r = copyMake();
+	let seen = false;
+	if (r.ok) {
+		if (r.value.kind == CopyKind.B) seen = r.value.flag;
+	}
+	assert seen;
+}
+
+// --- a narrowed variant reaches an object by a written copy or as its union ---
+import { okText, okCount } from "./fixtures/objectParameters";
+
+type VariantPair = match (ok: boolean) {
+	true => { value: string },
+	false => { error: string },
+};
+
+function variantPair(good: boolean): VariantPair {
+	if (good) return { ok: true, value: "lib" };
+	return { ok: false, error: "nope" };
+}
+
+function variantCount(good: boolean): Result<int32, string> {
+	if (good) return Result.ok(7);
+	return Result.err("no");
+}
+
+function variantTaker(x: VariantPair): boolean {
+	return x.ok;
+}
+
+test "a narrowed match variant copied with a spread passes to a parameter written as an object" {
+	const p = variantPair(true);
+	let seen = "";
+	if (p.ok) seen = okText({ ...p });
+	assert seen == "true:lib";
+}
+
+test "a narrowed Result copied with a spread passes to a parameter written as an object" {
+	const r = variantCount(true);
+	let seen = 0;
+	if (r.ok) seen = okCount({ ...r });
+	assert seen == 7;
+}
+
+test "a narrowed match variant passes to a parameter of its union type" {
+	const p = variantPair(true);
+	let seen = false;
+	if (p.ok) seen = variantTaker(p);
+	assert seen;
+}
+
+test "a value written as the variant's object type passes where the match type is expected" {
+	const v: { ok: true; value: string } = { ok: true, value: "w" };
+	assert variantTaker(v);
+}

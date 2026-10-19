@@ -18,7 +18,7 @@ struct Failure {
 	code: uint64;
 }
 
-type Flag = match (ok: boolean) {
+struct Flag = match (ok: boolean) {
 	true => { name: string, key: Key },
 	false => { code: uint64 },
 };
@@ -35,7 +35,7 @@ struct Miss {
 
 type Probe = Hit | Miss;
 
-type Word = match (ok: boolean) {
+struct Word = match (ok: boolean) {
 	true => { text: string },
 	false => { code: int32 },
 };

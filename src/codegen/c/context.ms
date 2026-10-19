@@ -731,6 +731,11 @@ export interface DeferredStructDef {
 	def: string;
 }
 
+export interface DeferredElement {
+	elem: Type;
+	contentName: string;
+}
+
 // ===== CGen — module-level state (Standard reference parity) =====
 
 export class CGen {
@@ -764,7 +769,7 @@ export class CGen {
 	unionsInProgress: string[];
 	deferredStructs: DeferredStructDef[];
 	inlineCopies: Symbol[];
-	deferredElements: Type[];
+	deferredElements: DeferredElement[];
 }
 
 export interface TestEntry {

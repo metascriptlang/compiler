@@ -23,6 +23,7 @@ import "./cases/typeAssertionInner";
 import "./cases/unaryOperand";
 import "./cases/reExport";
 import "./cases/typeAliasGenerics";
+import "./cases/structMatch";
 import "./cases/functionGenerics";
 import "./cases/classInterfaceGenerics";
 import "./cases/templateLiteral";
