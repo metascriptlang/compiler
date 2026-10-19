@@ -42,7 +42,7 @@ after another, and compare every red against src/test/known-red.json.
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
   --local        with --record: write the reds the shared set lacks to this machine's
-                 ~/.metascript/gates/known-red.local.json instead; a red only one host
+                 ~/.metascript/known-red.local.json instead; a red only one host
                  sees is recorded there, never in the tracked set
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
@@ -622,7 +622,7 @@ program_keys() {
 cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
 
 GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
-KNOWN_LOCAL="${GATE_KNOWN_LOCAL:-$GATES_DIR/known-red.local.json}"
+KNOWN_LOCAL="${GATE_KNOWN_LOCAL:-${HOME:-$USERPROFILE}/.metascript/known-red.local.json}"
 
 known_of() {
   local f
@@ -648,6 +648,7 @@ known_file_of() {
 
 known_local_self_test() (
   local d bad=0
+  case "$KNOWN_LOCAL" in "$GATES_DIR"/*) printf 'FAIL known local: %s sits in the queue directory, whose scan refuses any file but a gate pid\n' "$KNOWN_LOCAL"; bad=1 ;; esac
   d=$(mktemp -d) || return 1
   KNOWN="$d/shared.json" KNOWN_LOCAL="$d/local.json"
   printf '{"corpus":{"a [c]":{"since":"x","note":"n"}},"flaky":{"f":{"since":"x","note":"n"}}}\n' >"$KNOWN"
@@ -2322,7 +2323,7 @@ resume_close
 if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   target="$KNOWN"
-  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$GATES_DIR" || die "--record --local: cannot create $GATES_DIR"; }
+  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$(dirname "$KNOWN_LOCAL")" || die "--record --local: cannot create the directory of $KNOWN_LOCAL"; }
   [ -f "$target" ] || echo '{}' >"$target.prev"
   [ -f "$target" ] && cp "$target" "$target.prev"
   merged="$OUT/known.merged"
