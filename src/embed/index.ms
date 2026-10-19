@@ -6,7 +6,9 @@ import { BuildSession, createBuildSession } from "../compiler/buildSession";
 import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
 import { RaiserValueKind } from "../raiser/value";
-import { writeFile, ensureDir, removeAll } from "std/fs";
+import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
+import { writeFile, ensureDir, removeAll, exists } from "std/fs";
+import { join } from "std/fs/path";
 
 export interface Diagnostic {
 	file: string;
@@ -27,8 +29,12 @@ export interface Interpreter {
 	session: BuildSession;
 }
 
-export function createInterpreter(): Interpreter {
-	return { opts: newCliOptions(), session: createBuildSession(true) };
+export function createInterpreter(runtimeRoot: string): Result<Interpreter, string> {
+	if (!exists(join(runtimeRoot, "std/core/system/index.ms"))) {
+		return Result.err(`no MetaScript std under ${runtimeRoot}: expected ${runtimeRoot}/std/core/system/index.ms`);
+	}
+	setHostRuntimeDir(runtimeRoot);
+	return Result.ok({ opts: newCliOptions(), session: createBuildSession(true) });
 }
 
 function errorAt(file: string, message: string): Diagnostic {
@@ -74,17 +80,31 @@ function scratchDir(): string {
 	return dir;
 }
 
+function testInterpreter(): Interpreter {
+	const created = createInterpreter(resolveRuntimeDir());
+	if (!created.ok) throw new Error(created.error);
+	return created.value;
+}
+
 function outputOf(interp: Interpreter, path: string): string {
 	const r = evalModule(interp, path);
 	if (r.ok) return r.value.output;
 	return `error: ${r.error[0].message}`;
 }
 
+test "createInterpreter refuses a root without std" {
+	const dir = scratchDir();
+	const created = createInterpreter(dir);
+	assert !created.ok;
+	if (!created.ok) assert created.error.includes("no MetaScript std");
+	removeAll(dir);
+}
+
 test "evalModule runs a module that imports a sibling and std" {
 	const dir = scratchDir();
 	writeFile(`${dir}/config.ms`, `export const config = { fontFamily: ["OperatorMonoLig Nerd Font Mono"], size: 14 };\n`);
 	writeFile(`${dir}/main.ms`, `import { config } from "./config";\nconsole.log(JSON.stringify(config));\n`);
-	assert outputOf(createInterpreter(), `${dir}/main.ms`) == `{"fontFamily":["OperatorMonoLig Nerd Font Mono"],"size":14}\n`;
+	assert outputOf(testInterpreter(), `${dir}/main.ms`) == `{"fontFamily":["OperatorMonoLig Nerd Font Mono"],"size":14}\n`;
 	removeAll(dir);
 }
 
@@ -93,14 +113,14 @@ test "evalModule takes a value a macro computed" {
 	writeFile(`${dir}/main.ms`, `import { Node, NodeKind } from "std/meta";\n`
 		+ `macro sameTag(): Node { const a: string[] = ["m", "n"]; return { kind: NodeKind.BooleanLiteral, line: 1, column: 1, boolValue: a[0] + a[1] == "mn" }; }\n`
 		+ `console.log(\`\${sameTag()}\`);\n`);
-	assert outputOf(createInterpreter(), `${dir}/main.ms`) == "true\n";
+	assert outputOf(testInterpreter(), `${dir}/main.ms`) == "true\n";
 	removeAll(dir);
 }
 
 test "evalModule returns a type error as a diagnostic and the host keeps running" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `const size: int32 = "big";\nconsole.log(size);\n`);
-	const interp = createInterpreter();
+	const interp = testInterpreter();
 	const r = evalModule(interp, `${dir}/main.ms`);
 	assert !r.ok;
 	if (!r.ok) {
@@ -118,7 +138,7 @@ test "evalModule returns a type error as a diagnostic and the host keeps running
 test "evalModule reloads an edited import in one interpreter" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `import { size } from "./config";\nconsole.log(size * 2);\n`);
-	const interp = createInterpreter();
+	const interp = testInterpreter();
 	writeFile(`${dir}/config.ms`, `export const size: int32 = 7;\n`);
 	assert outputOf(interp, `${dir}/main.ms`) == "14\n";
 	writeFile(`${dir}/config.ms`, `export const size: int32 = 21;\n`);
@@ -129,7 +149,7 @@ test "evalModule reloads an edited import in one interpreter" {
 test "evalModule reloads an edited macro in an imported module" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `import { flag } from "./flags";\nconsole.log(\`\${flag()}\`);\n`);
-	const interp = createInterpreter();
+	const interp = testInterpreter();
 	writeFile(`${dir}/flags.ms`, `import { Node, NodeKind } from "std/meta";\n`
 		+ `export macro flag(): Node { return { kind: NodeKind.BooleanLiteral, line: 1, column: 1, boolValue: 1 + 1 == 2 }; }\n`);
 	assert outputOf(interp, `${dir}/main.ms`) == "true\n";
@@ -142,7 +162,7 @@ test "evalModule reloads an edited macro in an imported module" {
 test "evalModule returns a runtime error and an exit code without leaving the host" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `const xs: int32[] = [1];\nconsole.log(xs[5]);\n`);
-	const interp = createInterpreter();
+	const interp = testInterpreter();
 	const thrown = evalModule(interp, `${dir}/main.ms`);
 	assert !thrown.ok;
 	if (!thrown.ok) assert thrown.error[0].message.startsWith("raiser runtime error");
