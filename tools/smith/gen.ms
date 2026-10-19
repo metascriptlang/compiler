@@ -588,6 +588,7 @@ class Gen {
 	metaSites: int32 = 0;
 	afns: Afn[] = [];
 	asyncCtx: boolean = false;
+	metaCtx: boolean = false;
 	concurrent: boolean = false;
 	noStringIndex: boolean = false;
 	asyncCount: int32 = 0;
@@ -1877,6 +1878,7 @@ class Gen {
 		const elseArms = this.elseArms;
 		const arithInElse = this.arithInElse;
 		const asyncCtx = this.asyncCtx;
+		const metaCtx = this.metaCtx;
 		this.scope = params.map((v: Var): Var => v);
 		this.ents = [];
 		this.globals = [];
@@ -1890,6 +1892,7 @@ class Gen {
 		this.elseArms = 0;
 		this.arithInElse = 0;
 		this.asyncCtx = false;
+		this.metaCtx = true;
 		const body = this.block(0, "\t", false, ret, true);
 		this.ents = [];
 		const tail = "\treturn " + this.expr(ret, 0) + ";\n";
@@ -1907,6 +1910,7 @@ class Gen {
 		this.elseArms = elseArms;
 		this.arithInElse = arithInElse;
 		this.asyncCtx = asyncCtx;
+		this.metaCtx = metaCtx;
 		return { text: body + tail, cost: spent };
 	}
 
@@ -8390,9 +8394,10 @@ class Gen {
 			const put = this.useHelper(name, "function " + name + "(a: " + T + "[], n: " + T + "): void {\n" + body + "}\n");
 			const cells = this.entName("e");
 			const op = this.entName("v");
+			const byValue = !this.metaCtx;
 			const head = indent + "const " + cells + ": " + T + "[] = [" + this.expr(t, 0) + "];\n" +
-				indent + "const " + op + ": (a: " + T + "[], n: " + T + ") => void = " + put + ";\n";
-			const calls = indent + op + "(" + cells + ", " + this.expr(t, 0) + ");\n" + indent + put + "(" + cells + ", " + this.expr(t, 0) + ");\n";
+				(byValue ? indent + "const " + op + ": (a: " + T + "[], n: " + T + ") => void = " + put + ";\n" : "");
+			const calls = indent + (byValue ? op : put) + "(" + cells + ", " + this.expr(t, 0) + ");\n" + indent + put + "(" + cells + ", " + this.expr(t, 0) + ");\n";
 			return head + calls + indent + "let " + this.newLocal(t) + ": " + T + " = " + cells + "[0];\n";
 		}
 		const times = this.rng.between(1, 3);
@@ -12492,6 +12497,23 @@ test "a bigint or null local never starts as a plain null" {
 		}
 	}
 	assert seen > 3;
+}
+
+test "a comptime routine calls a named function but never reads it as a value (inbox comptime-call-of-a-method-holding-an-arrow-crashes-msc, function value)" {
+	const f = withWeights("types=int32,float64 fams=meta w.core.stmt=60 w.core.void=40");
+	let inRoutine = 0;
+	let outside = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		let inside = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("@comptime function ")) { inside = true; continue; }
+			if (inside && line.startsWith("}")) { inside = false; }
+			if (inside && line.contains("putM")) { inRoutine++; }
+			if (inside) { assert !line.contains(") => void = put"); }
+			if (!inside && line.contains(") => void = put")) { outside++; }
+		}
+	}
+	assert inRoutine > 0 && outside > 0;
 }
 
 test "a comptime routine holds no await and no async trace" {
