@@ -1527,7 +1527,8 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return TypeRelation.Subtype;
 	}
 	if (actual.kind == TypeKind.NumberLiteral && formal.kind != TypeKind.Union) {
-		return typeRelation(formal, numberLiteralBase(actual)) == TypeRelation.None ? TypeRelation.None : TypeRelation.Subtype;
+		const baseRel = typeRelation(formal, numberLiteralBase(actual));
+		return baseRel == TypeRelation.Exact ? TypeRelation.Subtype : baseRel;
 	}
 	// BooleanLiteral → Boolean (mirrors isAssignable :381; the reverse stays None).
 	if (formal.kind == TypeKind.Boolean && actual.kind == TypeKind.BooleanLiteral) {
