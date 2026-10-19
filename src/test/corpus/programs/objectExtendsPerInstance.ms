@@ -6,7 +6,7 @@
 import { isObject } from "std/typetraits";
 
 interface Named { name: string; }
-class Pet implements Named { name: string = "p"; }
+class Pet { name: string = "p"; }
 struct Point { x: int32; y: int32; }
 enum Color { Red, Green }
 type Word = "a" | "b";
