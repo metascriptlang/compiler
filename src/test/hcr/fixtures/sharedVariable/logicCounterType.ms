@@ -5,3 +5,6 @@ export function bump(): int32 {
 	counter += 1;
 	return counter as int32;
 }
+export function add(n: int32): void {
+	counter += n as int64;
+}
