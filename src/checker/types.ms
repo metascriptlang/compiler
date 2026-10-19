@@ -595,7 +595,7 @@ export function createUnionInOrder(types: Type[]): Type {
 function nestedUnionOf(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Union) return t;
-	if (t.kind != TypeKind.GenericInstance) return null;
+	if (t.kind != TypeKind.GenericInstance || !aliasesUnion(t)) return null;
 	instantiateGenericBody(t, genericParamsOf(t));
 	const seen = peelTransparentInstance(t);
 	return seen.kind == TypeKind.Union ? seen : null;
@@ -1277,6 +1277,15 @@ export function matchUnionBehindInstance(t: Type): Type {
 // identity of its own: `type Brand<T> = T` means `Brand<number>` IS number.
 // Reference parity: ccgtypes.nim `irrelevantForBackend` + getSimpleTypeDesc
 // `of tyGenericInst: skipModifier typ`.
+function isUnionAlias(nominal: Type | null): boolean {
+	return nominal != null && nominal.kind == TypeKind.Union && !isDiscriminatedUnion(nominal)
+		&& nominal.sym != null && nominal.sym.symbolKind == SymbolKind.TypeAlias;
+}
+
+function aliasesUnion(gi: Type): boolean {
+	return isUnionAlias(peelToStructOrUnion(gi.typeExtra));
+}
+
 export function peelTransparentInstance(t: Type): Type {
 	let cur: Type = t;
 	let _g = 0;
@@ -1287,7 +1296,7 @@ export function peelTransparentInstance(t: Type): Type {
 		if (cur.typeReturn == null) return cur;
 		if (cur.typeExtra != null && cur.typeExtra.kind == TypeKind.Distinct) return cur;
 		const nominal = peelToStructOrUnion(cur.typeExtra);
-		if (nominal != null && nominal.kind == TypeKind.Union
+		if (aliasesUnion(cur)
 			&& ((cur.typeReturn.kind == TypeKind.Union && hasTypeIdentity(cur.typeReturn)) || isMaybeType(cur.typeReturn))) return cur.typeReturn;
 		if (nominal != null
 			&& (nominal.kind == TypeKind.Struct || nominal.kind == TypeKind.Union)) return cur;
@@ -2180,10 +2189,13 @@ function bodyWouldShareTheDeclaration(base: Type, names: string[], args: Type[])
 const _instancesBuilding: Type[] = [];
 
 function instanceBeingBuilt(gi: Type): Type | null {
-	if (_instancesBuilding.length == 0) return null;
-	const key = typeKey(gi);
 	for (const building of _instancesBuilding) {
-		if (typeKey(building) == key) return building;
+		if (building.typeExtra != gi.typeExtra || building.typeChildren.length != gi.typeChildren.length) continue;
+		let same = true;
+		for (let i = 0; i < gi.typeChildren.length; i += 1) {
+			if (typeKey(building.typeChildren[i]) != typeKey(gi.typeChildren[i])) same = false;
+		}
+		if (same) return building;
 	}
 	return null;
 }
@@ -2213,7 +2225,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const body = substituteAllParams(innerBase, names, args);
 	_instancesBuilding.pop();
 	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
-	if (body != innerBase && body.kind == TypeKind.Union) body.typeInst = gi;
+	if (body != innerBase && body.kind == TypeKind.Union && isUnionAlias(innerBase)) body.typeInst = gi;
 	// Re-wrap in Ref if the base was Ref<Struct>
 	gi.typeReturn = isRefWrapped ? createRef(body) : body;
 	_instantiatedBodies = _instantiatedBodies + 1;

@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, hasTypeIdentity, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -1317,7 +1317,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			const instRepr = distinctInstanceRepr(t);
 			if (instRepr != null) return getTypeDesc(g, instRepr);
 			const sharedBody = t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
-			if (sharedBody != null && sharedBody.kind == TypeKind.Union && sharedBody.typeInst == null && hasTypeIdentity(sharedBody)) return getTypeDesc(g, sharedBody);
+			if (sharedBody != null && sharedBody.kind == TypeKind.Union && sharedBody == peelToStructOrUnion(t.typeExtra)) return getTypeDesc(g, sharedBody);
 			const instBody: Type | null = genericParamsOf(t) == "" && t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
 			if (instBody != null && instBody.kind == TypeKind.Union) return genInstanceUnion(g, t, instBody);
 			const instName = monoInstanceName(t);
