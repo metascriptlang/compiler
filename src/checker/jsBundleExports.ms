@@ -4,7 +4,8 @@ import { lookupSymbol, lookupLocal, hasFlag, SymbolFlag } from "./symbol";
 import { hasGenericParams } from "./types";
 import { getDeclName, resolveImportSourcePath } from "./collectPass";
 
-export interface BundleReexport {
+// An entry export the bundle's codegen does not bind itself: a re-export, or an enum, whose object only the bundle's export list needs.
+export interface BundleExport {
 	name: string;
 	sym: Symbol;
 }
@@ -32,7 +33,6 @@ function isGenericSym(sym: Symbol): boolean {
 }
 
 function noSingleValueReason(sym: Symbol): string {
-	if (sym.symbolKind == SymbolKind.Enum) return "it is an enum, which is a type, not a value — export consts or functions that carry its members, or drop 'export'";
 	if (sym.symbolKind == SymbolKind.Class && hasGenericParams(sym.symbolType)) return "it is a generic class, which compiles to one class per instance, not one value — export a non-generic class for each type a host needs, or drop 'export'";
 	if (sym.symbolKind != SymbolKind.Function) return "";
 	const fns = hostFunctions(sym);
@@ -55,7 +55,7 @@ function runtimeValueOf(sym: Symbol): Symbol | null {
 		const fns = hostFunctions(sym);
 		return fns.length == 1 ? fns[0] : null;
 	}
-	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Class ? sym : null;
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Enum ? sym : null;
 }
 
 function exportDeclOf(stmt: Node): Node | null {
@@ -63,8 +63,8 @@ function exportDeclOf(stmt: Node): Node | null {
 	return node.kind == NodeKind.ExportDecl ? node : null;
 }
 
-export function checkJsBundleExports(ctx: CheckerContext, program: Node): BundleReexport[] {
-	const reexports: BundleReexport[] = [];
+export function checkJsBundleExports(ctx: CheckerContext, program: Node): BundleExport[] {
+	const extra: BundleExport[] = [];
 	const handled = new Set<string>();
 	for (const stmt of (program.data as ProgramData).programStmts) {
 		const exp = exportDeclOf(stmt);
@@ -77,6 +77,7 @@ export function checkJsBundleExports(ctx: CheckerContext, program: Node): Bundle
 			handled.add(name);
 			const reason = noSingleValueReason(sym);
 			if (reason != "") refuse(ctx, exp, name, "", reason);
+			else if (sym.symbolKind == SymbolKind.Enum && runtimeValueOf(sym) != null) extra.push({ name, sym });
 			continue;
 		}
 		const imp = inner.data as ImportDeclData;
@@ -95,9 +96,9 @@ export function checkJsBundleExports(ctx: CheckerContext, program: Node): Bundle
 			if (reason != "") refuse(ctx, exp, name, imp.importSource, reason);
 			else {
 				const value = runtimeValueOf(sym);
-				if (value != null) reexports.push({ name, sym: value });
+				if (value != null) extra.push({ name, sym: value });
 			}
 		}
 	}
-	return reexports;
+	return extra;
 }

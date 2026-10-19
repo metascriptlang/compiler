@@ -5,7 +5,7 @@ import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, F
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, EnumDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
@@ -23,7 +23,7 @@ import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
+import { mangleModuleName, mangleProcName, mangleQualified, mangledGlobalName, safeName } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -34,8 +34,9 @@ import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelM
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
-import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
+import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
+import { jsEnumObject } from "../codegen/js/declarations";
 import { getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
@@ -1373,11 +1374,25 @@ function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: str
 	return ctxs;
 }
 
-function bundleExportList(names: string[], locals: string[], reexports: BundleReexport[]): string {
+function bundleExportList(names: string[], locals: string[], extra: BundleExport[]): string {
 	const specifiers: string[] = [];
+	let enumObjects = "";
+	const madeObjects = new Set<string>();
 	for (let i = 0; i < names.length; i += 1) specifiers.push(exportSpecifier(locals[i], names[i]));
-	for (const r of reexports) specifiers.push(exportSpecifier(jsBundleReferenceName(r.sym, r.name), r.name));
-	return specifiers.length == 0 ? "" : `export { ${specifiers.join(", ")} };\n`;
+	for (const r of extra) {
+		if (r.sym.symbolKind != SymbolKind.Enum) {
+			specifiers.push(exportSpecifier(jsBundleReferenceName(r.sym, r.name), r.name));
+			continue;
+		}
+		if (r.sym.declNode == null || r.sym.declNode.kind != NodeKind.EnumDecl) throw new Error(`internal: exported enum '${r.name}' has no declaration`);
+		const local = mangledGlobalName(r.sym, r.sym.name);
+		if (!madeObjects.has(local)) {
+			madeObjects.add(local);
+			enumObjects = enumObjects + jsEnumObject(local, r.sym.declNode.data as EnumDeclData);
+		}
+		specifiers.push(exportSpecifier(local, r.name));
+	}
+	return specifiers.length == 0 ? "" : `${enumObjects}export { ${specifiers.join(", ")} };\n`;
 }
 
 function exportSpecifier(local: string, name: string): string {
