@@ -61,6 +61,7 @@ import "./raiseChecks";
 import "./inlineFunctions";
 import "./pointerAddress";
 import "./noinlinePragma";
+import "./forOfCounterEmit";
 import "./computedGoto";
 import "./dispatcherMain";
 import "./moduleBindingTdz";
