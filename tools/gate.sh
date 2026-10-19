@@ -1967,6 +1967,9 @@ solana_replays() {
     solana_check "${pin%%:*}-build" "$CAND" build "tools/solana/${pin#*:}.ms" --os=solana --release --output="$dir/${pin#*:}.so" \
       && { solana_check "${pin%%:*}-replay" node "tools/solana/${pin%%:*}.mjs" "$dir/${pin#*:}.so" || rc=1; } || rc=1
   done
+  solana_check accountLimit-build "$CAND" build tools/solana/accountLimitProbe.ms --os=solana --release --passC=-DMS_SOL_MAX_ACCOUNTS=2 --output="$dir/accountLimit2.so" \
+    && solana_check accountLimit-default-build "$CAND" build tools/solana/accountLimitProbe.ms --os=solana --release --output="$dir/accountLimit.so" \
+    && { solana_check accountLimit-replay node tools/solana/accountLimit.mjs "$dir/accountLimit2.so" "$dir/accountLimit.so" || rc=1; } || rc=1
   return $rc
 }
 
