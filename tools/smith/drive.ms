@@ -2,7 +2,8 @@ import { cwd, env, execFileResult, findOnPath, platform } from "std/process";
 import { copyFile, ensureDir, exists, readDir, readFile, realpath, removeAll, writeFile } from "std/fs";
 import { basename } from "std/fs/path";
 import { djb2, fingerprint, hashToHex } from "std/hash";
-import { Features, defaults, format, overlay, swarm } from "./features";
+import { ALL_FAMS, Fam, Features, defaults, format, overlay, swarm } from "./features";
+import { hitLines } from "./hits";
 import { File, generateProject, isModuleFileName } from "./proj";
 
 const GENERATOR_SOURCES: string[] = ["rng.ms", "features.ms", "gen.ms", "proj.ms"];
@@ -371,6 +372,62 @@ function stage(p: Paths, name: string, f: Features, files: File[]): string {
 	return "";
 }
 
+export function skippedLanes(entry: string): string[] {
+	const out: string[] = [];
+	for (const line of entry.split("\n")) {
+		const t = line.trim();
+		if (t != "" && !t.startsWith("//")) { break; }
+		if (t.startsWith("// @skip-js") && !inList(out, "js")) { out.push("js"); }
+		if (t.startsWith("// @skip-raiser") && !inList(out, "raiser")) { out.push("raiser"); }
+	}
+	return out;
+}
+
+function noLaneReason(lane: string, skipped: int32, programs: int32, log: string): string {
+	const directive = lane == "raiser" ? "raiser" : "js";
+	if ((lane == "raiser" || lane == "js" || lane == "esm") && skipped == programs) { return "every program carries @skip-" + directive; }
+	if (log.contains("MSCORPUS_LANES — only")) { return "narrowed by MSCORPUS_LANES"; }
+	if (lane == "raiser" && log.contains("raiser lane off")) { return "raiser lane off, MSCORPUS_RAISER=1 turns it on"; }
+	if ((lane == "js" || lane == "esm") && log.contains("js lane is DISABLED")) { return "node not found"; }
+	return "no cell reported";
+}
+
+export function laneLines(requested: string[], seen: string[][], skips: string[][], log: string): string[] {
+	const programs = seen.length;
+	let present = "";
+	let absent = "";
+	for (const lane of requested) {
+		let ran = 0;
+		for (const lanes of seen) { if (inList(lanes, lane)) { ran++; } }
+		if (ran > 0) {
+			present += (present == "" ? "" : " ") + lane + (ran == programs ? "" : " " + String(ran) + "/" + String(programs));
+			continue;
+		}
+		const directive = lane == "raiser" ? "raiser" : "js";
+		let skipped = 0;
+		for (const s of skips) { if (inList(s, directive)) { skipped++; } }
+		absent += (absent == "" ? "" : ", ") + lane + " (" + noLaneReason(lane, skipped, programs, log) + ")";
+	}
+	let skipJs = 0;
+	let skipRaiser = 0;
+	for (const s of skips) {
+		if (inList(s, "js")) { skipJs++; }
+		if (inList(s, "raiser")) { skipRaiser++; }
+	}
+	return [
+		"  lanes: " + (present == "" ? "none" : present) + "; unavailable: " + (absent == "" ? "none" : absent),
+		"  directives: @skip-js=" + String(skipJs) + " @skip-raiser=" + String(skipRaiser) + " of " + String(programs) + " program(s)",
+	];
+}
+
+function familiesOf(vectors: Features[]): Fam[] {
+	const out: Fam[] = [];
+	for (const fam of ALL_FAMS) {
+		for (const f of vectors) { if (f.fams.has(fam) && !out.includes(fam)) { out.push(fam); } }
+	}
+	return out;
+}
+
 export function runSeeds(first: uint64, count: int32, base: Features, swarmed: boolean, san: boolean): int32 {
 	const p = paths();
 	if (!exists(p.root + "/src/test/corpus/run.ms")) { return fail("run from the repo root: no src/test/corpus/run.ms under " + p.root); }
@@ -382,6 +439,8 @@ export function runSeeds(first: uint64, count: int32, base: Features, swarmed: b
 	const names: string[] = [];
 	const sources: File[][] = [];
 	const vectors: Features[] = [];
+	const texts: string[] = [];
+	const skips: string[][] = [];
 	for (let i = 0; i < count; i++) {
 		const seed = first + (i as uint64);
 		const f = swarmed ? base.swarm(seed) : base;
@@ -393,6 +452,8 @@ export function runSeeds(first: uint64, count: int32, base: Features, swarmed: b
 		if (staged != "") { return fail(staged); }
 		names.push(name);
 		sources.push(made.value);
+		texts.push(programText(f, made.value));
+		skips.push(skippedLanes(made.value[0].text));
 	}
 	console.log("smith run — seeds " + String(first) + ".." + String(first + ((count - 1) as uint64)) + ", " + (san ? "SAN lane, " : "") + (swarmed ? "swarm over " : "") + base.format());
 	console.log("  msc " + id.msc + " (" + id.mscVersion + ", " + id.mscHash + "; " + id.support + ")");
@@ -402,10 +463,14 @@ export function runSeeds(first: uint64, count: int32, base: Features, swarmed: b
 	let clean = 0;
 	let findings = 0;
 	let notBugs = 0;
+	let invalid = 0;
+	const seen: string[][] = [];
 	for (let i = 0; i < count; i++) {
 		const seed = first + (i as uint64);
 		const v = classify(log.value, names[i], p.cells, san);
 		if (v.kind == "missing") { return fail("the corpus harness reported nothing for " + names[i] + "; see " + p.sandbox + "/runner.log"); }
+		seen.push(v.lanes.map((r: LaneResult): string => r.lane));
+		if (v.kind == "unrated") { invalid++; }
 		if (!isFinding(v.kind)) {
 			clean++;
 			continue;
@@ -417,6 +482,11 @@ export function runSeeds(first: uint64, count: int32, base: Features, swarmed: b
 		if (v.kind == "timeout" || v.kind == "unjudged") { notBugs++; } else { findings++; }
 		console.log("  " + names[i] + " " + v.kind + (v.split == "" ? "" : " [" + v.split + "]") + (known ? " (bundle already recorded, left untouched) → " : " → ") + dir);
 	}
+	const fams = familiesOf(vectors);
+	if (fams.length == 0) { console.log("  hits: no family in the vector"); }
+	for (const line of hitLines(fams, texts)) { console.log(line); }
+	console.log("  invalid: " + String(invalid) + " (the same failure on every lane, unrated; a generator defect until a compiler repro shows otherwise)");
+	for (const line of laneLines(san ? ["san"] : LANE_ORDER, seen, skips, log.value)) { console.log(line); }
 	console.log(String(count) + " programs · " + String(clean) + " clean · " + String(findings) + " finding(s) · " +
 		String(notBugs) + " timeout/unjudged (not a bug until a longer deadline or a second lane proves it)");
 	return findings + notBugs > 0 ? 1 : 0;
@@ -934,4 +1004,34 @@ test "every generated project passes msc check" {
 		}
 	}
 	removeAll(PROJECT_TMP);
+}
+
+test "the directive head names the lanes a program skips and stops at its first statement" {
+	assert skippedLanes("// smith seed 1\n// @skip-raiser: why\n// @skip-js: why\nconst a = 1;\n// @skip-js: late\n").join(",") == "raiser,js";
+	assert skippedLanes("// smith seed 1\nconst a = 1;\n// @skip-js: late\n").length == 0;
+	assert skippedLanes("// @skip-js: a\n// @skip-js: b\n").length == 1;
+}
+
+test "the lane line counts a lane that some programs lack and names why a lane is absent" {
+	const seen = [["c", "js", "esm"], ["c", "js", "esm"], ["c"]];
+	const skips = [[], [], ["js"]];
+	const lines = laneLines(["c", "js", "esm", "raiser"], seen, skips, "  !! raiser lane off - no program runs on the Raiser VM; MSCORPUS_RAISER=1 turns it on\n");
+	assert lines[0] == "  lanes: c js 2/3 esm 2/3; unavailable: raiser (raiser lane off, MSCORPUS_RAISER=1 turns it on)";
+	assert lines[1] == "  directives: @skip-js=1 @skip-raiser=0 of 3 program(s)";
+}
+
+test "an absent lane reports the first cause the runner log and the programs establish" {
+	const one = [["c"]];
+	assert laneLines(["c", "js"], one, [["js"]], "")[0] == "  lanes: c; unavailable: js (every program carries @skip-js)";
+	assert laneLines(["c", "js"], one, [[]], "  !! node not found - the js lane is DISABLED on this host;")[0] == "  lanes: c; unavailable: js (node not found)";
+	assert laneLines(["c", "raiser"], one, [[]], "  !! MSCORPUS_LANES — only c cells are built")[0] == "  lanes: c; unavailable: raiser (narrowed by MSCORPUS_LANES)";
+	assert laneLines(["c", "orc"], one, [[]], "")[0] == "  lanes: c; unavailable: orc (no cell reported)";
+	assert laneLines(["c"], one, [[]], "")[0] == "  lanes: c; unavailable: none";
+	assert laneLines(["san"], [[]], [[]], "")[0] == "  lanes: none; unavailable: san (no cell reported)";
+}
+
+test "a program the runner refuses on every lane is the one the summary counts as invalid" {
+	const log = "✗ FAIL smith1-aaaaaaaa [c] — compile error\n✗ FAIL smith1-aaaaaaaa [js] — compile error\n";
+	assert classify(log, "smith1-aaaaaaaa", "/nowhere", false).kind == "unrated";
+	assert classify("✓ smith1-aaaaaaaa [c]\n✗ FAIL smith1-aaaaaaaa [js] — x\n", "smith1-aaaaaaaa", "/nowhere", false).kind == "crash";
 }
