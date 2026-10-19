@@ -18,6 +18,7 @@ const AGG_MARKS: string[] = [
 	": PtS", " = mkS", "{ ...s", ".n = s",
 	"\tsetS", " = new CellC", ".p = ", ".put(",
 	".get()", "eqS", ".n.c", ".v = ",
+	"{ ...mkS", "IvS",
 ];
 const COLL_MARKS: string[] = [
 	"[ixI(", ".pop(); }", ".splice(ixI(", ".setLength(",
@@ -44,6 +45,7 @@ const OWN_MARKS: string[] = [
 	" = move o", "= takeOInt32(move o", ".push(move o", "\tbumpO",
 	"(out o", ": OwnInt32[] = [o", ".push(o", ".tag.length",
 	"].v : ", ".v",
+	": Readonly<OwnInt32> = ", "readonly k: int32",
 ];
 const ITER_MARKS: string[] = [
 	"\tfunction* y", "): Iterator<uint64> {", "): Iterator<float64> {", " => { a",
@@ -73,6 +75,7 @@ const GCLS_MARKS: string[] = [
 	".drop();", ".set(", ".v = ", ".b = ",
 	".a = ", ".get().set(", ".get().get()", ".key",
 	"StackQ<Own", "CellQ<Own", ".swap().first()", ".first()",
+	"unwrapQ(newWrapQ(", ".pairWith(",
 ];
 const ENUM_MARKS: string[] = [
 	"enum En", "selEn0", "mEn0", "BitSet<Fg",
@@ -86,6 +89,7 @@ const ENUM_MARKS: string[] = [
 	": Dm0 = ", ": Db0 = ", "): unknown {", ": unknown = mkCx(",
 	"scoreCx(", "): never {", "const x: never = d;", "mustN(",
 	"mustE(", "mustF(", "nvDk0(",
+	"type IxAB", "type CdIs<",
 ];
 const NATIVE_MARKS: string[] = [
 	": NatSInt32 = { n: ", ": NatOUint8 = { head: ", ": NatSFloat64[] = [", " as Ptr<NatSInt32>;",
@@ -119,9 +123,9 @@ const ASYNC_MARKS: string[] = [
 	".push(", ".v = ", " = async (q", "throw new Error(",
 	"\"re:\"", "Promise<Result<",
 ];
-const ENUM_FLOORS: int32[] = [1, 2, 2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 2, 2, 2];
+const ENUM_FLOORS: int32[] = [1, 2, 2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 2, 2, 2, 1, 1];
 
-const CLS_MARKS: string[] = ["class Cls", " extends Cls", "super(", "get pr", "set pr", "static sm", "interface Ifc", " implements Ifc", "protected ", "readonly ", " instanceof Cls"];
+const CLS_MARKS: string[] = ["class Cls", " extends Cls", "super(", "get pr", "set pr", "static sm", "interface Ifc", " implements Ifc", "protected ", "readonly ", " instanceof Cls", "abstract class ", "static {"];
 const CONV_KEYS: string[] = ["cast", "frac", "text", "ext", "ref", "static", "proto", "op"];
 const CONV_MARKS: string[] = [" as int32) as int64)", "convFloat64To", ".toString(", ".cvStep(", "cvRun0", ".cvOf(", "cvFoldS", ") + CvS"];
 const EXC_KEYS: string[] = ["catch", "finally", "rethrow", "unwind", "defer", "deferloop", "recover", "result", "narrow", "wrap", "orelse", "nullable"];
@@ -155,7 +159,7 @@ export function shapesOf(fam: Fam): FamShapes {
 	return match (fam) {
 		Fam.Closure => shaped(fam, "fams=closure", 8, listed(["(q"])),
 		Fam.Union => shaped(fam, "fams=union", 8, listed(["| string | null"])),
-		Fam.Generic => shaped(fam, "fams=generic", 8, listed(["<T>"])),
+		Fam.Generic => shaped(fam, "fams=generic", 8, listed(["<T>", "idG(", "extends BndBase"])),
 		Fam.Agg => shaped(fam, "fams=agg types=int32,uint8 stmts=8 w.stmt.fam=80", 40, listed(AGG_MARKS)),
 		Fam.Coll => shaped(fam, "fams=coll types=int32,uint8 stmts=8 w.stmt.fam=80", 40, listed(COLL_MARKS)),
 		Fam.Str => shaped(fam, "fams=str types=int32,uint8 stmts=8 w.stmt.fam=80", 40, listed(STR_MARKS)),

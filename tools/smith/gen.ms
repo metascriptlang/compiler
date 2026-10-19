@@ -163,6 +163,7 @@ class ClsDef {
 	smeths: ClsMember[] = [];
 	ctor: Ty[] = [];
 	ctorCost: int64 = 0 as int64;
+	isAbstract: boolean = false;
 }
 
 struct ClsIface {
@@ -350,6 +351,8 @@ enum EShape {
 	Disc,
 	Unknown,
 	Never,
+	Inter,
+	Cond,
 }
 
 const E_SHAPES: EShape[] = [
@@ -362,6 +365,8 @@ const E_SHAPES: EShape[] = [
 	EShape.Disc,
 	EShape.Unknown,
 	EShape.Never,
+	EShape.Inter,
+	EShape.Cond,
 ];
 
 struct ETy {
@@ -578,6 +583,7 @@ class Gen {
 	clsNames: int32 = 0;
 	arrowDepth: int32 = 0;
 	clsStatics: int32 = -1;
+	clsForce: int32 = -1;
 	metaCount: int32 = 0;
 	metaSites: int32 = 0;
 	afns: Afn[] = [];
@@ -1131,7 +1137,7 @@ class Gen {
 	genericExpr(t: Ty, depth: int32): string {
 		this.genericHelpers();
 		const T = tyName(t);
-		const k = this.pickW(W.GenericId, W.GenericBox);
+		const k = this.pickW(W.GenericId, W.GenericBound);
 		if (k == 0) { return "idG<" + T + ">(" + this.expr(t, depth + 1) + ")"; }
 		if (k == 1) {
 			const f = this.lambda([t], t, depth, this.spare(2 as int64));
@@ -1153,9 +1159,62 @@ class Gen {
 			if (!this.reserve(f.cost)) { return ""; }
 			return "new BoxG<" + tyName(s) + ">(" + this.expr(s, depth + 1) + ").map<" + T + ">(" + f.text + ").get()";
 		}
+		if (k == 5) { return this.genericInfer(t, depth); }
+		if (k == 6) { return this.genericBound(t, depth); }
 		const boxes = this.entsOf(EntKind.BoxVar, t);
 		if (boxes.length > 0) { return boxes[this.rng.below(boxes.length)].name + ".get()"; }
 		return "new BoxG<" + T + ">(" + this.expr(t, depth + 1) + ").get()";
+	}
+
+	genericInfer(t: Ty, depth: int32): string {
+		const form = this.rng.below(5);
+		if (form == 0) { return "idG(" + this.expr(t, depth + 1) + ")"; }
+		if (form == 1) {
+			const f = this.lambda([t], t, depth, this.spare(2 as int64));
+			if (!this.reserve((2 as int64) * f.cost)) { return ""; }
+			return "twiceG(" + f.text + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (form == 2) {
+			const n = this.rng.between(1, 3);
+			let items = "";
+			for (let i = 0; i < n; i++) {
+				const e = this.expr(t, depth + 1);
+				items = items == "" ? e : items + ", " + e;
+			}
+			return "pickG([" + items + "], " + String(this.rng.below(n + 1)) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (form == 3) {
+			const s = this.pickTy();
+			const f = this.lambda([s], t, depth, this.spare(1 as int64));
+			if (!this.reserve(f.cost)) { return ""; }
+			return "new BoxG<" + tyName(s) + ">(" + this.expr(s, depth + 1) + ").map(" + f.text + ").get()";
+		}
+		return "idG(idG(" + this.expr(t, depth + 1) + "))";
+	}
+
+	genericBound(t: Ty, depth: int32): string {
+		const X = tyTitle(t);
+		this.useHelper("BndBase", "interface HasKeyB { k: int32; }\n" +
+			"class BndBase implements HasKeyB {\n" +
+			"\tk: int32;\n" +
+			"\tconstructor(k: int32) { this.k = k; }\n" +
+			"\tweight(): int32 { return this.k; }\n" +
+			"}\n" +
+			"function heavyB<U extends BndBase>(a: U, b: U): U { return a.weight() >= b.weight() ? a : b; }\n" +
+			"function bumpB<U extends BndBase>(x: U, n: int32): U { x.k = x.k + n; return x; }\n" +
+			"function keyB<U extends HasKeyB>(x: U): int32 { return x.k; }\n");
+		this.useHelper("Bnd" + X, "class Bnd" + X + " extends BndBase {\n" +
+			"\tv: " + tyName(t) + ";\n" +
+			"\tconstructor(k: int32, v: " + tyName(t) + ") { super(k); this.v = v; }\n" +
+			"}\n");
+		const form = this.rng.below(5);
+		const one = "new Bnd" + X + "(" + String(this.rng.below(6)) + ", " + this.expr(t, depth + 1) + ")";
+		const two = "new Bnd" + X + "(" + String(this.rng.below(6)) + ", " + this.expr(t, depth + 1) + ")";
+		if (form == 0) { return "heavyB(" + one + ", " + two + ").v"; }
+		if (form == 1) { return "heavyB<Bnd" + X + ">(" + one + ", " + two + ").v"; }
+		if (form == 2) { return "bumpB(" + one + ", " + String(this.rng.below(4)) + ").v"; }
+		if (form == 3) { return this.lift("keyB(" + one + ")", t); }
+		return this.lift("heavyB<BndBase>(" + one + ", new BndBase(" + String(this.rng.below(6)) + ")).weight()", t);
 	}
 
 	aggHelpers(t: Ty): string {
@@ -1212,7 +1271,9 @@ class Gen {
 		const X = this.aggHelpers(t);
 		const structs = this.entsOf(EntKind.StructVar, t);
 		const cells = this.entsOf(EntKind.ClassVar, t);
-		const k = this.pickW(W.AggStruct, W.AggPoke);
+		const picked = this.pickW(W.AggStruct, W.AggSpread);
+		if (picked == 7 && structs.length > 0) { return this.aggSpread(t, X, structs, indent); }
+		const k = picked == 7 ? 0 : picked;
 		if (k >= 1 && k <= 3 && structs.length > 0) {
 			const s = structs[this.rng.below(structs.length)].name;
 			const other = structs[this.rng.below(structs.length)].name;
@@ -1251,6 +1312,36 @@ class Gen {
 		}
 		const name = this.entName("s");
 		const text = indent + "let " + name + ": PtS" + X + " = mkS" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ");\n";
+		this.ents.push({ kind: EntKind.StructVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return text;
+	}
+
+	aggSpread(t: Ty, X: string, structs: Ent[], indent: string): string {
+		const other = this.pickEnt(structs).name;
+		const third = this.pickEnt(structs).name;
+		const name = this.entName("s");
+		const head = indent + "let " + name + ": PtS" + X + " = ";
+		const form = this.rng.below(5);
+		let text = "";
+		if (form == 0) {
+			const made = "mkS" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ")";
+			text = head + "{ ..." + made + ", a: " + this.expr(t, 0) + " };\n";
+		} else if (form == 1) {
+			text = head + "{ ..." + other + ", n: { ..." + third + ".n, d: " + this.expr(t, 0) + " } };\n";
+		} else if (form == 2) {
+			text = head + "{ ..." + other + ", ..." + third + " };\n";
+		} else {
+			const view = this.entName("v");
+			const iv = "IvS" + X;
+			this.useHelper(iv, "interface " + iv + " { a: " + tyName(t) + "; n: InS" + X + "; }\n");
+			if (form == 3) {
+				text = indent + "const " + view + ": " + iv + " = { a: " + this.expr(t, 0) + ", n: " + other + ".n };\n";
+			} else {
+				text = indent + "const " + view + ": " + iv + " = { ..." + other + " };\n" +
+					indent + view + ".n" + [".c", ".d"][this.rng.below(2)] + " = " + this.expr(t, 0) + ";\n";
+			}
+			text += head + "{ ..." + view + ", a: " + this.expr(t, 0) + " };\n";
+		}
 		this.ents.push({ kind: EntKind.StructVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
 		return text;
 	}
@@ -1585,7 +1676,46 @@ class Gen {
 		}
 		if (owns.length == 0) { return ""; }
 		const o = this.pickEnt(owns).name;
+		if (k == 2) {
+			const X = this.ownViewHelpers(t);
+			if (held.length > 0 && this.rng.chance(40)) {
+				const h = this.pickEnt(held).name;
+				const text = "(" + h + ".length > 0 ? peekO" + X + "(" + h + "[ixI(" + this.smallInt(depth) + ", " + h + ".length)]) : " + this.elseExpr(t, depth) + ")";
+				return this.ternary(text);
+			}
+			return (this.rng.chance(50) ? "peekO" : "rdO") + X + "(" + o + ")";
+		}
 		return t == Ty.Int32 && this.rng.chance(30) ? o + ".tag.length" : o + ".v";
+	}
+
+	ownViewHelpers(t: Ty): string {
+		const X = this.ownHelpers(t);
+		const T = tyName(t);
+		this.useHelper("viewO" + X, "function peekO" + X + "(o: Readonly<Own" + X + ">): " + T + " { return o.v; }\n" +
+			"function rdO" + X + "(readonly o: Own" + X + "): " + T + " { return o.v; }\n");
+		return X;
+	}
+
+	ownRo(t: Ty, indent: string): string {
+		const X = this.ownHelpers(t);
+		const T = tyName(t);
+		const R = "Ro" + X;
+		this.useHelper("roHooks", "let roHooks: int32 = 0;\n");
+		this.useHelper(R, "struct " + R + " { readonly k: int32; v: " + T + "; tag: string; }\n" +
+			"function onDestroy(this o: " + R + "): void { roHooks = (roHooks + 1) % 1000; }\n" +
+			"function mkR" + X + "(k: int32, v: " + T + ", t: string): " + R + " { return { k: k, v: v, tag: t }; }\n" +
+			"function withK" + X + "(r: " + R + ", k: int32): " + R + " { return { ...r, k: k }; }\n" +
+			"function pickR" + X + "(a: " + R + ", b: " + R + "): " + T + " { return a.k == b.k ? a.v : b.v; }\n");
+		const first = "mkR" + X + "(" + String(this.rng.below(4)) + ", " + this.expr(t, 0) + ", \"" + this.strLiteral(0) + "\")";
+		const rewrite = this.rng.chance(50);
+		const a = this.entName("ro");
+		const b = this.entName("ro");
+		const second = rewrite ? "{ ..." + a + ", k: " + String(this.rng.below(4)) + " }" : "withK" + X + "(" + a + ", " + String(this.rng.below(4)) + ")";
+		const write = this.expr(t, 0);
+		const out = indent + "let " + a + ": " + R + " = " + first + ";\n" +
+			indent + "let " + b + ": " + R + " = " + second + ";\n" +
+			indent + b + ".v = " + write + ";\n";
+		return out + indent + "let " + this.newLocal(t) + ": " + T + " = pickR" + X + "(" + a + ", " + b + ");\n";
 	}
 
 	dropEnt(name: string): void {
@@ -1602,7 +1732,8 @@ class Gen {
 		const O = "Own" + X;
 		const owns = this.entsOf(EntKind.OwnVar, t);
 		const held = this.entsOf(EntKind.HeldVar, t);
-		const k = this.pickW(W.OwnDecl, W.OwnSink);
+		const k = this.pickW(W.OwnDecl, W.OwnRo);
+		if (k == 7) { return this.ownRo(t, indent); }
 		if (k >= 1 && owns.length > 0) {
 			const o = this.pickEnt(owns).name;
 			if (k == 1) {
@@ -1634,6 +1765,14 @@ class Gen {
 				const name = this.entName("h");
 				this.ents.push({ kind: EntKind.HeldVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
 				return indent + "let " + name + ": " + O + "[] = " + value + ";\n";
+			}
+			if (k == 6) {
+				this.ownViewHelpers(t);
+				const frozen = this.entName("fz");
+				const write = this.expr(t, 0);
+				const out = indent + "const " + frozen + ": Readonly<" + O + "> = " + o + ";\n" +
+					indent + "bumpO" + X + "(" + o + ", " + write + ");\n";
+				return out + indent + "let " + this.newLocal(t) + ": " + tyName(t) + " = peekO" + X + "(" + frozen + ");\n";
 			}
 		}
 		const value = "mkO" + X + "(" + this.expr(t, 0) + ", \"" + this.strLiteral(0) + "\")";
@@ -3015,6 +3154,12 @@ class Gen {
 
 	clsAt(i: int32): ClsDef { return i < 0 ? this.clsSelf : this.classes[i]; }
 
+	clsBuildable(): int32[] {
+		const out: int32[] = [];
+		for (let i = 0; i < this.classes.length; i++) { if (!this.classes[i].isAbstract) { out.push(i); } }
+		return out;
+	}
+
 	clsThis(): Ent { return { kind: EntKind.ClsObj, name: "this", ty: Ty.Int32, params: [], len: -1, cost: 0 as int64 }; }
 
 	clsDepth(c: int32): int32 {
@@ -3100,7 +3245,7 @@ class Gen {
 		}
 		const fresh: int32[] = [];
 		for (let i = 0; depth == 0 && i < this.classes.length; i++) {
-			if (this.clsMembers(this.classes[i], methods, t, false).length > 0) { fresh.push(i); }
+			if (!this.classes[i].isAbstract && this.clsMembers(this.classes[i], methods, t, false).length > 0) { fresh.push(i); }
 		}
 		if (objs.length > 0 && (fresh.length == 0 || this.rng.chance(70))) {
 			const o = this.pickEnt(objs);
@@ -3209,7 +3354,8 @@ class Gen {
 	}
 
 	clsNew(indent: string): string {
-		const cls = this.classes[this.rng.below(this.classes.length)];
+		const built = this.clsBuildable();
+		const cls = this.classes[built[this.rng.below(built.length)]];
 		if (!this.reserve(cls.ctorCost + (1 as int64))) { return ""; }
 		const value = "new " + cls.name + "(" + this.args(cls.ctor, 0) + ")";
 		const name = this.entName("o");
@@ -3251,7 +3397,7 @@ class Gen {
 				}
 				if (k == 2 && (o.cost as int32) % 2 == 1) {
 					const subs: int32[] = [];
-					for (let d = 0; d < this.classes.length; d++) { if (this.clsBelow(d, o.len)) { subs.push(d); } }
+					for (let d = 0; d < this.classes.length; d++) { if (this.clsBelow(d, o.len) && !this.classes[d].isAbstract) { subs.push(d); } }
 					const d = this.classes[subs[this.rng.below(subs.length)]];
 					if (!this.reserve(d.ctorCost + (1 as int64))) { continue; }
 					return indent + o.name + " = new " + d.name + "(" + this.args(d.ctor, 0) + ");\n";
@@ -3316,7 +3462,7 @@ class Gen {
 		const sets: ClsMember[] = [];
 		for (const f of this.classes[s].fields) { if (f.vis == 0 && f.writable) { sets.push(f); } }
 		const subs: int32[] = [];
-		for (let d = 0; d < this.classes.length; d++) { if (this.clsBelow(d, s)) { subs.push(d); } }
+		for (let d = 0; d < this.classes.length; d++) { if (this.clsBelow(d, s) && !this.classes[d].isAbstract) { subs.push(d); } }
 		const n = this.rng.between(2, 4);
 		const kinds: int32[] = [];
 		let made = (n as int64) * (m.cost + (2 as int64)) + (2 as int64);
@@ -3437,14 +3583,18 @@ class Gen {
 	}
 
 	clsDecl(want: Ty): void {
-		if (this.clsStatics < 0) { this.clsStatics = this.wt(W.ClsDeclStatic) > 0 && this.rng.chance(40) ? 1 : 0; }
-		const primary = this.pickW(W.ClsDeclPlain, W.ClsDeclVisible);
+		if (this.clsStatics < 0) { this.clsStatics = (this.wt(W.ClsDeclStatic) > 0 || this.wt(W.ClsDeclBlock) > 0) && this.rng.chance(40) ? 1 : 0; }
+		const forced = this.clsForce;
+		this.clsForce = -1;
+		const primary = this.pickW(W.ClsDeclPlain, W.ClsDeclBlock);
 		const cls = new ClsDef();
 		cls.index = this.classes.length;
 		cls.name = "Cls" + String(cls.index);
 		let head = "class " + cls.name;
 		const open: int32[] = [];
-		if (this.clsFlag(primary, 1, W.ClsDeclInherit)) {
+		if (forced >= 0) {
+			open.push(forced);
+		} else if (this.clsFlag(primary, 1, W.ClsDeclInherit)) {
 			for (let i = 0; i < this.classes.length; i++) { if (this.clsDepth(i) < CLS_DEPTH_MAX) { open.push(i); } }
 		}
 		if (open.length > 0) {
@@ -3459,6 +3609,8 @@ class Gen {
 			head += " extends " + base.name;
 		}
 		const hide = this.clsFlag(primary, 5, W.ClsDeclVisible);
+		cls.isAbstract = forced < 0 && this.wt(W.ClsDeclInherit) > 0 && this.classes.length + 2 <= CLS_MAX && (cls.parent < 0 || this.clsDepth(cls.parent) + 1 < CLS_DEPTH_MAX) && this.clsFlag(primary, 6, W.ClsDeclAbstract);
+		if (cls.isAbstract) { head = "abstract " + head; }
 		if (cls.parent < 0 && this.clsFlag(primary, 4, W.ClsDeclImplements)) {
 			cls.iface = this.clsIfaceFor(want);
 			head += " implements " + this.ifaces[cls.iface].name;
@@ -3547,9 +3699,9 @@ class Gen {
 				if (cls.methods[i].vis == 0 && cls.methods[i].owner != cls.index) { over.push(i); }
 			}
 		}
-		if (over.length > 0 && this.rng.chance(70)) { methodText += this.clsMethod(cls, over[this.rng.below(over.length)], want, false, false); }
+		if (over.length > 0 && (forced >= 0 || this.rng.chance(70))) { methodText += this.clsMethod(cls, over[this.rng.below(over.length)], want, false, false); }
 		let staticText = "";
-		if (this.clsStatics == 1 && this.clsFlag(primary, 3, W.ClsDeclStatic)) {
+		if (this.clsStatics == 1 && (this.clsFlag(primary, 3, W.ClsDeclStatic) || this.clsFlag(primary, 7, W.ClsDeclBlock))) {
 			const n = this.rng.between(1, 2);
 			for (let i = 0; i < n; i++) {
 				const t = this.pickTy();
@@ -3569,10 +3721,40 @@ class Gen {
 			const m: ClsMember = { name: this.clsName("sm"), ty: t, params: params, cost: v.cost + (1 as int64), owner: cls.index, id: 0, vis: 0, writable: false };
 			cls.smeths.push(m);
 			staticText += "\tstatic " + m.name + "(" + sig + "): " + tyName(t) + " { return " + v.text + "; }\n";
+			if (this.clsFlag(primary, 7, W.ClsDeclBlock)) { staticText += this.clsStaticBlock(cls); }
 			this.directive("// @skip-raiser: a static class member cannot be read on the Raiser, inbox 2026-10-09-raiser-cannot-read-a-static-class-field");
 		}
 		this.classes.push(cls);
 		this.useHelper(cls.name, head + " {\n" + fieldText + ctorText + propText + methodText + staticText + "}\n");
+		if (cls.isAbstract) {
+			this.clsForce = cls.index;
+			this.clsDecl(want);
+		}
+	}
+
+	clsStaticBlock(cls: ClsDef): string {
+		const scope: Var[] = [];
+		for (const c of this.classes) {
+			for (const s of c.statics) { scope.push({ name: c.name + "." + s.name, ty: s.ty, writable: false }); }
+		}
+		for (const s of cls.statics) { scope.push({ name: cls.name + "." + s.name, ty: s.ty, writable: false }); }
+		const savedGlobals = this.globals;
+		const savedFns = this.fns;
+		const savedFams = this.fams;
+		this.globals = [];
+		this.fns = [];
+		this.fams = [];
+		let text = "\tstatic {\n";
+		const n = this.rng.between(1, 2);
+		for (let i = 0; i < n; i++) {
+			const target = cls.statics[this.rng.below(cls.statics.length)];
+			const v = this.clsBody(scope, [], target.ty, CLS_CAP, -1);
+			text += "\t\t" + cls.name + "." + target.name + " = " + v.text + ";\n";
+		}
+		this.globals = savedGlobals;
+		this.fns = savedFns;
+		this.fams = savedFams;
+		return text + "\t}\n";
 	}
 
 	clsPrints(): string {
@@ -6222,14 +6404,34 @@ class Gen {
 	}
 
 	gclsExpr(t: Ty, depth: int32): string {
-		const k = this.pickW(W.GclsCell, W.GclsWrap);
+		const k = this.pickW(W.GclsCell, W.GclsInfer);
 		if (k == 0) { return this.gclsCell(t, depth); }
 		if (k == 1) { return this.gclsMap(t, depth); }
 		if (k == 2) { return this.gclsNest(t, depth); }
 		if (k == 3) { return this.gclsPair(t, depth); }
 		if (k == 4) { return this.gclsStack(t, depth); }
 		if (k == 5) { return this.gclsBest(t, depth); }
+		if (k == 7) { return this.gclsInfer(t, depth); }
 		return this.gclsWrap(t, depth);
+	}
+
+	gclsInfer(t: Ty, depth: int32): string {
+		const T = tyName(t);
+		const form = this.rng.below(5);
+		if (form <= 2) { this.kit("WrapQ"); }
+		if (form == 0) { return "unwrapQ(newWrapQ(" + this.expr(t, depth + 1) + ", " + this.smallInt(depth) + "))"; }
+		if (form == 1) { return "holdQ(" + this.expr(t, depth + 1) + ", " + this.smallInt(depth) + ").item"; }
+		if (form == 2) {
+			const inner = "newWrapQ(" + this.expr(t, depth + 1) + ", " + this.smallInt(depth) + ")";
+			return "holdQ(" + inner + ", " + this.smallInt(depth) + ").item.v";
+		}
+		this.kit("CellQ");
+		if (form == 3) {
+			this.kit("idQ");
+			return "idQ(new CellQ<" + T + ">(" + this.expr(t, depth + 1) + ")).get()";
+		}
+		const u = this.pickTy();
+		return "new CellQ<" + T + ">(" + this.expr(t, depth + 1) + ").pairWith(" + this.expr(u, depth + 1) + ").first()";
 	}
 
 	gclsCell(t: Ty, depth: int32): string {
@@ -6851,9 +7053,11 @@ class Gen {
 	}
 
 	enumExpr(t: Ty, depth: int32): string {
-		const shape = E_SHAPES[this.pickW(W.EnumNumeric, W.EnumNever)];
+		const shape = E_SHAPES[this.pickW(W.EnumNumeric, W.EnumCond)];
 		if (shape == EShape.Alias) { return this.aliasExpr(t, depth); }
 		if (shape == EShape.Never) { return this.neverExpr(t, depth); }
+		if (shape == EShape.Inter) { return this.interExpr(t, depth); }
+		if (shape == EShape.Cond) { return this.condExpr(t, depth); }
 		if (!this.reserve(6 as int64)) { return ""; }
 		const et = this.shapeType(shape);
 		if (shape == EShape.Numeric) {
@@ -6925,8 +7129,110 @@ class Gen {
 		return this.lift("nvDk0(" + this.eValue(et, depth + 1) + ")", t);
 	}
 
+	interKit(t: Ty): string {
+		const X = tyTitle(t);
+		const T = tyName(t);
+		if (this.hasHelper("Ix" + X)) { return X; }
+		this.useHelper("Ix" + X, "interface IxA" + X + " { a: " + T + "; b: " + T + "; }\n" +
+			"interface IxB" + X + " { c: " + T + "; d: " + T + "; }\n" +
+			"type IxAB" + X + " = IxA" + X + " & IxB" + X + ";\n" +
+			"type IxBA" + X + " = IxB" + X + " & IxA" + X + ";\n" +
+			"type IxAE" + X + " = IxA" + X + " & { e: " + T + " };\n" +
+			"function ixMk" + X + "(a: " + T + ", b: " + T + ", c: " + T + ", d: " + T + "): IxAB" + X + " { return { b: b, a: a, d: d, c: c }; }\n" +
+			"function ixMkBa" + X + "(a: " + T + ", b: " + T + ", c: " + T + ", d: " + T + "): IxBA" + X + " { return { a: a, c: c, b: b, d: d }; }\n" +
+			"function ixMkE" + X + "(a: " + T + ", b: " + T + ", e: " + T + "): IxAE" + X + " { return { e: e, a: a, b: b }; }\n" +
+			"function ixAt" + X + "(v: IxAB" + X + ", x: " + T + "): " + T + " { return v.a == x ? v.b : v.c; }\n" +
+			"function ixPut" + X + "(v: IxA" + X + ", x: " + T + "): " + T + " { v.a = x; return v.b; }\n" +
+			"function ixPutB" + X + "(v: IxB" + X + ", x: " + T + "): " + T + " { v.c = x; return v.d; }\n" +
+			"function ixRd" + X + "(v: Readonly<IxA" + X + ">): " + T + " { return v.a == v.b ? v.a : v.b; }\n" +
+			"function ixEd" + X + "(v: IxAE" + X + ", x: " + T + "): " + T + " { return v.e == x ? v.a : v.e; }\n");
+		return X;
+	}
+
+	interExpr(t: Ty, depth: int32): string {
+		if (!this.reserve(6 as int64)) { return ""; }
+		const X = this.interKit(t);
+		const k = this.rng.below(6);
+		const four = this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1);
+		if (k == 0) { return "ixAt" + X + "(ixMk" + X + "(" + four + "), " + this.expr(t, depth + 1) + ")"; }
+		if (k == 1) { return "ixPut" + X + "(ixMk" + X + "(" + four + "), " + this.expr(t, depth + 1) + ")"; }
+		if (k == 2) { return "ixPutB" + X + "(ixMkBa" + X + "(" + four + "), " + this.expr(t, depth + 1) + ")"; }
+		if (k == 3) { return "ixRd" + X + "(ixMk" + X + "(" + four + "))"; }
+		if (k == 4) {
+			const three = this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1);
+			return "ixEd" + X + "(ixMkE" + X + "(" + three + "), " + this.expr(t, depth + 1) + ")";
+		}
+		return "ixMk" + X + "(" + four + ")." + ["a", "b", "c", "d"][this.rng.below(4)];
+	}
+
+	interStatement(t: Ty, indent: string): string {
+		if (!this.reserve(8 as int64)) { return ""; }
+		const X = this.interKit(t);
+		const T = tyName(t);
+		const first = this.entName("i");
+		const second = this.entName("i");
+		const form = this.rng.below(4);
+		let text = "";
+		if (form == 0) {
+			text = indent + "const " + first + ": IxAB" + X + " = { b: " + this.expr(t, 0) + ", a: " + this.expr(t, 0) + ", d: " + this.expr(t, 0) + ", c: " + this.expr(t, 0) + " };\n" +
+				indent + "const " + second + ": IxAB" + X + " = " + first + ";\n" +
+				indent + "ixPut" + X + "(" + second + ", " + this.expr(t, 0) + ");\n" +
+				indent + second + ".d = " + this.expr(t, 0) + ";\n";
+		} else if (form == 1) {
+			this.ixHelper();
+			text = indent + "const " + first + ": IxAB" + X + " = ixMk" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ");\n" +
+				indent + "const " + second + ": IxAB" + X + "[] = [" + first + ", ixMk" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ")];\n" +
+				indent + second + "[ixI(" + this.smallInt(0) + ", " + second + ".length)].c = " + this.expr(t, 0) + ";\n";
+		} else if (form == 2) {
+			text = indent + "const " + first + ": IxBA" + X + " = { a: " + this.expr(t, 0) + ", d: " + this.expr(t, 0) + ", b: " + this.expr(t, 0) + ", c: " + this.expr(t, 0) + " };\n" +
+				indent + "ixPutB" + X + "(" + first + ", " + this.expr(t, 0) + ");\n" +
+				indent + "const " + second + ": IxAB" + X + " = ixMk" + X + "(" + first + ".a, " + first + ".b, " + first + ".c, " + first + ".d);\n";
+		} else {
+			text = indent + "const " + first + ": IxAE" + X + " = { a: " + this.expr(t, 0) + ", e: " + this.expr(t, 0) + ", b: " + this.expr(t, 0) + " };\n" +
+				indent + "ixPut" + X + "(" + first + ", " + this.expr(t, 0) + ");\n" +
+				indent + "const " + second + ": IxAB" + X + " = ixMk" + X + "(" + first + ".a, " + first + ".b, " + first + ".e, " + this.expr(t, 0) + ");\n";
+		}
+		const probe = this.expr(t, 0);
+		const seen = this.newLocal(t);
+		return text + indent + "let " + seen + ": " + T + " = ixAt" + X + "(" + second + ", " + probe + ");\n";
+	}
+
+	condKit(t: Ty): string {
+		const X = tyTitle(t);
+		const T = tyName(t);
+		this.useHelper("Cd", "type CdIs<T, X, Y> = T extends string ? X : Y;\n" +
+			"type CdUn<T> = T extends Array<infer U> ? U : T;\n" +
+			"interface CdBx<V> { v: V; }\n" +
+			"type CdUnbox<T> = T extends CdBx<infer U> ? U : never;\n");
+		if (this.hasHelper("Cd" + X)) { return X; }
+		this.useHelper("Cd" + X, "function cdA" + X + "(a: CdUn<" + T + "[]>, b: CdUn<" + T + ">): " + T + " { return a == b ? a : b; }\n" +
+			"function cdB" + X + "(a: CdIs<string, " + T + ", boolean>, b: CdIs<int32, boolean, " + T + ">, c: CdIs<CdBx<" + T + ">, boolean, " + T + ">): " + T + " { return c == a ? b : a; }\n" +
+			"function cdC" + X + "(a: CdUnbox<CdBx<" + T + ">>, b: CdUn<CdUn<" + T + "[][]>>): " + T + " { return a == b ? b : a; }\n");
+		return X;
+	}
+
+	condExpr(t: Ty, depth: int32): string {
+		if (!this.reserve(6 as int64)) { return ""; }
+		const X = this.condKit(t);
+		const k = this.rng.below(3);
+		if (k == 0) { return "cdA" + X + "(" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")"; }
+		if (k == 1) { return "cdB" + X + "(" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")"; }
+		return "cdC" + X + "(" + this.expr(t, depth + 1) + ", " + this.expr(t, depth + 1) + ")";
+	}
+
+	condStatement(t: Ty, indent: string): string {
+		this.condKit(t);
+		const T = tyName(t);
+		const forms = ["CdUn<" + T + "[]>", "CdUn<" + T + ">", "CdIs<string, " + T + ", boolean>", "CdIs<int32, boolean, " + T + ">", "CdUnbox<CdBx<" + T + ">>", "CdUn<CdUn<" + T + "[][]>>"];
+		const ann = forms[this.rng.below(forms.length)];
+		const value = this.expr(t, 0);
+		return indent + "let " + this.newLocal(t) + ": " + ann + " = " + value + ";\n";
+	}
+
 	enumStatement(t: Ty, indent: string, depth: int32): string {
-		const shape = E_SHAPES[this.pickW(W.EnumNumeric, W.EnumNever)];
+		const shape = E_SHAPES[this.pickW(W.EnumNumeric, W.EnumCond)];
+		if (shape == EShape.Inter) { return this.interStatement(t, indent); }
+		if (shape == EShape.Cond) { return this.condStatement(t, indent); }
 		if (shape == EShape.Alias) {
 			const X = this.aliasKit(t);
 			const value = this.expr(t, 0);
@@ -8801,13 +9107,15 @@ test "a top-level block declares no function inside a block" {
 	assert routines > 0;
 }
 
+export const TYPE_OFF: string = "w.generic.infer=0 w.generic.bound=0 w.agg.spread=0 w.own.view=0 w.own.freeze=0 w.own.ro=0 w.gcls.infer=0 w.enum.inter=0 w.enum.cond=0 w.cls.decl.abstract=0 w.cls.decl.block=0";
+
 test "default weights keep the pinned stream" {
 	const sizes = [23008, 14006, 27999, 14767];
 	const closureSizes = [12836, 12148, 16450, 17808];
-	const closure = withWeights("fams=closure top=0 w.closure.routine=0 " + CORE_OFF);
+	const closure = withWeights("fams=closure top=0 w.closure.routine=0 " + CORE_OFF + " " + TYPE_OFF);
 	for (let i = 0; i < 4; i++) {
-		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic top=0 w.closure.routine=0 " + CORE_OFF)).replace(" top=0", "").replace(" w.closure.routine=0", "").replace(" " + CORE_OFF, "").byteLength == sizes[i];
-		assert generate((i + 1) as uint64, closure).replace(" top=0", "").replace(" w.closure.routine=0", "").replace(" " + CORE_OFF, "").byteLength == closureSizes[i];
+		assert generate((i + 1) as uint64, withWeights("fams=closure,union,generic top=0 w.closure.routine=0 " + CORE_OFF + " " + TYPE_OFF)).replace(" top=0", "").replace(" w.closure.routine=0", "").replace(" " + CORE_OFF, "").replace(" " + TYPE_OFF, "").byteLength == sizes[i];
+		assert generate((i + 1) as uint64, closure).replace(" top=0", "").replace(" w.closure.routine=0", "").replace(" " + CORE_OFF, "").replace(" " + TYPE_OFF, "").byteLength == closureSizes[i];
 	}
 }
 
@@ -8995,7 +9303,7 @@ test "struct equality is never drawn for a float field" {
 
 test "the aggregate weights choose between struct and class statements" {
 	const structs = withWeights("fams=agg types=int32 w.agg.class=0 w.agg.alias=0 w.agg.poke=0");
-	const cells = withWeights("fams=agg types=int32 w.agg.struct=0 w.agg.copy=0 w.agg.write=0 w.agg.ref=0");
+	const cells = withWeights("fams=agg types=int32 w.agg.struct=0 w.agg.copy=0 w.agg.write=0 w.agg.ref=0 w.agg.spread=0");
 	let s = 0;
 	let k = 0;
 	for (let seed = 1; seed < 21; seed++) {
@@ -9605,7 +9913,7 @@ test "a copied tuple is never written afterwards" {
 
 test "no program names a shape that is parked behind an open compiler card" {
 	const text = bothText();
-	for (const shape of ["Record<", "[k: ", "{ [", "Cursor<", ".reverse()", ": readonly ", "setLength(-", "swapT(", "firstQ(", "pairT(", "readG(", "headQ(", "pushQ(", "fillQ(", "takeQ(", "roQ(", "unwrapQ(", "newWrapQ(", "holdQ("]) {
+	for (const shape of ["Record<", "[k: ", "{ [", "Cursor<", ".reverse()", ": readonly ", "setLength(-", "swapT(", "firstQ(", "pairT(", "readG(", "headQ(", "pushQ(", "fillQ(", "takeQ(", "roQ("]) {
 		assert !text.contains(shape);
 	}
 }
@@ -10490,7 +10798,7 @@ test "a zero cls weight keeps its construct out of every program" {
 	const keys = ["w.cls.decl.inherit", "w.cls.decl.implements", "w.cls.decl.static", "w.cls.new", "w.cls.is", "w.cls.loop", "w.cls.literal", "w.cls.alias"];
 	const needles = [" extends ", " implements ", "static ", " = new Cls", " instanceof ", "for (const x", " = { ", "const o"];
 	for (let k = 0; k < keys.length; k++) {
-		const f = withWeights(CLS_VECTOR + " " + keys[k] + "=0");
+		const f = withWeights(CLS_VECTOR + " " + keys[k] + "=0" + (k == 2 ? " w.cls.decl.block=0" : ""));
 		for (let seed = 1; seed < 21; seed++) {
 			const text = generate(seed as uint64, f);
 			if (k == 3) {
@@ -10530,7 +10838,7 @@ test "a parked class construct never reaches a program" {
 	const f = withWeights(CLS_VECTOR + " w.cls.decl.inherit=6 w.cls.decl.implements=6 w.cls.decl.accessor=6 w.cls.decl.static=6 w.cls.decl.visible=6");
 	for (let seed = 1; seed < 41; seed++) {
 		const text = generate(seed as uint64, f);
-		assert !text.contains("super.") && !text.contains("override ") && !text.contains("abstract ");
+		assert !text.contains("super.") && !text.contains("override ");
 		assert !text.contains("constructor(public") && !text.contains("constructor(private") && !text.contains("constructor(protected") && !text.contains("constructor(readonly");
 		assert !text.contains("ref ") && !text.contains("move ") && !text.contains("out ");
 		assert !text.contains("<T>") && !text.contains("function*") && !text.contains("this.constructor");
@@ -11727,7 +12035,7 @@ test "the gap shapes at weight 0 keep the stream of the generator without them" 
 	const vectors = ["", "fams=none", "fams=closure", "fams=coll", "fams=str", "fams=iter", "types=int8,uint8,uint32,uint64,float64 fams=none", "types=int32,float32,char,bigint,boolean fams=none depth=2"];
 	const pins: int64[] = [133744062, 894288676, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 295138362, 752400772, 172228344, 208305650, 706058020, 346955844, 47405754, 455897030];
 	for (let v = 0; v < vectors.length; v++) {
-		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + GAP_OFF + " w.meta.spread=0 w.async.result=0");
+		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + GAP_OFF + " " + TYPE_OFF + " w.meta.spread=0 w.async.result=0");
 		for (let s = 0; s < 2; s++) {
 			const text = generate((s == 0 ? 3 : 9) as uint64, f);
 			assert digest(text.slice(text.indexOf("\n") + 1, text.length) + "\n") == pins[v * 2 + s];
@@ -11894,7 +12202,7 @@ test "core weights at 0 keep the stream of the generator without core" {
 		101192644, 178907495, 247101655, 884432220, 429445262, 471485418, 207847309, 349738871,
 	];
 	for (let v = 0; v < vectors.length; v++) {
-		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + CORE_OFF);
+		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + CORE_OFF + " " + TYPE_OFF);
 		for (let s = 0; s < 2; s++) {
 			const text = generate((s == 0 ? 3 : 9) as uint64, f);
 			assert digest(text.slice(text.indexOf("\n") + 1, text.length) + "\n") == pins[v * 2 + s];
@@ -12198,4 +12506,132 @@ test "a comptime routine holds no await and no async trace" {
 		}
 	}
 	assert routines > 5;
+}
+
+const GAP_VECTORS = [
+	"", "fams=cls", "fams=agg", "fams=enum", "fams=generic", "fams=gcls", "fams=own",
+	"fams=cls,agg,enum,generic,gcls,own types=int32,uint8,float64 stmts=8",
+];
+
+test "the gap weights at 0 keep the stream of the generator without them" {
+	const pins: int64[] = [
+		133744062, 894288676, 709567793, 430927381, 467908320, 469491598, 943975115, 622102701,
+		449176796, 656840684, 649565891, 801577426, 546248524, 513190738, 293039963, 565465550,
+	];
+	for (let v = 0; v < GAP_VECTORS.length; v++) {
+		const f = withWeights(GAP_VECTORS[v] + " " + TYPE_OFF + " " + GAP_OFF + " w.meta.spread=0 w.async.result=0");
+		for (let s = 0; s < 2; s++) {
+			const text = generate((s == 0 ? 3 : 9) as uint64, f);
+			assert digest(text.slice(text.indexOf("\n") + 1, text.length) + "\n") == pins[v * 2 + s];
+		}
+	}
+}
+
+test "the cls family reaches abstract classes and static blocks and never instantiates an abstract class (inbox 2026-10-19-abstract-class-can-be-constructed-and-override-is-a-parse-error)" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.abstract=8 w.cls.decl.block=8");
+	let abstracts = 0;
+	let blocks = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		blocks += countOf(text, "\tstatic {\n");
+		for (const line of text.split("\n")) {
+			if (!line.startsWith("abstract class ")) { continue; }
+			abstracts++;
+			const name = line.slice(15, line.indexOf(" ", 15) < 0 ? line.length : line.indexOf(" ", 15));
+			assert !text.contains("new " + name + "(");
+			assert text.contains(" extends " + name);
+		}
+	}
+	assert abstracts > 5 && blocks > 5;
+	const off = textOver(withWeights(CLS_VECTOR + " w.cls.decl.abstract=0 w.cls.decl.block=0"), 40);
+	assert !off.contains("abstract ") && !off.contains("static {");
+}
+
+test "a static block assigns a static field on every line" {
+	const f = withWeights(CLS_VECTOR + " w.cls.decl.block=8");
+	let blocks = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		let inside = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line == "\tstatic {") { inside = true; blocks++; continue; }
+			if (inside && line == "\t}") { inside = false; }
+			if (inside) {
+				assert line.trim().startsWith("Cls");
+				assert !line.contains("console");
+			}
+		}
+	}
+	assert blocks > 5;
+}
+
+test "an override member and an abstract method are never generated (inbox 2026-10-19-abstract-class-can-be-constructed-and-override-is-a-parse-error)" {
+	const text = textOver(withWeights(CLS_VECTOR + " w.cls.decl.abstract=8 w.cls.decl.inherit=8 w.cls.decl.block=8"), 40);
+	assert !text.contains("override ");
+	for (const line of text.split("\n")) { assert !line.contains("abstract ") || line.startsWith("abstract class "); }
+}
+
+test "the agg family reaches object spread and a zero weight removes it" {
+	const on = textOver(withWeights("fams=agg types=int32 w.agg.spread=8"), 30);
+	for (const shape of ["{ ...mkS", "n: { ...", ", ...s", "IvS", "const v"]) { assert on.contains(shape); }
+	const off = textOver(withWeights("fams=agg types=int32 w.agg.spread=0"), 30);
+	assert !off.contains("{ ...mkS") && !off.contains("n: { ...") && !off.contains(", ...s") && !off.contains("IvS");
+}
+
+test "the enum family reaches intersection and conditional types and a zero weight removes them" {
+	const f = withWeights("fams=enum types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.enum.inter=8 w.enum.cond=8");
+	const on = textOver(f, 60);
+	for (const shape of ["type IxAB", "type IxBA", "type IxAE", "ixMk", "ixAt", "ixPut", "ixRd", "ixEd", "type CdIs<", "type CdUn<", "type CdUnbox<", "cdA", "cdB", "cdC"]) {
+		assert on.contains(shape);
+	}
+	const off = textOver(withWeights("fams=enum types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.enum.inter=0 w.enum.cond=0"), 60);
+	assert !off.contains("IxA") && !off.contains("CdIs");
+}
+
+test "the generic family reaches inferred calls and bounded type parameters and a zero weight removes them" {
+	const f = withWeights("fams=generic types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.generic.infer=8 w.generic.bound=8");
+	const on = textOver(f, 60);
+	for (const shape of ["idG(", "twiceG(", "pickG([", ").map(", "heavyB(", "heavyB<Bnd", "heavyB<BndBase>(", "bumpB(", "keyB(", "extends BndBase", "extends HasKeyB"]) {
+		assert on.contains(shape);
+	}
+	const off = textOver(withWeights("fams=generic types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.generic.infer=0 w.generic.bound=0"), 60);
+	assert !off.contains("idG(") && !off.contains("twiceG(") && !off.contains("pickG([") && !off.contains("BndBase") && !off.contains("heavyB");
+}
+
+test "the gcls family reaches inferred calls and a zero weight removes them" {
+	const on = textOver(gclsFeatures("w.gcls.infer=8"), 60);
+	for (const shape of ["unwrapQ(newWrapQ(", "holdQ(", ".pairWith(", "idQ(new CellQ<"]) { assert on.contains(shape); }
+	const off = textOver(gclsFeatures("w.gcls.infer=0"), 60);
+	assert !off.contains("unwrapQ(") && !off.contains("holdQ(") && !off.contains(".pairWith(") && !off.contains("idQ(new CellQ<");
+}
+
+test "an inferred generic call is never a direct console.log argument (inbox generic-inference-refusals-on-legal-typescript n01)" {
+	const f = withWeights("fams=generic,gcls types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.generic.infer=8 w.generic.bound=8 w.gcls.infer=8");
+	for (let seed = 1; seed < 41; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("console.log(")) { assert line.startsWith("console.log(\""); }
+		}
+	}
+}
+
+test "the own family reaches views, a frozen snapshot and readonly fields and a zero weight removes them" {
+	const f = withWeights("fams=own types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.own.view=8 w.own.freeze=8 w.own.ro=8");
+	const on = textOver(f, 60);
+	for (const shape of ["peekOInt32(", "rdOInt32(", ": Readonly<OwnInt32> = ", "readonly k: int32", "withKInt32(", "pickRInt32(", "{ ...ro"]) { assert on.contains(shape); }
+	const off = textOver(withWeights("fams=own types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.own.view=0 w.own.freeze=0 w.own.ro=0"), 60);
+	assert !off.contains("Readonly<") && !off.contains("readonly ") && !off.contains("peekO") && !off.contains("rdO");
+}
+
+test "a readonly field is assigned only by a constructor or an object literal and its struct hooks onDestroy only (g2 finding readonly onCopy)" {
+	const f = withWeights("fams=own types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.own.ro=8");
+	let structs = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		for (const line of text.split("\n")) {
+			if (line.contains("readonly k: int32")) { structs++; }
+			const t = line.trim();
+			assert !(t.startsWith("ro") && t.contains(".k ="));
+			assert !(t.startsWith("function onCopy(this ref d: Ro"));
+		}
+	}
+	assert structs > 5;
 }
