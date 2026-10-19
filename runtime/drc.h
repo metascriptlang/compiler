@@ -484,11 +484,9 @@ static inline void msMarkMaybeCycle(void* p) {
 
 /* GC_runOrc / GC_enableOrc / GC_disableOrc parity */
 void msOrcCollect(void);
-void msOrcPartialCollect(int32_t lowMark);
 
 static inline void msOrcEnable(void) { msRootsThreshold = 0; }
 static inline void msOrcDisable(void) { msRootsThreshold = INT32_MAX; }
-static inline int32_t msOrcPrepare(void) { return msRoots.len; }
 
 /* Teardown critical section (=destroy hooks). While a destructor is unwinding, an
  * object's fields are half-freed and its slots not yet nulled; a threshold-triggered

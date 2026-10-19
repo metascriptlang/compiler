@@ -748,26 +748,4 @@ void msOrcCollect(void) {
 	}
 }
 
-void msOrcPartialCollect(int32_t lowMark) {
-	if (msRoots.len <= lowMark) return;
-
-	msGcEnv j;
-	msCellSeqInit(&j.traceStack);
-	msCellSeqInit(&j.toFree);
-	j.freed = 0;
-	j.touched = 0;
-	j.edges = 0;
-	j.rcSum = 0;
-	j.keepThreshold = false;
-
-	collectCyclesBacon(&j, lowMark);
-	msRoots.len = lowMark;
-
-	msCellSeqFree(&j.traceStack);
-
-#ifdef MSGC_ORC_STATS
-	msFreedCyclicObjects += j.freed;
-#endif
-}
-
 #endif /* MSGC_ORC */
