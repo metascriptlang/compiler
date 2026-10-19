@@ -3895,9 +3895,10 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 // ===== Raiser (Bytecode VM) Run =====
 
-export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): RaiserModule {
+export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null): RaiserModule {
+	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
-	const graph = loadAndCheckGraph(filePath, config, opts);
+	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Orc, session != null ? session.check : null);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);
@@ -3919,7 +3920,24 @@ export function compileRaiser(filePath: string, opts: CliOptions, resolveSection
 		unitPrograms.push(checked.program);
 		unitCtxs.push(checked.ctx);
 	}
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	const kept = session != null && session.keep ? session : null;
+	if (kept != null) {
+		const routeOrder: Node[] = [];
+		for (const modPath of unitPaths) {
+			const created = kept.check.instances.get(modPath);
+			if (created != null) for (const instNode of created) routeOrder.push(instNode);
+		}
+		retainCheckedInstances(unitCtxs);
+		const byOwner = routeInstances(routeOrder, (path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), false, null);
+		for (let i = 0; i < unitPrograms.length; i += 1) {
+			const program = cloneNodeKeepSem(unitPrograms[i]);
+			const routed = byOwner.get(unitPaths[i]);
+			if (routed != null) for (const inst of routed) (program.data as ProgramData).programStmts.push(cloneNodeKeepSem(inst));
+			unitPrograms[i] = program;
+		}
+	} else {
+		placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	}
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
