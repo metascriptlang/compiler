@@ -49,13 +49,11 @@ import {
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
 import {
 	SeedSlice,
-	SeedTable,
 	SignerSeeds,
+	bumpInPlace,
 	bytesAddress,
-	fillWithBump,
 	findAddress,
 	seedKey,
-	signerOfBumped,
 	tableAddress,
 } from "./seed";
 
@@ -637,6 +635,7 @@ export function createPdaOf<T>(
 
 // The address is proven and the bump found by the declared seeds: no derivation here, and seeds that
 // differ from the declared ones cannot sign for the account, so the System program refuses the create.
+// Only `createPda` calls this, with `bumpTable`'s seeds: the bump signs from their free last slice.
 export function createPdaProven<T>(
 	payer: WritableSigner,
 	target: WritablePda,
@@ -644,12 +643,13 @@ export function createPdaProven<T>(
 ): Result<Pda<T>, ProgramError> {
 	const _zeroFields = zeroAccountFieldsValid<T>();
 	const space = 8 + (sizeof(T) as uint64);
-	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
-	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, target.bump)) {
+	const bump: uint8[1] = [target.bump];
+	const table = tableAddress(seeds);
+	const used = (seeds.length as uint64) - 1;
+	if (!bumpInPlace(table, used, bytesAddress(bump))) {
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
-	let one: SignerSeeds[1] = [{ address: 0, length: 0 }];
-	signerOfBumped(signed, one);
+	const one: SignerSeeds[1] = [{ address: table, length: used + 1 }];
 	const created = try createdAccount(payer.account, target.account, space, provenDiscriminatorWord<T>(), one);
 	return Result.ok({ account: { account: created }, bump: target.bump });
 }

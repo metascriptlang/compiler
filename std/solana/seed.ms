@@ -3,7 +3,7 @@ import { ProgramError } from "./error";
 import { ProgramAddress } from "./pda";
 import { msSolDeriveAddress, msSolFindAddress, msSolFindCanonicalAddress, msSolFindCanonicalStaged, msSolFindExpectedAddress, msSolFindExpectedStaged, msSolHashIsStaged, msSolSeedStageInPlace } from "./kernel";
 import { SeedSlice, SignerSeeds } from "./addressTables";
-import { msSolCopy, msSolLoadU64, msSolProgramId, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
+import { msSolCopy, msSolLoadU64, msSolProgramId, msSolSeedRowSet, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
 
 export { SeedSlice, SignerSeeds } from "./addressTables";
 
@@ -160,6 +160,13 @@ export function findAddress(
 	program: uint64,
 ): Result<ProgramAddress, ProgramError> {
 	return findAt(tableAddress(seeds), seeds.length as uint64, program);
+}
+
+// `table` holds `used` seeds and one free slice after them, which takes the bump byte at `bump`.
+export function bumpInPlace(table: uint64, used: uint64, bump: uint64): boolean {
+	if (!fits(table, used, MAX_SEEDS - 1)) { return false; }
+	msSolSeedRowSet(table, used, bump, 1);
+	return true;
 }
 
 // The bump byte lives in the caller's table; returning the table by value would leave it dangling.
