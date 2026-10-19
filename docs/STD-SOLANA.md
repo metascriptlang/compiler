@@ -958,13 +958,16 @@ builds of the solana lane, LiteSVM replays:
 |---|---:|---:|
 | first port, every frame a zeroed `.ms` local | +7 160 | +44 677 |
 | frames in C, rows read and written through `Ptr<SeedSlice>` | +272 | +895 |
-| proven PDA create signs from a free slice of its seed list, associated check by the canonical walk, `put*` stores through the storage pointer | +504 | −1 036 |
+| proven PDA create signs from a free slice of its seed list, associated check by the canonical walk, `put*` stores through the storage pointer | +600 | −1 021 |
 
-The byte total of the last row is escrow debug (+536 over the row before; release escrow is 64 smaller). Release
+The byte total of the last row is escrow debug (+632 over the row before; release escrow is 64 smaller). Release
 rows: escrow make 20 231 → 20 188, take 7 005 → 6 942, refund 4 188 → 4 157, the associated refusal 2 300 → 2 250;
 hello, nested and prop-amm unchanged; multisig execute 2 537 → 2 564, create +8, vault +3/+4, 500 seed rounds +5.
 The same canonical walk in `expectAssociated` measured escrow make +24 and take +88 CU and was not kept. The parse
 keeps `MS_SOL_MAX_ACCOUNTS`: an SBF build with a 2-slot table sees 2 of 5 accounts (`tools/solana/accountLimit.mjs`).
+`slottedCanonicalBump` is a plain function, one core the `Delegated<T>` wrappers share: as `@inline` its body,
+now a call where it held the C walk, went into every `Delegated<T>.verifiedPda` copy (16 → 368 bytes,
+`solanaGenericSize.ms`); escrow debug pays 96 bytes and 5 CU for the call, release is unchanged.
 Left for the compiler: `ExternalMutable<TokenAccount>.read()` builds the struct in a local and copies it out through
 the builtins' `memcpy` shim, and zeroes each absent key's payload, about 25 CU per read
 (`.inbox/compiler/2026-10-20-sbf-struct-result-copies-through-memcpy-shim.md`).
