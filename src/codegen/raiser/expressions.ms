@@ -245,6 +245,12 @@ function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32, fromCls: int3
 	return dest;
 }
 
+function compileIndex(s: RaiserCompState, index: Node): int32 {
+	const reg = compileExpr(s, index);
+	if (!isFloatExpr(index)) return reg;
+	return emitConvTo(s, reg, RaiserConvClass.I64 as int32, RaiserConvClass.F64 as int32);
+}
+
 function emitNumericConv(s: RaiserCompState, reg: int32, from: Type | null, to: Type | null): int32 {
 	const fromCls = convClassOf(from);
 	const toCls = convClassOf(to);
@@ -685,7 +691,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 		const srcReg = compileExpr(s, right);
 		const ad = left.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
+		const idxReg = compileIndex(s, ad.index);
 		const held = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, held, arrReg, idxReg));
 		const result = emitValueAssign(s, held, srcReg, left.nodeType);
@@ -774,7 +780,7 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 		const held = skipModifier(d.array.nodeType);
 		if (held != null && held.kind == TypeKind.Ptr) return compileExpr(s, d.array);
 		const arrReg = compileExpr(s, d.array);
-		const idxReg = compileExpr(s, d.index);
+		const idxReg = compileIndex(s, d.index);
 		emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, arrReg, idxReg));
 		return dest;
 	} else if (place.kind == NodeKind.MemberExpr) {
@@ -1021,7 +1027,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		if (d.left.kind == NodeKind.ArrayAccess) {
 			const ad = d.left.data as ArrayAccessData;
 			const arrReg = compileExpr(s, ad.array);
-			const idxReg = compileExpr(s, ad.index);
+			const idxReg = compileIndex(s, ad.index);
 			emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, srcReg));
 			return srcReg;
 		}
@@ -1332,7 +1338,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	if (d.left.kind == NodeKind.ArrayAccess) {
 		const ad = d.left.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
+		const idxReg = compileIndex(s, ad.index);
 		const tmpReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, tmpReg, arrReg, idxReg));
 		const rhsReg = compileCompoundOperand(s, op, d.right);
@@ -1894,7 +1900,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 	if (d.updateArg.kind == NodeKind.ArrayAccess) {
 		const ad = d.updateArg.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
+		const idxReg = compileIndex(s, ad.index);
 		const oldReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, oldReg, arrReg, idxReg));
 		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
@@ -2064,7 +2070,7 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, d, bd);
 	}
 	const arrReg = compileExpr(s, d.array);
-	const idxReg = compileExpr(s, d.index);
+	const idxReg = compileIndex(s, d.index);
 	const dest = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, dest, arrReg, idxReg));
 	return dest;
