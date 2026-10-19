@@ -46,3 +46,18 @@ test "overload-x-generic: global invariant — no GenericParam leakage" {
 	if (violations.length > 0) { assert false, formatViolations(violations); }
 	assert true;
 }
+
+test "a callback value without the void parameter picks an overload as it fills a single declaration" {
+	const result = checkOnly(`
+class Once { f(cb: (v: void) => void): string { cb(); return "one"; } }
+class Twice {
+	f(cb: (v: void) => void): string { cb(); return "one"; }
+	f(cb: (v: void) => void, onError: (e: Error) => void): string { return "two"; }
+}
+const cb = (): void => {};
+const a = new Once().f(cb);
+const b = new Twice().f(cb);
+const c = new Twice().f(cb, (e: Error): void => {});
+`);
+	assert result.errors.length == 0, "both overload sets must accept the value: " + result.errors.join("\n");
+}

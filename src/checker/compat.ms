@@ -1435,11 +1435,13 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				// callConv is folded in only for the inline convention (NIM-REF CK-52:
 				// MS has one closure repr, so the others carry no discriminating information).
 				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
-				if (formal.typeChildren.length != actual.typeChildren.length) return TypeRelation.None;
+				const formalParams = runtimeParams(formal);
+				const actualParams = runtimeParams(actual);
+				if (formalParams.length != actualParams.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;
-				for (let pi = 0; pi < formal.typeChildren.length; pi += 1) {
-					if (fnSlotReprMismatch(formal.typeChildren[pi], actual.typeChildren[pi])) return TypeRelation.None;
-					const paramRel = typeRelation(formal.typeChildren[pi], actual.typeChildren[pi]);
+				for (let pi = 0; pi < formalParams.length; pi += 1) {
+					if (fnSlotReprMismatch(formalParams[pi], actualParams[pi])) return TypeRelation.None;
+					const paramRel = typeRelation(formalParams[pi], actualParams[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;
 					if (paramRel < worst) worst = paramRel;
 				}
