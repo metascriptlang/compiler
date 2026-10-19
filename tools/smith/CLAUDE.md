@@ -19,7 +19,15 @@ msc run tools/smith/main.ms run 1 30 --features="types=int32,float64 depth=2"
 msc run tools/smith/main.ms run 1 3 --san                     # SAN lane (ASan + DRC ledger); bundle kind san, mode recorded
 msc run tools/smith/main.ms run 1 3 --plant=san --san        # planted use after free; only the SAN lane judges it
 msc run tools/smith/main.ms rerun out/smith/bundles/<name>    # VOID / NOT REPRODUCED / REPRODUCED
+msc run tools/smith/main.ms run 1 20 --features="fams=async"  # opt-in family: native, spawn, actor, race, async run only when named
+msc run tools/smith/main.ms gen 3 --features="modules=4 modshapes=cycle,alias,ns" --out=out/smith/p3   # a module tree
+msc run tools/smith/main.ms run 1 20 --features="modules=3"   # project bundles (layout: project); reduce refuses them
+msc run tools/smith/main.ms diag 1 40                         # diagnostic catalogue: legal twin + one-line mutant, pinned message and position
+msc run tools/smith/main.ms diag 1 40 --plant                 # planted column shift; only wrong-position findings
+msc run tools/smith/main.ms diag show 7                       # the case of one seed
 msc test tools/smith/gen.ms                                   # generator, features and rng contracts
+msc test tools/smith/proj.ms                                  # + the module-tree splitter
+msc test tools/smith/diag.ms                                  # + the diagnostic catalogue (main.ms runs its CLI under test; not a test entry)
 msc run tools/smith/main.ms cov 1 20 --msc=out/smith/cov/msc-cov   # per-pass coverage of a batch
 ```
 
@@ -35,6 +43,9 @@ The compiler under test follows the corpus convention: `MSC=<path>`, else `./msc
 else the installed `msc`; the installed `msc` runs the harness. `MSCORPUS_LANES`,
 `MSCORPUS_RAISER`, `MSCORPUS_JOBS`, `MSCORPUS_BUILD_JOBS` and
 `MSCORPUS_CELL_TIMEOUT_MS` (Smith's default 60000) pass through to the runner.
+The Raiser lane is off unless `MSCORPUS_RAISER=1`; a campaign that claims
+Raiser evidence sets it. `diag` writes to `out/smith/diag/bundles/` (planted runs
+to `plant-bundles/`) and judges `msc check` only, so it has no lanes.
 
 ## Hard rules
 
