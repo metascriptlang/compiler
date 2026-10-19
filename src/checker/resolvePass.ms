@@ -149,6 +149,19 @@ function liftParamModifiers(params: string[], flags: string): string {
 	return flags;
 }
 
+function refuseActorParamModes(ctx: CheckerContext, actorName: string, md: MethodDeclData, at: Node): void {
+	for (const p of md.methodParams) {
+		const mode = p.startsWith("out:") ? "out" : p.startsWith("ref:") ? "ref" : p.startsWith("sink:") ? "sink" : "";
+		if (mode == "") continue;
+		const name = p.slice(mode.length + 1, p.length);
+		const why = mode == "sink"
+			? "an actor message already transfers ownership of its arguments"
+			: "the call returns before the actor runs, so it cannot write the caller's variable";
+		addError(ctx, `actor method '${actorName}.${md.methodName}' cannot take ${mode} parameter '${name}': ${why}; drop '${mode}'`, at.location.line, at.location.column);
+	}
+	liftParamModifiers(md.methodParams, "");
+}
+
 function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
 	if (flags == "" || (flags.indexOf("out:") < 0 && flags.indexOf("ref:") < 0 && flags.indexOf("sink:") < 0)) return;
 	for (const fp of splitTopLevel(flags, "|")) {
@@ -2779,6 +2792,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 		if (member.kind == NodeKind.MethodDecl) {
 			const md = member.data as MethodDeclData;
 			if (!md.methodIsStatic) refuseActorHandleName(ctx, d.actorName, md.methodName, member);
+			refuseActorParamModes(ctx, d.actorName, md, member);
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
 			if (hasMethodGenerics) {

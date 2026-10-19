@@ -32,3 +32,12 @@ test "sinkParamModes: an override keeps the sink mode of every parameter" {
 	assert errors("class A { push(sink v: string): void { } }\nclass B extends A { push(sink v: string): void { } }", override) == 0;
 	assert errors("class A { push(v: string): void { } }\nclass B extends A { push(v: string): void { } }", override) == 0;
 }
+
+test "sinkParamModes: an actor method refuses sink, ref and out and names the method and the mode" {
+	const actorText = "actor Store { items: string[] = []; add(MODE v: string): void { this.items.push(v); } }";
+	assert errors(actorText.replace("MODE", "sink"), "actor method 'Store.add' cannot take sink parameter 'v'") == 1;
+	assert errors(actorText.replace("MODE", "ref"), "actor method 'Store.add' cannot take ref parameter 'v'") == 1;
+	assert errors(actorText.replace("MODE", "out"), "actor method 'Store.add' cannot take out parameter 'v'") == 1;
+	assert errors(actorText.replace("MODE ", ""), "cannot take") == 0;
+	assert errors(actorText.replace("MODE", "sink"), "Undefined variable") == 0;
+}
