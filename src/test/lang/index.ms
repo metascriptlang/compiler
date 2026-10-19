@@ -96,3 +96,5 @@ import "./nullableFunction";
 import "./hashBitsPortable";
 import "./oneValueFieldAlias";
 import "./nullable";
+import "./keyedAccess";
+import "./proxyTraps";

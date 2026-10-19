@@ -1,6 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
+import { iterateThroughProxy } from "./proxy";
 import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
@@ -1985,6 +1986,7 @@ function iterableElemType(t: Type | null): Type {
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
+	if (iterateThroughProxy(ctx, node)) return;
 	let elemType = iterableElemType(d.forOfIterable.nodeType);
 	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable, ReadNeed.Items)) {
 		elemType = iterableElemType(d.forOfIterable.nodeType);

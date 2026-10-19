@@ -181,3 +181,6 @@ import "./numberLiteralFieldLayout";
 import "./variantIntoObject";
 import "./asPrecedence";
 import "./unclosedDelimiter";
+import "./keyedAccess";
+import "./literalTypeAssign";
+import "./proxyRefusals";

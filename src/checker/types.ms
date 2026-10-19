@@ -2516,6 +2516,94 @@ function isAssignableForConditional(source: Type, target: Type): boolean {
 	return source.kind == target.kind;
 }
 
+// Indexed access type — T[K], deferred while T or K is generic.
+// typeChildren[0] = object type (T)
+// typeChildren[1] = index type (K)
+export function createIndexedAccessType(objectType: Type, indexType: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.IndexedAccess;
+	t.typeChildren = [objectType, indexType];
+	return t;
+}
+
+// The type of the property a string literal index names, a union of them for a union of
+// literals; the deferred type while either side is generic; null when a key names no property.
+export function indexedAccessOf(objectType: Type, indexType: Type): Type | null {
+	if (hasGenericParams(objectType) || hasGenericParams(indexType)) return createIndexedAccessType(objectType, indexType);
+	if (indexType.kind != TypeKind.Union) return memberOfKey(objectType, indexType);
+	if (!isKeyUnion(indexType)) return null;
+	const members: Type[] = [];
+	for (const key of indexType.typeChildren) {
+		const member = memberOfKey(objectType, key);
+		if (member == null) return null;
+		if (members.indexOf(member) < 0) members.push(member);
+	}
+	return members.length == 1 ? members[0] : createUnion(members);
+}
+
+function arrayOf(t: Type): Type | null {
+	const peeled = skipModifier(t);
+	const array = peeled != null ? unwrapRef(peeled) : null;
+	return array != null && array.kind == TypeKind.Array ? array : null;
+}
+
+export function isArrayType(t: Type): boolean { return arrayOf(t) != null; }
+
+// E[][number] is E and E[]["length"] is number; a struct's key is the field it names.
+function memberOfKey(objectType: Type, key: Type): Type | null {
+	const array = arrayOf(objectType);
+	if (array != null) {
+		if (isNumeric(key)) return array.typeReturn;
+		return key.kind == TypeKind.StringLiteral && key.typeName == "length" ? numberType() : null;
+	}
+	return key.kind == TypeKind.StringLiteral ? findFieldInVariant(objectType, key.typeName) : null;
+}
+
+export function evaluateIndexedAccessType(t: Type): Type {
+	if (t.typeChildren.length < 2) return t;
+	const resolved = indexedAccessOf(t.typeChildren[0], t.typeChildren[1]);
+	return resolved != null ? resolved : t;
+}
+
+// keyof T, deferred while T is generic. typeChildren[0] = T.
+export function createKeyOfType(objectType: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.KeyOf;
+	t.typeChildren = [objectType];
+	return t;
+}
+
+export function evaluateKeyOfType(t: Type): Type {
+	if (t.typeChildren.length < 1 || hasGenericParams(t.typeChildren[0])) return t;
+	const keys = keyOfType(t.typeChildren[0]);
+	return keys != null ? keys : t;
+}
+
+// A constraint that holds only property names: a string literal, a union of them, or keyof T.
+export function isKeyConstraint(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.KeyOf || isAllStringLiteralUnion(t) || isKeyUnion(t));
+}
+
+// A union of property names, with `number` for the indices of an array (keyof E[]).
+function isKeyUnion(t: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren.length == 0) return false;
+	for (const child of t.typeChildren) {
+		if (child == null || (child.kind != TypeKind.StringLiteral && !isNumeric(child))) return false;
+	}
+	return true;
+}
+
+// keyof T for an object type: the union of its property names as string literal types;
+// keyof E[] is `number | "length"`, an array's methods being no keys in MetaScript.
+export function keyOfType(objectType: Type): Type | null {
+	if (arrayOf(objectType) != null) return createUnionInOrder([numberType(), createStringLiteral("length")]);
+	const s = peelToStruct(objectType);
+	if (s == null || s.typeNames == null || s.typeNames.length == 0) return null;
+	const keys: Type[] = [];
+	for (const name of s.typeNames) keys.push(createStringLiteral(name));
+	return keys.length == 1 ? keys[0] : createUnionInOrder(keys);
+}
+
 export function isAllStringLiteralUnion(t: Type | null): boolean {
 	if (t == null || t.kind != TypeKind.Union) return false;
 	if (t.typeChildren.length == 0) return false;
@@ -3695,6 +3783,16 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				for (const m of members) parts.push(substitutedConditional(t, paramName, m, active));
 				return unionOfParts(parts);
 			},
+			TypeKind.IndexedAccess => {
+				const access = copyTypeForSubst(t);
+				substituteChildrenInPlace(access, paramName, concrete, active);
+				return evaluateIndexedAccessType(access);
+			},
+			TypeKind.KeyOf => {
+				const keyOf = copyTypeForSubst(t);
+				substituteChildrenInPlace(keyOf, paramName, concrete, active);
+				return evaluateKeyOfType(keyOf);
+			},
 			_ => t,
 		};
 	return isReadonlyView(t) ? createReadonlyView(result) : result;
@@ -3782,6 +3880,16 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 					parts.push(substitutedConditionalAll(t, names, each, active));
 				}
 				return unionOfParts(parts);
+			},
+			TypeKind.IndexedAccess => {
+				const access = copyTypeForSubst(t);
+				substituteChildrenInPlaceAll(access, names, concretes, active);
+				return evaluateIndexedAccessType(access);
+			},
+			TypeKind.KeyOf => {
+				const keyOf = copyTypeForSubst(t);
+				substituteChildrenInPlaceAll(keyOf, names, concretes, active);
+				return evaluateKeyOfType(keyOf);
 			},
 			_ => t,
 		};
@@ -4455,6 +4563,8 @@ function typeNameOfInner(t: Type | null): string {
 		TypeKind.CString => "cstring",
 		TypeKind.StringLiteral => "\"" + t2.typeName + "\"",
 		TypeKind.NumberLiteral => t2.typeName,
+		TypeKind.IndexedAccess => t2.typeChildren.length < 2 ? "unknown" : typeDisplayName(t2.typeChildren[0]) + "[" + typeDisplayName(t2.typeChildren[1]) + "]",
+		TypeKind.KeyOf => t2.typeChildren.length < 1 ? "unknown" : "keyof " + typeDisplayName(t2.typeChildren[0]),
 		TypeKind.EnumLiteral => t2.typeName + "." + (t2.typeNames.length > 0 ? t2.typeNames[0] : ""),
 		// Result and Promise are now GenericInstance — handled above via t2.typeName
 		TypeKind.Enum => t2.typeName,

@@ -11,7 +11,7 @@ import { Symbol } from "../ast/node";
 
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 export function defaultGlobalImports(): string[] {
-	return ["std/core/system", "std/core/array", "std/core/string", "std/core/bigint", "std/core/json", "std/core/value", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket", "std/core/math", "std/core/number", "std/core/boolean", "std/core/object"];
+	return ["std/core/system", "std/core/array", "std/core/string", "std/core/bigint", "std/core/json", "std/core/value", "std/core/buffer", "std/core/promise", "std/core/struct", "std/core/fetch", "std/core/date", "std/core/performance", "std/core/websocket", "std/core/math", "std/core/number", "std/core/boolean", "std/core/object", "std/core/proxy"];
 }
 
 let _extraGlobalImports: string[] = [];
@@ -110,9 +110,9 @@ test "isGlobalImport is the std prelude only; an extra takes the ordinary import
 	setExtraGlobalImports([]);
 }
 
-test "globalImports has system, string, array, bigint, json, value, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean, object" {
+test "globalImports has system, string, array, bigint, json, value, buffer, promise, struct, fetch, date, performance, websocket, math, number, boolean, object, proxy" {
 	const imports = defaultGlobalImports();
-	assert imports.length == 17;
+	assert imports.length == 18;
 	assert imports[0] == "std/core/system";
 	assert imports[1] == "std/core/array";
 	assert imports[2] == "std/core/string";
@@ -130,6 +130,7 @@ test "globalImports has system, string, array, bigint, json, value, buffer, prom
 	assert imports[14] == "std/core/number";
 	assert imports[15] == "std/core/boolean";
 	assert imports[16] == "std/core/object";
+	assert imports[17] == "std/core/proxy";
 }
 
 test "module passes enter the build identity, and none leave it empty" {

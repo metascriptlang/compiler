@@ -75,3 +75,4 @@ import "./websocketServer";
 import "./arrayElementSpelling";
 import "./oneValueFieldStorage";
 import "./blockReduce";
+import "./proxyStaticKey";

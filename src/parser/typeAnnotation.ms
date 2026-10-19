@@ -140,7 +140,7 @@ function isNegativeNumberAhead(state: ParserState): boolean {
 function parseTypeAtom(state: ParserState): Node {
 	const token = current(state);
 
-	if (token.kind == TokenKind.Distinct) {
+	if (token.kind == TokenKind.Distinct || token.kind == TokenKind.Keyof) {
 		advance(state);
 		return parseTypeAtom(state);
 	}
@@ -472,6 +472,11 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		skipTypeAtomNoOptional(state);
 		return;
 	}
+	if (token.kind == TokenKind.Keyof) {
+		advance(state);
+		skipTypeAtomNoOptional(state);
+		return;
+	}
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {
 		advance(state); // consume 'infer'
@@ -530,6 +535,11 @@ function skipTypeAtom(state: ParserState): void {
 
 	if (token.kind == TokenKind.Distinct) {
 		addError(state, distinctMisplacedMessage(token.line));
+		advance(state);
+		skipTypeAtom(state);
+		return;
+	}
+	if (token.kind == TokenKind.Keyof) {
 		advance(state);
 		skipTypeAtom(state);
 		return;
