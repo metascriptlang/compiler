@@ -375,6 +375,45 @@ Not yet measured here: the 100-seed swarm campaign, closure-only campaign, SAN,
 Raiser, Windows or Linux. The matrix above does not claim yield or exhaustive
 family coverage.
 
+## G7 — the matrix, mechanisms
+
+G7 fills the rows of [`coveragePlan.md`](coveragePlan.md); each row's state,
+variants and campaign evidence live there, not here. What G7 added to Smith:
+
+- **Families.** `features.ms` `ALL_FAMS` holds 20 families. `OPT_IN_FAMS`
+  (native, spawn, actor, race, async) stay out of the default vector and the
+  swarm and run only when `fams=` names them, because each one skips a lane
+  for some of its programs and would thin the default batch's lane coverage.
+  The core family's new types (float32, char, bigint, boolean) arrive only
+  through `types=`; `w.core.*` weights at 0 restore the earlier stream.
+- **Module trees** (`proj.ms`, `modules=N`, `modshapes=`). The generator's
+  program is split into `main.ms` and `m0.ms`… with alias, namespace,
+  re-export, star, cycle, init and backend-selected (`when`) shapes. A project
+  bundle records `layout: project` and a hash per file; `reduce` refuses it.
+- **In-program model oracle.** The spawn, actor and race families compute
+  their result twice, through the concurrent shape and through a sequential
+  model, and throw `<name> mismatch <par> | <seq>` before printing when the
+  two differ. A wrong result is therefore a failure on every lane (UNRATED),
+  not a parity split; `plant=model` corrupts one side and is caught that way.
+- **Meta pair oracle.** Each meta shape (comptime, macro, quote/splice,
+  decorator, JSX consumed by a macro) is paired with a plain equivalent and
+  compared in the program; `plant=meta` breaks one pair.
+- **Diagnostic catalogue** (`diag.ms`, `main.ms diag`). A legal twin and a
+  one-line mutant per seed; the mutant's first `msc check` error must match a
+  pinned message, line and column, and controls must check clean. It judges
+  the checker only and writes `out/smith/diag/bundles/`.
+- **Batch report** (`hits.ms`). `run` prints construct hits per family, the
+  programs that failed identically on every lane, and which requested lanes
+  ran or were unavailable and why.
+- **Campaign protocol.** A campaign is a list of `run` batches started only
+  when `~/.metascript/gates` is empty, the 5-minute load is below 14 and 30 GiB
+  are free; an edit of `tools/smith/` waits for the running batch and pauses
+  the next. The Raiser lane needs `MSCORPUS_RAISER=1`.
+
+The adapters that would route target (bare, wasm, SBF) and reload (HCR)
+programs through their existing consumers are **NEW MECHANISM** proposals,
+not built; `coveragePlan.md` rows T1 and T2 carry them.
+
 ## Open questions (design-level, decide before the slice that needs them)
 
 - Canonical print vs digest as the lane-comparison surface: decided for slice 1
