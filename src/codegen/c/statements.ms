@@ -868,26 +868,24 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	emitStmtsLine(p, `static void* const ${table}[${size}] = { ${entries} };`);
 	emitStmtsLine(p, `goto *${table}[${genExpr(g, p, sd.switchDisc)}];`);
 
-	if (wrapperLabel != "") {
-		pushBlock(p, true);
-		p.blocks[p.blocks.length - 1].label = wrapperLabel;
-	}
 	let tails = 0;
 	for (let k = 0; k < sd.switchCases.length; k += 1) {
 		const cd = sd.switchCases[k].data as SwitchCaseData;
 		emitStmtsLine(p, `__cg${id}_${k}: ;`);
+		if (wrapperLabel != "") {
+			pushBlock(p, true);
+			p.blocks[p.blocks.length - 1].label = wrapperLabel;
+			p.blocks[p.blocks.length - 1].landing = `__cg${id}_${k}_end`;
+		}
 		genStmts(g, p, cd.caseStmts);
+		if (wrapperLabel != "") {
+			const landed = p.blocks[p.blocks.length - 1].breakUsed;
+			popBlock(p);
+			if (landed) { emitStmtsLine(p, `__cg${id}_${k}_end: ;`); }
+		}
 		if (endsInJump(cd.caseStmts)) continue;
 		genDispatchTail(g, p, pre, post, sd.switchDisc, table, tails > 0);
 		tails += 1;
-	}
-	if (wrapperLabel != "") {
-		const landed = p.blocks[p.blocks.length - 1].breakUsed;
-		popBlock(p);
-		if (landed) {
-			emitStmtsLine(p, `${wrapperLabel}_x_: ;`);
-			genDispatchTail(g, p, pre, post, sd.switchDisc, table, tails > 0);
-		}
 	}
 	if (d.whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${d.whileLabel}: ;`); }
 	popBlock(p);
@@ -1078,7 +1076,7 @@ function genBreakStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	}
 	if (d.breakLabel != "" && idx >= 0) {
 		p.blocks[idx].breakUsed = true;
-		emitStmtsLine(p, `goto ${d.breakLabel}_x_;`);
+		emitStmtsLine(p, `goto ${p.blocks[idx].landing != "" ? p.blocks[idx].landing : d.breakLabel + "_x_"};`);
 		return;
 	}
 	emitStmtsLine(p, "break;");

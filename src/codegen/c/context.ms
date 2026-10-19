@@ -143,6 +143,7 @@ export class CBlock {
 	nestedTryDepth: number;  // snapshot of CProc.nestedTryStmts.length at block entry
 	breakUsed: boolean;    // a labeled break targeted this block — emit the `<label>_x_:` landing after it
 	continueUsed: boolean; // a labeled continue targeted this block — emit the `<label>:` landing inside it
+	landing: string;       // non-empty: a labeled break jumps to this label instead of `<label>_x_`
 }
 
 export function createBlock(id: number, isLoop: boolean): CBlock {
@@ -156,6 +157,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 		nestedTryDepth: 0,
 		breakUsed: false,
 		continueUsed: false,
+		landing: "",
 	};
 }
 

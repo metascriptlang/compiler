@@ -182,3 +182,25 @@ test "@computedGoto: a statement that cannot be repeated because it holds a labe
 	const c = emitted(fetchLoop(true, "for (let i = 0; i < 2; i += 1) { if (i == 0) continue; acc += i; }"));
 	assert c.includes("computed goto repeats the statements around the switch, and one of them holds a label"), c.slice(0, 600);
 }
+
+test "@computedGoto: a break that ends a case block lands on that case's own dispatch, never on a shared tail" {
+	const c = emitted(`enum Op { A, B, C }
+	function run(code: Op[]): int32 {
+		let pc = 0;
+		let acc: int32 = 0;
+		while (true) {
+			@computedGoto;
+			const op = code[pc];
+			pc += 1;
+			switch (op) {
+				case Op.A: { if (acc > 5) { acc += 1; } acc += 1; break; }
+				case Op.B: { if (acc > 5) { acc += 2; } acc += 2; break; }
+				case Op.C: return acc;
+			}
+		}
+	}
+	console.log(run([Op.A, Op.B, Op.C]));`);
+	assert countOf(c, "goto *__cgtbl") == 3, c.slice(0, 1200);
+	assert !c.includes("goto __sw"), c.slice(0, 1200);
+	assert !c.includes("__sw1_x_"), c.slice(0, 1200);
+}
