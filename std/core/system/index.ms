@@ -319,6 +319,9 @@ when (mscDeclaresRuntime) {
 	extern function msStringAppendChar(dest: Ptr<void>, ch: char): void;
 
 	@compilerFunc
+	extern function msStringAppendCodePoint(dest: Ptr<void>, cp: number): void;
+
+	@compilerFunc
 	extern function msStringSetChar(s: Ptr<void>, idx: int64, ch: string): void;
 
 	@compilerFunc

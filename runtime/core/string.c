@@ -676,8 +676,7 @@ int64_t msStringCharCodeAt(msString s, int64_t idx) {
 	return -1;
 }
 
-msString msStringFromCodePoint(int64_t cp) {
-	uint8_t buf[4];
+static int msEncodeCodePoint(int64_t cp, uint8_t buf[4]) {
 	int len;
 	if (cp < 0x80) {
 		buf[0] = (uint8_t)cp;
@@ -702,7 +701,27 @@ msString msStringFromCodePoint(int64_t cp) {
 		buf[0] = 0xEF; buf[1] = 0xBF; buf[2] = 0xBD;
 		len = 3;
 	}
-	return msStringNew((const char*)buf, len);
+	return len;
+}
+
+msString msStringFromCodePoint(int64_t cp) {
+	uint8_t buf[4];
+	int len = msEncodeCodePoint(cp, buf);
+	msString s = msStringNew((const char*)buf, len);
+	if (len == 1 && buf[0] < 0x80) msStrMarkAscii(s.p);
+	else msStrMarkNonAscii(s.p);
+	return s;
+}
+
+void msStringAppendCodePoint(msString* dest, int64_t cp) {
+	uint8_t buf[4];
+	int len = msEncodeCodePoint(cp, buf);
+	if (len == 1) { msStringAppendChar(dest, (char)buf[0]); return; }
+	msStringPrepareAdd(dest, len);
+	memcpy(dest->p->data + dest->len, buf, len);
+	dest->len += len;
+	dest->p->data[dest->len] = '\0';
+	msStrMarkNonAscii(dest->p);
 }
 
 /* Byte-level slice: direct byte offsets into the underlying buffer.

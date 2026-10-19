@@ -10,7 +10,7 @@ import { statementCanRaise, callCanRaise } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
-	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
+	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, lookupLocalName, setLocalSymName, pushBlock, popBlock,
 	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError, isIndirectRef,
 } from "./context";
 import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions";
@@ -20,6 +20,8 @@ import { ensureCrossModuleProto } from "./forward";
 import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName } from "./names";
 import { isRuntimeProcSym } from "../../transform/util";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo, zeroInit } from "./types";
+import { computedGotoSize, isComputedGotoMark } from "../../checker/computedGoto";
+import { forEachChild } from "../../ast/visitor";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
 // Reference parity: when control flow exits through
@@ -528,6 +530,10 @@ function genReadonlyDataLocal(g: CGen, p: CProc, node: Readonly<Node>, d: Readon
 	return true;
 }
 
+function declareLocal(p: CProc, reuse: boolean, line: string): void {
+	if (!reuse) emitProcLocalsLine(p, line);
+}
+
 function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (isComptimeOnlyVarDecl(node)) return;
 	const d = node.data as VariableDeclData;
@@ -546,18 +552,29 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 	let varName = safeName(d.declName);
 	let hoistDecl = p != null;
 	const knownName = node.resolvedSym != null ? lookupLocalSymName(p, node.resolvedSym) : "";
-	if (hoistDecl && isTemp && knownName != "") {
+	let reuse = false;
+	if (hoistDecl && p.reemitting) {
+		if (node.resolvedSym != null && knownName != "") {
+			varName = knownName;
+			reuse = true;
+		} else if (isTemp && node.resolvedSym == null) {
+			const mapped = lookupLocalName(p, varName);
+			if (mapped != "") varName = mapped;
+			reuse = true;
+		}
+	}
+	if (!reuse && hoistDecl && isTemp && knownName != "") {
 		varName = knownName;
 		hoistDecl = false;
 	}
-	if (hoistDecl && (node.resolvedSym != null || isTemp)) {
+	if (!reuse && hoistDecl && (node.resolvedSym != null || isTemp)) {
 		varName = fillLocalName(p, varName, isTemp);
 		if (node.resolvedSym != null) setLocalSymName(p, node.resolvedSym, varName);
-	} else if (hoistDecl) {
+	} else if (!reuse && hoistDecl) {
 		// No resolvedSym (e.g., .cms prelude files): keep original name, don't hoist
 		hoistDecl = false;
 	}
-	if (hoistDecl && isTemp && p != null) {
+	if (!reuse && hoistDecl && isTemp && p != null) {
 		for (const s of p.hoistedTemps) {
 			if (s == d.declName) { hoistDecl = false; }
 		}
@@ -604,29 +621,29 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			if (cType == "void*" || cType == "double") {
 				cType = getTypeDesc(g, nrvoRet);
 			}
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); }
 			else { emitStmtsLine(p, `${cType} ${varName};`); }
 			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
 			emitStmtsLine(p, `${nrvoCall};`);
 		} else if (d.initializer.kind == NodeKind.NullLiteral
 			&& (isStructType(node.nodeType) || isStructCType(cType))) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = ${zeroInit(varType)};`); }
 		} else if (d.initializer.kind == NodeKind.NullLiteral && isNumericCType(cType)) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = 0;`); }
 		} else if (d.initializer.kind == NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length == 0) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = (${cType})${zeroInit(varType)};`); }
 		} else if (d.initializer.kind == NodeKind.TypeAssertion && isUnionNarrowing(d.initializer)) {
 			const initSnippet = genExpr(g, p, d.initializer);
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType}* ${varName};`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType}* ${varName};`); }
 			else { emitStmtsLine(p, `${cType}* ${varName};`); }
 			emitStmtsLine(p, `${varName} = &(${initSnippet});`);
 			p.indirectLocals.push(d.declName);
 			if (node.resolvedSym != null) p.indirectSyms.push(node.resolvedSym);
 		} else if (hoistDecl && buildsInPlace(g, d.initializer, cType)) {
-			emitProcLocalsLine(p, `${cType} ${varName};`);
+			declareLocal(p, reuse, `${cType} ${varName};`);
 			const built = genExprInto(g, p, d.initializer, varName);
 			if (built != varName) emitStmtsLine(p, `${varName} = ${built};`);
 		} else {
@@ -642,22 +659,22 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 					}
 				}
 			}
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = ${finalInit};`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = ${finalInit};`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = ${finalInit};`); }
 		}
 	} else {
 		// No initializer: emit zero-initialized declaration (reference: resetLoc/constructLoc)
 		if (isNumericCType(cType)) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = 0;`); }
 		} else if (isStructCType(cType)) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = ${zeroInit(varType)};`); }
 		} else if (cType.byteLength > 0 && cType.charAt(cType.byteLength - 1) == "*") {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = NULL;`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = NULL;`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = NULL;`); }
 		} else {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); }
+			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); }
 			else { emitStmtsLine(p, `${cType} ${varName};`); }
 		}
 	}
@@ -746,10 +763,158 @@ function genIfStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	emitStmtsLine(p, lend + ":;");
 }
 
+// ===== Computed goto loop =====
+
+function dispatchSwitchOf(stmt: Readonly<Node>): Readonly<Node> | null {
+	if (stmt.kind == NodeKind.SwitchStmt) return stmt;
+	if (stmt.kind != NodeKind.DoWhileStmt || !(stmt.data as DoWhileStmtData).dwSwitchWrapper) return null;
+	const body = (stmt.data as DoWhileStmtData).doBody;
+	if (body.kind != NodeKind.BlockStmt) return null;
+	const inner = (body.data as BlockStmtData).statements;
+	return inner.length == 1 && inner[0].kind == NodeKind.SwitchStmt ? inner[0] : null;
+}
+
+function holdsLabel(node: Readonly<Node>): boolean {
+	if (node == null) return false;
+	match (node.kind) {
+		NodeKind.WhileStmt => { return (node.data as WhileStmtData).whileLabel != "" || holdsLabel((node.data as WhileStmtData).whileBody); },
+		NodeKind.DoWhileStmt => { return (node.data as DoWhileStmtData).dwLabel != "" || holdsLabel((node.data as DoWhileStmtData).doBody); },
+		NodeKind.BlockStmt => {
+			for (const s of (node.data as BlockStmtData).statements) {
+				if (holdsLabel(s)) return true;
+			}
+			return false;
+		},
+		NodeKind.IfStmt => { return holdsLabel((node.data as IfStmtData).consequent) || holdsLabel((node.data as IfStmtData).alternate); },
+		NodeKind.TryCatchStmt => {
+			const t = node.data as TryCatchStmtData;
+			return holdsLabel(t.tryBody) || holdsLabel(t.catchBody) || holdsLabel(t.finallyBody);
+		},
+		NodeKind.SwitchStmt => {
+			for (const c of (node.data as SwitchStmtData).switchCases) {
+				for (const s of (c.data as SwitchCaseData).caseStmts) {
+					if (holdsLabel(s)) return true;
+				}
+			}
+			return false;
+		},
+		_ => { return false; },
+	};
+}
+
+function endsInJump(stmts: Readonly<Node[]>): boolean {
+	if (stmts.length == 0) return false;
+	const k = stmts[stmts.length - 1].kind;
+	return k == NodeKind.ReturnStmt || k == NodeKind.ThrowStmt || k == NodeKind.ContinueStmt || k == NodeKind.BreakStmt;
+}
+
+function genDispatchTail(g: CGen, p: CProc, pre: Readonly<Node[]>, post: Readonly<Node[]>, disc: Readonly<Node>, table: string, postSeen: boolean): void {
+	const wasReemitting = p.reemitting;
+	p.reemitting = postSeen;
+	genStmts(g, p, post);
+	p.reemitting = true;
+	genStmts(g, p, pre);
+	p.reemitting = wasReemitting;
+	emitStmtsLine(p, `goto *${table}[${genExpr(g, p, disc)}];`);
+}
+
+function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readonly<Node>, at: int32): void {
+	const d = node.data as WhileStmtData;
+	const stmts = (d.whileBody.data as BlockStmtData).statements;
+	const sd = sw.data as SwitchStmtData;
+	const size = computedGotoSize(sd.switchDisc.nodeType);
+	const pre: Readonly<Node>[] = [];
+	const post: Readonly<Node>[] = [];
+	for (let i = 0; i < stmts.length; i += 1) {
+		if (i == at || isComputedGotoMark(stmts[i])) continue;
+		if (holdsLabel(stmts[i])) {
+			addCGenError(g, "computed goto repeats the statements around the switch, and one of them holds a label", stmts[i].location.line, stmts[i].location.column);
+			return;
+		}
+		if (i < at) pre.push(stmts[i]);
+		else post.push(stmts[i]);
+	}
+	if (size == 0) {
+		addCGenError(g, "internal: computed goto reached C codegen without a table size", sw.location.line, sw.location.column);
+		return;
+	}
+	p.labels += 1;
+	const id = p.labels;
+	const table = `__cgtbl${id}`;
+	const wrapperLabel = stmts[at].kind == NodeKind.DoWhileStmt ? (stmts[at].data as DoWhileStmtData).dwLabel : "";
+
+	emitStmts(p, "while (1) {\n");
+	const oldIndent = getStmtsIndent(p);
+	pushBlock(p, true);
+	const whileBlk = p.blocks[p.blocks.length - 1];
+	if (d.whileLabel != "") { whileBlk.label = d.whileLabel; }
+	setStmtsIndent(p, oldIndent + 1);
+
+	genStmts(g, p, pre);
+	let entries = "";
+	for (let k = 0; k < sd.switchCases.length; k += 1) {
+		const cd = sd.switchCases[k].data as SwitchCaseData;
+		if (cd.isDefault) {
+			addCGenError(g, "internal: computed goto reached C codegen with a default case", sw.location.line, sw.location.column);
+			continue;
+		}
+		for (const test of cd.caseTests) {
+			const label = test.kind == NodeKind.NumberLiteral
+				? formatCNumberLit(test.data as NumberLiteralData, null)
+				: genExpr(g, p, test);
+			entries = entries + (entries == "" ? "" : ", ") + `[${label}] = &&__cg${id}_${k}`;
+		}
+	}
+	emitStmtsLine(p, `static void* const ${table}[${size}] = { ${entries} };`);
+	emitStmtsLine(p, `goto *${table}[${genExpr(g, p, sd.switchDisc)}];`);
+
+	let tails = 0;
+	for (let k = 0; k < sd.switchCases.length; k += 1) {
+		const cd = sd.switchCases[k].data as SwitchCaseData;
+		emitStmtsLine(p, `__cg${id}_${k}: ;`);
+		if (wrapperLabel != "") {
+			pushBlock(p, true);
+			p.blocks[p.blocks.length - 1].label = wrapperLabel;
+			p.blocks[p.blocks.length - 1].landing = `__cg${id}_${k}_end`;
+		}
+		genStmts(g, p, cd.caseStmts);
+		if (wrapperLabel != "") {
+			const landed = p.blocks[p.blocks.length - 1].breakUsed;
+			popBlock(p);
+			if (landed) { emitStmtsLine(p, `__cg${id}_${k}_end: ;`); }
+		}
+		if (endsInJump(cd.caseStmts)) continue;
+		genDispatchTail(g, p, pre, post, sd.switchDisc, table, tails > 0);
+		tails += 1;
+	}
+	if (d.whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${d.whileLabel}: ;`); }
+	popBlock(p);
+	emitStmtsLine(p, "}");
+	if (d.whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${d.whileLabel}_x_: ;`); }
+}
+
 // ===== While Statement =====
 
 function genWhileStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as WhileStmtData;
+
+	if (d.whileBody.kind == NodeKind.BlockStmt && (g.checkerCtx == null || g.checkerCtx.targetOs != "solana")) {
+		const body = (d.whileBody.data as BlockStmtData).statements;
+		let marked = false;
+		let at = -1;
+		for (let i = 0; i < body.length; i += 1) {
+			if (isComputedGotoMark(body[i])) marked = true;
+			if (dispatchSwitchOf(body[i]) != null) at = i;
+		}
+		if (marked && at < 0) {
+			addCGenError(g, "internal: computed goto reached C codegen without its switch", node.location.line, node.location.column);
+			return;
+		}
+		if (marked) {
+			genComputedGotoLoop(g, p, node, dispatchSwitchOf(body[at])!, at);
+			return;
+		}
+	}
 
 	// Reference parity: while(1) { cond-eval; if (!cond) break; body; }
 	// Ensures NRVO calls in conditions are re-evaluated each iteration.
@@ -911,7 +1076,7 @@ function genBreakStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	}
 	if (d.breakLabel != "" && idx >= 0) {
 		p.blocks[idx].breakUsed = true;
-		emitStmtsLine(p, `goto ${d.breakLabel}_x_;`);
+		emitStmtsLine(p, `goto ${p.blocks[idx].landing != "" ? p.blocks[idx].landing : d.breakLabel + "_x_"};`);
 		return;
 	}
 	emitStmtsLine(p, "break;");
