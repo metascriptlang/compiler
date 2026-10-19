@@ -65,10 +65,6 @@ let accountCount: uint64 = 0;
 let accountTable: uint64 = 0;
 let instructionData: uint64 = 0;
 
-function waits(name: string): Error {
-	return new Error(`solana kernel: ${name} waits for simulatorInvoke`);
-}
-
 // host.c msSolHostEnter
 function enter(input: uint64): void {
 	resetSimulator();
