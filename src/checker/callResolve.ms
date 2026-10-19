@@ -1890,6 +1890,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
 		if (extMultiFiltered.length > 1 && literalArgs[ai]) paramExpected = null;
+		if (paramExpected != null && paramExpected.kind == TypeKind.Varargs) {
+			const restElem = getElementType(unwrapRef(unwrapVarargs(paramExpected)));
+			paramExpected = restElem != null && restElem.kind != TypeKind.Inferred ? restElem : null;
+		}
 		callCheckExpr(ctx, d.arguments[ai], paramExpected);
 		ctx.pendingSpawnThunk = false;
 		let argType = d.arguments[ai].nodeType;
