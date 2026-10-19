@@ -386,7 +386,9 @@ static pthread_once_t gQueueOnce = PTHREAD_ONCE_INIT;
 static void msInitQueueOnce(void) {
 	if (gWakePipe[0] < 0) {
 		pipe(gWakePipe);
-		fcntl(gWakePipe[0], F_SETFL, O_NONBLOCK);
+		for (int i = 0; i < 2; i++) {
+			fcntl(gWakePipe[i], F_SETFL, fcntl(gWakePipe[i], F_GETFL) | O_NONBLOCK);
+		}
 	}
 	msMpscInit(&gCompletionQueue);
 	gCompletionQueueInited = true;
