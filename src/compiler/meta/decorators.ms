@@ -22,7 +22,7 @@ import { sgQueryAtPosition } from "../../checker/suggest";
 import { callMacroEngineCompiler, callMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
-	heapAllocString, heapStringText, raiserBool, raiserNil, raiserArray,
+	heapAllocString, heapAllocStoredString, heapStringText, raiserBool, raiserNil, raiserArray,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectGetField,
 } from "../../raiser/value";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
@@ -736,11 +736,11 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const arrHeap = vm.arrayHeap;
 	seedInheritedMetadata(ctx, plan);
 	const keysHandle = heapAllocArray(arrHeap);
-	for (const k of plan.metaKeys) heapArrayPush(arrHeap, keysHandle, heapAllocString(arrHeap, k));
+	for (const k of plan.metaKeys) heapArrayPush(arrHeap, keysHandle, heapAllocStoredString(arrHeap, k));
 	const valuesHandle = heapAllocArray(arrHeap);
 	for (const v of plan.metaValues) heapArrayPush(arrHeap, valuesHandle, nodeToValue(v, objHeap, arrHeap));
 	const inheritedKeysHandle = heapAllocArray(arrHeap);
-	for (const k of plan.inheritedKeys) heapArrayPush(arrHeap, inheritedKeysHandle, heapAllocString(arrHeap, k));
+	for (const k of plan.inheritedKeys) heapArrayPush(arrHeap, inheritedKeysHandle, heapAllocStoredString(arrHeap, k));
 	const inheritedValuesHandle = heapAllocArray(arrHeap);
 	for (const v of plan.inheritedValues) heapArrayPush(arrHeap, inheritedValuesHandle, nodeToValue(v, objHeap, arrHeap));
 	let initVal = raiserNil();

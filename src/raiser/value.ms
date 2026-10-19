@@ -49,8 +49,9 @@ export function raiserFloat(f: number): RaiserValue {
 }
 
 // A constant string: interned once for the process, never freed, readable from any heap.
-// Run-time text goes through heapAllocString.
-export function raiserString(s: string): RaiserValue {
+// Only code generation and module load call this, because the table never shrinks;
+// every run-time string goes through heapAllocString.
+export function raiserConstString(s: string): RaiserValue {
 	return { kind: RaiserValueKind.String, intVal: constHandle(s), floatVal: 0.0 };
 }
 
@@ -130,13 +131,19 @@ function constHandle(text: string): int64 {
 }
 
 function constText(handle: int64): string {
-	return constTexts[(-handle - 1) as number];
+	// bound first: .inbox/compiler/2026-10-19-return-of-an-array-element-leaks-a-reference.md
+	const text = constTexts[(-handle - 1) as number];
+	return text;
 }
 
 // Module constants and field names are interned, so reading one needs no heap.
 export function constStringText(v: RaiserValue): string {
 	if (v.kind != RaiserValueKind.String || v.intVal >= 0) throw new Error("internal: a module constant must be an interned string");
 	return constText(v.intVal);
+}
+
+export function constStringCount(): number {
+	return constTexts.length;
 }
 
 export function heapAllocString(arr: RaiserArrayHeap, text: string): RaiserValue {
@@ -156,11 +163,20 @@ export function heapAllocString(arr: RaiserArrayHeap, text: string): RaiserValue
 	return { kind: RaiserValueKind.String, intVal: handle, floatVal: 0.0 };
 }
 
+// A string the host stores into a container it built: the container holds the first count.
+export function heapAllocStoredString(arr: RaiserArrayHeap, text: string): RaiserValue {
+	const v = heapAllocString(arr, text);
+	if (v.intVal >= 0) arr.strings.rc[v.intVal] = 1;
+	return v;
+}
+
 // A value that is not a String reads as "", the way an unset text field always did.
 export function heapStringText(arr: RaiserArrayHeap, v: RaiserValue): string {
 	if (v.kind != RaiserValueKind.String) return "";
 	if (v.intVal < 0) return constText(v.intVal);
-	return arr.strings.texts[v.intVal];
+	// bound first: .inbox/compiler/2026-10-19-return-of-an-array-element-leaks-a-reference.md
+	const text = arr.strings.texts[v.intVal];
+	return text;
 }
 
 export function heapStringLive(arr: RaiserArrayHeap): number {
@@ -529,7 +545,7 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	heapObjectSetField(heap, h, "kind", raiserInt(5));
-	heapObjectSetField(heap, h, "left", raiserString("L"));
+	heapObjectSetField(heap, h, "left", raiserConstString("L"));
 	assert heapObjectFieldNameAt(heap, h, 0) == "kind";
 	assert heapObjectFieldNameAt(heap, h, 1) == "left";
 	assert heapStringText(createArrayHeap(), heapObjectFieldValueAt(heap, h, 1)) == "L";
@@ -740,7 +756,7 @@ test "copyGraph relocates a field address that points into its own owner" {
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
 	const padding = heapAllocObject(sObj);
-	heapObjectSetField(sObj, padding, "text", raiserString("unrelated"));
+	heapObjectSetField(sObj, padding, "text", raiserConstString("unrelated"));
 	const owner = heapAllocObject(sObj);
 	heapObjectSetField(sObj, owner, "text", heapAllocString(sArr, "source"));
 	heapObjectSetField(sObj, owner, "pointer", raiserFieldAddr(owner, "text"));
@@ -1074,8 +1090,8 @@ test "a constant string is shared by every heap and never freed" {
 	const a = createArrayHeap();
 	const b = createArrayHeap();
 	const obj = createStructHeap();
-	const c = raiserString("shared");
-	assert c.intVal < 0 && raiserString("shared").intVal == c.intVal;
+	const c = raiserConstString("shared");
+	assert c.intVal < 0 && raiserConstString("shared").intVal == c.intVal;
 	rcIncref(a, obj, c);
 	rcDecref(a, obj, c);
 	assert heapStringText(a, c) == "shared" && heapStringText(b, c) == "shared";

@@ -7,11 +7,11 @@ import {
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserInt, raiserFloat, raiserString, raiserArray, raiserToString, copyValueInto,
+	raiserNil, raiserInt, raiserFloat, raiserConstString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive,
-	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, clearArrayHeap, clearObjectHeap,
+	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, clearArrayHeap, clearObjectHeap,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -21,7 +21,7 @@ import { orcCollectCycles } from "./orc";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
 import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
-import { RaiserHostFn, RaiserPrintSink } from "./marshal";
+import { RaiserHostFn, RaiserPrintSink, boxString } from "./marshal";
 import { int64Bits } from "../utils/stdBackport";
 
 @include("runtime/promise/dispatch.h");
@@ -328,14 +328,24 @@ function getReg(vm: RaiserVM, idx: number): RaiserValue {
 	return vm.regs.slots[idx];
 }
 
-// --- ORC refcount helpers (gated on gcMode; no-op in arena mode) ---
+// --- Refcount helpers: ORC counts every heap kind; arena mode counts strings only,
+// because arrays and objects live until the heap is dropped but a string freed by
+// its last holder keeps a long-running loop's memory bounded ---
+
+function vmHold(vm: RaiserVM, kind: RaiserValueKind, handle: int64): void {
+	if (vm.orc || kind == RaiserValueKind.String) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, kind, handle);
+}
+
+function vmRelease(vm: RaiserVM, kind: RaiserValueKind, handle: int64): void {
+	if (vm.orc || kind == RaiserValueKind.String) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, kind, handle);
+}
 
 function vmIncref(vm: RaiserVM, val: RaiserValue): void {
-	if (vm.orc) rcIncref(vm.arrayHeap, vm.objectHeap, val);
+	vmHold(vm, val.kind, val.intVal);
 }
 
 function vmDecref(vm: RaiserVM, val: RaiserValue): void {
-	if (vm.orc) rcDecref(vm.arrayHeap, vm.objectHeap, val);
+	vmRelease(vm, val.kind, val.intVal);
 }
 
 // Adaptive cycle collection: when the live (allocated minus recycled) heap object
@@ -361,17 +371,13 @@ function vmMaybeCollect(vm: RaiserVM): void {
 // leaves a register only by being copied out.
 function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
 	if (idx >= vm.regs.slots.length) throw slotOutside(idx);
-	if (vm.orc) {
-		// Kinds below String hold no heap handle, so a scalar move skips both counters.
-		// incref-before-decref: safe under self-assignment (setReg(i, slots[i]))
-		if (val.kind >= RaiserValueKind.String) rcIncref(vm.arrayHeap, vm.objectHeap, val);
-		const oldKind = vm.regs.slots[idx].kind;
-		const oldHandle = vm.regs.slots[idx].intVal;
-		copyValueInto(vm.regs.slots[idx], val);
-		if (oldKind >= RaiserValueKind.String) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, oldKind, oldHandle);
-		return;
-	}
+	// Kinds below String hold no heap handle, so a scalar move skips both counters.
+	// incref-before-decref: safe under self-assignment (setReg(i, slots[i]))
+	if (val.kind >= RaiserValueKind.String) vmHold(vm, val.kind, val.intVal);
+	const oldKind = vm.regs.slots[idx].kind;
+	const oldHandle = vm.regs.slots[idx].intVal;
 	copyValueInto(vm.regs.slots[idx], val);
+	if (oldKind >= RaiserValueKind.String) vmRelease(vm, oldKind, oldHandle);
 }
 
 function setRegScalar(vm: RaiserVM, idx: number, kind: RaiserValueKind, intVal: int64, floatVal: number): void {
@@ -381,9 +387,7 @@ function setRegScalar(vm: RaiserVM, idx: number, kind: RaiserValueKind, intVal: 
 	dst.kind = kind;
 	dst.intVal = intVal;
 	dst.floatVal = floatVal;
-	if (vm.orc && oldKind >= RaiserValueKind.String) {
-		rcDecrefHandle(vm.arrayHeap, vm.objectHeap, oldKind, oldHandle);
-	}
+	if (oldKind >= RaiserValueKind.String) vmRelease(vm, oldKind, oldHandle);
 }
 
 function setRegInt(vm: RaiserVM, idx: number, n: int64): void {
@@ -412,13 +416,13 @@ function vmText(vm: RaiserVM, v: RaiserValue): string {
 
 function setRegRef(vm: RaiserVM, idx: number, kind: RaiserValueKind, handle: int64): void {
 	const dst = getReg(vm, idx);
-	if (vm.orc) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, kind, handle);
+	vmHold(vm, kind, handle);
 	const oldKind = dst.kind;
 	const oldHandle = dst.intVal;
 	dst.kind = kind;
 	dst.intVal = handle;
 	dst.floatVal = 0.0;
-	if (vm.orc) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, oldKind, oldHandle);
+	vmRelease(vm, oldKind, oldHandle);
 }
 
 // --- Error helper ---
@@ -819,7 +823,7 @@ function vmHandleThrow(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 	f.errorObserved = true;
 	if (f.record >= 0) copyValueInto(vm.currentException, moduleErrorForReader(vm, f.record));
-	else copyValueInto(vm.currentException, f.error.kind == RaiserValueKind.Nil ? raiserString(f.errorMsg) : copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error));
+	else copyValueInto(vm.currentException, f.error.kind == RaiserValueKind.Nil ? heapAllocString(vm.arrayHeap, f.errorMsg) : copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error));
 	unwindStep(vm);
 }
 
@@ -923,7 +927,7 @@ function copyStrandGlobals(
 	map.destGlobals = globals;
 	for (const value of vm.globals) {
 		const copied = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrays, objects, value, map);
-		if (vm.orc) rcIncref(arrays, objects, copied);
+		if (vm.orc || copied.kind == RaiserValueKind.String) rcIncref(arrays, objects, copied);
 		const slot = raiserNil();
 		copyValueInto(slot, copied);
 		globals.push(slot);
@@ -1531,7 +1535,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			RaiserOpcode.CopyValue => {
 				const source = slots[base + ib];
 				const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source,
-					func.copyPlans, ic as int32, vm.orc);
+					func.copyPlans, ic as int32);
 				setReg(vm, base + ia, copied);
 				vmMaybeCollect(vm);
 			},
@@ -2780,7 +2784,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 			vmError(vm, raised);
 			return;
 		}
-		copyValueInto(vm.currentException, raiserString(raised));
+		copyValueInto(vm.currentException, heapAllocString(vm.arrayHeap, raised));
 		unwindStep(vm);
 		return;
 	}
@@ -2867,7 +2871,7 @@ test "a register keeps its box: ops write into it, and a string left in it is cl
 			raiserABC(RaiserOpcode.AddI64, 0, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserInt(7), raiserString("old")]
+		[raiserInt(7), raiserConstString("old")]
 	));
 	const r0 = vm.regs.slots[0];
 	const r1 = vm.regs.slots[1];
@@ -2963,7 +2967,7 @@ test "a reference converted to its identity bits is its handle, and nil is zero"
 	assert execConv(raiserObject(7), RaiserConvClass.HandleBits).exitValue.intVal == 7;
 	assert execConv(raiserArray(3), RaiserConvClass.HandleBits).exitValue.intVal == 3;
 	assert execConv(raiserNil(), RaiserConvClass.HandleBits).exitValue.intVal == 0;
-	assert execConv(raiserString("k"), RaiserConvClass.HandleBits).error.startsWith("no identity bits");
+	assert execConv(raiserConstString("k"), RaiserConvClass.HandleBits).error.startsWith("no identity bits");
 }
 
 test "a float in a signed integer's range converts by truncation" {
@@ -3109,10 +3113,10 @@ function execIsKind(value: RaiserValue, kind: RaiserValueKind): RaiserValue {
 }
 
 test "IsKind answers a boolean for the value kind named by C" {
-	const hit = execIsKind(raiserString("a"), RaiserValueKind.String);
+	const hit = execIsKind(raiserConstString("a"), RaiserValueKind.String);
 	assert hit.kind == RaiserValueKind.Bool;
 	assert hit.intVal == 1;
-	assert execIsKind(raiserString("a"), RaiserValueKind.Float).intVal == 0;
+	assert execIsKind(raiserConstString("a"), RaiserValueKind.Float).intVal == 0;
 	assert execIsKind(raiserFloat(2.5), RaiserValueKind.Float).intVal == 1;
 	assert execIsKind(raiserNil(), RaiserValueKind.Nil).intVal == 1;
 	assert execIsKind(raiserInt(0), RaiserValueKind.Nil).intVal == 0;
@@ -3413,7 +3417,7 @@ test "NewObject + StoreField + LoadField" {
 			raiserABC(RaiserOpcode.LoadField, 2, 0, 1),   // R2 = R0.field(K1="x")
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserInt(42), raiserString("x")]
+		[raiserInt(42), raiserConstString("x")]
 	));
 	assert vm.exitValue.intVal == 42;
 }
@@ -3429,7 +3433,7 @@ test "multiple fields" {
 			raiserABC(RaiserOpcode.LoadField, 2, 0, 3),   // R2 = R0["y"]
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserInt(10), raiserInt(20), raiserString("x"), raiserString("y")]
+		[raiserInt(10), raiserInt(20), raiserConstString("x"), raiserConstString("y")]
 	));
 	assert vm.exitValue.intVal == 20;
 }
@@ -3445,7 +3449,7 @@ test "field update" {
 			raiserABC(RaiserOpcode.LoadField, 2, 0, 2),   // R2 = R0["x"]
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserInt(1), raiserInt(99), raiserString("x")]
+		[raiserInt(1), raiserInt(99), raiserConstString("x")]
 	));
 	assert vm.exitValue.intVal == 99;
 }
@@ -3458,7 +3462,7 @@ test "ConcatStr: two strings" {
 			raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "hello world"
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("hello"), raiserString(" world")]
+		[raiserConstString("hello"), raiserConstString(" world")]
 	));
 	assert vmText(vm, vm.exitValue) == "hello world";
 }
@@ -3471,7 +3475,7 @@ test "ConcatStr: int + string coercion" {
 			raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "val: 42"
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("val: "), raiserInt(42)]
+		[raiserConstString("val: "), raiserInt(42)]
 	));
 	assert vmText(vm, vm.exitValue) == "val: 42";
 }
@@ -3486,7 +3490,7 @@ test "EqStr: equal strings skip" {
 			raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 0 (false)
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("abc"), raiserInt(1), raiserInt(0)]
+		[raiserConstString("abc"), raiserInt(1), raiserInt(0)]
 	));
 	assert vm.exitValue.intVal == 1;
 }
@@ -3501,7 +3505,7 @@ test "EqStr: unequal strings no skip" {
 			raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
+		[raiserConstString("abc"), raiserConstString("def"), raiserInt(1), raiserInt(0)]
 	));
 	assert vm.exitValue.intVal == 0;
 }
@@ -3516,7 +3520,7 @@ test "NeStr: unequal strings skip" {
 			raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
+		[raiserConstString("abc"), raiserConstString("def"), raiserInt(1), raiserInt(0)]
 	));
 	assert vm.exitValue.intVal == 1;
 }
@@ -3528,7 +3532,7 @@ test "StrLen: string length" {
 			raiserABC(RaiserOpcode.StrLen, 1, 0, 0),       // R1 = len("hello") = 5
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
-		[raiserString("hello")]
+		[raiserConstString("hello")]
 	));
 	assert vm.exitValue.intVal == 5;
 }
@@ -3541,7 +3545,7 @@ test "StrCharAt: get character" {
 			raiserABC(RaiserOpcode.StrCharAt, 2, 0, 1),    // R2 = "e"
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("hello"), raiserInt(1)]
+		[raiserConstString("hello"), raiserInt(1)]
 	));
 	assert vmText(vm, vm.exitValue) == "e";
 }
@@ -3555,7 +3559,7 @@ test "StrSlice: substring" {
 			raiserABC(RaiserOpcode.StrSlice, 3, 0, 1),     // R3 = slice(R0, R1, R2)
 			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
 		],
-		[raiserString("hello world"), raiserInt(0), raiserInt(5)]
+		[raiserConstString("hello world"), raiserInt(0), raiserInt(5)]
 	));
 	assert vmText(vm, vm.exitValue) == "hello";
 }
@@ -3574,7 +3578,7 @@ test "orc: a string op that writes its own source register reads the source firs
 			raiserABC(RaiserOpcode.StrCharAt, 2, 2, 5),    // R2 = R2[0] = "b"
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("ab"), raiserString("cd"), raiserInt(1), raiserInt(3), raiserInt(0)]
+		[raiserConstString("ab"), raiserConstString("cd"), raiserInt(1), raiserInt(3), raiserInt(0)]
 	), "orc");
 	assert vm.error == "";
 	assert vmText(vm, vm.exitValue) == "b";
@@ -3588,7 +3592,7 @@ test "StrLen: empty string" {
 			raiserABC(RaiserOpcode.StrLen, 1, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
-		[raiserString("")]
+		[raiserConstString("")]
 	));
 	assert vm.exitValue.intVal == 0;
 }
@@ -3693,7 +3697,7 @@ test "two objects bidirectional link in function" {
 		raiserABC(RaiserOpcode.StoreField, 1, 2, 0),      // self."n" = n
 		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
 	];
-	const mkConsts: RaiserValue[] = [raiserString("ref"), raiserString("get"), raiserString("n")];
+	const mkConsts: RaiserValue[] = [raiserConstString("ref"), raiserConstString("get"), raiserConstString("n")];
 	const mk = createRaiserFunction("mk", mkCode, mkConsts, 1, 0, 3);
 
 	const entryCode: RaiserInstruction[] = [
@@ -3703,7 +3707,7 @@ test "two objects bidirectional link in function" {
 		raiserABC(RaiserOpcode.LoadField, 1, 0, 1),       // R1 = R0."n"
 		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 	];
-	const entryConsts: RaiserValue[] = [raiserInt(5), raiserString("n")];
+	const entryConsts: RaiserValue[] = [raiserInt(5), raiserConstString("n")];
 	const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 4);
 
 	const funcs: RaiserFunction[] = [mk, entry];
@@ -3762,7 +3766,7 @@ test "forward jumps are free; only back-edges consume the budget" {
 test "every opcode reaches a branch of the dispatch" {
 	for (let i: int32 = 0; i <= (RaiserOpcode.MulU64 as int32); i += 1) {
 		// a constant, a global and a copy plan give CallHost, LoadGlobal, StoreGlobal and CopyValue an operand to read
-		const mod = makeTestModule([raiserABC(i as RaiserOpcode, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserString("missingFn")]);
+		const mod = makeTestModule([raiserABC(i as RaiserOpcode, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserConstString("missingFn")]);
 		mod.globalCount = 1;
 		mod.functions[0].copyPlans.push({ kind: RaiserCopyKind.Preserve, names: [], children: [] });
 		const vm = execModule(mod);
@@ -3814,7 +3818,7 @@ test "CallHost echo string roundtrip" {
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 1),       // R0 = echo(R1)
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	const consts: RaiserValue[] = [raiserString("echo"), raiserString("hello")];
+	const consts: RaiserValue[] = [raiserConstString("echo"), raiserConstString("hello")];
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error == "";
 	assert vm.exitValue.kind == RaiserValueKind.String;
@@ -3834,7 +3838,7 @@ test "CallHost two-arg native" {
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 2),       // R0 = add(R1, R2)
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	const consts: RaiserValue[] = [raiserString("add"), raiserInt(10), raiserInt(32)];
+	const consts: RaiserValue[] = [raiserConstString("add"), raiserInt(10), raiserInt(32)];
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error == "";
 	assert vm.exitValue.intVal == 42;
@@ -3851,7 +3855,7 @@ test "CallHost zero-arg native" {
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),       // R0 = seven()
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	const consts: RaiserValue[] = [raiserString("seven")];
+	const consts: RaiserValue[] = [raiserConstString("seven")];
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error == "";
 	assert vm.exitValue.intVal == 7;
@@ -3863,7 +3867,7 @@ test "CallHost unknown name errors" {
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	const consts: RaiserValue[] = [raiserString("missingFn")];
+	const consts: RaiserValue[] = [raiserConstString("missingFn")];
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error.length > 0;
 	assert vm.halted;
@@ -3889,7 +3893,7 @@ function execHostRaiseInCatch(fatal: boolean): RaiserVM {
 			raiserABC(RaiserOpcode.FinallyEnd, 8, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
-		[raiserString("raise"), raiserString("finally")]
+		[raiserConstString("raise"), raiserConstString("finally")]
 	));
 }
 
@@ -3913,6 +3917,57 @@ test "a recoverable host error reaches the guest catch after a fatal host error"
 	assert vm.safePoints.length == 0;
 }
 
+test "a recoverable host error with a new message each run adds nothing to the constant table" {
+	_resetHostRegistryForTests();
+	const runs = [0];
+	registerHostFn("raise", (args: RaiserValue[]): RaiserValue => {
+		runs[0] = runs[0] + 1;
+		raiseFromHost(`host failure ${runs[0]}`, false);
+		return raiserNil();
+	});
+	const mod = makeTestModule(
+		[
+			raiserABx(RaiserOpcode.Try, 0, 3),
+			raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 1),
+			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserConstString("raise")]
+	);
+	const before = constStringCount();
+	let last = "";
+	for (let i = 0; i < 100000; i++) {
+		const vm = execModule(mod);
+		last = vmText(vm, vm.exitValue);
+	}
+	assert last == "host failure 100000", last;
+	assert constStringCount() == before;
+}
+
+test "a host function returning a new string each run adds nothing to the constant table in either gc mode" {
+	_resetHostRegistryForTests();
+	const runs = [0];
+	registerHostFn("mint", (args: RaiserValue[]): RaiserValue => {
+		runs[0] = runs[0] + 1;
+		return boxString(`minted ${runs[0]}`);
+	});
+	const mod = makeTestModule(
+		[raiserABC(RaiserOpcode.CallHost, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
+		[raiserConstString("mint")]
+	);
+	const before = constStringCount();
+	for (const mode of ["orc", "arena"]) {
+		let last = "";
+		for (let i = 0; i < 50000; i++) {
+			const vm = execModule(mod, mode);
+			last = vmText(vm, vm.exitValue);
+		}
+		assert last.startsWith("minted "), last;
+	}
+	assert constStringCount() == before;
+}
+
 test "restricted CallHost rejects an unclassified host" {
 	_resetHostRegistryForTests();
 	const fn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(1);
@@ -3921,7 +3976,7 @@ test "restricted CallHost rejects an unclassified host" {
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	const vm = createVM(makeTestModule(code, [raiserString("unsafe")]));
+	const vm = createVM(makeTestModule(code, [raiserConstString("unsafe")]));
 	vm.hostCallsRestricted = true;
 	vm.hostPolicySource = "/cache/evil.ms";
 	execLoop(vm);
@@ -3937,7 +3992,7 @@ test "restricted CallHost allows a classified pure host" {
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	const vm = createVM(makeTestModule(code, [raiserString("pure")]));
+	const vm = createVM(makeTestModule(code, [raiserConstString("pure")]));
 	vm.hostCallsRestricted = true;
 	vm.hostPolicySource = "/cache/good.ms";
 	execLoop(vm);
@@ -4018,7 +4073,7 @@ test "object handle out of bounds" {
 			raiserABC(RaiserOpcode.LoadField, 1, 0, 1),  // R1 = R0.field — bad handle
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
-		[raiserInt(-1), raiserString("x")]
+		[raiserInt(-1), raiserConstString("x")]
 	));
 	assert vm.error.length > 0;
 	assert vm.halted;
@@ -4034,7 +4089,7 @@ test "a field read through nil is a nil access, not a read of a live object" {
 			raiserABC(RaiserOpcode.LoadField, 3, 2, 0),
 			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
 		],
-		[raiserString("kind"), raiserInt(7)]
+		[raiserConstString("kind"), raiserInt(7)]
 	));
 	assert vm.halted;
 	assert vm.error == "attempt to access a nil address";
@@ -4049,7 +4104,7 @@ test "a field write through nil is a nil access" {
 			raiserABC(RaiserOpcode.StoreField, 1, 0, 2),
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("kind"), raiserInt(7)]
+		[raiserConstString("kind"), raiserInt(7)]
 	));
 	assert vm.halted;
 	assert vm.error == "attempt to access a nil address";
@@ -4063,7 +4118,7 @@ test "an integer is not an object handle" {
 			raiserABC(RaiserOpcode.LoadField, 2, 1, 0),
 			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 		],
-		[raiserString("kind"), raiserInt(0)]
+		[raiserConstString("kind"), raiserInt(0)]
 	));
 	assert vm.halted;
 	assert vm.error.indexOf("expected an object", 0) >= 0;
@@ -4218,7 +4273,7 @@ test "vmCallFunction: a failed invocation does not return the previous heap resu
 	const failed: RaiserInstruction[] = [raiserABx(RaiserOpcode.Trap, 0, 0)];
 	const empty: RaiserValue[] = [];
 	const first = createRaiserFunction("first", successful, empty, 0, 0, 2);
-	const second = createRaiserFunction("second", failed, [raiserString("failed invocation")], 0, 0, 2);
+	const second = createRaiserFunction("second", failed, [raiserConstString("failed invocation")], 0, 0, 2);
 	const vm = createVM(createRaiserModule("reuse", [first, second], 0), "arena");
 	const before = vmCallFunction(vm, 0, empty);
 	assert before.kind == RaiserValueKind.Object;
@@ -4272,7 +4327,7 @@ test "vmCallFunction: a host call that runs the VM again resumes the run that ma
 		raiserABC(RaiserOpcode.AddI64, 4, 1, 2),
 		raiserABC(RaiserOpcode.Ret, 4, 0, 0),
 	];
-	const outerConsts: RaiserValue[] = [raiserString("reenter"), raiserInt(7)];
+	const outerConsts: RaiserValue[] = [raiserConstString("reenter"), raiserInt(7)];
 	const outer = createRaiserFunction("outer", outerCode, outerConsts, 1, 0, 8);
 	const funcs: RaiserFunction[] = [inner, outer];
 	const vm = createVM(createRaiserModule("t", funcs, 0), "arena");
@@ -4308,7 +4363,7 @@ test "vmCallFunction: a host call made two frames deep returns through the frame
 		raiserABC(RaiserOpcode.CallHost, 2, 0, 1),
 		raiserABC(RaiserOpcode.AddI64, 4, 1, 2),
 		raiserABC(RaiserOpcode.Ret, 4, 0, 0),
-	], [raiserString("reenter"), raiserInt(7)], 1, 0, 8);
+	], [raiserConstString("reenter"), raiserInt(7)], 1, 0, 8);
 	const top = createRaiserFunction("top", [
 		raiserABC(RaiserOpcode.Move, 2, 0, 0),
 		raiserABC(RaiserOpcode.Call, 1, 2, 1),
@@ -4459,7 +4514,7 @@ test "each strand keeps its own registers" {
 // Builds the closure pair codegen emits for a non-capturing closure:
 // { fn: funcIdx, env: -1 } in R1, using K0=funcIdx, K1="fn", K2=-1, K3="env".
 function closurePairConsts(funcIdx: number): RaiserValue[] {
-	return [raiserInt(funcIdx as int64), raiserString("fn"), raiserInt(-1), raiserString("env")];
+	return [raiserInt(funcIdx as int64), raiserConstString("fn"), raiserInt(-1), raiserConstString("env")];
 }
 
 function closurePairCode(): RaiserInstruction[] {
@@ -4503,14 +4558,14 @@ test "a ref result crosses three heaps: producer, future, reader" {
 	mainCode.push(raiserABC(RaiserOpcode.Print, 5, 0, 0));
 	mainCode.push(raiserABC(RaiserOpcode.Halt, 5, 0, 0));
 	const mainConsts = closurePairConsts(1);
-	mainConsts.push(raiserString("v"));
+	mainConsts.push(raiserConstString("v"));
 	const workerCode: RaiserInstruction[] = [
 		raiserABC(RaiserOpcode.NewObject, 0, 0, 0),
 		raiserABx(RaiserOpcode.LoadConst, 1, 1),
 		raiserABC(RaiserOpcode.StoreField, 0, 0, 1),
 		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
 	];
-	const workerConsts: RaiserValue[] = [raiserString("v"), raiserInt(42)];
+	const workerConsts: RaiserValue[] = [raiserConstString("v"), raiserInt(42)];
 	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
 	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
@@ -4528,7 +4583,7 @@ test "a ref result crosses three heaps: producer, future, reader" {
 }
 
 test "a spawned strand writes to its own copy of the captured env" {
-	const mainConsts: RaiserValue[] = [raiserInt(1), raiserString("fn"), raiserString("env"), raiserString("n"), raiserInt(7)];
+	const mainConsts: RaiserValue[] = [raiserInt(1), raiserConstString("fn"), raiserConstString("env"), raiserConstString("n"), raiserInt(7)];
 	const mainCode: RaiserInstruction[] = [
 		raiserABC(RaiserOpcode.NewObject, 6, 0, 0),
 		raiserABx(RaiserOpcode.LoadConst, 7, 4),
@@ -4549,7 +4604,7 @@ test "a spawned strand writes to its own copy of the captured env" {
 		raiserABx(RaiserOpcode.LoadConst, 2, 2),
 		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
 	];
-	const workerConsts: RaiserValue[] = [raiserString("n"), raiserInt(99), raiserInt(0)];
+	const workerConsts: RaiserValue[] = [raiserConstString("n"), raiserInt(99), raiserInt(0)];
 	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
 	const fWorker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
@@ -4797,7 +4852,7 @@ test "an uncaught throw on the main strand is a VM error" {
 			raiserABC(RaiserOpcode.Throw, 0, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 		],
-		[raiserString("boom")]
+		[raiserConstString("boom")]
 	));
 	assert vm.output == "";
 	assert vm.error.length > 0;
@@ -4916,7 +4971,7 @@ test "a throw in a spawned strand fails its future and re-raises in the reader" 
 		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
 	];
 	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 12);
-	const fWorker = createRaiserFunction("worker", workerCode, [raiserString("boom")], 0, 0, 4);
+	const fWorker = createRaiserFunction("worker", workerCode, [raiserConstString("boom")], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
 	assert vm.error == "";
@@ -4936,7 +4991,7 @@ test "a failed future nobody read is an orphan rejection" {
 		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
 	];
 	const fMain = createRaiserFunction("main", mainCode, closurePairConsts(1), 0, 0, 8);
-	const fWorker = createRaiserFunction("worker", workerCode, [raiserString("dropped")], 0, 0, 4);
+	const fWorker = createRaiserFunction("worker", workerCode, [raiserConstString("dropped")], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
 	assert vm.error == "";
@@ -4963,7 +5018,7 @@ test "trap opcode fails the VM with its message" {
 		raiserABx(RaiserOpcode.Trap, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	const consts: RaiserValue[] = [raiserString("compile-time-known-bad site")];
+	const consts: RaiserValue[] = [raiserConstString("compile-time-known-bad site")];
 	const f = createRaiserFunction("main", code, consts, 0, 0, 4);
 	const funcs: RaiserFunction[] = [f];
 	const mod = createRaiserModule("t", funcs, 0);

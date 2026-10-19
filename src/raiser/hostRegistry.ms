@@ -146,7 +146,7 @@ export function _resetHostRegistryForTests(): void {
 // --- Tests ---
 
 import { RaiserValue } from "./value";
-import { raiserString, raiserInt, RaiserValueKind, heapStringText } from "./value";
+import { raiserConstString, raiserInt, RaiserValueKind, heapStringText } from "./value";
 
 test "register and lookup host fn" {
 	_resetHostRegistryForTests();
@@ -156,7 +156,7 @@ test "register and lookup host fn" {
 	registerHostFn("echo", echoFn);
 	const fn = lookupHostFn("echo");
 	assert fn != null;
-	const result = fn([raiserString("hello")]);
+	const result = fn([raiserConstString("hello")]);
 	assert result.kind == RaiserValueKind.String;
 	assert heapStringText(createArrayHeap(), result) == "hello";
 }

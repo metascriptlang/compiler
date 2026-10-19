@@ -1,6 +1,6 @@
 import { ensureHostTableLoaded, _resetBridgeStateForTests } from "../../compiler/meta/hostTable";
 import { _resetHostRegistryForTests, setActiveProgramArgv, activeProgramArgv } from "../../raiser/hostRegistry";
-import { RaiserValueKind, raiserString, heapArrayLen, heapArrayGet } from "../../raiser/value";
+import { RaiserValueKind, raiserConstString, heapArrayLen, heapArrayGet } from "../../raiser/value";
 import { RaiserModule, makeTestModule } from "../../raiser/module";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import { createContext, load, execute } from "../../raiser/context";
@@ -18,7 +18,7 @@ function processArgvModule(): RaiserModule {
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
 	];
-	return makeTestModule(code, [raiserString("msProcessArgv")]);
+	return makeTestModule(code, [raiserConstString("msProcessArgv")]);
 }
 
 function argvSeenBy(programArgv: string[] | null): string[] {

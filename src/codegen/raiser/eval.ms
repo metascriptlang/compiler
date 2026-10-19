@@ -13,13 +13,13 @@ import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
-import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
-import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
+import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
+import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, RaiserEnumMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -446,6 +446,10 @@ function compileForOrc(code: string): RaiserModule {
 // Full pipeline under ORC (gcMode=orc) — returns the VM so heap state is inspectable.
 function evalOrcVM(code: string): RaiserVM {
 	return execModule(compileForOrc(code), "orc");
+}
+
+function evalArenaVM(code: string): RaiserVM {
+	return execModule(compileForOrc(code), "arena");
 }
 
 test "engine: an enum converts to an integer type as its ordinal does, as on C and JS" {
@@ -1907,4 +1911,53 @@ test "orc: string equality, ordering and switch are by text, not by handle" {
 		+ " const e = { n: \"x\" + \"y\" }; console.log(`${e.n == \"xy\"} ${e.n < \"xz\"}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "true false true true true false\n1 2 3 1\ntrue false\ntrue true\n";
+}
+
+// --- Run-time strings never enter the process-wide constant table ---
+
+test "arena: strings built and dropped in a loop leave the string heap bounded" {
+	const vm = evalArenaVM("let s = \"\"; let n = 0; for (let i = 0; i < 100000; i++) { s = `k${i}` + \"x\"; n = n + s.length; } console.log(`${n}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "688890
+", vm.output;
+	assert heapStringLive(vm.arrayHeap) < 30, `${heapStringLive(vm.arrayHeap)}`;
+	assert vm.arrayHeap.strings.texts.length < 30, `${vm.arrayHeap.strings.texts.length}`;
+}
+
+const heldByContainer = "const o = { s: `f${1}` }; const a = [`g${2}`];"
+	+ " let t = o.s; t = \"x\" + \"y\"; let u = a[0]; u = \"z\" + \"w\";"
+	+ " console.log(o.s + a[0] + t + u);";
+
+test "orc: a string a container holds survives the register that read it being overwritten" {
+	const vm = evalOrcVM(heldByContainer);
+	assert vm.error == "", vm.error;
+	assert vm.output == "f1g2xyzw
+", vm.output;
+}
+
+test "arena: a string a container holds survives the register that read it being overwritten" {
+	const vm = evalArenaVM(heldByContainer);
+	assert vm.error == "", vm.error;
+	assert vm.output == "f1g2xyzw
+", vm.output;
+}
+
+test "a string a host function stores in the array it builds is held by that array in either gc mode" {
+	ensureHostTableLoaded();
+	const mod = makeTestModule(
+		[raiserABC(RaiserOpcode.CallHost, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
+		[raiserConstString("msProcessArgv")]
+	);
+	for (const mode of ["orc", "arena"]) {
+		const vm = createVM(mod, mode);
+		vm.programArgv = ["a.ms", "b c"];
+		execLoop(vm);
+		assert vm.error == "", vm.error;
+		const argvArray = vm.exitValue.intVal;
+		assert heapArrayLen(vm.arrayHeap, argvArray) == 2;
+		for (let i = 0; i < 2; i++) {
+			const item = heapArrayGet(vm.arrayHeap, argvArray, i);
+			assert vm.arrayHeap.strings.rc[item.intVal] == 1, `${mode} ${i}`;
+		}
+	}
 }

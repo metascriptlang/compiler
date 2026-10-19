@@ -14,7 +14,7 @@ import { hasGenericParams, classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
-	RaiserValue, RaiserValueKind, raiserNil, raiserString,
+	RaiserValue, RaiserValueKind, raiserNil, raiserConstString,
 	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle, heapStringText,
 	heapArrayGet, heapArrayLen
 } from "../../raiser/value";
@@ -167,7 +167,7 @@ function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: stri
 		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
 		if (methodIdx < 0) continue;
 		const closureReg = emitClosurePair(s, methodIdx, -1);
-		const methodNameIdx = addConst(s, raiserString(md.methodName));
+		const methodNameIdx = addConst(s, raiserConstString(md.methodName));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
 	}
 }
@@ -187,7 +187,7 @@ function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]):
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
 			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
-			const nameIdx = addConst(s, raiserString(pd.propName));
+			const nameIdx = addConst(s, raiserConstString(pd.propName));
 			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, fieldReg));
 		}
 	}

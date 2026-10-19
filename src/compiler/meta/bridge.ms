@@ -72,7 +72,7 @@ import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
 	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserNil, raiserObject, raiserArray,
-	heapAllocObject, heapObjectSetField, heapObjectGetField, heapAllocArray, heapArrayPush, heapStringText, heapAllocString,
+	heapAllocObject, heapObjectSetField, heapObjectGetField, heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
 	createStructHeap, createArrayHeap,
 } from "../../raiser/value";
 
@@ -612,7 +612,7 @@ function serializeNodes(nodes: Node[], objHeap: RaiserObjectHeap, arrHeap: Raise
 function serializeStrings(strs: string[], arrHeap: RaiserArrayHeap): RaiserValue {
 	const handle = heapAllocArray(arrHeap);
 	for (const s of strs) {
-		heapArrayPush(arrHeap, handle, heapAllocString(arrHeap, s));
+		heapArrayPush(arrHeap, handle, heapAllocStoredString(arrHeap, s));
 	}
 	return raiserArray(handle);
 }
@@ -624,7 +624,7 @@ function setNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, 
 }
 
 function setStr(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, val: string): void {
-	heapObjectSetField(objHeap, h, name, heapAllocString(arrHeap, val));
+	heapObjectSetField(objHeap, h, name, heapAllocStoredString(arrHeap, val));
 }
 
 function setBool(objHeap: RaiserObjectHeap, h: int64, name: string, val: boolean): void {
