@@ -208,7 +208,8 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			liveRanges(p, d.initializer);
-			registerVariable(p, node.resolvedSym, false);
+			// A global is never a cursor candidate: the module owns it for the whole program.
+			if (node.resolvedSym != null && !hasFlag(node.resolvedSym, SymbolFlag.Global)) registerVariable(p, node.resolvedSym, false);
 			// Declared in loop body → effectively reassigned each iteration
 			if (p.inLoop > 0 && d.initializer != null) {
 				const vid = variableId(p, node.resolvedSym);
@@ -320,13 +321,17 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		},
 
 		// Inner functions: skip (different scope)
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.MethodDecl | NodeKind.ConstructorDecl
+			| NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.TestDecl => {
 			p.abstractTime -= 1;
 		},
 
 		// Compound traversal
 		NodeKind.BlockStmt => {
 			for (const s of (node.data as BlockStmtData).statements) { liveRanges(p, s); }
+		},
+		NodeKind.Program => {
+			for (const s of (node.data as ProgramData).programStmts) { liveRanges(p, s); }
 		},
 		NodeKind.ExprStmt => liveRanges(p, (node.data as ExprStmtData).expr),
 		NodeKind.ReturnStmt => liveRanges(p, (node.data as ReturnStmtData).argument),
@@ -552,13 +557,17 @@ function trav(p: Partitions, node: Node | null): void {
 		},
 
 		// Inner functions: skip
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.MethodDecl | NodeKind.ConstructorDecl
+			| NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.TestDecl => {
 			p.abstractTime -= 1;
 		},
 
 		// Compound traversal (must match liveRanges order exactly)
 		NodeKind.BlockStmt => {
 			for (const s of (node.data as BlockStmtData).statements) { trav(p, s); }
+		},
+		NodeKind.Program => {
+			for (const s of (node.data as ProgramData).programStmts) { trav(p, s); }
 		},
 		NodeKind.ExprStmt => trav(p, (node.data as ExprStmtData).expr),
 		NodeKind.ReturnStmt => trav(p, (node.data as ReturnStmtData).argument),
@@ -658,7 +667,7 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 // Main entry point — called once per function body, before DRC injection.
 export function inferCursors(body: Node): void {
 	if (body == null) return;
-	if (body.kind != NodeKind.BlockStmt) return;
+	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 
 	const p = createPartitions();
 

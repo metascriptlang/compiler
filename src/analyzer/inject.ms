@@ -2600,6 +2600,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
+	inferCursors(program);
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
