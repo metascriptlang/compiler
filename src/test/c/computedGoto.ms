@@ -204,3 +204,36 @@ test "@computedGoto: a break that ends a case block lands on that case's own dis
 	assert !c.includes("goto __sw"), c.slice(0, 1200);
 	assert !c.includes("__sw1_x_"), c.slice(0, 1200);
 }
+
+function branchLoop(caseA: string): string {
+	return `enum Op { A, B }
+	function run(code: Op[]): int32 {
+		let pc = 0;
+		let acc: int32 = 0;
+		while (true) {
+			@computedGoto;
+			const op = code[pc];
+			pc += 1;
+			switch (op) {
+				case Op.A: { ${caseA} break; }
+				case Op.B: return acc;
+			}
+		}
+	}
+	console.log(run([Op.A, Op.B]));`;
+}
+
+test "@computedGoto: an if without else at the end of a case dispatches on both paths" {
+	const c = emitted(branchLoop("if (acc < 5) { acc += 1; }"));
+	assert countOf(c, "goto *__cgtbl") == 3, c.slice(0, 1400);
+}
+
+test "@computedGoto: an if with else at the end of a case dispatches in each arm" {
+	const c = emitted(branchLoop("if (acc < 5) { acc += 1; } else { acc += 2; }"));
+	assert countOf(c, "goto *__cgtbl") == 3, c.slice(0, 1400);
+}
+
+test "@computedGoto: a nested if at the end of a case dispatches on every path" {
+	const c = emitted(branchLoop("if (acc < 5) { if (acc < 3) { acc += 1; } } else if (acc > 9) { acc += 2; }"));
+	assert countOf(c, "goto *__cgtbl") == 5, c.slice(0, 1800);
+}

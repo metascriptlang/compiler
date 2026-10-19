@@ -808,14 +808,102 @@ function endsInJump(stmts: Readonly<Node[]>): boolean {
 	return k == NodeKind.ReturnStmt || k == NodeKind.ThrowStmt || k == NodeKind.ContinueStmt || k == NodeKind.BreakStmt;
 }
 
-function genDispatchTail(g: CGen, p: CProc, pre: Readonly<Node[]>, post: Readonly<Node[]>, disc: Readonly<Node>, table: string, postSeen: boolean): void {
+interface DispatchTail {
+	pre: Readonly<Node>[];
+	post: Readonly<Node>[];
+	disc: Readonly<Node>;
+	table: string;
+	wrapper: string;
+	emitted: int32;
+}
+
+function genDispatchTail(g: CGen, p: CProc, t: DispatchTail): void {
 	const wasReemitting = p.reemitting;
-	p.reemitting = postSeen;
-	genStmts(g, p, post);
+	p.reemitting = t.emitted > 0;
+	genStmts(g, p, t.post);
 	p.reemitting = true;
-	genStmts(g, p, pre);
+	genStmts(g, p, t.pre);
 	p.reemitting = wasReemitting;
-	emitStmtsLine(p, `goto *${table}[${genExpr(g, p, disc)}];`);
+	emitStmtsLine(p, `goto *${t.table}[${genExpr(g, p, t.disc)}];`);
+	t.emitted += 1;
+}
+
+function genBlockWithTail(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): void {
+	emitStmts(p, "{\n");
+	const oldIndent = getStmtsIndent(p);
+	setStmtsIndent(p, oldIndent + 1);
+	if (node.kind == NodeKind.BlockStmt) {
+		genStmtsWithTail(g, p, (node.data as BlockStmtData).statements, t);
+	} else {
+		const one: Readonly<Node>[] = [node];
+		genStmtsWithTail(g, p, one, t);
+	}
+	setStmtsIndent(p, oldIndent);
+	emitStmtsLine(p, "}");
+}
+
+function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): void {
+	const conds: Readonly<Node>[] = [];
+	const bodies: Readonly<Node>[] = [];
+	let elseBody: Readonly<Node> | null = null;
+	let current: Readonly<Node> | null = node;
+	while (current != null && current.kind == NodeKind.IfStmt) {
+		const d = current.data as IfStmtData;
+		conds.push(d.condition);
+		bodies.push(d.consequent);
+		if (isEmptyBlock(d.alternate)) {
+			current = null;
+		} else if (d.alternate.kind == NodeKind.IfStmt) {
+			current = d.alternate;
+		} else {
+			elseBody = d.alternate;
+			current = null;
+		}
+	}
+	p.labels += 1;
+	const lend = `__L${p.labels}_end`;
+	for (let i = 0; i < conds.length; i += 1) {
+		p.labels += 1;
+		const lnext = `__L${p.labels}`;
+		emitStmtsLine(p, "{");
+		emitStmtsLine(p, `if (!(${genExpr(g, p, conds[i])})) goto ${lnext};`);
+		genBlockWithTail(g, p, bodies[i], t);
+		emitStmtsLine(p, `} goto ${lend};`);
+		emitStmtsLine(p, lnext + ":;");
+	}
+	if (elseBody != null) {
+		genBlockWithTail(g, p, elseBody, t);
+		emitStmtsNl(p);
+	} else {
+		genDispatchTail(g, p, t);
+	}
+	emitStmtsLine(p, lend + ":;");
+}
+
+function endsCase(stmt: Readonly<Node>, t: DispatchTail): boolean {
+	return t.wrapper != "" && stmt.kind == NodeKind.BreakStmt && (stmt.data as BreakStmtData).breakLabel == t.wrapper;
+}
+
+function genStmtsWithTail(g: CGen, p: CProc, stmts: Readonly<Node[]>, t: DispatchTail): void {
+	let n = stmts.length;
+	if (n > 0 && endsCase(stmts[n - 1], t)) {
+		n -= 1;
+	} else if (endsInJump(stmts)) {
+		genStmts(g, p, stmts);
+		return;
+	}
+	const last = n - 1;
+	for (let i = 0; i < last; i += 1) genStmt(g, p, stmts[i]);
+	if (last >= 0 && stmts[last].kind == NodeKind.IfStmt) {
+		genTailIf(g, p, stmts[last], t);
+		return;
+	}
+	if (last >= 0 && stmts[last].kind == NodeKind.BlockStmt) {
+		genBlockWithTail(g, p, stmts[last], t);
+		return;
+	}
+	if (last >= 0) genStmt(g, p, stmts[last]);
+	genDispatchTail(g, p, t);
 }
 
 function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readonly<Node>, at: int32): void {
@@ -868,7 +956,7 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	emitStmtsLine(p, `static void* const ${table}[${size}] = { ${entries} };`);
 	emitStmtsLine(p, `goto *${table}[${genExpr(g, p, sd.switchDisc)}];`);
 
-	let tails = 0;
+	const tail: DispatchTail = { pre: pre, post: post, disc: sd.switchDisc, table: table, wrapper: wrapperLabel, emitted: 0 };
 	for (let k = 0; k < sd.switchCases.length; k += 1) {
 		const cd = sd.switchCases[k].data as SwitchCaseData;
 		emitStmtsLine(p, `__cg${id}_${k}: ;`);
@@ -877,15 +965,15 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 			p.blocks[p.blocks.length - 1].label = wrapperLabel;
 			p.blocks[p.blocks.length - 1].landing = `__cg${id}_${k}_end`;
 		}
-		genStmts(g, p, cd.caseStmts);
+		genStmtsWithTail(g, p, cd.caseStmts, tail);
 		if (wrapperLabel != "") {
 			const landed = p.blocks[p.blocks.length - 1].breakUsed;
 			popBlock(p);
-			if (landed) { emitStmtsLine(p, `__cg${id}_${k}_end: ;`); }
+			if (landed) {
+				emitStmtsLine(p, `__cg${id}_${k}_end: ;`);
+				if (!endsInJump(cd.caseStmts)) genDispatchTail(g, p, tail);
+			}
 		}
-		if (endsInJump(cd.caseStmts)) continue;
-		genDispatchTail(g, p, pre, post, sd.switchDisc, table, tails > 0);
-		tails += 1;
 	}
 	if (d.whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${d.whileLabel}: ;`); }
 	popBlock(p);
