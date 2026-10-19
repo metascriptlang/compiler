@@ -1,7 +1,8 @@
-// @stdout: 14|15|x!|y!|3,4|3,4|3,4|5|7|h:ab|8|ok
+// @stdout: 14|15|x!|y!|3,4|3,4|3,4|5|7|h:ab|8|7|ok
 // An async function returns what it awaits: `return load(n)` carries the same
 // meaning as `return await load(n)` for functions, arrows and expression-bodied
-// arrows, over int, string and struct payloads, and through a relay of a relay.
+// arrows, over int, string and struct payloads, through a relay of a relay, and for
+// a promise made by Promise.resolve.
 
 struct Pt { x: int32; y: int32; }
 
@@ -23,6 +24,7 @@ const ptExpr = async (a: int32): Promise<Pt> => loadPt(a);
 
 async function relay1(n: int32): Promise<int32> { return viaFn(n); }
 async function relay2(n: int32): Promise<int32> { return relay1(n); }
+async function viaResolve(): Promise<int32> { return Promise.resolve(7); }
 
 async function guarded(n: int32): Promise<int32> {
 	try { return await loadInt(n); } catch (e) { return -1; }
@@ -47,6 +49,7 @@ async function main() {
 	const i = await relay2(3) + 1;
 	const j = "h:" + (await afterTry(1)).slice(0, 2);
 	const k = await relay2(4);
-	console.log(a + "|" + b + "|" + c + "|" + d + "|" + e + "|" + f + "|" + g + "|" + h + "|" + i + "|" + j + "|" + k + "|ok");
+	const l = await viaResolve();
+	console.log(a + "|" + b + "|" + c + "|" + d + "|" + e + "|" + f + "|" + g + "|" + h + "|" + i + "|" + j + "|" + k + "|" + l + "|ok");
 }
 main();
