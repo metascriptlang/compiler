@@ -5,3 +5,4 @@
 vendor/** linguist-vendored
 tools/editor-plugin/**/tree-sitter/src/** linguist-generated
 docs/** linguist-documentation
+src/test/corpus/programs/comptimeReadFile/greeting.txt -text
