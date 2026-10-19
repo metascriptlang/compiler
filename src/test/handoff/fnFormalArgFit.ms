@@ -140,3 +140,10 @@ test "a generic function formal is related once, after binding" {
 	assert strictErrorCount("function apply<T>(f: (x: T) => void, v: T): void { f(v); }\napply((x: number): void => {}, 1);") == 0;
 	assert strictErrorCount("function apply<T>(f: (x: T) => void, v: T): void { f(v); }\napply(5, 1);") == 1;
 }
+
+test "a callback mismatch names the parameter or the return that differs" {
+	const nested = "function takeH(cb: (f: (s: string) => void) => void): void {}\ntakeH((f: (s: number) => void): void => {});";
+	assert hasError(nested, "parameter 'f' is typed '(s: number) => void', but the expected function passes it '(s: string) => void'; declare the parameter '(s: string) => void' or leave it unannotated");
+	const returned = "function takeR(f: (x: number) => number): number { return f(1); }\ntakeR((x: number): string => \"s\");";
+	assert hasError(returned, "the function returns 'string', but the expected function returns 'number'");
+}

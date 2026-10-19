@@ -956,16 +956,38 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 		if (taken != null && taken.kind == TypeKind.Void) { ni += 1; continue; }
 		if (ri >= targetParams.length) return "";
 		const passed = targetParams[ri];
-		if (!isAssignable(passed, taken)) {
-			if (taken == null || taken.kind == TypeKind.Function || passed.kind == TypeKind.Function) return "";
-			const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+		if (taken == null) return "";
+		const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+		if (taken.kind == TypeKind.Function && passed.kind == TypeKind.Function) {
+			if (!isAssignable(passed, taken)) {
+				return " — parameter '" + name + "' is typed '" + signatureText(taken) + "', but the expected function passes it '"
+					+ signatureText(passed) + "'; declare the parameter '" + signatureText(passed) + "' or leave it unannotated";
+			}
+		} else if (!isAssignable(passed, taken)) {
+			if (taken.kind == TypeKind.Function || passed.kind == TypeKind.Function) return "";
 			return " — parameter '" + name + "' takes " + typeDisplayName(taken) + ", but the expected function passes it "
 				+ typeDisplayName(passed) + "; declare the parameter " + typeDisplayName(passed) + " and narrow it inside";
 		}
 		ri += 1;
 		ni += 1;
 	}
-	return "";
+	const held = skipModifier(source.typeReturn);
+	const slot = skipModifier(target.typeReturn);
+	if (held == null || slot == null || isAssignable(held, slot)) return "";
+	if (unknownReturnRefusal(source, target) != "" || returnReprRefusal(source, target, "") != "") return "";
+	return " — the function returns '" + signatureText(held) + "', but the expected function returns '" + signatureText(slot) + "'";
+}
+
+function signatureText(t: Type): string {
+	if (t.kind != TypeKind.Function) return typeDisplayName(t);
+	const parts: string[] = [];
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const param = t.typeChildren[i];
+		if (param != null && param.kind == TypeKind.Void) continue;
+		const text = param != null ? signatureText(param) : "?";
+		parts.push(i < t.typeNames.length && t.typeNames[i] != "" ? t.typeNames[i] + ": " + text : text);
+	}
+	return "(" + parts.join(", ") + ") => " + (t.typeReturn != null ? signatureText(t.typeReturn) : "void");
 }
 
 // A literal bound without an annotation freezes as `__anonN__...` (anonStructName).

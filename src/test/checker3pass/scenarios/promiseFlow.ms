@@ -94,3 +94,10 @@ const c = new Promise<int32>((resolve, reject) => { reject(42); });
 `).errors.join("\n");
 	assert executor.contains("got int32, expected Error | string"), executor;
 }
+
+test "an executor whose reject is annotated narrower than string | Error is refused naming that parameter" {
+	const text = checkOnly(DECLS + `
+const p = new Promise<int32>((res: (v: int32) => void, rej: (e: Error) => void): void => { rej(new Error("x")); });
+`).errors.join("\n");
+	assert text.contains("parameter 'rej' is typed '(e: Error) => void', but the expected function passes it '(reason: Error | string) => void'; declare the parameter '(reason: Error | string) => void' or leave it unannotated"), text;
+}
