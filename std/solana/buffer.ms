@@ -28,7 +28,12 @@ function refused(storage: Span<uint8>): uint64 {
 
 export function putU8(this storage: Span<uint8>, at: uint64, value: uint8): uint64 {
 	if (!fits(storage, at, 1)) { return refused(storage); }
-	msSolStoreU8(msSolSpanAddress(storage) + at, value);
+	when (js) {
+		msSolStoreU8(msSolSpanAddress(storage) + at, value);
+	} else {
+		const base = storage as Ptr<uint8>;
+		base[at] = value;
+	}
 	return at + 1;
 }
 
@@ -72,7 +77,13 @@ export function putBool(this storage: Span<uint8>, at: uint64, value: boolean): 
 
 export function putPubkey(this storage: Span<uint8>, at: uint64, value: Pubkey): uint64 {
 	if (!fits(storage, at, 32)) { return refused(storage); }
-	storePubkey(value, msSolSpanAddress(storage) + at);
+	when (js) {
+		storePubkey(value, msSolSpanAddress(storage) + at);
+	} else {
+		const base = storage as Ptr<uint8>;
+		const dest = (base + at) as Ptr<Pubkey>;
+		dest[] = value;
+	}
 	return at + 32;
 }
 
