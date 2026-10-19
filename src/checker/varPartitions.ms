@@ -61,12 +61,14 @@ export interface Partitions {
 	inConditional: int32;
 	inLoop: int32;
 	inAsgnSource: int32;
+	lentTemps: Symbol[];
+	lentInits: Node[];
 }
 
 export function createPartitions(): Partitions {
 	return {
 		abstractTime: 0, vars: [], graphs: [],
-		inConstructor: 0, inConditional: 0, inLoop: 0, inAsgnSource: 0,
+		inConstructor: 0, inConditional: 0, inLoop: 0, inAsgnSource: 0, lentTemps: [], lentInits: [],
 	};
 }
 

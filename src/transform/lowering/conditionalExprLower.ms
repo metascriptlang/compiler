@@ -35,7 +35,7 @@ import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmt
 import { TransformContext, freshTempSym, freshOwnedSym, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, setFlag, SymbolFlag } from "../../checker/symbol";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
@@ -174,6 +174,7 @@ function shallowCopy(expr: Node): Node {
 function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: TransformContext): Node {
 	const loc = expr.location;
 	const sym = freshOwnedSym(ctx, prefix, expr.nodeType);
+	if (prefix == "call") setFlag(sym, SymbolFlag.HoistedCall);
 	const value = shallowCopy(expr);
 	const decl = makeVarDecl(sym.name, value, DeclKind.Const, loc);
 	decl.resolvedSym = sym;
