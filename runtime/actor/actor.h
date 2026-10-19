@@ -543,33 +543,19 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
     }
     msActorClearFlag(a, MS_ACTOR_SUSPENDED);
     /* Normal resume: suspendedFut stays set — the visit clears it (gate stays
-     * closed until the visit owns the shell under processing). Re-enqueue on the
-     * run queue (Pony parity: CAS prevents double-push vs a concurrent send). */
-    {
-        bool exp = false;
-        if (atomic_compare_exchange_strong_explicit(&a->scheduled, &exp, true,
-                memory_order_acq_rel, memory_order_relaxed)) {
-            if (sid >= 0 && sid < msSchedulerCount) {
-                msSchedRunPush(&msSchedulers[sid], a);
-            }
-            if (sid == 0) msActorWakeEventLoop();
-            else msPoolWakeWorker(sid);
-        }
+     * closed until the visit owns the shell under processing). */
+    atomic_store_explicit(&a->scheduled, true, memory_order_release);
+    if (sid >= 0 && sid < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[sid], a);
     }
+    if (sid == 0) msActorWakeEventLoop();
+    else msPoolWakeWorker(sid);
 }
 
 /* Suspend actor: save async _impl future, register resume callback.
  * For CALL methods, replyFut is chained separately by the dispatch function. */
 static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
     if (a == NULL) return;
-    /* R1 entry check: stop won the race to the suspend point — fail the reply,
-     * don't suspend, register no resume callback (no shell reference outlives
-     * this call). The visit's reap gate collects on the next pass. */
-    if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
-        if (replyFut != NULL) msMsgReplyFail(replyFut);
-        msHazardClear(a);
-        return;
-    }
     a->suspendedReplyFut = replyFut;
     atomic_store_explicit(&a->suspendedFut, implFut, memory_order_release);
     msActorSetFlag(a, MS_ACTOR_SUSPENDED);
@@ -726,23 +712,10 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         void* sfp = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
         if (sfp != NULL) {
             msFutureBase* sf = (msFutureBase*)sfp;
-            bool resumed = atomic_load_explicit(&sf->finished, memory_order_acquire);
-            if (!resumed) {
-                /* Still suspended — deschedule BEFORE releasing processing, or the
-                 * resume callback's scheduled-CAS can never re-enqueue (strand). */
-                atomic_store_explicit(&a->scheduled, false, memory_order_release);
-                /* Re-check: resume may have completed between the loads — reclaim
-                 * the visit (CAS back) or the mailbox stalls until the next send. */
-                if (atomic_load_explicit(&sf->finished, memory_order_acquire)) {
-                    bool reclaim = false;
-                    resumed = atomic_compare_exchange_strong_explicit(&a->scheduled,
-                        &reclaim, true, memory_order_acq_rel, memory_order_relaxed);
-                }
-                if (!resumed) {
-                    msCurrentActor = prevActor;
-                    atomic_store_explicit(&a->processing, false, memory_order_release);
-                    return 0;
-                }
+            if (!atomic_load_explicit(&sf->finished, memory_order_acquire)) {
+                msCurrentActor = prevActor;
+                atomic_store_explicit(&a->processing, false, memory_order_release);
+                return 0;
             }
             /* Resumed: _impl stepper already completed the reply future via
              * msFutureChain. Clear suspension state, fall through to mailbox drain. */
@@ -795,6 +768,14 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         /* Don't free msg here — MPSC pop made it the new tail stub.
          * It gets freed on the NEXT pop when a newer message takes its place. */
         processed++;
+        if (atomic_load_explicit(&a->suspendedFut, memory_order_relaxed) != NULL
+                || (atomic_load_explicit(&a->syncFlags, memory_order_relaxed) & MS_ACTOR_SUSPENDED) != 0) {
+            atomic_store_explicit(&a->scheduled, false, memory_order_release);
+            msCurrentActor = prevActor;
+            atomic_store_explicit(&a->processing, false, memory_order_release);
+            msFutureReleaseFlush();
+            return processed;
+        }
     }
 
     /* Scheduling decision, made WHILE HOLDING processing. Flags (heuristics) from the
