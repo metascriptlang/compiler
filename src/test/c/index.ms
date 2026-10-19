@@ -79,3 +79,4 @@ import "./spanParamAbi";
 import "./returnElementCopy";
 import "./topLevelCursors";
 import "./proxyStaticKey";
+import "./inductionPointer";

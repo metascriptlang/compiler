@@ -98,7 +98,7 @@ function placeOwnedInstances(units: CheckedUnit[], classesBesideGeneric: boolean
 	}
 }
 
-export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false, lowerAccess: boolean = false): CompileResult {
+export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false, lowerAccess: boolean = false, danger: boolean = false): CompileResult {
 	resetBuildState();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
@@ -132,6 +132,11 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 
 	const transformed = transformProgram(macroExpanded, checkerCtx, false);
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
+	if (danger) {
+		nativeCtx.rangeChecks = false;
+		nativeCtx.boundChecks = false;
+		nativeCtx.objChecks = false;
+	}
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
