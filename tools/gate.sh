@@ -1977,11 +1977,12 @@ run_solana_lane() {
     std/solana/idlTest.ms std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/simulatorContextTest.ms \
     std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
     std/solana/simulatorProgramsTest.ms std/solana/simulatorTokenTest.ms std/solana/simulatorInvokeTest.ms \
-    examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
+    std/solana/simulatorHostTest.ms examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done
   for entry in std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/memoryMachineTest.jms std/solana/kernelTest.jms \
-    std/solana/simulatorContextTest.ms std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms; do
+    std/solana/simulatorContextTest.ms std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
+    std/solana/simulatorHostTest.ms; do
     solana_host_test "$entry" --target=js || rc=1
   done
   if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"; then
