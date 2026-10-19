@@ -519,6 +519,7 @@ void msOrcTraceRef(void* child, void* env);
 
 #ifdef MSGC_ORC_STATS
 MS_TLS_EXTERN(int32_t, msFreedCyclicObjects);
+MS_TLS_EXTERN(int32_t, msOrcCollections);
 #endif
 
 #else /* !MSGC_ORC — plain ARC (--gc=drc) */

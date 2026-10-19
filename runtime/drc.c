@@ -469,6 +469,8 @@ MS_TLS_PUBLISH(msOrcTeardownDepth)
 #ifdef MSGC_ORC_STATS
 _Thread_local int32_t msFreedCyclicObjects = 0;
 MS_TLS_PUBLISH(msFreedCyclicObjects)
+_Thread_local int32_t msOrcCollections = 0;
+MS_TLS_PUBLISH(msOrcCollections)
 #endif
 
 void msRegisterCycle(void* p, const msTypeInfo* type) {
@@ -728,6 +730,7 @@ void msOrcCollect(void) {
 
 #ifdef MSGC_ORC_STATS
 	msFreedCyclicObjects += j.freed;
+	msOrcCollections += 1;
 #endif
 
 	/* Adaptive threshold:
@@ -738,7 +741,7 @@ void msOrcCollect(void) {
 		if (j.freed * 2 >= j.touched) {
 			msRootsThreshold = msRootsThreshold * 2 / 3;
 			if (msRootsThreshold < 16) msRootsThreshold = 16;
-		} else if (msRootsThreshold < 16384) {
+		} else if (msRootsThreshold < INT32_MAX / 4) {
 			if (msRootsThreshold <= 0) msRootsThreshold = 128;
 			msRootsThreshold = msRootsThreshold / 2 + msRootsThreshold;  /* * 3/2 growth */
 		}
