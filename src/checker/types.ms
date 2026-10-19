@@ -1266,7 +1266,9 @@ export function peelTransparentInstance(t: Type): Type {
 	let _g = 0;
 	while (_g < PEEL_MAX_DEPTH) {
 		_g = _g + 1;
-		if (cur.kind != TypeKind.GenericInstance || cur.typeReturn == null) return cur;
+		if (cur.kind != TypeKind.GenericInstance) return cur;
+		if (cur.typeReturn == null) instantiateGenericBody(cur, genericParamsOf(cur));
+		if (cur.typeReturn == null) return cur;
 		if (cur.typeExtra != null && cur.typeExtra.kind == TypeKind.Distinct) return cur;
 		const nominal = peelToStructOrUnion(cur.typeExtra);
 		if (nominal != null
@@ -4064,6 +4066,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		// is in flag bits, not in the name. Simple equality covers both.
 		const namesMatch = formal.typeName == concrete.typeName;
 		if (!namesMatch) {
+			const aliased = peelTransparentInstance(concrete);
+			if (aliased != concrete) {
+				unifyType(formal, aliased, bindings);
+				return;
+			}
 			const ancestor = classAncestorInstance(concrete, formal);
 			if (ancestor != null) unifyType(formal, ancestor, bindings);
 			return;
