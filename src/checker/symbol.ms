@@ -273,20 +273,24 @@ export function isCapturedAcross(table: SymbolTable, name: string, sym: Symbol, 
 	return true;
 }
 
-export function lookupSymbolInDefiningScope(table: SymbolTable, definer: string, name: string): Symbol {
+export function scopeDefining(table: SymbolTable, definer: string, name: string): Cursor<Scope> {
 	const definerId = getIdentId(table.identCache, definer);
 	let scope = table.current;
 	while (scope != null && !scope.symbols.has(definerId)) {
 		scope = scope.parent;
 	}
-	if (scope == null) return lookupSymbol(table, name);
+	if (scope == null) scope = table.current;
 	const nameId = getIdentId(table.identCache, name);
-	while (scope != null) {
-		const sym = scope.symbols.get(nameId);
-		if (sym != null) return sym;
+	while (scope != null && !scope.symbols.has(nameId)) {
 		scope = scope.parent;
 	}
-	return null as unknown as Symbol;
+	return scope;
+}
+
+export function lookupSymbolInDefiningScope(table: SymbolTable, definer: string, name: string): Symbol {
+	const scope = scopeDefining(table, definer, name);
+	if (scope == null) return null as unknown as Symbol;
+	return scope.symbols.get(getIdentId(table.identCache, name))!;
 }
 
 export function globalScope(table: SymbolTable): Scope {
