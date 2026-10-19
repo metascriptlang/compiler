@@ -19,6 +19,8 @@ test "number literal types: a value of a wider type is refused" {
 test "number literal types: a literal-typed variable is never stored a computed number" {
 	assert hasError("let n: 1 | 2 = 1; n += 1;", "would store a 'int32' in '1 | 2'");
 	assert hasError("let n: 1 | 2 = 1; n++;", "increment/decrement needs a numeric operand");
+	assert hasError(TYPES + "const s: Small = { v: 1, t: 1 }; s.v -= 1;", "would store a 'int32' in '1 | 2'");
+	assert strictErrorCount("let m: int32 = 1; m += 1;") == 0;
 }
 
 test "number literal types: integer and fractional literals in one union are each held" {

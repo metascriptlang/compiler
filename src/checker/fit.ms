@@ -2287,7 +2287,7 @@ export function storedTypeOfNullRead(expr: Node, exprType: Type, formal: Type): 
 	return stored;
 }
 
-function declaredTypeOfLocation(loc: Node): Type | null {
+export function declaredTypeOfLocation(loc: Node): Type | null {
 	if (loc.kind == NodeKind.Identifier) return loc.resolvedSym != null && loc.resolvedSym.symbolType != null ? peelTransparentInstance(loc.resolvedSym.symbolType) : null;
 	if (loc.kind != NodeKind.MemberExpr) return null;
 	const md = loc.data as MemberExprData;
