@@ -478,10 +478,22 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	return vm.exitValue;
 }
 
+function forgetHeapStrings(slots: RaiserValue[]): void {
+	for (const slot of slots) {
+		if (slot.kind == RaiserValueKind.String && slot.intVal >= 0) {
+			slot.kind = RaiserValueKind.Nil;
+			slot.intVal = 0;
+		}
+	}
+}
+
 export function vmReleaseHeaps(vm: RaiserVM): void {
 	if (vm.frameFloor > 0) return;
 	clearObjectHeap(vm.objectHeap);
 	clearArrayHeap(vm.arrayHeap);
+	forgetHeapStrings(vm.regs.slots);
+	forgetHeapStrings(vm.globals);
+	if (vm.currentException.kind == RaiserValueKind.String && vm.currentException.intVal >= 0) vm.currentException = raiserNil();
 }
 
 function runSuspendedAt(vm: RaiserVM, floor: number): boolean {
@@ -3583,6 +3595,30 @@ test "orc: a string op that writes its own source register reads the source firs
 	assert vm.error == "";
 	assert vmText(vm, vm.exitValue) == "b";
 	assert heapStringLive(vm.arrayHeap) == 1;
+}
+
+test "releasing the heaps leaves no register or global holding a string of the cleared heap" {
+	const vm = createVM(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserConstString("ab"), raiserConstString("cd")]
+	), "arena");
+	execLoop(vm);
+	assert vm.error == "";
+	assert vm.regs.slots[2].kind == RaiserValueKind.String && vm.regs.slots[2].intVal >= 0;
+	vmReleaseHeaps(vm);
+	for (const slot of vm.regs.slots) {
+		assert slot.kind != RaiserValueKind.String || slot.intVal < 0;
+	}
+	vm.ip = 0;
+	vm.halted = false;
+	execLoop(vm);
+	assert vm.error == "";
+	assert vmText(vm, vm.exitValue) == "abcd";
 }
 
 test "StrLen: empty string" {
