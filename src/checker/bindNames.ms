@@ -8,7 +8,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType } from "./types";
-import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope } from "./symbol";
+import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, ScopeKind } from "./symbol";
 import { CheckerContext, findExportedSymbol, macroPreludeKind } from "./context";
 
 class BindScope {
@@ -57,6 +57,13 @@ function lookupBound(b: NameBinder, name: string): Symbol | null {
 	return null;
 }
 
+function boundUnlessLeftToPreludes(b: NameBinder, name: string): Symbol | null {
+	const scope = scopeDefining(b.ctx.table, b.metaDefiner, name);
+	if (scope == null) return null;
+	const sym = lookupSymbolInDefiningScope(b.ctx.table, b.metaDefiner, name);
+	return scope.scopeKind == ScopeKind.Global && !sym.builtinKind.startsWith("Meta") ? null : sym;
+}
+
 function bindIdentifier(b: NameBinder, node: Node): void {
 	if (node.flags.has(NodeFlag.BoundSym)) {
 		if (b.metaBound != null) b.metaBound.set(node, node.resolvedSym);
@@ -66,7 +73,7 @@ function bindIdentifier(b: NameBinder, node: Node): void {
 	const name = (node.data as IdentifierData).name;
 	const local = lookupBound(b, name);
 	if (b.metaBound != null) {
-		b.metaBound.set(node, local != null ? local : lookupSymbolInDefiningScope(b.ctx.table, b.metaDefiner, name));
+		b.metaBound.set(node, local != null ? local : boundUnlessLeftToPreludes(b, name));
 		return;
 	}
 	if (local != null) {
