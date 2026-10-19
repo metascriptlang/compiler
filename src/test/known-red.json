@@ -6,14 +6,6 @@
     "762-bitSetMacro [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [js]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [orc]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
-    "catchBindingAcrossSuspendWithFinally [parity]": {"since":"1bb3c76a2","note":"card 2026-10-18-raiser-async-finally-after-caught-raise.md; a raise across a suspend point loses the finally or its rejection on the Raiser; red on main 1bb3c76a2, measured 2026-10-19"},
-    "execFileStartFailure [esm]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: node gives ENOENT for a directory, not EACCES; red on main 1bb3c76a2, measured 2026-10-19"},
-    "execFileStartFailure [js]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: node gives ENOENT for a directory, not EACCES; red on main 1bb3c76a2, measured 2026-10-19"},
-    "execMissingProgram [c]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
-    "execMissingProgram [danger]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
-    "execMissingProgram [orc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
-    "execMissingProgram [raiser]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"},
-    "finallyReraiseAcrossSuspend [raiser]": {"since":"1bb3c76a2","note":"card 2026-10-18-raiser-async-finally-after-caught-raise.md; a raise across a suspend point loses the finally or its rejection on the Raiser; red on main 1bb3c76a2, measured 2026-10-19"},
     "genericDeclarationEmitsOnlyInstances [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-static-member-in-generic-constructor.md; red on main 80207ca9c as well, the raiser lane never ran when ae964f7b3 landed it; recorded for release 0.3.2, 2026-10-12"}
   },
   "flaky": {
@@ -28,18 +20,10 @@
     "src/codegen/raiser/eval.ms > engine: two sleepers wake in deadline order, not spawn order": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; same 5 runs as the float32 case, wall-clock deadlines under load 30-60, 2026-10-03"}
   },
   "fmt": {},
-  "guard": {
-    "assertMessageBorrow [drc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: the clang+ASan fixture has no pthread.h; red on main 1bb3c76a2, measured 2026-10-19"},
-    "assertMessageBorrow [orc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: the clang+ASan fixture has no pthread.h; red on main 1bb3c76a2, measured 2026-10-19"},
-    "freestandingMathLargeValues [drc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: the ubsan runtime leaves printf and CommandLineToArgvW undefined at link; red on main 1bb3c76a2, measured 2026-10-19"},
-    "freestandingMathLargeValues [orc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: the ubsan runtime leaves printf and CommandLineToArgvW undefined at link; red on main 1bb3c76a2, measured 2026-10-19"},
-    "testRunnerReportsSignal [drc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: abort ends as status 0xC0000409, not signal 6; red on main 1bb3c76a2, measured 2026-10-19"},
-    "testRunnerReportsSignal [orc]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: abort ends as status 0xC0000409, not signal 6; red on main 1bb3c76a2, measured 2026-10-19"}
-  },
+  "guard": {},
   "hcr": {},
   "san": {
-    "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
-    "execMissingProgram [san]": {"since":"1bb3c76a2","note":"card 2026-10-18-windows-host-posix-test-oracles.md; Windows host: cmd.exe reports status 1, not sh's 127 not-found; red on main 1bb3c76a2, measured 2026-10-19"}
+    "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"}
   },
   "solana": {},
   "suite": {},
