@@ -535,7 +535,6 @@ function makeOpExt(opName: string): ExtensionMethod {
 	return {
 		methodName: opName,
 		sourcePath: "",
-		fnType,
 		isStatic: false,
 		sym: makeSymbol(opName, SymbolKind.Function, fnType, false),
 	};

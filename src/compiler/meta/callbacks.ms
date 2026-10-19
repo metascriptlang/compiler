@@ -84,10 +84,10 @@ export function registerMacroBodyPreparer(fn: MacroBodyPreparerFn): void {
 	macroBodyPreparerFn = fn;
 }
 
-type ComptimeHelperPreparerFn = (decl: Node) => void;
-let comptimeHelperPreparerFn: ComptimeHelperPreparerFn = (decl: Node): void => {};
-export function callComptimeHelperPreparer(decl: Node): void {
-	comptimeHelperPreparerFn(decl);
+type ComptimeHelperPreparerFn = (decl: Node, scope: CheckerContext) => void;
+let comptimeHelperPreparerFn: ComptimeHelperPreparerFn = (decl: Node, scope: CheckerContext): void => {};
+export function callComptimeHelperPreparer(decl: Node, scope: CheckerContext): void {
+	comptimeHelperPreparerFn(decl, scope);
 }
 export function registerComptimeHelperPreparer(fn: ComptimeHelperPreparerFn): void {
 	comptimeHelperPreparerFn = fn;

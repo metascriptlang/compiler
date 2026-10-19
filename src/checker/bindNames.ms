@@ -3,12 +3,13 @@ import {
 	ProgramData, WhileStmtData, DoWhileStmtData, ForStmtData,
 	ForOfStmtData, ForInStmtData, TryCatchStmtData, VariableDeclData, DestructuringDeclData,
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, MatchCaseData,
-	IdentifierData,
+	IdentifierData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData,
+	EnumDeclData, ClassDeclData, TypeAliasDeclData, CallExprData, MemberExprData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType } from "./types";
-import { makeSymbol, initSymbol, lookupSymbol } from "./symbol";
-import { CheckerContext } from "./context";
+import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope } from "./symbol";
+import { CheckerContext, findExportedSymbol, macroPreludeKind } from "./context";
 
 class BindScope {
 	names: Map<string, Symbol> = new Map<string, Symbol>();
@@ -18,6 +19,8 @@ class NameBinder {
 	ctx: CheckerContext;
 	scopes: BindScope[] = [];
 	keys: Node[] = [];
+	metaBound: Map<Node, Symbol | null> | null = null;
+	metaDefiner: string = "";
 
 	constructor(ctx: CheckerContext) {
 		this.ctx = ctx;
@@ -38,6 +41,7 @@ function declareName(b: NameBinder, name: string, kind: SymbolKind, key: Node): 
 	if (scope.names.has(name)) return null;
 	const sym = makeSymbol(name, kind, inferredType(), true);
 	scope.names.set(name, sym);
+	if (b.metaBound != null) return sym;
 	b.ctx.adoptedDecls.set(key, sym);
 	b.keys.push(key);
 	return sym;
@@ -54,10 +58,17 @@ function lookupBound(b: NameBinder, name: string): Symbol | null {
 }
 
 function bindIdentifier(b: NameBinder, node: Node): void {
-	if (node.flags.has(NodeFlag.BoundSym)) return;
+	if (node.flags.has(NodeFlag.BoundSym)) {
+		if (b.metaBound != null) b.metaBound.set(node, node.resolvedSym);
+		return;
+	}
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.EnumMember) return;
 	const name = (node.data as IdentifierData).name;
 	const local = lookupBound(b, name);
+	if (b.metaBound != null) {
+		b.metaBound.set(node, local != null ? local : lookupSymbolInDefiningScope(b.ctx.table, b.metaDefiner, name));
+		return;
+	}
 	if (local != null) {
 		node.resolvedSym = local;
 		b.ctx.boundIdents.set(node, local);
@@ -110,6 +121,17 @@ function bindPattern(b: NameBinder, pattern: Node): void {
 
 function bindBlockLike(b: NameBinder, node: Node): void {
 	openBindScope(b);
+	if (b.metaBound != null && node.kind == NodeKind.BlockStmt) {
+		for (const stmt of (node.data as BlockStmtData).statements) {
+			match (stmt.kind) {
+				NodeKind.FunctionDecl => declareName(b, (stmt.data as FunctionDeclData).fnName, SymbolKind.Function, stmt),
+				NodeKind.EnumDecl => declareName(b, (stmt.data as EnumDeclData).enumName, SymbolKind.Enum, stmt),
+				NodeKind.ClassDecl => declareName(b, (stmt.data as ClassDeclData).className, SymbolKind.Class, stmt),
+				NodeKind.TypeAliasDecl => declareName(b, (stmt.data as TypeAliasDeclData).aliasName, SymbolKind.TypeAlias, stmt),
+				_ => {},
+			};
+		}
+	}
 	forEachChild(node, (child: Node): void => { bindNode(b, child); });
 	closeBindScope(b);
 }
@@ -118,10 +140,24 @@ function bindNode(b: NameBinder, node: Node): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Identifier => bindIdentifier(b, node),
+		NodeKind.MemberExpr => {
+			const d = node.data as MemberExprData;
+			bindNode(b, d.object);
+			if (b.metaBound != null) {
+				const owner = b.metaBound.get(d.object);
+				const exported = owner != null && owner.symbolKind == SymbolKind.Module ? findExportedSymbol(b.ctx.exportRegistry, owner.modulePath, d.property) : null;
+				b.metaBound.set(node, exported != null ? exported.sym : null);
+			}
+		},
 		NodeKind.BlockStmt => bindBlockLike(b, node),
-		NodeKind.FunctionDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl
-		| NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.ClassDecl | NodeKind.ActorDecl
-		| NodeKind.MacroDecl | NodeKind.QuoteExpr | NodeKind.ComptimeBlock => {},
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
+			if (b.metaBound != null) bindNestedMetaBody(b, node);
+		},
+		NodeKind.QuoteExpr => {
+			if (b.metaBound != null) forEachChild(node, (child: Node): void => { bindQuotedCallees(b, child); });
+		},
+		NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ClassDecl | NodeKind.ActorDecl
+		| NodeKind.MacroDecl | NodeKind.ComptimeBlock => {},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			bindNode(b, d.initializer);
@@ -200,6 +236,43 @@ function bindLoop(b: NameBinder, node: Node): void {
 	}
 }
 
+function bindNestedMetaBody(b: NameBinder, node: Node): void {
+	let params: string[] = [];
+	let body: Node | null = null;
+	match (node.kind) {
+		NodeKind.FunctionDecl => {
+			params = (node.data as FunctionDeclData).params;
+			body = (node.data as FunctionDeclData).fnBody;
+		},
+		NodeKind.ArrowFunction => {
+			params = (node.data as ArrowFunctionData).arrowParams;
+			body = (node.data as ArrowFunctionData).arrowBody;
+		},
+		NodeKind.FunctionExpr => {
+			params = (node.data as FunctionExprData).funcExprParams;
+			body = (node.data as FunctionExprData).funcExprBody;
+		},
+		_ => {},
+	};
+	openBindScope(b);
+	for (const p of params) declareName(b, p, SymbolKind.Parameter, node);
+	if (body != null) bindNode(b, body);
+	closeBindScope(b);
+}
+
+function bindQuotedCallees(b: NameBinder, node: Node): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		bindNode(b, d.callee);
+		if (d.arguments.length == 1 && (node.flags.has(NodeFlag.QuoteSplice) || metaIntrinsicOf(b.ctx, b.metaBound!, d.callee) == "MetaSplice")) {
+			bindNode(b, d.arguments[0]);
+			return;
+		}
+	}
+	forEachChild(node, (child: Node): void => { bindQuotedCallees(b, child); });
+}
+
 function newBinder(ctx: CheckerContext): NameBinder {
 	return new NameBinder(ctx);
 }
@@ -218,6 +291,24 @@ export function bindContainerNames(ctx: CheckerContext, params: string[], body: 
 	b.keys.push(body);
 	bindNode(b, body);
 	return b.keys;
+}
+
+export function metaIntrinsicOf(ctx: CheckerContext, bound: Map<Node, Symbol | null>, callee: Node): string {
+	const sym = bound.get(callee);
+	if (sym != null) return sym.builtinKind;
+	if (callee.kind != NodeKind.Identifier) return "";
+	return macroPreludeKind(ctx, (callee.data as IdentifierData).name);
+}
+
+export function bindMetaBodyNames(ctx: CheckerContext, definer: string, params: string[], body: Node): Map<Node, Symbol | null> {
+	const b = newBinder(ctx);
+	const bound = new Map<Node, Symbol | null>();
+	b.metaBound = bound;
+	b.metaDefiner = definer;
+	openBindScope(b);
+	for (const p of params) declareName(b, p, SymbolKind.Parameter, body);
+	bindNode(b, body);
+	return bound;
 }
 
 export function bindModuleNames(ctx: CheckerContext, program: Node): Node[] {

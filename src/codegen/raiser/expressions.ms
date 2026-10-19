@@ -26,7 +26,7 @@ import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaise
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
-	isLocalString, isEnumName, findEnumConstant,
+	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType, landResult,
@@ -482,39 +482,9 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				emitLoadConst(s, infinityReg, raiserFloat(Infinity));
 				return infinityReg;
 			}
-			// The checker rewrites `Enum.Member` into an Identifier "Enum_Member".
-			// Raiser emits no enum declaration, so that name has no binding —
-			// inline the ordinal from the enum table. Key by the symbol's enum name
-			// + member (not the mangled identifier) so it can't collide.
 			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.EnumMember
 				&& node.resolvedSym.symbolType != null) {
-				// Self-contained ordinal (primary): the member's EnumLiteral carries
-				// the full enum Type on typeReturn (createEnumLiteral), whose
-				// typeChildren[i].typeValue hold the ordinals (createEnum). Reading
-				// it here means the ordinal no longer depends on the EnumDecl being
-				// physically injected into the comptime synthetic program — fixes
-				// single-file/local enums the same way as cross-module ones.
-				const enumTy = node.resolvedSym.symbolType.typeReturn;
-				if (enumTy != null) {
-					let ei = 0;
-					while (ei < enumTy.typeNames.length) {
-						if (enumTy.typeNames[ei] == node.resolvedSym.name) {
-							const ord = (enumTy.typeChildren != null && ei < enumTy.typeChildren.length)
-								? enumTy.typeChildren[ei].typeValue : ei;
-							const r0 = allocReg(s);
-							emitLoadConst(s, r0, raiserInt(ord));
-							return r0;
-						}
-						ei = ei + 1;
-					}
-				}
-				// Fallback: physically-injected EnumDecl → enumMap (legacy path).
-				const ec = findEnumConstant(s, `${node.resolvedSym.symbolType.typeName}.${node.resolvedSym.name}`);
-				if (ec >= 0) {
-					const r = allocReg(s);
-					emitLoadConst(s, r, raiserInt(s.enumMap.items[ec].index));
-					return r;
-				}
+				return compileEnumOrdinal(s, node, node.resolvedSym);
 			}
 			const funcIdx = resolveRoutine(s, node.resolvedSym);
 			if (funcIdx >= 0) {
@@ -2072,6 +2042,21 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	return dest;
 }
 
+function compileEnumOrdinal(s: RaiserCompState, node: Node, member: Symbol): int32 {
+	const enumTy = member.symbolType.kind == TypeKind.EnumLiteral ? member.symbolType.typeReturn : member.symbolType;
+	const r = allocReg(s);
+	if (enumTy != null && enumTy.kind == TypeKind.Enum) {
+		for (let ei = 0; ei < enumTy.typeNames.length; ei += 1) {
+			if (enumTy.typeNames[ei] != member.name) continue;
+			const ord = enumTy.typeChildren != null && ei < enumTy.typeChildren.length ? enumTy.typeChildren[ei].typeValue : ei;
+			emitLoadConst(s, r, raiserInt(ord));
+			return r;
+		}
+	}
+	queueRaiserCompileError(`internal: enum member '${member.name}' has no ordinal in its enum type`, node.location.line, node.location.column);
+	return r;
+}
+
 function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as MemberExprData;
 	const nsMember = namespaceMemberIdent(node);
@@ -2087,16 +2072,8 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 		if (pd.propInitializer != null) return compileExpr(s, pd.propInitializer);
 	}
 
-	// Enum member access: Color.Red → integer constant (codegen-only path; the
-	// checked AST carries this as an Identifier, handled in compileExpr).
-	if (d.object.kind == NodeKind.Identifier) {
-		const objId = d.object.data as IdentifierData;
-		if (isEnumName(s, objId.name)) {
-			const ec = findEnumConstant(s, `${objId.name}.${d.property}`);
-			const reg = allocReg(s);
-			emitLoadConst(s, reg, raiserInt(ec >= 0 ? s.enumMap.items[ec].index : 0));
-			return reg;
-		}
+	if (sym != null && sym.symbolKind == SymbolKind.EnumMember && sym.symbolType != null) {
+		return compileEnumOrdinal(s, node, sym);
 	}
 
 	if (d.property == "byteLength" && exprIsString(s, d.object)) {
@@ -2107,7 +2084,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	}
 
 	// .length — string vs array
-	if (d.property == "length") {
+	if (d.property == "length" && !isRecordOperand(d.object)) {
 		const objReg = compileExpr(s, d.object);
 		const dest = allocReg(s);
 		if (exprIsString(s, d.object)) {
@@ -2126,21 +2103,30 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	return dest;
 }
 
+function isRecordOperand(node: Node): boolean {
+	const t = peelToStructOrUnion(node.nodeType);
+	return t != null && t.kind == TypeKind.Struct;
+}
+
+function isDeclaredMethodCall(callee: Node): boolean {
+	return callee.resolvedSym != null && callee.resolvedSym.symbolKind == SymbolKind.Method;
+}
+
 function isArrayPush(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
+	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
 	return d.property == "push";
 }
 
 function isArraySetLengthCall(s: RaiserCompState, node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
+	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
 	if (d.property != "setLength") return false;
 	return !exprIsString(s, d.object);
 }
 
 function isToStringCall(node: Node): boolean {
-	if (node.kind != NodeKind.MemberExpr) return false;
+	if (node.kind != NodeKind.MemberExpr || isDeclaredMethodCall(node)) return false;
 	const d = node.data as MemberExprData;
 	return d.property == "toString";
 }

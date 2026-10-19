@@ -61,6 +61,7 @@ case "$v" in
   busy3) [ "$n" -gt 3 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; exit 0 ;;
   busyred) [ "$n" -gt 1 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; echo "gate: RED (tests) 0m01s"; exit 1 ;;
   green) exit 0 ;;
+  prune) mkdir -p out/gate; printf '{"kept":{}}\n' >out/gate/known-red.pruned.json; exit 0 ;;
   red) echo "gate: RED (tests) 0m01s"; exit 1 ;;
   hold) touch "$LQ_TEST/holding.${name#wt/}"; while [ ! -e "$LQ_TEST/release" ]; do sleep 0.2; done; exit 0 ;;
 esac
@@ -260,6 +261,25 @@ rz=$(waitfor z 60)
 git -C "$T/ws/.wt/wt-z" checkout -q --detach
 rz2=$(waitfor z 20)
 check "S19 wait by name ignores a detached HEAD" '[ "$rz" = 0 ] && [ "$rz2" = 0 ] && grep -q "z landed" "$T/ctl/wait.z"'
+
+echo "== S20 a green gate that pruned the known-red set: the land commits the pruned set and lands it"
+setup; mkwt k
+mkdir -p "$T/ws/.wt/wt-k/src/test"; printf '{"kept":{},"stale":{}}\n' >"$T/ws/.wt/wt-k/src/test/known-red.json"
+git -C "$T/ws/.wt/wt-k" add -A; git -C "$T/ws/.wt/wt-k" commit -qm "add known"; setverdict k prune
+enqueue k
+rk=$(waitfor k 60)
+check "S20 k landed with the pruned set" '[ "$rk" = 0 ] && onmain k.txt && [ "$(git -C "$R" show main:src/test/known-red.json)" = "{\"kept\":{}}" ]'
+check "S20 the pruned set is its own commit on main" '[ "$(git -C "$R" log -1 --format=%s main)" = "test: drop known-red entries that are green" ] && [ "$(git -C "$R" diff --name-only main~1 main)" = src/test/known-red.json ]'
+check "S20 the gate's pruned file is consumed" '[ ! -e "$T/ws/.wt/wt-k/out/gate/known-red.pruned.json" ]'
+
+echo "== S21 a worktree builder that cannot check the caught-up tree is replaced before the gate"
+setup; mkwt s
+printf '#!/usr/bin/env bash\n# stale\nexit 1\n' >"$T/ws/.wt/wt-s/msc"; chmod +x "$T/ws/.wt/wt-s/msc"
+printf '#!/usr/bin/env bash\n# main builder\nexit 0\n' >"$R/msc"; chmod +x "$R/msc"
+enqueue s
+rs=$(waitfor s 60)
+check "S21 s landed" '[ "$rs" = 0 ] && onmain s.txt'
+check "S21 the worktree builder is main's" 'grep -q "main builder" "$T/ws/.wt/wt-s/msc" && grep -q "picking a builder again" "$MSC_LAND_QUEUE/s.land.log"'
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

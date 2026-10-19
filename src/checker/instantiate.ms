@@ -6,11 +6,11 @@
 
 import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, VariableDeclData, ForOfStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
-import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
+import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
@@ -92,6 +92,8 @@ export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerCon
 	if (sym.modulePath == "" || sym.modulePath == ctx.modulePath) return ctx;
 	const defining = lookupModuleCtx(sym.modulePath);
 	if (defining != null) return defining;
+	const own = preludeModuleCtx(ctx, sym.modulePath);
+	if (own != null) return own;
 	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
 	let scope: Scope | null = prelude.table.current;
 	while (scope != null) {
@@ -101,6 +103,23 @@ export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerCon
 		scope = scope.parent;
 	}
 	return null;
+}
+
+export function preludeModuleCtx(ctx: CheckerContext, modulePath: string): CheckerContext | null {
+	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
+	const members = prelude.preludeModuleScopes.get(modulePath);
+	if (members == null) return null;
+	const view = createContext();
+	view.table.identCache = prelude.table.identCache;
+	view.table.current = globalScope(prelude.table);
+	openScope(view.table, ScopeKind.Module);
+	for (const s of members) addSymbolToScope(view.table.current, s);
+	view.modulePath = modulePath;
+	view.preludeCtx = prelude;
+	view.extensionRegistry = prelude.extensionRegistry;
+	view.exportRegistry = prelude.exportRegistry;
+	view.compilerFuncs = prelude.compilerFuncs;
+	return view;
 }
 
 export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null): CheckerContext {
@@ -689,7 +708,7 @@ function unwrapToFunctionDecl(node: Node): Node {
 	return null as unknown as Node;
 }
 
-const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref | NodeFlag.OptionalChainEnd;
+const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref | NodeFlag.OptionalChainEnd;
 
 function isCheckerWrapper(node: Node): boolean {
 	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
@@ -713,19 +732,6 @@ function collectDeclaredSyms(node: Node, into: Symbol[]): void {
 	if (binds && node.resolvedSym != null) into.push(node.resolvedSym);
 	if (node.paramSyms != null) for (const p of node.paramSyms) into.push(p);
 	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredSyms(child, into); });
-}
-
-export function collectDeclaredNames(node: Node, into: string[]): void {
-	match (node.kind) {
-		NodeKind.VariableDecl => { into.push((node.data as VariableDeclData).declName); },
-		NodeKind.ForOfStmt => { into.push((node.data as ForOfStmtData).forOfBinding); },
-		NodeKind.TryCatchStmt => { into.push((node.data as TryCatchStmtData).catchName); },
-		NodeKind.ArrowFunction => { for (const p of (node.data as ArrowFunctionData).arrowParams) into.push(p); },
-		NodeKind.FunctionExpr => { for (const p of (node.data as FunctionExprData).funcExprParams) into.push(p); },
-		NodeKind.FunctionDecl => { for (const p of (node.data as FunctionDeclData).params) into.push(p); },
-		_ => {},
-	}
-	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredNames(child, into); });
 }
 
 function bindsInto(node: Node, redeclared: Symbol[]): boolean {

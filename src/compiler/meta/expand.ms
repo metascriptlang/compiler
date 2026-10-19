@@ -51,7 +51,7 @@ import {
 	TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ActorDeclData, ExternDeclData, MacroDeclData,
 	TestDeclData, AssertStmtData,
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
-	SymbolKind, NodeFlag, Symbol,
+	SymbolKind, NodeFlag, Symbol, TypeKind,
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
@@ -60,6 +60,7 @@ import { nextQuoteGensymSuffix } from "../../checker/template";
 import { isUnresolvedType } from "../../checker/types";
 import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling } from "./callbacks";
@@ -91,11 +92,39 @@ import { addWarning } from "../../checker/context";
 // their argument expressions as-is instead of lowering to ObjectLiteral.
 let _quoteSpliceActive = false;
 
+let _metaScope: CheckerContext | null = null;
+let _metaBound: Map<Node, Symbol | null> = new Map<Node, Symbol | null>();
+
+interface MetaScope { scope: CheckerContext | null; bound: Map<Node, Symbol | null>; }
+
+function enterMetaScope(scope: CheckerContext, definer: string, params: string[], body: Node): MetaScope {
+	const outer: MetaScope = { scope: _metaScope, bound: _metaBound };
+	_metaScope = scope;
+	_metaBound = bindMetaBodyNames(scope, definer, params, body);
+	return outer;
+}
+
+function leaveMetaScope(outer: MetaScope): void {
+	_metaScope = outer.scope;
+	_metaBound = outer.bound;
+}
+
+function metaKind(n: Node | null): string {
+	if (n == null || _metaScope == null) return "";
+	return metaIntrinsicOf(_metaScope!, _metaBound, n);
+}
+
+function macroScopeOf(ctx: CheckerContext, macroSym: Symbol): CheckerContext {
+	if (macroSym.modulePath == "" || macroSym.modulePath == ctx.modulePath) return ctx;
+	const declCtx = declaringModuleCtx(ctx, macroSym);
+	return declCtx != null ? declCtx : ctx;
+}
+
 function isSpliceCall(node: Node | null): boolean {
 	if (node == null || node.kind != NodeKind.CallExpr) return false;
 	const cd = node.data as CallExprData;
-	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return false;
-	return (cd.callee.data as IdentifierData).name == "splice" && cd.arguments.length == 1;
+	if (cd.arguments.length != 1) return false;
+	return node.flags.has(NodeFlag.QuoteSplice) || metaKind(cd.callee) == "MetaSplice";
 }
 
 let _quoteGensym: HashSet<Node> = new HashSet<Node>();
@@ -1282,10 +1311,10 @@ function declKindOrdinal(name: string): number {
 
 // Lookup a member ordinal for our known macro-facing enums. Returns -1 for
 // unknown enum names so callers can no-op.
-function macroEnumOrdinal(enumName: string, memberName: string): number {
-	return match (enumName) {
-		"NodeKind" => nodeKindOrdinal(memberName),
-		"DeclKind" => declKindOrdinal(memberName),
+function macroEnumOrdinal(enumKind: string, memberName: string): number {
+	return match (enumKind) {
+		"MetaNodeKind" => nodeKindOrdinal(memberName),
+		"MetaDeclKind" => declKindOrdinal(memberName),
 		_ => -1,
 	};
 }
@@ -1314,13 +1343,14 @@ function tryRewriteEnumMember(node: Node): Node {
 		const d = node.data as MemberExprData;
 		if (d.object == null || d.object.kind != NodeKind.Identifier) return node;
 		const enumName = (d.object.data as IdentifierData).name;
-		const ord = macroEnumOrdinal(enumName, d.property);
+		const ord = macroEnumOrdinal(metaKind(d.object), d.property);
 		return ord >= 0 ? enumOrdinalAs(enumName, ord, node.location) : node;
 	}
 	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
 		const sym = node.resolvedSym;
 		if (sym.symbolKind == SymbolKind.EnumMember && sym.symbolType != null) {
-			const ord = macroEnumOrdinal(sym.symbolType.typeName, sym.name);
+			const enumTy = sym.symbolType.kind == TypeKind.EnumLiteral ? sym.symbolType.typeReturn : sym.symbolType;
+			const ord = enumTy != null && enumTy.sym != null ? macroEnumOrdinal(enumTy.sym.builtinKind, sym.name) : -1;
 			if (ord >= 0) return enumOrdinalAs(sym.symbolType.typeName, ord, node.location);
 		}
 	}
@@ -1357,9 +1387,9 @@ function peelHiddenConv(n: Node): Node {
 function tryRewriteCreateNodeAt(node: Node): Node {
 	if (node == null || node.kind != NodeKind.CallExpr) return node;
 	const c = node.data as CallExprData;
-	if (c.callee == null || c.callee.kind != NodeKind.Identifier) return node;
-	const calleeName = (c.callee.data as IdentifierData).name;
-	if (calleeName != "createNodeAt" && calleeName != "createNode") return node;
+	if (c.callee == null) return node;
+	const intrinsic = metaKind(c.callee);
+	if (intrinsic != "MetaCreateNodeAt" && intrinsic != "MetaCreateNode") return node;
 	if (c.arguments.length != 3) return node;
 
 	const kindArg = peelHiddenConv(c.arguments[0]);
@@ -1414,9 +1444,9 @@ function tryRewriteCompileError(node: Node): Node {
 	const ed = node.data as ExprStmtData;
 	if (ed.expr == null || ed.expr.kind != NodeKind.CallExpr) return node;
 	const cd = ed.expr.data as CallExprData;
-	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return node;
-	const name = (cd.callee.data as IdentifierData).name;
-	if (name != "error" && name != "warning") return node;
+	if (cd.callee == null) return node;
+	const intrinsic = metaKind(cd.callee);
+	if (intrinsic != "MetaError" && intrinsic != "MetaWarning") return node;
 	if (cd.arguments.length < 1 || cd.arguments.length > 2) return node;
 	const loc = node.location;
 	const msgArg = cd.arguments[0];
@@ -1424,7 +1454,7 @@ function tryRewriteCompileError(node: Node): Node {
 	// astNode.line and astNode.column carry the original source position.
 	const hasLoc = cd.arguments.length == 2;
 	const locNode = hasLoc ? cd.arguments[1] : null;
-	if (name == "error") {
+	if (intrinsic == "MetaError") {
 		let payload: Node = createNodeAt(NodeKind.BinaryExpr, {
 			operator: "+", left: mkString("__MACRO_ERROR__:", loc), right: msgArg,
 		}, loc);
@@ -1514,9 +1544,18 @@ function preprocessNode(node: Node): Node {
 
 // Public preprocessing entry: rewrite the macro body's recognized patterns
 // in place. Idempotent.
-function preprocessMacroBody(body: Node): void {
+function preprocessMacroBody(body: Node, scope: CheckerContext, definer: string, params: string[]): void {
 	if (body == null) return;
+	const outer = enterMetaScope(scope, definer, params, body);
 	preprocessNode(body);
+	leaveMetaScope(outer);
+}
+
+function bakeMacroBody(body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string, params: string[], typeArgParams: string[] | null): Node {
+	const outer = enterMetaScope(macroScopeOf(ctx, macroSym), macroSym.name, params, body);
+	const baked = bakeTypeIntrinsics(body, ctx, macroSym, macroName, typeArg, typeArgParams);
+	leaveMetaScope(outer);
+	return baked;
 }
 
 // ===== rewriteCallExprToMacroInvocation: post-expansion macro-call detection =====
@@ -1585,13 +1624,12 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 		// valueToNode rebinds the Symbol on the way out; the checker sees
 		// NodeFlag.BoundSym and skips the user-scope lookup — no imports needed,
 		// no user-local name capture.
-		if (cd.callee.kind == NodeKind.Identifier
-				&& (cd.callee.data as IdentifierData).name == "bindSym"
-				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
+		const intrinsic = metaKind(cd.callee);
+		if (intrinsic == "MetaBindSym" && cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			const symName = (cd.arguments[0].data as StringLiteralData).value;
 			let bindCtx = ctx;
 			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
-				const mc = lookupModuleCtx(macroSym.modulePath);
+				const mc = declaringModuleCtx(ctx, macroSym);
 				if (mc != null) bindCtx = mc;
 			}
 			const boundSym = lookupSymbolInDefiningScope(bindCtx.table, macroSym.name, symName);
@@ -1609,14 +1647,13 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			}
 			return bindSymCall(hostSym, symName, boundSym, node.location);
 		}
-		if (cd.callee.kind == NodeKind.Identifier
-				&& (cd.callee.data as IdentifierData).name == "getTypeImpl"
+		if (intrinsic == "MetaGetTypeImpl"
 				&& cd.arguments.length == 1
 				&& cd.arguments[0].kind == NodeKind.Identifier) {
 			const typeName = (cd.arguments[0].data as IdentifierData).name;
 			let declCtx = ctx;
 			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
-				const mc = lookupModuleCtx(macroSym.modulePath);
+				const mc = declaringModuleCtx(ctx, macroSym);
 				if (mc != null) declCtx = mc;
 			}
 			const sym = lookupSymbolInDefiningScope(declCtx.table, macroSym.name, typeName);
@@ -1646,9 +1683,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 		// getTypeArg() — the explicit <T> written at THIS call site. Resolved in the
 		// CALL SITE scope (that is where the user spelled the name), unlike
 		// getTypeImpl which resolves in the macro's own module.
-		if (cd.callee.kind == NodeKind.Identifier
-				&& (cd.callee.data as IdentifierData).name == "getTypeArg"
-				&& cd.arguments.length == 0) {
+		if (intrinsic == "MetaGetTypeArg" && cd.arguments.length == 0) {
 			if (typeArg == "") {
 				addError(ctx, `Macro '${macroName}': getTypeArg() needs an explicit type argument at the call site — write ${macroName}<T>(...)`, node.location.line, node.location.column);
 				return node;
@@ -1735,7 +1770,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	let workBody = body;
 	if (typeArg != "") workBody = cloneNodeForCheck(body);
 	const bakeMark = ctx.errors.length;
-	bakeTypeIntrinsics(workBody, ctx, macroSym, macroName, typeArg, params);
+	bakeMacroBody(workBody, ctx, macroSym, macroName, typeArg, decl.macroDeclParams, params);
 	if (errorsSince(ctx, bakeMark)) {
 		builds.push({ typeArg, compiled: null });
 		return null;
@@ -1819,7 +1854,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	}
 	let regCtx = ctx;
 	if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
-		const bmc = lookupModuleCtx(macroSym.modulePath);
+		const bmc = declaringModuleCtx(ctx, macroSym);
 		if (bmc == null) {
 			addError(ctx, `macro '${d.macroName}' has no checked declaring scope '${macroSym.modulePath}'`, node.location.line, node.location.column);
 			return node;
@@ -1832,7 +1867,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	// Phase D: Preprocess the body to rewrite NodeKind.X / DeclKind.X member
 	// access to integer literals. Mutation is in-place and idempotent — running
 	// on already-preprocessed code is a no-op, so it's safe to call repeatedly.
-	preprocessMacroBody(body);
+	preprocessMacroBody(body, regCtx, macroSym.name, params);
 
 	// Validate arity
 	if (d.macroArgs.length != params.length) {
@@ -2272,11 +2307,13 @@ export function expandMacros(program: Node, ctx: CheckerContext): Node {
 import { registerExpandMacroInvocation } from "../../checker/checkerCallbacks";
 registerExpandMacroInvocation(expandMacroInvocation);
 registerMacroBodyPreparer((body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string): Node => {
-	preprocessMacroBody(body);
-	return bakeTypeIntrinsics(body, ctx, macroSym, macroName, "");
+	const decl = macroDeclOf(macroSym);
+	const params: string[] = decl != null ? decl.macroDeclParams : [];
+	preprocessMacroBody(body, macroScopeOf(ctx, macroSym), macroSym.name, params);
+	return bakeMacroBody(body, ctx, macroSym, macroName, "", params, null);
 });
-registerComptimeHelperPreparer((decl: Node): void => {
-	preprocessMacroBody(decl);
+registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
+	preprocessMacroBody(decl, scope, "", []);
 });
 
 // ===== Tests =====
@@ -2284,6 +2321,17 @@ registerComptimeHelperPreparer((decl: Node): void => {
 import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
 import { isMetaNodeSym } from "./nodeSym";
+
+function metaTestScope(createNodeAtKind: string = "MetaCreateNodeAt"): CheckerContext {
+	const ctx = createContext();
+	const nodeKind = makeSymbol("NodeKind", SymbolKind.Enum, noneType(), false);
+	nodeKind.builtinKind = "MetaNodeKind";
+	defineSymbol(ctx.table, nodeKind);
+	const create = makeSymbol("createNodeAt", SymbolKind.Function, noneType(), false);
+	create.builtinKind = createNodeAtKind;
+	defineSymbol(ctx.table, create);
+	return ctx;
+}
 
 test "expand pass is no-op when no user macros" {
 	// Build a tiny Program manually to avoid the parseSource → check round trip
@@ -2343,7 +2391,9 @@ test "tryRewriteEnumMember rewrites NodeKind.X to its ordinal cast to NodeKind" 
 	const member = createNode(NodeKind.MemberExpr, {
 		object: obj, property: "NumberLiteral", isOptional: false,
 	}, synthToken(loc));
+	const outer = enterMetaScope(metaTestScope(), "", [], member);
 	const result = tryRewriteEnumMember(member);
+	leaveMetaScope(outer);
 	assert result.kind == NodeKind.TypeAssertion && (result.data as TypeAssertionData).asType == "NodeKind";
 	assert ((result.data as TypeAssertionData).asExpr.data as NumberLiteralData).value == (NodeKind.NumberLiteral as number);
 }
@@ -2354,7 +2404,9 @@ test "tryRewriteEnumMember leaves non-enum member unchanged" {
 	const member = createNode(NodeKind.MemberExpr, {
 		object: obj, property: "field", isOptional: false,
 	}, synthToken(loc));
+	const outer = enterMetaScope(metaTestScope(), "", [], member);
 	const result = tryRewriteEnumMember(member);
+	leaveMetaScope(outer);
 	assert result == member;
 	assert result.kind == NodeKind.MemberExpr;
 }
@@ -2367,7 +2419,7 @@ test "preprocessMacroBody rewrites NodeKind in nested ReturnStmt" {
 	}, synthToken(loc));
 	const ret = createNode(NodeKind.ReturnStmt, { argument: member }, synthToken(loc));
 	const body = createNode(NodeKind.BlockStmt, { statements: [ret] }, synthToken(loc));
-	preprocessMacroBody(body);
+	preprocessMacroBody(body, metaTestScope(), "", []);
 	const stmts = (body.data as BlockStmtData).statements;
 	const retData = stmts[0].data as ReturnStmtData;
 	assert retData.argument.kind == NodeKind.TypeAssertion;
@@ -2394,8 +2446,9 @@ test "tryRewriteCreateNodeAt converts call to ObjectLiteral" {
 		isDirectCall: true,
 		resolvedOverloadIdx: 0,
 	}, synthToken(loc));
-	// Rewrite
+	const outer = enterMetaScope(metaTestScope(), "", [], call);
 	const result = tryRewriteCreateNodeAt(call);
+	leaveMetaScope(outer);
 	assert result.kind == NodeKind.ObjectLiteral;
 	const od = result.data as ObjectLiteralData;
 	// Should have: kind, line, column, value, isFloat
@@ -2424,7 +2477,9 @@ test "tryRewriteCreateNodeAt strips x.location to x" {
 		isDirectCall: true,
 		resolvedOverloadIdx: 0,
 	}, synthToken(loc));
+	const outer = enterMetaScope(metaTestScope(), "", [], call);
 	const result = tryRewriteCreateNodeAt(call);
+	leaveMetaScope(outer);
 	assert result.kind == NodeKind.ObjectLiteral;
 	const od = result.data as ObjectLiteralData;
 	// line field should be MemberExpr accessing `x.line` (not `x.location.line`)
@@ -2448,10 +2503,27 @@ test "tryRewriteCreateNodeAt leaves call alone when D is not ObjectLiteral" {
 		isDirectCall: true,
 		resolvedOverloadIdx: 0,
 	}, synthToken(loc));
+	const outer = enterMetaScope(metaTestScope(), "", [], call);
 	const result = tryRewriteCreateNodeAt(call);
+	leaveMetaScope(outer);
 	// Should be unchanged
 	assert result == call;
 	assert result.kind == NodeKind.CallExpr;
+}
+
+test "tryRewriteCreateNodeAt leaves a call to a user function named createNodeAt alone" {
+	const loc = makeLoc(1, 0);
+	const dataLit = createNode(NodeKind.ObjectLiteral, { properties: [], keys: [], keyLocations: [] }, synthToken(loc));
+	const call = createNode(NodeKind.CallExpr, {
+		callee: createNode(NodeKind.Identifier, { name: "createNodeAt" }, synthToken(loc)),
+		arguments: [mkNumber(0, loc), dataLit, createNode(NodeKind.Identifier, { name: "x" }, synthToken(loc))],
+		isDirectCall: true,
+		resolvedOverloadIdx: 0,
+	}, synthToken(loc));
+	const outer = enterMetaScope(metaTestScope(""), "", [], call);
+	const result = tryRewriteCreateNodeAt(call);
+	leaveMetaScope(outer);
+	assert result == call;
 }
 
 test "nodeToASTLiteral builds ObjectLiteral for NumberLiteral" {
@@ -2679,7 +2751,7 @@ test "preprocessNode rewrites NodeKind.X inside ForOfStmt body" {
 		forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
 	}, loc);
 
-	preprocessMacroBody(forOf);
+	preprocessMacroBody(forOf, metaTestScope(), "", []);
 
 	// After preprocessing, the inner VariableDecl's initializer should be a
 	// cast of the NodeKind.NumberLiteral ordinal (=0) to NodeKind, not a

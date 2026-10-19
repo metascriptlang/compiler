@@ -14,8 +14,15 @@ export * from "./decorator";
 extern function currentFile(): string;
 extern function currentLine(): number;
 extern function exec(cmd: string): string;
-extern function error(msg: string, loc: SourceLocation): never;
-extern function warning(msg: string, loc: SourceLocation): void;
+@builtin("MetaError")
+export extern function error(msg: string, loc: Node | SourceLocation | null = null): never;
+@builtin("MetaWarning")
+export extern function warning(msg: string, loc: Node | SourceLocation | null = null): void;
+
+@builtin("MetaSplice")
+export extern function splice(n: Node): Node;
+@builtin("MetaGetTypeArg")
+export extern function getTypeArg(): Node;
 
 // Node child access by index over the macro VM's flat wire — the Nim
 // n[i]/n.len analog. Flat field names (n.object, n.left, ...) resolve only
@@ -62,8 +69,10 @@ extern function msMetaGetSize(n: Node): int32;
 extern function msMetaGetAlign(n: Node): int32;
 extern function msMetaGetOffset(n: Node, field: string): int32;
 
+@builtin("MetaBindSym")
 export function bindSym(name: string): Node | null { return msMetaBindSym(name, -1); }
 export function getType(n: Node | null): Node | null { if (n == null) return null; return msMetaGetType(n, false); }
+@builtin("MetaGetTypeImpl")
 export function getTypeImpl(n: Node | null): Node | null { if (n == null) return null; return msMetaGetType(n, true); }
 export function getImpl(n: Node | null): Node | null { if (n == null) return null; return msMetaGetImpl(n); }
 export function resolveType(text: string): Node | null { return msMetaResolveType(text); }
