@@ -1,28 +1,15 @@
+import { msSolLoadU64, msSolMemoryFaultText, msSolSpanAddress } from "./memory";
+import { RENT_AT } from "./simulatorContext";
 import {
-	msSolHostFaultCodeOf,
-	msSolLoadU64,
-	msSolMemoryAllocate,
-	msSolMemoryClearFault,
-	msSolMemoryFaultText,
-	msSolMemoryKeepOnly,
-	msSolMemoryMap,
-	msSolMemorySetAccounts,
-	msSolMemoryUnmap,
-	msSolSpanAddress,
-} from "./memory";
-import {
-	CONTEXT_SIZE,
-	EMPTY_INPUT_SIZE,
-	HEAP_SIZE,
-	HEAP_START,
-	INPUT_START,
-	MAX_ACCOUNTS,
-	RENT_AT,
-	heapExhausted,
-	heapHolds,
-	parseInput,
-	roundedSize,
-} from "./simulatorContext";
+	accountCount,
+	accountTable,
+	context,
+	instructionData,
+	msSolHostRemainingComputeUnits,
+	msSolHostResult,
+	msSolHostScratch,
+	setResult,
+} from "./simulatorHost";
 import {
 	getClock,
 	getRent,
@@ -35,13 +22,12 @@ import {
 	logPubkey,
 	logTotal,
 	rentReadTotal,
-	resetSimulator,
 	setClock,
 	setReturnData,
 	setSysvarStatus,
 } from "./simulatorLog";
 import { msSolHostCreateProgramAddress, msSolHostCurveValidatePoint, msSolHostTryFindProgramAddress } from "./simulatorCrypto";
-import { holdAccounts, invocationAt, invocationTotal, invokeSigned, resetDispatcher, settle } from "./simulatorInvoke";
+import { invocationAt, invocationTotal, invokeSigned } from "./simulatorInvoke";
 import { invokeMetas } from "./simulatorMetas";
 import {
 	deriveAddress,
@@ -55,77 +41,7 @@ import {
 } from "./simulatorSeeds";
 
 export { msSolHostFaultCodeOf } from "./memory";
-
-const COMPUTE_BUDGET: uint64 = 200000;
-
-let entered = false;
-let result: uint64 = 0;
-let position: uint64 = CONTEXT_SIZE;
-let accountCount: uint64 = 0;
-let accountTable: uint64 = 0;
-let instructionData: uint64 = 0;
-
-// host.c msSolHostEnter
-function enter(input: uint64): void {
-	resetSimulator();
-	resetDispatcher();
-	msSolMemoryKeepOnly(input);
-	let start = input;
-	if (input == 0) {
-		msSolMemoryMap(INPUT_START, EMPTY_INPUT_SIZE);
-		start = INPUT_START;
-	}
-	msSolMemoryMap(HEAP_START, HEAP_SIZE);
-	msSolMemoryClearFault();
-	result = 0;
-	position = CONTEXT_SIZE;
-	const table = msSolMemoryAllocate(MAX_ACCOUNTS * 8);
-	const parsed = parseInput(start, table);
-	if (msSolHostFaultCodeOf() != 0) { throw new Error("solana kernel: " + msSolMemoryFaultText()); }
-	accountCount = parsed.count;
-	accountTable = table;
-	instructionData = parsed.instructionData;
-	msSolMemorySetAccounts(table, parsed.count, parsed.instructionData, start, parsed.programId);
-	holdAccounts(table, parsed.count);
-	entered = true;
-}
-
-// host.c msSolHostContext
-function ready(): void {
-	if (!entered) { enter(0); }
-}
-
-// host.c msSolHostAlloc
-function allocate(size: uint64): uint64 {
-	ready();
-	const rounded = roundedSize(size);
-	if (!heapHolds(position, rounded)) { throw new Error(heapExhausted(rounded, position)); }
-	const address = HEAP_START + position;
-	position += rounded;
-	return address;
-}
-
-// host.c msSolHostInput
-export function msSolHostInput(size: uint64): uint64 {
-	msSolMemoryUnmap(INPUT_START);
-	msSolMemoryMap(INPUT_START, size);
-	return INPUT_START;
-}
-
-export function msSolHostEnter(input: uint64): void {
-	enter(input);
-}
-
-// host.c msSolHostLeave
-export function msSolHostLeave(): void {
-	if (result != 0) { return; }
-	settle();
-}
-
-// host.c msSolHostResult
-export function msSolHostResult(): uint64 {
-	return result;
-}
+export { msSolHostEnter, msSolHostInput, msSolHostLeave, msSolHostResult } from "./simulatorHost";
 
 // host.c msSolHostFaultMessage
 export function msSolHostFaultMessage(): string {
@@ -176,54 +92,44 @@ export function msSolInvokeMetas(
 
 // solana.h msSolAccountCount, msSolAccountAt, msSolAccountSlot
 export function msSolAccountCount(): uint64 {
-	ready();
-	return accountCount;
+	return accountCount();
 }
 
 export function msSolAccountAt(index: uint64): uint64 {
-	ready();
-	if (index >= accountCount) { return 0; }
-	return msSolLoadU64(accountTable + index * 8);
+	if (index >= accountCount()) { return 0; }
+	return msSolLoadU64(accountTable() + index * 8);
 }
 
 export function msSolAccountSlot(index: uint64): uint64 {
-	ready();
-	return msSolLoadU64(accountTable + index * 8);
+	return msSolLoadU64(accountTable() + index * 8);
 }
 
 // solana.h msSolInstructionData, msSolInstructionDataLength
 export function msSolInstructionData(): uint64 {
-	ready();
-	return instructionData;
+	return instructionData();
 }
 
 export function msSolInstructionDataLength(): uint64 {
-	ready();
-	return msSolLoadU64(instructionData - 8);
+	return msSolLoadU64(instructionData() - 8);
 }
 
 // solana.h msSolSetResult, msSolResult
 export function msSolSetResult(code: uint64): void {
-	ready();
-	result = code;
+	setResult(code);
 }
 
 export function msSolResult(): uint64 {
-	ready();
-	return result;
+	return msSolHostResult();
 }
 
-// solana.h msSolScratch (host branch): host.c msSolHostScratch
+// solana.h msSolScratch (host branch)
 export function msSolScratch(size: uint64): uint64 {
-	ready();
-	if (!heapHolds(position, size)) { return 0; }
-	return allocate(size);
+	return msSolHostScratch(size);
 }
 
 // solana.h msSolRentAddress
 export function msSolRentAddress(): uint64 {
-	ready();
-	const rent = HEAP_START + RENT_AT;
+	const rent = context() + RENT_AT;
 	if (msSolLoadU64(rent) == 0 && getRent(rent) != 0) { return 0; }
 	return rent;
 }
@@ -249,9 +155,9 @@ export function msSolLogComputeUnits(): void {
 	logComputeUnits();
 }
 
-// host.c msSolHostRemainingComputeUnits
+// solana.h msSolRemainingComputeUnits (host branch)
 export function msSolRemainingComputeUnits(): uint64 {
-	return COMPUTE_BUDGET;
+	return msSolHostRemainingComputeUnits();
 }
 
 // solana.h msSolGetClock, msSolCurveValidatePoint

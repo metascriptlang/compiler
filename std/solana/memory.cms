@@ -26,4 +26,6 @@ export extern function msSolDataRoom(record: uint64): uint64;
 export extern function msSolClaimRecord(address: uint64): void;
 export extern function msSolHostRaise(code: uint64, text: string): void;
 export extern function msSolHostFaultCodeOf(): uint64;
+export extern function msSolMemoryFaultText(): string from "msSolHostFaultMessage";
+export extern function msSolMemoryClearFault(): void from "msSolHostClearFault";
 export extern function msSolProgramId(): uint64;

@@ -3,6 +3,7 @@
 
 when (!solana) {
 	import "./simulatorCrypto";
+	import "./simulatorHost";
 	import "./simulatorInvoke";
 	import "./simulatorLog";
 	import "./simulatorPrograms";

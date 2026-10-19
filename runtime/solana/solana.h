@@ -50,7 +50,7 @@ typedef struct {
     uint64_t rent[3];
 } msSolanaContext;
 
-msSolanaContext* msSolHostContext(void);
+uint64_t msSolHostContext(void);
 uint64_t msSolHostAlloc(uint64_t size);
 uint64_t msSolHostScratch(uint64_t size);
 uint64_t msSolHostInput(uint64_t size);
@@ -59,6 +59,7 @@ void msSolHostLeave(void);
 uint64_t msSolHostResult(void);
 void msSolHostRaise(uint64_t code, msString text);
 uint64_t msSolHostFaultCodeOf(void);
+void msSolHostClearFault(void);
 msString msSolHostFaultMessage(void);
 uint64_t msSolHostLogTotal(void);
 msString msSolHostLogAt(uint64_t index);
@@ -83,11 +84,11 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
 uint64_t msSolHostGetClock(uint64_t out);
 uint64_t msSolHostGetRent(uint64_t out);
 uint64_t msSolHostRentReadTotal(void);
-void msSolHostSetReturnData(const uint8_t* data, int64_t length);
+void msSolHostSetReturnDataAt(uint64_t data, uint64_t length);
 uint64_t msSolHostGetReturnData(uint64_t data, uint64_t length, uint64_t programId);
 
 static inline msSolanaContext* msSolContext(void) {
-    return msSolHostContext();
+    return (msSolanaContext*)(uintptr_t)msSolHostContext();
 }
 
 static inline uint64_t msSolAlloc(uint64_t size) {
@@ -166,17 +167,6 @@ static inline __attribute__((noinline)) const uint8_t* msSolInstructionDataOf(co
     for (uint64_t left = *(const uint64_t*)input; left > 0; left--) cursor = msSolNextRecord(cursor);
     return cursor + 8;
 }
-
-#ifndef MSOS_SOLANA
-static inline __attribute__((noinline)) void msSolParse(uint64_t* table) {
-    msSolanaContext* context = msSolContext();
-    const uint8_t* input = (const uint8_t*)context->input;
-    msSolParseAccounts(input, table);
-    const uint8_t* instructionData = msSolInstructionDataOf(input);
-    context->instructionData = (uint64_t)instructionData;
-    context->programId = (uint64_t)instructionData + *(const uint64_t*)(instructionData - 8);
-}
-#endif
 
 static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
     if (!instructionData) instructionData = msSolInstructionDataOf(input);
@@ -444,7 +434,7 @@ static inline uint64_t msSolCurveValidatePoint(uint64_t curve, uint64_t point, u
 }
 
 static inline void msSolSetReturnData(const uint8_t* data, int64_t length) {
-    msSolHostSetReturnData(data, length);
+    msSolHostSetReturnDataAt((uint64_t)(uintptr_t)data, (uint64_t)length);
 }
 
 static inline uint64_t msSolGetReturnData(uint64_t data, uint64_t length, uint64_t programId) {
