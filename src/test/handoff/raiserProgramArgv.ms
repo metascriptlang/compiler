@@ -1,10 +1,9 @@
 import { ensureHostTableLoaded, _resetBridgeStateForTests } from "../../compiler/meta/hostTable";
 import { _resetHostRegistryForTests, setActiveProgramArgv, activeProgramArgv } from "../../raiser/hostRegistry";
-import { RaiserValueKind, raiserConstString, heapArrayLen, heapArrayGet } from "../../raiser/value";
+import { RaiserValueKind, raiserConstString, heapArrayLen, heapArrayGet, heapStringText } from "../../raiser/value";
 import { RaiserModule, makeTestModule } from "../../raiser/module";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import { createContext, load, execute } from "../../raiser/context";
-import { unboxString } from "../../raiser/marshal";
 import { argv } from "std/process";
 
 function prepareProgramArgvHost(): void {
@@ -30,7 +29,7 @@ function argvSeenBy(programArgv: string[] | null): string[] {
 	if (ctx.lastResult.kind != RaiserValueKind.Array) { out.push("not an array"); return out; }
 	const n = heapArrayLen(ctx.arrayHeap, ctx.lastResult.intVal);
 	for (let i = 0; i < n; i += 1) {
-		out.push(unboxString(heapArrayGet(ctx.arrayHeap, ctx.lastResult.intVal, i)));
+		out.push(heapStringText(ctx.arrayHeap, heapArrayGet(ctx.arrayHeap, ctx.lastResult.intVal, i)));
 	}
 	return out;
 }
