@@ -1293,6 +1293,32 @@ function coreOp(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function coreGenericInit(): void {
+	const tag = "hcrCoreGenericInit";
+	const dir = freshDir(`${TMP}/coreGenericInit`);
+	for (const sub of ["app", "lib"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "lib/lib.ms", "logicEdit.ms"]) {
+		copy(`${FIXTURES}/coreGenericInit/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-GI ")) seen.push(line);
+	}
+	const want = [
+		"HCR-GI start V6 42 applib app=4 lib=3",
+		"HCR-GI reloaded logic",
+		"HCR-GI after V6 357 applib app=4 lib=3",
+	];
+	if (!succeeded(ran) || seen.join("
+") != want.join("
+")) {
+		console.log(both(ran));
+		failWith(tag, "a generic class instance a project image and a core module both construct did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function rewriteCoreNativeHeader(dir: string, include: string): void {
 	const revision = `${performance.now()}`.replaceAll(".", "");
 	put(`${dir}/box/shared.h`, `${include}#define HCR_NATIVE_REV ${revision}\n`);
@@ -1746,6 +1772,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrCoreOp", run: coreOp },
+	{ name: "hcrCoreGenericInit", run: coreGenericInit },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
