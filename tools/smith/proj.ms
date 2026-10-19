@@ -182,6 +182,7 @@ class Unit {
 	glue: boolean = false;
 	fragile: boolean = false;
 	ext: boolean = false;
+	lent: boolean = false;
 	preToks: Tok[] = [];
 	deps: int32[] = [];
 	writes: int32[] = [];
@@ -498,7 +499,9 @@ class Splitter {
 			for (const a of toks) {
 				if (a.start < open || a.end > i || a.member) { continue; }
 				const k = this.unitIndex(a.text);
-				if (k >= 0 && this.units[k].kind == "let" && !writes.includes(k)) { writes.push(k); }
+				if (k < 0 || this.units[k].kind != "let") { continue; }
+				this.units[k].lent = true;
+				if (!writes.includes(k)) { writes.push(k); }
 			}
 		}
 	}
@@ -658,9 +661,15 @@ class Splitter {
 				if ((u.glue || u.ext || u.kind == "converter") && TYPE_KINDS.includes(this.kindOf(d))) { this.dsu.join(i, d); }
 			}
 			for (const w of u.writes) { this.dsu.join(i, w); }
+			for (const d of u.deps) {
+				if (this.units[d].lent) { this.dsu.join(i, d); }
+			}
 			if (this.names[i] != "") { this.dsu.join(i, this.unitIndex(this.names[i])); }
 		}
 		for (const w of this.mainWrites) { this.dsu.join(n, w); }
+		for (const d of this.mainDeps) {
+			if (this.units[d].lent) { this.dsu.join(n, d); }
+		}
 		let changed = true;
 		while (changed) {
 			changed = false;
@@ -1536,7 +1545,7 @@ test "a module that reaches a module declaring an operator or an implicit functi
 	assert glueModules > 0 && direct > 0;
 }
 
-test "a global lent to a Borrow parameter is declared in the file that lends it, because another file reads it as a plain value" {
+test "a global lent to a Borrow parameter is declared and read in one file, because another file reads it as a plain value" {
 	let lent = 0;
 	for (const vector of ["fams=own", "fams=seq", "fams=conv,own,seq"]) {
 		for (let seed = 1; seed <= 25; seed++) {
@@ -1555,6 +1564,12 @@ test "a global lent to a Borrow parameter is declared in the file that lends it,
 					if (!isGlobalName(arg)) { continue; }
 					lent++;
 					assert f.text.contains("let " + arg + ":");
+					for (const other of files) {
+						if (other.name == f.name) { continue; }
+						const toks = scanTokens(other.text);
+						assert toks.ok;
+						for (const tok of toks.value) { assert tok.text != arg; }
+					}
 				}
 			}
 		}
