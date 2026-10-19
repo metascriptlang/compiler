@@ -2,12 +2,66 @@
 
 import { encodeHex, encodeBase64 } from "./encoding";
 
-extern function msCryptoHashBuffer(algorithm: string, data: string): string;
+extern function msCryptoHashInto(
+	algorithm: string, data: string, ref output: uint8[64], capacity: int64,
+): int64;
+extern function msCryptoHmacInto(
+	algorithm: string, key: string, data: string, ref output: uint8[64], capacity: int64,
+): int64;
+extern function msCryptoHashFinalIntoHandle(ctx: int64, ref output: uint8[64], capacity: int64): int64;
+extern function msCryptoHmacFinalIntoHandle(ctx: int64, ref output: uint8[64], capacity: int64): int64;
+
+function encodeDigest(data: Readonly<Span<uint8>>, encoding: string): string {
+	return encoding == "base64" ? encodeBase64(data) : encodeHex(data);
+}
 
 @exportName("msCryptoHashString")
 export function encodedHash(algorithm: string, data: string, encoding: string): string {
-	const digest = msCryptoHashBuffer(algorithm, data);
-	return encoding == "base64" ? encodeBase64(digest.asBytes()) : encodeHex(digest.asBytes());
+	let digest: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	const length = msCryptoHashInto(algorithm, data, digest, 64);
+	if (length == 0) return "";
+	return encodeDigest(digest[0..length], encoding);
+}
+
+export function encodedHmac(algorithm: string, key: string, data: string, encoding: string): string {
+	let digest: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	const length = msCryptoHmacInto(algorithm, key, data, digest, 64);
+	if (length == 0) return "";
+	return encodeDigest(digest[0..length], encoding);
+}
+
+export function encodedHashFinal(ctx: int64, encoding: string): string {
+	let digest: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	const length = msCryptoHashFinalIntoHandle(ctx, digest, 64);
+	if (length == 0) return "";
+	return encodeDigest(digest[0..length], encoding);
+}
+
+export function encodedHmacFinal(ctx: int64, encoding: string): string {
+	let digest: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	const length = msCryptoHmacFinalIntoHandle(ctx, digest, 64);
+	if (length == 0) return "";
+	return encodeDigest(digest[0..length], encoding);
 }
 
 @exportName("msCryptoToBase64")

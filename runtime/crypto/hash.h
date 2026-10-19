@@ -31,12 +31,14 @@ msString msCryptoHashString(msString algorithm, msString data, msString encoding
 /* Hash raw binary data, return raw hash bytes as msString buffer.
  * Returns empty string on error. */
 msString msCryptoHashBuffer(msString algorithm, msString data);
+int64_t msCryptoHashInto(msString algorithm, msString data, void* output, int64_t capacity);
 
 /* ===== HMAC ===== */
 
 /* HMAC of raw data with raw key, return raw bytes as msString buffer.
  * Returns empty string on error. */
 msString msCryptoHmacBuffer(msString algorithm, msString key, msString data);
+int64_t msCryptoHmacInto(msString algorithm, msString key, msString data, void* output, int64_t capacity);
 
 /* ===== Random ===== */
 
@@ -68,6 +70,7 @@ void msCryptoHashUpdate(msCryptoHashCtx* ctx, msString data);
 
 /* Finalize and get raw hash bytes. Frees context. */
 msString msCryptoHashFinalBuffer(msCryptoHashCtx* ctx);
+int64_t msCryptoHashFinalInto(msCryptoHashCtx* ctx, void* output, int64_t capacity);
 
 /* Free a hash context without finalizing */
 void msCryptoHashFree(msCryptoHashCtx* ctx);
@@ -85,6 +88,7 @@ void msCryptoHmacUpdate(msCryptoHmacCtx* ctx, msString data);
 
 /* Finalize and get raw HMAC bytes. Frees context. */
 msString msCryptoHmacFinalBuffer(msCryptoHmacCtx* ctx);
+int64_t msCryptoHmacFinalInto(msCryptoHmacCtx* ctx, void* output, int64_t capacity);
 
 /* Free an HMAC context without finalizing */
 void msCryptoHmacFree(msCryptoHmacCtx* ctx);
@@ -106,6 +110,9 @@ static inline void msCryptoHashUpdateHandle(int64_t ctx, msString data) {
 static inline msString msCryptoHashFinalBufferHandle(int64_t ctx) {
     return msCryptoHashFinalBuffer(HASH_CTX_FROM_HANDLE(ctx));
 }
+static inline int64_t msCryptoHashFinalIntoHandle(int64_t ctx, void* output, int64_t capacity) {
+    return msCryptoHashFinalInto(HASH_CTX_FROM_HANDLE(ctx), output, capacity);
+}
 static inline void msCryptoHashFreeHandle(int64_t ctx) {
     msCryptoHashFree(HASH_CTX_FROM_HANDLE(ctx));
 }
@@ -118,6 +125,9 @@ static inline void msCryptoHmacUpdateHandle(int64_t ctx, msString data) {
 }
 static inline msString msCryptoHmacFinalBufferHandle(int64_t ctx) {
     return msCryptoHmacFinalBuffer(HMAC_CTX_FROM_HANDLE(ctx));
+}
+static inline int64_t msCryptoHmacFinalIntoHandle(int64_t ctx, void* output, int64_t capacity) {
+    return msCryptoHmacFinalInto(HMAC_CTX_FROM_HANDLE(ctx), output, capacity);
 }
 static inline void msCryptoHmacFreeHandle(int64_t ctx) {
     msCryptoHmacFree(HMAC_CTX_FROM_HANDLE(ctx));

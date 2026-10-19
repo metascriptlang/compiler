@@ -1,6 +1,6 @@
 @include("runtime/crypto/hash.h");
 
-import "./encodingNative";
+import { encodedHash, encodedHmac, encodedHashFinal, encodedHmacFinal } from "./encodingNative";
 
 // mbedTLS include paths + minimal config
 @passC("-Iruntime/crypto");
@@ -102,13 +102,10 @@ export function cleanup(): void {
 
 // ===== Hash Functions =====
 
-function encodeDigest(data: string, encoding: string): string {
-	return encoding == "base64" ? toBase64(data) : toHex(data);
-}
-
 export function hash(algorithm: string, data: string, encoding: string = "hex"): Result<string, CryptoError> {
-	const result = try hashBuffer(algorithm, data);
-	return Result.ok(encodeDigest(result, encoding));
+	const result = encodedHash(algorithm, data, encoding);
+	if (result == "") return Result.err(hashFailed(algorithm, "Hash computation failed"));
+	return Result.ok(result);
 }
 
 export function sha256(data: string, encoding: string = "hex"): Result<string, CryptoError> { return hash("sha256", data, encoding); }
@@ -133,8 +130,9 @@ export function hmac(
 	data: string,
 	encoding: string = "hex"
 ): Result<string, CryptoError> {
-	const result = try hmacBuffer(algorithm, key, data);
-	return Result.ok(encodeDigest(result, encoding));
+	const result = encodedHmac(algorithm, key, data, encoding);
+	if (result == "") return Result.err(hmacFailed(algorithm, "HMAC computation failed"));
+	return Result.ok(result);
 }
 
 export function hmacBuffer(algorithm: string, key: string, data: string): Result<string, CryptoError> {
@@ -198,7 +196,9 @@ export class Hasher {
 		if (this._ctx == 0) {
 			return "";
 		}
-		return encodeDigest(this.digestBuffer(), encoding);
+		const ctx = this._ctx;
+		this._ctx = 0;
+		return encodedHashFinal(ctx, encoding);
 	}
 
 	digestBuffer(): string {
@@ -239,7 +239,9 @@ export class Hmac {
 		if (this._ctx == 0) {
 			return "";
 		}
-		return encodeDigest(this.digestBuffer(), encoding);
+		const ctx = this._ctx;
+		this._ctx = 0;
+		return encodedHmacFinal(ctx, encoding);
 	}
 
 	digestBuffer(): string {

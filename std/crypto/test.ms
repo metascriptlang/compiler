@@ -4,6 +4,56 @@ import { sha256, sha512, sha384, sha1, md5, hash, hmac, randomBytes, randomInt, 
 	timingSafeEqual, createHash, createHmac, isHashSupported, init,
 	toHex, fromHex, toBase64, fromBase64, hashBuffer, hmacBuffer } from "std/crypto";
 
+@include("runtime/crypto/hash.h");
+extern function hashInto(
+	algorithm: string, data: string, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHashInto";
+extern function hmacInto(
+	algorithm: string, key: string, data: string, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHmacInto";
+extern function hashInit(algorithm: string): int64 from "msCryptoHashInitHandle";
+extern function hashFinalInto(
+	ctx: int64, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHashFinalIntoHandle";
+extern function hmacFinalInto(
+	ctx: int64, ref output: uint8[64], capacity: int64,
+): int64 from "msCryptoHmacFinalIntoHandle";
+
+test "digest scratch rejects undersized outputs without writes" {
+	let bytes: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	for (const capacity of [-1, 0, 63]) {
+		assert hashInto("sha512", "abc", bytes, capacity) == 0;
+		assert hmacInto("sha512", "key", "abc", bytes, capacity) == 0;
+		for (const byte of bytes) assert byte == 0;
+	}
+	assert hashInto("bogus", "abc", bytes, 64) == 0;
+	assert hmacInto("bogus", "key", "abc", bytes, 64) == 0;
+	const ctx = hashInit("sha512");
+	assert ctx != 0;
+	assert hashFinalInto(ctx, bytes, 63) == 0;
+	assert hashFinalInto(0, bytes, 64) == 0;
+	assert hmacFinalInto(0, bytes, 64) == 0;
+	for (const byte of bytes) assert byte == 0;
+}
+
+test "digest scratch accepts exact small and maximum capacities" {
+	let bytes: uint8[64] = [
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	];
+	assert hashInto("md5", "abc", bytes, 16) == 16;
+	assert hmacInto("md5", "key", "abc", bytes, 16) == 16;
+	assert hashInto("sha512", "abc", bytes, 64) == 64;
+	assert hmacInto("sha512", "key", "abc", bytes, 64) == 64;
+}
+
 test "crypto codecs preserve raw binary strings" {
 	const bytes: uint8[] = [];
 	for (let i = 0; i < 256; i++) bytes.push(i as uint8);
