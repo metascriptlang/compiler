@@ -58,6 +58,7 @@ import "./emissionOwnership";
 import "./arraySpliceEmit";
 import "./arrayLengthAssignEmit";
 import "./raiseChecks";
+import "./ctorOwnership";
 import "./inlineFunctions";
 import "./pointerAddress";
 import "./noinlinePragma";

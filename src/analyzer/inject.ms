@@ -491,6 +491,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
 		sinkParams = sym.symbolType.typeChildren;
 	}
+	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 
 	// Actor proxy call without a park = SEND-class handoff: the caller never
 	// suspends on a reply, so a plain-ref arg must transfer ownership into the
@@ -508,7 +509,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink) {
+		if (sinksAll || (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink)) {
 			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
@@ -823,12 +824,12 @@ function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node 
 
 function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const nd = node.data as NewExprData;
-	// Ctor params are borrows like every other param (Nim default — no sink params,
-	// ea38c2a); `new T(x)` lowers to T_init(this, x) = a plain call. Consumed here
-	// orphaned every fresh/moved arg: caller relinquished, callee copied (+1 leak).
+	// A constructor's parameters are owned (see isCtorRoutine): the arguments are sunk, a last
+	// use or a temporary moves in and anything still live is copied.
 	const marks: Node[] = [];
+	const argMode = isCtorRoutine(node.resolvedSym) ? DrcMode.SinkArg : DrcMode.Normal;
 	for (let i = 0; i < nd.newArguments.length; i += 1) {
-		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, DrcMode.Normal);
+		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, argMode);
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(nd.newArguments, marks, dctx);
@@ -1213,6 +1214,10 @@ function genCopy(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 		if ((flags & MOC_IS_DECL) != 0) {
 			if (destSym != null) {
 				return makeBlock([stmt, makeCopyAfterInit(destSym, rcInfo, loc, null)], loc);
+			}
+			if ((flags & MOC_IS_FIELD) != 0) {
+				const increfCall = makeExprStmt(makeCall(makeTypedIdentResolved(rcInfo.copyFn, null, loc), [dest], loc), loc);
+				return makeBlock([stmt, increfCall], loc);
 			}
 			return stmt;
 		}
@@ -1642,9 +1647,18 @@ function callCanThrow(callExpr: Node): boolean {
 	return !hasFlag(sym, SymbolFlag.ImportC);
 }
 
+// A constructor owns the values it is handed: every call of one sinks its arguments, and its
+// body registers its parameters as owned. Decided from the routine alone, so a caller analysed
+// before the constructor's module is lowered still agrees with the body.
+function isCtorRoutine(sym: Symbol | null): boolean {
+	if (sym == null) return false;
+	if (hasFlag(sym, SymbolFlag.ClassInit)) return true;
+	return sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl;
+}
+
 // The whole-program raise inference runs after this walk, so a constructor call is assumed to raise.
 function newRunsConstructor(node: Node): boolean {
-	return node.kind == NodeKind.NewExpr && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ClassInit);
+	return node.kind == NodeKind.NewExpr && isCtorRoutine(node.resolvedSym);
 }
 
 function setNeedsTryIfRaises(node: Node, dctx: DrcContext): void {
@@ -1700,15 +1714,15 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	// Reference parity (sfGlobal): module-level variables live for the entire program.
 	// wasMoved would zero them for all callers. Never move globals.
 	if (hasFlag(sym, SymbolFlag.Global)) return false;
-	// Params are borrows — never move them: the caller owns the value and
-	// will still destroy its own copy (use-after-free otherwise).
-	if (sym.symbolKind == SymbolKind.Parameter) return false;
+	// A borrowed param is never moved: the caller owns the value and will still
+	// destroy its own copy (use-after-free otherwise). A constructor's owned param moves.
+	const vi = findVarInfoInContext(dctx, sym);
+	if (sym.symbolKind == SymbolKind.Parameter && (vi == null || vi.isCursor)) return false;
 	// Reference parity: cursor variables are borrows — never move them.
 	// isLastRead(n, c, s) and not (n.kind == Identifier and isCursor(n))
 	// Cursor vars (for-of bindings, $-prefixed temps) don't own the data;
 	// the source array/container still holds its own reference.
 	// Moving a cursor would leave the source with a dangling pointer.
-	const vi = findVarInfoInContext(dctx, sym);
 	if (vi != null && vi.isCursor) return false;
 	// Phase A: variables in finally blocks must never be moved (use-after-free prevention)
 	if (symListHas(dctx.finallyProtectedVars, sym)) return false;
@@ -1750,15 +1764,15 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 // Register RC-typed function parameters for scope cleanup.
 // The function owns the parameter values — they need destroy at scope exit.
 
-function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, body: Node): void {
+function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, body: Node, ownedFrom: int32): void {
 	if (dctx.ctx.checkerCtx == null) return;
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pRcInfo = classifyRc(paramTypes[pi], dctx);
 		if (pRcInfo.needsCleanup) {
-			// Params are borrows registered as cursors (no sink params, ea38c2a):
-			// the caller owns the value; stores inside the callee copy at the
-			// assignment point.
-			registerVar(dctx, pRcInfo, true, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
+			// Params are borrows registered as cursors: the caller owns the value and a
+			// store inside the callee copies at the assignment point. A constructor's
+			// parameters from `ownedFrom` on are owned: its callers sink them.
+			registerVar(dctx, pRcInfo, ownedFrom < 0 || pi < ownedFrom, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 		}
 	}
 }
@@ -1776,7 +1790,53 @@ function isGeneratorBody(body: Node): boolean {
 
 // Process a function body with sink param registration.
 // Looks up the function's type to get resolved param types.
-function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: string, paramNames: string[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, funcNodeType: Type): Node {
+function mentionsReceiver(node: Node, thisSym: Symbol): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier) {
+		return node.resolvedSym == thisSym || (node.data as IdentifierData).name == "super";
+	}
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && mentionsReceiver(child, thisSym)) found = true;
+	});
+	return found;
+}
+
+function receiverField(target: Node, thisSym: Symbol): string {
+	if (target.kind != NodeKind.MemberExpr) return "";
+	const md = target.data as MemberExprData;
+	let obj = md.object;
+	while (obj.kind == NodeKind.HiddenDeref) obj = (obj.data as HiddenDerefData).expr;
+	return obj.kind == NodeKind.Identifier && obj.resolvedSym == thisSym ? md.property : "";
+}
+
+// The object a constructor builds is fresh: while no statement lets `this` out, the first
+// `this.f = value` of a field replaces nothing, so its old value needs no destroy
+// (the reference's nfFirstWrite). Only straight-line top-level statements are tracked.
+function markFirstFieldWrites(stmts: Node[], thisSym: Symbol | null): void {
+	if (thisSym == null) return;
+	const written: string[] = [];
+	for (const stmt of stmts) {
+		let field = "";
+		if (stmt.kind == NodeKind.ExprStmt) {
+			const expr = (stmt.data as ExprStmtData).expr;
+			if (expr.kind == NodeKind.BinaryExpr && (expr.data as BinaryExprData).operator == "=") {
+				const bd = expr.data as BinaryExprData;
+				field = receiverField(bd.left, thisSym);
+				if (field != "" && mentionsReceiver(bd.right, thisSym)) return;
+				if (field != "" && !written.includes(field)) expr.flags = expr.flags.incl(NodeFlag.FirstWrite);
+				if (bd.right.kind == NodeKind.NullLiteral) continue;
+			}
+		}
+		if (field == "") {
+			if (mentionsReceiver(stmt, thisSym)) return;
+		} else {
+			written.push(field);
+		}
+	}
+}
+
+function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: string, paramNames: string[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, funcNodeType: Type, ownedFrom: int32 = -1): Node {
 	if (body == null) return body;
 	if (body.kind != NodeKind.BlockStmt) return body;
 	const bd = body.data as BlockStmtData;
@@ -1786,6 +1846,10 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	if (ownerSym != null && hasFlag(ownerSym, SymbolFlag.GeneratedOp)) return body;
 
 	pushScope(dctx, false, true);
+
+	if (ownerSym != null && isCtorRoutine(ownerSym)) {
+		markFirstFieldWrites(bd.statements, paramSyms != null && paramSyms.length > 0 ? paramSyms[0] : null);
+	}
 
 	const outerFinallyVars = dctx.finallyProtectedVars;
 	const outerBody = dctx.currentFuncBody;
@@ -1805,9 +1869,9 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	// Reference parity: ALWAYS use the function's type (owner.typ), never scope lookupSymbol.
 	// lookupSymbol(paramName) can find wrong-scope variables with the same name.
 	if (ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function) {
-		registerFuncParams(ownerSym.symbolType.typeNames, ownerSym.symbolType.typeChildren, paramSyms, dctx, loc, body);
+		registerFuncParams(ownerSym.symbolType.typeNames, ownerSym.symbolType.typeChildren, paramSyms, dctx, loc, body, ownedFrom >= 0 ? ownedFrom : (isCtorRoutine(ownerSym) ? 1 : -1));
 	} else if (funcNodeType != null && funcNodeType.kind == TypeKind.Function) {
-		registerFuncParams(funcNodeType.typeNames, funcNodeType.typeChildren, paramSyms, dctx, loc, body);
+		registerFuncParams(funcNodeType.typeNames, funcNodeType.typeChildren, paramSyms, dctx, loc, body, ownedFrom);
 	} else if (paramNames.length > 0) {
 		// No type info for params — transform bug. Log so we catch it early.
 		// NEVER fall back to lookupSymbol(paramName) — it finds wrong-scope variables.
@@ -2478,7 +2542,7 @@ function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation):
 	const cd = member.data as ConstructorDeclData;
 	if (cd.ctorBody != null) {
 		const ctorParamSyms = ctorSymsWithoutReceiver(member.paramSyms);
-		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
+		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!, 0);
 	}
 }
 

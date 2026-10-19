@@ -1,4 +1,4 @@
-// @stdout: tree=2047 live=same:3 twice=b read=hello-5 thrown=caught:2 swap=6|2 shared=2:2:2 derived=7:k:leaf init=fresh:rebound ctorStr=ab:ab self=ok:t-s-none
+// @stdout: tree=2047 live=same:3 twice=b read=hello-5 thrown=caught:2 swap=6|2 shared=2:2:2 derived=7:k:leaf init=fresh:rebound ctorStr=ab:ab self=ok:t-s-none more=fieldleaf=,ab1live,cap!,v3v3,tt,genv3,dldd,imp,ruru,argre,ns,rg=,nest
 
 // A constructor takes ownership of the values written into its fields: a temporary or a
 // last use moves in, a value still used after `new` is copied, and a field of the fresh
@@ -77,6 +77,70 @@ class SelfRead {
 	}
 }
 
+class Wrap { child: Leaf; constructor(child: Leaf) { this.child = child; } }
+class Multi {
+	a: Leaf | null = null;
+	b: Leaf | null = null;
+	list: Leaf[];
+	constructor(l: Leaf, flag: boolean) {
+		if (flag) this.a = l; else this.b = l;
+		this.list = [l];
+	}
+}
+class Cb { f: () => string; constructor(f: () => string) { this.f = f; } }
+class Str2 { a: string; constructor(s: string) { this.a = s; } }
+interface Pt { tag: string; }
+class PtBox { p: Pt; constructor(p: Pt) { this.p = p; } }
+class Cell<T> { v: T; constructor(v: T) { this.v = v; } }
+class Dflt { a: Leaf; b: string; constructor(a: Leaf, b: string = "dd") { this.a = a; this.b = b; } }
+class Implicit extends Base {}
+class Reuse extends Base {
+	copy: string;
+	constructor(t: string) { super(t); this.copy = t; }
+}
+class Reassign { f: Leaf; constructor(x: Leaf) { x = new Leaf("re"); this.f = x; } }
+class Early { f: Leaf | null = null; constructor(l: Leaf, skip: boolean) { if (skip) return; this.f = l; } }
+class Reg { f: Leaf; constructor(l: Leaf, into: Leaf[]) { this.f = l; into.push(l); } }
+
+function more(): string {
+	const out: string[] = [];
+	const h = new Holder(new Leaf("fieldleaf"), 1);
+	const w = new Wrap(h.item);
+	out.push(w.child.name + (h.item === w.child ? "=" : "!"));
+	const live = new Leaf("live");
+	const m1 = new Multi(live, true);
+	const m2 = new Multi(new Leaf("tmp"), false);
+	out.push((m1.a === live ? "a" : "-") + (m2.b != null ? "b" : "-") + m1.list.length.toString() + live.name);
+	const cap = "cap";
+	const cb = new Cb(() => cap + "!");
+	out.push(cb.f());
+	const s = "v" + out.length.toString();
+	const s2 = new Str2(s);
+	out.push(s + s2.a);
+	const pt: Pt = { tag: "t" };
+	const pb = new PtBox(pt);
+	out.push(pt.tag + pb.p.tag);
+	const c1 = new Cell<Leaf>(new Leaf("gen"));
+	const c2 = new Cell<string>(s);
+	out.push(c1.v.name + c2.v);
+	const d = new Dflt(new Leaf("dl"));
+	out.push(d.a.name + d.b);
+	out.push(new Implicit("imp").tag);
+	const r = new Reuse("ru");
+	out.push(r.tag + r.copy);
+	const arg = new Leaf("arg");
+	const re = new Reassign(arg);
+	out.push(arg.name + re.f.name);
+	const ea = new Early(arg, true);
+	const eb = new Early(arg, false);
+	out.push((ea.f == null ? "n" : "s") + (eb.f === arg ? "s" : "n"));
+	const into: Leaf[] = [];
+	const rg = new Reg(new Leaf("rg"), into);
+	out.push(rg.f.name + (into[0] === rg.f ? "=" : "!"));
+	out.push(new Holder(new Leaf("nest"), new Leaf("x").name.length).item.name);
+	return out.join(",");
+}
+
 export function main(): void {
 	const out: string[] = [];
 	const t = bottomUp(10);
@@ -101,6 +165,7 @@ export function main(): void {
 	const s0 = new SelfRead("s", null);
 	const s1 = new SelfRead("t", s0);
 	out.push("self=" + (s1.next === s0 ? "ok:" : "bad:") + s1.tag);
+	out.push("more=" + more());
 	console.log(out.join(" "));
 }
 

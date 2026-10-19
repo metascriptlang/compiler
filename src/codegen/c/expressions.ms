@@ -1372,14 +1372,11 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				}
 				addLine(sec(g, CSection.ProcHeaders), procHeader(g, initName, createFunction(initParams, initNames, voidType()), null, 0, false) + ";");
 			}
-			g.labels += 1;
-			const newTmp = `_new${g.labels}_`;
-			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
-			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
 			if (ctorChildren == null && d.newArguments.length > 0) {
 				addCGenError(g, `internal: the constructor of '${d.newCallee.resolvedSym.name}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
-			let initArgs = newTmp;
+			// The arguments are evaluated before the object exists, so one that raises leaves nothing to free.
+			let initArgs = "";
 			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
 				const argNode = d.newArguments[ai];
 				let argSnippet = genExpr(g, p, argNode);
@@ -1388,6 +1385,11 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				}
 				initArgs = initArgs + ", " + argSnippet;
 			}
+			g.labels += 1;
+			const newTmp = `_new${g.labels}_`;
+			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
+			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
+			initArgs = newTmp + initArgs;
 			emitStmtsLine(p, `${initName}(${initArgs});`);
 			if (!p.suppressRaiseCheck && newCanRaise(node)) {
 				emitStmtsLine(p, `if (msErr) { msDecrefCyclic(${newTmp}); goto ${raiseTarget(p)}; }`);
