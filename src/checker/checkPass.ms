@@ -9,7 +9,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
+import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -1653,21 +1653,64 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checked;
 }
 
-function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className: string, classType: Type): void {
-	if (classType == null || classType.sym == null) return;
+function checkOverride(ctx: CheckerContext, d: MethodDeclData, className: string, classType: Type): DispMethodEntry | null {
+	if (classType == null || classType.sym == null) return null;
 	const base = dispatchOverriddenEntry(classType.sym, d.methodName);
-	if (base == null) return;
+	if (base == null) return null;
 	let baseDecl = base.sym.declNode;
 	if (baseDecl != null && baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
 	const baseGeneric = baseDecl != null && baseDecl.kind == NodeKind.MethodDecl && isGenericFn((baseDecl.data as MethodDeclData).methodFlags);
 	if (baseGeneric || isGenericFn(d.methodFlags)) {
 		addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
 			d.nameLocation.line, d.nameLocation.column);
+		return null;
+	}
+	if (symGenericParams(base.classSym) != "" || symGenericParams(classType.sym) != "") {
+		addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method of a generic class cannot override or be overridden`,
+			d.nameLocation.line, d.nameLocation.column);
+		return null;
+	}
+	if (baseDecl == null || baseDecl.kind != NodeKind.MethodDecl) return null;
+	const own = dispatchDeclaredEntry(classType.sym, d.methodName);
+	if (base.overloaded || own == null || own.overloaded) return null;
+	return base;
+}
+
+function refuseOverrideSignature(ctx: CheckerContext, d: MethodDeclData, className: string, fn: Type | null, base: DispMethodEntry): void {
+	let baseDecl = base.sym.declNode;
+	if (baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
+	const baseD = baseDecl.data as MethodDeclData;
+	const baseFn = base.sym.symbolType;
+	if (fn == null || baseFn == null || fn.kind != TypeKind.Function || baseFn.kind != TypeKind.Function) return;
+	const baseName = base.classSym.name;
+	const pair = `Method '${overrideSignature(className, d.methodName, d.methodParams, fn)}' overrides '${overrideSignature(baseName, d.methodName, baseD.methodParams, baseFn)}', but `;
+	for (let i = 1; i < fn.typeChildren.length && i < d.methodParams.length; i += 1) {
+		const taken = fn.typeChildren[i];
+		if (i >= baseFn.typeChildren.length) {
+			if (d.methodDefaults == null || i >= d.methodDefaults.length || d.methodDefaults[i] == null) {
+				addError(ctx, `${pair}parameter '${d.methodParams[i]}' has no default and a call through '${baseName}' never passes it; give it a default or remove it`,
+					d.nameLocation.line, d.nameLocation.column);
+				return;
+			}
+			continue;
+		}
+		const passed = baseFn.typeChildren[i];
+		if (isUnresolvedType(taken) || isUnresolvedType(passed) || isAssignable(passed, taken)) continue;
+		addError(ctx, `${pair}parameter '${d.methodParams[i]}' takes ${typeDisplayName(taken)} and a call through '${baseName}' passes it ${typeDisplayName(passed)}; declare the parameter ${typeDisplayName(passed)} and narrow it inside`,
+			d.nameLocation.line, d.nameLocation.column);
 		return;
 	}
-	if (symGenericParams(base.classSym) == "" && symGenericParams(classType.sym) == "") return;
-	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method of a generic class cannot override or be overridden`,
+	const held = fn.typeReturn;
+	const slot = baseFn.typeReturn;
+	if (held == null || slot == null || slot.kind == TypeKind.Void || isUnresolvedType(held) || isUnresolvedType(slot) || isAssignable(held, slot)) return;
+	addError(ctx, `${pair}it returns ${typeDisplayName(held)} and a call through '${baseName}' expects ${typeDisplayName(slot)}; declare the return type ${typeDisplayName(slot)}`,
 		d.nameLocation.line, d.nameLocation.column);
+}
+
+function overrideSignature(owner: string, name: string, params: string[], fn: Type): string {
+	const parts: string[] = [];
+	for (let i = 1; i < params.length && i < fn.typeChildren.length; i += 1) parts.push(`${params[i]}: ${typeDisplayName(fn.typeChildren[i])}`);
+	return `${owner}.${name}(${parts.join(", ")}): ${typeDisplayName(fn.typeReturn)}`;
 }
 
 function checkClassMember(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
@@ -1719,7 +1762,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 					setFlag(sym, SymbolFlag.Async);
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
-			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className, classType);
+			const overridden = d.methodIsStatic ? null : checkOverride(ctx, d, className, classType);
 			refuseAccessorOverField(ctx, node, classType, d.methodName, d.nameLocation);
 			// Skip body check for generic methods (body re-checked per instantiation,
 			// like top-level generic fns at checkFunctionDecl:358).
@@ -1729,6 +1772,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
 			}
+			if (overridden != null) refuseOverrideSignature(ctx, d, className, sym.symbolType, overridden);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
