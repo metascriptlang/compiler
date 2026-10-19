@@ -1,6 +1,6 @@
 import { Rng, seeded } from "./rng";
 import { Features, Mod, defaults, overlay } from "./features";
-import { Parts, generate, generateParts } from "./gen";
+import { CORE_OFF, Parts, byteDigest, countOf, generate, generateParts } from "./gen";
 
 export struct File {
 	name: string;
@@ -707,6 +707,10 @@ class Splitter {
 	cyclic: boolean = false;
 	routeKeys: string[] = [];
 	routeVals: Route[] = [];
+	selectHost: int32 = -1;
+	selectDecl: string = "";
+	selectImport: string = "";
+	selectUse: string = "";
 
 	assign(): Result<boolean, string> {
 		const n = this.units.length;
@@ -1041,12 +1045,13 @@ class Splitter {
 	moduleText(m: int32, rw: Rewrite): string {
 		const k = this.count;
 		let text = this.headText(m);
-		text += (m == k ? this.loadFirst() : "") + rw.imports + this.hubLines(m);
+		text += (m == k ? this.loadFirst() : "") + rw.imports + (m == k ? this.selectImport : "") + this.hubLines(m);
 		if (m < k && this.shapes.has(Mod.Init)) { text += "console.log(\"init m" + String(m) + "\");\n"; }
 		for (const u of this.units) {
 			if (u.module == m) { text += u.pre + (u.shown || u.glue || u.ext || u.kind == "converter" ? "export " : "") + rewrite(u.text, u.toks, rw.from, rw.to); }
 		}
-		return m == k ? text + rewrite(this.mainText, this.mainToks, rw.from, rw.to) : text;
+		if (m == this.selectHost) { text += this.selectDecl; }
+		return m == k ? text + rewrite(this.mainText, this.mainToks, rw.from, rw.to) + this.selectUse : text;
 	}
 
 	importGlueModules(rewrites: Rewrite[]): void {
@@ -1075,11 +1080,49 @@ class Splitter {
 		}
 	}
 
+	select(): void {
+		if (!this.shapes.has(Mod.Select) || this.count < 1) { return; }
+		this.selectHost = this.rng.below(this.count);
+		const name = this.fresh("selPick");
+		const form = this.rng.below(3);
+		const spelled = [
+			["a * 3 + b", "b + a * 3", "a + a + a + b"],
+			["(a ^ b) + (a & b) * 2", "(a | b) + (a & b)", "a + b"],
+			["a * b + a", "a * (b + 1)", "(b + 1) * a"],
+		][this.rng.below(3)];
+		const sig = "(a: int32, b: int32): int32";
+		if (form == 0) {
+			this.selectDecl = "when (js) {\n\texport function " + name + sig + " { return " + spelled[0] + "; }\n} else when (c) {\n\texport function " + name + sig + " { return " + spelled[1] + "; }\n} else {\n\texport function " + name + sig + " { return " + spelled[2] + "; }\n}\n";
+		} else if (form == 1) {
+			this.selectDecl = "export function " + name + sig + " {\n\twhen (js) { return " + spelled[0] + "; } else when (c) { return " + spelled[1] + "; } else { return " + spelled[2] + "; }\n}\n";
+		} else {
+			const base = this.fresh("selBase");
+			this.selectDecl = "when (js) {\n\texport const " + base + ": int32 = 2 + 3;\n} else when (c) {\n\texport const " + base + ": int32 = 3 + 2;\n} else {\n\texport const " + base + ": int32 = 5;\n}\n" +
+				"export function " + name + sig + " { return " + base + " * a + b; }\n";
+		}
+		const file = "\"./m" + String(this.selectHost) + "\"";
+		let style = this.rng.below(3);
+		if ((style == 1 && !this.shapes.has(Mod.Alias)) || (style == 2 && !this.shapes.has(Mod.Namespace))) { style = 0; }
+		let callee = name;
+		if (style == 0) {
+			this.selectImport = "import { " + name + " } from " + file + ";\n";
+		} else if (style == 1) {
+			callee = this.fresh(name + "_s");
+			this.selectImport = "import { " + name + " as " + callee + " } from " + file + ";\n";
+		} else {
+			const space = this.fresh("selNs");
+			callee = space + "." + name;
+			this.selectImport = "import * as " + space + " from " + file + ";\n";
+		}
+		this.selectUse = "console.log(\"sel \" + String(" + callee + "(" + String(this.rng.below(10)) + ", " + String(this.rng.below(10)) + ")));\n";
+	}
+
 	build(): File[] {
 		const k = this.count;
 		const rewrites: Rewrite[] = [];
 		for (let m = 0; m <= k; m++) { rewrites.push(this.consume(m)); }
 		this.importGlueModules(rewrites);
+		this.select();
 		const files: File[] = [{ name: "main.ms", text: this.moduleText(k, rewrites[k]) }];
 		for (let m = 0; m < k; m++) { files.push({ name: moduleFileName(m), text: this.moduleText(m, rewrites[m]) }); }
 		return files;
@@ -1171,6 +1214,14 @@ function declarations(text: string): int32 {
 	return n;
 }
 
+function selectDeclarations(files: File[]): int32 {
+	let n = 0;
+	for (const f of files) {
+		for (const line of f.text.split("\n")) { if (line.startsWith("export function selPick")) { n++; } }
+	}
+	return n;
+}
+
 function joined(files: File[]): string {
 	let all = "";
 	for (const f of files) { all += f.text; }
@@ -1235,7 +1286,7 @@ test "a split project is deterministic, holds every declaration once and imports
 				assert i == 0 || files[i].name == moduleFileName(i - 1);
 			}
 			assert files.length >= 2 && files.length <= modules + 1;
-			assert declarations(joined(files)) == declarations(projectOf(seed as uint64, "modules=0")[0].text);
+			assert declarations(joined(files)) - selectDeclarations(files) == declarations(projectOf(seed as uint64, "modules=0")[0].text);
 			assert cyclicModules(files).length < files.length;
 		}
 	}
@@ -1320,6 +1371,67 @@ test "a rest function and a class that instantiates itself sit in the first modu
 		}
 	}
 	assert cycles > 0 && rests > 0 && selfs > 0;
+}
+
+function projectDigest(files: File[]): int64 {
+	let h = 0 as int64;
+	for (const f of files) {
+		h = (h * (131 as int64) + byteDigest(f.name + "\n" + f.text.slice(f.text.indexOf("\n") + 1, f.text.length) + "\n")) % (1000000007 as int64);
+	}
+	return h;
+}
+
+test "a project module selects its code by backend with when, whose three branches compute one value" {
+	let declared = 0;
+	let inBody = 0;
+	let constant = 0;
+	let named = 0;
+	let aliased = 0;
+	let spaced = 0;
+	for (let seed = 1; seed <= 40; seed++) {
+		const files = projectOf(seed as uint64, "modules=3 fams=closure");
+		assert files.length > 0 && unresolved(files) == "";
+		const all = joined(files);
+		assert countOf(all, "console.log(\"sel \" + String(") == 1 && countOf(all, "export function selPick") >= 1;
+		assert files[0].text.endsWith(");\n") && files[0].text.contains("console.log(\"sel \" + String(");
+		for (const f of files) {
+			assert f.name == "main.ms" || !f.text.contains("console.log(\"sel ");
+			if (f.text.contains("\nwhen (js) {\n\texport function selPick")) {
+				declared++;
+				assert f.text.contains("} else when (c) {\n\texport function selPick") && f.text.contains("} else {\n\texport function selPick");
+			}
+			if (f.text.contains("\texport function selPick") == false && f.text.contains("\twhen (js) { return ")) {
+				inBody++;
+				assert f.text.contains("; } else when (c) { return ") && f.text.contains("; } else { return ");
+			}
+			if (f.text.contains("export const selBase: int32 = 2 + 3;")) {
+				constant++;
+				assert f.text.contains("export const selBase: int32 = 3 + 2;") && f.text.contains("export const selBase: int32 = 5;");
+			}
+		}
+		const main = files[0].text;
+		if (main.contains("import { selPick } from \"./m")) { named++; }
+		if (main.contains("import { selPick as selPick_s } from \"./m")) { aliased++; }
+		if (main.contains("import * as selNs from \"./m") && main.contains("selNs.selPick(")) { spaced++; }
+	}
+	assert declared > 3 && inBody > 3 && constant > 3 && named > 3 && aliased > 3 && spaced > 3;
+}
+
+test "the select shape imports by name only when the alias and namespace shapes are off, and modshapes=none keeps it out" {
+	for (let seed = 1; seed <= 30; seed++) {
+		const only = joined(projectOf(seed as uint64, "modules=3 modshapes=select"));
+		assert only.contains("selPick") && !only.contains("selPick_s") && !only.contains("selNs");
+		const none = joined(projectOf(seed as uint64, "modules=3 modshapes=none"));
+		assert !none.contains("selPick") && !none.contains("when (js)") && !none.contains("\"sel ");
+	}
+}
+
+test "module shapes other than select keep the stream of the splitter without it" {
+	const off = "alias,ns,reexport,star,cycle,init";
+	const cases = ["modules=4 fams=closure,agg " + CORE_OFF + " modshapes=" + off, "modules=3 fams=none modshapes=ns,star"];
+	const pins: int64[] = [341073509, 235616312, 916984209, 372824637, 799339767, 1749349, 784271022, 766585468, 390463679];
+	const seeds: uint64[] = [1, 2, 3, 4, 5, 6, 1, 2, 3];
+	for (let i = 0; i < seeds.length; i++) { assert projectDigest(projectOf(seeds[i], cases[i < 6 ? 0 : 1])) == pins[i]; }
 }
 
 test "an import cycle is closed by a function or a global, never by a struct or a class" {

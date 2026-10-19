@@ -119,6 +119,11 @@ struct MetaPair {
 	plain: string;
 }
 
+struct MetaSpread {
+	jsx: string;
+	values: string[];
+}
+
 function metaOpWord(op: string): string {
 	return match (op) {
 		"+" => "Add",
@@ -1936,6 +1941,28 @@ class Gen {
 		return ["t", "u", "hi there", "é日本", "ok"][this.rng.below(5)];
 	}
 
+	metaSpreadOn(): boolean {
+		return this.wt(W.MetaSpread) > 0 && this.rng.chance(this.wt(W.MetaSpread));
+	}
+
+	metaSpread(t: Ty, depth: int32): MetaSpread {
+		const form = this.rng.below(3);
+		if (form == 2) {
+			const X = tyTitle(t);
+			this.useHelper("metaProp" + X, "struct MetaProp" + X + " { val: " + tyName(t) + "; }\n" +
+				"const metaProp" + X + ": MetaProp" + X + " = { val: " + this.literal(t) + " };\n");
+			return { jsx: " {...metaProp" + X + "}", values: ["metaProp" + X + ".val"] };
+		}
+		const values: string[] = [];
+		let props = "";
+		for (let i = 0; i < form + 1; i++) {
+			const e = this.metaPure(t, depth + 1);
+			values.push(e);
+			props += (i == 0 ? "" : ", ") + ["u", "v"][i] + ": " + e;
+		}
+		return { jsx: " {...{ " + props + " }}", values: values };
+	}
+
 	metaJsxPair(t: Ty, depth: int32): MetaPair {
 		const from = this.cost;
 		const T = tyName(t);
@@ -1946,6 +1973,13 @@ class Gen {
 		const init = op == "&" ? "(~(0 as " + T + "))" : op == "*" ? one : zero(t);
 		const name = "metaJsx" + metaOpWord(op) + X;
 		this.metaImports(["Node", "NodeKind"]);
+		const spreadRead = this.wt(W.MetaSpread) == 0 ? "" :
+			"\t\telse if (a.kind == NodeKind.JSXSpreadAttribute) {\n" +
+			"\t\t\tconst o = a.jsxSpreadArg;\n" +
+			"\t\t\tif (o.kind == NodeKind.ObjectLiteral) {\n" +
+			"\t\t\t\tfor (const p of o.properties) { acc = quote { (${acc} " + op + " ${p}) }; }\n" +
+			"\t\t\t} else { acc = quote { (${acc} " + op + " ${o}.val) }; }\n" +
+			"\t\t}\n";
 		this.useHelper(name, "macro " + name + "(node: Node): Node {\n" +
 			"\tlet acc: Node = quote { " + init + " };\n" +
 			"\tif (node.kind == NodeKind.JSXFragment) {\n" +
@@ -1956,6 +1990,7 @@ class Gen {
 			"\t}\n" +
 			"\tfor (const a of node.jsxAttrs) {\n" +
 			"\t\tif (a.kind == NodeKind.JSXAttribute && a.jsxAttrName != \"key\") { acc = quote { (${acc} " + op + " ${a.jsxAttrValue}) }; }\n" +
+			spreadRead +
 			"\t}\n" +
 			"\tfor (const c of node.jsxChildren) {\n" +
 			"\t\tif (c.kind == NodeKind.JSXExpressionContainer) { acc = quote { (${acc} " + op + " ${c.jsxExpr}) }; }\n" +
@@ -1980,7 +2015,15 @@ class Gen {
 			const attrs = this.rng.between(0, 2);
 			for (let i = 0; i < attrs; i++) {
 				if (this.rng.chance(30)) { jsx += " key=\"k\""; }
-				if (this.rng.chance(25)) { jsx += " {...{}}"; }
+				if (this.rng.chance(25)) {
+					if (this.metaSpreadOn()) {
+						const spread = this.metaSpread(t, depth);
+						jsx += spread.jsx;
+						for (const v of spread.values) { plain = "(" + plain + " " + op + " " + v + ")"; }
+					} else {
+						jsx += " {...{}}";
+					}
+				}
 				const e = this.metaPure(t, depth + 1);
 				jsx += " " + this.metaJsxAttr() + "={" + e + "}";
 				plain = "(" + plain + " " + op + " " + e + ")";
@@ -2133,6 +2176,11 @@ class Gen {
 	metaJsxString(t: Ty, indent: string): string {
 		const from = this.cost;
 		this.metaImports(["Node", "NodeKind"]);
+		const spreadShow = this.wt(W.MetaSpread) == 0 ? "" :
+			"\t\t\tconst o = a.jsxSpreadArg;\n" +
+			"\t\t\tif (o.kind == NodeKind.ObjectLiteral) {\n" +
+			"\t\t\t\tfor (const p of o.properties) { acc = quote { ${acc} + (\"\" + ${p}) }; }\n" +
+			"\t\t\t} else { acc = quote { ${acc} + (\"\" + ${o}.val) }; }\n";
 		this.useHelper("metaJsxS", "macro metaJsxS(node: Node): Node {\n" +
 			"\tif (node.kind == NodeKind.JSXFragment) {\n" +
 			"\t\tlet acc: Node = { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: \"<>\" };\n" +
@@ -2150,6 +2198,7 @@ class Gen {
 			"\t\t\tacc = quote { ${acc} + ${nm} + (\"\" + ${a.jsxAttrValue}) };\n" +
 			"\t\t} else {\n" +
 			"\t\t\tacc = quote { ${acc} + \" ...\" };\n" +
+			spreadShow +
 			"\t\t}\n" +
 			"\t}\n" +
 			"\tif (node.jsxSelfClosing) { return quote { ${acc} + \"/>\" }; }\n" +
@@ -2202,8 +2251,15 @@ class Gen {
 					plain += " + \" key=\" + (\"\" + \"k\")";
 				}
 				if (this.rng.chance(25)) {
-					jsx += " {...{}}";
-					plain += " + \" ...\"";
+					if (this.metaSpreadOn()) {
+						const spread = this.metaSpread(t, 1);
+						jsx += spread.jsx;
+						plain += " + \" ...\"";
+						for (const v of spread.values) { plain += " + (\"\" + " + v + ")"; }
+					} else {
+						jsx += " {...{}}";
+						plain += " + \" ...\"";
+					}
 				}
 				const name = this.metaJsxAttr();
 				const e = this.metaPure(t, 1);
@@ -3871,7 +3927,7 @@ class Gen {
 
 	asyncStatement(indent: string, depth: int32): string {
 		if (!this.awaitOk()) { return ""; }
-		const k = this.pickW(W.AsyncSeq, W.AsyncLocal);
+		const k = this.pickW(W.AsyncSeq, W.AsyncResult);
 		if (k == 0) { return this.asyncSeq(indent); }
 		if (k == 1) { return this.asyncTick(indent); }
 		if (k == 2) { return this.asyncResolve(indent); }
@@ -3879,7 +3935,8 @@ class Gen {
 		if (k == 4) { return this.asyncAll(indent); }
 		if (k == 5) { return this.asyncCatch(indent); }
 		if (k == 6) { return this.asyncHold(indent); }
-		return this.asyncLocal(indent);
+		if (k == 7) { return this.asyncLocal(indent); }
+		return this.asyncResult(indent);
 	}
 
 	asyncSeq(indent: string): string {
@@ -4078,6 +4135,72 @@ class Gen {
 			indent + "\treturn " + body.text + ";\n" +
 			indent + "};\n" +
 			indent + "let " + result + ": int32 = " + call + ";\n";
+	}
+
+	asyncResultFns(okKind: int32, errKind: int32, form: int32, t: Ty): string[] {
+		const X = okKind == 4 ? "Void" : ["V", "C", "S", "A"][okKind] + (okKind == 1 || okKind == 2 ? this.aggHelpers(t) : tyTitle(t));
+		const name = "arRs" + X + ["S", "I", "F"][errKind] + ["D", "A", "M"][form];
+		const callee0 = form == 2 ? name + ".m0" : name + "0";
+		const callee1 = form == 2 ? name + ".m1" : name + "1";
+		if (this.hasHelper(name)) { return [callee0, callee1]; }
+		if (errKind == 2) { this.useHelper("ArBad", "struct ArBad { code: int32; why: string; }\n"); }
+		const T = tyName(t);
+		const OK = okKind == 0 ? T : okKind == 1 ? "CellC" + tyTitle(t) : okKind == 2 ? "PtS" + tyTitle(t) : okKind == 3 ? T + "[]" : "void";
+		const ER = ["string", "int32", "ArBad"][errKind];
+		const params = okKind == 4 ? "k: int32" : "k: int32, v: " + T;
+		const args = okKind == 4 ? "k" : "k, v";
+		const retTy = "Promise<Result<" + OK + ", " + ER + ">>";
+		const okVal = okKind == 0 ? "v" : okKind == 1 ? "new CellC" + tyTitle(t) + "(v)" : okKind == 2 ? "mkS" + tyTitle(t) + "(v, v, v)" : okKind == 3 ? "[v, v]" : "null";
+		const e1 = errKind == 0 ? "\"e\" + String(m)" : errKind == 1 ? "m" : "{ code: m, why: \"f\" + String(m) }";
+		const e2 = errKind == 0 ? "\"g\" + String(m)" : errKind == 1 ? "m + 100" : "{ code: m + 1, why: \"g\" + String(m) }";
+		const lead = form == 2 ? "\t\t" : "\t";
+		const body0 = lead + "await Promise.resolve(0);\n" +
+			lead + "const m = k % 7;\n" +
+			lead + "if (m % 3 == 0) { return Result.err(" + e1 + "); }\n" +
+			lead + "return Result.ok(" + okVal + ");\n";
+		const body1 = lead + "const m = k % 7;\n" +
+			lead + "const a = try await " + (form == 2 ? "this.m0" : name + "0") + "(" + args + ");\n" +
+			lead + "await Promise.resolve(0);\n" +
+			lead + "if (m % 2 == 1) { return Result.err(" + e2 + "); }\n" +
+			lead + "const b = try await " + (form == 2 ? "this.m0" : name + "0") + "(" + (okKind == 4 ? "m + 7" : "m + 7, v") + ");\n" +
+			lead + "return Result.ok(" + (okKind == 4 ? "null" : "b") + ");\n";
+		let text = "";
+		if (form == 0) {
+			text = "async function " + name + "0(" + params + "): " + retTy + " {\n" + body0 + "}\n" +
+				"async function " + name + "1(" + params + "): " + retTy + " {\n" + body1 + "}\n";
+		} else if (form == 1) {
+			text = "const " + name + "0 = async (" + params + "): " + retTy + " => {\n" + body0 + "};\n" +
+				"const " + name + "1 = async (" + params + "): " + retTy + " => {\n" + body1 + "};\n";
+		} else {
+			text = "class ArCls" + X + ["S", "I", "F"][errKind] + " {\n" +
+				"\tasync m0(" + params + "): " + retTy + " {\n" + body0 + "\t}\n" +
+				"\tasync m1(" + params + "): " + retTy + " {\n" + body1 + "\t}\n}\n" +
+				"const " + name + " = new ArCls" + X + ["S", "I", "F"][errKind] + "();\n";
+		}
+		this.useHelper(name, text);
+		return [callee0, callee1];
+	}
+
+	asyncResult(indent: string): string {
+		if (!this.reserve(14 as int64)) { return ""; }
+		const t = this.pickPayload();
+		const okKind = this.rng.below(5);
+		const errKind = this.rng.below(3);
+		const form = this.rng.below(3);
+		const callees = this.asyncResultFns(okKind, errKind, form, t);
+		const callee = callees[this.rng.below(2)];
+		const args = okKind == 4 ? this.smallInt(0) : this.smallInt(0) + ", " + this.expr(t, 0);
+		if (okKind == 0 && this.rng.chance(40)) {
+			return this.note(indent, "\"c\" + String(try await " + callee + "(" + args + ") catch " + this.expr(t, 0) + ")");
+		}
+		const r = this.entName("r");
+		const okText = okKind == 0 ? "String(" + r + ".value)" :
+			okKind == 1 ? "String(" + r + ".value.v) + String(" + r + ".value.p.n.c)" :
+			okKind == 2 ? "String(" + r + ".value.a) + String(" + r + ".value.n.d)" :
+			okKind == 3 ? "String(" + r + ".value.length) + String(" + r + ".value[1])" : "\"v\"";
+		const errText = errKind == 0 ? r + ".error" : errKind == 1 ? "String(" + r + ".error)" : "String(" + r + ".error.code) + " + r + ".error.why";
+		return indent + "const " + r + " = await " + callee + "(" + args + ");\n" +
+			indent + "if (" + r + ".ok) { atrace += \"ok\" + " + okText + " + \",\"; } else { atrace += \"err\" + " + errText + " + \",\"; }\n";
 	}
 
 	asyncBody(pad: string, ret: AK, t: Ty, name: string, fails: boolean, params: boolean): string {
@@ -8387,7 +8510,7 @@ export function generateParts(seed: uint64, f: Features): Parts {
 	};
 }
 
-const CORE_OFF: string = "w.core.expr=0 w.core.stmt=0 w.core.fn=0 w.core.pow=0 w.core.nullish=0 w.core.cvt=0 w.core.cmp=0 w.core.while=0 w.core.do=0 w.core.switch=0 w.core.match=0 w.core.compound=0 w.core.cell=0 w.core.incdec=0 w.core.default=0 w.core.rest=0 w.core.overload=0 w.core.recurse=0 w.core.fnvalue=0 w.core.zero=0";
+export const CORE_OFF: string = "w.core.expr=0 w.core.stmt=0 w.core.fn=0 w.core.pow=0 w.core.nullish=0 w.core.cvt=0 w.core.cmp=0 w.core.while=0 w.core.do=0 w.core.switch=0 w.core.match=0 w.core.compound=0 w.core.cell=0 w.core.incdec=0 w.core.default=0 w.core.rest=0 w.core.overload=0 w.core.recurse=0 w.core.fnvalue=0 w.core.zero=0";
 
 function coreOff(): int32[] {
 	const parsed = Features.defaults().overlay(CORE_OFF);
@@ -8995,7 +9118,7 @@ test "a named closure is invoked only when its weighted body fits" {
 	}
 }
 
-function countOf(text: string, needle: string): int32 {
+export function countOf(text: string, needle: string): int32 {
 	let n = 0;
 	let at = text.indexOf(needle);
 	while (at >= 0) {
@@ -10876,6 +10999,47 @@ test "a zero meta weight keeps its shape out of every program" {
 	}
 }
 
+const META_JSX_ONLY: string = "fams=meta types=int32,float64,int16 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.meta.block=0 w.meta.fn=0 w.meta.macro=0 w.meta.when=0 w.meta.inline=0 w.meta.decor=0 ";
+
+test "a non-empty JSX spread is an object literal the macro folds in order or a props constant it reads by field, in both JSX pairs" {
+	const f = withWeights(META_JSX_ONLY + "w.meta.spread=100 " + CORE_OFF);
+	const marks = [" {...{ u: ", ", v: ", " {...metaProp", "struct MetaProp", "const metaProp", "NodeKind.JSXSpreadAttribute", "o.kind == NodeKind.ObjectLiteral", "for (const p of o.properties) { acc = quote { (${acc} ",
+		"for (const p of o.properties) { acc = quote { ${acc} + (\"\" + ${p}) }; }", "${o}.val", " ...\" + (\"\" + ", " {...{}}"];
+	const seen: boolean[] = marks.map((x: string): boolean => false);
+	for (let seed = 1; seed < 61; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < marks.length; i++) { if (text.contains(marks[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < marks.length - 1; i++) { assert seen[i]; }
+}
+
+test "a JSX spread weight at 0 keeps only empty spreads and the stream of the meta family without the shape" {
+	const f = withWeights(META_JSX_ONLY + "w.meta.spread=0 " + CORE_OFF);
+	let empty = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("JSXSpreadAttribute") && !text.contains("MetaProp") && !text.contains("{...{ ") && !text.contains("{...metaProp");
+		empty += countOf(text, " {...{}}");
+	}
+	assert empty > 10;
+	const pins: int64[] = [814109091, 302784249, 75423212, 935196815, 943640085, 32448339];
+	const vectors = ["fams=meta ", META_JSX_ONLY];
+	const seeds: uint64[] = [3, 9, 14, 2, 5, 11];
+	for (let v = 0; v < vectors.length; v++) {
+		const g = withWeights(vectors[v] + CORE_OFF + " w.meta.spread=0");
+		for (let s = 0; s < 3; s++) { assert streamDigest(generate(seeds[v * 3 + s], g)) == pins[v * 3 + s]; }
+	}
+}
+
+test "a JSX spread weight of 100 makes every drawn spread non-empty" {
+	const on = withWeights(META_JSX_ONLY + "w.meta.spread=100 " + CORE_OFF);
+	const off = withWeights(META_JSX_ONLY + "w.meta.spread=0 " + CORE_OFF);
+	let spreads = 0;
+	for (let seed = 1; seed < 41; seed++) { spreads += countOf(generate(seed as uint64, on), "{...{ ") + countOf(generate(seed as uint64, on), "{...metaProp"); }
+	assert spreads > 20;
+	assert countOver("{...{}}", 40, on) == 0 && countOver("{...{}}", 40, off) > 0;
+}
+
 test "a meta plant puts one off-by-one pair after the entries and declares its delta" {
 	const f = withWeights("plant=meta");
 	for (let seed = 1; seed <= 6; seed++) {
@@ -11059,6 +11223,55 @@ test "a quote splices a whole call argument nowhere" {
 		}
 	}
 	assert splices > 50;
+}
+
+const ASYNC_RESULT_ONLY: string = "fams=async types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.async.seq=0 w.async.tick=0 w.async.resolve=0 w.async.interleave=0 w.async.all=0 w.async.catch=0 w.async.hold=0 w.async.local=0 ";
+
+test "an async Result function is declared as a function, an arrow and a method, and its caller matches, unwraps or falls back" {
+	const f = withWeights(ASYNC_RESULT_ONLY + "w.async.result=40 " + CORE_OFF);
+	const marks = ["\nasync function arRs", "\nconst arRsVInt32SA0 = async (k: int32, v: int32): Promise<Result<int32, string>> => {", "\n\tasync m1(k: int32, v: ", "): Promise<Result<",
+		"\n\tconst r", " = await arRs", "try await arRs", "try await this.m0(", " catch ", "Result.err({ code: m + 1, why: ", "Result.ok(null)", "struct ArBad { code: int32; why: string; }",
+		"Promise<Result<CellC", "Promise<Result<PtS", "Result<float64[], ", "if (m % 3 == 0) { return Result.err(", "\"ok\" + String(", "\"err\" + ", "String(r"];
+	const seen: boolean[] = marks.map((x: string): boolean => false);
+	for (let seed = 1; seed < 61; seed++) {
+		const text = generate(seed as uint64, f);
+		for (let i = 0; i < marks.length; i++) { if (text.contains(marks[i])) { seen[i] = true; } }
+	}
+	for (let i = 0; i < marks.length; i++) { assert seen[i]; }
+}
+
+test "a Result promise holds no 64-bit integer, and the Raiser has nothing to skip for it" {
+	const f = withWeights(ASYNC_RESULT_ONLY.replace("types=int32,uint8,float64", "types=int32,int64,uint64,float64") + "w.async.result=40 " + CORE_OFF);
+	let results = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		assert !text.contains("Result<int64") && !text.contains("Result<uint64") && !text.contains("Result<CellCInt64") && !text.contains("Result<PtSUint64");
+		assert !text.contains("@skip");
+		results += countOf(text, " = await arRs");
+	}
+	assert results > 20;
+}
+
+test "a zero async result weight keeps its functions and calls out of every program" {
+	const off = withWeights(ASYNC_RESULT_ONLY + "w.async.seq=40 w.async.result=0 " + CORE_OFF);
+	const on = withWeights(ASYNC_RESULT_ONLY + "w.async.result=40 " + CORE_OFF);
+	let strays = 0;
+	let hits = 0;
+	for (let seed = 1; seed < 21; seed++) {
+		strays += countOf(generate(seed as uint64, off), "arRs");
+		hits += countOf(generate(seed as uint64, on), "arRs");
+	}
+	assert strays == 0 && hits > 0;
+}
+
+test "an async result weight at 0 keeps the stream of the async family without the shape" {
+	const pins: int64[] = [56007945, 985272385, 974582668, 289553570, 269052595, 765366512];
+	const vectors = ["fams=async ", "fams=async types=int32,float64,uint8 stmts=8 w.stmt.fam=80 "];
+	const seeds: uint64[] = [3, 9, 14, 2, 5, 11];
+	for (let v = 0; v < vectors.length; v++) {
+		const f = withWeights(vectors[v] + CORE_OFF + " w.async.result=0");
+		for (let s = 0; s < 3; s++) { assert streamDigest(generate(seeds[v * 3 + s], f)) == pins[v * 3 + s]; }
+	}
 }
 
 test "the async family alone reaches each of its shapes" {
@@ -11367,6 +11580,14 @@ test "the bigint operators are all reached" {
 	for (const m of marks) { assert countOver(m, 40, f) > 0; }
 }
 
+export function byteDigest(text: string): int64 {
+	let h = 0 as int64;
+	for (let i = 0; i < text.byteLength; i++) { h = (h * (131 as int64) + (text.byteAt(i) as int64)) % (1000000007 as int64); }
+	return h;
+}
+
+function streamDigest(text: string): int64 { return byteDigest(text.slice(text.indexOf("\n") + 1, text.length) + "\n"); }
+
 function digest(text: string): int64 {
 	let h = 0 as int64;
 	for (let i = 0; i < text.length; i++) { h = (h * (131 as int64) + (text.charCodeAt(i) as int64)) % (1000000007 as int64); }
@@ -11376,9 +11597,9 @@ function digest(text: string): int64 {
 test "core weights at 0 keep the stream of the generator without core" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=union", "fams=generic", "fams=agg", "fams=coll", "fams=str", "fams=own", "fams=iter", "types=int8,uint32,float64", "types=int64 fams=none", "types=float64,int32 depth=2", "types=int32 stmts=12 expr=4 trips=16"];
 	const pins: int64[] = [
-		651155737, 673880329, 87231079, 582624134, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
+		777384880, 838568104, 87231079, 582624134, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
 		412924459, 288809904, 944357120, 370177479, 817021040, 106325321, 660642918, 606921276, 651104178, 2913754,
-		101192644, 178907495, 247101655, 884432220, 429445262, 992118170, 792363545, 794359772,
+		101192644, 178907495, 247101655, 884432220, 429445262, 471485418, 207847309, 349738871,
 	];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + CORE_OFF);

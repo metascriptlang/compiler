@@ -106,7 +106,7 @@ const META_MARKS: string[] = [
 	"(@comptime { return ", "(@comptime { let a", "=> { let a", "@comptime function metaFn",
 	"function metaPlain", "macro metaBin", "macro metaPick", "macro metaTwice",
 	"macro metaNest", "macro metaFold", "macro metaChain", "macro metaStrLen",
-	"macro metaHoist", "(node: Node): Node {\n\tlet acc: Node = quote {", "metaJsxS(<", "isPlainData<U>()",
+	"macro metaHoist", "(node: Node): Node {\n\tlet acc: Node = quote {", "metaJsxS(<", " {...metaProp", "isPlainData<U>()",
 	"@inline function metaInl", "@noinline function metaInl", "\twhen (", " else when (",
 	" else { l", "metaChkInt32(", "metaShowInt32(", "metaShowStr(",
 	").length; }) as ", "\", (@comptime { return ", " {...{}}", "macro metaDescribe",
@@ -117,7 +117,7 @@ const ASYNC_MARKS: string[] = [
 	"\tawait Promise.resolve(0);\n", " = await Promise.resolve(", " = await pr", "await Promise.all([",
 	"} catch (z", "await Promise.reject<", "(await a", ".n.d = ",
 	".push(", ".v = ", " = async (q", "throw new Error(",
-	"\"re:\"",
+	"\"re:\"", "Promise<Result<",
 ];
 const ENUM_FLOORS: int32[] = [1, 2, 2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 2, 2, 2];
 

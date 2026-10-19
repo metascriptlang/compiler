@@ -46,6 +46,7 @@ export enum Mod {
 	Star,
 	Cycle,
 	Init,
+	Select,
 }
 
 export enum W {
@@ -266,6 +267,7 @@ export enum W {
 	AsyncCatch,
 	AsyncHold,
 	AsyncLocal,
+	AsyncResult,
 	AsyncFunc,
 	AsyncArrow,
 	AsyncMethod,
@@ -273,6 +275,7 @@ export enum W {
 	StmtFam,
 	StmtElse,
 	UnionLen,
+	MetaSpread,
 	CoreExpr,
 	CoreStmt,
 	CoreFn,
@@ -513,6 +516,7 @@ export const W_KEYS: string[] = [
 	"w.async.catch",
 	"w.async.hold",
 	"w.async.local",
+	"w.async.result",
 	"w.async.func",
 	"w.async.arrow",
 	"w.async.method",
@@ -520,6 +524,7 @@ export const W_KEYS: string[] = [
 	"w.stmt.fam",
 	"w.stmt.else",
 	"w.union.len",
+	"w.meta.spread",
 	"w.core.expr",
 	"w.core.stmt",
 	"w.core.fn",
@@ -575,8 +580,8 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-	20, 20, 50, 30,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	20, 20, 50, 30, 50,
 	25, 25, 25, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1,
@@ -618,7 +623,7 @@ const W_GROUPS: W[][] = [
 	[W.ConvCast, W.ConvOp],
 	[W.MetaBlock, W.MetaDecor],
 	[W.AsyncAwait, W.AsyncImmediate],
-	[W.AsyncSeq, W.AsyncLocal],
+	[W.AsyncSeq, W.AsyncResult],
 	[W.AsyncFunc, W.AsyncMethod],
 ];
 
@@ -713,7 +718,7 @@ function famFromName(name: string): Result<Fam, string> {
 	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, enum, exc, native, spawn, actor, race, cls, conv, meta, async, none)");
 }
 
-export const ALL_MODS: Mod[] = [Mod.Alias, Mod.Namespace, Mod.Reexport, Mod.Star, Mod.Cycle, Mod.Init];
+export const ALL_MODS: Mod[] = [Mod.Alias, Mod.Namespace, Mod.Reexport, Mod.Star, Mod.Cycle, Mod.Init, Mod.Select];
 
 export function modName(m: Mod): string {
 	return match (m) {
@@ -723,6 +728,7 @@ export function modName(m: Mod): string {
 		Mod.Star => "star",
 		Mod.Cycle => "cycle",
 		Mod.Init => "init",
+		Mod.Select => "select",
 	};
 }
 
@@ -730,7 +736,7 @@ function modFromName(name: string): Result<Mod, string> {
 	for (const m of ALL_MODS) {
 		if (modName(m) == name) { return Result.ok(m); }
 	}
-	return Result.err("unknown module shape '" + name + "' (alias, ns, reexport, star, cycle, init, none)");
+	return Result.err("unknown module shape '" + name + "' (alias, ns, reexport, star, cycle, init, select, none)");
 }
 
 export function tyName(t: Ty): string {
