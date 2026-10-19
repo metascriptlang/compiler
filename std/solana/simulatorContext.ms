@@ -24,12 +24,12 @@ export struct ParsedInput {
 }
 
 // solana.h msSolPastRecord
-function pastRecord(record: uint64): uint64 {
+@inline function pastRecord(record: uint64): uint64 {
 	return (record + msSolLoadU64(record + 80) + (RECORD_HEADER + MAX_DATA_INCREASE + 15)) & ALIGN_DOWN;
 }
 
 // solana.h msSolNextRecord
-function nextRecord(cursor: uint64): uint64 {
+@inline function nextRecord(cursor: uint64): uint64 {
 	if (msSolLoadU8(cursor) != DUPLICATE_MARKER) { return cursor + 8; }
 	const past = (cursor + RECORD_HEADER + msSolLoadU64(cursor + 80) + MAX_DATA_INCREASE + 7) & ALIGN_DOWN;
 	return past + 8;
@@ -41,7 +41,7 @@ export function tooManyAccounts(input: uint64): boolean {
 
 // solana.h msSolParseAccounts: the slot table gets one record address per account, a duplicate's slot is its first
 // record's, and that first record's borrow byte is marked duplicated. Answers the number of accounts.
-export function parseAccounts(input: uint64, table: uint64): uint64 {
+@inline export function parseAccounts(input: uint64, table: uint64): uint64 {
 	const kept = msSolLoadU64(input);
 	if (kept > MAX_ACCOUNTS) {
 		msSolHostRaise(REFUSED, "solana input: the loader refuses more than 255 accounts");
@@ -50,30 +50,31 @@ export function parseAccounts(input: uint64, table: uint64): uint64 {
 	let cursor = input + 8;
 	msSolStoreU64(table, cursor);
 	if (kept <= 1) { return kept; }
-	let slot = PEELED_ACCOUNTS;
+	let slot = table + PEELED_ACCOUNTS * 8;
 	cursor = pastRecord(cursor);
 	for (let index: uint64 = 1; index < PEELED_ACCOUNTS; index++) {
 		if (msSolLoadU8(cursor) != DUPLICATE_MARKER) {
-			slot = index;
+			slot = table + index * 8;
 			break;
 		}
 		msSolStoreU64(table + index * 8, cursor);
 		if (kept == index + 1) { return kept; }
 		cursor = pastRecord(cursor);
 	}
+	const end = table + kept * 8;
 	while (true) {
 		const marker = msSolLoadU8(cursor);
 		if (marker == DUPLICATE_MARKER) {
-			msSolStoreU64(table + slot * 8, cursor);
-			slot++;
-			if (slot == kept) { break; }
+			msSolStoreU64(slot, cursor);
+			slot += 8;
+			if (slot == end) { break; }
 			cursor = pastRecord(cursor);
 		} else {
 			const first = msSolLoadU64(table + (marker as uint64) * 8);
-			msSolStoreU64(table + slot * 8, first);
-			slot++;
+			msSolStoreU64(slot, first);
+			slot += 8;
 			msSolStoreU8(first + BORROW_OFFSET, DUPLICATED_RECORD);
-			if (slot == kept) { break; }
+			if (slot == end) { break; }
 			cursor += 8;
 		}
 	}
@@ -81,13 +82,12 @@ export function parseAccounts(input: uint64, table: uint64): uint64 {
 }
 
 // solana.h msSolInstructionDataOf
-export function instructionDataOf(input: uint64): uint64 {
+@noinline export function instructionDataOf(input: uint64): uint64 {
 	let cursor = input + 8;
 	for (let left = msSolLoadU64(input); left > 0; left--) { cursor = nextRecord(cursor); }
 	return cursor + 8;
 }
 
-// solana.h msSolParse
 export function parseInput(input: uint64, table: uint64): ParsedInput {
 	if (tooManyAccounts(input)) {
 		parseAccounts(input, table);

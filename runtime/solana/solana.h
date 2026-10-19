@@ -101,6 +101,25 @@ static inline uint64_t msSolScratch(uint64_t size) {
 
 #endif
 
+#ifdef MSOS_SOLANA
+/* std/solana/simulatorContext.ms parses the input, through std/solana/kernel.cms. */
+uint64_t msSolEntryAccounts(uint64_t input, uint64_t table);
+uint64_t msSolEntryInstructionData(uint64_t input);
+
+static inline void msSolHostRaise(uint64_t code, msString text) {
+    (void)code;
+    (void)text;
+    __builtin_trap();
+}
+
+static inline __attribute__((always_inline)) void msSolStart(const uint8_t* input, uint64_t* table, const uint8_t* instructionData) {
+    if (!instructionData) instructionData = (const uint8_t*)msSolEntryInstructionData((uint64_t)input);
+    msSolanaContext* context = msSolContext();
+    context->accountCount = msSolEntryAccounts((uint64_t)input, (uint64_t)table);
+    context->accountTable = (uint64_t)table;
+    context->instructionData = (uint64_t)instructionData;
+}
+#else
 static inline const uint8_t* msSolNextRecord(const uint8_t* cursor) {
     if (cursor[0] != MS_SOL_DUPLICATE_MARKER) return cursor + 8;
     uint64_t dataLength = *(const uint64_t*)(cursor + 80);
@@ -173,6 +192,7 @@ static inline __attribute__((always_inline)) void msSolStart(const uint8_t* inpu
     msSolParseAccounts(input, table);
     msSolContext()->instructionData = (uint64_t)instructionData;
 }
+#endif
 
 static inline uint64_t msSolAccountTable(void) {
     return msSolContext()->accountTable;
@@ -451,6 +471,7 @@ static inline uint64_t msSolRentAddress(void) {
     return (uint64_t)(uintptr_t)context->rent;
 }
 
+#ifndef MSOS_SOLANA
 typedef struct {
     uint64_t address;
     uint64_t length;
@@ -654,6 +675,70 @@ static __attribute__((noinline)) uint64_t msSolInvokeMetas(uint64_t program, uin
     msSolCpiInstruction instruction = { program, metas, count, data, length };
     return msSolInvokeSigned((uint64_t)(uintptr_t)&instruction, (uint64_t)(uintptr_t)infos, count, signers, signerCount);
 }
+#else
+/* On SBF the logic is std/solana/simulatorSeeds.ms and simulatorMetas.ms; C only holds their frames, which are not
+   zeroed. */
+uint64_t msSolDeriveAddressAt(uint64_t input, uint64_t last, uint64_t table, uint64_t count, uint64_t bump, uint64_t program, uint64_t out);
+uint64_t msSolFindAddressAt(uint64_t input, uint64_t table, uint64_t count, uint64_t program, uint64_t out, uint64_t bumpOut);
+uint64_t msSolFindExpectedAddressAt(uint64_t input, uint64_t hash, uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut);
+uint64_t msSolFindCanonicalAddressAt(uint64_t input, uint64_t hash, uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut);
+uint64_t msSolSeedStageInPlaceAt(uint64_t table, uint64_t count, uint64_t bump, uint64_t program);
+uint64_t msSolFindExpectedStagedAt(uint64_t hash, uint64_t table, uint64_t used, uint64_t expected);
+uint64_t msSolFindCanonicalStagedAt(uint64_t hash, uint64_t table, uint64_t used, uint64_t expected);
+uint64_t msSolHashIsStagedAt(uint64_t hash, uint64_t table, uint64_t used, uint64_t bump, uint64_t expected);
+uint64_t msSolInvokeMetasAt(uint64_t infos, uint64_t header, uint64_t program, uint64_t metas, uint64_t count, uint64_t data,
+    uint64_t length, uint64_t signers, uint64_t signerCount);
+
+#define MS_SOL_FLAT static inline __attribute__((always_inline, flatten))
+
+MS_SOL_FLAT uint64_t msSolSeedStageInPlace(uint64_t table, uint64_t count, uint64_t bump, uint64_t program) {
+    return msSolSeedStageInPlaceAt(table, count, bump, program);
+}
+
+MS_SOL_FLAT uint64_t msSolFindExpectedStaged(uint64_t table, uint64_t used, uint64_t expected) {
+    uint8_t hash[32];
+    return msSolFindExpectedStagedAt((uint64_t)(uintptr_t)hash, table, used, expected);
+}
+
+MS_SOL_FLAT uint64_t msSolFindCanonicalStaged(uint64_t table, uint64_t used, uint64_t expected) {
+    uint8_t hash[32];
+    return msSolFindCanonicalStagedAt((uint64_t)(uintptr_t)hash, table, used, expected);
+}
+
+MS_SOL_FLAT uint64_t msSolHashIsStaged(uint64_t table, uint64_t used, uint64_t bump, uint64_t expected) {
+    uint8_t hash[32];
+    return msSolHashIsStagedAt((uint64_t)(uintptr_t)hash, table, used, bump, expected);
+}
+
+static inline uint64_t msSolDeriveAddress(uint64_t table, uint64_t count, uint64_t bump, uint64_t program, uint64_t out) {
+    uint64_t words[36];
+    uint8_t last;
+    return msSolDeriveAddressAt((uint64_t)(uintptr_t)words, (uint64_t)(uintptr_t)&last, table, count, bump, program, out);
+}
+
+static inline __attribute__((always_inline)) uint64_t msSolFindAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t out, uint64_t bumpOut) {
+    uint64_t words[36];
+    return msSolFindAddressAt((uint64_t)(uintptr_t)words, table, count, program, out, bumpOut);
+}
+
+static inline __attribute__((always_inline)) uint64_t msSolFindExpectedAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    uint64_t words[36];
+    uint8_t hash[32];
+    return msSolFindExpectedAddressAt((uint64_t)(uintptr_t)words, (uint64_t)(uintptr_t)hash, table, count, program, expected, bumpOut);
+}
+
+static inline __attribute__((always_inline)) uint64_t msSolFindCanonicalAddress(uint64_t table, uint64_t count, uint64_t program, uint64_t expected, uint64_t bumpOut) {
+    uint64_t words[36];
+    uint8_t hash[32];
+    return msSolFindCanonicalAddressAt((uint64_t)(uintptr_t)words, (uint64_t)(uintptr_t)hash, table, count, program, expected, bumpOut);
+}
+
+static __attribute__((noinline)) uint64_t msSolInvokeMetas(uint64_t program, uint64_t metas, uint64_t count, uint64_t data, uint64_t length, uint64_t signers, uint64_t signerCount) {
+    uint64_t infos[64 * 7];
+    uint64_t header[5];
+    return msSolInvokeMetasAt((uint64_t)(uintptr_t)infos, (uint64_t)(uintptr_t)header, program, metas, count, data, length, signers, signerCount);
+}
+#endif
 
 static inline uint64_t msSolStringAddress(msString text) {
     return text.p == (msStrPayload*)0 ? 0 : (uint64_t)text.p->data;

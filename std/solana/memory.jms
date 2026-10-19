@@ -636,3 +636,16 @@ export function msSolArrayAt<T>(layout: string, address: uint64, count: uint64):
   return d.k === "uint8" ? msSolViewBytes(${address}, n) : msSolViewArray({ k: "array", n: n, z: d.z * n, e: d }, ${address});`);
 	unreachable;
 }
+
+export function msSolSeedRowLength(table: uint64, index: uint64): uint64 {
+	return msSolLoadU64(table + index * 16 + 8);
+}
+
+export function msSolSeedRowAddress(table: uint64, index: uint64): uint64 {
+	return msSolLoadU64(table + index * 16);
+}
+
+export function msSolSeedRowSet(table: uint64, index: uint64, address: uint64, length: uint64): void {
+	msSolStoreU64(table + index * 16, address);
+	msSolStoreU64(table + index * 16 + 8, length);
+}

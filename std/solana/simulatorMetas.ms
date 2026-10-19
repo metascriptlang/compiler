@@ -8,8 +8,11 @@ const INFO_SIZE: uint64 = 56;
 export type Invoker = (instruction: uint64, infos: uint64, count: uint64, signers: uint64, signerCount: uint64) => uint64;
 
 // solana.h msSolInvokeMetas: the runtime's SolAccountInfo of each meta's record and the instruction header, built
-// in memory and handed to `invoke` (msSolInvokeSigned on chain, the simulator's dispatcher here)
-export function invokeMetas(
+// in the caller's frames (`infos` of 448 words, `header` of 5) and handed to `invoke` (msSolInvokeSigned on chain,
+// the simulator's dispatcher here)
+export function invokeMetasAt(
+	infos: uint64,
+	header: uint64,
 	program: uint64,
 	metas: uint64,
 	count: uint64,
@@ -23,10 +26,6 @@ export function invokeMetas(
 		msSolHostRaise(REFUSED, "solana invoke: more than 64 accounts in one instruction");
 		return REFUSED;
 	}
-	let infoWords: uint64[448] = [];
-	let headerWords: uint64[5] = [];
-	const infos = msSolWordsAddress(infoWords);
-	const header = msSolWordsAddress(headerWords);
 	for (let index: uint64 = 0; index < count; index++) {
 		const at = infos + index * INFO_SIZE;
 		const key = msSolLoadU64(metas + index * 16);
@@ -45,4 +44,19 @@ export function invokeMetas(
 	msSolStoreU64(header + 24, data);
 	msSolStoreU64(header + 32, length);
 	return invoke(header, infos, count, signers, signerCount);
+}
+
+@noinline export function invokeMetas(
+	program: uint64,
+	metas: uint64,
+	count: uint64,
+	data: uint64,
+	length: uint64,
+	signers: uint64,
+	signerCount: uint64,
+	invoke: Invoker,
+): uint64 {
+	let infoWords: uint64[448] = [];
+	let headerWords: uint64[5] = [];
+	return invokeMetasAt(msSolWordsAddress(infoWords), msSolWordsAddress(headerWords), program, metas, count, data, length, signers, signerCount, invoke);
 }

@@ -1,6 +1,45 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
+when (solana) {
+	import { instructionDataOf, parseAccounts } from "./simulatorContext";
+	import { invokeMetasAt } from "./simulatorMetas";
+	import "./simulatorSeeds";
+
+	extern function msSolInvokeSigned(instruction: uint64, infos: uint64, count: uint64, signers: uint64, signerCount: uint64): uint64;
+
+	function invokeSyscall(instruction: uint64, infos: uint64, count: uint64, signers: uint64, signerCount: uint64): uint64 {
+		return msSolInvokeSigned(instruction, infos, count, signers, signerCount);
+	}
+
+	// solana.h msSolInvokeMetas calls this with its frames
+	@exportName("msSolInvokeMetasAt")
+	export function msSolInvokeMetasAt(
+		infos: uint64,
+		header: uint64,
+		program: uint64,
+		metas: uint64,
+		count: uint64,
+		data: uint64,
+		length: uint64,
+		signers: uint64,
+		signerCount: uint64,
+	): uint64 {
+		return invokeMetasAt(infos, header, program, metas, count, data, length, signers, signerCount, invokeSyscall);
+	}
+
+	// solana.h msSolStart calls these two on the loader's input
+	@exportName("msSolEntryAccounts")
+	export function msSolEntryAccounts(input: uint64, table: uint64): uint64 {
+		return parseAccounts(input, table);
+	}
+
+	@exportName("msSolEntryInstructionData")
+	export function msSolEntryInstructionData(input: uint64): uint64 {
+		return instructionDataOf(input);
+	}
+}
+
 when (!solana) {
 	import "./simulatorCrypto";
 	import "./simulatorHost";
@@ -11,6 +50,23 @@ when (!solana) {
 }
 
 export { msSolHostFaultCodeOf } from "./memory";
+export extern function msSolSeedStageInPlace(table: uint64, count: uint64, bump: uint64, program: uint64): uint64;
+export extern function msSolFindExpectedStaged(table: uint64, used: uint64, expected: uint64): uint64;
+export extern function msSolFindCanonicalStaged(table: uint64, used: uint64, expected: uint64): uint64;
+export extern function msSolHashIsStaged(table: uint64, used: uint64, bump: uint64, expected: uint64): uint64;
+export extern function msSolInvokeMetas(
+	program: uint64,
+	metas: uint64,
+	count: uint64,
+	data: uint64,
+	length: uint64,
+	signers: uint64,
+	signerCount: uint64,
+): uint64;
+export extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
+export extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
+export extern function msSolFindCanonicalAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
+export extern function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
 export extern function msSolHostInput(size: uint64): uint64;
 export extern function msSolHostEnter(input: uint64): void;
 export extern function msSolHostLeave(): void;
@@ -29,15 +85,6 @@ export extern function msSolHostSetClock(
 	unixTime: uint64,
 ): void;
 export extern function msSolHostSetSysvarStatus(status: uint64): void;
-export extern function msSolInvokeMetas(
-	program: uint64,
-	metas: uint64,
-	count: uint64,
-	data: uint64,
-	length: uint64,
-	signers: uint64,
-	signerCount: uint64,
-): uint64;
 export extern function msSolAccountCount(): uint64;
 export extern function msSolAccountAt(index: uint64): uint64;
 export extern function msSolAccountSlot(index: uint64): uint64;
@@ -59,11 +106,3 @@ export extern function msSolSetReturnData(data: Readonly<Span<uint8>>): void;
 export extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
 export extern function msSolCreateProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64): uint64;
 export extern function msSolTryFindProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64, bump: uint64): uint64;
-export extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
-export extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
-export extern function msSolFindCanonicalAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
-export extern function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
-export extern function msSolSeedStageInPlace(table: uint64, count: uint64, bump: uint64, program: uint64): uint64;
-export extern function msSolFindExpectedStaged(table: uint64, used: uint64, expected: uint64): uint64;
-export extern function msSolFindCanonicalStaged(table: uint64, used: uint64, expected: uint64): uint64;
-export extern function msSolHashIsStaged(table: uint64, used: uint64, bump: uint64, expected: uint64): uint64;
