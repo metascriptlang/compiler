@@ -690,7 +690,7 @@ stale_known_self_test() (
   w="$d/wt"
   mkdir -p "$w/tools" "$w/src/test" "$w/out/gate" "$d/home"
   cp "$GATE_SH" "$w/tools/gate.sh"
-  printf '#!/bin/sh\nexit 0\n' >"$w/msc"; chmod +x "$w/msc"; cp "$w/msc" "$w/out/gate/msc"
+  printf '#!/bin/sh\nexit 0\n' >"$w/msc"; chmod +x "$w/msc"; cp "$w/msc" "$w/out/gate/msc$EXE_SUFFIX"
   printf 'out/\nmsc\n' >"$w/.gitignore"
   printf '{"fmt":{"a.ms":{"since":"x","note":"n"},"b.ms":{"since":"x","note":"n"},"c.ms":{"since":"x","note":"n"}},"flaky":{"c.ms":{"since":"x","note":"n"}}}\n' >"$w/src/test/known-red.json"
   printf '{"fmt":{"d.ms":{"since":"y","note":"host"}}}\n' >"$d/local.json"
