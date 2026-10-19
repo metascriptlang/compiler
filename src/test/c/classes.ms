@@ -108,7 +108,23 @@ test "E2E C: a decorated accessor stays an accessor and keeps its name" {
 	const renamed = compileToCWithStd(renamer + "class C { @rename get n(): int32 { return 1; } }");
 	assert !renamed.ok;
 	if (!renamed.ok) assert renamed.error.contains("decorator 'rename' on a getter 'n' must return a getter 'n' or nothing, got getter 'm'");
-	assert accessorError(deco + "struct V2 { x: float32; @logged get sum(): float32 { return this.x; } }").contains("Decorated getter 'sum' at line 3 is not supported");
+}
+
+function stdError(src: string): string {
+	const c = compileToCWithStd(src);
+	return c.ok ? "compiled" : c.error;
+}
+
+test "E2E C: a decorated struct getter stays the struct's getter" {
+	const deco = "import { Node, ClassGetterDecoratorContext } from \"std/meta\";\nmacro logged(value: Node, context: ClassGetterDecoratorContext): Node { return value; }\n";
+	const tell = "import { Node, NodeKind, ClassGetterDecoratorContext } from \"std/meta\";\nmacro tell(value: Node, context: ClassGetterDecoratorContext): void { context.addInitializer({ kind: NodeKind.ExprStmt, line: 1, column: 0, expr: { kind: NodeKind.NumberLiteral, line: 1, column: 0, value: 1.0, isFloat: true } }); }\n";
+	const renamer = "import { Node, ClassGetterDecoratorContext } from \"std/meta\";\nmacro rename(value: Node, context: ClassGetterDecoratorContext): Node { value.fnName = \"get_m\"; return value; }\n";
+	assert stdError(deco + "struct V2 { x: float32; @logged get sum(): float32 { return this.x; } }\nconst v: V2 = { x: 1.0 };\nconsole.log(v.sum);") == "compiled";
+	assert stdError(tell + "struct V2 { x: float32; @tell get sum(): float32 { return this.x; } }").contains("addInitializer on struct getter 'sum' is not supported");
+	assert stdError(renamer + "struct V2 { x: float32; @rename get sum(): float32 { return this.x; } }").contains("decorator 'rename' on a getter 'sum' must return a getter 'sum' or nothing, got getter 'm'");
+	assert stdError(deco + "struct V2 { x: float32; @logged set sum(v: float32) {} }").contains("a struct takes getters only");
+	const mark = "import { Node, NodeKind, ClassGetterDecoratorContext, metadataSet } from \"std/meta\";\nmacro mark(value: Node, context: ClassGetterDecoratorContext): void { metadataSet(context.metadata, \"k\", { kind: NodeKind.NumberLiteral, line: 1, column: 0, value: 1.0, isFloat: true }); }\n";
+	assert stdError(mark + "struct V2 { x: float32; @mark get sum(): float32 { return this.x; } }").contains("context.metadata on struct getter 'sum' is not supported");
 }
 
 test "E2E C: an accessor field is a typed instance field of a class" {
@@ -162,5 +178,15 @@ test "fmt: struct getters print back inside their struct, in source order" {
 	const b = out.indexOf("get b(): float32");
 	const close = out.indexOf("const k");
 	assert a > 0 && a < y && y < b && b < close, out;
+	assert !out.contains("function get_"), out;
+}
+
+test "fmt: a decorated struct getter prints back with its decorators inside its struct" {
+	const out = fmtSource("export struct V {\n\tx: float32;\n\t@twice get a(): float32 { return this.x; }\n\t@keep\n\tget b(): float32 { return this.x; }\n}\nconst k = 1;\n");
+	const a = out.indexOf("@twice get a(): float32");
+	const keep = out.indexOf("@keep\n");
+	const b = out.indexOf("get b(): float32");
+	const close = out.indexOf("const k");
+	assert a > 0 && a < keep && keep < b && b < close, out;
 	assert !out.contains("function get_"), out;
 }
