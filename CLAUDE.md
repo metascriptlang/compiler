@@ -45,6 +45,7 @@ msc build src/index.ms --gc=drc --danger --lto=off --output=msc
 ./msc run --target=raiser tools/syncLocalBinary.ms            # full sync
 ./msc run --target=raiser tools/syncLocalBinary.ms check      # dry-run
 ./msc run --target=raiser tools/syncLocalBinary.ms no-binary  # support trees only
+./msc run --target=raiser tools/syncLocalBinary.ms web        # browser compiler only (emcc) → ~/.metascript/web/
 
 bash tools/editor-plugin/build.sh --install   # after grammar/highlights edits
 ```
