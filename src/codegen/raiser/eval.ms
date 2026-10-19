@@ -2005,3 +2005,27 @@ test "orc: a bare return in a constructor still yields the object" {
 	assert vm.output == "none y b0 t2 10 11\n", vm.output;
 }
 
+
+const finallyInFlight = "let log = ''; function note(s: string): void { log = log + s + '|'; } function boom(m: number): void { throw m; }"
+	+ " function ownCatch(): void { try { boom(9); } catch (e) { note('own'); } }"
+	+ " function replaced(): void { try { try { boom(1); } finally { note('f'); boom(2); } } catch (e) { note(String(e as number)); } }"
+	+ " function viaCall(): void { try { try { boom(3); } finally { ownCatch(); } } catch (e) { note(String(e as number)); } }"
+	+ " function sameFrame(): void { try { try { boom(3); } finally { try { boom(9); } catch (e) { note('own'); } } } catch (e) { note(String(e as number)); } }"
+	+ " function returns(): number { try { return 7; } finally { ownCatch(); try { boom(8); } catch (e) { note('own2'); } } }"
+	+ " function normal(): void { try { note('body'); } finally { ownCatch(); note('fin'); } }"
+	+ " function twoLevels(): void { try { try { try { boom(4); } finally { ownCatch(); note('f1'); } } finally { ownCatch(); note('f2'); } } catch (e) { note(String(e as number)); } }"
+	+ " function cancelled(): number { try { try { boom(5); } finally { return 3; } } catch (e) { return 4; } }"
+	+ " replaced(); viaCall(); sameFrame(); note(`${returns()}`); normal(); twoLevels(); note(`${cancelled()}`); console.log(log);";
+const finallyInFlightOut = "f|2|own|3|own|3|own|own2|7|body|own|fin|own|f1|own|f2|4|3|\n";
+
+test "orc: a throw in a finally replaces the raise, and a catch inside it keeps the raise in flight" {
+	const vm = evalOrcVM(finallyInFlight);
+	assert vm.error == "", vm.error;
+	assert vm.output == finallyInFlightOut, vm.output;
+}
+
+test "arena: a throw in a finally replaces the raise, and a catch inside it keeps the raise in flight" {
+	const vm = evalArenaVM(finallyInFlight);
+	assert vm.error == "", vm.error;
+	assert vm.output == finallyInFlightOut, vm.output;
+}
