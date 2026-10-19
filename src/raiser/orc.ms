@@ -133,7 +133,7 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 			if (isRef(child)) {
 				if (colorOf(arrHeap, objHeap, child) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, child)) as int32;
 				else if (colorOf(arrHeap, objHeap, child) != COL_GRAY) rcDecref(arrHeap, objHeap, child);
-			}
+			} else if (child.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, child);
 		}
 		data.items.length = 0;
 		data.rc = 0;
@@ -145,7 +145,7 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 			if (isRef(f.value)) {
 				if (colorOf(arrHeap, objHeap, f.value) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, f.value)) as int32;
 				else if (colorOf(arrHeap, objHeap, f.value) != COL_GRAY) rcDecref(arrHeap, objHeap, f.value);
-			}
+			} else if (f.value.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, f.value);
 		}
 		data.fields.length = 0;
 		data.rc = 0;

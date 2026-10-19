@@ -13,7 +13,7 @@ import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -1106,7 +1106,7 @@ test "existing arithmetic still works" {
 
 test "number toString through full pipeline" {
 	const ctx = evalFull("return (10).toString() + \"-\" + (20).toString();");
-	assert ctx.lastResult.strVal == "10-20";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "10-20";
 }
 
 // Enum member access through the FULL pipeline: the checker rewrites `Color.Green`
@@ -1147,7 +1147,7 @@ test "objects through transform" {
 test "build.ms pattern through transform" {
 	const ctx = evalFull("interface Config { root: string; } function defineConfig(config: Config): Config { return config; } export default defineConfig({ root: \"src/main.ms\" });");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
 }
 
@@ -1267,7 +1267,7 @@ test "a call through a closure parameter calls the closure, not a routine of the
 test "a closure made in a for-of reads the binding of its own iteration" {
 	const ctx = evalFull("function make(): string { const fs: (() => string)[] = []; for (const j of ['a', 'b']) { fs.push((): string => j); } let out = ''; for (const f of fs) { out = out + f(); } return out; } return make();");
 	assert ctx.lastError == "", ctx.lastError;
-	assert ctx.lastResult.strVal == "ab";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "ab";
 }
 
 test "a closure made in a for loop that continues reads the counter of its own iteration" {
@@ -1851,4 +1851,60 @@ test "engine: a branch over more than 32768 instructions keeps its target and a 
 	assert span > 32768, `${span}`;
 	const ctx = evalOrcVM(source);
 	assert ctx.error == "" && ctx.output == "20001 0 20\n", `${ctx.error} ${ctx.output}`;
+}
+
+// --- Strings on the string heap ---
+
+test "orc: strings built and dropped in a loop leave the string heap bounded" {
+	const vm = evalOrcVM("let n = 0; for (let i = 0; i < 300; i++) { const s = `item ${i}` + \"-\" + `${i}`; n = n + s.length; } console.log(`${n}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "3380\n";
+	assert vm.arrayHeap.strings.texts.length < 30;
+	assert heapStringLive(vm.arrayHeap) < 30;
+}
+
+test "orc: strings dropped with their array and overwritten in an object field are released" {
+	const vm = evalOrcVM("let a: string[] = []; const o = { s: \"\" }; for (let i = 0; i < 200; i++) { a.push(`v${i}`); o.s = `f${i}`; } a = []; console.log(o.s);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "f199\n";
+	assert heapStringLive(vm.arrayHeap) < 20;
+}
+
+test "orc: a string written into the register of its only source keeps its value" {
+	const vm = evalOrcVM("let s = \"\"; for (let i = 0; i < 50; i++) { s = s + \"x\"; } console.log(`${s.length}`);"
+		+ " let t = \"abcdefgh\"; while (t.length > 3) { t = t.slice(1); } console.log(t);"
+		+ " const o = { s: \"a\" }; for (let i = 0; i < 3; i++) { o.s = o.s + \"b\"; } console.log(o.s);"
+		+ " const arr = [\"wxyz\", \"k\"]; arr[0] = arr[0].slice(2); arr[1] = arr[1] + arr[1]; console.log(arr[0] + \",\" + arr[1]);"
+		+ " let c = \"q\"; c = c.charAt(0) + c; console.log(c);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "50\nfgh\nabbb\nyz,kk\nqq\n";
+}
+
+test "orc: non-ASCII strings keep their bytes through the string tier" {
+	const vm = evalOrcVM("console.log(\"é\".padStart(4, \"x\")); console.log(\"日本\".padEnd(5, \"·\"));"
+		+ " const m = \"naïve\".padStart(7, \"é\"); console.log(m + \"|\" + `${m.length}`);"
+		+ " for (const p of [\"a\", \"é\", \"日\"]) { console.log(p.padStart(3, \"-\")); }");
+	assert vm.error == "", vm.error;
+	assert vm.output == "xxxé\n日本···\néénaïve|7\n--a\n--é\n--日\n";
+}
+
+test "orc: a string a spawned strand extends leaves the sender's copy unchanged" {
+	const vm = evalOrcVM("const box = { text: \"abc\", tags: [\"é\", \"x\"] };"
+		+ " const f = spawn(() => { let t = box.text; t = t + \"Z\"; let u = box.tags[0]; u = u + \"日\"; return t + u + box.tags[1]; });"
+		+ " const r = await f; console.log(box.text + \"|\" + box.tags[0] + \"|\" + r);"
+		+ " const word = \"né\"; const g = spawn(() => { let w = word; for (let i = 0; i < 3; i++) { w = w + word; } return w; });"
+		+ " console.log((await g) + \"|\" + word);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "abc|é|abcZé日x\nnénénéné|né\n";
+}
+
+test "orc: string equality, ordering and switch are by text, not by handle" {
+	const vm = evalOrcVM("const a = \"ab\" + \"c\"; const b = \"abc\";"
+		+ " console.log(`${a == b} ${a != b} ${a < \"abd\"} ${a <= b} ${a > \"abb\"} ${a >= \"abd\"}`);"
+		+ " function kind(x: string): number { switch (x) { case \"abc\": return 1; case \"é\": return 2; default: return 3; } }"
+		+ " console.log(`${kind(a)} ${kind(\"é\")} ${kind(\"zz\")} ${kind(\"a\" + \"bc\")}`);"
+		+ " const k = [\"x\", \"y\"]; console.log(`${k[0] == \"x\"} ${k[1] == \"x\"}`);"
+		+ " const e = { n: \"x\" + \"y\" }; console.log(`${e.n == \"xy\"} ${e.n < \"xz\"}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "true false true true true false\n1 2 3 1\ntrue false\ntrue true\n";
 }

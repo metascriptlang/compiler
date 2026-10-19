@@ -14,9 +14,10 @@
 // where possible (extern type signatures enforce this at the call site).
 
 import {
-	RaiserValue, RaiserValueKind,
-	raiserNil, raiserBool, raiserInt, raiserFloat, raiserString,
+	RaiserValue, RaiserValueKind, RaiserArrayHeap,
+	raiserNil, raiserBool, raiserInt, raiserFloat, createArrayHeap, createStructHeap, heapAllocString, heapStringText,
 } from "./value";
+import { activeHostArrayHeap, setActiveHostHeaps } from "./hostRegistry";
 
 // --- Host function signature ---
 // Every registered host call has this shape. Wrappers handle per-native
@@ -28,9 +29,17 @@ export type RaiserPrintSink = (text: string) => void;
 
 // --- Unbox helpers ---
 
+// A host function sees a string as a handle on the running strand's heap; these two
+// are where text crosses to and from a host string.
+function hostStringHeap(): RaiserArrayHeap {
+	const heap = activeHostArrayHeap();
+	if (heap == null) throw new Error("internal: a host string needs an active host heap");
+	return heap;
+}
+
 export function unboxString(v: RaiserValue): string {
 	if (v.kind != RaiserValueKind.String) return "";
-	return v.strVal;
+	return heapStringText(hostStringHeap(), v);
 }
 
 export function unboxInt(v: RaiserValue): number {
@@ -62,7 +71,7 @@ export function boxVoid(): RaiserValue {
 }
 
 export function boxString(s: string): RaiserValue {
-	return raiserString(s);
+	return heapAllocString(hostStringHeap(), s);
 }
 
 export function boxInt(n: number): RaiserValue {
@@ -80,11 +89,13 @@ export function boxBool(b: boolean): RaiserValue {
 // --- Tests ---
 
 test "unboxString from string value" {
-	const v = raiserString("hello");
+	setActiveHostHeaps(createStructHeap(), createArrayHeap());
+	const v = boxString("hello");
 	assert unboxString(v) == "hello";
 }
 
 test "unboxString from non-string returns empty" {
+	setActiveHostHeaps(createStructHeap(), createArrayHeap());
 	const v = raiserInt(42);
 	assert unboxString(v) == "";
 }
@@ -109,10 +120,11 @@ test "unboxBool from int" {
 	assert unboxBool(raiserInt(0)) == false;
 }
 
-test "boxString roundtrip" {
-	const v = boxString("hi");
+test "boxString roundtrip keeps non-ASCII bytes" {
+	setActiveHostHeaps(createStructHeap(), createArrayHeap());
+	const v = boxString("hi é 日本");
 	assert v.kind == RaiserValueKind.String;
-	assert v.strVal == "hi";
+	assert unboxString(v) == "hi é 日本";
 }
 
 test "boxInt roundtrip" {

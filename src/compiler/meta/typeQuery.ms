@@ -105,9 +105,9 @@ function hostBindSym(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
 	if (ctx == null || args.length < 2 || args[0].kind != RaiserValueKind.String) return raiserNil();
 	const bound = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int32 : args[1].intVal as int32;
-	const sym = bound >= 0 ? boundSymAt(bound) : lookupSymbol(ctx.table, args[0].strVal);
+	const sym = bound >= 0 ? boundSymAt(bound) : lookupSymbol(ctx.table, unboxString(args[0]));
 	if (sym == null) return raiserNil();
-	const ident = createNodeAt(NodeKind.Identifier, { name: bound >= 0 ? args[0].strVal : sym.name }, makeLoc(activeMetaLine(), activeMetaColumn()));
+	const ident = createNodeAt(NodeKind.Identifier, { name: bound >= 0 ? unboxString(args[0]) : sym.name }, makeLoc(activeMetaLine(), activeMetaColumn()));
 	ident.resolvedSym = sym;
 	ident.flags = ident.flags.incl(NodeFlag.BoundSym);
 	return emitNode(ident);
@@ -133,7 +133,7 @@ function namesBuiltinType(ctx: CheckerContext, v: RaiserValue): boolean {
 	if (heap == null || v.kind != RaiserValueKind.Object) return false;
 	if (heapObjectGetField(heap, v.intVal, "kind").intVal != (NodeKind.Identifier as int64)) return false;
 	const name = heapObjectGetField(heap, v.intVal, "name");
-	return name.kind == RaiserValueKind.String && builtinTypeNamed(ctx, name.strVal) != null;
+	return name.kind == RaiserValueKind.String && builtinTypeNamed(ctx, unboxString(name)) != null;
 }
 
 function hostGetImpl(args: RaiserValue[]): RaiserValue {
@@ -159,7 +159,7 @@ function hostResolveType(args: RaiserValue[]): RaiserValue {
 	if (ctx == null || args.length < 1 || args[0].kind != RaiserValueKind.String) return raiserNil();
 	const line = activeMetaLine();
 	const column = activeMetaColumn();
-	const t = resolveAnnotation(args[0].strVal, ctx, line, column);
+	const t = resolveAnnotation(unboxString(args[0]), ctx, line, column);
 	if (t == null) return raiserNil();
 	return emitTypeNode(mapTypeToAst(t, makeLoc(line, column)), t);
 }
@@ -217,7 +217,7 @@ function hostGetOffset(args: RaiserValue[]): RaiserValue {
 		if (sizeOfType(ctx.targetInfo, t) < 0) return raiserInt(SIZE_NOT_COMPUTABLE as int64);
 		return queryError(ctx, "getOffset: node type is not a struct");
 	}
-	const field = args[1].strVal;
+	const field = unboxString(args[1]);
 	for (const name of body.typeNames) {
 		if (name == field) return raiserInt(offsetOfField(ctx.targetInfo, t, field) as int64);
 	}

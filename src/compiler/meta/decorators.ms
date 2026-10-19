@@ -22,7 +22,7 @@ import { sgQueryAtPosition } from "../../checker/suggest";
 import { callMacroEngineCompiler, callMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
-	raiserString, raiserBool, raiserNil, raiserArray,
+	heapAllocString, heapStringText, raiserBool, raiserNil, raiserArray,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectGetField,
 } from "../../raiser/value";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
@@ -664,7 +664,7 @@ function readStrings(arrHeap: RaiserArrayHeap, v: RaiserValue): string[] {
 	if (v.kind != RaiserValueKind.Array) return out;
 	const len = heapArrayLen(arrHeap, v.intVal) as int32;
 	for (let i = 0; i < len; i += 1) {
-		out.push(heapArrayGet(arrHeap, v.intVal, i).strVal);
+		out.push(heapStringText(arrHeap, heapArrayGet(arrHeap, v.intVal, i)));
 	}
 	return out;
 }
@@ -736,11 +736,11 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const arrHeap = vm.arrayHeap;
 	seedInheritedMetadata(ctx, plan);
 	const keysHandle = heapAllocArray(arrHeap);
-	for (const k of plan.metaKeys) heapArrayPush(arrHeap, keysHandle, raiserString(k));
+	for (const k of plan.metaKeys) heapArrayPush(arrHeap, keysHandle, heapAllocString(arrHeap, k));
 	const valuesHandle = heapAllocArray(arrHeap);
 	for (const v of plan.metaValues) heapArrayPush(arrHeap, valuesHandle, nodeToValue(v, objHeap, arrHeap));
 	const inheritedKeysHandle = heapAllocArray(arrHeap);
-	for (const k of plan.inheritedKeys) heapArrayPush(arrHeap, inheritedKeysHandle, raiserString(k));
+	for (const k of plan.inheritedKeys) heapArrayPush(arrHeap, inheritedKeysHandle, heapAllocString(arrHeap, k));
 	const inheritedValuesHandle = heapAllocArray(arrHeap);
 	for (const v of plan.inheritedValues) heapArrayPush(arrHeap, inheritedValuesHandle, nodeToValue(v, objHeap, arrHeap));
 	let initVal = raiserNil();
@@ -751,7 +751,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	}
 	const args: RaiserValue[] = [
 		accessor ? raiserNil() : nodeToValue(target, objHeap, arrHeap),
-		raiserString(info.kind), raiserString(info.name), raiserBool(info.isStatic), raiserBool(false),
+		heapAllocString(arrHeap, info.kind), heapAllocString(arrHeap, info.name), raiserBool(info.isStatic), raiserBool(false),
 		raiserArray(keysHandle), raiserArray(valuesHandle),
 		raiserArray(inheritedKeysHandle), raiserArray(inheritedValuesHandle), initVal,
 	];

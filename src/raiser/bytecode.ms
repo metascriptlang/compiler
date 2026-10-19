@@ -45,16 +45,16 @@ export enum RaiserOpcode {
 
 	// Object operations (3)
 	NewObject,        // ABC: R[A] = new empty object; B > 0 gives it class type B - 1 of the function
-	LoadField,        // ABC: R[A] = R[B].field(constants[C].strVal)
-	StoreField,       // ABC: R[A].field(constants[B].strVal) = R[C]
+	LoadField,        // ABC: R[A] = R[B].field(constants[C].text)
+	StoreField,       // ABC: R[A].field(constants[B].text) = R[C]
 
 	// String operations (6)
 	ConcatStr,        // ABC: R[A] = toString(R[B]) + toString(R[C])
-	EqStr,            // ABC: if R[A].strVal == R[B].strVal skip C
-	NeStr,            // ABC: if R[A].strVal != R[B].strVal skip C
-	StrLen,           // ABC: R[A] = R[B].strVal.length
-	StrCharAt,        // ABC: R[A] = R[B].strVal[R[C].intVal] (single char)
-	StrSlice,         // ABC: R[A] = R[B].strVal.slice(R[C].intVal, R[C+1].intVal)
+	EqStr,            // ABC: if R[A].text == R[B].text skip C
+	NeStr,            // ABC: if R[A].text != R[B].text skip C
+	StrLen,           // ABC: R[A] = R[B].text.length
+	StrCharAt,        // ABC: R[A] = R[B].text[R[C].intVal] (single char)
+	StrSlice,         // ABC: R[A] = R[B].text.slice(R[C].intVal, R[C+1].intVal)
 
 	// Indirect call (1)
 	CallIndirect,     // ABC: R[A] = call func[R[B].intVal](R[A+1]..R[A+C])
@@ -87,7 +87,7 @@ export enum RaiserOpcode {
 	// dispatch time; arguments are marshalled per the registered signature.
 	// New stdlib externs require zero VM/codegen edits — they self-register
 	// through the host table (see src/compiler/meta/hostTable.ms).
-	CallHost,         // ABC: R[A] = hostFn[constants[B].strVal](R[A+1]..R[A+C])
+	CallHost,         // ABC: R[A] = hostFn[constants[B].text](R[A+1]..R[A+C])
 
 	// Kind test (1)
 	// Compares value KIND (not just intVal). Required because BneI64/BeqI64
@@ -104,8 +104,8 @@ export enum RaiserOpcode {
 	// opcode: Nim derives them by swapping operands, and so does our codegen.
 	// ⚠ Appended at the END on purpose — src/raiser/vm_dispatch.c hardcodes
 	// opcode NUMBERS, so inserting mid-enum would silently desync it.
-	LtStr,            // ABC: if R[A].strVal < R[B].strVal skip C
-	LeStr,            // ABC: if R[A].strVal <= R[B].strVal skip C
+	LtStr,            // ABC: if R[A].text < R[B].text skip C
+	LeStr,            // ABC: if R[A].text <= R[B].text skip C
 
 	// Strand suspension (1)
 	// Hands the turn to the scheduler; the strand resumes at the next
