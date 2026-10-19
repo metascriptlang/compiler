@@ -1,32 +1,33 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
+import { invokeMetasAt } from "./simulatorMetas";
+import "./simulatorSeeds";
+
+extern function msSolInvokeSigned(instruction: uint64, infos: uint64, count: uint64, signers: uint64, signerCount: uint64): uint64;
+
+function invokeSyscall(instruction: uint64, infos: uint64, count: uint64, signers: uint64, signerCount: uint64): uint64 {
+	return msSolInvokeSigned(instruction, infos, count, signers, signerCount);
+}
+
+// solana.h msSolInvokeMetas calls this with its frames
+@exportName("msSolInvokeMetasAt")
+export function msSolInvokeMetasAt(
+	infos: uint64,
+	header: uint64,
+	program: uint64,
+	metas: uint64,
+	count: uint64,
+	data: uint64,
+	length: uint64,
+	signers: uint64,
+	signerCount: uint64,
+): uint64 {
+	return invokeMetasAt(infos, header, program, metas, count, data, length, signers, signerCount, invokeSyscall);
+}
+
 when (solana) {
 	import { instructionDataOf, parseAccounts } from "./simulatorContext";
-	import { invokeMetasAt } from "./simulatorMetas";
-	import "./simulatorSeeds";
-
-	extern function msSolInvokeSigned(instruction: uint64, infos: uint64, count: uint64, signers: uint64, signerCount: uint64): uint64;
-
-	function invokeSyscall(instruction: uint64, infos: uint64, count: uint64, signers: uint64, signerCount: uint64): uint64 {
-		return msSolInvokeSigned(instruction, infos, count, signers, signerCount);
-	}
-
-	// solana.h msSolInvokeMetas calls this with its frames
-	@exportName("msSolInvokeMetasAt")
-	export function msSolInvokeMetasAt(
-		infos: uint64,
-		header: uint64,
-		program: uint64,
-		metas: uint64,
-		count: uint64,
-		data: uint64,
-		length: uint64,
-		signers: uint64,
-		signerCount: uint64,
-	): uint64 {
-		return invokeMetasAt(infos, header, program, metas, count, data, length, signers, signerCount, invokeSyscall);
-	}
 
 	// solana.h msSolStart calls these two on the loader's input
 	@exportName("msSolEntryAccounts")

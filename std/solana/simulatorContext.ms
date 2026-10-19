@@ -23,12 +23,10 @@ export struct ParsedInput {
 	programId: uint64;
 }
 
-// solana.h msSolPastRecord
 @inline function pastRecord(record: uint64): uint64 {
 	return (record + msSolLoadU64(record + 80) + (RECORD_HEADER + MAX_DATA_INCREASE + 15)) & ALIGN_DOWN;
 }
 
-// solana.h msSolNextRecord
 @inline function nextRecord(cursor: uint64): uint64 {
 	if (msSolLoadU8(cursor) != DUPLICATE_MARKER) { return cursor + 8; }
 	const past = (cursor + RECORD_HEADER + msSolLoadU64(cursor + 80) + MAX_DATA_INCREASE + 7) & ALIGN_DOWN;
@@ -82,7 +80,6 @@ export function tooManyAccounts(input: uint64): boolean {
 	return kept;
 }
 
-// solana.h msSolInstructionDataOf
 @noinline export function instructionDataOf(input: uint64): uint64 {
 	let cursor = input + 8;
 	for (let left = msSolLoadU64(input); left > 0; left--) { cursor = nextRecord(cursor); }
