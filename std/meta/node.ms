@@ -52,6 +52,8 @@ export enum TypeKind {
 	BigInt,
 	Set,
 	Module,
+	IndexedAccess,
+	KeyOf,
 }
 
 // ===== Calling Convention =====

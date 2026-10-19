@@ -1,0 +1,189 @@
+import { accountLayoutText } from "./accountCodecMacro";
+import { msSolHostFaultCodeOf, msSolLoadU16, msSolLoadU32, msSolLoadU64, msSolLoadU8, msSolMemoryAllocate, msSolStoreU32, msSolStoreU64, msSolStoreU8, msSolViewAt } from "./memory";
+
+enum Mode { Idle, Busy, Done }
+enum Offset { Below = -7, Zero = 0, Above = 70000 }
+type Tag = distinct uint32;
+type Amount = distinct uint64;
+struct Key { bytes: uint8[32]; }
+struct Counter { authority: Key; value: uint64; bump: uint8; pad: uint8[7]; }
+struct Item { amount: uint64; kind: uint16; flag: boolean; }
+struct Kinds {
+	u8: uint8; i8: int8; u16: uint16; i16: int16; u32: uint32; i32: int32; u64: uint64; i64: int64;
+	f32: float32; f64: float64; on: boolean; mode: Mode; offset: Offset; tag: Tag; amount: Amount;
+	bits: BitSet<Mode>; raw: uint8[4]; words: uint32[3]; wide: uint64[2]; items: Item[2]; inner: Item;
+}
+type Row = uint8[2];
+struct Grid { cells: Row[3]; flags: boolean[3]; marks: Mode[2]; reals: float64[2]; signed: int16[2]; }
+
+function viewOf<T>(address: uint64): Ptr<T> { return msSolViewAt<T>(accountLayoutText<T>(), address); }
+
+function faultOf(run: () => void): string {
+	@emit(`try { ${run}(); } catch (error) { return error.message; }
+	return "";`);
+	unreachable;
+}
+
+function bump(counter: Ptr<Counter>): void { counter.value += 1; }
+function same(a: Key, b: Key): boolean { return a == b; }
+function readonlyValue(counter: Readonly<Ptr<Counter>>): uint64 { return counter.value; }
+let kept: Key[] = [];
+function keep(key: Key): void { kept.push(key); }
+
+test "a view reads and writes the bytes a raw load and store see, in both directions" {
+	const at = msSolMemoryAllocate(96);
+	const counter = viewOf<Counter>(at + 8);
+	msSolStoreU64(at + 8 + 32, 41);
+	assert counter.value == 41;
+	counter.value += 1;
+	bump(counter);
+	assert msSolLoadU64(at + 8 + 32) == 43;
+	counter.bump = 9;
+	counter.authority.bytes[3] = 5;
+	assert msSolLoadU8(at + 8 + 40) == 9 && msSolLoadU8(at + 8 + 3) == 5;
+	msSolStoreU8(at + 8 + 4, 77);
+	assert counter.authority.bytes[4] == 77;
+	assert readonlyValue(counter) == 43;
+}
+
+test "a snapshot copy is independent of the memory and a whole struct assignment writes its bytes" {
+	const at = msSolMemoryAllocate(160);
+	const counter = viewOf<Counter>(at);
+	const other = viewOf<Counter>(at + 64);
+	counter.value = 5;
+	const snap = counter[];
+	counter.value += 1;
+	assert snap.value == 5 && counter.value == 6;
+	other[] = { authority: { bytes: [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9] }, value: 42, bump: 1, pad: [1, 2, 3, 4, 5, 6, 7] };
+	assert msSolLoadU64(at + 64 + 32) == 42 && msSolLoadU8(at + 64) == 9 && msSolLoadU8(at + 64 + 47) == 7;
+	counter[] = other[];
+	assert counter.value == 42 && msSolLoadU8(at + 31) == 9 && msSolLoadU8(at + 40) == 1;
+	other.value = 1;
+	assert counter.value == 42;
+}
+
+test "a Pubkey field compares, passes by value and is copied when stored" {
+	const at = msSolMemoryAllocate(160);
+	const counter = viewOf<Counter>(at);
+	const other = viewOf<Counter>(at + 64);
+	counter.authority.bytes[0] = 1;
+	assert counter.authority != other.authority;
+	other.authority = counter.authority;
+	assert counter.authority == other.authority && same(counter.authority, other.authority);
+	assert msSolLoadU8(at + 64) == 1;
+	keep(counter.authority);
+	counter.authority.bytes[0] = 2;
+	assert kept[kept.length - 1].bytes[0] == 1 && msSolLoadU8(at) == 2;
+}
+
+test "every field kind reads back what a raw store wrote and writes what a raw load reads" {
+	const at = msSolMemoryAllocate(256);
+	const kinds = viewOf<Kinds>(at);
+	const u64At = 48;
+	kinds.u8 = 200; kinds.i8 = -3; kinds.u16 = 65000; kinds.i16 = -300; kinds.u32 = 4000000000; kinds.i32 = -70000;
+	kinds.u64 = 0xfedcba9876543210; kinds.i64 = -5; kinds.f32 = 1.5; kinds.f64 = -2.25; kinds.on = true;
+	assert kinds.u8 == 200 && kinds.i8 == -3 && kinds.u16 == 65000 && kinds.i16 == -300;
+	assert kinds.u32 == 4000000000 && kinds.i32 == -70000 && kinds.u64 == 0xfedcba9876543210 && kinds.i64 == -5;
+	assert kinds.f32 == 1.5 && kinds.f64 == -2.25 && kinds.on;
+	assert msSolLoadU8(at) == 200 && msSolLoadU8(at + 1) == 253 && msSolLoadU16(at + 2) == 65000 && msSolLoadU16(at + 4) == 65236;
+	assert msSolLoadU32(at + 8) == 4000000000 && msSolLoadU32(at + 12) == 4294897296;
+	assert msSolLoadU64(at + 16) == 0xfedcba9876543210 && msSolLoadU64(at + 24) == 0xfffffffffffffffb;
+	assert msSolLoadU32(at + 32) == 0x3fc00000 && msSolLoadU64(at + 40) == 0xc002000000000000;
+	assert u64At == 48;
+	kinds.on = false;
+	assert !kinds.on && msSolLoadU8(at + 48) == 0;
+	msSolStoreU8(at + 48, 1);
+	assert kinds.on;
+}
+
+test "enums, distinct types and bit sets keep their width and sign" {
+	const at = msSolMemoryAllocate(256);
+	const kinds = viewOf<Kinds>(at);
+	kinds.mode = Mode.Busy;
+	kinds.offset = Offset.Below;
+	kinds.tag = 7 as Tag;
+	kinds.amount = (0x8000000000000001 as uint64) as Amount;
+	kinds.bits = (5 as uint8) as BitSet<Mode>;
+	assert kinds.mode == Mode.Busy && kinds.offset == Offset.Below && (kinds.tag as uint32) == 7;
+	assert (kinds.amount as uint64) == 0x8000000000000001 && (kinds.bits as uint8) == 5;
+	kinds.offset = Offset.Above;
+	assert kinds.offset == Offset.Above && msSolLoadU32(at + 52) == 70000;
+	kinds.offset = Offset.Below;
+	assert msSolLoadU32(at + 52) == 4294967289;
+	assert msSolLoadU8(at + 49) == 1 && msSolLoadU32(at + 56) == 7 && msSolLoadU8(at + 72) == 5;
+}
+
+test "fixed arrays are live: index, length, slice, set and whole assignment reach the bytes" {
+	const at = msSolMemoryAllocate(256);
+	const kinds = viewOf<Kinds>(at);
+	kinds.raw[1] = 7;
+	kinds.words[2] = 4000000000;
+	kinds.wide[1] = 0xffffffffffffffff;
+	assert msSolLoadU8(at + 74) == 7 && msSolLoadU32(at + 88) == 4000000000 && msSolLoadU64(at + 104) == 0xffffffffffffffff;
+	msSolStoreU8(at + 75, 11);
+	assert kinds.raw.length == 4 && kinds.raw[2] == 11 && kinds.words.length == 3 && kinds.wide.length == 2;
+	const snap = kinds.raw;
+	kinds.raw = [1, 2, 3, 4];
+	assert msSolLoadU8(at + 76) == 4 && kinds.raw[0] == 1;
+	const copy = kinds.words;
+	kinds.words[0] = 1;
+	assert copy[0] == 0 && kinds.words[0] == 1;
+	kinds.wide = [3, 4];
+	assert msSolLoadU64(at + 96) == 3 && msSolLoadU64(at + 104) == 4;
+	assert snap.length == 4;
+}
+
+test "arrays of structs and nested structs read and write in place" {
+	const at = msSolMemoryAllocate(256);
+	const kinds = viewOf<Kinds>(at);
+	kinds.items[1].amount = 99;
+	kinds.items[1].kind = 3;
+	kinds.items[0] = kinds.items[1];
+	kinds.inner.flag = true;
+	kinds.inner.amount += 5;
+	assert msSolLoadU64(at + 112) == 99 && msSolLoadU64(at + 128) == 99 && msSolLoadU16(at + 136) == 3;
+	assert kinds.items[0].amount == 99 && kinds.inner.flag && kinds.inner.amount == 5;
+	const items = kinds.items;
+	kinds.items[0].amount = 1;
+	assert items[0].amount == 99 && kinds.items[0].amount == 1;
+	kinds.inner = { amount: 8, kind: 2, flag: false };
+	assert msSolLoadU64(at + 144) == 8 && kinds.inner.kind == 2;
+	kinds.items = [{ amount: 6, kind: 1, flag: true }, { amount: 7, kind: 2, flag: false }];
+	assert msSolLoadU64(at + 112) == 6 && msSolLoadU64(at + 128) == 7;
+}
+
+test "arrays of arrays, booleans, enums, floats and signed numbers round trip" {
+	const at = msSolMemoryAllocate(128);
+	const grid = viewOf<Grid>(at);
+	grid.cells[2][1] = 9;
+	grid.flags[1] = true;
+	grid.marks[1] = Mode.Done;
+	grid.reals[1] = 0.5;
+	grid.signed[0] = -2;
+	assert msSolLoadU8(at + 5) == 9 && msSolLoadU8(at + 7) == 1 && msSolLoadU8(at + 10) == 2;
+	assert grid.cells[2][1] == 9 && grid.flags[1] && !grid.flags[0] && grid.marks[1] == Mode.Done;
+	assert grid.reals[1] == 0.5 && grid.signed[0] == -2 && msSolLoadU16(at + 32) == 65534;
+}
+
+test "a view of memory that is too short or unmapped names the address" {
+	const at = msSolMemoryAllocate(40);
+	assert faultOf(() => { viewOf<Counter>(at); }).includes("view");
+	assert faultOf(() => { viewOf<Counter>(0x10); }).includes("hits no region");
+	assert msSolHostFaultCodeOf() == 0;
+}
+
+test "plain stores that wrap in a normal field write wrap in the view too" {
+	const at = msSolMemoryAllocate(256);
+	const kinds = viewOf<Kinds>(at);
+	kinds.u32 = 0xffffffff;
+	kinds.u32 += 1;
+	kinds.u8 = 255;
+	kinds.u8 += 2;
+	kinds.u64 = 0xffffffffffffffff;
+	kinds.u64 += 2;
+	kinds.i16 = 32767;
+	kinds.i8 = 127;
+	assert kinds.u32 == 0 && kinds.u8 == 1 && kinds.u64 == 1 && kinds.i16 == 32767 && kinds.i8 == 127;
+	msSolStoreU32(at + 8, 0xffffffff);
+	assert kinds.u32 == 0xffffffff;
+}

@@ -28,7 +28,7 @@ test "the C prelude declares every runtime routine the lowerings synthesize" {
 	"msBigIntDiv", "msBigIntFromFloat64", "msBigIntFromLit", "msBigIntIsZero", "msBigIntMod", "msBigIntMul",
 	"msBigIntNeg", "msBigIntNot", "msBigIntOr", "msBigIntPow", "msBigIntShl", "msBigIntShr", "msBigIntSub",
 	"msBigIntToFloat64", "msBigIntToInt64", "msBigIntToString", "msBigIntXor", "msBoolToString", "msBoxDouble",
-	"msBoxInt32", "msCheckRangeI16", "msCheckRangeI32", "msCheckRangeI64", "msCheckRangeI8",
+	"msBoxInt32", "msBoxInt64", "msCheckRangeI16", "msCheckRangeI32", "msCheckRangeI64", "msCheckRangeI8",
 	"msClosureArrayDestroy", "msClosureCopy", "msClosureDestroy", "msClosureSink", "msClosureTrace",
 	"msClosureWasMoved", "msDecref", "msDecrefCyclic", "msDivAssignI32", "msDivI32", "msDivI64", "msDivU32",
 	"msDivU64", "msFutureCheckErr", "msFutureComplete", "msFutureCompleteVoid", "msFutureCreate",

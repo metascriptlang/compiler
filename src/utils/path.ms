@@ -91,9 +91,16 @@ function canonicalRootDir(dir: string): string {
 	return normalize(physical != "" ? physical : dir);
 }
 
+let _hostRuntimeDir = "";
+
+export function setHostRuntimeDir(root: string): void {
+	_hostRuntimeDir = root == "" ? "" : canonicalRootDir(root);
+}
+
 // Find the compiler root directory (the one containing std/).
 // Walks up from argv[0] (resolved via $PATH if bare), then falls back to cwd().
 export function resolveRuntimeDir(): string {
+	if (_hostRuntimeDir != "") return _hostRuntimeDir;
 	return runtimeDirFrom(resolveArgv0(argv[0]));
 }
 

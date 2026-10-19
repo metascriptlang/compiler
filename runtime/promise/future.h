@@ -512,6 +512,8 @@ static inline void* msBoxDouble(double v) { void* p = NULL; memcpy(&p, &v, sizeo
 static inline double msUnboxDouble(void* p) { double v; memcpy(&v, &p, sizeof(double)); return v; }
 static inline void* msBoxInt32(int32_t v) { return (void*)(intptr_t)v; }
 static inline int32_t msUnboxInt32(void* p) { return (int32_t)(intptr_t)p; }
+static inline void* msBoxInt64(int64_t v) { return (void*)(intptr_t)v; }
+static inline int64_t msUnboxInt64(void* p) { return (int64_t)(intptr_t)p; }
 static inline void* msBoxBool(bool v) { return (void*)(intptr_t)v; }
 static inline bool msUnboxBool(void* p) { return (bool)(intptr_t)p; }
 
@@ -533,6 +535,13 @@ static inline int32_t msFutureReadInt32(void* fp) {
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return 0; }
 	return ((msFuture_int32*)fp)->value;
+}
+
+static inline int64_t msFutureReadInt64(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
+	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
+	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return 0; }
+	return ((msFuture_int64*)fp)->value;
 }
 
 static inline bool msFutureReadBool(void* fp) {

@@ -57,6 +57,7 @@ uint64_t msSolHostInput(uint64_t size);
 void msSolHostEnter(uint64_t input);
 void msSolHostLeave(void);
 uint64_t msSolHostResult(void);
+void msSolHostRaise(uint64_t code, msString text);
 uint64_t msSolHostFaultCodeOf(void);
 msString msSolHostFaultMessage(void);
 uint64_t msSolHostLogTotal(void);

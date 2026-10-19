@@ -3,7 +3,7 @@
 // JSGenerator context, low-level emit functions.
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
-import { Node, NodeKind, TypeKind, BlockStmtData } from "../../ast/node";
+import { Node, NodeKind, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
@@ -54,6 +54,7 @@ export class JSGenerator {
 	neededModules: string[];    // cross-module references collected during emission
 	neededNames: string[][];
 	neededLocals: string[][];   // the binding each needed name takes in this module
+	declaredLocals: HashSet<string>;   // every name this module binds below top level; an import binding never takes one
 	moduleRequests: string;     // source imports and re-exports, in source order, hoisted in front of the body
 	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
 	namespaceNames: string[][];
@@ -80,7 +81,7 @@ export class JSGenerator {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], moduleRequests: "", namespaceModules: [], namespaceNames: [],
+		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
@@ -123,7 +124,47 @@ function importBindingTaken(gen: JSGenerator, local: string): boolean {
 	for (const locals of gen.neededLocals) {
 		for (const taken of locals) { if (taken == local) return true; }
 	}
-	return moduleExportsName(gen, gen.currentModulePath, local);
+	return gen.declaredLocals.has(local) || moduleExportsName(gen, gen.currentModulePath, local);
+}
+
+function collectPatternNames(n: Node | null, out: HashSet<string>): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) out.add((n.data as IdentifierData).name);
+	if (n.kind == NodeKind.ObjectPatternProp) out.add((n.data as ObjectPatternPropData).propKey);
+	forEachChild(n, (c: Node): void => { collectPatternNames(c, out); });
+}
+
+function addNames(names: string[], out: HashSet<string>): void {
+	for (const nm of names) out.add(nm);
+}
+
+export function collectDeclaredLocals(node: Node, out: HashSet<string>): void {
+	match (node.kind) {
+		NodeKind.VariableDecl => { out.add((node.data as VariableDeclData).declName); },
+		NodeKind.ForOfStmt => {
+			const d = node.data as ForOfStmtData;
+			out.add(d.forOfBinding);
+			collectPatternNames(d.forOfPattern, out);
+		},
+		NodeKind.ForInStmt => { out.add((node.data as ForInStmtData).forInBinding); },
+		NodeKind.TryCatchStmt => { out.add((node.data as TryCatchStmtData).catchName); },
+		NodeKind.ArrowFunction => { addNames((node.data as ArrowFunctionData).arrowParams, out); },
+		NodeKind.FunctionExpr => { addNames((node.data as FunctionExprData).funcExprParams, out); },
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			out.add(d.fnName);
+			addNames(d.params, out);
+		},
+		NodeKind.MethodDecl => { addNames((node.data as MethodDeclData).methodParams, out); },
+		NodeKind.ConstructorDecl => { addNames((node.data as ConstructorDeclData).ctorParams, out); },
+		NodeKind.ClassDecl => { out.add((node.data as ClassDeclData).className); },
+		NodeKind.DestructuringDecl => { collectPatternNames((node.data as DestructuringDeclData).destrPattern, out); },
+		NodeKind.MatchCase => {
+			for (const p of (node.data as MatchCaseData).casePatterns) collectPatternNames(p, out);
+		},
+		_ => {},
+	}
+	forEachChild(node, (c: Node): void => { if (c != null) collectDeclaredLocals(c, out); });
 }
 
 export function importSpecifier(name: string, local: string): string {

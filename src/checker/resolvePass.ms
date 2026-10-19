@@ -8,12 +8,13 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric } from "./types";
+import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
+import { proxyAtExtern } from "./proxy";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -538,6 +539,32 @@ function refuseVoidMember(ctx: CheckerContext, parts: string[], members: Type[],
 	addError(ctx, msg, line, col);
 }
 
+function resolveKeyOf(operand: string, ctx: CheckerContext, line: int32, col: int32): Type {
+	const objectType = resolveAnnotation(operand, ctx, line, col);
+	if (objectType.kind == TypeKind.Error) return objectType;
+	if (hasGenericParams(objectType)) return createKeyOfType(objectType);
+	const keys = keyOfType(objectType);
+	if (keys == null) {
+		if (line > 0) addError(ctx, `'keyof ${operand.trim()}' has no keys: '${typeDisplayName(objectType)}' is not an object type with properties`, line, col);
+		return errorType();
+	}
+	return keys;
+}
+
+// `T[K]` where K is a string literal type, a union of them or a type parameter;
+// null when the brackets hold something else, so the sized-array path reports it.
+function resolveIndexedAccess(objectText: string, indexText: string, ctx: CheckerContext, line: int32, col: int32): Type | null {
+	const indexType = resolveAnnotation(indexText, ctx, 0, 0);
+	const isKey = indexType.kind == TypeKind.GenericParam || isKeyConstraint(indexType);
+	if (!isKey) return null;
+	const objectType = resolveAnnotation(objectText, ctx, line, col);
+	if (objectType.kind == TypeKind.Error) return objectType;
+	const access = indexedAccessOf(objectType, indexType);
+	if (access != null) return access;
+	if (line > 0) addError(ctx, `'${indexText}' is not a key of '${typeDisplayName(objectType)}'`, line, col);
+	return errorType();
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -704,6 +731,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		return createStringLiteral(trimmed.slice(1, trimmed.length - 1));
 	}
 
+	if (trimmed.length > 6 && trimmed.slice(0, 6) == "keyof ") return resolveKeyOf(trimmed.slice(6, trimmed.length), ctx, line, col);
+
 	// Boolean literal type: `true` / `false` → BooleanLiteral (TypeScript parity)
 	// Required for discriminated union narrowing on boolean discriminants
 	// (e.g. `type Result<T,E> = { ok: true, value: T } | { ok: false, error: E }`).
@@ -828,6 +857,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 
 			const dim = constArrayDimension(sizeStr, ctx, line, col);
 			if (dim < 0) {
+				const access = resolveIndexedAccess(inner, sizeStr, ctx, line, col);
+				if (access != null) return access;
 				if (line > 0) {
 					addError(ctx, `array size '${sizeStr}' must be a compile-time integer constant`, line, col);
 					return errorType();
@@ -1696,6 +1727,8 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnFlags.indexOf("extern", 0) >= 0 && !ctx.modulePath.endsWith(".jms")) {
 		refuseUnknownAtCBoundary(ctx, d.fnName, paramTypes, returnType, node);
 	}
+	const proxySpot = d.fnFlags.indexOf("extern", 0) >= 0 ? proxyAtExtern(ctx, paramTypes, returnType) : "";
+	if (proxySpot != "") addError(ctx, "extern '" + d.fnName + "' " + proxySpot + ": a Proxy crosses into foreign code, which reads it without its traps — " + (proxySpot == "return type" ? "return the target and wrap it here" : "pass proxyTarget(p)"), node.location.line, node.location.column);
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;

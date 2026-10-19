@@ -57,7 +57,7 @@ finish() {
 }
 
 run_item() {
-  local item=$1 name worktree tries running rc
+  local item=$1 name worktree tries running rc this_try
   name=$(field name "$item")
   worktree=$(field worktree "$item")
   tries=$(field tries "$item")
@@ -86,7 +86,15 @@ run_item() {
     rm -f "$running"
     return
   fi
-  if grep -qE 'moved during the gate to .* run land again|gate: BUSY load' <(sed -n '/===== .* try '"$tries"'$/,$p' "$Q/$name.land.log") && [ "$tries" -lt "$TRIES" ]; then
+  this_try=$(awk '/^===== /{t=""} {t=t $0 ORS} END{printf "%s", t}' "$Q/$name.land.log")
+  if grep -q 'gate: BUSY load' <<<"$this_try"; then
+    log "$name: machine busy, queued again with its green lanes kept; try $tries not counted"
+    { printf 'name=%s\nworktree=%s\ntries=%s\n' "$name" "$worktree" "$((tries - 1))"; } >"$running.tmp"
+    mv "$running.tmp" "$item"
+    rm -f "$running"
+    return
+  fi
+  if grep -qE 'moved during the gate to .* run land again' <<<"$this_try" && [ "$tries" -lt "$TRIES" ]; then
     log "$name: retry ($(tail -1 "$Q/$name.land.log"))"
     { printf 'name=%s\nworktree=%s\ntries=%s\n' "$name" "$worktree" "$tries"; } >"$running.tmp"
     mv "$running.tmp" "$item"

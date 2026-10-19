@@ -10,8 +10,7 @@
 //
 // What lives here:
 //   - per-T suffix/dispatch helpers (futureTypedSuffix, futureThenFnForInner,
-//     futureCatchFnForInner, futureFinallyFnForInner, promiseAllFnForInner,
-//     typedFutureReadFn)
+//     futureCatchFnForInner, futureFinallyFnForInner, promiseAllFnForInner)
 //   - box/unbox helpers for primitive values flowing through msFuture* slots
 //   - typeTagFor (int/double/string/ptr tag dispatch for msFutureThenTyped etc.)
 //   - handlers for PromiseThen / PromiseCatch / PromiseFinally / PromiseResolve
@@ -31,11 +30,11 @@ import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeR
 // ===== Type-tag dispatch =====
 
 // Runtime type-tag for msFutureThenTyped / msFutureCatchTyped. Matches
-// MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string).
+// MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string, 4=void).
 function typeTagFor(t: Type | null): number {
 	if (t == null) return 0;
 	return match (t.kind) {
-		TypeKind.Void => 0,
+		TypeKind.Void => 4,
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
 		TypeKind.String => 3,
 		TypeKind.Struct | TypeKind.Ref | TypeKind.Ptr | TypeKind.Array => 0,
@@ -94,22 +93,6 @@ function promiseAllFnForInner(t: Type | null): string {
 	// Codegen names the per-type instance; this name only routes the call there.
 	if (boxedInFuture(t) && t!.kind != TypeKind.Array) return "msPromiseAllFor_msFuture_value";
 	return "";
-}
-
-// Typed future readers — msFutureReadT reads the typed inline value from
-// the future struct (msFuture_T.value). All futures use typed inline
-// storage; no boxed path exists.
-// Exported for awaitLower.ms which selects the typed read per Promise<T>.
-export function typedFutureReadFn(t: Type): string {
-	if (t == null) return "";
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
-		TypeKind.Boolean => "msFutureReadBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msFutureReadInt32",
-		TypeKind.String => "msFutureReadString",
-		_ => "",
-	};
 }
 
 // ===== Call-construction helpers =====

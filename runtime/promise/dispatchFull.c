@@ -844,6 +844,19 @@ static inline bool msIsWorkerWait(void) {
  * Production runtimes use similar bounds (Tokio ~50μs, Go ~10ms, Pony ~1ms). */
 #define MS_ACTIVE_WAIT_MS 5
 
+static void msMarkReached(void* reached) { *(bool*)reached = true; }
+
+static void msResumeBehindQueuedCallbacks(void* fp) {
+	msDispatcher* d = msGetDispatcher();
+	if (msDequeLen(&d->callbacks) == 0) return;
+	bool reached = false;
+	msFutureAddCallback(fp, (msClosure){ .fn = (msClosureFn)msMarkReached, .env = &reached });
+	while (!reached) {
+		msClosure cb = msDequePop(&d->callbacks);
+		((void(*)(void*))cb.fn)(cb.env);
+	}
+}
+
 void* msWaitFor(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
@@ -859,6 +872,7 @@ void* msWaitFor(void* fp) {
 		}
 	}
 	if (dec) msPoolBusyInc();  /* back to own work */
+	if (!worker) msResumeBehindQueuedCallbacks(fp);
 	return msFutureRead(fp);
 }
 
@@ -883,6 +897,7 @@ void msWaitForReady(void* fp) {
 		}
 	}
 	if (dec) msPoolBusyInc();  /* back to own work */
+	if (!worker) msResumeBehindQueuedCallbacks(fp);
 }
 
 /* Standard reference runForever pattern */

@@ -1,6 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
+import { iterateThroughProxy } from "./proxy";
 import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
@@ -36,7 +37,7 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -1984,6 +1985,7 @@ function iterableElemType(t: Type | null): Type {
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
+	if (iterateThroughProxy(ctx, node)) return;
 	let elemType = iterableElemType(d.forOfIterable.nodeType);
 	if (isUnresolvedType(elemType) && valueOfInPlace(ctx, d.forOfIterable, ReadNeed.Items)) {
 		elemType = iterableElemType(d.forOfIterable.nodeType);
@@ -2398,18 +2400,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (refuseGeneratorReturnValue(ctx, node)) return;
 	if (d.argument == null) {
-		// Bare `return;` is the user explicitly saying "void return". Inference
-		// (e.g. lambda body without an explicit return-type annotation) needs
-		// this signal — without it, a body whose only return is bare leaves
-		// `inferredReturn` stuck at Unknown, codegen falls back to `void*`, and
-		// the C compiler rejects the bare `return;` as "non-void function
-		// should return a value". Mirrors the "first return wins" rule used
-		// below for `return X` so subsequent returns can't downgrade the type.
-		if (ctx.matchExprDepth == 0
-				&& ctx.inferredReturn != null
-				&& ctx.inferredReturn.kind == TypeKind.Inferred) {
-			ctx.inferredReturn = voidType();
-		}
+		checkBareReturn(ctx, node);
 		return;
 	}
 
@@ -2421,10 +2412,9 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// the expected type against itself (trivially passes); check BEFORE stamp
 	// compares Null against expected, which is the real safety question.
 	if (d.argument.kind == NodeKind.NullLiteral && ctx.matchExprDepth == 0) {
-		if (ctx.currentFunction != null
-			&& ctx.currentFunction.symbolType.kind == TypeKind.Function
-			&& ctx.currentFunction.symbolType.typeReturn != null) {
-			const declared = ctx.currentFunction.symbolType.typeReturn;
+		const fnType = ctx.currentFunction != null ? ctx.currentFunction.symbolType : null;
+		const declared = fnType == null ? null : fnType.kind == TypeKind.Function ? fnType.typeReturn : isUnresolvedType(fnType) ? fnType : null;
+		if (declared != null) {
 			d.argument.nodeType = nullType();
 			if (isUnresolvedType(declared)) {
 				if (ctx.matchExprDepth == 0 && ctx.inferredReturn != null) {
@@ -2435,12 +2425,13 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 						if (!isUnresolvedType(joinedRet)) ctx.inferredReturn = joinedRet;
 					}
 					ctx.inferredReturnStmts.push(node);
+					giveBareReturnsNull(ctx);
 				}
 				return;
 			}
 			if (!isAssignable(nullType(), declared)) {
 				addError(ctx,
-					"Return type mismatch in '" + ctx.currentFunction.name + "': expected " + formatTypeBrief(declared) + ", got null",
+					"Return type mismatch in '" + ctx.currentFunction!.name + "': expected " + formatTypeBrief(declared) + ", got null",
 					node.location.line, node.location.column);
 				return;
 			}
@@ -2507,6 +2498,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		}
 		if (returnExpected == null && d.argument != null) {
 			ctx.inferredReturnStmts.push(node);
+			giveBareReturnsNull(ctx);
 		}
 	}
 }
@@ -3708,10 +3700,12 @@ export function createGraphPreludeContext(): CheckerContext {
 
 export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
 	const imps = defaultGlobalImports();
+	const outerGensym = beginGensymUnit();
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
 	for (const imp of imps) loadPreludeOne(ctx, imp, stdPath, backendExt);
 	forgetInstances(ctx);
+	rewindTemplateGensym(outerGensym);
 	return ctx;
 }
 
@@ -6013,9 +6007,16 @@ test "a module numbers its template locals in its own context, whatever was chec
 test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
 	env.set("MSC_NO_PRELUDE_PACK", "1");
 	try {
-		const ctx = buildPreludeContext(join(resolveRuntimeDir(), "std"));
-		assert ctx.generatedInstances.length == 0;
-		assert ctx.procInstCache.size == 0 && ctx.typeInstCache.size == 0;
+		for (const ext of [".rms", ".cms"]) {
+			const outer = templateGensymMark();
+			rewindTemplateGensym(41);
+			const ctx = buildPreludeContext(join(resolveRuntimeDir(), "std"), ext);
+			const left = templateGensymMark();
+			rewindTemplateGensym(outer);
+			assert left == 41;
+			assert ctx.generatedInstances.length == 0;
+			assert ctx.procInstCache.size == 0 && ctx.typeInstCache.size == 0;
+		}
 	} finally {
 		env.delete("MSC_NO_PRELUDE_PACK");
 	}

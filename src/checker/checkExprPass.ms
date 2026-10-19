@@ -15,7 +15,8 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
-import { distinctNumericBase } from "./types";
+import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
+import { distinctNumericBase, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -31,7 +32,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns } from "./fit";
+import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -735,6 +736,12 @@ function checkStringLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (typeLiteralAgainstPayload(ctx, node, expectedType)) return;
 	if (keepsFoldedNominalType(node, expectedType)) return;
 	// TypeScript parity: string literals get StringLiteral type when expectedType demands it
+	if (expectedType != null && expectedType.kind == TypeKind.GenericParam && isKeyConstraint(expectedType.typeExtra)) {
+		// A type parameter constrained to property names infers the literal (`K extends keyof T`);
+		// the call checks it against the constraint once the type parameters are bound.
+		node.nodeType = createStringLiteral((node.data as StringLiteralData).value);
+		return;
+	}
 	if (expectedType != null) {
 		const sd = node.data as StringLiteralData;
 		if (expectedType.kind == TypeKind.StringLiteral && expectedType.typeName == sd.value) {
@@ -834,6 +841,10 @@ function checkComptimeBlock(ctx: CheckerContext, node: Node, expectedType: Type 
 
 function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as UpdateExprData;
+	if (d.updateArg.kind == NodeKind.MemberExpr || d.updateArg.kind == NodeKind.ArrayAccess) {
+		checkInTypeSlot(ctx, d.updateArg.kind == NodeKind.MemberExpr ? (d.updateArg.data as MemberExprData).object : (d.updateArg.data as ArrayAccessData).array);
+		if (updateThroughProxy(ctx, node)) return;
+	}
 	checkExpr(ctx, d.updateArg, null);
 	reportSharedWrite(ctx, d.updateArg);
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
@@ -1070,6 +1081,19 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	}
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
+	}
+	if (isAsgn && d.left.kind == NodeKind.ArrayAccess && (d.left.data as ArrayAccessData).array != null) {
+		checkInTypeSlot(ctx, (d.left.data as ArrayAccessData).array);
+		const keyed = keyedProxyAccess(ctx, d.left);
+		if (keyed == "refused" || keyed == "index") {
+			ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
+			if (keyed == "refused" || !writeThroughProxy(ctx, node)) node.nodeType = errorType();
+			return;
+		}
+	}
+	if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
+		checkInTypeSlot(ctx, (d.left.data as MemberExprData).object);
+		if (writeThroughProxy(ctx, node)) { ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1; return; }
 	}
 	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
 	const savedDefinite = ctx.initTracker.definiteTarget;
@@ -1503,6 +1527,7 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 		return;
 	}
 	if (refuseDisjointStrings(ctx, d.operator, d.left, d.right, node)) { node.nodeType = errorType(); return; }
+	if (refuseProxyOperator(ctx, d.operator, d.left.nodeType, d.right.nodeType, node)) { node.nodeType = errorType(); return; }
 	const tplOpName = (d.operator == "!=" || d.operator == "!==") ? "!="
 		: ((d.operator == ">" || d.operator == ">=") ? d.operator : "");
 	if (tplOpName != "" && effLeft != null && effRight != null
@@ -2421,6 +2446,10 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 		ctx.initTracker.leftPartOfAsgn = 0;
 		checkExpr(ctx, d.index, null);
 		ctx.initTracker.leftPartOfAsgn = savedLpa;
+		const keyed = keyedProxyAccess(ctx, node);
+		if (keyed == "member") { checkExpr(ctx, node, expectedType); return; }
+		if (keyed == "index") { readIndexThroughProxy(ctx, node, expectedType); return; }
+		if (keyed == "refused") return;
 	}
 	if (arrayIsFunction) {
 		addError(ctx, "a function value cannot be indexed — call it first", node.location.line, node.location.column);
@@ -2497,6 +2526,8 @@ function checkArrayAccess(ctx: CheckerContext, node: Node, expectedType: Type | 
 		sargs.push(d.index);
 		node.nodeType = rewriteAsMethodCall(ctx, node, d.array, "[]", sargs); return;
 	}
+	if (subscriptRecv != null && subscriptRecv.kind == TypeKind.Struct && accessByKey(ctx, node, d, subscriptRecv, expectedType)) return;
+	if (isArrayType(arrType) && accessByKey(ctx, node, d, arrType, expectedType)) return;
 	if (subscriptRecv != null && !hasGenericParams(subscriptRecv)
 			&& (subscriptRecv.kind == TypeKind.Struct || subscriptRecv.kind == TypeKind.Boolean || isNumeric(subscriptRecv))) {
 		addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
@@ -2962,6 +2993,30 @@ function resolveSuper(ctx: CheckerContext, node: Node): Type {
 // `obj.setDynamicField("foo", x)`). After mutation, checkCallExpr resolves
 // the extension method and validates argument types. Returns the call's
 // inferred type.
+// `obj[key]` with a key of string literal type is the property it names (TypeScript's
+// element access with a literal key), so `t[key]` in an instance with `K = "title"` is
+// `t.title`. A generic key gives the deferred `T[K]`, settled per instance.
+function accessByKey(ctx: CheckerContext, node: Node, d: ArrayAccessData, recv: Type, expectedType: Type | null): boolean {
+	const keyType = d.index != null ? skipModifier(d.index.nodeType) : null;
+	if (keyType == null) return false;
+	if (keyType.kind == TypeKind.GenericParam && isKeyConstraint(keyType.typeExtra)) {
+		node.nodeType = indexedAccessOf(recv, keyType);
+		return true;
+	}
+	const key = keyType.kind == TypeKind.StringLiteral ? keyType.typeName
+		: d.index.kind == NodeKind.StringLiteral ? (d.index.data as StringLiteralData).value : null;
+	if (key == null) return false;
+	if (findFieldInVariant(recv, key) == null && !(key == "length" && isArrayType(recv))) {
+		addError(ctx, `'"${key}"' is not a key of '${typeDisplayName(recv)}'`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return true;
+	}
+	node.kind = NodeKind.MemberExpr;
+	node.data = { object: d.array, property: key, isOptional: false } as MemberExprData;
+	checkExpr(ctx, node, expectedType);
+	return true;
+}
+
 function subscriptOperandOf(receiver: Type | null): Type | null {
 	const peeled = skipModifier(receiver);
 	if (peeled == null) return null;
@@ -3118,6 +3173,49 @@ export function refuseGeneratorReturnValue(ctx: CheckerContext, node: Node): boo
 		addError(ctx, "a generator's 'return' ends it and carries no value: its values are what it yields; write 'return;'", node.location.line, node.location.column);
 	}
 	return true;
+}
+
+export function checkBareReturn(ctx: CheckerContext, node: Node): void {
+	const fn = ctx.currentFunction;
+	if (fn == null || ctx.matchExprDepth > 0 || ctx.inferredReturn == null) return;
+	if (fn.declNode != null && fn.declNode.kind == NodeKind.ConstructorDecl) return;
+	if (isGeneratorFlags(routineFlags(fn.declNode))) return;
+	const declared = declaredReturnOf(fn);
+	if (declared == null || isUnresolvedType(declared)) {
+		if (ctx.inferredReturn.kind == TypeKind.Inferred) ctx.inferredReturn = voidType();
+		ctx.inferredReturnStmts.push(node);
+		giveBareReturnsNull(ctx);
+		return;
+	}
+	const ret = hasFlag(fn, SymbolFlag.Async) ? awaitedType(declared) : declared;
+	if (ret == null || ret.kind == TypeKind.Void || isUnknownType(ret) || isUnresolvedType(ret) || isIterator(ret)) return;
+	if (ret.kind == TypeKind.Union) {
+		for (const m of ret.typeChildren) {
+			if (m != null && m.kind == TypeKind.Void) return;
+		}
+	}
+	if (!isAssignable(nullType(), ret)) {
+		const shown = typeDisplayName(ret);
+		addError(ctx, "'" + fn.name + "' returns '" + shown + "', and a bare 'return;' gives no value: return a value, or write the return type as '" + shown + " | null'", node.location.line, node.location.column);
+		return;
+	}
+	const d = node.data as ReturnStmtData;
+	d.argument = fitNode(ctx, typedNull(node.location), ret, nullType());
+}
+
+export function giveBareReturnsNull(ctx: CheckerContext): void {
+	const t = ctx.inferredReturn;
+	if (!branchContributesToJoin(t)) return;
+	let gave = false;
+	for (const rs of ctx.inferredReturnStmts) {
+		const rsd = rs.data as ReturnStmtData;
+		if (rs.kind != NodeKind.ReturnStmt || rsd.argument != null) continue;
+		rsd.argument = typedNull(rs.location);
+		gave = true;
+	}
+	if (!gave || t.kind == TypeKind.Null) return;
+	const joined = joinBranchTypes([t, nullType()]);
+	if (!isUnresolvedType(joined)) ctx.inferredReturn = joined;
 }
 
 // ===== Anonymous Functions =====

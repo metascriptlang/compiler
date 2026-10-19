@@ -5,3 +5,7 @@ export extern function isPlainData<T>(): boolean;
 /** True when every slot that stores a `T` holds its own value that can later change in place (a value struct, tuple, `Vec`, fixed array); false when slots may share one `T` (numbers, booleans, enums, strings, references). Answered while compiling, per instance. */
 @builtin("NeedsCopy")
 export extern function needsCopy<T>(): boolean;
+
+/** True when `T` is an array `E[]`. Answered while compiling, per instance. */
+@builtin("IsArray")
+export extern function isArray<T>(): boolean;

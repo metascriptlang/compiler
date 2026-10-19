@@ -1,5 +1,44 @@
-@include("runtime/solana/solana.h");
-@compile("runtime/solana/host.c");
+import {
+	msSolAccountAt,
+	msSolAccountCount,
+	msSolAccountSlot,
+	msSolCurveValidatePoint,
+	msSolGetClock,
+	msSolGetReturnData,
+	msSolInstructionData,
+	msSolInstructionDataLength,
+	msSolInvokeMetas,
+	msSolLog,
+	msSolLog64,
+	msSolLogComputeUnits,
+	msSolLogData,
+	msSolLogPubkey,
+	msSolRemainingComputeUnits,
+	msSolRentAddress,
+	msSolResult,
+	msSolScratch,
+	msSolSetResult,
+	msSolSetReturnData,
+} from "./kernel";
+import {
+	msSolCopy,
+	msSolDataRoom,
+	msSolFill,
+	msSolLoadU16,
+	msSolLoadU32,
+	msSolLoadU64,
+	msSolLoadU8,
+	msSolProgramId,
+	msSolSeedsAddress,
+	msSolSpanAddress,
+	msSolStoreU16,
+	msSolStoreU32,
+	msSolStoreU64,
+	msSolStoreU8,
+	msSolStringAddress,
+	msSolStringLength,
+	msSolWordsAddress,
+} from "./memory";
 
 import {
 	ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -46,53 +85,13 @@ export {
 	putU8,
 } from "./buffer";
 
-extern function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 from "msSolSpanAddress";
-extern function msSolInvokeMetas(
-	program: uint64,
-	metas: uint64,
-	count: uint64,
-	data: uint64,
-	length: uint64,
-	signers: uint64,
-	signerCount: uint64,
-): uint64;
-extern function msSolAccountCount(): uint64;
-extern function msSolAccountAt(index: uint64): uint64;
-extern function msSolAccountSlot(index: uint64): uint64;
-extern function msSolInstructionData(): uint64;
-extern function msSolInstructionDataLength(): uint64;
-extern function msSolProgramId(): uint64;
-extern function msSolSetResult(code: uint64): void;
-extern function msSolPointer(address: uint64): Ptr<void>;
-extern function msSolLoadU8(address: uint64): uint8;
-extern function msSolLoadU16(address: uint64): uint16;
-extern function msSolLoadU32(address: uint64): uint32;
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolStoreU8(address: uint64, value: uint8): void;
-extern function msSolStoreU16(address: uint64, value: uint16): void;
-extern function msSolStoreU32(address: uint64, value: uint32): void;
-extern function msSolStoreU64(address: uint64, value: uint64): void;
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolScratch(size: uint64): uint64;
-extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
-extern function msSolDataRoom(record: uint64): uint64;
-extern function msSolResult(): uint64;
-extern function msSolLog(address: uint64, length: uint64): void;
-extern function msSolStringAddress(text: string): uint64;
-extern function msSolStringLength(text: string): uint64;
-extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
-extern function msSolLogPubkey(address: uint64): void;
-extern function msSolLogData(address: uint64, length: uint64): void;
-extern function msSolLogComputeUnits(): void;
-extern function msSolRemainingComputeUnits(): uint64;
-extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
-extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolGetClock(out: uint64): uint64;
-extern function msSolRentAddress(): uint64;
-extern function msSolCurveValidatePoint(curve: uint64, point: uint64, result: uint64): uint64;
-extern function msSolSetReturnData(data: Readonly<Span<uint8>>): void;
-extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
+when (js) {
+	import { msSolMetasAddress } from "./memory";
+} else {
+	import { msSolPointer } from "./memory";
+
+	extern function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 from "msSolSpanAddress";
+}
 
 const MAX_RETURN_DATA: uint64 = 1024;
 
@@ -199,8 +198,14 @@ export function failWith(error: ProgramError): void {
 }
 
 function loadPubkey(address: uint64): Pubkey {
-	const at = msSolPointer(address) as Ptr<Pubkey>;
-	return at[];
+	when (js) {
+		let key = Pubkey.zero();
+		msSolCopy(msSolSpanAddress(key.bytes), address, 32);
+		return key;
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		return at[];
+	}
 }
 
 export function programId(): Pubkey {

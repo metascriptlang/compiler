@@ -110,6 +110,9 @@ extern function msFutureReadDouble(fut: Ptr<void>): number from "msFutureReadDou
 extern function msFutureReadInt32(fut: Ptr<void>): int32 from "msFutureReadInt32";
 
 @compilerFunc @throws
+extern function msFutureReadInt64(fut: Ptr<void>): int64 from "msFutureReadInt64";
+
+@compilerFunc @throws
 extern function msFutureReadBool(fut: Ptr<void>): boolean from "msFutureReadBool";
 
 @compilerFunc @throws
@@ -812,6 +815,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msBoxInt32(v: int32): Ptr<void>;
+
+	@compilerFunc
+	extern function msBoxInt64(v: int64): Ptr<void>;
 
 	@compilerFunc
 	extern function msBoxBool(v: boolean): Ptr<void>;

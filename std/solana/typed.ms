@@ -1,6 +1,3 @@
-@include("runtime/solana/solana.h");
-@compile("runtime/solana/host.c");
-
 import { DeclKind, Node, NodeKind, bindSym, define, expansionFile, getImpl, sameType, stringValue } from "std/meta";
 import { derivedAddressOf } from "./pda";
 import { accountAddressOf, keyAddressOf, slottedTable } from "./accountSeeds";
@@ -62,14 +59,15 @@ import {
 	tableAddress,
 } from "./seed";
 
-extern function msSolAccountAt(index: uint64): uint64;
-extern function msSolAccountTable(): uint64;
-extern function msSolAccountCount(): uint64;
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolLoadU32(address: uint64): uint32;
-extern function msSolPointer(address: uint64): Ptr<void>;
-extern function msSolLoadU8(address: uint64): uint8;
-extern function msSolClaimRecord(address: uint64): void;
+import { msSolAccountCount } from "./kernel";
+import { msSolClaimRecord, msSolLoadU32, msSolLoadU8 } from "./memory";
+
+when (js) {
+	import { msSolViewAt } from "./memory";
+	import { accountLayoutText } from "./accountCodecMacro";
+} else {
+	import { msSolPointer } from "./memory";
+}
 
 export struct Signer { private account: Account; }
 export struct WritableSigner { private account: Account; }
@@ -243,15 +241,27 @@ export function systemAccount(index: int32): Result<SystemAccount, ProgramError>
 }
 
 export function data<T>(this proof: Mutable<T>): Ptr<T> {
-	return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
+	when (js) {
+		return msSolViewAt<T>(accountLayoutText<T>(), proof.account.recordAddress() + 96);
+	} else {
+		return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
+	}
 }
 
 export function data<T>(this proof: Owned<T>): Readonly<Ptr<T>> {
-	return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
+	when (js) {
+		return msSolViewAt<T>(accountLayoutText<T>(), proof.account.recordAddress() + 96);
+	} else {
+		return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
+	}
 }
 
 export function data<T>(this proof: Delegated<T>): Readonly<Ptr<T>> {
-	return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
+	when (js) {
+		return msSolViewAt<T>(accountLayoutText<T>(), proof.account.recordAddress() + 96);
+	} else {
+		return msSolPointer(proof.account.recordAddress() + 96) as Ptr<T>;
+	}
 }
 
 export function read<T>(this proof: External<T>): Result<T, ProgramError> {
