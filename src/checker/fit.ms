@@ -513,7 +513,7 @@ function builtinText(ctx: CheckerContext, value: Node): Node {
 
 // A union the std dump can read: one whose variants lead with a string-literal field, or one holding only primitives.
 function foldableUnion(u: Type): boolean {
-	if (isStringLike(u) || unwrapRefNullUnion(u) != null || u.typeChildren.length == 0) return false;
+	if (isStringLike(u) || literalUnionBase(u) != null || unwrapRefNullUnion(u) != null || u.typeChildren.length == 0) return false;
 	let primitive = true;
 	for (const m of u.typeChildren) {
 		if (m == null || m.kind == TypeKind.Null) return false;

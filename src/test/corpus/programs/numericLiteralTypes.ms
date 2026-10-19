@@ -1,3 +1,6 @@
+// @stdout: 20 -1 1
+// @exit: 0
+
 type Small = { v: 1 | 2; t: uint8 };
 
 function pick(k: int32): 1 | 2 | string { return k > 0 ? 2 : "s"; }
