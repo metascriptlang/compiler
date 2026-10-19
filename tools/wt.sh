@@ -471,6 +471,18 @@ queued_for() {
 runner_alive() { local p; p=$(cat "$1/runner.lock/pid" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 start_runner() { (nohup bash "$MAIN/tools/landQueue.sh" >/dev/null 2>&1 &); }
 
+commit_pruned_known() {
+  local w=$1 pruned="$1/out/gate/known-red.pruned.json"
+  [ -f "$pruned" ] || return 0
+  [ "$(git -C "$w" rev-parse HEAD)" = "$new" ] && [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || return 0
+  cp "$pruned" "$w/src/test/known-red.json" \
+    && git -C "$w" commit -q -m "test: drop known-red entries that are green" -- src/test/known-red.json \
+    || die "land: committing the gate's pruned known-red set failed; $w holds the attempt"
+  rm -f "$pruned"
+  new=$(git -C "$w" rev-parse HEAD)
+  say "land: committed the known-red set without the entries the gate saw green ($(git -C "$w" rev-parse --short "$new"))"
+}
+
 cmd_land() {
   local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict
   while [ $# -gt 0 ]; do
@@ -533,6 +545,10 @@ cmd_land() {
   clash=$(main_held "$old" "$(git -C "$w" diff --name-only --no-renames "$old" "$new")")
   [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes; clear it, then land again (no gate ran):
 $(printf '%s\n' "$clash" | sed 's/^/  /')"
+  if [ "$gate" -eq 1 ] && [ -x "$w/msc" ] && ! (cd "$w" && ./msc check src/index.ms >/dev/null 2>&1); then
+    say "land: $w/msc cannot check src/index.ms on $BASE $(git -C "$MAIN" rev-parse --short "$old"); picking a builder again"
+    pick_builder "$w" || die "land: no builder can check src/index.ms at this rev (set MSC_BUILDER)"
+  fi
   verdict="$(git -C "$w" rev-parse --absolute-git-dir)/wt-land-verdict"
   if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && [ -f "$verdict" ] \
     && [ "$(awk '{print $1, $2}' "$verdict")" = "$new $old" ]; then
@@ -544,6 +560,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
       say "gate: $cmd"
       (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
     done
+    commit_pruned_known "$w"
     [ "${#also[@]}" -gt 0 ] || printf '%s %s %s\n' "$new" "$old" "$(date +%Y-%m-%dT%H:%M:%S)" >"$verdict"
   else
     say "land: --no-gate, tools/gate.sh did not run"

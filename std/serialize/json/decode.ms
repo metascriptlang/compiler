@@ -13,8 +13,8 @@
 // Day 5 scope: all atomic field types (string/boolean/number/float*/int*/uint*).
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
-import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, implementationOf } from "../discDetect";
+import { Node, NodeKind, TypeKind, typeKind } from "std/meta";
+import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, unwrapType, implementationOf } from "../discDetect";
 
 // Macro: jv must be a JsonValue. Witness expression must be typed `T | null`
 // (e.g., user passes `null as Person | null`). Honest nullable typing — null
@@ -41,9 +41,8 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below
 	}
 	// Peel Ref<Struct> wrapper (interface/class types are reference-typed).
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	tt = unwrapType(tt);
+	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// V3 — Tagged union (DU) decoding. Mirror encode shape: dispatch on disc
 	// field accessor, emit per-variant ObjectLiteral { disc: discLit, ...payload }.
@@ -203,12 +202,12 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 		const ftype: Node = implementationOf(fieldTypes[i]);
 
 		// Nested struct field: peel Ref<Struct> → TypeObject, then emit a
-		// recursive jsonValueToStruct call with a typed witness `null as
-		// <Inner> | null`. Inner type name comes from TypeObjectData
-		// .typExprTypeName, populated by mapTypeToAst's structToAst.
+		// recursive jsonValueToStruct call with the witness
+		// `MemberExpr(witness, field)`, which carries the field's type in nodeType.
 		let innerStruct: Node | null = null;
 		if (ftype.kind == NodeKind.TypeGeneric) {
-			const peeled = ftype.typExprArgs[0];
+			let peeled = unwrapType(ftype);
+			if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
 			if (peeled.kind == NodeKind.TypeObject) innerStruct = peeled;
 		} else if (ftype.kind == NodeKind.TypeObject) {
 			innerStruct = ftype;
@@ -218,7 +217,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			if (innerName == "") {
 				error("jsonValueToStruct: anonymous nested struct fields unsupported (field '" + fname + "'); name the inner struct via interface/class", witness);
 			}
-			// jsonValueToStruct(getDynamicField(jv, "f"), null as Inner | null)
+			// jsonValueToStruct(getDynamicField(jv, "f"), witness.f)
 			const recursiveCall: Node = {
 				kind: NodeKind.CallExpr,
 				line: jv.line,
@@ -250,18 +249,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 							},
 						],
 					},
-					{
-						kind: NodeKind.TypeAssertion,
-						line: jv.line,
-						column: jv.column,
-						asExpr: {
-							kind: NodeKind.NullLiteral,
-							line: jv.line,
-							column: jv.column,
-							nullPlaceholder: true,
-						},
-						asType: innerName + " | null",
-					},
+					{ kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: fname, nodeType: ftype, isOptional: false },
 				],
 			};
 			keyNodes.push(fname);
@@ -364,7 +352,8 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 					error("jsonValueToStruct: anonymous struct element arrays unsupported (field '" + fname + "')", witness);
 				}
 			} else if (elemType.kind == NodeKind.TypeGeneric) {
-				const peeled: Node = elemType.typExprArgs[0];
+				let peeled: Node = unwrapType(elemType);
+				if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
 				if (namesStruct(peeled)) {
 					elemIsStruct = true;
 					en = peeled.name;
@@ -607,9 +596,8 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			tt = implementationOf(firstNonNull);
 		}
 	}
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	tt = unwrapType(tt);
+	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Tagged-union decode, strict: the disc is read through req*, and a
 	// wildcard arm records an unknown-disc error while still producing
@@ -804,6 +792,9 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 					if (bn == "Ref" || bn == "Ptr" || bn == "Sink" || bn == "Lent" || bn == "Var" || bn == "Borrow") {
 						fcore = fcore.typExprArgs[0];
 						peeling = true;
+					} else if (bn != "Array" && typeKind(fcore) == TypeKind.GenericInstance) {
+						fcore = unwrapType(fcore);
+						peeling = true;
 					}
 				}
 			}
@@ -924,6 +915,9 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 						const ebn: string = eb.name;
 						if (ebn == "Ref" || ebn == "Ptr" || ebn == "Sink" || ebn == "Lent" || ebn == "Var" || ebn == "Borrow") {
 							ec = ec.typExprArgs[0];
+							epeeling = true;
+						} else if (ebn != "Array" && typeKind(ec) == TypeKind.GenericInstance) {
+							ec = unwrapType(ec);
 							epeeling = true;
 						}
 					}

@@ -500,8 +500,8 @@ chain there was **90,032 vs 72,336 B**, so these optimized numbers do not claim
 all-mode improvement.
 
 Integration is not complete: a hidden proof alias in an imported accounts shape
-still fails `Unresolved type 'Auth'`; the owning bound-annotation fix is on
-`name-to-symbol`. The full transitive JS codec suite waits for `sized-arrays`.
+still fails `Unresolved type 'Auth'`; the owning bound-annotation fix moved from
+`name-to-symbol` to `macro-typed-callee` (not verified there). The full transitive JS codec suite waits for `sized-arrays`.
 No completed gate or installed-candidate claim follows from these SBF probes.
 
 ### Matched v2 baseline — checked reference approved, measurements in progress
@@ -1047,8 +1047,8 @@ An operand is spelled by a name visible at the call site, its own or an alias of
 type; a private type with no visible name there is refused as an unresolved type. Same
 `test.ms` 29 files / 499 tests and 448 CU on the lane candidate.
 
-The bound VariableDecl gap (`name-to-symbol`, item2b) still exists in the
-compiler, but account expansion no longer declares locals using a hidden written
+The bound VariableDecl gap (owned by `macro-typed-callee`, which closed
+`name-to-symbol` without it) still exists in the compiler, but account expansion no longer declares locals using a hidden written
 proof alias: kernels fill the account holder's typed fields directly. This keeps
 checked field identity, avoids the unnecessary copy, and does not require an extra
 caller import. The imported `Auth` and singleton/guarded-expression pins now pass.

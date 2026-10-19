@@ -4,7 +4,7 @@
 
 import {
 	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, DeclKind, VariableDeclData, Type, TypeKind,
-	ExportDeclData, DecoratedDeclData, EnumDeclData,
+	ExportDeclData, DecoratedDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
@@ -19,7 +19,7 @@ import {
 	heapArrayGet, heapArrayLen
 } from "../../raiser/value";
 import {
-	RaiserModule, RaiserFunction,
+	RaiserModule, RaiserFunction, RaiserExport,
 	createRaiserFunction, createRaiserModule
 } from "../../raiser/module";
 import { DynamicModulePlan } from "../../module/graph";
@@ -27,7 +27,7 @@ import { mangleModuleName } from "../c/names";
 import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
-	RaiserFuncMap, RaiserEnumMap, RaiserFuncEntry, RaiserGlobalMap, createFuncMap,
+	RaiserFuncMap, RaiserGlobalMap, createFuncMap,
 	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocReg, raiserClassKey,
 	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
@@ -63,10 +63,6 @@ function unwrapToKind(node: Node, targetKind: NodeKind): Node | null {
 
 export function unwrapToFuncDecl(node: Node): Node | null {
 	return unwrapToKind(node, NodeKind.FunctionDecl);
-}
-
-export function unwrapToEnumDecl(node: Node): Node | null {
-	return unwrapToKind(node, NodeKind.EnumDecl);
 }
 
 export function unwrapToClassDecl(node: Node): Node | null {
@@ -128,10 +124,9 @@ function runtimeParamSyms(decl: Node, name: string): Symbol[] {
 	return kept;
 }
 
-export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserEnumMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null): RaiserFunction {
+export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSyms: Symbol[], body: Node, globals: RaiserGlobalMap | null = null): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
-	s.enumMap = enumMap;
 	if (globals != null) s.globals = globals;
 
 	// Declare params as locals R[0..arity-1]
@@ -194,13 +189,12 @@ function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]):
 }
 
 function compileClassInit(
-	funcMap: RaiserFuncMap, enumMap: RaiserEnumMap,
+	funcMap: RaiserFuncMap,
 	className: string, classBody: Node[],
 	ctorSyms: Symbol[], ctorBody: Node | null, globals: RaiserGlobalMap | null = null
 ): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
-	s.enumMap = enumMap;
 	if (globals != null) s.globals = globals;
 	const thisReg = allocReg(s);
 	s.receiverReg = thisReg;
@@ -232,14 +226,13 @@ function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbo
 }
 
 function compileClassConstructor(
-	funcMap: RaiserFuncMap, enumMap: RaiserEnumMap,
+	funcMap: RaiserFuncMap,
 	className: string, classBody: Node[],
 	ctorSyms: Symbol[], ctorBody: Node | null, globals: RaiserGlobalMap | null = null,
 	classSym: Symbol | null = null
 ): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
-	s.enumMap = enumMap;
 	if (globals != null) s.globals = globals;
 
 	// Declare ctor params
@@ -275,12 +268,12 @@ function compileClassConstructor(
 // --- Incremental append into a shared image (comptime engine) ---
 // Compiles a program's functions and classes into an existing image + funcMap, assigning
 // each an ABSOLUTE index (base + local position) so Call/closure funcIdx resolve
-// image-wide with no relocation. Enums fold into the shared enumMap. Returns the
+// image-wide with no relocation. Returns the
 // absolute index assigned to `wantFn` (-1 if not present).
 interface RaiserReservedSlot { idx: number; fnName: string; paramSyms: Symbol[]; body: Node; }
 interface RaiserReservedCtor { idx: number; initIdx: number; className: string; classBody: Node[]; ctorSyms: Symbol[]; ctorBody: Node | null; classSym: Symbol | null; }
 
-export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserEnumMap, program: Node, wantFn: string, wantSym: Symbol | null = null): int32 {
+export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, program: Node, wantFn: string, wantSym: Symbol | null = null): int32 {
 	const pd = program.data as ProgramData;
 	let wantIdx = -1;
 
@@ -338,25 +331,16 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 			if (wantsClass && wantSym != null) funcMap.initIndices.set(wantSym, initIdx);
 			ctors.push({ idx: ctorIdx, initIdx, className: cd.className, classBody: cd.classBody, ctorSyms, ctorBody, classSym });
 		}
-		const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
-		if (enumNode != null) {
-			const ed = enumNode.data as EnumDeclData;
-			for (let ei = 0; ei < ed.enumMembers.length; ei += 1) {
-				const val = (ed.enumValues != null && ei < ed.enumValues.length) ? ed.enumValues[ei] : ei;
-				const eEntry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val as int32 };
-				enumMap.items.push(eEntry);
-			}
-		}
 	}
 
 	for (let i = 0; i < reserved.length; i += 1) {
 		const r = reserved[i];
-		const func = compileFuncBody(funcMap, enumMap, r.fnName, r.paramSyms, r.body);
+		const func = compileFuncBody(funcMap, r.fnName, r.paramSyms, r.body);
 		image.functions[r.idx] = func;
 	}
 	for (const c of ctors) {
-		image.functions[c.idx] = compileClassConstructor(funcMap, enumMap, c.className, c.classBody, c.ctorSyms, c.ctorBody, null, c.classSym);
-		image.functions[c.initIdx] = compileClassInit(funcMap, enumMap, c.className, c.classBody, c.ctorSyms, c.ctorBody);
+		image.functions[c.idx] = compileClassConstructor(funcMap, c.className, c.classBody, c.ctorSyms, c.ctorBody, null, c.classSym);
+		image.functions[c.initIdx] = compileClassInit(funcMap, c.className, c.classBody, c.ctorSyms, c.ctorBody);
 	}
 	return wantIdx;
 }
@@ -426,7 +410,7 @@ function hasTopLevelAwait(node: Node): boolean {
 	return found;
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan()): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], plan: DynamicModulePlan = new DynamicModulePlan(), exportsOf: string = ""): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
@@ -436,10 +420,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 
 	// --- Pass 1: Global declaration collection ---
 	const globalFuncMap = createFuncMap();
-	const globalEnumMapItems: RaiserFuncEntry[] = [];
-	const globalEnumMap: RaiserEnumMap = { items: globalEnumMapItems };
 	let funcIdx = 0;
 	const projectDecls: RaiserProjectDecl[] = [];
+	const exports: RaiserExport[] = [];
 	const noNodes: Node[] = [];
 	const noSyms: Symbol[] = [];
 	const nullNode = null as unknown as Node;
@@ -452,17 +435,12 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			if (fnNode != null && emitsRoutine(fnNode, (fnNode.data as FunctionDeclData).fnFlags)) {
 				const fd = fnNode.data as FunctionDeclData;
 				globalFuncMap.symbolIndices.set(declaredSymbol(fnNode, fd.fnName), funcIdx);
-				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms: runtimeParamSyms(fnNode, fd.fnName), body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
-				funcIdx += 1;
-			}
-			const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
-			if (enumNode != null) {
-				const ed = enumNode.data as EnumDeclData;
-				for (let ei = 0; ei < ed.enumMembers.length; ei += 1) {
-					const val = (ed.enumValues != null && ei < ed.enumValues.length) ? ed.enumValues[ei] : ei;
-					const entry: RaiserFuncEntry = { name: `${ed.enumName}.${ed.enumMembers[ei]}`, index: val as int32 };
-					globalEnumMap.items.push(entry);
+				const paramSyms = runtimeParamSyms(fnNode, fd.fnName);
+				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, fnName: fd.fnName, paramSyms, body: fd.fnBody, className: "", classBody: noNodes, ctorBody: nullNode });
+				if (modules[mi].modulePath == exportsOf && pd.programStmts[i].kind == NodeKind.ExportDecl) {
+					exports.push({ name: fd.fnName, funcIdx: funcIdx as int32, arity: paramSyms.length });
 				}
+				funcIdx += 1;
 			}
 		}
 	}
@@ -531,11 +509,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		const prevModule = getRaiserModulePath();
 		setRaiserModulePath(dcl.modulePath);
 		if (dcl.isInit) {
-			functions[idx] = compileClassInit(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.paramSyms, dcl.ctorBody, globals);
+			functions[idx] = compileClassInit(globalFuncMap, dcl.className, dcl.classBody, dcl.paramSyms, dcl.ctorBody, globals);
 		} else if (dcl.isCtor) {
-			functions[idx] = compileClassConstructor(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.paramSyms, dcl.ctorBody, globals, dcl.classSym);
+			functions[idx] = compileClassConstructor(globalFuncMap, dcl.className, dcl.classBody, dcl.paramSyms, dcl.ctorBody, globals, dcl.classSym);
 		} else {
-			functions[idx] = compileFuncBody(globalFuncMap, globalEnumMap, dcl.fnName, dcl.paramSyms, dcl.body, globals);
+			functions[idx] = compileFuncBody(globalFuncMap, dcl.fnName, dcl.paramSyms, dcl.body, globals);
 		}
 		setRaiserModulePath(prevModule);
 	};
@@ -550,7 +528,6 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		setRaiserModulePath(modules[mi].modulePath);
 		const s = createCompState();
 		s.funcMap = globalFuncMap;
-		s.enumMap = globalEnumMap;
 		s.globals = globals;
 
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
@@ -575,6 +552,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 		functions.push(initFunc);
 		initIndices.push(functions.length - 1);
 	}
+	for (const exported of exports) demandBody(exported.funcIdx);
 
 	// --- Create synthetic entry function ---
 	// Calls all init functions in order, halts with last result
@@ -595,6 +573,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);
 	compiled.globalCount = globalCount;
+	compiled.exports = exports;
 	for (let ri = 0; ri < plan.records.length; ri += 1) {
 		const path = plan.records[ri];
 		let init: number = -1;

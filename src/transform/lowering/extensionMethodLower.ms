@@ -99,8 +99,7 @@ function setupExtensionCtx(input: string, ext: ExtensionMethod): Node {
 	if (!result.ok) return null as unknown as Node;
 	const cc = createContext();
 	registerExtension(cc.extensionRegistry, ext);
-	const sym = makeSymbol(ext.methodName, SymbolKind.Function, ext.fnType, false);
-	defineSymbol(cc.table, sym);
+	defineSymbol(cc.table, ext.sym!);
 	// Simulate checker: set NF_ExtCall flag on the CallExpr
 	const stmts = getStmts(result.value);
 	if (stmts.length > 0) {
@@ -108,7 +107,7 @@ function setupExtensionCtx(input: string, ext: ExtensionMethod): Node {
 		if (callNode != null && callNode.kind == NodeKind.CallExpr) {
 			callNode.flags = callNode.flags.incl(NodeFlag.ExtCall);
 			if (ext.isStatic) callNode.flags = callNode.flags.incl(NodeFlag.ExtStatic);
-			callNode.resolvedSym = sym;
+			callNode.resolvedSym = ext.sym;
 		}
 	}
 	const ctx = createTransformContextWithChecker(cc);
@@ -121,9 +120,8 @@ function makeTrimExt(): ExtensionMethod {
 	const ext: ExtensionMethod = {
 		methodName: "trim",
 		sourcePath: "",
-		fnType: createFunction([], [], inferredType()),
 		isStatic: false,
-		sym: null,
+		sym: makeSymbol("trim", SymbolKind.Function, createFunction([], [], inferredType()), false),
 	};
 	return ext;
 }
@@ -132,9 +130,8 @@ function makePushExt(): ExtensionMethod {
 	const ext: ExtensionMethod = {
 		methodName: "push",
 		sourcePath: "",
-		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: false,
-		sym: null,
+		sym: makeSymbol("push", SymbolKind.Function, createFunction([inferredType()], ["x"], inferredType()), false),
 	};
 	return ext;
 }
@@ -203,18 +200,16 @@ test "static extension no receiver prepend" {
 	const ext: ExtensionMethod = {
 		methodName: "floor",
 		sourcePath: "",
-		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: true,
-		sym: null,
+		sym: makeSymbol("floor", SymbolKind.Function, createFunction([inferredType()], ["x"], inferredType()), false),
 	};
 	registerExtension(cc.extensionRegistry, ext);
-	const fnSym = makeSymbol("floor", SymbolKind.Function, ext.fnType, false);
-	defineSymbol(cc.table, fnSym);
+	defineSymbol(cc.table, ext.sym!);
 	// Simulate checker: set NF_ExtCall + NF_ExtStatic
 	const stmts = getStmts(result.value);
 	const callNode = (stmts[0].data as ExprStmtData).expr;
 	callNode.flags = callNode.flags.incl(NodeFlag.ExtCall).incl(NodeFlag.ExtStatic);
-	callNode.resolvedSym = fnSym;
+	callNode.resolvedSym = ext.sym;
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
 	// Should rewrite to floor(3.7) — callee is Identifier, not MemberExpr

@@ -49,7 +49,7 @@ test "ctorOwnership: a constructor moves its arguments into the fresh fields wit
 test "ctorOwnership: the caller of a constructor that cannot raise carries no error check" {
 	const result = compileToC(TREE_SRC);
 	assert result.ok, result.error;
-	const start = result.value.indexOf("bottomUp__M");
+	const start = result.value.indexOf("bottomUp__");
 	assert start >= 0;
 	assert !result.value.slice(result.value.indexOf("\nMS_LIB_PRIVATE Node", start), result.value.indexOf("\n}", start)).contains("msErr");
 }

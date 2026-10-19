@@ -1,7 +1,7 @@
 // Type System — utility functions for Type manipulation
 // Type class + enums are defined in ast/node.ms (reference parity: single-file AST).
 
-import { bareAfterDelim, splitTopLevel } from "../utils/string";
+import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral, integerLiteralIsBitPattern, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty } from "../codegen/c/names";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
@@ -74,12 +74,17 @@ function lenPtrAlign(tg: TargetInfo): int32 {
 	return a > tg.ptrSize ? a : tg.ptrSize;
 }
 
-export function isStringLiteralUnion(t: Type): boolean {
-	if (t.kind != TypeKind.Union || t.typeChildren.length == 0) return false;
+export function literalUnionBase(t: Type | null): Type | null {
+	if (t == null || t.kind != TypeKind.Union || t.typeChildren.length == 0) return null;
+	let base: Type | null = null;
 	for (const child of t.typeChildren) {
-		if (child == null || child.kind != TypeKind.StringLiteral) return false;
+		if (child == null) return null;
+		const own = child.kind == TypeKind.StringLiteral ? stringType()
+			: (child.kind == TypeKind.NumberLiteral ? numberLiteralBase(child) : null);
+		if (own == null || (base != null && base.kind != own.kind)) return null;
+		base = own;
 	}
-	return true;
+	return base;
 }
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
@@ -738,11 +743,13 @@ function unionMemberKey(t: Type): string {
 // loop into createUnion hangs the v0.2.24 analyzer on the enlarged var graph.
 function stampInlineDuVariants(seen: Type[]): void {
 	for (const v of seen) {
-		if (v.kind == TypeKind.Struct && v.typeName == "") {
-			v.typeFlags = v.typeFlags.incl(TypeFlag.DuVariant);
-			duRegAdd(_duVariantRegistry, v);
-		}
+		if (v.kind == TypeKind.Struct && v.typeName == "") markDuVariant(v);
 	}
+}
+
+export function markDuVariant(v: Type): void {
+	v.typeFlags = v.typeFlags.incl(TypeFlag.DuVariant);
+	duRegAdd(_duVariantRegistry, v);
 }
 
 // Registered inline-variant payload types, in registration order. The flag on the
@@ -998,16 +1005,14 @@ export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
 	const hits: int32[] = [];
 	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return hits;
 	const ek = exprType.kind;
-	const stringCarried = isAllStringLiteralUnion(exprType);
-	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !stringCarried) || ek == TypeKind.Null) return hits;
-	let allStrLit = true;
+	const carried = literalUnionBase(exprType) != null;
+	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !carried) || ek == TypeKind.Null) return hits;
 	for (const child of formal.typeChildren) {
 		if (child == null || child.kind == TypeKind.Null) return hits;
-		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
-	if (allStrLit) return hits;
-	if (isStringLike(exprType)) {
-		const slot = stringSlotOf(formal, exprType);
+	if (literalUnionBase(formal) != null) return hits;
+	if (ek == TypeKind.String || ek == TypeKind.StringLiteral || ek == TypeKind.NumberLiteral || carried) {
+		const slot = literalSlotOf(formal, exprType);
 		if (slot >= 0) hits.push(slot);
 		return hits;
 	}
@@ -1021,22 +1026,23 @@ export function primitiveMemberHits(formal: Type, exprType: Type): int32[] {
 	return hits;
 }
 
-function stringSlotOf(formal: Type, value: Type): int32 {
+function literalSlotOf(formal: Type, value: Type): int32 {
+	const base = literalBase(value);
 	let slot: int32 = -1;
 	let wide = false;
 	for (let i: int32 = 0; i < formal.typeChildren.length; i += 1) {
 		const child = formal.typeChildren[i];
-		if (child.kind != TypeKind.String && child.kind != TypeKind.StringLiteral) continue;
+		if (literalBase(child).kind != base.kind) continue;
 		if (slot < 0) slot = i;
-		if (child.kind == TypeKind.String) wide = true;
+		if (child.kind == base.kind) wide = true;
 	}
 	if (slot < 0 || wide) return slot;
-	if (value.kind == TypeKind.String) return -1;
-	const literals = value.kind == TypeKind.StringLiteral ? [value] : value.typeChildren;
+	if (value.kind == base.kind) return -1;
+	const literals = value.kind == TypeKind.Union ? value.typeChildren : [value];
 	for (const lit of literals) {
 		let held = false;
 		for (const child of formal.typeChildren) {
-			if (child.kind == TypeKind.StringLiteral && child.typeName == lit.typeName) held = true;
+			if (child.kind == lit.kind && child.typeName == lit.typeName) held = true;
 		}
 		if (!held) return -1;
 	}
@@ -1051,6 +1057,7 @@ function duLayoutName(t: Type | null): string {
 	return match (t.kind) {
 		TypeKind.StringLiteral => "string",
 		TypeKind.BooleanLiteral => "boolean",
+		TypeKind.NumberLiteral => duLayoutName(numberLiteralBase(t)),
 		TypeKind.EnumLiteral => t.typeName,
 		_ => typeDisplayName(t),
 	};
@@ -1207,8 +1214,8 @@ export function inlineVariantStruct(member: Type | null): Type | null {
 export function storesNothing(owner: Type, field: Type | null): boolean {
 	if (field == null) return false;
 	if (field.kind == TypeKind.Void) return true;
-	const n = owner.typeName;
-	return field.kind == TypeKind.BooleanLiteral && owner.kind == TypeKind.Struct && (n == "" || n.startsWith("{") || n.startsWith("__anon"));
+	return (field.kind == TypeKind.BooleanLiteral || field.kind == TypeKind.EnumLiteral)
+		&& owner.kind == TypeKind.Struct && owner.typeFlags.has(TypeFlag.DuVariant);
 }
 
 // Peel Ref/Ptr/GenericInstance wrappers until reaching a Struct or Union body.
@@ -1240,6 +1247,14 @@ export function peelToStructOrUnion(t: Type | null): Type | null {
 		break;
 	}
 	return cur;
+}
+
+export function matchUnionBehindInstance(t: Type): Type {
+	if (t.kind != TypeKind.GenericInstance) return t;
+	instantiateGenericBody(t, genericParamsOf(t));
+	if (t.typeReturn == null) return t;
+	const u = peelToStructOrUnion(t);
+	return isDiscriminatedUnion(u) ? u! : t;
 }
 
 // A generic instantiation whose body has no nominal Struct/Union carries no
@@ -1462,12 +1477,13 @@ function moduleQualifiedName(inner: Type): string {
 
 function maybeCacheKey(inner: Type): string {
 	if (inner.kind == TypeKind.StringLiteral) return "sl_" + identSafeKey(inner.typeName);
+	if (inner.kind == TypeKind.NumberLiteral) return "nl_" + identSafeKey(inner.typeName);
 	if (inner.kind == TypeKind.GenericInstance) return "gi_" + identSafeKey(typeKey(inner));
 	if (inner.kind == TypeKind.Set) {
 		return inner.typeReturn != null ? "set_" + maybeCacheKey(inner.typeReturn) : "set_any";
 	}
 	if (inner.typeName != "" && hasNominalIdentity(inner)) return moduleQualifiedName(inner);
-	if (isAllStringLiteralUnion(inner)) {
+	if (literalUnionBase(inner) != null) {
 		const members: string[] = [];
 		for (const c of inner.typeChildren) {
 			if (c != null) members.push(identSafeKey(c.typeName));
@@ -1486,6 +1502,12 @@ function maybeCacheKey(inner: Type): string {
 	return "p" + (scalar as number);
 }
 
+export function representedPayload(inner: Type): Type {
+	if (inner.kind == TypeKind.StringLiteral) return stringType();
+	if (inner.kind == TypeKind.NumberLiteral) return numberLiteralBase(inner);
+	return literalUnionBase(inner) ?? inner;
+}
+
 export function createMaybeType(inner: Type): Type {
 	// Pointer types are inherently nullable — no wrapper needed (reference parity: nullable pointers)
 	if (inner.kind == TypeKind.Ref || inner.kind == TypeKind.Ptr) return inner;
@@ -1500,7 +1522,7 @@ export function createMaybeType(inner: Type): Type {
 	}
 	const t = emptyType();
 	t.kind = TypeKind.Struct;
-	t.typeName = "Maybe_" + key;
+	t.typeName = "Maybe_" + maybeCacheKey(representedPayload(inner));
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
 	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe).incl(TypeFlag.Spelled);
@@ -1621,7 +1643,7 @@ function isPodFieldType(t: Type | null, depth: int32): boolean {
 	if (t == null) return true;
 	if (isNumeric(t)) return true;
 	return match (t.kind) {
-		TypeKind.BigInt | TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char
+		TypeKind.BigInt | TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.Char
 			| TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
 		TypeKind.Distinct | TypeKind.SizedArray => isPodFieldType(t.typeReturn, depth + 1),
@@ -1944,6 +1966,8 @@ export function setRepr(t: Type | null): Type | null {
 export function peelToRepr(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Distinct) return peelToRepr(t.typeReturn);
+	const widened = widenNumberLiteralType(t);
+	if (widened != t) return widened;
 	if (t.kind == TypeKind.Set) {
 		const sr = setRepr(t);
 		return sr != null ? peelToRepr(sr) : t;
@@ -2193,10 +2217,29 @@ export function isSysType(t: Type): boolean {
 export function numberType(): Type { return getSysType(TypeKind.Number); }
 
 export function literalBase(t: Type): Type {
-	if (t.kind == TypeKind.StringLiteral || isAllStringLiteralUnion(t)) return stringType();
+	if (t.kind == TypeKind.StringLiteral) return stringType();
+	if (t.kind == TypeKind.NumberLiteral) return numberLiteralBase(t);
+	const carried = literalUnionBase(t);
+	if (carried != null) return carried;
 	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
 	if (t.kind == TypeKind.EnumLiteral && t.typeReturn != null) return t.typeReturn;
 	return t;
+}
+export function holdsNumberLiteral(t: Type | null): boolean {
+	if (t == null) return false;
+	const held = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	if (held.kind == TypeKind.NumberLiteral) return true;
+	if (held.kind != TypeKind.Union) return false;
+	for (const child of held.typeChildren) {
+		if (child != null && child.kind == TypeKind.NumberLiteral) return true;
+	}
+	return false;
+}
+
+export function widenNumberLiteralType(t: Type): Type {
+	if (t.kind == TypeKind.NumberLiteral) return numberLiteralBase(t);
+	const carried = literalUnionBase(t);
+	return carried != null && carried.kind != TypeKind.String ? carried : t;
 }
 export function stringType(): Type { return getSysType(TypeKind.String); }
 export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
@@ -2332,6 +2375,37 @@ export function createStringLiteral(value: string): Type {
 	t.kind = TypeKind.StringLiteral;
 	t.typeName = value;
 	return t;
+}
+
+export function createNumberLiteral(name: string, base: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.NumberLiteral;
+	t.typeName = name;
+	t.typeReturn = base;
+	return t;
+}
+
+export function numberLiteralBase(t: Type): Type {
+	return t.typeReturn != null ? t.typeReturn : int32Type();
+}
+
+export function integerLiteralName(v: int64): string { return int64ToDecimal(v); }
+
+export function fractionLiteralName(v: number): string {
+	const s = v.toString();
+	return numericLiteralIsFloat(s) || s.indexOf("n") >= 0 ? s : s + ".0";
+}
+
+export function numberLiteralTypeOf(text: string): Type | null {
+	const negative = text.startsWith("-");
+	const body = negative ? text.slice(1, text.length) : text;
+	if (numericLiteralIsFloat(body)) {
+		const v = parseNumberLiteral(text);
+		return v - v == 0 ? createNumberLiteral(fractionLiteralName(v), float64Type()) : null;
+	}
+	if (integerLiteralIsBitPattern(body) || !fitsInt64Decimal(body, negative)) return null;
+	const v = parseIntegerLiteral(text);
+	return createNumberLiteral(integerLiteralName(v), v >= -2147483648 && v <= 2147483647 ? int32Type() : createPrimitive(TypeKind.Int64));
 }
 
 export function isStringLiteral(t: Type | null): boolean {
@@ -2564,7 +2638,7 @@ export function isFloatType(t: Type | null): boolean {
 export function isPrimitiveUnionMember(m: Type | null): boolean {
 	if (m == null) return false;
 	if (m.kind == TypeKind.Null || m.kind == TypeKind.String || m.kind == TypeKind.StringLiteral
-		|| m.kind == TypeKind.Boolean || m.kind == TypeKind.BooleanLiteral) return true;
+		|| m.kind == TypeKind.Boolean || m.kind == TypeKind.BooleanLiteral || m.kind == TypeKind.NumberLiteral) return true;
 	return isNumeric(m);
 }
 
@@ -2573,14 +2647,14 @@ export function isPrimitiveUnionMember(m: Type | null): boolean {
 export function isTagCarriedUnion(t: Type | null): boolean {
 	if (t == null || t.kind != TypeKind.Union) return false;
 	if (t.typeChildren == null || t.typeChildren.length == 0) return false;
-	return !isStringLike(t);
+	return literalUnionBase(t) == null;
 }
 
 export function typeofTagOf(t: Type | null): string {
 	if (t == null) return "object";
 	const v = peelTransparentInstance(t);
 	if (v.kind == TypeKind.Set) return typeofTagOf(setRepr(v));
-	if (isNumeric(v) || v.kind == TypeKind.Enum || v.kind == TypeKind.EnumLiteral) return "number";
+	if (isNumeric(v) || v.kind == TypeKind.NumberLiteral || v.kind == TypeKind.Enum || v.kind == TypeKind.EnumLiteral) return "number";
 	if (v.kind == TypeKind.String || v.kind == TypeKind.StringLiteral) return "string";
 	if (v.kind == TypeKind.Boolean || v.kind == TypeKind.BooleanLiteral) return "boolean";
 	if (v.kind == TypeKind.Function) return "function";
@@ -2766,7 +2840,7 @@ export function valueCopyRepr(t: Type | null): Type | null {
 		const repr = setRepr(t);
 		if (repr != null) return repr;
 	}
-	if (t != null && t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return t.typeReturn;
+	if (t != null && t.kind == TypeKind.GenericInstance && (isStructType(t.typeReturn) || (t.typeReturn != null && t.typeReturn.kind == TypeKind.Union && t.typeReturn.typeFlags.has(TypeFlag.ValueUnion)))) return t.typeReturn;
 	return t;
 }
 
@@ -2774,6 +2848,7 @@ export function needsValueCopy(t: Type | null): boolean {
 	t = valueCopyRepr(t);
 	if (t == null) return false;
 	if (t.kind == TypeKind.Struct) return t.typeFlags.has(TypeFlag.IsStruct);
+	if (t.kind == TypeKind.Union) return t.typeFlags.has(TypeFlag.ValueUnion);
 	if (t.kind == TypeKind.Tuple) return true;
 	if (t.kind == TypeKind.Array) return true;
 	if (t.kind == TypeKind.SizedArray) return true;
@@ -2889,6 +2964,7 @@ function typeKeyIn(t: Type, keying: Type[]): string {
 
 function typeKeyInner(t: Type, keying: Type[]): string {
 	if (t == null) return "null";
+	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(t.typeReturn, keying);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.GenericInstance) return t.typeName;
@@ -3017,7 +3093,7 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind == TypeKind.Set) return true;
 	if (t.kind == TypeKind.String) return true;
 	if (t.kind == TypeKind.StringLiteral) return true;
-	if (isAllStringLiteralUnion(t)) return true;
+	if (literalUnionBase(t) != null) return true;
 	if (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || t.kind == TypeKind.Array) return true;
 	if (t.kind == TypeKind.GenericInstance) return t.typeExtra != null && isStructType(t.typeExtra);
 	return false;
@@ -4402,6 +4478,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind == TypeKind.CString
 		|| kind == TypeKind.StringLiteral
 		|| kind == TypeKind.BooleanLiteral
+		|| kind == TypeKind.NumberLiteral
 		|| kind == TypeKind.Error
 		|| kind == TypeKind.None
 		|| kind == TypeKind.Inferred;
@@ -4491,6 +4568,7 @@ function typeNameOfInner(t: Type | null): string {
 		TypeKind.Tuple => "Tuple",
 		TypeKind.CString => "cstring",
 		TypeKind.StringLiteral => "\"" + t2.typeName + "\"",
+		TypeKind.NumberLiteral => t2.typeName,
 		TypeKind.IndexedAccess => t2.typeChildren.length < 2 ? "unknown" : typeDisplayName(t2.typeChildren[0]) + "[" + typeDisplayName(t2.typeChildren[1]) + "]",
 		TypeKind.KeyOf => t2.typeChildren.length < 1 ? "unknown" : "keyof " + typeDisplayName(t2.typeChildren[0]),
 		TypeKind.EnumLiteral => t2.typeName + "." + (t2.typeNames.length > 0 ? t2.typeNames[0] : ""),
@@ -4707,7 +4785,8 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	}
 	if (t.kind == TypeKind.Union) {
 		if (unwrapRefNullUnion(t) != null) return ps;
-		if (isStringLiteralUnion(t)) return alignOfTypeAt(tg, stringType(), depth);
+		const carried = literalUnionBase(t);
+		if (carried != null) return alignOfTypeAt(tg, carried, depth);
 		return alignOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {
@@ -4729,6 +4808,7 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		return alignOfTypeAt(tg, t.typeChildren[0], depth);
 	}
 	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) return alignOfTypeAt(tg, enumStorageOf(t), depth);
+	if (t.kind == TypeKind.NumberLiteral) return alignOfTypeAt(tg, numberLiteralBase(t), depth);
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
@@ -4775,7 +4855,8 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	}
 	if (t.kind == TypeKind.Union) {
 		if (unwrapRefNullUnion(t) != null) return ps;
-		if (isStringLiteralUnion(t)) return sizeOfTypeAt(tg, stringType(), depth);
+		const carried = literalUnionBase(t);
+		if (carried != null) return sizeOfTypeAt(tg, carried, depth);
 		return sizeOfUnion(tg, t, depth);
 	}
 	if (t.kind == TypeKind.Set) {
@@ -4798,6 +4879,7 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		return sizeOfTypeAt(tg, t.typeChildren[0], depth);
 	}
 	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) return sizeOfTypeAt(tg, enumStorageOf(t), depth);
+	if (t.kind == TypeKind.NumberLiteral) return sizeOfTypeAt(tg, numberLiteralBase(t), depth);
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,

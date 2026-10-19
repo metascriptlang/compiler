@@ -3784,7 +3784,7 @@ test "every opcode reaches a branch of the dispatch" {
 		// a constant, a global and a copy plan give CallHost, LoadGlobal, StoreGlobal and CopyValue an operand to read
 		const mod = makeTestModule([raiserABC(i as RaiserOpcode, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserString("missingFn")]);
 		mod.globalCount = 1;
-		mod.functions[0].copyPlans.push({ kind: RaiserCopyKind.Preserve, names: [], children: [] });
+		mod.functions[0].copyPlans.push({ kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [] });
 		const vm = execModule(mod);
 		assert !vm.error.startsWith("Unknown opcode"), vm.error;
 	}

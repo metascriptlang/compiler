@@ -18,7 +18,7 @@
 // Macro VM passes Node arguments as flat-field heap objects, so we cast each
 // Node to its NodeData variant via `node as XData`; the runtime heap lookup for the
 // named field works because the wire writes data fields at the top level.
-import { Node, NodeKind, TypeUnionData, TypeObjectData, IdentifierData,
+import { Node, NodeKind, TypeUnionData, TypeGenericData, TypeObjectData, IdentifierData,
 	StringLiteralData, BooleanLiteralData,
 	CallExprData, MemberExprData, TypeAssertionData,
 	createNodeAt, makeLoc,
@@ -26,6 +26,14 @@ import { Node, NodeKind, TypeUnionData, TypeObjectData, IdentifierData,
 
 export function namesStruct(n: Node): boolean {
 	return n.kind == NodeKind.Identifier && typeKind(n) == TypeKind.Struct;
+}
+
+export function unwrapType(n: Node): Node {
+	if (n.kind != NodeKind.TypeGeneric) return n;
+	if (typeKind(n) != TypeKind.GenericInstance) return (n as TypeGenericData).typExprArgs[0];
+	const impl = getTypeImpl(n);
+	if (impl == null) throw new Error("internal: unwrapType: a generic instance has no implementation");
+	return impl;
 }
 
 export interface DiscVariant {

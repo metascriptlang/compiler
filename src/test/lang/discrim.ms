@@ -101,6 +101,47 @@ test "match-type enum disc string variant" {
 	}
 }
 
+type PairD = match (kind: NodeK) {
+	NodeK.Num => { numVal: number },
+	NodeK.Str => { strVal: string },
+};
+
+function showD<T>(x: T): string {
+	return JSON.stringify(x);
+}
+
+test "match-type enum disc narrowed by == is copied as a whole value" {
+	const s: PairD = { kind: NodeK.Str, strVal: "hello" };
+	if (s.kind == NodeK.Str) {
+		const c = s;
+		assert c.strVal == "hello";
+	}
+}
+
+test "match-type enum disc narrowed by == keeps its kind as a whole value" {
+	const s: PairD = { kind: NodeK.Str, strVal: "hello" };
+	if (s.kind == NodeK.Str) {
+		const c = s;
+		assert c.kind == NodeK.Str;
+		assert JSON.stringify(s) == `{"kind":"Str","strVal":"hello"}`;
+		assert showD(s) == `{"kind":"Str","strVal":"hello"}`;
+	}
+}
+
+function makeStrD(): PairD {
+	return { kind: NodeK.Str, strVal: "hello" };
+}
+
+test "match-type enum disc narrowed by != keeps its kind as a whole value" {
+	const s = makeStrD();
+	if (s.kind != NodeK.Num) {
+		const c = s;
+		assert c.kind == NodeK.Str;
+		assert s.kind == NodeK.Str;
+		assert showD(s) == `{"kind":"Str","strVal":"hello"}`;
+	}
+}
+
 // =====================================================================
 // SHAPE 4: Match-type with boolean discriminator
 // =====================================================================
@@ -210,7 +251,7 @@ test "Either err + Result err with identical shape coexist" {
 // `MyData__T_E*` (mono) typedef references.
 
 enum DBodyK { Ok, Err }
-type DBody<T, E> = match (kind: DBodyK) {
+struct DBody<T, E> = match (kind: DBodyK) {
 	DBodyK.Ok => { value: T },
 	DBodyK.Err => { error: E },
 };

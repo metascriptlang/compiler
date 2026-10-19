@@ -3,7 +3,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { nominalTypeKey, hasTypeIdentity } from "../checker/types";
+import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload } from "../checker/types";
 
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
@@ -109,6 +109,7 @@ function monoTypeKeyBody(t: Type): string {
 		TypeKind.EnumLiteral => "k" + (t.kind as number).toString() + "_" + monoTypeKey(t.typeReturn) + "_" + (t.typeNames.length > 0 ? t.typeNames[0] : ""),
 		TypeKind.Struct | TypeKind.Enum => {
 			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(t));
+			if (isMaybeType(t) && t.typeReturn != null && representedPayload(t.typeReturn) != t.typeReturn) return "Maybe_" + monoTypeKey(t.typeReturn);
 			const owner = monoOwnerPath(t);
 			const name = monoDeclaredName(t);
 			if (owner != "") return name + "_" + hashToBase36(owner);

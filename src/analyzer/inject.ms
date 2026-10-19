@@ -11,7 +11,7 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
+import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
@@ -262,7 +262,7 @@ function isUnionProjection(node: Node): boolean {
 	if (target == null) return false;
 	if (unwrapRefNullUnion(target) != null) return true;
 	if (isMaybeType(target)) return !isTagCarriedUnion(unwrapMaybeType(target));
-	return !isTagCarriedUnion(target);
+	return !isTagCarriedUnion(matchUnionBehindInstance(target));
 }
 
 function processUnaryWrapper(node: Node, dctx: DrcContext): Node {

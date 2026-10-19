@@ -90,19 +90,10 @@ export interface RaiserLoopStack {
 
 // --- Function map ---
 
-export interface RaiserFuncEntry {
-	name: string;
-	index: int32;
-}
-
 export interface RaiserFuncMap {
 	symbolIndices: HashMap<Symbol, int32>;
 	ctorIndices: HashMap<Symbol, int32>;
 	initIndices: HashMap<Symbol, int32>;
-}
-
-export interface RaiserEnumMap {
-	items: RaiserFuncEntry[];
 }
 
 export function createFuncMap(): RaiserFuncMap {
@@ -135,7 +126,6 @@ export interface RaiserCompState {
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
-	enumMap: RaiserEnumMap;
 	copyTypes: Type[];
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
@@ -156,10 +146,8 @@ export function createCompState(): RaiserCompState {
 	const locals: RaiserLocals = { items: localItems };
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
-	const enumItems: RaiserFuncEntry[] = [];
-	const enumMap: RaiserEnumMap = { items: enumItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap: createFuncMap(), enumMap, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -394,39 +382,6 @@ export function resolveConstructor(s: RaiserCompState, classSym: Symbol): int32 
 
 export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 	return demandIndex(s.funcMap.initIndices.get(placedInstanceOf(classSym)));
-}
-
-// --- Enum helpers ---
-// Encodes enum entries as "EnumName.MemberName" → index, reusing RaiserFuncEntry.
-
-export function declareEnum(s: RaiserCompState, enumName: string, members: string[]): void {
-	for (let i = 0; i < members.length; i = i + 1) {
-		const key = `${enumName}.${members[i]}`;
-		const entry: RaiserFuncEntry = { name: key, index: i };
-		s.enumMap.items.push(entry);
-	}
-}
-
-// Returns the enumMap entry index for an "EnumName.Member" key (caller reads
-// .index for the value, which may be negative), or -1 if not an enum constant.
-export function findEnumConstant(s: RaiserCompState, key: string): int32 {
-	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
-		if (s.enumMap.items[i].name == key) return i;
-	}
-	return -1;
-}
-
-export function isEnumName(s: RaiserCompState, name: string): boolean {
-	const prefix = name + ".";
-	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
-		const entryName = s.enumMap.items[i].name;
-		// Check if entryName starts with prefix
-		if (entryName.length > prefix.length) {
-			const slice = entryName.slice(0, prefix.length);
-			if (slice == prefix) return true;
-		}
-	}
-	return false;
 }
 
 // --- Builtin helpers ---

@@ -613,10 +613,12 @@ function parsePrimary(state: ParserState): ExprResult {
 			advance(state);
 		}
 		const spliceCallee = createNode(NodeKind.Identifier, { name: "splice" }, token);
-		return Result.ok(createNode(NodeKind.CallExpr, {
+		const spliceCall = createNode(NodeKind.CallExpr, {
 			callee: spliceCallee, arguments: [spliceExpr],
 			isDirectCall: true, resolvedOverloadIdx: -1,
-		}, token));
+		}, token);
+		spliceCall.flags = spliceCall.flags.incl(NodeFlag.QuoteSplice);
+		return Result.ok(spliceCall);
 	}
 
 	// Spread: ...expr

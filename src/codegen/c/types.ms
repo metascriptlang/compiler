@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, isStringLiteralUnion, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, isIntegerType } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -360,6 +360,7 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 			return t.typeName;
 		},
 		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
 			let k = "fn(";
@@ -539,6 +540,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.CString => "cstring",
 		TypeKind.StringLiteral => "strlit:" + t.typeName,
 		TypeKind.BooleanLiteral => "boollit:" + t.typeName,
+		TypeKind.NumberLiteral => "numlit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { return "enum:" + mangledTypeName(t.sym, t.typeName); },
@@ -652,6 +654,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",
 		TypeKind.Alias => t.typeReturn == null ? "void" : getSimpleTypeDesc(t.typeReturn),
+		TypeKind.NumberLiteral => getSimpleTypeDesc(numberLiteralBase(t)),
 		TypeKind.Void => "void",
 		// `Null` as a TYPE (not the literal value) appears when a generic param
 		// monomorphizes to T=Null — e.g. `id(null)` without contextual type.
@@ -1507,10 +1510,11 @@ function layoutAssert(g: CGen, t: Type, cType: string): string {
 function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
-	// Pure string literal union → msString (TypeScript: string at runtime)
-	if (isStringLiteralUnion(t)) {
-		typeCacheSet(g.typeCache, typeKey(t), "msString");
-		return "msString";
+	const carried = literalUnionBase(t);
+	if (carried != null) {
+		const carriedDesc = getTypeDesc(g, carried);
+		typeCacheSet(g.typeCache, typeKey(t), carriedDesc);
+		return carriedDesc;
 	}
 
 	// Single cache lookup via typeKey. Naming is unique per type:
@@ -1690,7 +1694,8 @@ function genArrayType(g: CGen, t: Type): string {
 	const elemKey = (resolvedElem != null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey != "" && isBeingDefined(g, elemKey);
 
-	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : elementTypeDesc(g, t.typeReturn);
+	const byValue = !selfRef && resolvedElem != null && holdsStructByValue(resolvedElem);
+	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : (byValue ? "" : getTypeDesc(g, t.typeReturn));
 
 	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
@@ -1706,22 +1711,20 @@ function genArrayType(g: CGen, t: Type): string {
 		// Reference parity: two-struct split { len, p* } + __Content { cap, T data[] }.
 		// Forward decls in ForwardDecls, slim struct in Types, content in SeqTypes.
 		// SeqTypes is emitted after Types — element type is always complete by then.
+		// A by-value element is spelled by the name getTypeDesc gives it once defined
+		// (defineDeferredElements), never by a name derived beside it.
 		const contentName = arrTypeName + "__Content";
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${arrTypeName} ${arrTypeName};`);
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${contentName} ${contentName};`);
 		addLine(sec(g, CSection.Types), `struct ${arrTypeName} { int64_t len; ${contentName}* p; };`);
-		addLine(sec(g, CSection.SeqTypes), `struct ${contentName} { int64_t cap; ${elemType} data[]; };`);
+		if (byValue && resolvedElem != null) {
+			g.deferredElements.push({ elem: resolvedElem, contentName: contentName });
+		} else {
+			addLine(sec(g, CSection.SeqTypes), `struct ${contentName} { int64_t cap; ${elemType} data[]; };`);
+		}
 	}
 
 	return arrTypeName;
-}
-
-function elementTypeDesc(g: CGen, elem: Type | null): string {
-	if (elem == null || !holdsStructByValue(elem)) return getTypeDesc(g, elem);
-	const name = elemArrayCName(elem);
-	ensureForwardDecl(g, name);
-	g.deferredElements.push(elem);
-	return name;
 }
 
 function holdsStructByValue(t: Type): boolean {
@@ -1737,7 +1740,10 @@ export function defineDeferredElements(g: CGen): void {
 	while (g.deferredElements.length > 0) {
 		const pending = g.deferredElements;
 		g.deferredElements = [];
-		for (const t of pending) getTypeDesc(g, t);
+		for (const d of pending) {
+			const elemType = getTypeDesc(g, d.elem);
+			addLine(sec(g, CSection.SeqTypes), `struct ${d.contentName} { int64_t cap; ${elemType} data[]; };`);
+		}
 	}
 }
 
@@ -2370,6 +2376,21 @@ test "same anonymous type gets same name (deterministic)" {
 	const anon2 = createStruct("", names2, types2, true);
 
 	assert anonTypeName(anon1) == anonTypeName(anon2);
+}
+
+test "anonymous type name ignores a generic field's lazily instantiated body" {
+	const gi = createGenericInstance(createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true), [createPrimitive(TypeKind.Int32)]);
+	const anon = createStruct("", ["v", "t"], [gi, createPrimitive(TypeKind.Uint8)], true);
+	const before = anonTypeName(anon);
+	gi.typeReturn = createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true);
+	assert anonTypeName(anon) == before;
+}
+
+test "anonymous type name tells generic arguments apart" {
+	const base = createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true);
+	const ofInt = createStruct("", ["v"], [createGenericInstance(base, [createPrimitive(TypeKind.Int32)])], true);
+	const ofString = createStruct("", ["v"], [createGenericInstance(base, [createPrimitive(TypeKind.String)])], true);
+	assert anonTypeName(ofInt) != anonTypeName(ofString);
 }
 
 test "anonymous type cache key distinguishes" {

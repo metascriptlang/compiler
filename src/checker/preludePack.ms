@@ -540,7 +540,7 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
-//   E methodName sourcePath isStatic scopeDepth symIdx fnTypeIdx
+//   E methodName sourcePath isStatic scopeDepth symIdx
 //   C converterSymIdx targetTypeIdx
 //   P compilerFuncName symIdx
 //   D includeDirectives
@@ -740,7 +740,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const ps of n.paramSyms) psi.push(idxSym(ps));
 			pss = psi.length == 0 ? "" : intsCsv(psi);
 		}
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint32}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${emitNodePayloadViaSink(n)}`);
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${emitNodePayloadViaSink(n)}`);
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {
@@ -774,8 +774,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 
 	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
-			const fnRef = ext.sym == null && ext.fnType != null ? idxType(ext.fnType) : -1;
-			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}\t${fnRef}`);
+			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}`);
 		}
 	}
 
@@ -1174,7 +1173,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			loc.endLine = f[6].parseInt() as int32;
 			loc.endColumn = f[7].parseInt() as int32;
 			const n = createNodeAt(kind, { nullPlaceholder: true } as NodeData, loc);
-			n.flags = f[3].parseInt() as uint32 as BitSet<NodeFlag>;
+			n.flags = f[3].parseInt() as uint64 as BitSet<NodeFlag>;
 			n.typeArg = unescapeP(f[13]);
 			n.variantSlot = f[14].parseInt() as int32;
 			nodes.push(n);
@@ -1330,10 +1329,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 
 	for (const f of extRows) {
 		const symRef = f[5].parseInt() as int32;
-		const fnRef = f[6].parseInt() as int32;
 		const extSym = symRef >= 0 && symRef < syms.length ? syms[symRef] : null as unknown as Symbol;
-		const extType = fnRef >= 0 && fnRef < types.length ? types[fnRef] : noneType();
-		const ext = createExtMethod(unescapeP(f[1]), unescapeP(f[2]), extType, f[3] == "1", extSym, f[4].parseInt() as int32);
+		const ext = createExtMethod(unescapeP(f[1]), unescapeP(f[2]), f[3] == "1", extSym, f[4].parseInt() as int32);
 		registerExtension(ctx.extensionRegistry, ext);
 	}
 
@@ -1470,6 +1467,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		const ret = createNodeAt(NodeKind.ReturnStmt, { argument: add } as NodeData, makeLoc(9, 2));
 		const body = createNodeAt(NodeKind.BlockStmt, { statements: [ret] } as NodeData, makeLoc(8, 30));
 		const decl = createNodeAt(NodeKind.FunctionDecl, { fnName: "pkTestFn", params: ["start"], fnParamTypes: ["int32"], fnBody: body, fnFlags: "", fnReturnType: "int32", fnDefaults: [zero], nativeName: "", nameLocation: makeLoc(7, 9) } as NodeData, makeLoc(7, 1));
+		decl.flags = decl.flags.incl(NodeFlag.OptionalChainEnd).incl(NodeFlag.ValueUnion);
 		sym.declNode = decl;
 		sym.defaultParams = [zero];
 		const cache = ctx.table.identCache;
@@ -1478,7 +1476,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		ctx.includeDirectives = "runtime/core/system.h\nruntime/io/streams.h";
 		ctx.compilerFlags = "-Ivendor/x -O2";
 		ctx.compileDirectives = "vendor/crypto/a.c vendor/io/b.c";
-		registerExtension(ctx.extensionRegistry, createExtMethod("pkExt", "std/pk/test.ms", noneType(), true, sym, 0));
+		registerExtension(ctx.extensionRegistry, createExtMethod("pkExt", "std/pk/test.ms", true, sym, 0));
 		ctx.compilerFuncs.set("pkRuntimeName", sym);
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");
@@ -1502,6 +1500,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert got.declNode != null;
 		assert got.declNode.kind == NodeKind.FunctionDecl;
 		const gd = got.declNode.data as FunctionDeclData;
+		assert got.declNode.flags.has(NodeFlag.OptionalChainEnd) && got.declNode.flags.has(NodeFlag.ValueUnion), "a node flag past bit 31 did not survive the pack";
 		assert gd.fnName == "pkTestFn";
 		assert gd.params[0] == "start";
 		const gbody = gd.fnBody.data as BlockStmtData;

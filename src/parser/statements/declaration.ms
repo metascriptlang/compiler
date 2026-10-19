@@ -630,6 +630,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 // ===== Discriminated Union Declaration =====
 // syntax: type X = match (discName: EnumOrBool) { Key => { fields }, ... };
+//         struct X = match (...) { ... };  the same arms held by value (NodeFlag.ValueUnion)
 //   - Enum discriminator: keys are enum members (`MyKind.Ok`, `MyKind.Err`)
 //   - Boolean discriminator: keys are `true` / `false` literals
 
@@ -959,6 +960,11 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 	// which contain semicolons — don't terminate the RHS prematurely.
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 		advance(state);
+		if (nodeKind == NodeKind.StructDecl && current(state).kind == TokenKind.Match) {
+			const decl = try parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, token, nameToken);
+			decl.flags = decl.flags.incl(NodeFlag.ValueUnion);
+			return Result.ok(decl);
+		}
 		const rhsStart = state.position;
 		let braceDepth = 0;
 		while (!isAtEnd(state)) {

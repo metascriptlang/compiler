@@ -5,7 +5,7 @@ import { fixtureShapeValue } from "./fixtures/sameNamedShape";
 
 enum ReferenceKind { Ok, Err }
 
-type ReferenceBody<T, E> = match (kind: ReferenceKind) {
+struct ReferenceBody<T, E> = match (kind: ReferenceKind) {
 	ReferenceKind.Ok => { value: T },
 	ReferenceKind.Err => { error: E },
 };

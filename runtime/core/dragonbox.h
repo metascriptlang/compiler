@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "runtime/core/mulWide.h"
 
 typedef struct { uint64_t hi; uint64_t lo; } msDragonboxU128;
 typedef struct { uint64_t significand; int32_t exponent; } msDragonboxDecimal;
@@ -697,8 +698,7 @@ static inline bool msDragonboxMultipleOfPow5(uint64_t value, int32_t e5) {
 }
 
 static inline msDragonboxU128 msDragonboxMul128(uint64_t a, uint64_t b) {
-	__uint128_t p = (__uint128_t)a * b;
-	msDragonboxU128 r = { (uint64_t)(p >> 64), (uint64_t)p };
+	msDragonboxU128 r = { msMulHi64(a, b), a * b };
 	return r;
 }
 

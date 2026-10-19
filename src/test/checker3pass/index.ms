@@ -51,5 +51,7 @@ import "./scenarios/charArithmetic";
 import "./scenarios/voidInUnion";
 import "./scenarios/bareReturnInValueFunction";
 import "./scenarios/textOfVoid";
+import "./scenarios/methodOverrideSignature";
 import "./scenarios/functionReturnRepr";
 import "./scenarios/narrowedWriteTarget";
+import "./scenarios/nullableLiteralUnionTarget";

@@ -2,8 +2,9 @@
 // projects pick them up via $PATH.
 //
 // Run from a clean worktree of main, with the msc you just built:
-//   ./msc run --target=raiser tools/syncLocalBinary.ms [check] [no-binary]
-// check prints what would change; no-binary syncs the support trees only.
+//   ./msc run --target=raiser tools/syncLocalBinary.ms [check] [no-binary | web]
+// check prints what would change; no-binary syncs the support trees only;
+// web builds only the browser compiler (msc.js, msc.wasm, msc.data with std) into web/.
 // A session whose work runs on the installed msc holds the destination meanwhile:
 //   msc run --target=raiser tools/syncLocalBinary.ms hold <owner> <minutes> [pid]
 //   msc run --target=raiser tools/syncLocalBinary.ms release <owner>
@@ -37,9 +38,11 @@ function scriptRoot(): string {
 
 let check = false;
 let syncBinary = true;
+let web = false;
 for (const a of argv) {
 	if (a == "check") check = true;
 	if (a == "no-binary") syncBinary = false;
+	if (a == "web") web = true;
 }
 
 const SRC = scriptRoot();
@@ -188,6 +191,14 @@ if (vendorDirt != "") {
 	die(`${SRC} holds vendor files their pinned submodule commits do not track:\n${vendorDirt}deploy only the pinned commits: remove these files, or pin a commit that tracks them. A header the build needs lives under runtime/ (miniz_export.h: runtime/compress/).`);
 }
 
+function builder(): string {
+	const built = exists(`${SRC}/msc${EXE}`) ? `${SRC}/msc${EXE}` : `${SRC}/msc`;
+	if (!exists(built)) die(`${SRC}/msc not found. Build it first:\n  msc build src/index.ms --gc=drc --danger --output=msc`);
+	const srcCommitTime = git(["log", "-1", "--format=%ct", "--", "src"]).parseFloat();
+	if (modifiedTime(built) < srcCommitTime) die(`${built} is older than the last commit under src/. Rebuild it first.`);
+	return built;
+}
+
 let changes = 0;
 
 function sameFile(a: string, b: string): boolean {
@@ -241,15 +252,32 @@ function syncTree(rel: string): void {
 	console.log(check ? `${rel}/: ${changes} file(s) would change` : `synced ${rel}/ → ${DEST}/${rel}/ (${changes} changed)`);
 }
 
+if (web) {
+	const out = `${DEST}/web`;
+	if (check) {
+		console.log(`would: build the browser compiler → ${out}/`);
+		exit(0);
+	}
+	const next = `${out}.next`;
+	removeAll(next);
+	ensureDir(next);
+	const link = `-sSTACK_SIZE=8MB -sMODULARIZE=1 -sEXPORT_NAME=createMsc -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=FS,callMain --preload-file ${SRC}/std@/std --exclude-file=*.md`;
+	const r = execFileResult(builder(), ["build", "src/index.ms", "--os=emcc", "--gc=drc", "--release", `--passL=${link}`, `--output=${next}/msc.js`, "--no-color"], SRC);
+	if (!r.started || r.exitCode != 0) die(`the browser compiler did not build:\n${r.output}${r.errorOutput}`);
+	removeAll(`${next}/msc.js_link.rsp`);
+	removeAll(out);
+	if (!rename(next, out).ok) die(`cannot move ${next} to ${out}`);
+	recordBuild("web");
+	console.log(`synced browser compiler → ${out}/`);
+	exit(0);
+}
+
 if (!check) {
 	ensureDir(`${DEST}/bin`);
 }
 
 if (syncBinary) {
-	const built = exists(`${SRC}/msc${EXE}`) ? `${SRC}/msc${EXE}` : `${SRC}/msc`;
-	if (!exists(built)) die(`${SRC}/msc not found. Build it first:\n  msc build src/index.ms --gc=drc --danger --output=msc`);
-	const srcCommitTime = git(["log", "-1", "--format=%ct", "--", "src"]).parseFloat();
-	if (modifiedTime(built) < srcCommitTime) die(`${built} is older than the last commit under src/. Rebuild it first.`);
+	const built = builder();
 	const installed = `${DEST}/bin/msc${EXE}`;
 	if (check) {
 		console.log(`would: copy ${built} → ${installed}`);

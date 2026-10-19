@@ -105,6 +105,7 @@ import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
+import { lowerAssert } from "./native/assertLower";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
@@ -128,7 +129,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = planModuleTdz(result, ctx); }
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
-	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
+	result = jsBackend ? lowerPowerAssert(result, ctx) : lowerAssert(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
 	if (!jsBackend) { result = lowerStaticInit(result, ctx); }

@@ -3895,7 +3895,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 // ===== Raiser (Bytecode VM) Run =====
 
-export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null): RaiserModule {
+export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
 	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
 	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Orc, session != null ? session.check : null);
@@ -3959,7 +3959,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, resolveSection
 	// through the same registry — load it first or both see an empty table.
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath));
+	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryCanonical : "");
 	// Comptime parity: queued bytecode-compile errors are collected and
 	// reported, not fatal — std module bodies the program never calls can
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks
