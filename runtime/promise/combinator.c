@@ -248,9 +248,8 @@ void* msPromiseAny(msRefArray* arr) {
 static void msFutureThenCb(void* raw) {
 	msFutureThenEnv* e = (msFutureThenEnv*)raw;
 	if (e->input->base.failed || e->input->base.cancelled) {
-		msFutureFailShared(e->output, e->input->base.error);
-		msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled);
-		free(e);
+		msFutureThenRejected(e);
+		msFutureThenEnvFree(e);
 		return;
 	}
 	void* val = e->input->value;
@@ -297,8 +296,7 @@ static void msFutureThenCb(void* raw) {
 	} else {
 		msFutureComplete(e->output, NULL);
 	}
-	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled);
-	free(e);
+	msFutureThenEnvFree(e);
 }
 
 msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
@@ -306,11 +304,11 @@ msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
 }
 
 void* msFutureThenTyped(void* input, msClosure onFulfilled, int typeTag) {
-	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
-	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled; env->typeTag = typeTag;
-	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureThenCb, .env = env});
-	return output;
+	return msFutureThenTypedWithRejected(input, onFulfilled, typeTag, (msClosure){0});
+}
+
+void* msFutureThenTypedWithRejected(void* input, msClosure onFulfilled, int typeTag, msClosure onRejected) {
+	return msFutureThenAttach(input, onFulfilled, onRejected, typeTag, (msClosureFn)msFutureThenCb);
 }
 
 /* ===== Promise.catch ===== */

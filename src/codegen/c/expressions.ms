@@ -3013,8 +3013,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		return;
 	}
 
-	// msFutureThenBoxed(input, cb) → the per-T MS_DEFINE_FUTURE_THEN_BOXED instance, T from
-	// the input's Promise<T>. promiseLower picks it for boxed value types.
+	// msFutureThenBoxed(input, cb[, onRejected]) → the per-T MS_DEFINE_FUTURE_THEN_BOXED instance,
+	// T from the input's Promise<T>. promiseLower picks it for boxed value types.
 	if (magic == CallMagic.FutureThenBoxed && cd.arguments.length >= 2 && cd.arguments[0].nodeType != null) {
 		const innerT = awaitedType(cd.arguments[0].nodeType!);
 		if (innerT != null) {
@@ -3023,7 +3023,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			const paramType = cbType != null && cbType.kind == TypeKind.Function && cbType.typeChildren.length > 0 ? cbType.typeChildren[0] : innerT;
 			const mutated = callback != null && (callback.mutatedParams & 1) != 0;
 			const byRef = shouldIndirectParam(g.target, paramType, mutated);
-			ctx.results.push(`${ensureFutureThenBoxedInstance(g, innerT, byRef)}(${argsStr})`);
+			const withRejected = cd.arguments.length > 2 ? "WithRejected" : "";
+			ctx.results.push(`${ensureFutureThenBoxedInstance(g, innerT, byRef)}${withRejected}(${argsStr})`);
 			return;
 		}
 	}

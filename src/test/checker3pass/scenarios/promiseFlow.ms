@@ -76,6 +76,7 @@ const b: Promise<int32> = Promise.reject(new CodeError("coded"));
 const c = new Promise<int32>((resolve, reject) => { reject("boom"); });
 const d = new Promise<int32>((resolve, reject) => { reject(new Error("e")); });
 a.catch((e: Error): void => { const m: string = e.message; });
+b.then((v: int32): void => {}, (e: Error): void => { const m: string = e.message; });
 `);
 	assert valid.errors.length == 0, "string and Error reasons must check: " + valid.errors.join("\n");
 	const refused = checkOnly(DECLS + `

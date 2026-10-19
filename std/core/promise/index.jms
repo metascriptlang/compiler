@@ -17,6 +17,7 @@ export extern class Promise<T> {
 	static extern reject(error: Error): Promise<never>;
 
 	extern then(callback: (value: T) => void): Promise<void>;
+	extern then(callback: (value: T) => void, onRejected: (error: Error) => void): Promise<void>;
 	extern catch(callback: (error: Error) => void): Promise<void>;
 }
 

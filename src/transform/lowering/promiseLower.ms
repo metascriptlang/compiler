@@ -124,13 +124,18 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 	const cb = handlers[0];
 	return match (builtinKind) {
 		"PromiseThen" => {
+			const onRejected = handlers.length > 1 ? handlers[1] : null;
 			const typedFn = futureThenFnForInner(innerType);
-			if (typedFn != "") return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
-			if (boxedInFuture(innerType) && innerType!.kind != TypeKind.Array) {
-				return mkTypedCall("msFutureThenBoxed", [receiver, cb], node.nodeType, loc);
+			if (typedFn != "") {
+				if (onRejected != null) return mkTypedCall(typedFn + "WithRejected", [receiver, cb, onRejected], node.nodeType, loc);
+				return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
 			}
-			const tag = typeTagFor(innerType);
-			return mkTypedCall("msFutureThenTyped", [receiver, cb, makeNumber(tag, loc)], node.nodeType, loc);
+			if (boxedInFuture(innerType) && innerType!.kind != TypeKind.Array) {
+				return mkTypedCall("msFutureThenBoxed", onRejected != null ? [receiver, cb, onRejected] : [receiver, cb], node.nodeType, loc);
+			}
+			const tag = makeNumber(typeTagFor(innerType), loc);
+			if (onRejected != null) return mkTypedCall("msFutureThenTypedWithRejected", [receiver, cb, tag, onRejected], node.nodeType, loc);
+			return mkTypedCall("msFutureThenTyped", [receiver, cb, tag], node.nodeType, loc);
 		},
 		"PromiseCatch" => {
 			const typedFn = futureCatchFnForInner(innerType);
