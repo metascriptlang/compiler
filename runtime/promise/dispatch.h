@@ -93,6 +93,7 @@ bool msHasDispatcher(void);
 int msGetDispatcherSelectorFd(void);
 
 int msProcessTimers(msDispatcher* d, bool* didWork);
+int msNextTimerDelayMs(void);
 void msProcessCallbacks(msDispatcher* d, bool* didWork);
 
 /* ===== Timers (the JS-shaped surface behind std setTimeout/setInterval) ===== */

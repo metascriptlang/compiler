@@ -627,6 +627,17 @@ static msTimer msTimerPop(msTimerHeap* h) {
 /* Standard reference processTimers pattern
  * Pop expired timers, complete their futures.
  * Returns ms until next timer (+1 margin like standard reference), or -1 if no timers. */
+static int msTimerDelayFrom(int64_t now) {
+	msTimerLock();
+	int64_t nextAt = gTimers.len > 0 ? gTimers.data[0].finishAtMs : -1;
+	msTimerUnlock();
+	if (nextAt >= 0) {
+		int64_t diff = nextAt - now;
+		return (int)(diff > 0 ? diff : 0); /* No margin — step 3 re-processes timers after poll */
+	}
+	return -1; /* no timers */
+}
+
 int msProcessTimers(msDispatcher* d, bool* didWork) {
 	/* timers are process-global here — see gTimers; `d` is the caller's
 	 * callback queue, drained after every fired timer */
@@ -664,14 +675,11 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 		}
 		msProcessCallbacks(d, didWork);
 	}
-	msTimerLock();
-	int64_t nextAt = gTimers.len > 0 ? gTimers.data[0].finishAtMs : -1;
-	msTimerUnlock();
-	if (nextAt >= 0) {
-		int64_t diff = nextAt - now;
-		return (int)(diff > 0 ? diff : 0); /* No margin — step 3 re-processes timers after poll */
-	}
-	return -1; /* no timers */
+	return msTimerDelayFrom(now);
+}
+
+int msNextTimerDelayMs(void) {
+	return msTimerDelayFrom(msMonoTimeMs());
 }
 
 /* Standard reference processPendingCallbacks pattern
