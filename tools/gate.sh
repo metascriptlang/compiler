@@ -132,6 +132,23 @@ cap_jobs() {
   done
   printf '%s\n' "$((10#$jobs))"
 }
+slow_starts() {
+  local n=$1 slow=0 t
+  shift
+  while [ "$n" -gt 0 ]; do
+    t=${EPOCHREALTIME//[.,]/}
+    "$@" >/dev/null 2>&1
+    [ $((${EPOCHREALTIME//[.,]/} - t)) -le 500000 ] || slow=$((slow + 1))
+    n=$((n - 1))
+  done
+  echo "$slow"
+}
+warn_slow_starts() {
+  local slow
+  [ -n "${EPOCHREALTIME:-}" ] || return 0
+  slow=$(slow_starts 20 /usr/bin/true)
+  [ "$slow" -lt 5 ] || say "gate: WARNING this host is stalling on process start ($slow of 20 took over 0.5 s); every lane will run several times slower until a reboot clears it"
+}
 ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 ledger() {
   [ -s "$GATE_LEDGER" ] || printf 'ts\ttree\tlane\tsecs\trc\tred\tknown\tnew\tflaky\twait\n' >"$GATE_LEDGER"
@@ -1392,6 +1409,11 @@ FAKE
   return $bad
 )
 
+slow_starts_self_test() {
+  [ "$(slow_starts 2 sleep 0.6)" = 2 ] || { printf 'FAIL slow starts: two 0.6 s starts were not counted\n'; return 1; }
+  [ "$(slow_starts 2 :)" = 0 ] || { printf 'FAIL slow starts: an instant start was counted\n'; return 1; }
+}
+
 emit_width_self_test() (
   local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
@@ -1693,6 +1715,7 @@ CASES
   control_boot_self_test || bad=1
   emit_many_self_test || bad=1
   emit_width_self_test || bad=1
+  slow_starts_self_test || bad=1
   cand_reuse_self_test || bad=1
   resume_self_test || bad=1
   std_swap_self_test || bad=1
@@ -2175,7 +2198,7 @@ PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "sol
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
 trap queue_release EXIT
-[ "$lanes" = tools ] || queue_acquire
+[ "$lanes" = tools ] || { queue_acquire; warn_slow_starts; }
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 resume_open
