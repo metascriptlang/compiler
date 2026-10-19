@@ -75,8 +75,6 @@ function zeroed(size: uint64): uint8[] {
 	return bytes;
 }
 
-// Called by host.c msSolHostForget
-@exportName("msSolHostResetDispatcher")
 export function resetDispatcher(): void {
 	holds = [];
 	invocationHeaders = [];

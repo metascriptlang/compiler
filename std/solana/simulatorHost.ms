@@ -9,7 +9,7 @@ import {
 	parseInput,
 	roundedSize,
 } from "./simulatorContext";
-import { resetSimulator } from "./simulatorLog";
+import { COMPUTE_BUDGET, resetSimulator } from "./simulatorLog";
 import { holdAccounts, resetDispatcher, settle } from "./simulatorInvoke";
 
 when (c) {
@@ -32,7 +32,6 @@ when (c) {
 	import { HEAP_START, INPUT_START } from "./simulatorContext";
 }
 
-const COMPUTE_BUDGET: uint64 = 200000;
 const ALIGN_DOWN_16: uint64 = 0xfffffffffffffff0;
 const INPUT_AT: uint64 = 0;
 const RESULT_AT: uint64 = 8;

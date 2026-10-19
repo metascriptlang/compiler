@@ -11,7 +11,7 @@ import {
 } from "./simulatorLogCore";
 
 const REFUSED: uint64 = 0xffffffffffffffff;
-const COMPUTE_BUDGET: uint64 = 200000;
+export const COMPUTE_BUDGET: uint64 = 200000;
 const MAX_RETURN_DATA: uint64 = 1024;
 const LAMPORTS_PER_BYTE_YEAR: uint64 = 3480;
 const EXEMPTION_THRESHOLD_BITS: uint64 = 0x4000000000000000;
@@ -50,8 +50,6 @@ function recordText(line: string): void {
 	record(line, line.byteLength as uint64);
 }
 
-// Called by host.c msSolHostForget
-@exportName("msSolHostResetSimulator")
 export function resetSimulator(): void {
 	book = newLogBook();
 	rentReads = 0;

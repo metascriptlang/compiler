@@ -98,18 +98,16 @@ export function parseInput(input: uint64, table: uint64): ParsedInput {
 	return { count: count, instructionData: instructionData, programId: instructionData + msSolLoadU64(instructionData - 8) };
 }
 
-// host.c msSolHostAlloc rounds a request up to 8 bytes; a request too large to round is kept and then refused
+// A request too large to round up to 8 bytes is kept as is, so the heap check refuses it
 export function roundedSize(size: uint64): uint64 {
 	if (size <= 0xfffffffffffffff8) { return (size + 7) & ALIGN_DOWN; }
 	return size;
 }
 
-// host.c msSolHostScratch and msSolHostAlloc compare against what is left of the heap after `position`
 export function heapHolds(position: uint64, size: uint64): boolean {
 	return size <= HEAP_SIZE - position;
 }
 
-// host.c msSolHostAlloc
 export function heapExhausted(size: uint64, position: uint64): string {
 	return `std/solana host: the 32 KiB program heap is exhausted (asked ${size} more bytes at ${position})`;
 }
