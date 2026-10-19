@@ -41,7 +41,7 @@ test "the C prelude declares every runtime routine the lowerings synthesize" {
 	"msNumberToStringRadix", "msOrcBeginTeardown", "msOrcEndTeardown", "msOrcTraceRef", "msPowI32", "msPowI64",
 	"msPrintln", "msPtrWasMoved", "msRaiseFieldError", "msRefArrayDestroy", "msRefArraySetLen", "msRefCopyCyclic", "msSetCard32",
 	"msSetHashWord", "msSliceLen", "msSpawn", "msSpawnSlotSubmit", "msSpawnTaskSubmit", "msStringAppend",
-	"msStringAppendChar", "msStringArrayDestroy", "msStringArraySetLen", "msStringByteAt", "msStringByteLength",
+	"msStringAppendChar", "msStringAppendCodePoint", "msStringArrayDestroy", "msStringArraySetLen", "msStringByteAt", "msStringByteLength",
 	"msStringCompare", "msStringConcat", "msStringCopy", "msStringDecref", "msStringEquals", "msStringHash", "msStringIncref",
 	"msStringLength", "msStringSink", "msStringToCString", "msStringWasMoved", "msToInt32", "msUint64ToString",
 	"msUint64ToStringRadix", "msUnboxDouble", "msUnboxInt32", "msUnboxString", "msWaitFor", "msWaitForReady"
