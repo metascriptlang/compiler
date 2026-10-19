@@ -193,7 +193,7 @@ function walkBody(node: Node, modulePath: string): void {
 	walkChildrenGeneric(node, modulePath);
 }
 
-function moveCellOwnerIntoCore(key: string, demander: string): void {
+function moveTypeInfoOwnerIntoCore(key: string, demander: string): void {
 	if (_imageModules.size == 0 || _imageModules.has(demander)) return;
 	for (const demand of _aliveSet.typeInfos) {
 		if (demand.key != key) continue;
@@ -209,7 +209,7 @@ function moveCellOwnerIntoCore(key: string, demander: string): void {
 function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const key = refArrayCellKey(arrT);
 	if (_aliveSet.typeInfoKeys.has(key)) {
-		moveCellOwnerIntoCore(key, modulePath);
+		moveTypeInfoOwnerIntoCore(key, modulePath);
 		return;
 	}
 	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
@@ -309,14 +309,18 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	if (subject == null) return;
 	if (subject.sym != null && hasFlag(subject.sym, SymbolFlag.ImportC)) return;
 	const key = objectTypeInfoKey(subject, modulePath);
-	if (_aliveSet.typeInfoKeys.has(key)) return;
 	const isPrivate = isPrivateTypeInfoSubject(subject);
+	if (_aliveSet.typeInfoKeys.has(key)) {
+		if (!isPrivate) moveTypeInfoOwnerIntoCore(key, modulePath);
+		return;
+	}
 	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
 	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (!isPrivate && _singleModule == "") {
 		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
 		else owner = opOwner(destroy, modulePath);
+		if (_imageModules.size > 0 && !_imageModules.has(modulePath) && _imageModules.has(owner)) owner = modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
 	let baseKey = "";
