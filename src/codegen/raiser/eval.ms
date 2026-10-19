@@ -1918,8 +1918,7 @@ test "orc: string equality, ordering and switch are by text, not by handle" {
 test "arena: strings built and dropped in a loop leave the string heap bounded" {
 	const vm = evalArenaVM("let s = \"\"; let n = 0; for (let i = 0; i < 100000; i++) { s = `k${i}` + \"x\"; n = n + s.length; } console.log(`${n}`);");
 	assert vm.error == "", vm.error;
-	assert vm.output == "688890
-", vm.output;
+	assert vm.output == "688890\n", vm.output;
 	assert heapStringLive(vm.arrayHeap) < 30, `${heapStringLive(vm.arrayHeap)}`;
 	assert vm.arrayHeap.strings.texts.length < 30, `${vm.arrayHeap.strings.texts.length}`;
 }
@@ -1931,15 +1930,13 @@ const heldByContainer = "const o = { s: `f${1}` }; const a = [`g${2}`];"
 test "orc: a string a container holds survives the register that read it being overwritten" {
 	const vm = evalOrcVM(heldByContainer);
 	assert vm.error == "", vm.error;
-	assert vm.output == "f1g2xyzw
-", vm.output;
+	assert vm.output == "f1g2xyzw\n", vm.output;
 }
 
 test "arena: a string a container holds survives the register that read it being overwritten" {
 	const vm = evalArenaVM(heldByContainer);
 	assert vm.error == "", vm.error;
-	assert vm.output == "f1g2xyzw
-", vm.output;
+	assert vm.output == "f1g2xyzw\n", vm.output;
 }
 
 test "a string a host function stores in the array it builds is held by that array in either gc mode" {
