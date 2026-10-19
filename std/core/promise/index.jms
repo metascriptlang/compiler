@@ -17,7 +17,7 @@ export extern class Promise<T> {
 	static extern reject(error: Error): Promise<never>;
 
 	extern then(callback: (value: T) => void): Promise<void>;
-	extern catch(callback: (error: string) => void): Promise<void> from "#.catch((e) => (#)(typeof e?.message === 'string' ? e.message : e))";
+	extern catch(callback: (error: Error) => void): Promise<void>;
 }
 
 // spawn on js is SCHEDULING, not parallelism — the documented Node-semantics
@@ -29,8 +29,15 @@ export extern class Promise<T> {
 extern function msNewPromise<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> from "new Promise(#)";
 
 @compilerFunc
-export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
-	return msNewPromise<T>(executor);
+export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: string | Error) => void) => void): Promise<T> {
+	return msNewPromise<T>((resolve: (value: T) => void, reject: (reason: Error) => void): void => {
+		executor(resolve, (reason: string | Error): void => { reject(raisedError(reason)); });
+	});
+}
+
+function raisedError(reason: string | Error): Error {
+	if (typeof reason === "string") return new Error(reason);
+	return reason;
 }
 
 extern function msQueueJob(job: () => void): void from "queueMicrotask(#)";

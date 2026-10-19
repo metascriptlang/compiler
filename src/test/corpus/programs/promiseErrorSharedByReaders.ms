@@ -50,7 +50,7 @@ async function handlers(): Promise<void> {
 	try { await thened; } catch (e) { console.log(`input ${e.message}`); }
 
 	const caught = fail(1);
-	await caught.catch((e: string): void => { console.log(`catch ${e}`); });
+	await caught.catch((e: Error): void => { console.log(`catch ${e.message}`); });
 	try { await caught; } catch (e) { console.log(`input ${e.message}`); }
 }
 
@@ -64,7 +64,7 @@ async function readers(): Promise<void> {
 	console.log(`race won ${won}`);
 	await sleepAsync(40);
 
-	await fail(1).catch((e: string): void => { console.log(`caught handler`); });
+	await fail(1).catch((e: Error): void => { console.log(`caught handler`); });
 }
 
 await combinators();

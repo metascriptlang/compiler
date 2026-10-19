@@ -272,8 +272,8 @@ static inline void* name(void* input, msClosure onSettled) { \
 }
 
 /* Typed .catch: on success, propagate input value to output via typed complete.
- * On error, invoke handler (error is always msString in MetaScript), complete output
- * with NULL on handler success or propagate handler's rethrow. */
+ * On error, invoke handler with the Error the input holds (lent: the input keeps its
+ * count), complete output with NULL on handler success or propagate handler's rethrow. */
 #define MS_DEFINE_FUTURE_CATCH(name, fut_type) \
 static inline void name##_cb(void* raw) { \
     msFutureCatchEnv* e = (msFutureCatchEnv*)raw; \
@@ -281,9 +281,8 @@ static inline void name##_cb(void* raw) { \
         void* err = e->input->base.error; \
         void* fn = (void*)e->onRejected.fn; \
         void* env = e->onRejected.env; \
-        msString sval = err ? *(msString*)err : MS_EMPTY_STRING; \
-        if (env) ((void(*)(msString, void*))fn)(sval, env); \
-        else ((void(*)(msString))fn)(sval); \
+        if (env) ((void(*)(void*, void*))fn)(err, env); \
+        else ((void(*)(void*))fn)(err); \
         if (msErr) { \
             msFutureFail(e->output, (void*)msCurrException); \
             msErr = false; msCurrException = NULL; \
@@ -300,7 +299,7 @@ static inline void name##_cb(void* raw) { \
 static inline void* name(void* input, msClosure onRejected) { \
     msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
     msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv)); \
-    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = 3; \
+    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = MS_TYPETAG_PTR; \
     msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
     return output; \
 }

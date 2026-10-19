@@ -133,10 +133,9 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 			return mkTypedCall("msFutureThenTyped", [receiver, cb, makeNumber(tag, loc)], node.nodeType, loc);
 		},
 		"PromiseCatch" => {
-			// Error handler always receives msString (MetaScript errors are strings).
 			const typedFn = futureCatchFnForInner(innerType);
 			if (typedFn != "") return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
-			return mkTypedCall("msFutureCatchTyped", [receiver, cb, makeNumber(3, loc)], node.nodeType, loc);
+			return mkTypedCall("msFutureCatchTyped", [receiver, cb, makeNumber(0, loc)], node.nodeType, loc);
 		},
 		_ => {
 			// PromiseFinally — wildcard is safe: outer dispatch restricts to these three.

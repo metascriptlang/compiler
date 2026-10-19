@@ -11,7 +11,7 @@ export class Promise<T> {
 	@builtin("PromiseThen")
 	extern then(callback: (value: T) => void): Promise<void> from "msFutureThen";
 	@builtin("PromiseCatch")
-	extern catch(callback: (error: string) => void): Promise<void> from "msFutureCatch";
+	extern catch(callback: (error: Error) => void): Promise<void> from "msFutureCatch";
 	@builtin("PromiseFinally")
 	extern finally(callback: () => void): Promise<void> from "msFutureFinally";
 
@@ -38,14 +38,22 @@ extern function msPromiseSettle<T>(promise: Promise<T>, value: T): void from "ms
 extern function msPromiseFail<T>(promise: Promise<T>, reason: Error): void from "msFutureFail";
 
 @compilerFunc
-export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
+export function promiseFromExecutor<T>(executor: (resolve: (value: T) => void, reject: (reason: string | Error) => void) => void): Promise<T> {
 	const promise = msPromisePending<T>();
 	try {
-		executor((value: T): void => { msPromiseSettle(promise, value); }, (reason: Error): void => { msPromiseFail(promise, reason); });
+		executor((value: T): void => { msPromiseSettle(promise, value); }, (reason: string | Error): void => {
+			const error = raisedError(reason);
+			msPromiseFail(promise, error);
+		});
 	} catch (e) {
 		msPromiseFail(promise, e);
 	}
 	return promise;
+}
+
+function raisedError(reason: string | Error): Error {
+	if (typeof reason === "string") return new Error(reason);
+	return reason;
 }
 
 export function promiseFromThenable<S, T>(thenable: S, callThen: (thenable: S, resolve: (value: T) => void, reject: (reason: Error) => void) => void): Promise<T> {
