@@ -33,6 +33,8 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			if (d.argument != null) {
 				const reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
 				emitRet(s, reg);
+			} else if (s.receiverReg >= 0) {
+				emitRet(s, s.receiverReg);
 			} else {
 				const reg = allocReg(s);
 				emitLoadConst(s, reg, raiserNil());

@@ -1992,3 +1992,16 @@ test "arena: appending to a string another holder shares leaves the holder uncha
 	assert vm.error == "", vm.error;
 	assert vm.output == "a1|a1xa1xy|a1xa1x\n", vm.output;
 }
+
+test "orc: a bare return in a constructor still yields the object" {
+	const vm = evalOrcVM("class Early { f: string = 'none'; constructor(v: string, skip: boolean) { if (skip) return; this.f = v; } }"
+		+ " class Base { tag: string = 'b'; constructor(t: string) { if (t == '') return; this.tag = t; } }"
+		+ " class Kid extends Base { k: number = 0; constructor(t: string, skip: boolean) { super(t); if (skip) return; this.k = 2; } }"
+		+ " class Guarded { n: number = 0; constructor(skip: boolean) { try { if (skip) return; this.n = 1; } finally { this.n = this.n + 10; } } }"
+		+ " const a = new Early('x', true); const b = new Early('y', false); const c = new Kid('', true); const d = new Kid('t', false);"
+		+ " const g = new Guarded(true); const h = new Guarded(false);"
+		+ " console.log(`${a.f} ${b.f} ${c.tag}${c.k} ${d.tag}${d.k} ${g.n} ${h.n}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "none y b0 t2 10 11\n", vm.output;
+}
+
