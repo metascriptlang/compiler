@@ -1,14 +1,11 @@
 import { compileToC } from "../helpers";
 
 function bodyOf(code: string, name: string, marker: string): string {
-	for (const line of code.split("
-")) {
+	for (const line of code.split("\n")) {
 		const at = line.indexOf(marker);
 		if (at < 0 || !line.endsWith(" {") || line.indexOf(" " + name + "__") < 0) continue;
-		const start = code.indexOf(line + "
-");
-		return code.slice(start, code.indexOf("
-}", start));
+		const start = code.indexOf(line + "\n");
+		return code.slice(start, code.indexOf("\n}", start));
 	}
 	return "";
 }
