@@ -1579,28 +1579,13 @@ static inline bool msActorPollLocal(void) {
     return didWork;
 }
 
-/* Exit-poll: drain ALL run queues + scan ALL registries (belt-and-suspenders).
- * Called at program exit to flush remaining messages. */
+/* Exit-poll: drain ALL run queues. Called at program exit to flush remaining messages. */
 static inline bool msActorPollAll(void) {
     bool didWork = false;
-    /* Drain run queues first */
     for (int s = 0; s < msSchedulerCount; s++) {
         msActor* a;
         while ((a = msSchedRunPop(&msSchedulers[s])) != NULL) {
             if (!msActorHasFlag(a, MS_ACTOR_MUTED)) {
-                int n = msActorProcess(a, MS_ACTOR_BATCH);
-                if (n > 0) didWork = true;
-            }
-        }
-    }
-    /* Scan registry for stragglers not in run queue */
-    for (int s = 0; s < msSchedulerCount; s++) {
-        msSchedActors* sched = &msSchedulers[s];
-        int cnt2 = atomic_load_explicit(&sched->count, memory_order_acquire);
-        for (int i = 0; i < cnt2; i++) {
-            msActor* a = sched->actors[i];
-            if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
-            if (atomic_load_explicit(&a->hasWork, memory_order_acquire)) {
                 int n = msActorProcess(a, MS_ACTOR_BATCH);
                 if (n > 0) didWork = true;
             }
