@@ -490,78 +490,8 @@ double msCryptoIsHashSupported(msString algorithm) {
 	return info ? 1.0 : 0.0;
 }
 
-/* ===== Decode Helpers ===== */
-
-static int hex_digit(char c) {
-	if (c >= '0' && c <= '9') return c - '0';
-	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-	return -1;
-}
-
-static msString decode_from_hex(const char* hex, int64_t len) {
-	if (len == 0 || (len % 2) != 0) return MS_EMPTY_STRING;
-	int64_t out_len = len / 2;
-	char* buf = (char*)msMemAlloc((size_t)out_len);
-	for (int64_t i = 0; i < out_len; i++) {
-		int hi = hex_digit(hex[i * 2]);
-		int lo = hex_digit(hex[i * 2 + 1]);
-		if (hi < 0 || lo < 0) { free(buf); return MS_EMPTY_STRING; }
-		buf[i] = (char)((hi << 4) | lo);
-	}
-	msString result = msStringNew(buf, out_len);
-	free(buf);
-	return result;
-}
-
-static int base64_val(char c) {
-	if (c >= 'A' && c <= 'Z') return c - 'A';
-	if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-	if (c >= '0' && c <= '9') return c - '0' + 52;
-	if (c == '+') return 62;
-	if (c == '/') return 63;
-	return -1;
-}
-
-static msString decode_from_base64(const char* b64, int64_t len) {
-	if (len == 0 || (len % 4) != 0) return MS_EMPTY_STRING;
-	int64_t out_len = (len / 4) * 3;
-	if (len >= 1 && b64[len - 1] == '=') out_len--;
-	if (len >= 2 && b64[len - 2] == '=') out_len--;
-	char* buf = (char*)msMemAlloc((size_t)out_len);
-	int64_t j = 0;
-	for (int64_t i = 0; i < len; i += 4) {
-		int a = base64_val(b64[i]);
-		int b = base64_val(b64[i + 1]);
-		int c = b64[i + 2] == '=' ? 0 : base64_val(b64[i + 2]);
-		int d = b64[i + 3] == '=' ? 0 : base64_val(b64[i + 3]);
-		if (a < 0 || b < 0 || c < 0 || d < 0) { free(buf); return MS_EMPTY_STRING; }
-		uint32_t triple = ((uint32_t)a << 18) | ((uint32_t)b << 12) | ((uint32_t)c << 6) | (uint32_t)d;
-		if (j < out_len) buf[j++] = (char)((triple >> 16) & 0xff);
-		if (j < out_len) buf[j++] = (char)((triple >> 8) & 0xff);
-		if (j < out_len) buf[j++] = (char)(triple & 0xff);
-	}
-	msString result = msStringNew(buf, out_len);
-	free(buf);
-	return result;
-}
-
-/* ===== Encoding Public API ===== */
-
-msString msCryptoToHex(msString data) {
-	return encode_to_hex((const uint8_t*)msStringToCString(data), (size_t)data.len);
-}
-
-msString msCryptoFromHex(msString hex) {
-	return decode_from_hex(msStringToCString(hex), hex.len);
-}
-
 msString msCryptoToBase64(msString data) {
 	return encode_to_base64((const uint8_t*)msStringToCString(data), (size_t)data.len);
-}
-
-msString msCryptoFromBase64(msString b64) {
-	return decode_from_base64(msStringToCString(b64), b64.len);
 }
 
 /* ===== PBKDF2 (RFC 8018 — manual implementation using MD HMAC) ===== */

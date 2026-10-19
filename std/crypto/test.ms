@@ -1,7 +1,41 @@
 // Crypto — Comprehensive Test Suite
 
 import { sha256, sha512, sha384, sha1, md5, hash, hmac, randomBytes, randomInt, randomUUID,
-	timingSafeEqual, createHash, createHmac, isHashSupported, init } from "std/crypto";
+	timingSafeEqual, createHash, createHmac, isHashSupported, init,
+	toHex, fromHex, toBase64, fromBase64 } from "std/crypto";
+
+test "crypto codecs preserve raw binary strings" {
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 256; i++) bytes.push(i as uint8);
+	const binary = bytes.asString();
+	assert fromHex(toHex(binary)) == binary;
+	assert fromBase64(toBase64(binary)) == binary;
+	assert toHex(fromBase64("/w==")) == "ff";
+	assert toHex(fromHex("AaFf00")) == "aaff00";
+}
+
+test "crypto base64 encodes all tail lengths and UTF-8" {
+	const plain = ["", "f", "fo", "foo", "foob", "fooba", "foobar", "hé😀"];
+	const encoded = [
+		"", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy", "aMOp8J+YgA==",
+	];
+	for (let i = 0; i < plain.length; i++) {
+		assert toBase64(plain[i]) == encoded[i];
+		assert fromBase64(encoded[i]) == plain[i];
+	}
+}
+
+test "crypto codecs retain malformed input results" {
+	for (const text of ["", "0", "000", "gg", "00gg", "00 0", "\0f", "é"]) {
+		assert fromHex(text) == "";
+	}
+	for (const text of ["", "Zg", " Zg==", "Zg==\n", "====", "_w==", "AAA?", "AA\0A"]) {
+		assert fromBase64(text) == "";
+	}
+	assert toHex(fromBase64("AB==")) == "00";
+	assert toHex(fromBase64("AA=A")) == "0000";
+	assert toHex(fromBase64("AA==AAAA")) == "000000000000";
+}
 
 // ===== Known Test Vectors =====
 

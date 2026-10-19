@@ -146,10 +146,7 @@ double msCryptoIsHashSupported(msString algorithm);
 
 /* ===== Encoding ===== */
 
-msString msCryptoToHex(msString data);
-msString msCryptoFromHex(msString hex);
 msString msCryptoToBase64(msString data);
-msString msCryptoFromBase64(msString b64);
 
 /* ===== Key Derivation ===== */
 

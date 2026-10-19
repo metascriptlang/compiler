@@ -76,12 +76,6 @@ extern function msCryptoHmacFreeHandle(ctx: int64): void;
 // Utility
 extern function msCryptoIsHashSupported(algorithm: string): boolean;
 
-// Encoding
-extern function msCryptoToHex(data: string): string;
-extern function msCryptoFromHex(hex: string): string;
-extern function msCryptoToBase64(data: string): string;
-extern function msCryptoFromBase64(b64: string): string;
-
 // Key Derivation
 extern function msCryptoPbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): string;
 extern function msCryptoHkdf(algorithm: string, ikm: string, salt: string, info: string, length: int32): string;
@@ -296,10 +290,12 @@ export function isHashSupported(algorithm: string): boolean {
 
 // ===== Encoding =====
 
-export function toHex(data: string): string { return msCryptoToHex(data); }
-export function fromHex(hex: string): string { return msCryptoFromHex(hex); }
-export function toBase64(data: string): string { return msCryptoToBase64(data); }
-export function fromBase64(b64: string): string { return msCryptoFromBase64(b64); }
+import { encodeHex, decodeHex, encodeBase64, decodeBase64 } from "./encoding";
+
+export function toHex(data: string): string { return encodeHex(data.asBytes()); }
+export function fromHex(hex: string): string { return decodeHex(hex).asString(); }
+export function toBase64(data: string): string { return encodeBase64(data.asBytes()); }
+export function fromBase64(b64: string): string { return decodeBase64(b64).asString(); }
 
 // ===== Key Derivation =====
 
