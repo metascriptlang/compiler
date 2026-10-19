@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type } from "./types";
+import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -409,6 +409,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// narrowing (all union variants handled), the residual type is never.
 	// `return x` where `x: never` must be valid regardless of the return type.
 	if (source.kind == TypeKind.Never) return true;
+	if (target.kind == TypeKind.NonPrimitive) return isNonPrimitiveType(source);
 
 	// `A | null` into `A | B | null`. MUST precede the same-kind arm below: both
 	// sides are Maybe carriers, so kind equality sends them to the struct

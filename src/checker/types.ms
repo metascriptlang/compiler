@@ -2266,6 +2266,26 @@ export function nullType(): Type { return getSysType(TypeKind.Null); }
 // (bootstrap-stable ordinals) — this accessor returns a fresh type per call.
 export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 
+export function nonPrimitiveType(): Type { return getSysType(TypeKind.NonPrimitive); }
+
+export function isNonPrimitiveType(t: Type | null): boolean {
+	const s = skipModifier(t);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Union) {
+		for (const member of s.typeChildren) {
+			if (!isNonPrimitiveType(member)) return false;
+		}
+		return s.typeChildren.length > 0;
+	}
+	return match (s.kind) {
+		TypeKind.Ref | TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Tuple
+			| TypeKind.Function | TypeKind.Set | TypeKind.Result | TypeKind.NonPrimitive => true,
+		TypeKind.GenericInstance => s.typeReturn == null || isNonPrimitiveType(s.typeReturn),
+		TypeKind.Distinct | TypeKind.Alias => isNonPrimitiveType(s.typeReturn),
+		_ => false,
+	};
+}
+
 export function isUnresolvedType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Inferred;
 }
@@ -4689,6 +4709,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		TypeKind.Void => "void",
 		TypeKind.Never => "never",
 		TypeKind.Unknown => "unknown",
+		TypeKind.NonPrimitive => "object",
 		TypeKind.Error => "<error>",
 		TypeKind.None => "<none>",
 		TypeKind.Inferred => "<inferring>",

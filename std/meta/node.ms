@@ -55,6 +55,7 @@ export enum TypeKind {
 	IndexedAccess,
 	KeyOf,
 	NumberLiteral,
+	NonPrimitive,
 }
 
 // ===== Calling Convention =====
