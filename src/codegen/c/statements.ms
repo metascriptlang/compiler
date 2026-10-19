@@ -19,7 +19,7 @@ import { readonlyDataConstBinding } from "../../checker/constFold";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName } from "./names";
 import { isRuntimeProcSym } from "../../transform/util";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo, zeroInit } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo, zeroInit, returnsBorrow } from "./types";
 import { computedGotoSize, isComputedGotoMark } from "../../checker/computedGoto";
 import { forEachChild } from "../../ast/visitor";
 
@@ -86,7 +86,7 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: s
 		// ABI shim — genArg always checks ccgIntroducedPtr (gated on param mutation)
 		if (hasParamTypes && i < nrvoFnType.typeChildren.length) {
 			const nrvoMutBits: int32 = nrvoSym != null ? nrvoSym.mutatedParams : 0;
-			arg = shimCallArg(g, p, arg, nrvoFnType.typeChildren[i], cd.arguments[i], nrvoMutBits, i);
+			arg = shimCallArg(g, p, arg, nrvoFnType.typeChildren[i], cd.arguments[i], nrvoMutBits, i, i == 0 && returnsBorrow(nrvoFnType));
 		}
 		argsStr = argsStr + arg;
 	}

@@ -1625,7 +1625,7 @@ function borrowedRoot(node: Node | null): Node | null {
 	return null;
 }
 
-function passedByValue(t: Type | null): boolean {
+export function passedByValue(t: Type | null): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct) return passedByValue(t.typeReturn);
 	if (isPrimitiveKind(t.kind) || isStructType(t)) return true;
@@ -1641,9 +1641,6 @@ function checkBorrowReturns(ctx: CheckerContext, routine: Node, name: string, bo
 	if (body == null || sig == null || sig.kind != TypeKind.Function || sig.typeReturn == null || sig.typeReturn.kind != TypeKind.Borrow) return;
 	const shown = typeDisplayName(sig.typeReturn);
 	const first = routine.paramSyms != null && routine.paramSyms.length > 0 ? routine.paramSyms[0] : null;
-	if (first != null && passedByValue(first.symbolType)) {
-		addError(ctx, `'${name}' returns ${shown} from its first parameter '${first.name}', which is passed by value: the view would point into the call's copy; take '${first.name}' as a class, array, Span or Borrow<T>`, routine.location.line, routine.location.column);
-	}
 	refuseBorrowedReturns(ctx, body, first, name, shown);
 }
 

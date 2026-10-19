@@ -12,7 +12,6 @@ const rows = "struct Row { a: string; b: int32; }\n";
 const escapes = "escapes its stack frame";
 const notFirst = "is not the first parameter";
 const notPath = "it is not a path expression";
-const byValue = "which is passed by value";
 
 test "borrowReturn: a view into a path rooted at the first parameter compiles" {
 	assert errors(rows + "class Box { items: Row[] = []; at(i: int32): Borrow<Row> { return this.items[i]; } }", "") == 0;
@@ -46,8 +45,8 @@ test "borrowReturn: a module-level variable is not the first parameter" {
 	assert errors(rows + "const g: Row = { a: \"g\", b: 0 };\nfunction pick(rows: Row[]): Borrow<Row> { return g; }", "must borrow from the first parameter") == 1;
 }
 
-test "borrowReturn: a first parameter passed by value would be borrowed from its copy" {
-	assert errors(rows + "function pick(r: Row): Borrow<string> { return r.a; }", byValue) == 1;
-	assert errors("function pick(s: string): Borrow<string> { return s; }", byValue) == 1;
-	assert errors("function pick(n: int32): Borrow<int32> { return n; }", byValue) == 1;
+test "borrowReturn: a first parameter passed by value is lent by pointer" {
+	assert errors(rows + "function pick(r: Row): Borrow<string> { return r.a; }", "") == 0;
+	assert errors("function pick(s: string): Borrow<string> { return s; }", "") == 0;
+	assert errors("function pick(n: int32): Borrow<int32> { return n; }", "") == 0;
 }
