@@ -1211,6 +1211,7 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 	callCheckExpr(ctx, d.tryArg, null);
 	const argType = d.tryArg.nodeType;
 	ctx.inTryExpr = oldInTry;
+	if (refuseNonResultOperand(ctx, d, argType)) return errorType();
 	// tryArg.nodeType = Result<T,E> (set by checkExpr on the CallExpr)
 	// resultDesugar reads tryArg.nodeType for the full Result type.
 	// TryExpr itself evaluates to T (the unwrapped value).
@@ -1233,6 +1234,15 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 		return okT;
 	}
 	return argType;
+}
+
+function refuseNonResultOperand(ctx: CheckerContext, d: TryExprData, argType: Type | null): boolean {
+	if (argType == null || isResult(argType) || isUnresolvedType(argType) || hasGenericParams(argType)) return false;
+	if (argType.kind == TypeKind.Error || argType.kind == TypeKind.Never) return false;
+	if (d.hasCatch && d.tryArg.kind == NodeKind.AwaitExpr) return false;
+	addError(ctx, "'try' needs a Result operand, but this is '" + typeDisplayName(argType) + "', not a Result",
+		d.tryArg.location.line, d.tryArg.location.column);
+	return true;
 }
 
 function checkPropagatedError(ctx: CheckerContext, node: Node, argType: Type | null): void {
