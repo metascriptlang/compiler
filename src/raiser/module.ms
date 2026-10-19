@@ -35,12 +35,19 @@ export interface RaiserModuleRecord {
 	hasTLA: boolean;   // a lazy module whose body has a top-level await
 }
 
+export interface RaiserExport {
+	name: string;
+	funcIdx: int32;
+	arity: int32;
+}
+
 export interface RaiserModule {
 	name: string;
 	functions: RaiserFunction[];
 	entry: number;
 	globalCount: int32;
 	records: RaiserModuleRecord[];
+	exports: RaiserExport[];
 }
 
 // --- Constructors ---
@@ -58,7 +65,7 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
-	return { name, functions, entry, globalCount: 0, records: [] };
+	return { name, functions, entry, globalCount: 0, records: [], exports: [] };
 }
 
 // --- Test Helper ---
