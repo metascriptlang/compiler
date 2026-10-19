@@ -67,3 +67,22 @@ async function resolved(): Promise<int32> { return Promise.resolve(7); }
 `);
 	assert result.errors.length == 0, "valid promise flow must check: " + result.errors.join("\n");
 }
+
+test "a rejection reason follows the throw rule: a string or an Error passes, anything else is refused as throw refuses it" {
+	const valid = checkOnly(DECLS + `
+class CodeError extends Error { code: int32 = 7; }
+const a: Promise<int32> = Promise.reject("boom");
+const b: Promise<int32> = Promise.reject(new CodeError("coded"));
+`);
+	assert valid.errors.length == 0, "string and Error reasons must check: " + valid.errors.join("\n");
+	const refused = checkOnly(DECLS + `
+class Oops { code: int32 = 3; }
+const a: Promise<int32> = Promise.reject(42);
+const b: Promise<int32> = Promise.reject(new Oops());
+function thrown(): void { throw 42; }
+`).errors;
+	const text = refused.join("\n");
+	assert text.contains("only an 'Error' or a 'string' can be thrown, got 'int32'"), text;
+	assert text.contains("only an 'Error' or a 'string' can be thrown, got 'Oops'"), text;
+	assert refused.length == 3, "reject(42), reject(new Oops()) and throw 42, each once: " + text;
+}

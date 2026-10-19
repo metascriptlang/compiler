@@ -849,6 +849,33 @@ export function awaitReturnedThenable(ctx: CheckerContext, value: Node): Node {
 	return awaited;
 }
 
+export function raisedOperand(ctx: CheckerContext, operand: Node): Node | null {
+	callCheckExpr(ctx, operand, null);
+	const argType = operand.nodeType;
+	if (argType == null || argType.kind == TypeKind.Error || isUnresolvedType(argType) || hasGenericParams(argType)) return operand;
+	const errSym = lookupSymbol(ctx.table, "Error");
+	if (errSym == null || errSym.symbolType == null) {
+		addError(ctx, "throw needs the std 'Error' class in scope", operand.location.line, operand.location.column);
+		return null;
+	}
+	const opaque = isUnknownType(argType);
+	if (!opaque && isAssignable(argType, errSym.symbolType)) return operand;
+	if (opaque || !isAssignable(argType, stringType())) {
+		addError(ctx, "only an 'Error' or a 'string' can be thrown, got '" + typeDisplayName(argType) + "'", operand.location.line, operand.location.column);
+		return null;
+	}
+	const loc = operand.location;
+	const callee = createNodeAt(NodeKind.Identifier, { name: "Error" }, loc);
+	ensureShaped(errSym, ctx);
+	markUsedIn(ctx, errSym);
+	callee.resolvedSym = errSym;
+	callee.nodeType = errSym.symbolType;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym).incl(NodeFlag.Sem);
+	const boxed = createNodeAt(NodeKind.NewExpr, { newCallee: callee, newArguments: [operand] }, loc);
+	callCheckExpr(ctx, boxed, null);
+	return boxed;
+}
+
 const PROMISE_COMBINATORS = ["all", "race", "any", "allSettled"];
 
 function promiseStaticOf(ctx: CheckerContext, callee: Node): string {
@@ -868,6 +895,12 @@ function adoptPromiseInputs(ctx: CheckerContext, node: Node, expected: Type | nu
 	const name = promiseStaticOf(ctx, d.callee);
 	if (name == "" || d.arguments.length != 1 || takesContext(d.arguments[0])) return expected;
 	const arg = d.arguments[0];
+	if (name == "reject") {
+		const raised = raisedOperand(ctx, arg);
+		if (raised != null) d.arguments[0] = raised;
+		else arg.nodeType = errorType();
+		return expected;
+	}
 	if (name == "resolve") {
 		callCheckExpr(ctx, arg, expected != null && isAwaitable(expected) ? awaitedType(expected) : null);
 		const adoption = thenableAdoption(ctx, arg, "The value 'Promise.resolve' takes");
