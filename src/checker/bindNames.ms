@@ -297,7 +297,7 @@ export function metaIntrinsicOf(ctx: CheckerContext, bound: Map<Node, Symbol | n
 	const sym = bound.get(callee);
 	if (sym != null) return sym.builtinKind;
 	if (callee.kind != NodeKind.Identifier) return "";
-	return macroPreludeKind(ctx.exportRegistry, (callee.data as IdentifierData).name);
+	return macroPreludeKind(ctx, (callee.data as IdentifierData).name);
 }
 
 export function bindMetaBodyNames(ctx: CheckerContext, definer: string, params: string[], body: Node): Map<Node, Symbol | null> {

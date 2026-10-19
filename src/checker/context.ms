@@ -69,11 +69,18 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 	return null as unknown as ModuleExports;
 }
 
-export function macroPreludeKind(registry: ExportRegistry | null, name: string): string {
-	if (registry == null) return "";
-	for (const mod of registry.entries) {
-		for (const e of mod.symbols) {
-			if (e.name == name && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym.builtinKind;
+export function macroPreludeKind(ctx: CheckerContext, name: string): string {
+	if (ctx.exportRegistry != null) {
+		for (const mod of ctx.exportRegistry.entries) {
+			for (const e of mod.symbols) {
+				if (e.name == name && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym.builtinKind;
+			}
+		}
+	}
+	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
+	for (const members of prelude.preludeModuleScopes.values()) {
+		for (const s of members) {
+			if (s.name == name && s.builtinKind.startsWith("Meta")) return s.builtinKind;
 		}
 	}
 	return "";

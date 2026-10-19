@@ -348,7 +348,7 @@ export function markNamesUsed(ctx: CheckerContext, node: Node | null): void {
 		const cd = node.data as CallExprData;
 		const calleeName = cd.callee.kind == NodeKind.Identifier ? (cd.callee.data as IdentifierData).name : "";
 		const callee = calleeName != "" ? lookupSymbol(ctx.table, calleeName) : null;
-		const intrinsic = callee != null ? callee.builtinKind : calleeName != "" ? macroPreludeKind(ctx.exportRegistry, calleeName) : "";
+		const intrinsic = callee != null ? callee.builtinKind : calleeName != "" ? macroPreludeKind(ctx, calleeName) : "";
 		if (intrinsic == "MetaBindSym"
 				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			name = (cd.arguments[0].data as StringLiteralData).value;
