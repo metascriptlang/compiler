@@ -507,6 +507,44 @@ cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
 
 GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
 KNOWN_LOCAL="${GATE_KNOWN_LOCAL:-$GATES_DIR/known-red.local.json}"
+
+known_of() {
+  local f
+  for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r --arg l "$1" '.[$l] // {} | keys[]' "$f"
+  done | tr -d '\r' | sort -u
+}
+
+flaky_ids() {
+  local f
+  for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r '.flaky // {} | keys[]' "$f"
+  done | tr -d '\r' | sort -u
+}
+
+known_file_of() {
+  if [ -f "$KNOWN_LOCAL" ] && jq -e --arg l "$1" --arg n "$2" '.[$l][$n] != null' "$KNOWN_LOCAL" >/dev/null 2>&1; then
+    echo "$KNOWN_LOCAL"
+  else
+    echo "src/test/known-red.json"
+  fi
+}
+
+known_local_self_test() (
+  local d bad=0
+  d=$(mktemp -d) || return 1
+  KNOWN="$d/shared.json" KNOWN_LOCAL="$d/local.json"
+  printf '{"corpus":{"a [c]":{"since":"x","note":"n"}},"flaky":{"f":{"since":"x","note":"n"}}}\n' >"$KNOWN"
+  [ "$(known_of corpus | paste -sd, -)" = "a [c]" ] || { printf 'FAIL known local: a missing local file changed the shared set\n'; bad=1; }
+  printf '{"corpus":{"b [c]":{"since":"y","note":"host"}},"flaky":{"g":{"since":"y","note":"host"}}}\n' >"$KNOWN_LOCAL"
+  [ "$(known_of corpus | paste -sd, -)" = "a [c],b [c]" ] || { printf 'FAIL known local: the local reds are not read beside the shared ones\n'; bad=1; }
+  [ "$(flaky_ids | paste -sd, -)" = "f,g" ] || { printf 'FAIL known local: the local flaky ids are not read\n'; bad=1; }
+  [ "$(known_file_of corpus 'b [c]')" = "$KNOWN_LOCAL" ] || { printf 'FAIL known local: a local red is not named by its file\n'; bad=1; }
+  [ "$(known_file_of corpus 'a [c]')" = "src/test/known-red.json" ] || { printf 'FAIL known local: a shared red is named by the local file\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 QUEUE_POLL=2
 
 queue_write() { printf '%s %s %s\n' "$MY_TICKET" "$1" "$(basename "$TOP")" >"$GATES_DIR/.w.$$" && mv -f "$GATES_DIR/.w.$$" "$GATES_DIR/$$"; }
@@ -1851,43 +1889,6 @@ run_test_lane() {
   done <<<"$jobs"
   return $rc
 }
-
-known_of() {
-  local f
-  for f in "$KNOWN" "$KNOWN_LOCAL"; do
-    [ -f "$f" ] && jq -r --arg l "$1" '.[$l] // {} | keys[]' "$f"
-  done | tr -d '\r' | sort -u
-}
-
-flaky_ids() {
-  local f
-  for f in "$KNOWN" "$KNOWN_LOCAL"; do
-    [ -f "$f" ] && jq -r '.flaky // {} | keys[]' "$f"
-  done | tr -d '\r' | sort -u
-}
-
-known_file_of() {
-  if [ -f "$KNOWN_LOCAL" ] && jq -e --arg l "$1" --arg n "$2" '.[$l][$n] != null' "$KNOWN_LOCAL" >/dev/null 2>&1; then
-    echo "$KNOWN_LOCAL"
-  else
-    echo "src/test/known-red.json"
-  fi
-}
-
-known_local_self_test() (
-  local d bad=0
-  d=$(mktemp -d) || return 1
-  KNOWN="$d/shared.json" KNOWN_LOCAL="$d/local.json"
-  printf '{"corpus":{"a [c]":{"since":"x","note":"n"}},"flaky":{"f":{"since":"x","note":"n"}}}\n' >"$KNOWN"
-  [ "$(known_of corpus | paste -sd, -)" = "a [c]" ] || { printf 'FAIL known local: a missing local file changed the shared set\n'; bad=1; }
-  printf '{"corpus":{"b [c]":{"since":"y","note":"host"}},"flaky":{"g":{"since":"y","note":"host"}}}\n' >"$KNOWN_LOCAL"
-  [ "$(known_of corpus | paste -sd, -)" = "a [c],b [c]" ] || { printf 'FAIL known local: the local reds are not read beside the shared ones\n'; bad=1; }
-  [ "$(flaky_ids | paste -sd, -)" = "f,g" ] || { printf 'FAIL known local: the local flaky ids are not read\n'; bad=1; }
-  [ "$(known_file_of corpus 'b [c]')" = "$KNOWN_LOCAL" ] || { printf 'FAIL known local: a local red is not named by its file\n'; bad=1; }
-  [ "$(known_file_of corpus 'a [c]')" = "src/test/known-red.json" ] || { printf 'FAIL known local: a shared red is named by the local file\n'; bad=1; }
-  rm -rf "$d"
-  return $bad
-)
 
 split_flaky() {
   awk -v want="$1" '
