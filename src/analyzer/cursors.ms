@@ -14,7 +14,7 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind, Symbol, Type,
+	Node, NodeKind, Symbol, Type, TypeKind,
 	VariableDeclData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
@@ -30,7 +30,7 @@ import { forEachChild } from "../ast/visitor";
 import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
-import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
+import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer, receiverOf } from "../checker/varPartitions";
 
 // ===== VarFlag (per-variable analysis flags) =====
 
@@ -52,10 +52,34 @@ function getIdentSym(node: Node): Symbol | null {
 	return null;
 }
 
+function lentSource(call: Node): Node | null {
+	const args = (call.data as CallExprData).arguments;
+	const recv = receiverOf(call);
+	return recv != null ? recv : (args.length > 0 ? args[0] : null);
+}
+
+function isLentCall(node: Node): boolean {
+	return node.kind == NodeKind.CallExpr && node.nodeType != null && node.nodeType.kind == TypeKind.Borrow;
+}
+
+let lentTemps: Symbol[] = [];
+let lentInits: Node[] = [];
+
+function lentTempInit(sym: Symbol | null): Node | null {
+	for (let i = 0; i < lentTemps.length; i += 1) {
+		if (lentTemps[i] == sym) return lentInits[i];
+	}
+	return null;
+}
+
 function allRoots(node: Node, result: Symbol[]): void {
 	if (node == null) return;
 	match (node.kind) {
-		NodeKind.Identifier => { if (node.resolvedSym != null) result.push(node.resolvedSym); },
+		NodeKind.Identifier => {
+			const lent = lentTempInit(node.resolvedSym);
+			if (lent != null) allRoots(lent, result);
+			else if (node.resolvedSym != null) result.push(node.resolvedSym);
+		},
 		NodeKind.MemberExpr => allRoots((node.data as MemberExprData).object, result),
 		NodeKind.ArrayAccess => allRoots((node.data as ArrayAccessData).array, result),
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => allRoots((node.data as { expr: Node }).expr, result),
@@ -71,7 +95,10 @@ function allRoots(node: Node, result: Symbol[]): void {
 		NodeKind.SpreadExpr => allRoots((node.data as SpreadExprData).spreadArg, result),
 		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { allRoots(a, result); } },
 		NodeKind.CallExpr => {
-			if (containsPointer(node.nodeType, 0)) {
+			if (isLentCall(node)) {
+				const first = lentSource(node);
+				if (first != null) allRoots(first, result);
+			} else if (containsPointer(node.nodeType, 0)) {
 				for (const a of (node.data as CallExprData).arguments) { allRoots(a, result); }
 			}
 		},
@@ -118,6 +145,11 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 
 		// Identifier: just a dependency (connect), unless in constructor context
 		NodeKind.Identifier => {
+			const lent = lentTempInit(src.resolvedSym);
+			if (lent != null) {
+				destMightOwn(p, destIdx, lent);
+				return;
+			}
 			const srcId = variableId(p, src.resolvedSym);
 			if (srcId < 0) {
 				// Unknown variable (module-level, imported) — unsafe to alias
@@ -169,7 +201,9 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 
 		// Calls: return value is constructed → dest owns data
 		NodeKind.CallExpr | NodeKind.NewExpr => {
-			p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+			const first = isLentCall(src) ? lentSource(src) : null;
+			if (first != null) destMightOwn(p, destIdx, first);
+			else p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 		},
 
 		// Move: explicit ownership transfer
@@ -208,6 +242,10 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			liveRanges(p, d.initializer);
+			if (d.initializer != null && node.resolvedSym != null && isLentCall(d.initializer)) {
+				lentTemps.push(node.resolvedSym);
+				lentInits.push(d.initializer);
+			}
 			// A global is never a cursor candidate: the module owns it for the whole program.
 			if (node.resolvedSym != null && !hasFlag(node.resolvedSym, SymbolFlag.Global)) registerVariable(p, node.resolvedSym, false);
 			// Declared in loop body → effectively reassigned each iteration
@@ -670,6 +708,8 @@ export function inferCursors(body: Node): void {
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 
 	const p = createPartitions();
+	lentTemps = [];
+	lentInits = [];
 
 	// Pass 1: compute live ranges and register variables
 	liveRanges(p, body);

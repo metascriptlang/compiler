@@ -2333,6 +2333,11 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 
 	setNeedsTryAll(dctx);
 
+	if (d.argument != null && d.argument.nodeType != null && d.argument.nodeType.kind == TypeKind.Borrow) {
+		d.argument = processNode(d.argument, dctx, DrcMode.Normal);
+		return stmt;
+	}
+
 	if (d.argument != null) {
 		// Capture the ORIGINAL argument shape before processNode can rewrite it.
 		// processNode(Consumed) on an identifier may return a freshly-created
