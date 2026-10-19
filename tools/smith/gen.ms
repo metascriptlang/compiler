@@ -7173,8 +7173,8 @@ class Gen {
 		if (!this.reserve(8 as int64)) { return ""; }
 		const X = this.interKit(t);
 		const T = tyName(t);
-		const first = this.entName("i");
-		const second = this.entName("i");
+		const first = this.entName("ix");
+		const second = this.entName("ix");
 		const form = this.rng.below(4);
 		let text = "";
 		if (form == 0) {
@@ -7198,7 +7198,8 @@ class Gen {
 		}
 		const probe = this.expr(t, 0);
 		const seen = this.newLocal(t);
-		return text + indent + "let " + seen + ": " + T + " = ixAt" + X + "(" + second + ", " + probe + ");\n";
+		const held = form == 1 ? second + "[0]" : second;
+		return text + indent + "let " + seen + ": " + T + " = ixAt" + X + "(" + held + ", " + probe + ");\n";
 	}
 
 	condKit(t: Ty): string {
@@ -12607,6 +12608,21 @@ test "the enum family reaches intersection and conditional types and a zero weig
 	}
 	const off = textOver(withWeights("fams=enum types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.enum.inter=0 w.enum.cond=0"), 60);
 	assert !off.contains("IxA") && !off.contains("CdIs");
+}
+
+test "an intersection local takes no loop index name and ixAt reads one element, not the array" {
+	const on = textOver(withWeights("fams=enum types=int32,uint8 stmts=8 w.stmt.fam=80 w.enum.inter=40"), 60);
+	const lines = on.split("\n");
+	let arrays = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const t = lines[i].trim();
+		assert !(t.startsWith("const i") && t.substring(7, 8) >= "0" && t.substring(7, 8) <= "9");
+		if (t.startsWith("const ix") && t.contains("[] = [") && i + 2 < lines.length) {
+			arrays++;
+			assert lines[i + 2].contains("(" + t.substring(6, t.indexOf(":")) + "[0], ");
+		}
+	}
+	assert arrays > 0;
 }
 
 test "the generic family reaches inferred calls and bounded type parameters and a zero weight removes them" {
