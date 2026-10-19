@@ -492,6 +492,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		sinkParams = sym.symbolType.typeChildren;
 	}
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
+	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
 
 	// Actor proxy call without a park = SEND-class handoff: the caller never
 	// suspends on a reply, so a plain-ref arg must transfer ownership into the
@@ -509,7 +510,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if (sinksAll || (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink)) {
+		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink)) {
 			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
@@ -829,7 +830,7 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const marks: Node[] = [];
 	const argMode = isCtorRoutine(node.resolvedSym) ? DrcMode.SinkArg : DrcMode.Normal;
 	for (let i = 0; i < nd.newArguments.length; i += 1) {
-		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, argMode);
+		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, isRestArg(node.resolvedSym, i, nd.newArguments.length) ? DrcMode.Normal : argMode);
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(nd.newArguments, marks, dctx);
@@ -1656,6 +1657,14 @@ function isCtorRoutine(sym: Symbol | null): boolean {
 	return sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl;
 }
 
+// A rest parameter is never sunk, whatever routine takes it: the caller packs the trailing
+// arguments into the call's last argument, lends the pack and destroys it.
+function isRestArg(sym: Symbol | null, argIdx: int32, argCount: int32): boolean {
+	if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return false;
+	const params = sym.symbolType.typeChildren;
+	return argIdx == argCount - 1 && params.length > 0 && params[params.length - 1] != null && params[params.length - 1].kind == TypeKind.Varargs;
+}
+
 // The whole-program raise inference runs after this walk, so a constructor call is assumed to raise.
 function newRunsConstructor(node: Node): boolean {
 	return node.kind == NodeKind.NewExpr && isCtorRoutine(node.resolvedSym);
@@ -1772,7 +1781,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 			// Params are borrows registered as cursors: the caller owns the value and a
 			// store inside the callee copies at the assignment point. A constructor's
 			// parameters from `ownedFrom` on are owned: its callers sink them.
-			registerVar(dctx, pRcInfo, ownedFrom < 0 || pi < ownedFrom, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
+			registerVar(dctx, pRcInfo, ownedFrom < 0 || pi < ownedFrom || paramTypes[pi].kind == TypeKind.Varargs, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 		}
 	}
 }
