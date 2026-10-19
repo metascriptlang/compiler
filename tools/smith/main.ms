@@ -6,6 +6,7 @@ import { generateProject } from "./proj";
 import { rerunBundle, runSeeds } from "./drive";
 import { interesting, reduceInput } from "./reduce";
 import { coverSeeds } from "./cov";
+import { caseFor, runDiag, runPlanted } from "./diag";
 
 function usage(): int32 {
 	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt|san|model|meta] [--swarm] [--out=<new or empty dir>]");
@@ -15,6 +16,8 @@ function usage(): int32 {
 	console.log("       msc run tools/smith/main.ms rerun <bundleDir>");
 	console.log("       msc run tools/smith/main.ms reduce <bundleDir|program.ms> [--identity=<file>] [--jobs=4] [--cap=2700]");
 	console.log("       msc run tools/smith/main.ms interesting <identityFile> <program.ms>");
+	console.log("       msc run tools/smith/main.ms diag <firstSeed> <count> [--plant]");
+	console.log("       msc run tools/smith/main.ms diag show <seed>");
 	return 2;
 }
 
@@ -40,6 +43,7 @@ function main(): int32 {
 	const positional: string[] = [];
 	let overlayText = "";
 	let swarmed = false;
+	let diagPlant = false;
 	let san = false;
 	let identityPath = "";
 	let covMsc = "";
@@ -66,6 +70,8 @@ function main(): int32 {
 				return 2;
 			}
 			if (a.startsWith("--jobs=")) { jobs = n.value > 4 ? 4 : n.value; } else { cap = n.value; }
+		} else if (a == "--plant") {
+			diagPlant = true;
 		} else if (a == "--swarm") {
 			swarmed = true;
 		} else if (a == "--san") {
@@ -83,6 +89,10 @@ function main(): int32 {
 		return 2;
 	}
 	const f = fr.value;
+	if (diagPlant && (positional.length == 0 || positional[0] != "diag")) {
+		console.log("smith: --plant without a value belongs to diag; the generator takes --plant=<kind>");
+		return 2;
+	}
 	if (positional.length == 2 && positional[0] == "gen") {
 		const seed = seedOf(positional[1]);
 		if (!seed.ok) {
@@ -156,6 +166,32 @@ function main(): int32 {
 			return 2;
 		}
 		return rerunBundle(positional[1]);
+	}
+	if (positional.length == 3 && positional[0] == "diag" && positional[1] == "show") {
+		const seed = seedOf(positional[2]);
+		if (!seed.ok) {
+			console.log("smith: " + seed.error);
+			return 2;
+		}
+		const c = caseFor(seed.value);
+		console.log("kind " + c.kind + " variant " + c.variant + " line " + String(c.line) + " col " + String(c.col) + " token '" + c.token + "'");
+		console.log("expected: " + (c.message == "" ? "clean" : c.message));
+		console.log("--- mutant");
+		console.log(c.mutant.slice(c.mutant.indexOf("// diag "), c.mutant.length));
+		return 0;
+	}
+	if (positional.length == 3 && positional[0] == "diag") {
+		const first = seedOf(positional[1]);
+		const n = count(positional[2], "count");
+		if (!first.ok || !n.ok || n.value < 1) {
+			console.log("smith: diag takes a first seed and a count of at least 1");
+			return 2;
+		}
+		if (overlayText != "" || swarmed || san) {
+			console.log("smith: diag builds on the default program; drop --features/--plant=/--swarm/--san");
+			return 2;
+		}
+		return diagPlant ? runPlanted(first.value, n.value) : runDiag(first.value, n.value);
 	}
 	if (positional.length == 2 && positional[0] == "reduce") { return reduceInput(cwd().replaceAll("\\", "/"), positional[1], identityPath, jobs, cap); }
 	if (positional.length == 3 && positional[0] == "interesting") { return interesting(positional[1], positional[2]); }
