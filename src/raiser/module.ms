@@ -1,7 +1,7 @@
 // Raiser VM — Module and Function structures
 
 import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx, packInstruction } from "./bytecode";
-import { RaiserValue, RaiserClassType, raiserInt } from "./value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, constStringText } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 
 // --- Function ---
@@ -13,6 +13,7 @@ export interface RaiserFunction {
 	lines: int32[];       // source line per instruction, 0 = unknown
 	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
+	names: string[];      // constants[i] read as text, "" for a non-string; LoadField and StoreField compare it on every access
 	arity: number;
 	localsCount: number;
 	maxRegs: number;
@@ -54,7 +55,9 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 		lines.push(inst.line as int32);
 		fieldCache.push(-1);
 	}
-	return { name, code, packed, lines, fieldCache, constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
+	const names: string[] = [];
+	for (const c of constants) names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
+	return { name, code, packed, lines, fieldCache, constants, names, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {

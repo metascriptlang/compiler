@@ -2406,8 +2406,7 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 	// MIC: try cached index first
 	let idx = func.fieldCache[pc];
 	if (idx >= 0 && idx < fields.length) {
-		const nameVal = getFuncConst(func, ic);
-		if (fields[idx].name == constStringText(nameVal)) {
+		if (fields[idx].name == func.names[ic]) {
 			// Cache hit — O(1) access
 			setReg(vm, vm.baseReg + ia, fields[idx].value);
 			return;
@@ -2415,8 +2414,7 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 	}
 
 	// Cache miss — linear scan, then update cache
-	const nameVal = getFuncConst(func, ic);
-	const fieldName = constStringText(nameVal);
+	const fieldName = func.names[ic];
 	let fi = 0;
 	while (fi < fields.length) {
 		if (fields[fi].name == fieldName) {
@@ -2448,8 +2446,7 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 	// MIC: try cached index first
 	let idx = func.fieldCache[pc];
 	if (idx >= 0 && idx < fields.length) {
-		const nameVal = getFuncConst(func, ib);
-		if (fields[idx].name == constStringText(nameVal)) {
+		if (fields[idx].name == func.names[ib]) {
 			// Cache hit — O(1) update
 			vmIncref(vm, val);
 			vmDecref(vm, fields[idx].value);
@@ -2459,8 +2456,7 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 	}
 
 	// Cache miss — linear scan, then update cache
-	const nameVal = getFuncConst(func, ib);
-	const fieldName = constStringText(nameVal);
+	const fieldName = func.names[ib];
 	let fi = 0;
 	while (fi < fields.length) {
 		if (fields[fi].name == fieldName) {
