@@ -23,6 +23,7 @@ export interface InitTracker {
 	currentBlock: number;      // scope depth counter
 	leftPartOfAsgn: number;    // >0 when processing LHS of assignment
 	assignTarget: Node | null; // the identifier an `=` or `out` writes; its own check is not a read
+	definiteTarget: Node | null; // the left operand of `=`, `&&=`, `||=`, `??=`: only it reads its declared type, a receiver or compound target reads the flow-narrowed one
 	argIdents: Node[];         // bare identifiers passed as call arguments: whether the callee takes them `out` is known only after resolution
 	pendingReads: Node[];      // those of argIdents read while unassigned, settled when the call resolves
 	declScopes: string[];      // parallel with declBlocks: var name at declaration
@@ -38,6 +39,7 @@ export function createInitTracker(): InitTracker {
 		currentBlock: 0,
 		leftPartOfAsgn: 0,
 		assignTarget: null,
+		definiteTarget: null,
 		argIdents: [],
 		pendingReads: [],
 		declScopes: [],
