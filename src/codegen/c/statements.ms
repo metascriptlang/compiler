@@ -11,7 +11,7 @@ import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, lookupLocalName, setLocalSymName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError, isIndirectRef,
+	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError, isIndirectRef, raiseTarget,
 } from "./context";
 import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit, cBoolLiteral } from "./literals";
@@ -207,14 +207,6 @@ export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: C
 		};
 	}
 	return result;
-}
-
-function raiseTarget(p: CProc): string {
-	if (p.nestedTryStmts.length == 0) {
-		p.beforeRetNeeded = true;
-		return "BeforeRet_";
-	}
-	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
 }
 
 // Reference fixupCall/raiseExit parity: after a call that can raise, transfer to

@@ -1642,6 +1642,11 @@ function callCanThrow(callExpr: Node): boolean {
 	return !hasFlag(sym, SymbolFlag.ImportC);
 }
 
+// The whole-program raise inference runs after this walk, so a constructor call is assumed to raise.
+function newRunsConstructor(node: Node): boolean {
+	return node.kind == NodeKind.NewExpr && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ClassInit);
+}
+
 function setNeedsTryIfRaises(node: Node, dctx: DrcContext): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.FunctionDecl
@@ -1650,7 +1655,7 @@ function setNeedsTryIfRaises(node: Node, dctx: DrcContext): void {
 		|| node.kind == NodeKind.ClassDecl
 		|| node.kind == NodeKind.ActorDecl
 		|| node.kind == NodeKind.TestDecl) return;
-	if (node.kind == NodeKind.CallExpr && callCanThrow(node)) {
+	if ((node.kind == NodeKind.CallExpr && callCanThrow(node)) || newRunsConstructor(node)) {
 		setNeedsTryAll(dctx);
 		return;
 	}

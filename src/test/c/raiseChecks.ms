@@ -255,3 +255,36 @@ test "raiseChecks: under manual memory a closure called where it is written keep
 	assert result.ok, result.error;
 	assert checksIn(result.value, "useBareRaises") == 1;
 }
+
+const NEW_SRC = `
+class Quiet { v: int32; constructor(v: int32) { this.v = v; } }
+class Loud { v: int32; constructor(v: int32) { if (v > 5) throw new Error("big"); this.v = v; } }
+function makeQuiet(n: int32): Quiet { return new Quiet(n); }
+function useQuiet(n: int32): int32 {
+	const q = makeQuiet(n);
+	return q.v + 1;
+}
+function makeLoud(n: int32): Loud {
+	const l = new Loud(n);
+	return l;
+}
+function useLoud(n: int32): int32 {
+	const l = makeLoud(n);
+	return l.v + 1;
+}
+console.log(String(useQuiet(1) + useLoud(2)));
+`;
+
+test "raiseChecks: a new of a constructor that cannot raise adds no check to it or its callers" {
+	const result = compileToC(NEW_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useQuiet") == 0;
+	assert !functionBody(result.value, "makeQuiet").contains("msErr");
+}
+
+test "raiseChecks: a new of a constructor that raises frees the half-built object before it leaves" {
+	const result = compileToC(NEW_SRC);
+	assert result.ok, result.error;
+	assert functionBody(result.value, "makeLoud").contains("if (msErr) { msDecrefCyclic(_new");
+	assert checksIn(result.value, "useLoud") == 1;
+}

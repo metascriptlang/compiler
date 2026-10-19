@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, CallExprData, TryCatchStmtData, ExportDeclData, DecoratedDeclData, MacroInvocationData, ExprStmtData, VariableDeclData, ReturnStmtData, BinaryExprData, ObjectLiteralData, OutExprData, HiddenDerefData, Symbol, SymbolKind, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, CallExprData, NewExprData, TryCatchStmtData, ExportDeclData, DecoratedDeclData, MacroInvocationData, ExprStmtData, VariableDeclData, ReturnStmtData, BinaryExprData, ObjectLiteralData, OutExprData, HiddenDerefData, Symbol, SymbolKind, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -89,12 +89,21 @@ function isDispatched(sym: Symbol): boolean {
 }
 
 function classifyCall(call: Readonly<Node>): CallRaise {
-	const cd = call.data as CallExprData;
-	const sym = calleeTarget(call);
+	return classifyTarget(calleeTarget(call), (call.data as CallExprData).arguments);
+}
+
+// A `new` runs the constructor routine, so it raises as that routine does; one with no routine symbol keeps the check.
+function classifyNew(node: Readonly<Node>): CallRaise {
+	const sym = node.resolvedSym;
+	if (sym == null || !hasFlag(sym, SymbolFlag.ClassInit)) return CallRaise.Can;
+	return classifyTarget(sym, (node.data as NewExprData).newArguments);
+}
+
+function classifyTarget(sym: Symbol | null, args: Readonly<Node[]>): CallRaise {
 	if (sym == null) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Throws)) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.DestroyOp) || hasFlag(sym, SymbolFlag.WasMovedOp)) return CallRaise.Never;
-	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(cd.arguments) ? CallRaise.Can : CallRaise.Never;
+	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(args) ? CallRaise.Can : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.NeverRaises)) return CallRaise.Never;
 	if (sym.symbolKind != SymbolKind.Function) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Async) || hasFlag(sym, SymbolFlag.StateMachine)) return CallRaise.Can;
@@ -108,6 +117,14 @@ function isNestedRoutine(node: Node): boolean {
 		|| node.kind == NodeKind.ActorDecl || node.kind == NodeKind.TestDecl;
 }
 
+function noteVerdict(verdict: CallRaise, callee: Symbol | null, info: RoutineInfo, routines: HashMap<Symbol, RoutineInfo>): void {
+	if (verdict == CallRaise.Can) info.raises = true;
+	else if (verdict == CallRaise.AsBody) {
+		if (routines.has(callee!)) info.callees.push(callee!);
+		else info.raises = true;
+	}
+}
+
 function scanBody(node: Node, caught: boolean, info: RoutineInfo, routines: HashMap<Symbol, RoutineInfo>): void {
 	if (node == null || isNestedRoutine(node)) return;
 	if (node.kind == NodeKind.TryCatchStmt) {
@@ -118,19 +135,14 @@ function scanBody(node: Node, caught: boolean, info: RoutineInfo, routines: Hash
 		return;
 	}
 	if (!caught) {
-		if (node.kind == NodeKind.ThrowStmt || node.kind == NodeKind.NewExpr
-			|| node.kind == NodeKind.AwaitExpr || node.kind == NodeKind.YieldExpr) {
+		if (node.kind == NodeKind.ThrowStmt || node.kind == NodeKind.AwaitExpr || node.kind == NodeKind.YieldExpr) {
 			info.raises = true;
+		} else if (node.kind == NodeKind.NewExpr) {
+			noteVerdict(classifyNew(node), node.resolvedSym, info, routines);
 		} else if (node.kind == NodeKind.MacroInvocation && (node.data as MacroInvocationData).macroName == "emit") {
 			info.raises = true;
 		} else if (node.kind == NodeKind.CallExpr) {
-			const verdict = classifyCall(node);
-			const callee = calleeTarget(node);
-			if (verdict == CallRaise.Can) info.raises = true;
-			else if (verdict == CallRaise.AsBody) {
-				if (routines.has(callee!)) info.callees.push(callee!);
-				else info.raises = true;
-			}
+			noteVerdict(classifyCall(node), calleeTarget(node), info, routines);
 		}
 	}
 	forEachChild(node, (child: Node): void => { scanBody(child, caught, info, routines); });
@@ -209,6 +221,7 @@ export function inferRaises(programs: Node[]): void {
 function holdsRaisingCall(expr: Node): boolean {
 	if (expr == null || isNestedRoutine(expr)) return false;
 	if (expr.kind == NodeKind.CallExpr && callCanRaise(expr)) return true;
+	if (expr.kind == NodeKind.NewExpr && newCanRaise(expr)) return true;
 	let found = false;
 	forEachChild(expr, (child: Node): void => {
 		if (!found && holdsRaisingCall(child)) found = true;
@@ -236,12 +249,18 @@ export function callCanRaise(call: Readonly<Node>): boolean {
 	return verdict == CallRaise.Can;
 }
 
+export function newCanRaise(node: Readonly<Node>): boolean {
+	const verdict = classifyNew(node);
+	if (verdict == CallRaise.AsBody) return !_raisesNothing.has(node.resolvedSym!);
+	return verdict == CallRaise.Can;
+}
+
 // A value the inference never saw keeps the check after a top-level call.
 export function statementCanRaise(value: Readonly<Node>): boolean {
 	if (value == null) return false;
 	if (value.flags.has(NodeFlag.CanRaise)) return true;
 	if (value.flags.has(NodeFlag.CannotRaise)) return false;
-	if (value.kind == NodeKind.CallExpr) return true;
+	if (value.kind == NodeKind.CallExpr || value.kind == NodeKind.NewExpr) return true;
 	if (value.kind != NodeKind.BinaryExpr) return false;
 	const d = value.data as BinaryExprData;
 	return d.operator == "=" && d.right != null && d.right.kind == NodeKind.CallExpr;

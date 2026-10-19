@@ -22,7 +22,8 @@ import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, g
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
-import { useHeader, createCGen, createProc, sec, CSection, readProcStmts } from "./context";
+import { useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
+import { newCanRaise } from "../../checker/raises";
 import { GcMode, dispatchOverridesFor, dispatchEntryFor, CheckerContext } from "../../checker/context";
 import { ctorFormalTypes } from "../../checker/ctorRoutine";
 import { monoBaseName } from "../../monomorphize/registry";
@@ -1388,6 +1389,9 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				initArgs = initArgs + ", " + argSnippet;
 			}
 			emitStmtsLine(p, `${initName}(${initArgs});`);
+			if (!p.suppressRaiseCheck && newCanRaise(node)) {
+				emitStmtsLine(p, `if (msErr) { msDecrefCyclic(${newTmp}); goto ${raiseTarget(p)}; }`);
+			}
 			ctx.results.push(newTmp);
 			return;
 		}
