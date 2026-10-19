@@ -1,5 +1,5 @@
 // @maxrss: 30
-// @stdout: sink-param-ownership 200000 400000 100000 400000 200000 200000 200000
+// @stdout: sink-param-ownership 200000 400000 100000 400000 200000 200000 200000 600000
 struct Slot { text: string; tags: string[]; n: int32 }
 class Box<T> {
 	items: T[] = [];
@@ -36,6 +36,7 @@ let reassignedTotal: number = 0;
 let branched: number = 0;
 let held: number = 0;
 let viaMove: number = 0;
+let kept: number = 0;
 for (let k = 0; k < 200000; k++) {
 	const a = `${k} ${pad}`;
 	store(strings, move a);
@@ -54,5 +55,12 @@ for (let k = 0; k < 200000; k++) {
 	strings.push(move m);
 	strings.items.pop();
 	viaMove += 1;
+	const c = `${k} ${pad}`;
+	store(strings, c);
+	kept += strings.items.pop()!.length > 0 ? 1 : 0;
+	kept += c.length > 0 ? 1 : 0;
+	const d = `${k} ${pad}`;
+	slots.push({ text: d, tags: [d], n: 1 });
+	kept += slots.items.pop()!.text == d ? 1 : 0;
 }
-console.log("sink-param-ownership", stored, slotted, branched, dropped, reassignedTotal, held, viaMove);
+console.log("sink-param-ownership", stored, slotted, branched, dropped, reassignedTotal, held, viaMove, kept);
