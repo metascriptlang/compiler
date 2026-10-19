@@ -1,6 +1,8 @@
 import { compileRaiser, runRaiser, setDiagnosticHook } from "../compiler/compile";
 import { setRecoverableBuild, BUILD_STOPPED } from "../compiler/io";
 import { CliOptions, newCliOptions } from "../compiler/options";
+import { defaultResolveSection } from "../compiler/buildConfig";
+import { BuildSession, createBuildSession } from "../compiler/buildSession";
 import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
 import { RaiserValueKind } from "../raiser/value";
@@ -22,10 +24,11 @@ export interface Evaluation {
 
 export interface Interpreter {
 	opts: CliOptions;
+	session: BuildSession;
 }
 
 export function createInterpreter(): Interpreter {
-	return { opts: newCliOptions() };
+	return { opts: newCliOptions(), session: createBuildSession(true) };
 }
 
 function errorAt(file: string, message: string): Diagnostic {
@@ -40,9 +43,12 @@ export function evalModule(interp: Interpreter, path: string): Result<Evaluation
 	setRecoverableBuild(true);
 	let compiled: RaiserModule | null = null;
 	try {
-		compiled = compileRaiser(path, interp.opts);
+		compiled = compileRaiser(path, interp.opts, defaultResolveSection(), interp.session);
 	} catch (e) {
-		if (e.message != BUILD_STOPPED) diagnostics.push(errorAt(path, `internal: ${e.message}`));
+		if (e.message != BUILD_STOPPED) {
+			diagnostics.push(errorAt(path, `internal: ${e.message}`));
+			interp.session = createBuildSession(true);
+		}
 	}
 	setRecoverableBuild(false);
 	setDiagnosticHook(null);
@@ -117,6 +123,19 @@ test "evalModule reloads an edited import in one interpreter" {
 	assert outputOf(interp, `${dir}/main.ms`) == "14\n";
 	writeFile(`${dir}/config.ms`, `export const size: int32 = 21;\n`);
 	assert outputOf(interp, `${dir}/main.ms`) == "42\n";
+	removeAll(dir);
+}
+
+test "evalModule reloads an edited macro in an imported module" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `import { flag } from "./flags";\nconsole.log(\`\${flag()}\`);\n`);
+	const interp = createInterpreter();
+	writeFile(`${dir}/flags.ms`, `import { Node, NodeKind } from "std/meta";\n`
+		+ `export macro flag(): Node { return { kind: NodeKind.BooleanLiteral, line: 1, column: 1, boolValue: 1 + 1 == 2 }; }\n`);
+	assert outputOf(interp, `${dir}/main.ms`) == "true\n";
+	writeFile(`${dir}/flags.ms`, `import { Node, NodeKind } from "std/meta";\n`
+		+ `export macro flag(): Node { return { kind: NodeKind.BooleanLiteral, line: 1, column: 1, boolValue: 1 + 1 == 3 }; }\n`);
+	assert outputOf(interp, `${dir}/main.ms`) == "false\n";
 	removeAll(dir);
 }
 
