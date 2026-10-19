@@ -8371,7 +8371,7 @@ class Gen {
 		const t = this.pickCoreTy();
 		if (t == Ty.Char || this.wt(W.ExprTernary) == 0) { return ""; }
 		const name = this.entName("z");
-		const boxed = this.rng.chance(50);
+		const boxed = this.rng.chance(50) && !this.metaCtx;
 		const T = tyName(t);
 		const type = boxed ? "OptBox" + tyTitle(t) : "{ f: " + T + "; g: " + T + " }";
 		const first = this.optValue(t, boxed);
@@ -12512,6 +12512,23 @@ test "a comptime routine calls a named function but never reads it as a value (i
 			if (inside && line.contains("putM")) { inRoutine++; }
 			if (inside) { assert !line.contains(") => void = put"); }
 			if (!inside && line.contains(") => void = put")) { outside++; }
+		}
+	}
+	assert inRoutine > 0 && outside > 0;
+}
+
+test "a comptime routine reads optional fields but calls no method (inbox comptime-call-of-a-method-holding-an-arrow-crashes-msc, c4c)" {
+	const f = withWeights("types=int32,float64 fams=meta w.core.stmt=60 w.core.optional=40");
+	let inRoutine = 0;
+	let outside = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		let inside = false;
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			if (line.startsWith("@comptime function ")) { inside = true; continue; }
+			if (inside && line.startsWith("}")) { inside = false; }
+			if (inside && line.contains(": { f: ") && line.contains(" | null = ")) { inRoutine++; }
+			if (inside) { assert !line.contains("new OptBox") && !line.contains("?.get()"); }
+			if (!inside && line.contains("?.get()")) { outside++; }
 		}
 	}
 	assert inRoutine > 0 && outside > 0;
