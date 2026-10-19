@@ -42,7 +42,7 @@ import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineI
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
-import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
+import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
@@ -2501,6 +2501,10 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// or a call to the runtime converter for the return type.
 	if (returnExpected != null && !errSentinel && !engineReturnMarshalsToNode(retType, returnExpected)) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
+		if (returnExpected.kind == TypeKind.Borrow && returnExpected.typeReturn != null
+			&& d.argument.nodeType != null && d.argument.nodeType.kind != TypeKind.Borrow) {
+			d.argument = wrapInConv(d.argument, returnExpected);
+		}
 	}
 	// Re-read the post-fitNode type so converter substitutions
 	// (e.g. `expr` → `toNumber(expr)`) are reflected in downstream checks.
