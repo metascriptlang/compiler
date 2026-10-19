@@ -218,6 +218,28 @@ function writeValue(layout: AccountLayout, bytes: Node, value: Node, offset: int
 	statements.push(createNodeAt(NodeKind.ExprStmt, { expr: write }, bytes.location));
 }
 
+function layoutText(layout: AccountLayout): string {
+	if (layout.kind == "distinct") { return layoutText(layout.children[0]); }
+	if (layout.kind == "struct") {
+		let fields = "";
+		for (let i = 0; i < layout.children.length; i += 1) {
+			fields += (i > 0 ? "," : "") + "[\"" + layout.names[i] + "\"," + layout.offsets[i] + "," + layoutText(layout.children[i]) + "]";
+		}
+		return "{\"k\":\"struct\",\"z\":" + layout.size + ",\"f\":[" + fields + "]}";
+	}
+	if (layout.kind == "array") {
+		return "{\"k\":\"array\",\"z\":" + layout.size + ",\"n\":" + layout.count + ",\"e\":" + layoutText(layout.children[0]) + "}";
+	}
+	let signed = false;
+	if (layout.kind == "enum") { for (const value of layout.values) { if (value < 0) { signed = true; } } }
+	return "{\"k\":\"" + layout.kind + "\",\"z\":" + layout.size + (signed ? ",\"s\":1" : "") + "}";
+}
+
+export macro accountLayoutText(): Node {
+	const type = getTypeArg();
+	return createNodeAt(NodeKind.StringLiteral, { value: layoutText(wireLayout(type)) }, type.location);
+}
+
 export macro accountCodecSize(): Node {
 	const type = getTypeArg();
 	return integer(wireLayout(type).size + 8, type);

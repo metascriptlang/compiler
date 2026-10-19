@@ -1,42 +1,15 @@
-@include("runtime/solana/solana.h");
-@compile("runtime/solana/host.c");
-
 import { Pubkey } from "./pubkey";
 import { ProgramError } from "./error";
 import { ProgramAddress } from "./pda";
+import { msSolDeriveAddress, msSolFindAddress, msSolFindCanonicalAddress, msSolFindCanonicalStaged, msSolFindExpectedAddress, msSolFindExpectedStaged, msSolHashIsStaged, msSolSeedStageInPlace } from "./kernel";
+import { SeedSlice, SignerSeeds } from "./addressTables";
+import { msSolCopy, msSolLoadU64, msSolProgramId, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
 
-extern function msSolProgramId(): uint64;
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolStringAddress(text: string): uint64;
-extern function msSolStringLength(text: string): uint64;
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
-extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
-extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
-extern function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
-extern function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64;
-extern function msSolFindCanonicalAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
-extern function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64;
-extern function msSolSeedStageInPlace(table: uint64, count: uint64, bump: uint64, program: uint64): uint64;
-extern function msSolFindExpectedStaged(table: uint64, used: uint64, expected: uint64): uint64;
-extern function msSolFindCanonicalStaged(table: uint64, used: uint64, expected: uint64): uint64;
-extern function msSolHashIsStaged(table: uint64, used: uint64, bump: uint64, expected: uint64): uint64;
+export { SeedSlice, SignerSeeds } from "./addressTables";
 
 const MAX_SEEDS: uint64 = 16;
 const MAX_SEED_LENGTH: uint64 = 32;
 const NO_BUMP: uint64 = 256;
-
-// A SeedSlice points into the frame that built it: valid while that call runs, never returned.
-export struct SeedSlice {
-	address: uint64;
-	length: uint64;
-}
-
-export struct SignerSeeds {
-	address: uint64;
-	length: uint64;
-}
 
 export struct Signing {
 	table: uint64;
@@ -124,7 +97,13 @@ export function findAt(
 ): Result<ProgramAddress, ProgramError> {
 	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
 	const keyAddress = msSolSpanAddress(found.key.bytes);
-	const code = msSolFindAddress(table, count, program, keyAddress, keyAddress + 32);
+	when (js) {
+		let bump: uint8[1] = [];
+		const code = msSolFindAddress(table, count, program, keyAddress, msSolSpanAddress(bump));
+		found.bump = bump[0];
+	} else {
+		const code = msSolFindAddress(table, count, program, keyAddress, keyAddress + 32);
+	}
 	if (code == 2) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
 	if (code != 0) { return Result.err(ProgramError.invalidSeeds()); }
 	return Result.ok(found);

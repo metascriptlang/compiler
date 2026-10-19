@@ -1,21 +1,20 @@
-@include("runtime/solana/solana.h");
-@compile("runtime/solana/host.c");
-
 import { Pubkey } from "./pubkey";
 import { Bytes } from "./bytes";
+import { msSolCopy, msSolSpanAddress, msSolStoreU16, msSolStoreU32, msSolStoreU64, msSolStoreU8 } from "./memory";
+
 export { Bytes } from "./bytes";
 
-extern function msSolPointer(address: uint64): Ptr<void>;
-extern function msSolStoreU8(address: uint64, value: uint8): void;
-extern function msSolStoreU16(address: uint64, value: uint16): void;
-extern function msSolStoreU32(address: uint64, value: uint32): void;
-extern function msSolStoreU64(address: uint64, value: uint64): void;
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+when (!js) {
+	import { msSolPointer } from "./memory";
+}
 
 export function storePubkey(key: Pubkey, address: uint64): void {
-	const at = msSolPointer(address) as Ptr<Pubkey>;
-	at[] = key;
+	when (js) {
+		msSolCopy(address, msSolSpanAddress(key.bytes), 32);
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		at[] = key;
+	}
 }
 
 function fits(storage: Span<uint8>, at: uint64, width: uint64): boolean {

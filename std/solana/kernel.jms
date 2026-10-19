@@ -1,0 +1,319 @@
+import {
+	msSolHostFaultCodeOf,
+	msSolLoadU64,
+	msSolMemoryAllocate,
+	msSolMemoryClearFault,
+	msSolMemoryFaultText,
+	msSolMemoryKeepOnly,
+	msSolMemoryMap,
+	msSolMemorySetAccounts,
+	msSolMemoryUnmap,
+	msSolSpanAddress,
+} from "./memory";
+import {
+	CONTEXT_SIZE,
+	EMPTY_INPUT_SIZE,
+	HEAP_SIZE,
+	HEAP_START,
+	INPUT_START,
+	MAX_ACCOUNTS,
+	RENT_AT,
+	heapExhausted,
+	heapHolds,
+	parseInput,
+	roundedSize,
+} from "./simulatorContext";
+import {
+	getClock,
+	getRent,
+	getReturnData,
+	log,
+	log64,
+	logAt,
+	logComputeUnits,
+	logData,
+	logPubkey,
+	logTotal,
+	rentReadTotal,
+	resetSimulator,
+	setClock,
+	setReturnData,
+	setSysvarStatus,
+} from "./simulatorLog";
+import { msSolHostCreateProgramAddress, msSolHostCurveValidatePoint, msSolHostTryFindProgramAddress } from "./simulatorCrypto";
+import { holdAccounts, invocationAt, invocationTotal, invokeSigned, resetDispatcher, settle } from "./simulatorInvoke";
+import { invokeMetas } from "./simulatorMetas";
+import {
+	deriveAddress,
+	findAddress,
+	findCanonicalAddress,
+	findCanonicalStaged,
+	findExpectedAddress,
+	findExpectedStaged,
+	hashIsStaged,
+	seedStageInPlace,
+} from "./simulatorSeeds";
+
+export { msSolHostFaultCodeOf } from "./memory";
+
+const COMPUTE_BUDGET: uint64 = 200000;
+
+let entered = false;
+let result: uint64 = 0;
+let position: uint64 = CONTEXT_SIZE;
+let accountCount: uint64 = 0;
+let accountTable: uint64 = 0;
+let instructionData: uint64 = 0;
+
+function waits(name: string): Error {
+	return new Error(`solana kernel: ${name} waits for simulatorInvoke`);
+}
+
+// host.c msSolHostEnter
+function enter(input: uint64): void {
+	resetSimulator();
+	resetDispatcher();
+	msSolMemoryKeepOnly(input);
+	let start = input;
+	if (input == 0) {
+		msSolMemoryMap(INPUT_START, EMPTY_INPUT_SIZE);
+		start = INPUT_START;
+	}
+	msSolMemoryMap(HEAP_START, HEAP_SIZE);
+	msSolMemoryClearFault();
+	result = 0;
+	position = CONTEXT_SIZE;
+	const table = msSolMemoryAllocate(MAX_ACCOUNTS * 8);
+	const parsed = parseInput(start, table);
+	if (msSolHostFaultCodeOf() != 0) { throw new Error("solana kernel: " + msSolMemoryFaultText()); }
+	accountCount = parsed.count;
+	accountTable = table;
+	instructionData = parsed.instructionData;
+	msSolMemorySetAccounts(table, parsed.count, parsed.instructionData, start, parsed.programId);
+	holdAccounts(table, parsed.count);
+	entered = true;
+}
+
+// host.c msSolHostContext
+function ready(): void {
+	if (!entered) { enter(0); }
+}
+
+// host.c msSolHostAlloc
+function allocate(size: uint64): uint64 {
+	ready();
+	const rounded = roundedSize(size);
+	if (!heapHolds(position, rounded)) { throw new Error(heapExhausted(rounded, position)); }
+	const address = HEAP_START + position;
+	position += rounded;
+	return address;
+}
+
+// host.c msSolHostInput
+export function msSolHostInput(size: uint64): uint64 {
+	msSolMemoryUnmap(INPUT_START);
+	msSolMemoryMap(INPUT_START, size);
+	return INPUT_START;
+}
+
+export function msSolHostEnter(input: uint64): void {
+	enter(input);
+}
+
+// host.c msSolHostLeave
+export function msSolHostLeave(): void {
+	if (result != 0) { return; }
+	settle();
+}
+
+// host.c msSolHostResult
+export function msSolHostResult(): uint64 {
+	return result;
+}
+
+// host.c msSolHostFaultMessage
+export function msSolHostFaultMessage(): string {
+	return msSolMemoryFaultText();
+}
+
+// host.c msSolHostLogTotal and msSolHostLogAt
+export function msSolHostLogTotal(): uint64 {
+	return logTotal();
+}
+
+export function msSolHostLogAt(index: uint64): string {
+	return logAt(index);
+}
+
+export function msSolHostInvocationTotal(): uint64 {
+	return invocationTotal();
+}
+
+export function msSolHostInvocationAt(index: uint64): uint64 {
+	return invocationAt(index);
+}
+
+// host.c msSolHostRentReadTotal, msSolHostSetClock and msSolHostSetSysvarStatus
+export function msSolHostRentReadTotal(): uint64 {
+	return rentReadTotal();
+}
+
+export function msSolHostSetClock(slot: uint64, epochStart: uint64, epoch: uint64, leaderEpoch: uint64, unixTime: uint64): void {
+	setClock(slot, epochStart, epoch, leaderEpoch, unixTime);
+}
+
+export function msSolHostSetSysvarStatus(status: uint64): void {
+	setSysvarStatus(status);
+}
+
+export function msSolInvokeMetas(
+	program: uint64,
+	metas: uint64,
+	count: uint64,
+	data: uint64,
+	length: uint64,
+	signers: uint64,
+	signerCount: uint64,
+): uint64 {
+	return invokeMetas(program, metas, count, data, length, signers, signerCount, invokeSigned);
+}
+
+// solana.h msSolAccountCount, msSolAccountAt, msSolAccountSlot
+export function msSolAccountCount(): uint64 {
+	ready();
+	return accountCount;
+}
+
+export function msSolAccountAt(index: uint64): uint64 {
+	ready();
+	if (index >= accountCount) { return 0; }
+	return msSolLoadU64(accountTable + index * 8);
+}
+
+export function msSolAccountSlot(index: uint64): uint64 {
+	ready();
+	return msSolLoadU64(accountTable + index * 8);
+}
+
+// solana.h msSolInstructionData, msSolInstructionDataLength
+export function msSolInstructionData(): uint64 {
+	ready();
+	return instructionData;
+}
+
+export function msSolInstructionDataLength(): uint64 {
+	ready();
+	return msSolLoadU64(instructionData - 8);
+}
+
+// solana.h msSolSetResult, msSolResult
+export function msSolSetResult(code: uint64): void {
+	ready();
+	result = code;
+}
+
+export function msSolResult(): uint64 {
+	ready();
+	return result;
+}
+
+// solana.h msSolScratch (host branch): host.c msSolHostScratch
+export function msSolScratch(size: uint64): uint64 {
+	ready();
+	if (!heapHolds(position, size)) { return 0; }
+	return allocate(size);
+}
+
+// solana.h msSolRentAddress
+export function msSolRentAddress(): uint64 {
+	ready();
+	const rent = HEAP_START + RENT_AT;
+	if (msSolLoadU64(rent) == 0 && getRent(rent) != 0) { return 0; }
+	return rent;
+}
+
+// solana.h msSolLog, msSolLog64, msSolLogPubkey, msSolLogData, msSolLogComputeUnits
+export function msSolLog(address: uint64, length: uint64): void {
+	log(address, length);
+}
+
+export function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void {
+	log64(a, b, c, d, e);
+}
+
+export function msSolLogPubkey(address: uint64): void {
+	logPubkey(address);
+}
+
+export function msSolLogData(address: uint64, length: uint64): void {
+	logData(address, length);
+}
+
+export function msSolLogComputeUnits(): void {
+	logComputeUnits();
+}
+
+// host.c msSolHostRemainingComputeUnits
+export function msSolRemainingComputeUnits(): uint64 {
+	return COMPUTE_BUDGET;
+}
+
+// solana.h msSolGetClock, msSolCurveValidatePoint
+export function msSolGetClock(out: uint64): uint64 {
+	return getClock(out);
+}
+
+export function msSolCurveValidatePoint(curve: uint64, point: uint64, resultAddress: uint64): uint64 {
+	return msSolHostCurveValidatePoint(curve, point, resultAddress);
+}
+
+// solana.h msSolSetReturnData, msSolGetReturnData
+export function msSolSetReturnData(data: Readonly<Span<uint8>>): void {
+	const length = data.length as uint64;
+	setReturnData(length == 0 ? 0 : msSolSpanAddress(data), length);
+}
+
+export function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64 {
+	return getReturnData(data, length, programId);
+}
+
+// solana.h msSolCreateProgramAddress, msSolTryFindProgramAddress
+export function msSolCreateProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64): uint64 {
+	return msSolHostCreateProgramAddress(seeds, count, program, out);
+}
+
+export function msSolTryFindProgramAddress(seeds: uint64, count: uint64, program: uint64, out: uint64, bump: uint64): uint64 {
+	return msSolHostTryFindProgramAddress(seeds, count, program, out, bump);
+}
+
+export function msSolDeriveAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64 {
+	return deriveAddress(table, count, bump, program, out);
+}
+
+export function msSolFindAddress(table: uint64, count: uint64, program: uint64, out: uint64, bumpOut: uint64): uint64 {
+	return findAddress(table, count, program, out, bumpOut);
+}
+
+export function msSolFindCanonicalAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64 {
+	return findCanonicalAddress(table, count, program, expected, bumpOut);
+}
+
+export function msSolFindExpectedAddress(table: uint64, count: uint64, program: uint64, expected: uint64, bumpOut: uint64): uint64 {
+	return findExpectedAddress(table, count, program, expected, bumpOut);
+}
+
+export function msSolSeedStageInPlace(table: uint64, count: uint64, bump: uint64, program: uint64): uint64 {
+	return seedStageInPlace(table, count, bump, program);
+}
+
+export function msSolFindExpectedStaged(table: uint64, used: uint64, expected: uint64): uint64 {
+	return findExpectedStaged(table, used, expected);
+}
+
+export function msSolFindCanonicalStaged(table: uint64, used: uint64, expected: uint64): uint64 {
+	return findCanonicalStaged(table, used, expected);
+}
+
+export function msSolHashIsStaged(table: uint64, used: uint64, bump: uint64, expected: uint64): uint64 {
+	return hashIsStaged(table, used, bump, expected);
+}

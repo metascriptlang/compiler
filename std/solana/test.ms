@@ -1,5 +1,3 @@
-@include("runtime/solana/solana.h");
-
 import {
 	External, Signer as ChainAuth, WritablePda as DerivedSlot, accounts, external, externalMutable,
 } from "./typed";
@@ -124,12 +122,8 @@ import { Node, NodeKind, bindSym } from "std/meta";
 import { sha256 } from "std/crypto/sha256";
 import { isEdwardsPoint } from "std/crypto/ed25519/point";
 
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolProgramId(): uint64;
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolStoreU8(address: uint64, value: uint8): void;
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolHashAddress(table: uint64, count: uint64, bump: uint64, program: uint64, out: uint64): uint64;
+import { msSolLoadU64, msSolProgramId, msSolSpanAddress, msSolStoreU8 } from "./memory";
+import { msSolDeriveAddress } from "./kernel";
 
 
 export struct Counter {
@@ -3925,10 +3919,22 @@ test "the IDL's arguments read the bytes args<T>() reads for a struct that exten
 	}
 }
 
+function decodeBase64(text: string): uint8[] {
+	const out: uint8[] = [];
+	when (js) {
+		const decoded = Buffer.fromString(text, "base64");
+		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
+	} else {
+		const decoded = Buffer.fromString(text, "base64").asBytes();
+		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
+	}
+	return out;
+}
+
 test "the IDL's fields of an event read back what emit<E>() logged for a struct that extends another" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], paidToEntry).result == 0;
-	const logged = Buffer.fromString(logs()[0].slice("Program data: ".length), "base64").asBytes();
+	const logged = decodeBase64(logs()[0].slice("Program data: ".length));
 	const parsed = JSON.parseValue(inheritedDataIdl());
 	assert parsed.ok;
 	if (parsed.ok) {
@@ -4853,7 +4859,7 @@ test "the hash-only given-bump check answers ConstraintSeeds for another bump or
 function onCurveEntry(): void {
 	const slot = unchecked(0);
 	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
-	if (!slot.ok || msSolHashAddress(tableAddress(seeds), 15, 255, msSolProgramId(), slot.value.keyAddress()) != 0) {
+	if (!slot.ok || msSolDeriveAddress(tableAddress(seeds), 15, 255, msSolProgramId(), slot.value.keyAddress()) == 2) {
 		failWith(ProgramError.invalidSeeds());
 		return;
 	}
@@ -5228,6 +5234,25 @@ function scratchNegativeStep(): Result<uint64, ProgramError> {
 
 function scratchNegativeEntry(): void { codeOf(scratchNegativeStep()); }
 
+let scratchWholeSeen: uint64 = 0;
+
+function scratchWholeStep(): Result<uint64, ProgramError> {
+	const crits = scratch<Crit>(2);
+	crits[0].hp = 41;
+	crits[0].owner.bytes[5] = 6;
+	crits[1] = crits[0];
+	crits[0].hp = 1;
+	scratchWholeSeen = (crits[1].hp as uint64) * 1000 + (crits[1].owner.bytes[5] as uint64) * 10 + (crits[0].hp as uint64);
+	return Result.ok(0);
+}
+
+function scratchWholeEntry(): void { codeOf(scratchWholeStep()); }
+
+test "scratch stores a whole element through the span and the copy keeps its own bytes" {
+	assert run(programKey(), [], [], scratchWholeEntry).result == 0;
+	assert scratchWholeSeen == 41061;
+}
+
 test "scratch refuses a negative count and gives an empty span for zero" {
 	const zero: uint8[] = [1];
 	assert run(programKey(), [], zero, scratchNegativeEntry).result == 0;
@@ -5244,4 +5269,25 @@ test "std/solana gives a native program the Borsh writer and reader its clients 
 	const back = reader.u64();
 	assert back.ok;
 	if (back.ok) { assert back.value == 7; }
+}
+
+let scratchScalarsSeen = "";
+
+function scratchScalarsStep(): Result<uint64, ProgramError> {
+	const words = scratch<uint64>(3);
+	words[0] = 0xffffffffffffff01;
+	words[2] = 7;
+	const flags = scratch<boolean>(2);
+	flags[1] = true;
+	const halves = scratch<int16>(2);
+	halves[0] = -3;
+	scratchScalarsSeen = `${words[0]} ${words[1]} ${words[2]} ${flags[0]} ${flags[1]} ${halves[0]} ${halves[1]}`;
+	return Result.ok(0);
+}
+
+function scratchScalarsEntry(): void { codeOf(scratchScalarsStep()); }
+
+test "scratch of uint64, boolean and int16 reads back what was stored, zero elsewhere" {
+	assert run(programKey(), [], [], scratchScalarsEntry).result == 0;
+	assert scratchScalarsSeen == "18446744073709551361 0 7 false true -3 0";
 }

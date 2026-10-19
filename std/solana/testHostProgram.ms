@@ -1,30 +1,15 @@
-@include("runtime/solana/solana.h");
-
 import { Bytes, putU8 } from "./buffer";
 import { account, accountCount, failWith, instructionData, logU64, setReturnData } from "./core";
 import { InstructionAccount, invokeList } from "./core";
 import { ProgramError } from "./error";
+import {
+	msSolCreateProgramAddress,
+	msSolCurveValidatePoint,
+	msSolLog,
+	msSolTryFindProgramAddress,
+} from "./kernel";
+import { msSolCopy, msSolProgramId, msSolSeedsAddress, msSolSpanAddress } from "./memory";
 import { SeedSlice, SignerSeeds, signerOf } from "./seed";
-
-extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
-extern function msSolLog(address: uint64, length: uint64): void;
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
-extern function msSolProgramId(): uint64;
-extern function msSolCreateProgramAddress(
-	seeds: uint64,
-	count: uint64,
-	program: uint64,
-	out: uint64,
-): uint64;
-extern function msSolTryFindProgramAddress(
-	seeds: uint64,
-	count: uint64,
-	program: uint64,
-	out: uint64,
-	bump: uint64,
-): uint64;
-extern function msSolCurveValidatePoint(curve: uint64, point: uint64, result: uint64): uint64;
 
 export const NOTHING: uint8 = 0;
 export const OVERLAPPING_COPY: uint8 = 1;

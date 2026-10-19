@@ -1,0 +1,149 @@
+import { SeedSlice } from "./addressTables";
+import {
+	msSolCompare,
+	msSolCopy,
+	msSolDataRoom,
+	msSolFill,
+	msSolHostRaise,
+	msSolLoadU16,
+	msSolLoadU32,
+	msSolLoadU64,
+	msSolLoadU8,
+	msSolMemoryAllocate,
+	msSolMemoryClearFault,
+	msSolHostFaultCodeOf,
+	msSolMemoryFaultText,
+	msSolMemoryMap,
+	msSolMemoryRelease,
+	msSolMemorySetAccounts,
+	msSolPointer,
+	msSolSpanAddress,
+	msSolStoreU16,
+	msSolStoreU32,
+	msSolStoreU64,
+	msSolStoreU8,
+	msSolStringAddress,
+	msSolTableAddress,
+} from "./memory";
+
+function faultOf(run: () => void): string {
+	@emit(`try { ${run}(); } catch (error) { return error.message; }
+	return "";`);
+	unreachable;
+}
+
+function addressOf(bytes: Readonly<Span<uint8>>): uint64 {
+	return msSolSpanAddress(bytes);
+}
+
+test "a growing byte array keeps its address and reads the bytes pushed after the address was taken" {
+	let bytes: uint8[] = [1, 2, 3];
+	const at = addressOf(bytes);
+	for (let i = 0; i < 40; i++) { bytes.push((i + 10) as uint8); }
+	assert addressOf(bytes) == at;
+	assert msSolLoadU8(at + 2) == 3 && msSolLoadU8(at + 42) == 49;
+	msSolStoreU8(at + 40, 200);
+	assert bytes[40] == 200;
+}
+
+test "regions never share an address and a second array gets a start past the first" {
+	let first: uint8[4] = [0, 0, 0, 0];
+	let second: uint8[4] = [0, 0, 0, 0];
+	const a = addressOf(first);
+	const b = addressOf(second);
+	assert a != b && a % 4096 == 0 && b % 4096 == 0;
+	assert b > a;
+}
+
+test "an access past the end of a region, or at no region, throws a message naming the address" {
+	let buffer: uint8[8] = [0, 0, 0, 0, 0, 0, 0, 0];
+	const at = addressOf(buffer);
+	let tiny: uint8[4] = [0, 0, 0, 0];
+	const small = addressOf(tiny);
+	assert faultOf(() => { msSolLoadU64(at + 4); }).startsWith("solana memory: load of 8 byte(s) at 0x");
+	assert faultOf(() => { msSolLoadU8(at + 8); }).includes("crosses the end of the region");
+	assert faultOf(() => { msSolStoreU16(at + 7, 1); }).includes("store of 2 byte(s)");
+	assert faultOf(() => { msSolLoadU8(0); }) == "solana memory: load of 1 byte(s) at 0x0 hits no region";
+	assert faultOf(() => { msSolCopy(at, small, 8); }).includes("copy from");
+	assert faultOf(() => { msSolFill(at, 1, 9); }).includes("fill of 9 byte(s)");
+	assert faultOf(() => { msSolCompare(at, 0x7000000000, 1); }).includes("hits no region");
+	assert faultOf(() => { msSolLoadU8(at + 7); }) == "";
+}
+
+test "a table access past its last entry throws, and a store into a string throws" {
+	let table: SeedSlice[1] = [{ address: 1, length: 2 }];
+	const at = msSolTableAddress(table);
+	assert faultOf(() => { msSolLoadU64(at + 16); }).includes("crosses the end");
+	const text = msSolStringAddress("abc");
+	assert faultOf(() => { msSolStoreU8(text, 1); }).includes("read-only region");
+	assert faultOf(() => { msSolFill(text, 0, 1); }).includes("read-only region");
+}
+
+test "msSolPointer names the rule instead of building a pointer" {
+	assert faultOf(() => { msSolPointer(4096); }).includes("Taking an address");
+}
+
+test "a fixed region maps at its address, refuses an overlap and is gone after release" {
+	msSolMemoryMap(0x400000000, 64);
+	msSolStoreU64(0x400000000 + 56, 0x1122334455667788);
+	assert msSolLoadU32(0x400000000 + 56) == 0x55667788 && msSolLoadU16(0x400000000 + 62) == 0x1122;
+	assert faultOf(() => { msSolMemoryMap(0x400000000 + 32, 16); }).includes("overlaps the region");
+	assert msSolLoadU8(0x400000000 + 3) == 0;
+	msSolMemoryRelease();
+	assert faultOf(() => { msSolLoadU8(0x400000000); }).includes("hits no region");
+	const fresh = msSolMemoryAllocate(10);
+	assert msSolLoadU8(fresh + 9) == 0;
+	assert faultOf(() => { msSolLoadU8(fresh + 10); }).includes("crosses the end");
+}
+
+test "auto regions step around a fixed region instead of landing on it" {
+	msSolMemoryRelease();
+	msSolMemoryMap(0x100000000, 8192);
+	const at = msSolMemoryAllocate(16);
+	assert at >= 0x100000000 + 8192;
+	msSolMemoryRelease();
+}
+
+test "the first fault wins and carries the text cut to 159 bytes" {
+	msSolMemoryClearFault();
+	msSolHostRaise(7, "first");
+	msSolHostRaise(9, "second");
+	assert msSolHostFaultCodeOf() == 7 && msSolMemoryFaultText() == "first";
+	msSolMemoryClearFault();
+	let long = "";
+	for (let i = 0; i < 200; i++) { long += "x"; }
+	msSolHostRaise(1, long);
+	assert msSolMemoryFaultText().length == 159;
+	msSolMemoryClearFault();
+	assert msSolHostFaultCodeOf() == 0 && msSolMemoryFaultText() == "";
+}
+
+test "an overlapping copy faults the run and copies nothing" {
+	msSolMemoryClearFault();
+	let buffer: uint8[16] = [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0];
+	const at = addressOf(buffer);
+	msSolCopy(at + 4, at, 8);
+	assert msSolHostFaultCodeOf() == 0xffffffffffffffff;
+	assert msSolMemoryFaultText() == "ProgramFailedToComplete: sol_memcpy_: Overlapping copy";
+	assert buffer[4] == 5 && buffer[8] == 0;
+	msSolMemoryClearFault();
+	msSolCopy(at + 8, at, 8);
+	assert buffer[8] == 1 && buffer[15] == 8 && msSolHostFaultCodeOf() == 0;
+}
+
+test "the data room is the gap to the next record, ported over the account table" {
+	msSolMemoryRelease();
+	const input = msSolMemoryAllocate(4096);
+	const table = msSolMemoryAllocate(64);
+	msSolStoreU64(input, 2);
+	msSolStoreU64(table, input + 8);
+	msSolStoreU64(table + 8, input + 1024);
+	msSolStoreU64(input + 2048 + 8, 0);
+	msSolMemorySetAccounts(table, 2, input + 2048 + 8, input, input);
+	assert msSolDataRoom(input + 8) == 920;
+	assert msSolDataRoom(input + 1024) == 928;
+	assert msSolDataRoom(input + 16) == 0;
+	msSolStoreU64(input, 3);
+	assert msSolDataRoom(input + 1024) == 0;
+	msSolMemoryRelease();
+}

@@ -13,7 +13,6 @@ export * from "./decorator";
 // Compile-time builtins (injected by the Raiser VM, macro bodies only)
 extern function currentFile(): string;
 extern function currentLine(): number;
-extern function readFile(path: string): string;
 extern function exec(cmd: string): string;
 extern function error(msg: string, loc: SourceLocation): never;
 extern function warning(msg: string, loc: SourceLocation): void;
@@ -33,6 +32,11 @@ export function define(name: string): string { return msMetaDefine(name); }
 extern function msMetaExpansionFile(): string;
 
 export function expansionFile(): string { return msMetaExpansionFile(); }
+
+extern function msMetaReadFile(path: string): string;
+
+// The file's text, read relative to the working directory; a failed read throws.
+export function readFile(path: string): string { return msMetaReadFile(path); }
 
 export function childCount(n: Node): number { return msNodeChildCount(n); }
 export function childAt(n: Node, i: number): Node { return msNodeChildAt(n, i); }

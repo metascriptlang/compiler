@@ -18,7 +18,9 @@ import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileI
 import { createJSHelpers, escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
-import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
+import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute, RaiserContext } from "../raiser/context";
+import { RaiserModule } from "../raiser/module";
+import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
@@ -185,11 +187,17 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 
 // Report graph-level errors (e.g., missing entry) and circular dep warnings.
 function reportGraphErrors(graph: ModuleGraph): void {
+	const hook = _diagnosticHook;
 	for (const err of graph.errors) {
-		printDiag(red("graph error: ") + err);
+		if (hook != null) hook("", { message: err, line: 0, column: 0, severity: ErrorSeverity.Error });
+		else printDiag(red("graph error: ") + err);
 	}
 	for (const dep of graph.circularDeps) {
 		let circMsg = `circular import: ${dep.fromPath} <-> ${dep.toPath}`;
+		if (hook != null) {
+			hook(dep.fromPath, { message: circMsg, line: dep.importLine as int32, column: 0, severity: ErrorSeverity.Warning });
+			continue;
+		}
 		if (dep.importLine > 0) {
 			circMsg = circMsg + ` (line ${dep.importLine})`;
 		}
@@ -211,8 +219,19 @@ function printDiag(line: string): void {
 	writeStderr(line + "\n");
 }
 
+let _diagnosticHook: ((file: string, e: ModuleError) => void) | null = null;
+
+export function setDiagnosticHook(hook: ((file: string, e: ModuleError) => void) | null): void {
+	_diagnosticHook = hook;
+}
+
 // Render a single structured error in Rust-style format
 function renderModuleError(modPath: string, source: string, e: ModuleError): void {
+	const hook = _diagnosticHook;
+	if (hook != null) {
+		hook(modPath, e);
+		return;
+	}
 	// Header: "error: message" or "warning: message"
 	const isWarn = e.severity == ErrorSeverity.Warning;
 	const levelStr = match (isWarn) {
@@ -432,7 +451,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 		}
 	}
 	if (graphErrors > 0) {
-		printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
+		if (_diagnosticHook == null) printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
 		stopBuild();
 	}
 	return graph;
@@ -3876,10 +3895,10 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 // ===== Raiser (Bytecode VM) Run =====
 
-export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), argv0: string = ""): void {
-	const t0 = performance.now();
+export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null): RaiserModule {
+	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
-	const graph = loadAndCheckGraph(filePath, config, opts);
+	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Orc, session != null ? session.check : null);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);
@@ -3901,7 +3920,24 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		unitPrograms.push(checked.program);
 		unitCtxs.push(checked.ctx);
 	}
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	const kept = session != null && session.keep ? session : null;
+	if (kept != null) {
+		const routeOrder: Node[] = [];
+		for (const modPath of unitPaths) {
+			const created = kept.check.instances.get(modPath);
+			if (created != null) for (const instNode of created) routeOrder.push(instNode);
+		}
+		retainCheckedInstances(unitCtxs);
+		const byOwner = routeInstances(routeOrder, (path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), false, null);
+		for (let i = 0; i < unitPrograms.length; i += 1) {
+			const program = cloneNodeKeepSem(unitPrograms[i]);
+			const routed = byOwner.get(unitPaths[i]);
+			if (routed != null) for (const inst of routed) (program.data as ProgramData).programStmts.push(cloneNodeKeepSem(inst));
+			unitPrograms[i] = program;
+		}
+	} else {
+		placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	}
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
@@ -3928,25 +3964,35 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	// reported, not fatal — std module bodies the program never calls can
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks
 	// into live code is visible here as a "cannot evaluate" line.
+	const hook = _diagnosticHook;
 	for (const e of takeRaiserCompileErrors()) {
-		printDiag(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
+		if (hook != null) hook("", { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Warning });
+		else printDiag(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
 	}
+	return raiserMod;
+}
 
-	if (opts.showTime) printTiming("compiled", t0);
-
+export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink): RaiserContext {
 	const ctx = createRaiserContext();
 	ctx.gcMode = "orc";
+	ctx.programArgv = programArgv;
+	ctx.printSink = printSink;
+	raiserLoad(ctx, mod);
+	raiserExecute(ctx);
+	return ctx;
+}
+
+export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), argv0: string = ""): void {
+	const t0 = performance.now();
+	const raiserMod = compileRaiser(filePath, opts, resolveSection);
+	if (opts.showTime) printTiming("compiled", t0);
+
 	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
 	for (const a of opts.extraArgs) programArgv.push(a);
-	ctx.programArgv = programArgv;
-	ctx.printSink = (text: string): void => { console.log(text); };
-	raiserLoad(ctx, raiserMod);
-	const ranOk = raiserExecute(ctx);
+	const ctx = runRaiser(raiserMod, programArgv, (text: string): void => { console.log(text); });
 
-	if (!ranOk) {
-		if (ctx.lastError != "") {
-			printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
-		}
+	if (ctx.lastError != "") {
+		printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
 		exit(1);
 	}
 
