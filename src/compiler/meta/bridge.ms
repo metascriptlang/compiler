@@ -582,6 +582,11 @@ export function attachFieldTypeNodes(impl: RaiserValue, decl: Node, shape: Type,
 		const nodes: Node[] = [];
 		for (const name of (decl.data as InterfaceDeclData).interfaceFields) nodes.push(fieldTypeNode(fieldTypeIn(shape, name), decl.location));
 		heapObjectSetField(objHeap, impl.intVal, "typeExprs", serializeNodes(nodes, objHeap, arrHeap, false));
+		if (decl.baseExprs != null) {
+			const bases: Node[] = [];
+			for (const b of decl.baseExprs) bases.push(fieldTypeNode(b.nodeType, decl.location));
+			heapObjectSetField(objHeap, impl.intVal, "baseExprs", serializeNodes(bases, objHeap, arrHeap, false));
+		}
 		return;
 	}
 	if (decl.kind != NodeKind.ClassDecl) return;

@@ -40,7 +40,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 
-const PACK_MAGIC = "MSPK4";
+const PACK_MAGIC = "MSPK5";
 
 // Same dual-hash formula as compiler/cache.ms hashContent — keys are written
 // and read by this module only, so the formula just has to be self-consistent.
@@ -535,7 +535,7 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 //
 // Line format (tab-separated; \1.. prefixes keep the reader dumb):
 //   T idx kind flags callConv typeName typeNamesCsv childrenCsv ret extra symIdx opsCsv
-//   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg <payload...>
+//   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv <payload...>
 //   S idx kind state flags overloadIdx mutatedParams duVariantSlot
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
@@ -692,6 +692,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			if (n.typeExprs != null) {
 				for (const te of n.typeExprs) enqNode(te);
 			}
+			if (n.baseExprs != null) {
+				for (const be of n.baseExprs) enqNode(be);
+			}
 			nodeFields(n, walkSink);
 			continue;
 		}
@@ -733,6 +736,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const n = nodes[i];
 		const loc = n.location;
 		const tes = n.typeExprs != null ? idxs(n.typeExprs) : "-";
+		const bes = n.baseExprs != null ? idxs(n.baseExprs) : "-";
 		const pls = locsCsv(n.paramLocations);
 		let pss = "-";
 		if (n.paramSyms != null) {
@@ -740,7 +744,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const ps of n.paramSyms) psi.push(idxSym(ps));
 			pss = psi.length == 0 ? "" : intsCsv(psi);
 		}
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${emitNodePayloadViaSink(n)}`);
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${idxType(n.nodeType)}\t${idxSym(n.resolvedSym)}\t${idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${bes}\t${emitNodePayloadViaSink(n)}`);
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {
@@ -1133,6 +1137,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const nodeSymRef: int32[] = [];
 	const nodeTeRef: int32[] = [];
 	const nodeTesRaw: string[] = [];
+	const nodeBesRaw: string[] = [];
 	const nodePlsRaw: string[] = [];
 	const nodePssRaw: string[] = [];
 	const nodePayload: string[][] = [];
@@ -1183,8 +1188,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			nodeTesRaw.push(f[11]);
 			nodePlsRaw.push(f[12]);
 			nodePssRaw.push(f[15]);
+			nodeBesRaw.push(f[16]);
 			const payloadFields: string[] = [];
-			let pi = 16;
+			let pi = 17;
 			while (pi < f.length) {
 				payloadFields.push(f[pi]);
 				pi = pi + 1;
@@ -1290,6 +1296,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		n.resolvedSym = nodeSymRef[i] >= 0 && nodeSymRef[i] < syms.length ? syms[nodeSymRef[i]] : null as unknown as Symbol;
 		n.typeExpr = nd(nodeTeRef[i], nodes) as Node;
 		n.typeExprs = nodeTesRaw[i] == "-" ? null : parseNodeArr(nodeTesRaw[i], nodes);
+		n.baseExprs = nodeBesRaw[i] == "-" ? null : parseNodeArr(nodeBesRaw[i], nodes);
 		n.paramLocations = nodePlsRaw[i] == "-" ? null : parseLocs(nodePlsRaw[i]);
 		if (nodePssRaw[i] != "-") {
 			const pss: Symbol[] = [];

@@ -409,7 +409,11 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.TypeAliasDecl, { aliasName: "TA", aliasType: "int32", aliasIsDistinct: true, aliasGenericParams: "<T>", discriminantName: "d", discriminantType: "string", variantKeys: ["A", "B"], variantTypes: ["{a}", "{b}"], nameLocation: pkLoc(8) } as NodeData, makeLoc(17, 57)));
 	out.push(createNodeAt(NodeKind.EnumDecl, { enumName: "E", enumMembers: ["A", "B"], enumValues: [1.5, -2.25], nameLocation: pkLoc(9), memberLocations: [pkLoc(10)], enumInits: [n1, null as unknown as Node] } as NodeData, makeLoc(17, 58)));
 	out.push(createNodeAt(NodeKind.InterfaceDecl, { interfaceName: "I1", interfaceFields: ["f"], interfaceFieldTypes: ["int32"], interfaceExtends: ["B1"], nameLocation: pkLoc(11), interfaceFieldVisibility: [""], interfaceFieldDecorators: [[a, n1]] } as NodeData, makeLoc(17, 59)));
-	out.push(createNodeAt(NodeKind.StructDecl, { interfaceName: "S1", interfaceFields: ["g"], interfaceFieldTypes: ["string"], interfaceExtends: ["B2"], nameLocation: pkLoc(12), interfaceFieldVisibility: ["private"], interfaceFieldDecorators: [[]] } as NodeData, makeLoc(17, 60)));
+	const structDecl = createNodeAt(NodeKind.StructDecl, { interfaceName: "S1", interfaceFields: ["g"], interfaceFieldTypes: ["string"], interfaceExtends: ["B2"], nameLocation: pkLoc(12), interfaceFieldVisibility: ["private"], interfaceFieldDecorators: [[]] } as NodeData, makeLoc(17, 60));
+	const base = pkIdent("B2");
+	base.nodeType = nodeTypeSample;
+	structDecl.baseExprs = [base];
+	out.push(structDecl);
 	out.push(createNodeAt(NodeKind.ClassDecl, { className: "C", classDisplayName: "C", classExtends: "Base", classBody: [methodDecl], nameLocation: pkLoc(13) } as NodeData, makeLoc(17, 61)));
 	out.push(createNodeAt(NodeKind.PropertyDecl, { propName: "p", propType: "int32", propIsStatic: true, propIsReadonly: true, propVisibility: "pub", propInitializer: n1 } as NodeData, makeLoc(17, 62)));
 	out.push(methodDecl);
@@ -466,6 +470,10 @@ export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 		if (n.typeExprs != null) {
 			s = s + "tes=";
 			for (const t of n.typeExprs) s = s + pkDumpNode(t) + ";";
+		}
+		if (n.baseExprs != null) {
+			s = s + "bes=";
+			for (const b of n.baseExprs) s = s + pkDumpNode(b) + ";";
 		}
 		if (n.paramLocations != null) {
 			s = s + "pls=";

@@ -2049,6 +2049,13 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		const pt = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
 		parentTypes.push(pt);
 	}
+	const baseExprs: Node[] = [];
+	for (let i = 0; i < parentTypes.length; i += 1) {
+		const base = createNodeAt(NodeKind.Identifier, { name: d.interfaceExtends[i] } as IdentifierData, node.location);
+		base.nodeType = parentTypes[i];
+		baseExprs.push(base);
+	}
+	node.baseExprs = baseExprs;
 
 	if (hasGenerics) {
 		closeScope(ctx.table);

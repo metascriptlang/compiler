@@ -625,6 +625,7 @@ export class Node {
 	comments: Token[]; // Added for comment preservation
 	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
+	baseExprs: Node[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	paramSyms: Symbol[] | null;
 	typeArg: string; // Use site: explicit generic args ("Person" from parse<Person>()); class/interface/struct/actor/extern decl: its generic params ("K,V")
@@ -778,6 +779,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		comments: [],
 		typeExpr: null,
 		typeExprs: null,
+		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,
 		typeArg: "",
@@ -919,6 +921,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 		comments: [],
 		typeExpr: null,
 		typeExprs: null,
+		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,
 		typeArg: "",
