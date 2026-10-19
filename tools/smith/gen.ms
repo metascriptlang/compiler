@@ -51,6 +51,7 @@ enum EntKind {
 	HeldVar,
 	IterFn,
 	NullVar,
+	OptVar,
 	TupleVar,
 	TupleFrozen,
 	VecVar,
@@ -228,6 +229,26 @@ function bitsOf(t: Ty): int32 {
 function switchable(t: Ty): boolean { return t == Ty.Bool || (isIntTy(t) && bitsOf(t) < 64); }
 
 function trapsOnOverflow(t: Ty): boolean { return isSigned(t); }
+
+function unsignedTwin(t: Ty): Ty {
+	return match (t) {
+		Ty.Int8 => Ty.Uint8,
+		Ty.Int16 => Ty.Uint16,
+		Ty.Int32 => Ty.Uint32,
+		Ty.Int64 => Ty.Uint64,
+		_ => t,
+	};
+}
+
+function signedTwin(t: Ty): Ty {
+	return match (t) {
+		Ty.Uint8 => Ty.Int8,
+		Ty.Uint16 => Ty.Int16,
+		Ty.Uint32 => Ty.Int32,
+		Ty.Uint64 => Ty.Int64,
+		_ => t,
+	};
+}
 
 function posMax(t: Ty): uint64 {
 	return match (t) {
@@ -544,6 +565,7 @@ class Gen {
 	famShape: Shape = Shape.Other;
 	elseArms: int32 = 0;
 	atTop: boolean = false;
+	overloading: int32 = 0;
 	arithInElse: int32 = 0;
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
@@ -799,18 +821,26 @@ class Gen {
 	binary(t: Ty, depth: int32): string {
 		const inElse = this.elseArms > 0;
 		if (inElse) { this.arithInElse++; }
-		const a = this.expr(t, depth + 1);
-		const b = this.expr(t, depth + 1);
+		const ushr = !isFloat(t) && (!isSigned(t) || this.wt(W.ExprConvert) > 0) && this.wt(W.CoreUshr) > 0 && this.rng.chance(this.wt(W.CoreUshr));
+		const operand = ushr && !isSigned(t) && this.hasTy(signedTwin(t)) && this.rng.chance(50) ? signedTwin(t) : t;
+		const a = this.expr(operand, depth + 1);
+		const b = this.expr(operand, depth + 1);
 		if (inElse) { this.arithInElse--; }
 		if (isFloat(t)) {
 			const fop = this.pickOp(FLOAT_OPS);
 			if (fop == "/" && this.wt(W.CoreZero) > 0) { return this.floatDivHelper(t) + "(" + a + ", " + b + ")"; }
 			return "(" + a + " " + fop + " " + b + ")";
 		}
+		if (ushr) { return this.ushrText(t, a, b); }
 		const op = this.pickOp(INT_OPS);
 		const guarded = op == "/" || op == "%" || (trapsOnOverflow(t) && (op == "+" || op == "-" || op == "*"));
 		if (guarded) { return this.arithHelper(op, t) + "(" + a + ", " + b + ")"; }
 		return "(" + a + " " + op + " " + b + ")";
+	}
+
+	ushrText(t: Ty, a: string, b: string): string {
+		if (!isSigned(t)) { return "(" + a + " >>> " + b + ")"; }
+		return this.convHelper(unsignedTwin(t), t) + "(" + a + " >>> " + b + ")";
 	}
 
 	binaryOrLeaf(t: Ty, depth: int32): string {
@@ -7851,6 +7881,10 @@ class Gen {
 			const n = this.nullishExpr(t, depth);
 			if (n != "") { return this.shaped(n, Shape.Ternary); }
 		}
+		if (t != Ty.Char && this.wt(W.CoreExpr) > 0 && this.wt(W.CoreOptional) > 0 && this.rng.chance(10)) {
+			const n = this.optExpr(t, depth);
+			if (n != "") { return n; }
+		}
 		const kind = this.pickW(W.ExprLeaf, W.ExprCall);
 		if (kind == 0) { return this.leaf(t); }
 		if (kind == 4) {
@@ -7928,14 +7962,25 @@ class Gen {
 	}
 
 	coreExpr(t: Ty, depth: int32): string {
-		const k = this.pickCore(W.CorePow, W.CoreCvt);
+		const k = this.pickCore(W.CorePow, W.CoreOptional);
 		if (k == 0) { return this.wt(W.ExprBinary) > 0 ? this.shaped(this.powExpr(t, depth), Shape.Other) : ""; }
 		if (k == 1) { return this.shaped(this.nullishExpr(t, depth), Shape.Ternary); }
 		if (k == 2) {
 			const text = this.cvtExpr(t, depth);
 			return this.shaped(text, text.contains(" ? ") ? Shape.Ternary : Shape.Other);
 		}
+		if (k == 3) { return this.optExpr(t, depth); }
 		return "";
+	}
+
+	optExpr(t: Ty, depth: int32): string {
+		if (t == Ty.Char) { return ""; }
+		const vars = this.entsOf(EntKind.OptVar, t);
+		if (vars.length == 0) { return ""; }
+		const o = this.pickEnt(vars);
+		const read = (o.len == 0 ? [".f", ".g"] : [".v", ".get()"])[this.rng.below(2)];
+		const text = "(" + o.name + "?" + read + " ?? " + this.expr(t, depth + 1) + ")";
+		return this.shaped(text, Shape.Ternary);
 	}
 
 	powExpr(t: Ty, depth: int32): string {
@@ -7986,7 +8031,11 @@ class Gen {
 			const decl = this.nullDecl(indent);
 			if (decl != "") { return decl; }
 		}
-		const k = this.pickCore(W.CoreWhile, W.CoreIncDec);
+		if (this.wt(W.CoreOptional) > 0 && this.rng.chance(15)) {
+			const decl = this.optDecl(indent);
+			if (decl != "") { return decl; }
+		}
+		const k = this.pickCore(W.CoreWhile, W.CoreAlias);
 		const nested = depth < this.depthMax;
 		if (k == 0 || k == 1) { return nested && (inFn || k == 0) ? this.whileLoop(depth, indent, ret, inFn, k == 1) : ""; }
 		if (k == 2) { return nested ? this.switchStmt(depth, indent, inLoop, ret, inFn) : ""; }
@@ -7994,7 +8043,108 @@ class Gen {
 		if (k == 4) { return this.compoundStmt(indent); }
 		if (k == 5) { return this.cellStmt(indent); }
 		if (k == 6) { return this.incDecStmt(indent); }
+		if (k == 7) { return this.voidStmt(indent); }
+		if (k == 8) { return this.aliasStmt(indent); }
 		return "";
+	}
+
+	optValue(t: Ty, boxed: boolean): string {
+		if (!boxed) { return "{ f: " + this.expr(t, 1) + ", g: " + this.expr(t, 1) + " }"; }
+		const name = "OptBox" + tyTitle(t);
+		const T = tyName(t);
+		this.useHelper(name, "class " + name + " {\n\tv: " + T + ";\n\tconstructor(v: " + T + ") {\n\t\tthis.v = v;\n\t}\n\tget(): " + T + " {\n\t\treturn this.v;\n\t}\n}\n");
+		return "new " + name + "(" + this.expr(t, 1) + ")";
+	}
+
+	optDecl(indent: string): string {
+		const t = this.pickCoreTy();
+		if (t == Ty.Char || this.wt(W.ExprTernary) == 0) { return ""; }
+		const name = this.entName("z");
+		const boxed = this.rng.chance(50);
+		const T = tyName(t);
+		const type = boxed ? "OptBox" + tyTitle(t) : "{ f: " + T + "; g: " + T + " }";
+		const first = this.optValue(t, boxed);
+		let out = indent + "let " + name + ": " + type + " | null = " + this.cond(1) + " ? " + first + " : null;\n";
+		if (this.rng.chance(40)) { out += indent + "if " + this.cond(0) + " { " + name + " = " + (this.rng.chance(30) ? "null" : this.optValue(t, boxed)) + "; }\n"; }
+		this.ents.push({ kind: EntKind.OptVar, name: name, ty: t, params: [], len: boxed ? 1 : 0, cost: 0 as int64 });
+		return out;
+	}
+
+	voidStmt(indent: string): string {
+		if (this.tys.length == 0 || this.asyncCtx) { return ""; }
+		const t = this.pickTy();
+		const T = tyName(t);
+		let form = this.rng.below(5);
+		if (this.overloading > 0 && form < 3) { form = 3 + this.rng.below(2); }
+		if (form >= 3) {
+			const tail = tyTitle(t);
+			const early = form == 3;
+			const name = (early ? "putMin" : "putMax") + tail;
+			const body = early ? "\tif (n >= a[0]) { return; }\n\ta[0] = n;\n" : "\tif (n > a[0]) { a[0] = n; }\n";
+			const put = this.useHelper(name, "function " + name + "(a: " + T + "[], n: " + T + "): void {\n" + body + "}\n");
+			const cells = this.entName("e");
+			const op = this.entName("v");
+			const head = indent + "const " + cells + ": " + T + "[] = [" + this.expr(t, 0) + "];\n" +
+				indent + "const " + op + ": (a: " + T + "[], n: " + T + ") => void = " + put + ";\n";
+			const calls = indent + op + "(" + cells + ", " + this.expr(t, 0) + ");\n" + indent + put + "(" + cells + ", " + this.expr(t, 0) + ");\n";
+			return head + calls + indent + "let " + this.newLocal(t) + ": " + T + " = " + cells + "[0];\n";
+		}
+		const times = this.rng.between(1, 3);
+		const cap = this.spare((times + 1) as int64);
+		const init = this.expr(t, 0);
+		const acc = this.newLocal(t);
+		const name = this.entName("v");
+		let text = "";
+		let work = 0 as int64;
+		if (form == 1) {
+			const first = this.routine(t, 1, cap);
+			const second = this.routine(t, 1, cap);
+			work = (first.cost + second.cost + (2 as int64)) * (2 as int64);
+			text = indent + "const " + name + ": (() => void)[] = [(): void => { " + acc + " = " + first.text + "; }, (): void => { " + acc + " = " + second.text + "; }];\n" +
+				indent + name + "[" + String(this.rng.below(2)) + "]();\n" +
+				indent + name + "[1]();\n";
+		} else {
+			const body = this.routine(t, 1, cap);
+			work = (body.cost + (2 as int64)) * (times as int64);
+			text = indent + "const " + name + ": () => void = (): void => { " + acc + " = " + body.text + "; };\n";
+			if (form == 2) {
+				const apply = this.useHelper("applyVoid", "function applyVoid(cb: () => void, times: int32): void {\n\tlet i: int32 = 0;\n\twhile (i < times) {\n\t\tcb();\n\t\ti++;\n\t}\n}\n");
+				text += indent + apply + "(" + name + ", " + String(times) + ");\n";
+			} else {
+				for (let i = 0; i < times; i++) { text += indent + name + "();\n"; }
+			}
+		}
+		if (!this.reserve(work)) {
+			this.scope.pop();
+			return "";
+		}
+		return indent + "let " + acc + ": " + T + " = " + init + ";\n" + text;
+	}
+
+	aliasStmt(indent: string): string {
+		const t = this.pickCoreTy();
+		const T = tyName(t);
+		const alias = "Alias" + tyTitle(t);
+		this.useHelper(alias, "type " + alias + " = " + T + ";\n");
+		const form = this.rng.below(4);
+		if (form == 1) {
+			const cells = this.entName("e");
+			const items = this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0);
+			return indent + "const " + cells + ": " + alias + "[] = [" + items + "];\n" +
+				indent + "let " + this.newLocal(t) + ": " + T + " = " + cells + "[" + String(this.rng.below(3)) + "];\n";
+		}
+		if (form == 2) {
+			const pick = this.useHelper("pick" + alias, "function pick" + alias + "(n: int32, a: " + alias + ", b: " + alias + "): " + alias + " {\n\tif (n > 3) { return a; }\n\treturn b;\n}\n");
+			const call = pick + "(" + this.smallInt(1) + ", " + this.expr(t, 1) + ", " + this.expr(t, 1) + ")";
+			return indent + "let " + this.newLocal(t) + ": " + alias + " = " + call + ";\n";
+		}
+		let spelled = alias;
+		if (form == 3) {
+			spelled = alias + "Twice";
+			this.useHelper(spelled, "type " + spelled + " = " + alias + ";\n");
+		}
+		const value = this.expr(t, 0);
+		return indent + "let " + this.newLocal(t) + ": " + spelled + " = " + value + ";\n";
 	}
 
 	nullDecl(indent: string): string {
@@ -8198,7 +8348,8 @@ class Gen {
 			return lead + indent + place + (k == 3 ? " /= " : " %= ") + divisor + ";\n";
 		}
 		if (k == 8 || k == 9) {
-			return lead + indent + place + (k == 8 ? " <<= " : " >>= ") + "(" + z + " & " + intLiteral(t, false, (bitsOf(t) - 1) as uint64) + ");\n";
+			const shift = k == 8 ? " <<= " : !signed && this.wt(W.CoreUshr) > 0 && this.rng.chance(50) ? " >>>= " : " >>= ";
+			return lead + indent + place + shift + "(" + z + " & " + intLiteral(t, false, (bitsOf(t) - 1) as uint64) + ");\n";
 		}
 		const ops = ["+=", "-=", "*=", "", "", "&=", "|=", "^="];
 		return lead + indent + place + " " + ops[k] + " " + z + ";\n";
@@ -8286,7 +8437,9 @@ class Gen {
 		const sig = this.signature(params, params.length);
 		const saved = this.fams;
 		this.fams = [];
+		this.overloading++;
 		const out = this.finishFn(name, sig, ret, params);
+		this.overloading--;
 		this.fams = saved;
 		return out;
 	}
@@ -8510,7 +8663,7 @@ export function generateParts(seed: uint64, f: Features): Parts {
 	};
 }
 
-export const CORE_OFF: string = "w.core.expr=0 w.core.stmt=0 w.core.fn=0 w.core.pow=0 w.core.nullish=0 w.core.cvt=0 w.core.cmp=0 w.core.while=0 w.core.do=0 w.core.switch=0 w.core.match=0 w.core.compound=0 w.core.cell=0 w.core.incdec=0 w.core.default=0 w.core.rest=0 w.core.overload=0 w.core.recurse=0 w.core.fnvalue=0 w.core.zero=0";
+export const CORE_OFF: string = "w.core.expr=0 w.core.stmt=0 w.core.fn=0 w.core.pow=0 w.core.nullish=0 w.core.cvt=0 w.core.optional=0 w.core.cmp=0 w.core.while=0 w.core.do=0 w.core.switch=0 w.core.match=0 w.core.compound=0 w.core.cell=0 w.core.incdec=0 w.core.void=0 w.core.alias=0 w.core.default=0 w.core.rest=0 w.core.overload=0 w.core.recurse=0 w.core.fnvalue=0 w.core.zero=0 w.core.ushr=0";
 
 function coreOff(): int32[] {
 	const parsed = Features.defaults().overlay(CORE_OFF);
@@ -8917,7 +9070,7 @@ test "a float element is never searched or kept in a Set" {
 	const f = withWeights("fams=coll types=int32,float64 stmts=8 w.stmt.fam=80 w.coll.keyed=20 w.coll.size=20");
 	let searched = 0;
 	let floatDecls = 0;
-	for (let seed = 1; seed < 21; seed++) {
+	for (let seed = 1; seed < 61; seed++) {
 		const text = generate(seed as uint64, f);
 		assert !text.contains("new Set<float64>");
 		const floats: string[] = [];
@@ -9338,7 +9491,7 @@ test "a moved Vec was declared in the moving block and is never named again" {
 			moves++;
 			let declared = -1;
 			for (let j = i - 1; j >= 0 && declared < 0; j--) {
-				if (lines[j].trim().startsWith("let " + name + ":") || lines[j].contains("..." + name + "]")) { declared = indentOf(lines[j]); }
+				if (lines[j].trim().startsWith("let " + name + ":") || lines[j].contains("..." + name + "] =")) { declared = indentOf(lines[j]); }
 			}
 			assert declared == indentOf(lines[i]);
 			for (let j = i + 1; j < lines.length && !lines[j].startsWith("}"); j++) { assert !namesWord(lines[j], name); }
@@ -11291,7 +11444,7 @@ test "an async program names its Raiser skip only for the shapes the Raiser runs
 	const f = withWeights("fams=async types=int32,float64 stmts=8 w.stmt.fam=80 w.async.interleave=8 w.async.all=8");
 	let inline = 0;
 	let all = 0;
-	for (let seed = 1; seed < 41; seed++) {
+	for (let seed = 1; seed < 81; seed++) {
 		const text = generate(seed as uint64, f);
 		const started = text.contains("const pr");
 		const joined = text.contains("await Promise.all([");
@@ -11546,6 +11699,145 @@ test "each new core operator group is reached and its weight at 0 removes it" {
 	assert reaches(s, "w.core.cell", " = { f: ");
 	assert reaches(s, "w.core.cell", "[] = [");
 	assert reaches(s, "w.core.incdec", "++; }");
+}
+
+const GAP_OFF: string = "w.core.optional=0 w.core.void=0 w.core.alias=0 w.core.ushr=0";
+
+test "each gap shape is reached and its weight at 0 removes it" {
+	const both = "w.core.expr=60 w.core.stmt=60";
+	assert reaches(both, "w.core.ushr", " >>> ");
+	assert reaches(both + " w.core.compound=5", "w.core.ushr", " >>>= ");
+	assert reaches(both, "w.core.optional", "?.v ?? ");
+	assert reaches(both, "w.core.optional", "?.get() ?? ");
+	assert reaches(both, "w.core.optional", "?.f ?? ");
+	assert reaches(both, "w.core.optional", "?.g ?? ");
+	assert reaches("w.core.stmt=60", "w.core.void", "(): void => ");
+	assert reaches("w.core.stmt=60", "w.core.void", "function putMax");
+	assert reaches("w.core.stmt=60", "w.core.void", "function putMin");
+	assert reaches("w.core.stmt=60", "w.core.void", "applyVoid(");
+	assert reaches("w.core.stmt=60", "w.core.void", "[1]();");
+	assert reaches("w.core.stmt=60", "w.core.void", ") => void = put");
+	assert reaches("w.core.stmt=60", "w.core.alias", "Twice = Alias");
+	assert reaches("w.core.stmt=60", "w.core.alias", "function pickAlias");
+	assert reaches("w.core.stmt=60", "w.core.alias", "[] = [");
+	assert reaches("w.core.stmt=60", "w.core.alias", ": Alias");
+}
+
+test "the gap shapes at weight 0 keep the stream of the generator without them" {
+	const vectors = ["", "fams=none", "fams=closure", "fams=coll", "fams=str", "fams=iter", "types=int8,uint8,uint32,uint64,float64 fams=none", "types=int32,float32,char,bigint,boolean fams=none depth=2"];
+	const pins: int64[] = [133744062, 894288676, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 295138362, 752400772, 172228344, 208305650, 706058020, 346955844, 47405754, 455897030];
+	for (let v = 0; v < vectors.length; v++) {
+		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + GAP_OFF + " w.meta.spread=0 w.async.result=0");
+		for (let s = 0; s < 2; s++) {
+			const text = generate((s == 0 ? 3 : 9) as uint64, f);
+			assert digest(text.slice(text.indexOf("\n") + 1, text.length) + "\n") == pins[v * 2 + s];
+		}
+	}
+}
+
+test "an unsigned shift is taken over no float and no bigint and a signed one only through the range-checked conversion" {
+	const on = "w.core.expr=60 w.core.stmt=60 w.core.compound=10 w.core.ushr=40";
+	assert countOver(" >>> ", 25, withWeights("types=float64 fams=none " + on)) == 0;
+	assert countOver(" >>> ", 25, withWeights("types=bigint fams=none " + on)) == 0;
+	assert countOver(" >>>= ", 25, withWeights("types=int8,int32,int64 fams=none " + on)) == 0;
+	assert countOver(" >>> ", 25, withWeights("types=int8,int32,int64 fams=none w.expr.convert=0 " + on)) == 0;
+	let shifted = 0;
+	for (let seed = 1; seed <= 25; seed++) {
+		for (const line of generate(seed as uint64, withWeights("types=int8,int32,int64 fams=none " + on)).split("\n")) {
+			if (!line.contains(" >>> ")) { continue; }
+			assert line.contains("convUint") || line.startsWith("function ");
+			shifted++;
+		}
+	}
+	assert shifted > 5;
+}
+
+test "an optional access is read only with a default and a nullable object never starts as a plain null" {
+	const f = withWeights("types=int32,int8,uint32,float64,float32,boolean fams=none w.core.expr=60 w.core.stmt=60 w.core.optional=40");
+	let reads = 0;
+	let decls = 0;
+	for (let seed = 1; seed <= 25; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			let at = line.indexOf("?.");
+			while (at >= 0) {
+				assert line.slice(at, line.length).contains(" ?? ");
+				reads++;
+				at = line.indexOf("?.", at + 2);
+			}
+			if (line.trim().startsWith("let z") && (line.contains("OptBox") || line.contains(": { f: ")) && line.contains(" | null = ")) {
+				assert line.contains(" ? ") && !line.endsWith("| null = null;");
+				decls++;
+			}
+		}
+	}
+	assert reads > 20 && decls > 10;
+	assert countOver("?.", 25, withWeights("types=char fams=none w.core.expr=60 w.core.stmt=60 w.core.optional=40")) == 0;
+}
+
+function callsNamed(line: string, prefix: string): boolean {
+	let at = line.indexOf(prefix);
+	while (at >= 0) {
+		let end = at + prefix.length;
+		while (end < line.length && line.charCodeAt(end) >= 48 && line.charCodeAt(end) <= 57) { end++; }
+		const identBefore = at > 0 && isWord(line.charCodeAt(at - 1));
+		if (!identBefore && end > at + prefix.length && end < line.length && line.charCodeAt(end) == 40) { return true; }
+		at = line.indexOf(prefix, at + 1);
+	}
+	return false;
+}
+
+test "a void routine is called as a statement and never read as a value, and none is a nested function at the top level" {
+	const f = withWeights("types=int32,uint8,float64 fams=none w.core.stmt=60 w.core.void=40");
+	let calls = 0;
+	for (let seed = 1; seed <= 25; seed++) {
+		for (const line of generate(seed as uint64, f).split("\n")) {
+			const body = line.trim();
+			if (body.startsWith("let ") || body.startsWith("return ") || body.startsWith("console.log(")) { assert !callsNamed(body, "v"); }
+			if (callsNamed(body, "v") && !body.startsWith("function ") && !body.startsWith("const ")) {
+				assert body.endsWith(");") && !body.contains(" = v");
+				calls++;
+			}
+			assert !line.startsWith("function v");
+		}
+	}
+	assert calls > 20;
+}
+
+test "a void callback is never an arrow inside an overloaded function" {
+	let seen = 0;
+	for (let seed = 1; seed <= 60; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Uint32, Ty.Float64];
+		g.exprMax = 3;
+		g.costCap = TOP_COST_CAP;
+		g.overloading = 1;
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.voidStmt("");
+		assert !text.contains("(): void => ");
+		if (text != "") { seen++; }
+	}
+	assert seen > 50;
+}
+
+test "a refused void or alias statement leaves the scope as it found it and a kept one adds one local" {
+	for (let seed = 1; seed <= 60; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Uint32, Ty.Float64];
+		g.newTys = [Ty.Char, Ty.Bool];
+		g.exprMax = 3;
+		g.costCap = seed % 3 == 0 ? FN_COST_CAP : TOP_COST_CAP;
+		g.cost = seed % 3 == 0 ? FN_COST_CAP - (3 as int64) : (0 as int64);
+		g.mult = seed % 3 == 0 ? (7 as int64) : (1 as int64);
+		g.atTop = seed % 2 == 0;
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.voidStmt("");
+		assert (text == "" && g.scope.length == 0) || (text != "" && g.scope.length == 1);
+		assert !g.atTop || !text.contains("function ");
+		const alias = g.aliasStmt("");
+		assert alias.contains("let l") && g.scope.length == (text == "" ? 1 : 2);
+	}
 }
 
 function overloads(f: Features): int32 {

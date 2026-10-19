@@ -282,6 +282,7 @@ export enum W {
 	CorePow,
 	CoreNullish,
 	CoreCvt,
+	CoreOptional,
 	CoreCmp,
 	CoreWhile,
 	CoreDo,
@@ -290,12 +291,15 @@ export enum W {
 	CoreCompound,
 	CoreCell,
 	CoreIncDec,
+	CoreVoid,
+	CoreAlias,
 	CoreDefault,
 	CoreRest,
 	CoreOverload,
 	CoreRecurse,
 	CoreFnValue,
 	CoreZero,
+	CoreUshr,
 }
 
 export const W_KEYS: string[] = [
@@ -531,6 +535,7 @@ export const W_KEYS: string[] = [
 	"w.core.pow",
 	"w.core.nullish",
 	"w.core.cvt",
+	"w.core.optional",
 	"w.core.cmp",
 	"w.core.while",
 	"w.core.do",
@@ -539,12 +544,15 @@ export const W_KEYS: string[] = [
 	"w.core.compound",
 	"w.core.cell",
 	"w.core.incdec",
+	"w.core.void",
+	"w.core.alias",
 	"w.core.default",
 	"w.core.rest",
 	"w.core.overload",
 	"w.core.recurse",
 	"w.core.fnvalue",
 	"w.core.zero",
+	"w.core.ushr",
 ];
 
 export const W_DEFAULTS: int32[] = [
@@ -582,9 +590,9 @@ export const W_DEFAULTS: int32[] = [
 	1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	20, 20, 50, 30, 50,
-	25, 25, 25, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1,
+	25, 25, 25, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 5,
 ];
 
 const W_GROUPS: W[][] = [
@@ -1070,22 +1078,22 @@ test "swarm keeps the weights of its base" {
 
 test "weight keys and defaults line up with the enum" {
 	assert W_KEYS.length == W_DEFAULTS.length;
-	assert W_KEYS.length == (W.CoreZero as int32) + 1;
+	assert W_KEYS.length == (W.CoreUshr as int32) + 1;
 	assert W_KEYS[W.StmtBreak as int32] == "w.stmt.break";
 	assert W_KEYS[W.GenericBox as int32] == "w.generic.box";
 }
 
 test "each core weight key sits at its enum position with its default" {
 	const keys = [
-		"w.core.expr", "w.core.stmt", "w.core.fn", "w.core.pow", "w.core.nullish", "w.core.cvt", "w.core.cmp",
-		"w.core.while", "w.core.do", "w.core.switch", "w.core.match", "w.core.compound", "w.core.cell", "w.core.incdec",
-		"w.core.default", "w.core.rest", "w.core.overload", "w.core.recurse", "w.core.fnvalue", "w.core.zero",
+		"w.core.expr", "w.core.stmt", "w.core.fn", "w.core.pow", "w.core.nullish", "w.core.cvt", "w.core.optional", "w.core.cmp",
+		"w.core.while", "w.core.do", "w.core.switch", "w.core.match", "w.core.compound", "w.core.cell", "w.core.incdec", "w.core.void", "w.core.alias",
+		"w.core.default", "w.core.rest", "w.core.overload", "w.core.recurse", "w.core.fnvalue", "w.core.zero", "w.core.ushr",
 	];
 	for (let i = 0; i < keys.length; i++) {
 		assert W_KEYS[(W.CoreExpr as int32) + i] == keys[i];
-		assert W_DEFAULTS[(W.CoreExpr as int32) + i] == (i < 3 ? 25 : 1);
+		assert W_DEFAULTS[(W.CoreExpr as int32) + i] == (i < 3 ? 25 : keys[i] == "w.core.ushr" ? 5 : 1);
 	}
-	assert keys.length == (W.CoreZero as int32) - (W.CoreExpr as int32) + 1;
+	assert keys.length == (W.CoreUshr as int32) - (W.CoreExpr as int32) + 1;
 }
 
 test "the new types are named, parse back, and stay out of the default vector" {

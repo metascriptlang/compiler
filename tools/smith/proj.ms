@@ -1428,7 +1428,7 @@ test "the select shape imports by name only when the alias and namespace shapes 
 
 test "module shapes other than select keep the stream of the splitter without it" {
 	const off = "alias,ns,reexport,star,cycle,init";
-	const cases = ["modules=4 fams=closure,agg " + CORE_OFF + " modshapes=" + off, "modules=3 fams=none modshapes=ns,star"];
+	const cases = ["modules=4 fams=closure,agg " + CORE_OFF + " modshapes=" + off, "modules=3 fams=none w.core.optional=0 w.core.void=0 w.core.alias=0 w.core.ushr=0 modshapes=ns,star"];
 	const pins: int64[] = [341073509, 235616312, 916984209, 372824637, 799339767, 1749349, 784271022, 766585468, 390463679];
 	const seeds: uint64[] = [1, 2, 3, 4, 5, 6, 1, 2, 3];
 	for (let i = 0; i < seeds.length; i++) { assert projectDigest(projectOf(seeds[i], cases[i < 6 ? 0 : 1])) == pins[i]; }
