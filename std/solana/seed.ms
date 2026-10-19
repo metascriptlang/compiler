@@ -126,6 +126,13 @@ export function findAt(
 	return canonicalFailure(msSolFindCanonicalAddress(table, count, program, expected, bumpOut));
 }
 
+// The canonical address of `seeds` is `expected`, or the code of why not: `mismatch` when it is another address.
+export function canonicalAddressFailure(seeds: Readonly<Span<SeedSlice>>, program: uint64, expected: uint64, mismatch: uint64): uint64 {
+	let bump: uint8[1] = [0];
+	const code = msSolFindCanonicalAddress(tableAddress(seeds), seeds.length as uint64, program, expected, msSolSpanAddress(bump));
+	return code == 3 ? mismatch : canonicalFailure(code);
+}
+
 @inline export function findCanonicalStagedFailure(table: uint64, used: uint64, expected: uint64): uint64 {
 	return canonicalFailure(msSolFindCanonicalStaged(table, used, expected));
 }

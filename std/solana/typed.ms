@@ -52,7 +52,7 @@ import {
 	SignerSeeds,
 	bumpInPlace,
 	bytesAddress,
-	findAddress,
+	canonicalAddressFailure,
 	seedKey,
 	tableAddress,
 } from "./seed";
@@ -739,13 +739,7 @@ function associatedFailure(token: uint64, wallet: uint64, mint: uint64): uint64 
 		return ProgramError.incorrectProgramId().code;
 	}
 	const seeds: SeedSlice[3] = [seedKey(wallet), seedKey(tokenProgram), seedKey(mint)];
-	const associatedProgram = ASSOCIATED_TOKEN_PROGRAM_ID;
-	const derived = findAddress(seeds, bytesAddress(associatedProgram.bytes));
-	if (!derived.ok) { return derived.error.code; }
-	if (!keysEqual(bytesAddress(derived.value.key.bytes), token)) {
-		return ProgramError.constraintAssociated().code;
-	}
-	return 0;
+	return canonicalAddressFailure(seeds, bytesAddress(ASSOCIATED_TOKEN_PROGRAM_ID.bytes), token, ProgramError.constraintAssociated().code);
 }
 
 export function associatedMatches(token: uint64, wallet: uint64, mint: uint64): Result<void, ProgramError> {
