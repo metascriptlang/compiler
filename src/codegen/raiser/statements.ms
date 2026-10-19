@@ -15,13 +15,13 @@ import { raiserNil, raiserInt, raiserString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declaredSymbol, regIsFixedLocal,
-	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
+	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst,
 } from "./context";
-import { compileExpr, exprIsString } from "./expressions";
+import { compileExpr, compileExprForEffect, condJumps, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue } from "./valueCopy";
 
 // --- Statement compilation ---
@@ -45,7 +45,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 				const mi = d.expr.data as MacroInvocationData;
 				if (mi.macroName != "emit") { return; }
 			}
-			compileExpr(s, d.expr);
+			compileExprForEffect(s, d.expr);
 		},
 		NodeKind.BlockStmt => { compileBlock(s, node); },
 		NodeKind.VariableDecl => { compileVariableDecl(s, node); },
@@ -54,14 +54,18 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		NodeKind.BreakStmt => {
 			const label = (node.data as BreakStmtData).breakLabel;
 			const loop = jumpTarget(s, label);
-			if (loop != null) loop.breakPatches.items.push(emitJumpPlaceholder(s));
-			else if (label != "") trapMissingTarget(s, node, `break ${label}`);
+			if (loop != null) {
+				leaveTries(s, loop.tryDepth);
+				loop.breakPatches.items.push(emitJumpPlaceholder(s));
+			} else if (label != "") trapMissingTarget(s, node, `break ${label}`);
 		},
 		NodeKind.ContinueStmt => {
 			const label = (node.data as ContinueStmtData).continueLabel;
 			const loop = jumpTarget(s, label);
-			if (loop != null) loop.continuePatches.items.push(emitJumpPlaceholder(s));
-			else if (label != "") trapMissingTarget(s, node, `continue ${label}`);
+			if (loop != null) {
+				leaveTries(s, loop.tryDepth);
+				loop.continuePatches.items.push(emitJumpPlaceholder(s));
+			} else if (label != "") trapMissingTarget(s, node, `continue ${label}`);
 		},
 		NodeKind.FunctionDecl => {},
 		NodeKind.DoWhileStmt => { compileDoWhileStmt(s, node); },
@@ -183,18 +187,19 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 
 function compileIfStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as IfStmtData;
-	const condReg = compileExpr(s, d.condition);
-	const jumpToElse = emitBranchIfFalsy(s, condReg);
+	const toElse = condJumps(s, d.condition, false);
 
 	compileStmt(s, d.consequent);
 
-	if (d.alternate != null) {
+	const alternate = d.alternate;
+	const emptyElse = alternate != null && alternate.kind == NodeKind.BlockStmt && (alternate.data as BlockStmtData).statements.length == 0;
+	if (alternate != null && !emptyElse) {
 		const jumpPastElse = emitJumpPlaceholder(s);
-		patchJumpTo(s, jumpToElse, codeLen(s));
-		compileStmt(s, d.alternate);
+		patchJumpsTo(s, toElse, codeLen(s));
+		compileStmt(s, alternate);
 		patchJumpTo(s, jumpPastElse, codeLen(s));
 	} else {
-		patchJumpTo(s, jumpToElse, codeLen(s));
+		patchJumpsTo(s, toElse, codeLen(s));
 	}
 }
 
@@ -210,12 +215,7 @@ function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
 	patchLoopContinues(s);
 
 	// Condition at the end — loop back if truthy
-	const condReg = compileExpr(s, d.doCondition);
-	const exitJump = emitBranchIfFalsy(s, condReg);
-	const backOffset = loopStart - codeLen(s) - 1;
-	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
-
-	patchJumpTo(s, exitJump, codeLen(s));
+	patchJumpsTo(s, condJumps(s, d.doCondition, true), loopStart);
 	patchLoopBreaks(s);
 }
 
@@ -226,8 +226,7 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.whileLabel);
 
-	const condReg = compileExpr(s, d.whileCondition);
-	const exitJump = emitBranchIfFalsy(s, condReg);
+	const exitJumps = condJumps(s, d.whileCondition, false);
 
 	compileStmt(s, d.whileBody);
 
@@ -238,7 +237,7 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
 
 	// Patch exit + break jumps
-	patchJumpTo(s, exitJump, codeLen(s));
+	patchJumpsTo(s, exitJumps, codeLen(s));
 	patchLoopBreaks(s);
 }
 
@@ -257,10 +256,9 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 	pushLoop(s, loopStart, d.forLabel);
 
 	// Condition
-	let exitJump = -1;
+	let exitJumps: int32[] = [];
 	if (d.forCondition != null) {
-		const condReg = compileExpr(s, d.forCondition);
-		exitJump = emitBranchIfFalsy(s, condReg);
+		exitJumps = condJumps(s, d.forCondition, false);
 	}
 
 	// Body
@@ -270,7 +268,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 
 	// Update
 	if (d.forUpdate != null) {
-		compileExpr(s, d.forUpdate);
+		compileExprForEffect(s, d.forUpdate);
 	}
 
 	// Jump back to condition
@@ -278,9 +276,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
 
 	// Patch exit + break jumps
-	if (exitJump >= 0) {
-		patchJumpTo(s, exitJump, codeLen(s));
-	}
+	patchJumpsTo(s, exitJumps, codeLen(s));
 	patchLoopBreaks(s);
 }
 
@@ -364,45 +360,75 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 //   <try body>
 //   Jump →FIN             nothing raised: fall into Finally, which pops it
 //   EH: Catch a=<e> →FIN  never executed; the unwinder reads a and Bx
-//   <catch body>
-//   Jump →FIN+1           the unwinder already popped, so SKIP the marker
-//   FIN: Finally
+//   Try →FIN              only with a finally clause: the unwinder popped the
+//   <catch body>          try's safepoint, so this one makes a raise or a
+//   Jump →FIN             return leaving the catch body run the finally
+//   FIN: Finally a=<r>    R[r], R[r+1] = how the finally body was entered
 //   <finally body>
-//   FinallyEnd
+//   FinallyEnd a=<r>      fall through, re-raise or return, as R[r] says
 //
 // The Finally marker is emitted even when the source has no finally clause,
-// so the normal path always has exactly one place that pops the safepoint.
+// so the normal path always has exactly one place that pops the safepoint;
+// without a finally clause the catch body has no safepoint and jumps past
+// FinallyEnd.
 function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as TryCatchStmtData;
+	const routeReg = allocReg(s);
+	allocReg(s);
 	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
+	s.tries.push({ finallyBody: d.finallyBody, routeReg });
 	compileStmt(s, d.tryBody);
+	s.tries.pop();
 	const toFinally = emitJumpPlaceholder(s);
 
 	let catchIdx = -1;
 	let catchEnd = -1;
+	let catchGuard = -1;
 	let catchReg = 0;
 	if (d.hasCatchClause) {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
 		catchReg = allocReg(s);
+		if (d.finallyBody != null) {
+			catchGuard = emitAbxPlaceholder(s, RaiserOpcode.Try);
+			s.tries.push({ finallyBody: d.finallyBody, routeReg });
+		}
 		const savedLocals = s.locals.items.length;
 		if (d.catchName != "") declareLocal(s, declaredSymbol(node, d.catchName), catchReg);
 		if (d.catchBody != null) compileStmt(s, d.catchBody);
 		s.locals.items.shrink(savedLocals);
+		if (catchGuard >= 0) s.tries.pop();
 		catchEnd = emitJumpPlaceholder(s);
 	}
 
 	const finIdx = codeLen(s);
-	emitInst(s, raiserABC(RaiserOpcode.Finally, 0, 0, 0));
+	emitInst(s, raiserABC(RaiserOpcode.Finally, routeReg, 0, 0));
 	if (d.hasCatchClause) {
 		patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, catchIdx);
 		patchAbxTo(s, catchIdx, RaiserOpcode.Catch, catchReg, finIdx);
-		patchJumpTo(s, catchEnd, codeLen(s));
+		if (catchGuard >= 0) {
+			patchAbxTo(s, catchGuard, RaiserOpcode.Try, 0, finIdx);
+			patchJumpTo(s, catchEnd, finIdx);
+		}
 	} else {
 		patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, finIdx);
 	}
 	patchJumpTo(s, toFinally, finIdx);
 	if (d.finallyBody != null) compileStmt(s, d.finallyBody);
-	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0));
+	emitInst(s, raiserABC(RaiserOpcode.FinallyEnd, routeReg, 0, 0));
+	if (d.hasCatchClause && catchGuard < 0) patchJumpTo(s, catchEnd, codeLen(s));
+}
+
+function leaveTries(s: RaiserCompState, depth: int32): void {
+	const tries = s.tries.slice(0, s.tries.length);
+	for (let j = tries.length - 1; j >= depth; j = j - 1) {
+		emitInst(s, raiserABC(RaiserOpcode.Finally, tries[j].routeReg, 0, 0));
+		const fin = tries[j].finallyBody;
+		if (fin != null) {
+			s.tries.shrink(j);
+			compileStmt(s, fin);
+			s.tries = tries.slice(0, tries.length);
+		}
+	}
 }
 
 function compileSwitchStmt(s: RaiserCompState, node: Node): void {

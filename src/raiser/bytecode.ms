@@ -129,8 +129,8 @@ export enum RaiserOpcode {
 	// Same append-at-the-END rule as the opcodes above.
 	Try,              // ABx: push a safepoint at ip + Bx (a Catch or a Finally)
 	Catch,            // ABx: metadata — handler body follows, Bx = offset past the block
-	Finally,          // ABC: pop the safepoint — reached only when nothing was raised
-	FinallyEnd,       // ABC: resume the pending unwind, if there is one
+	Finally,          // ABC: pop the safepoint — reached only when nothing was raised; R[A], R[A+1] = how the finally body was entered
+	FinallyEnd,       // ABC: resume what R[A], R[A+1] of its Finally hold: fall through, re-raise, or return
 	Throw,            // ABC: raise R[A]
 
 	// Compile-time-known-bad site: the bytecode compiler already reported it
@@ -170,6 +170,27 @@ export enum RaiserOpcode {
 	FutureNew,        // ABC: R[A] = a pending future
 	FutureSettle,     // ABC: complete future R[A] with R[B] unless it is already settled
 	FutureFail,       // ABC: fail future R[A] with exception R[B] unless it is already settled
+	LoadInt,          // ABC: R[A] = the immediate in B
+	AddI64Imm,        // ABC: R[A] = R[B] + the immediate in C, stopping on overflow as AddI64 does
+	SubI64Imm,        // ABC: R[A] = R[B] - the immediate in C, stopping on overflow as SubI64 does
+	BeqI64Imm,        // ABC: if R[A] == the immediate in B skip C instructions
+	BneI64Imm,        // ABC: if R[A] != the immediate in B skip C instructions
+	BltI64Imm,        // ABC: if R[A] <  the immediate in B skip C instructions
+	BleI64Imm,        // ABC: if R[A] <= the immediate in B skip C instructions
+	BgtI64Imm,        // ABC: if R[A] >  the immediate in B skip C instructions
+	BgeI64Imm,        // ABC: if R[A] >= the immediate in B skip C instructions
+	BrEqI64,          // ABC: if R[A] == R[B] pc += branchOffset(C)
+	BrNeI64,          // ABC: if R[A] != R[B] pc += branchOffset(C)
+	BrLtI64,          // ABC: if R[A] <  R[B] pc += branchOffset(C)
+	BrLeI64,          // ABC: if R[A] <= R[B] pc += branchOffset(C)
+	BrGtI64,          // ABC: if R[A] >  R[B] pc += branchOffset(C)
+	BrGeI64,          // ABC: if R[A] >= R[B] pc += branchOffset(C)
+	BrEqI64Imm,       // ABC: if R[A] == the immediate in B pc += branchOffset(C)
+	BrNeI64Imm,       // ABC: if R[A] != the immediate in B pc += branchOffset(C)
+	BrLtI64Imm,       // ABC: if R[A] <  the immediate in B pc += branchOffset(C)
+	BrLeI64Imm,       // ABC: if R[A] <= the immediate in B pc += branchOffset(C)
+	BrGtI64Imm,       // ABC: if R[A] >  the immediate in B pc += branchOffset(C)
+	BrGeI64Imm,       // ABC: if R[A] >= the immediate in B pc += branchOffset(C)
 }
 
 export enum RaiserConvClass {
@@ -219,28 +240,27 @@ export function convClassSigned(cls: RaiserConvClass): boolean {
 }
 
 // --- Instruction ---
-// Flat interface — no bit packing needed until .msb serialization (Layer 5+).
-// Fields a/b/c are 0-255 (u8 range).
+// The record codegen builds and the disassembler reads. The VM runs the packed
+// form of it (packInstruction).
 
 export interface RaiserInstruction {
 	op: RaiserOpcode;
 	a: number;
 	b: number;
 	c: number;
-	cachedIdx: number;  // MIC: cached field index for LoadField/StoreField (-1 = miss)
 	line: number;       // Source line number for diagnostics (0 = unknown)
 }
 
 // --- Constructors ---
 
 export function raiserABC(op: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
-	return { op, a, b, c, cachedIdx: -1, line: 0 };
+	return { op, a, b, c, line: 0 };
 }
 
 export function raiserABx(op: RaiserOpcode, a: number, bx: number): RaiserInstruction {
 	const bHigh: int32 = (bx as int32 / 256) | 0;
 	const bLow = bx - (bHigh as number) * 256;
-	return { op, a, b: bHigh as number, c: bLow, cachedIdx: -1, line: 0 };
+	return { op, a, b: bHigh as number, c: bLow, line: 0 };
 }
 
 export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
@@ -252,7 +272,7 @@ export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
 	const rem = raw - (aHigh as number) * 65536;
 	const bMid: int32 = (rem as int32 / 256) | 0;
 	const cLow = rem - (bMid as number) * 256;
-	return { op, a: aHigh as number, b: bMid as number, c: cLow, cachedIdx: -1, line: 0 };
+	return { op, a: aHigh as number, b: bMid as number, c: cLow, line: 0 };
 }
 
 // --- Decoders ---
@@ -271,6 +291,76 @@ export function getSignedAx(inst: RaiserInstruction): number {
 	const raw = inst.a * 65536 + inst.b * 256 + inst.c;
 	if (raw >= 8388608) return raw - 16777216;
 	return raw;
+}
+
+const IMM_EXCESS = 32768;
+
+export function fitsImm(v: int64): boolean {
+	return v >= -IMM_EXCESS && v < IMM_EXCESS;
+}
+
+export function immField(v: int64): number {
+	if (!fitsImm(v)) throw new Error(`internal: immediate ${v} does not fit the 16-bit operand field`);
+	return (v + IMM_EXCESS) as number;
+}
+
+export function immValue(field: number): int64 {
+	return (field as int64) - IMM_EXCESS;
+}
+
+const BRANCH_EXCESS = 8388608;
+
+export function isBranchI64(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
+			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm
+			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => true,
+		_ => false,
+	};
+}
+
+export function branchField(offset: int64): number {
+	if (offset < -BRANCH_EXCESS || offset >= BRANCH_EXCESS) throw new Error(`internal: branch offset ${offset} does not fit the 24-bit branch field`);
+	return (offset + BRANCH_EXCESS) as number;
+}
+
+export function branchOffset(field: number): int64 {
+	return (field as int64) - BRANCH_EXCESS;
+}
+
+// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's c takes the 24 bits from bit 40 up.
+const PACKED_FIELD_LIMIT = 65536;
+const PACKED_BRANCH_LIMIT = 16777216;
+
+function packedField(inst: RaiserInstruction, v: number, name: string, limit: int64, bits: int32): int64 {
+	const whole = v as int64;
+	if ((whole as number) != v || whole < 0 || whole >= limit) {
+		throw new Error(`internal: operand ${name} = ${v} of opcode ${inst.op} does not fit the packed ${bits}-bit field`);
+	}
+	return whole;
+}
+
+export function packedOp(word: int64): RaiserOpcode {
+	return (word & 255) as RaiserOpcode;
+}
+
+export function packedA(word: int64): number {
+	return ((word >> 8) & 65535) as number;
+}
+
+export function packedBx(word: int64): number {
+	return (((word >> 24) & 65535) * 256 + ((word >> 40) & 65535)) as number;
+}
+
+export function packedBranch(word: int64): int32 {
+	return (((word >> 40) & 16777215) - BRANCH_EXCESS) as int32;
+}
+
+export function packInstruction(inst: RaiserInstruction): int64 {
+	const op = inst.op as int64;
+	if (op < 0 || op > 255) throw new Error(`internal: opcode ${inst.op} does not fit the packed 8-bit field`);
+	const c = isBranchI64(inst.op) ? packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16);
+	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | (c << 40);
 }
 
 // --- Tests ---
@@ -350,4 +440,68 @@ test "CallHost zero args" {
 	const inst = raiserABC(RaiserOpcode.CallHost, 0, 0, 0);
 	assert inst.op == RaiserOpcode.CallHost;
 	assert inst.c == 0;
+}
+
+test "packed word holds op, a, b and c" {
+	const w = packInstruction(raiserABC(RaiserOpcode.Jump, 65535, 1000, 7));
+	assert (w & 255) == (RaiserOpcode.Jump as int64);
+	assert ((w >> 8) & 65535) == 65535;
+	assert ((w >> 24) & 65535) == 1000;
+	assert ((w >> 40) & 65535) == 7;
+}
+
+test "packed word keeps a negative jump's three bytes" {
+	const inst = raiserAx(RaiserOpcode.Jump, -5);
+	const w = packInstruction(inst);
+	const a = ((w >> 8) & 65535) as int32;
+	const b = ((w >> 24) & 65535) as int32;
+	const c = ((w >> 40) & 65535) as int32;
+	assert a * 65536 + b * 256 + c == 16777211;
+}
+
+test "an operand outside 16 bits stops the pack" {
+	let message = "";
+	try {
+		packInstruction(raiserABC(RaiserOpcode.Move, 65536, 0, 0));
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("does not fit the packed 16-bit field");
+}
+
+test "an immediate keeps its value across the field and stops one past each end" {
+	assert immValue(immField(-32768)) == -32768;
+	assert immValue(immField(32767)) == 32767;
+	assert immValue(immField(0)) == 0;
+	assert immField(-32768) == 0 && immField(32767) == 65535;
+	assert fitsImm(32767) && fitsImm(-32768) && !fitsImm(32768) && !fitsImm(-32769);
+	let message = "";
+	try {
+		immField(32768);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("does not fit the 16-bit operand field");
+}
+
+test "a branch offset keeps its sign across the 24-bit packed field and stops one past each end" {
+	for (const offset of [0, 1, -1, 32768, -32769, 8388607, -8388608]) {
+		const inst = raiserABC(RaiserOpcode.BrLtI64, 3, 4, branchField(offset));
+		assert packedBranch(packInstruction(inst)) == offset;
+		assert packedA(packInstruction(inst)) == 3;
+	}
+	let message = "";
+	try {
+		branchField(8388608);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.includes("does not fit the 24-bit branch field");
+	let wide = "";
+	try {
+		packInstruction(raiserABC(RaiserOpcode.BltI64, 0, 0, 65536));
+	} catch (e) {
+		wide = (e as Error).message;
+	}
+	assert wide.includes("does not fit the packed 16-bit field");
 }

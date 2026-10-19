@@ -62,6 +62,7 @@ import "./raiseChecks";
 import "./inlineFunctions";
 import "./pointerAddress";
 import "./noinlinePragma";
+import "./computedGoto";
 import "./dispatcherMain";
 import "./moduleBindingTdz";
 import "./copiedBodyHeader";

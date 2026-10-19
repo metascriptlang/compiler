@@ -49,5 +49,7 @@ import "./scenarios/charAcceptsOnlyChar";
 import "./scenarios/tryOperandIsResult";
 import "./scenarios/charArithmetic";
 import "./scenarios/voidInUnion";
+import "./scenarios/bareReturnInValueFunction";
 import "./scenarios/textOfVoid";
 import "./scenarios/functionReturnRepr";
+import "./scenarios/narrowedWriteTarget";

@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -951,6 +951,7 @@ export enum PromiseAllShape {
 	None,
 	Int32,
 	Int64,
+	Integer,
 	Boxed,
 }
 
@@ -962,6 +963,7 @@ export function promiseAllShape(inner: Type | null): PromiseAllShape {
 		if (simple == "double" || simple == "bool" || simple == "MS_BOOL" || simple == "msString" || simple.endsWith("*")) return PromiseAllShape.None;
 		if (simple == "int32_t") return PromiseAllShape.Int32;
 		if (simple == "int64_t") return PromiseAllShape.Int64;
+		if (isIntegerType(inner)) return PromiseAllShape.Integer;
 		return PromiseAllShape.Boxed;
 	}
 	if (isAwaitable(inner)) return PromiseAllShape.None;
@@ -2008,7 +2010,8 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	const futName = "msFuture_" + mangle(innerDesc);
 	const arrName = arrayCTypeName(arrT);
 	const payloadName = getArrayContentType(arrName);
-	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", arrTypeInfo);
+	const copyStmt = shape == PromiseAllShape.Integer ? "MS_COPY_SAME" : "MS_COPY_BOXED_MOVE";
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, copyStmt, arrTypeInfo);
 	return "msPromiseAllFor_" + futName;
 }
 
@@ -2113,16 +2116,17 @@ function genTupleType(g: CGen, t: Type): string {
 	typeCacheSet(g.typeCache, key, name);
 	ensureForwardDecl(g, name);
 
-	// Emit struct: fields named _0, _1, ...
+	const fieldDescs: string[] = [];
+	for (const child of t.typeChildren) fieldDescs.push(getTypeDesc(g, child));
+
 	const b = sec(g, CSection.Types);
 	addLine(b, `#ifndef ${name}_DEFINED`);
 	addLine(b, `#define ${name}_DEFINED`);
 	addLine(b, `struct ${name} {`);
 	b.indent += 1;
 	let i = 0;
-	while (i < t.typeChildren.length) {
-		const ft = getTypeDesc(g, t.typeChildren[i]);
-		addLine(b, `${ft} _${i};`);
+	while (i < fieldDescs.length) {
+		addLine(b, `${fieldDescs[i]} _${i};`);
 		i += 1;
 	}
 	b.indent -= 1;
@@ -2403,6 +2407,21 @@ test "tuple type desc emits struct" {
 	assert name != "void*";
 	assert name.length > 8; // "msTuple_" + hash
 	assert types.length > 0;
+}
+
+test "a tuple's element types are defined before the tuple struct opens" {
+	const g = createCGen(null as unknown as CheckerContext, "");
+	const face = createEnum("Face", ["None", "Back"]);
+	face.sym = makeSymbol("Face", SymbolKind.Enum, face, false);
+	const t = createTuple([createTuple([face, createPrimitive(TypeKind.Int32)]), createPrimitive(TypeKind.Int32)]);
+	const outer = getTypeDesc(g, t);
+	const inner = getTypeDesc(g, t.typeChildren[0]);
+	const types = extract(sec(g, CSection.Types));
+	const enumAt = types.indexOf("typedef uint8_t Face");
+	const innerAt = types.indexOf(`struct ${inner} {`);
+	const outerAt = types.indexOf(`struct ${outer} {`);
+	assert enumAt >= 0 && enumAt < innerAt;
+	assert types.indexOf("};", innerAt) < outerAt;
 }
 
 test "tuple needsRC with string element" {

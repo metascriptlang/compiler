@@ -3600,6 +3600,16 @@ function unionOfParts(parts: Type[]): Type {
 	return isNullableShape(parts) ? nullableUnionOf(parts) : createUnion(parts);
 }
 
+function canonicalSubstitutedUnion(copy: Type): Type {
+	if (isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) return nullableUnionOf(copy.typeChildren);
+	if (copy.typeName != "" || (copy.typeNames != null && copy.typeNames.length > 0)) return copy;
+	for (const m of copy.typeChildren) {
+		if (m != null && m.kind == TypeKind.Union) return createUnion(copy.typeChildren);
+	}
+	sortUnionMembers(copy.typeChildren);
+	return copy;
+}
+
 // In-place substitute all children of a copied type.
 function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type, seen: Cursor<Type>[]): void {
 	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
@@ -3652,11 +3662,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete, active);
-				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
-				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
-					return nullableUnionOf(copy.typeChildren);
-				}
-				return copy;
+				return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
 			},
 			TypeKind.Ref => rebuildRefLike(t, substituteTypeInner(refSubstInner(t), paramName, concrete, active)),
 			TypeKind.Ptr => createPtr(substituteTypeInner(t.typeReturn, paramName, concrete, active)),
@@ -3743,11 +3749,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(copy, names, concretes, active);
-				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
-				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
-					return nullableUnionOf(copy.typeChildren);
-				}
-				return copy;
+				return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
 			},
 			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), names, concretes, active)),
 			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
@@ -5070,6 +5072,16 @@ test "substitute in Result" {
 	assert ok2 != null && ok2.kind == TypeKind.Number;
 	const err2 = getResultErrType(step2);
 	assert err2 != null && err2.kind == TypeKind.String;
+}
+
+test "a union substituted into a union is the flat union the resolver builds" {
+	const literals = createUnion([createStringLiteral("a"), createStringLiteral("b")]);
+	const generic = createUnion([createGenericParam("T"), booleanType()]);
+	const direct = createUnion([literals, booleanType()]);
+	const one = substituteType(generic, "T", literals);
+	const all = substituteAllParams(generic, ["T"], [literals]);
+	assert one.typeChildren.length == 3 && typeKey(one) == typeKey(direct);
+	assert all.typeChildren.length == 3 && typeKey(all) == typeKey(direct);
 }
 
 test "instantiateGeneric multi-param" {

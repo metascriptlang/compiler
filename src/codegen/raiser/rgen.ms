@@ -28,7 +28,7 @@ import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserEnumMap, RaiserFuncEntry, RaiserGlobalMap, createFuncMap,
-	createCompState, emitInst, emitLoadConst, emitRet, allocReg, raiserClassKey,
+	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocReg, raiserClassKey,
 	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
@@ -148,9 +148,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserEnumMap, 
 		compileStmt(s, body);
 	}
 
-	const nilReg = allocReg(s);
-	emitLoadConst(s, nilReg, raiserNil());
-	emitRet(s, nilReg);
+	emitImplicitReturn(s);
 
 	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.maxRegSeen);
 	compiled.copyPlans = s.copyPlans;
@@ -213,9 +211,7 @@ function compileClassInit(
 	if (ctorBody != null) {
 		compileStmt(s, ctorBody);
 	}
-	const nilReg = allocReg(s);
-	emitLoadConst(s, nilReg, raiserNil());
-	emitRet(s, nilReg);
+	emitImplicitReturn(s);
 	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorArity(ctorSyms) + 1, 0, s.maxRegSeen);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;

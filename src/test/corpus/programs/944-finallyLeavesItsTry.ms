@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser bytecode compiler skips a finally left by `break` and one left by `return` inside a catch, also on the baseline
 // @stdout: fin r|1|fin b|1|fin 0|fin 1|fin 2|33|fin|outer caught|calls=1|fin|caught|calls=1|loop fin|own caught|-1|calls=1|inner fin|outer catch|outer fin|2|calls=1
 // note: a jump inside a finally does not run that finally again, and a raise from a finally inlined at a return or break leaves the try being left (inject-scopes-9 / -10: C ran the finally twice or caught the raise in the same try).
 

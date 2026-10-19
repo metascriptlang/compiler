@@ -279,6 +279,7 @@ msString msStringByteCharAt(msString s, int64_t idx);
 
 /* Create a string from a Unicode codepoint (UTF-8 encoded). */
 msString msStringFromCodePoint(int64_t cp);
+void msStringAppendCodePoint(msString* dest, int64_t cp);
 
 /* Substring [start, end) by character position. TypeScript parity. */
 msString msStringSlice(msString s, int64_t start, int64_t end);

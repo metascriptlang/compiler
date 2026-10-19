@@ -22,8 +22,9 @@ import { isMaybeType, unwrapMaybeType, isTagCarriedUnion, unwrapRefNullUnion, pe
 import { projectTagUnionMember, narrowMaybePayload, checkedProjection, storesUnionTag } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeMember } from "../util";
-import { unwrapRefusesNull } from "../native/nullableLower";
+import { makeMember, makeBinary } from "../util";
+import { unwrapRefusesNull, wrapMaybeValue } from "../native/nullableLower";
+import { cloneIfPure } from "./intArithJS";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
 	const project = !ctx.jsBackend && !ctx.raiserBackend;
@@ -40,6 +41,23 @@ function isAssignOp(op: string): boolean {
 	if (op == "=") return true;
 	if (op.length < 2 || op.charAt(op.length - 1) != "=") return false;
 	return op != "==" && op != "!=" && op != "===" && op != "!==" && op != "<=" && op != ">=";
+}
+
+function isCompoundStoreOp(op: string): boolean {
+	return op != "=" && op != "&&=" && op != "||=" && op != "??=";
+}
+
+// `x op= y` on a narrowed carrier stores what `x = x op y` stores: the checker wraps the
+// RHS of `=` into the carrier, but a compound RHS is a bare payload.
+function storeCompoundInCarrier(node: Node, d: BinaryExprData, read: Node): Node {
+	const carrier = d.left.nodeType;
+	const readCarrier = cloneIfPure(d.left);
+	if (carrier == null || readCarrier == null) return node;
+	const payloadRead = makeMember(readCarrier, "value", node.location);
+	payloadRead.nodeType = read.nodeType;
+	payloadRead.flags = read.flags;
+	const combined = makeBinary(payloadRead, d.operator.slice(0, d.operator.length - 1), d.right, node.location);
+	return makeBinary(d.left, "=", wrapMaybeValue(combined, carrier, node.location), node.location);
 }
 
 function declaredMaybeOf(node: Node): Type | null {
@@ -128,7 +146,10 @@ function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	const project = projectAll || qualifiesForTagged(node);
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (isAssignOp(d.operator)) d.left = unwrapIfMaterialized(d.left);
+		if (!isAssignOp(d.operator)) return node;
+		const read = d.left;
+		d.left = unwrapIfMaterialized(read);
+		if (d.left != read && isCompoundStoreOp(d.operator)) return storeCompoundInCarrier(node, d, read);
 		return node;
 	}
 	if (node.kind == NodeKind.OutExpr) {

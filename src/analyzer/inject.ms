@@ -2277,8 +2277,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Covers: return d.className (string field from union variant extraction),
 		//         return state.tokens[pos] (struct with string field),
 		//         return _globalArray (module-level variable), etc.
-		// Gate on ORIGINAL kind to avoid re-copying a passCopyToSink-produced temp.
-		if (origKind == NodeKind.ArrayAccess || origKind == NodeKind.MemberExpr) {
+		if (d.argument.kind == NodeKind.ArrayAccess || d.argument.kind == NodeKind.MemberExpr) {
 			const retRc = classifyRc(d.argument.nodeType, dctx);
 			if (retRc.needsCleanup && retRc.rcKind != RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);

@@ -143,6 +143,7 @@ export class CBlock {
 	nestedTryDepth: number;  // snapshot of CProc.nestedTryStmts.length at block entry
 	breakUsed: boolean;    // a labeled break targeted this block — emit the `<label>_x_:` landing after it
 	continueUsed: boolean; // a labeled continue targeted this block — emit the `<label>:` landing inside it
+	landing: string;       // non-empty: a labeled break jumps to this label instead of `<label>_x_`
 }
 
 export function createBlock(id: number, isLoop: boolean): CBlock {
@@ -156,6 +157,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 		nestedTryDepth: 0,
 		breakUsed: false,
 		continueUsed: false,
+		landing: "",
 	};
 }
 
@@ -190,6 +192,7 @@ export class CProc {
 	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
 	// here so identifiers created by DRC (which lack resolvedSym) can resolve the unique name.
 	localNameMap: string[];   // parallel arrays: [originalName, uniqueName, ...]
+	reemitting: boolean;  // a statement is being generated again: a local it declares is assigned, never declared
 }
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
@@ -244,6 +247,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		localSyms: [],
 		localSymNames: [],
 		localNameMap: [],
+		reemitting: false,
 	};
 }
 

@@ -109,3 +109,23 @@ test "safeSqrt helper" {
 	assert r5.ok;
 	assert r5.value == 5;
 }
+
+test "async: an await of a settled promise in a test block resumes behind the callbacks queued before it" {
+	let order = "";
+	Promise.resolve(0).then((v: int32): void => { order += "t"; });
+	Promise.resolve(0).then((v: int32): void => { order += "u"; });
+	await Promise.resolve(0);
+	order += "a";
+	assert order == "tua", order;
+}
+
+let chainOrder = "";
+
+test "async: a callback queued while an await waits its turn runs after the await resumes" {
+	Promise.resolve(0).then((v: int32): void => { chainOrder += "1"; }).then((): void => { chainOrder += "2"; });
+	await Promise.resolve(0);
+	chainOrder += "a";
+	assert chainOrder == "1a", chainOrder;
+	await Promise.resolve(0);
+	assert chainOrder == "1a2", chainOrder;
+}

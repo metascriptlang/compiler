@@ -30,7 +30,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet } from "./fit";
+import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -209,7 +209,9 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 
 function literalDiscriminantOwner(md: MemberExprData): Type | null {
 	let obj = md.object;
-	while (obj.kind == NodeKind.HiddenDeref) obj = (obj.data as HiddenDerefData).expr;
+	while (obj.kind == NodeKind.HiddenDeref || obj.kind == NodeKind.HiddenSubConv || obj.kind == NodeKind.HiddenStdConv) {
+		obj = obj.kind == NodeKind.HiddenDeref ? (obj.data as HiddenDerefData).expr : (obj.data as HiddenStdConvData).convExpr;
+	}
 	const declared = obj.resolvedSym != null && (obj.kind == NodeKind.Identifier || obj.kind == NodeKind.MemberExpr) ? obj.resolvedSym.symbolType : obj.nodeType;
 	const u = peelToStructOrUnion(declared);
 	if (u == null || u.kind != TypeKind.Union) return null;
@@ -1127,6 +1129,8 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 	}
 	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
+	const savedDefinite = ctx.initTracker.definiteTarget;
+	if (d.operator == "=" || d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") ctx.initTracker.definiteTarget = d.left;
 	if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
 		if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 		checkAssignTarget(ctx, d.left);
@@ -1134,6 +1138,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
 	}
 	ctx.initTracker.assignTarget = null;
+	ctx.initTracker.definiteTarget = savedDefinite;
 	if (isAsgn && d.operator != "=" && isNumberLiteralTyped(d.left.nodeType)) {
 		addError(ctx, `'${d.operator}' would store a '${typeDisplayName(widenNumberLiteralType(d.left.nodeType!))}' in '${typeDisplayName(d.left.nodeType)}': assign a literal of that type instead`, node.location.line, node.location.column);
 		node.nodeType = errorType(); return;
@@ -2755,7 +2760,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (readType != null && (readType.kind == TypeKind.Var || readType.kind == TypeKind.Borrow) && readType.typeReturn != null) {
 		readType = readType.typeReturn;
 	}
-	if (ctx.initTracker.leftPartOfAsgn > 0) {
+	if (node == ctx.initTracker.definiteTarget) {
 		node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
 	}
 	const flowType = getFlowTypeOfReference(node, readType);
@@ -3191,6 +3196,49 @@ export function refuseGeneratorReturnValue(ctx: CheckerContext, node: Node): boo
 		addError(ctx, "a generator's 'return' ends it and carries no value: its values are what it yields; write 'return;'", node.location.line, node.location.column);
 	}
 	return true;
+}
+
+export function checkBareReturn(ctx: CheckerContext, node: Node): void {
+	const fn = ctx.currentFunction;
+	if (fn == null || ctx.matchExprDepth > 0 || ctx.inferredReturn == null) return;
+	if (fn.declNode != null && fn.declNode.kind == NodeKind.ConstructorDecl) return;
+	if (isGeneratorFlags(routineFlags(fn.declNode))) return;
+	const declared = declaredReturnOf(fn);
+	if (declared == null || isUnresolvedType(declared)) {
+		if (ctx.inferredReturn.kind == TypeKind.Inferred) ctx.inferredReturn = voidType();
+		ctx.inferredReturnStmts.push(node);
+		giveBareReturnsNull(ctx);
+		return;
+	}
+	const ret = hasFlag(fn, SymbolFlag.Async) ? awaitedType(declared) : declared;
+	if (ret == null || ret.kind == TypeKind.Void || isUnknownType(ret) || isUnresolvedType(ret) || isIterator(ret)) return;
+	if (ret.kind == TypeKind.Union) {
+		for (const m of ret.typeChildren) {
+			if (m != null && m.kind == TypeKind.Void) return;
+		}
+	}
+	if (!isAssignable(nullType(), ret)) {
+		const shown = typeDisplayName(ret);
+		addError(ctx, "'" + fn.name + "' returns '" + shown + "', and a bare 'return;' gives no value: return a value, or write the return type as '" + shown + " | null'", node.location.line, node.location.column);
+		return;
+	}
+	const d = node.data as ReturnStmtData;
+	d.argument = fitNode(ctx, typedNull(node.location), ret, nullType());
+}
+
+export function giveBareReturnsNull(ctx: CheckerContext): void {
+	const t = ctx.inferredReturn;
+	if (!branchContributesToJoin(t)) return;
+	let gave = false;
+	for (const rs of ctx.inferredReturnStmts) {
+		const rsd = rs.data as ReturnStmtData;
+		if (rs.kind != NodeKind.ReturnStmt || rsd.argument != null) continue;
+		rsd.argument = typedNull(rs.location);
+		gave = true;
+	}
+	if (!gave || t.kind == TypeKind.Null) return;
+	const joined = joinBranchTypes([t, nullType()]);
+	if (!isUnresolvedType(joined)) ctx.inferredReturn = joined;
 }
 
 // ===== Anonymous Functions =====

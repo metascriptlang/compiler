@@ -1,6 +1,6 @@
 // Raiser VM — Module and Function structures
 
-import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx } from "./bytecode";
+import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx, packInstruction } from "./bytecode";
 import { RaiserValue, RaiserClassType, raiserInt } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 
@@ -8,13 +8,22 @@ import { RaiserCopyPlan } from "./valueCopy";
 
 export interface RaiserFunction {
 	name: string;
-	code: RaiserInstruction[];
+	code: RaiserInstruction[];  // disasm, tests and codegen only: the VM reads `packed`
+	packed: int64[];      // code, packed once by createRaiserFunction
+	lines: int32[];       // source line per instruction, 0 = unknown
+	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
 	arity: number;
 	localsCount: number;
 	maxRegs: number;
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
+}
+
+export function assertPacked(func: RaiserFunction): void {
+	if (func.packed.length != func.code.length) {
+		throw new Error(`internal: function ${func.name} has ${func.code.length} instructions but ${func.packed.length} packed words; its code changed after createRaiserFunction`);
+	}
 }
 
 // --- Module ---
@@ -37,7 +46,15 @@ export interface RaiserModule {
 // --- Constructors ---
 
 export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number): RaiserFunction {
-	return { name, code, constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
+	const packed: int64[] = [];
+	const lines: int32[] = [];
+	const fieldCache: int32[] = [];
+	for (const inst of code) {
+		packed.push(packInstruction(inst));
+		lines.push(inst.line as int32);
+		fieldCache.push(-1);
+	}
+	return { name, code, packed, lines, fieldCache, constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {

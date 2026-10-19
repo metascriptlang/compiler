@@ -40,7 +40,10 @@ after another, and compare every red against src/test/known-red.json.
   --release      the full ladder, whatever the diff says
   --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests fmt corpus san guard solana
   --dry-run      print the chosen lanes and the paths that pulled each one in
-  --record       run the ladder on a clean main and rewrite known-red.json
+  --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
+  --local        with --record: write the reds the shared set lacks to this machine's
+                 ~/.metascript/gates/known-red.local.json instead; a red only one host
+                 sees is recorded there, never in the tracked set
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --inert <from> <to>  exit 0 when every path changed from..to picks no lane
@@ -503,6 +506,45 @@ program_keys() {
 cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
 
 GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
+KNOWN_LOCAL="${GATE_KNOWN_LOCAL:-$GATES_DIR/known-red.local.json}"
+
+known_of() {
+  local f
+  for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r --arg l "$1" '.[$l] // {} | keys[]' "$f"
+  done | tr -d '\r' | sort -u
+}
+
+flaky_ids() {
+  local f
+  for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r '.flaky // {} | keys[]' "$f"
+  done | tr -d '\r' | sort -u
+}
+
+known_file_of() {
+  if [ -f "$KNOWN_LOCAL" ] && jq -e --arg l "$1" --arg n "$2" '.[$l][$n] != null' "$KNOWN_LOCAL" >/dev/null 2>&1; then
+    echo "$KNOWN_LOCAL"
+  else
+    echo "src/test/known-red.json"
+  fi
+}
+
+known_local_self_test() (
+  local d bad=0
+  d=$(mktemp -d) || return 1
+  KNOWN="$d/shared.json" KNOWN_LOCAL="$d/local.json"
+  printf '{"corpus":{"a [c]":{"since":"x","note":"n"}},"flaky":{"f":{"since":"x","note":"n"}}}\n' >"$KNOWN"
+  [ "$(known_of corpus | paste -sd, -)" = "a [c]" ] || { printf 'FAIL known local: a missing local file changed the shared set\n'; bad=1; }
+  printf '{"corpus":{"b [c]":{"since":"y","note":"host"}},"flaky":{"g":{"since":"y","note":"host"}}}\n' >"$KNOWN_LOCAL"
+  [ "$(known_of corpus | paste -sd, -)" = "a [c],b [c]" ] || { printf 'FAIL known local: the local reds are not read beside the shared ones\n'; bad=1; }
+  [ "$(flaky_ids | paste -sd, -)" = "f,g" ] || { printf 'FAIL known local: the local flaky ids are not read\n'; bad=1; }
+  [ "$(known_file_of corpus 'b [c]')" = "$KNOWN_LOCAL" ] || { printf 'FAIL known local: a local red is not named by its file\n'; bad=1; }
+  [ "$(known_file_of corpus 'a [c]')" = "src/test/known-red.json" ] || { printf 'FAIL known local: a shared red is named by the local file\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 QUEUE_POLL=2
 
 queue_write() { printf '%s %s %s\n' "$MY_TICKET" "$1" "$(basename "$TOP")" >"$GATES_DIR/.w.$$" && mv -f "$GATES_DIR/.w.$$" "$GATES_DIR/$$"; }
@@ -1545,6 +1587,7 @@ CASES
     [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
   done
   shared_cache_self_test || bad=1
+  known_local_self_test || bad=1
   support_cache_self_test || bad=1
   control_key_self_test || bad=1
   program_key_self_test || bad=1
@@ -1563,7 +1606,7 @@ CASES
   return $bad
 }
 
-base=main release=0 dry=0 record=0 reuse=0 lanes_arg="" select_only=0
+base=main release=0 dry=0 record=0 record_local=0 reuse=0 lanes_arg="" select_only=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) base=${2:?--base needs a rev}; shift ;;
@@ -1572,6 +1615,7 @@ while [ $# -gt 0 ]; do
     --dry-run) dry=1 ;;
     --select) select_only=1 ;;
     --record) record=1 ;;
+    --local) record_local=1 ;;
     --reuse) reuse=1 ;;
     --reds) reds_of "${2:?--reds needs a lane}" "${3:?--reds needs a log}" 1; exit 0 ;;
     --inert) inert_range "${2:?--inert needs <from> <to>}" "${3:?--inert needs <from> <to>}"; exit $? ;;
@@ -1660,6 +1704,10 @@ explain
 corpus_build_limit=${MSCORPUS_BUILD_JOBS:-}
 cap_jobs 1 "${GATE_PAR:-}" "$corpus_build_limit" >/dev/null
 
+[ "$record_local" -eq 0 ] || [ "$record" -eq 1 ] || die "--local only modifies --record"
+if [ "$record" -eq 1 ] && [ "$record_local" -eq 0 ] && [ "$(uname -s)" != Darwin ]; then
+  die "--record rewrites the tracked set, which macOS records; on this host record its own reds with --record --local"
+fi
 if [ "$record" -eq 1 ]; then
   base=main
   off_main=$(changed_paths | route_paths | awk -F'\t' '$1 != "tools" { print $2 }' | sort -u)
@@ -1842,16 +1890,6 @@ run_test_lane() {
   return $rc
 }
 
-known_of() {
-  [ -f "$KNOWN" ] || return 0
-  jq -r --arg l "$1" '.[$l] // {} | keys[]' "$KNOWN" | tr -d '\r' | sort -u
-}
-
-flaky_ids() {
-  [ -f "$KNOWN" ] || return 0
-  jq -r '.flaky // {} | keys[]' "$KNOWN" | sort -u
-}
-
 split_flaky() {
   awk -v want="$1" '
     NR == FNR { f[$0] = 1; next }
@@ -1950,8 +1988,10 @@ if [ "$select_only" -eq 1 ]; then
 fi
 
 if [ "$record" -eq 0 ] && [ -f "$KNOWN" ]; then
-  unnoted=$(jq -r 'to_entries[] | .key as $l | .value | to_entries[]
-                   | select((.value.note // "") == "") | "  no reason: \($l) · \(.key)"' "$KNOWN")
+  unnoted=$(for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r --arg f "$f" 'to_entries[] | .key as $l | .value | to_entries[]
+                   | select((.value.note // "") == "") | "  no reason: \($l) · \(.key) (\($f))"' "$f"
+  done)
   if [ -n "$unnoted" ]; then
     printf '%s\n' "$unnoted" >&2
     die "known red(s) without a note: each one names why it is still red, or the card that owns it"
@@ -2130,9 +2170,9 @@ for phase in "${PHASES[@]}"; do
   if [ "$n_fixed" -gt 0 ] && [ "$record" -eq 0 ]; then
     verdict=RED
     while IFS= read -r name; do
-      say "  known-now-green: $name"
+      say "  known-now-green: $name ($(known_file_of "$lane" "$name"))"
     done <"$OUT/$lane.fixed"
-    say "  the set now lies: drop those from src/test/known-red.json in the commit that fixed them"
+    say "  the set now lies: drop each from the file it names, a tracked one in the commit that fixed it"
   fi
   if [ "$n_new" -gt 0 ] && [ "$record" -eq 0 ]; then
     verdict=RED; stopped=$lane
@@ -2147,14 +2187,21 @@ done
 
 if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
-  [ -f "$KNOWN" ] || echo '{}' >"$KNOWN.prev"
-  [ -f "$KNOWN" ] && cp "$KNOWN" "$KNOWN.prev"
+  target="$KNOWN"
+  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$GATES_DIR" || die "--record --local: cannot create $GATES_DIR"; }
+  [ -f "$target" ] || echo '{}' >"$target.prev"
+  [ -f "$target" ] && cp "$target" "$target.prev"
   merged="$OUT/known.merged"
-  jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$KNOWN.prev" >"$merged" \
-    || die "--record: cannot read $KNOWN.prev"
+  jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$target.prev" >"$merged" \
+    || die "--record: cannot read $target.prev"
   for lane in $ran; do
     case " $KNOWN_LANES " in *" $lane "*) ;; *) continue ;; esac
-    jq --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.red" '
+    if [ "$record_local" -eq 1 ]; then
+      jq -r --arg l "$lane" '.[$l] // {} | keys[]' "$KNOWN" | tr -d '\r' | sort -u | comm -23 "$OUT/$lane.red" - >"$OUT/$lane.record"
+    else
+      cp "$OUT/$lane.red" "$OUT/$lane.record"
+    fi
+    jq --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.record" '
       . as $prev
       | ($reds | split("\n") | map(select(length > 0))) as $names
       | $prev + {($l): ($names | map({key: ., value: (($prev[$l] // {})[.] // {since: $sha, note: ""})}) | from_entries)}' "$merged" >"$merged.next" \
@@ -2165,10 +2212,10 @@ if [ "$record" -eq 1 ]; then
       "  \(.key | @json): {" +
       (if (.value | length) == 0 then "" else
         "\n" + ([.value | to_entries | sort_by(.key)[] | "    \(.key | @json): \(.value | tojson)"] | join(",\n")) + "\n  "
-      end) + "}"] | join(",\n")) + "\n}"' "$merged" >"$KNOWN" || die "--record: writing $KNOWN failed"
-  diff -u "$KNOWN.prev" "$KNOWN" | sed -n '3,$p'
-  rm -f "$KNOWN.prev"
-  say "gate: RECORDED $(jq '[.[] | length] | add // 0' "$KNOWN") known red(s) at $sha ($(fmt_secs $((SECONDS - start)))) -> src/test/known-red.json"
+      end) + "}"] | join(",\n")) + "\n}"' "$merged" >"$target" || die "--record: writing $target failed"
+  diff -u "$target.prev" "$target" | sed -n '3,$p'
+  rm -f "$target.prev"
+  say "gate: RECORDED $(jq '[.[] | length] | add // 0' "$target") known red(s) at $sha ($(fmt_secs $((SECONDS - start)))) -> ${target#"$TOP"/}"
   ledger total $((SECONDS - start)) 0 "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
   exit 0
 fi

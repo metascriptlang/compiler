@@ -144,6 +144,12 @@ function rewriteStringOp(node: Node): Node {
 			result.nodeType = node.nodeType;
 			return result;
 		}
+		if (isFromCodePointCall(d.right)) {
+			const cp = (d.right.data as CallExprData).arguments[0];
+			const result = makeCall(runtimeRef("msStringAppendCodePoint", loc), [addrOf, cp], loc);
+			result.nodeType = node.nodeType;
+			return result;
+		}
 		const right = coercePartToString(d.right, loc);
 		const result = makeCall(runtimeRef("msStringAppend", loc), [addrOf, right], loc);
 		result.nodeType = node.nodeType;
@@ -208,6 +214,12 @@ export function stringifyCharOperand(node: Node): Node {
 	if (isCharTyped(d.right) && isStringTyped(d.left)) d.right = charToString(d.right, d.right.location);
 	else if (d.operator == "+" && isCharTyped(d.left) && isStringTyped(d.right)) d.left = charToString(d.left, d.left.location);
 	return node;
+}
+
+function isFromCodePointCall(node: Node): boolean {
+	return node.kind == NodeKind.CallExpr && node.resolvedSym != null
+		&& node.resolvedSym.nativeName == "msStringFromCodePoint"
+		&& (node.data as CallExprData).arguments.length == 1;
 }
 
 function asAsciiCharCode(node: Node): int32 {

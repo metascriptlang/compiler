@@ -3,9 +3,9 @@
 
 import {
 	RaiserOpcode, RaiserInstruction,
-	raiserABC, raiserABx, raiserAx
+	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -81,6 +81,7 @@ export interface RaiserLoopInfo {
 	// the loop counter never advances), while to before the backjump, do-while
 	// to before the bottom condition.
 	continuePatches: RaiserBreakPatches;
+	tryDepth: int32;
 }
 
 export interface RaiserLoopStack {
@@ -140,6 +141,12 @@ export interface RaiserCompState {
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;
 	receiverReg: int32;
+	tries: RaiserTryInfo[];
+}
+
+export interface RaiserTryInfo {
+	finallyBody: Node | null;
+	routeReg: int32;
 }
 
 export function createCompState(): RaiserCompState {
@@ -152,7 +159,7 @@ export function createCompState(): RaiserCompState {
 	const enumItems: RaiserFuncEntry[] = [];
 	const enumMap: RaiserEnumMap = { items: enumItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap: createFuncMap(), enumMap, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1 };
+		funcMap: createFuncMap(), enumMap, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
 }
 
 export function classSymOfType(t: Type | null): Symbol | null {
@@ -225,6 +232,10 @@ export function resetTemps(s: RaiserCompState): void {
 // --- Typed emit helpers ---
 
 export function emitLoadConst(s: RaiserCompState, reg: int32, val: RaiserValue): void {
+	if (val.kind == RaiserValueKind.Int && fitsImm(val.intVal)) {
+		emitInst(s, raiserABC(RaiserOpcode.LoadInt, reg, immField(val.intVal), 0));
+		return;
+	}
 	const ci = addConst(s, val);
 	const inst = raiserABx(RaiserOpcode.LoadConst, reg, ci);
 	emitInst(s, inst);
@@ -292,7 +303,16 @@ export function emitJumpPlaceholder(s: RaiserCompState): int32 {
 
 export function patchJumpTo(s: RaiserCompState, idx: int32, target: int32): void {
 	const offset = target - idx - 1;
+	const placed = s.code[idx];
+	if (isBranchI64(placed.op)) {
+		placed.c = branchField(offset);
+		return;
+	}
 	s.code[idx] = raiserAx(RaiserOpcode.Jump, offset);
+}
+
+export function patchJumpsTo(s: RaiserCompState, jumps: int32[], target: int32): void {
+	for (const j of jumps) patchJumpTo(s, j, target);
 }
 
 export function codeLen(s: RaiserCompState): int32 {
@@ -319,6 +339,7 @@ export function pushLoop(s: RaiserCompState, startIp: int32, label: string): voi
 		label,
 		breakPatches: { items: [] },
 		continuePatches: { items: [] },
+		tryDepth: s.tries.length,
 	};
 	s.loopStack.items.push(info);
 }
@@ -505,4 +526,109 @@ export function emitTrapNil(s: RaiserCompState, message: string): int32 {
 	const reg = allocReg(s);
 	emitLoadConst(s, reg, raiserNil());
 	return reg;
+}
+
+// --- Destinations ---
+
+function writesResultAfterReading(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.LoadConst | RaiserOpcode.LoadInt | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm | RaiserOpcode.LoadGlobal | RaiserOpcode.LoadField | RaiserOpcode.LoadIndex
+			| RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64
+			| RaiserOpcode.ModI64 | RaiserOpcode.NegI64
+			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
+			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
+			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
+			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt
+			| RaiserOpcode.IsKind => true,
+		_ => false,
+	};
+}
+
+function skipsInstructions(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64
+			| RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm
+			| RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
+			| RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64
+			| RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64
+			| RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr
+			| RaiserOpcode.BltU64 | RaiserOpcode.BleU64 | RaiserOpcode.BTruthy => true,
+		_ => false,
+	};
+}
+
+function landsPast(inst: RaiserInstruction, at: int32, limit: int32): boolean {
+	if (inst.op == RaiserOpcode.Jump) return at + 1 + getSignedAx(inst) >= limit;
+	if (isBranchI64(inst.op)) return at + 1 + (branchOffset(inst.c) as int32) >= limit;
+	return skipsInstructions(inst.op) && at + 1 + inst.c >= limit;
+}
+
+// A width check that rewrites `reg` where it stands: the range stop of a narrow integer, or the
+// float32 rounding of an arithmetic result.
+function isInPlaceWidth(inst: RaiserInstruction, reg: int32): boolean {
+	if (inst.a != reg) return false;
+	return inst.op == RaiserOpcode.NarrowS || inst.op == RaiserOpcode.NarrowU
+		|| (inst.op == RaiserOpcode.Conv && inst.b == reg);
+}
+
+function writesRegAfterReading(inst: RaiserInstruction, reg: int32): boolean {
+	return inst.a == reg && writesResultAfterReading(inst.op);
+}
+
+// The code from `startPc` computed `reg` and nothing else is read of it afterwards, so the
+// instruction that wrote it can write `target` instead when it is the last one (or the last but the
+// width check that follows it), reads its operands before writing, and no jump of the expression lands
+// past it (a merge of branches has several writers). Returns how many trailing instructions move, 0 for none.
+function lastWriteTail(s: RaiserCompState, startPc: int32, reg: int32): int32 {
+	const end = s.code.length;
+	if (end <= startPc) return 0;
+	let tail: int32 = 1;
+	if (end - 1 > startPc && isInPlaceWidth(s.code[end - 1], reg) && writesRegAfterReading(s.code[end - 2], reg)) tail = 2;
+	else if (!writesRegAfterReading(s.code[end - 1], reg)) return 0;
+	const pastWriter = end - tail + 1;
+	for (let i = startPc; i < end - tail; i = i + 1) {
+		const inst = s.code[i];
+		if (landsPast(inst, i, pastWriter)) return 0;
+	}
+	return tail;
+}
+
+// `reg` is where an expression compiled from `startPc` left its value, `firstTemp` the first register
+// that expression could allocate: the value is moved to `target` unless its writer can aim there.
+export function landResult(s: RaiserCompState, target: number, startPc: int32, firstTemp: int32, reg: int32): void {
+	if (reg == target) return;
+	const tail = reg >= firstTemp ? lastWriteTail(s, startPc, reg) : 0;
+	if (tail > 0) {
+		const end = s.code.length;
+		s.code[end - tail].a = target;
+		if (tail == 2) {
+			s.code[end - 1].a = target;
+			if (s.code[end - 1].op == RaiserOpcode.Conv) s.code[end - 1].b = target;
+		}
+		return;
+	}
+	emitInst(s, raiserABC(RaiserOpcode.Move, target, reg, 0));
+}
+
+// A body that cannot fall off its end returns nil only where the code says so: its last instruction
+// is a Ret, no jump or skip lands past it, and no handler (whose offsets are not scanned) exists.
+function endIsUnreachable(s: RaiserCompState): boolean {
+	const end = s.code.length;
+	if (end == 0 || s.code[end - 1].op != RaiserOpcode.Ret) return false;
+	for (let i = 0; i < end; i = i + 1) {
+		const inst = s.code[i];
+		if (landsPast(inst, i, end)) return false;
+		if (inst.op == RaiserOpcode.Try || inst.op == RaiserOpcode.Catch || inst.op == RaiserOpcode.Finally
+			|| inst.op == RaiserOpcode.FinallyEnd) return false;
+	}
+	return true;
+}
+
+export function emitImplicitReturn(s: RaiserCompState): void {
+	if (endIsUnreachable(s)) return;
+	const nilReg = allocReg(s);
+	emitLoadConst(s, nilReg, raiserNil());
+	emitRet(s, nilReg);
 }
