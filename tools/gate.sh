@@ -102,6 +102,12 @@ program rather than by lane. Their reds are counted and printed but are never ne
 never known, and never known-now-green — a program that fails half the time cannot
 answer either question. Putting one there needs a run that shows both outcomes.
 
+A run that ends BUSY (75) keeps the lanes that ended green in out/gate/resume. The
+next run reads their logs instead of running them, and waits for load only before a
+phase with a lane left to run, when HEAD, a clean status, the resolved --base, the
+lanes and options, ./msc, both known-red files, the corpus/guard/hcr selector
+environment and the candidate binary are all unchanged; any other ending drops the record.
+
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = refuse at once, < 0 = skip the load check)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
@@ -281,6 +287,97 @@ adopt_builder() {
   fi
   refresh_builder "$CAND" "$dest" "$cand_key" || return 0
 }
+
+file_digest() { if [ -f "$1" ]; then digest <"$1"; else echo none; fi; }
+
+resume_key() {
+  local head base_sha
+  [ "$record" -eq 0 ] && [ -z "$(git status --porcelain)" ] || return 1
+  head=$(git rev-parse HEAD) && base_sha=$(git rev-parse --verify -q "$base^{commit}") || return 1
+  {
+    printf 'gate-resume-v1\nhead %s\nbase %s\nlanes %s\nopts %s|%s|%s|%s\n' "$head" "$base_sha" "$lanes" "$release" "$lanes_arg" "$select" "$raiser_on"
+    printf 'builder %s\nknown %s\nlocal %s\n' "$(file_digest "$BUILDER")" "$(file_digest "$KNOWN")" "$(file_digest "$KNOWN_LOCAL")"
+    env | grep -E '^(MSCORPUS|GUARD|HCR)_' | grep -vE '^(MSCORPUS_BUILD_JOBS|MSCORPUS_JOBS|GUARD_SHARD|GUARD_CLAIMS|HCR_SHARD)=' | sort || true
+  } | digest
+}
+
+resume_open() {
+  local f="$OUT/resume"
+  KEPT="" RESUME_KEY=$(resume_key) || RESUME_KEY=""
+  if [ -n "$RESUME_KEY" ] && [ "$(sed -n 's/^key //p' "$f" 2>/dev/null)" = "$RESUME_KEY" ] && grep -qx busy "$f" \
+    && [ "$(sed -n 's/^cand //p' "$f")" = "$(file_digest "$CAND")" ]; then
+    KEPT=$(sed -n 's/^green //p' "$f" | paste -sd' ' -)
+  fi
+  rm -f "$f"
+  [ -z "$RESUME_KEY" ] || printf 'key %s\n' "$RESUME_KEY" >"$f"
+  [ -z "$KEPT" ] || say "gate: resuming after a load timeout on the same tree and candidate, kept green: $KEPT"
+}
+resume_kept() { case " $KEPT " in *" $1 "*) return 0 ;; esac; return 1; }
+resume_green() { [ -z "$RESUME_KEY" ] || printf 'green %s\n' "$1" >>"$OUT/resume"; }
+resume_busy() { [ -z "$RESUME_KEY" ] || printf 'cand %s\nbusy\n' "$(file_digest "$CAND")" >>"$OUT/resume"; }
+resume_close() { rm -f "$OUT/resume"; }
+skip_lane() { { [ "$reuse" -eq 1 ] || resume_kept "$1"; } && [ "$(tail -1 "$OUT/$1.log" 2>/dev/null)" = END ]; }
+
+load1() {
+  if [ -r /proc/loadavg ]; then cut -d' ' -f1 /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi
+}
+admit() {
+  local max=${GATE_WAIT_MAX:-1800} waited=0 n l
+  [ "$max" -ge 0 ] || return 0
+  n=$(cores)
+  while :; do
+    l=$(load1)
+    awk -v l="$l" -v n="$n" 'BEGIN{exit !(l<=n)}' && { ADMIT_WAITED=$((ADMIT_WAITED + waited)); return 0; }
+    [ "$waited" -lt "$max" ] || { ADMIT_WAITED=$((ADMIT_WAITED + waited)); ledger busy 0 75 0 0 0 0 "$ADMIT_WAITED"; resume_busy; say "gate: BUSY load $l > $n cores after ${waited}s"; exit 75; }
+    say "gate: waiting, load $l > $n cores (${waited}s/${max}s)"
+    sleep 60; waited=$((waited + 60))
+  done
+}
+
+resume_self_test() (
+  local d bad=0 g="git -c user.name=t -c user.email=t@t" k
+  d=$(mktemp -d) || return 1
+  TOP="$d/wt" OUT="$d/wt/out/gate" CAND="$d/wt/out/gate/msc" BUILDER="$d/wt/msc" KNOWN="$d/known.json" KNOWN_LOCAL="$d/local.json"
+  GATE_LEDGER="$d/gate.tsv" base=main lanes="build suite corpus solana" release=0 lanes_arg="" select=1 raiser_on=0 record=0 reuse=0
+  unset MSCORPUS_FILTER MSCORPUS_ONLY
+  mkdir -p "$OUT" && cd "$d" && git init -q -b main wt && cd wt || return 1
+  printf 'out/\nmsc\n' >.gitignore; printf '{}\n' >"$KNOWN"; printf 'a\n' >a.ms
+  $g add -A && $g commit -qm base && git branch -q base0 && printf 'b\n' >b.ms && $g add -A && $g commit -qm work || return 1
+  printf 'builder\n' >"$BUILDER"; printf 'cand\n' >"$CAND"
+  for k in build suite corpus solana; do printf 'x\nSECS=1\nRC=0\nEND\n' >"$OUT/$k.log"; done
+  greens() { resume_open >/dev/null; resume_green build; resume_green suite; }
+  seed() { greens; resume_busy; }
+  kept_after() { resume_open >/dev/null; [ "$KEPT" = "$1" ] || { printf 'FAIL resume: %s: kept "%s", want "%s"\n' "$2" "$KEPT" "$1"; bad=1; }; }
+  seed; kept_after "build suite" "a BUSY run on the same tree"
+  skip_lane suite && skip_lane build && ! skip_lane corpus || { printf 'FAIL resume: skip_lane does not follow the kept set\n'; bad=1; }
+  printf 'x\n' >"$OUT/suite.log"; ! skip_lane suite || { printf 'FAIL resume: a kept lane whose log did not end was skipped\n'; bad=1; }
+  printf 'x\nSECS=1\nRC=0\nEND\n' >"$OUT/suite.log"
+  resume_green build; resume_green suite; resume_green corpus; resume_busy
+  kept_after "build suite corpus" "a second BUSY run keeps what the first kept"
+  resume_green build; kept_after "" "a run that did not end BUSY"
+  seed; resume_close; kept_after "" "a run that ended GREEN or RED"
+  greens; ( GATE_WAIT_MAX=0 ADMIT_WAITED=0; cores() { echo 1; }; load1() { echo 99; }; admit >/dev/null ); k=$?
+  [ "$k" -eq 75 ] || { printf 'FAIL resume: admit past GATE_WAIT_MAX exited %s, not 75\n' "$k"; bad=1; }
+  kept_after "build suite" "the record admit leaves when it gives up"
+  seed; printf 'c\n' >c.ms; $g add -A; $g commit -qm more; kept_after "" "another HEAD"
+  seed; printf 'dirty\n' >>a.ms; kept_after "" "a dirty tree"; git checkout -q -- a.ms
+  seed; printf 'untracked\n' >u.ms; kept_after "" "an untracked file"; rm -f u.ms
+  seed; base=base0; kept_after "" "another base"; base=main
+  seed; lanes="build suite corpus"; kept_after "" "other lanes"; lanes="build suite corpus solana"
+  seed; release=1; kept_after "" "--release"; release=0
+  seed; printf 'builder2\n' >"$BUILDER"; kept_after "" "another builder"
+  seed; printf '{"suite":{}}\n' >"$KNOWN"; kept_after "" "another known-red set"
+  seed; printf '{}\n' >"$KNOWN_LOCAL"; kept_after "" "a machine-local known-red file appeared"
+  seed; printf '{"suite":{}}\n' >"$KNOWN_LOCAL"; kept_after "" "another machine-local known-red set"
+  seed; export MSCORPUS_FILTER=leak; kept_after "" "a corpus filter"; unset MSCORPUS_FILTER
+  seed; export MSCORPUS_BUILD_JOBS=3; kept_after "build suite" "a different build width"; unset MSCORPUS_BUILD_JOBS
+  seed; printf 'cand2\n' >"$CAND"; kept_after "" "another candidate"
+  seed; rm -f "$CAND"; kept_after "" "a candidate that is gone"
+  seed; record=1; kept_after "" "--record"; record=0
+  [ ! -e "$OUT/resume" ] || { printf 'FAIL resume: --record left a record behind\n'; bad=1; }
+  cd / && rm -rf "$d"
+  return $bad
+)
 
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
@@ -1597,6 +1694,7 @@ CASES
   emit_many_self_test || bad=1
   emit_width_self_test || bad=1
   cand_reuse_self_test || bad=1
+  resume_self_test || bad=1
   std_swap_self_test || bad=1
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
@@ -1720,22 +1818,6 @@ cand_key=""
 [ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
-
-load1() {
-  if [ -r /proc/loadavg ]; then cut -d' ' -f1 /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi
-}
-admit() {
-  local max=${GATE_WAIT_MAX:-1800} waited=0 n l
-  [ "$max" -ge 0 ] || return 0
-  n=$(cores)
-  while :; do
-    l=$(load1)
-    awk -v l="$l" -v n="$n" 'BEGIN{exit !(l<=n)}' && { ADMIT_WAITED=$((ADMIT_WAITED + waited)); return 0; }
-    [ "$waited" -lt "$max" ] || { ADMIT_WAITED=$((ADMIT_WAITED + waited)); ledger busy 0 75 0 0 0 0 "$ADMIT_WAITED"; say "gate: BUSY load $l > $n cores after ${waited}s"; exit 75; }
-    say "gate: waiting, load $l > $n cores (${waited}s/${max}s)"
-    sleep 60; waited=$((waited + 60))
-  done
-}
 
 lane_cmd() {
   case "$1" in
@@ -2096,7 +2178,7 @@ trap queue_release EXIT
 [ "$lanes" = tools ] || queue_acquire
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
-[ "$lanes" = tools ] || admit
+resume_open
 
 for phase in "${PHASES[@]}"; do
   todo=""
@@ -2106,7 +2188,9 @@ for phase in "${PHASES[@]}"; do
     for lane in $todo; do say "gate: $lane skipped, $stopped has a new red"; done
     continue
   fi
-  [ "$todo" = " tools" ] || [ "$phase" = "${PHASES[0]}" ] || admit
+  fresh=""
+  for lane in $todo; do skip_lane "$lane" || fresh="$fresh $lane"; done
+  [ "$todo" = " tools" ] || [ -z "$fresh" ] || admit
   heavy=0
   for lane in $todo; do case "$lane" in corpus|san) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
@@ -2132,7 +2216,7 @@ for phase in "${PHASES[@]}"; do
       printf '%s\n%s\n' "$only_csv" "$lanes_csv" >"$OUT/$lane.scope" ;;
     esac
     launched="$launched $lane"
-    if [ "$reuse" -eq 1 ] && [ "$(tail -1 "$log" 2>/dev/null)" = END ]; then continue; fi
+    if skip_lane "$lane"; then continue; fi
     lane_body "$lane" & pids="$pids $!"
   done
   [ -z "$pids" ] || wait $pids
@@ -2149,7 +2233,7 @@ for phase in "${PHASES[@]}"; do
   fi
   { read -r only_csv; read -r lanes_csv; } <"$OUT/$lane.scope" || { only_csv=""; lanes_csv=""; }
   reused=""
-  [ "$reuse" -eq 0 ] || reused=" (reused log)"
+  if [ "$reuse" -eq 1 ]; then reused=" (reused log)"; elif resume_kept "$lane"; then reused=" (kept from the BUSY run)"; fi
   { reds_of "$lane" "$log" "$rc"; grep -q '^TIMEOUT after ' "$log" && echo "timed out"; } | sort -u >"$OUT/$lane.red.all"
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
@@ -2172,6 +2256,7 @@ for phase in "${PHASES[@]}"; do
   say "$line"
   red_sum=$((red_sum + n_red)); new_sum=$((new_sum + n_new)); flaky_sum=$((flaky_sum + n_flaky)); ledger "$lane" "${secs:-0}" "$rc" "$n_red" "$((n_red - n_new))" "$n_new" "$n_flaky" "$ADMIT_WAITED"
   ran="$ran $lane"
+  [ "$n_new" -gt 0 ] || [ "$n_fixed" -gt 0 ] || resume_green "$lane"
   if [ "$n_fixed" -gt 0 ] && [ "$record" -eq 0 ]; then
     verdict=RED
     while IFS= read -r name; do
@@ -2190,6 +2275,7 @@ for phase in "${PHASES[@]}"; do
   done
 done
 
+resume_close
 if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   target="$KNOWN"
