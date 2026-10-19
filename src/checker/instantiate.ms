@@ -8,7 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams } from "./types";
+import { isMaybeType, inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -433,6 +433,7 @@ function sameInstanceTypeBody(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.GenericInstance) {
 		return sameInstanceType(a.typeExtra, b.typeExtra) && sameInstanceArgs(a.typeChildren, b.typeChildren);
 	}
+	if (isMaybeType(a) && isMaybeType(b)) return sameInstanceType(a.typeReturn, b.typeReturn);
 	if (a.kind == TypeKind.Struct || a.kind == TypeKind.Enum || a.kind == TypeKind.Distinct) {
 		if (a.sym != null || b.sym != null) return a.sym != null && a.sym == b.sym;
 		if (a.typeFlags.has(TypeFlag.Spelled)) return a.typeName == b.typeName;

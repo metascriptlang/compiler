@@ -1502,6 +1502,12 @@ function maybeCacheKey(inner: Type): string {
 	return "p" + (scalar as number);
 }
 
+export function representedPayload(inner: Type): Type {
+	if (inner.kind == TypeKind.StringLiteral) return stringType();
+	if (inner.kind == TypeKind.NumberLiteral) return numberLiteralBase(inner);
+	return literalUnionBase(inner) ?? inner;
+}
+
 export function createMaybeType(inner: Type): Type {
 	// Pointer types are inherently nullable — no wrapper needed (reference parity: nullable pointers)
 	if (inner.kind == TypeKind.Ref || inner.kind == TypeKind.Ptr) return inner;
@@ -1516,7 +1522,7 @@ export function createMaybeType(inner: Type): Type {
 	}
 	const t = emptyType();
 	t.kind = TypeKind.Struct;
-	t.typeName = "Maybe_" + key;
+	t.typeName = "Maybe_" + maybeCacheKey(representedPayload(inner));
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
 	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe).incl(TypeFlag.Spelled);
