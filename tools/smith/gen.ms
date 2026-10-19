@@ -8534,6 +8534,7 @@ class Gen {
 		if (t == Ty.Char) { return ""; }
 		let scrutinee = "";
 		let arms = "";
+		this.matchArms++;
 		if (this.hasNewTy(Ty.Char) && this.rng.chance(40)) {
 			scrutinee = this.expr(Ty.Char, 1);
 			const used: int32[] = [];
@@ -8551,6 +8552,7 @@ class Gen {
 			scrutinee = this.cond(0);
 			arms = indent + "\ttrue => " + this.expr(t, 1) + ",\n" + indent + "\tfalse => " + this.expr(t, 1) + ",\n";
 		}
+		this.matchArms--;
 		const name = this.newLocal(t);
 		return indent + "let " + name + ": " + tyName(t) + " = match (" + scrutinee + ") {\n" + arms + indent + "};\n";
 	}
@@ -10220,7 +10222,7 @@ test "no exc construct matches on a Result or puts a try in a match arm" {
 			assert !t.contains("{ ok");
 			if (t.contains("match (n")) { assert false; }
 			const first = t.length > 0 ? t.charCodeAt(0) : 0;
-			const armLike = t.contains(" => ") && (t.startsWith("_ =>") || (first >= 48 && first <= 57) || t.startsWith("-"));
+			const armLike = t.contains(" => ") && (t.startsWith("_ =>") || t.startsWith("true =>") || t.startsWith("false =>") || (first >= 48 && first <= 57) || t.startsWith("-"));
 			if (!armLike) { continue; }
 			arms++;
 			assert !t.contains("try ");
