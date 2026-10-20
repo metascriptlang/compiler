@@ -121,3 +121,10 @@ test "JS: a plain from name on an extern const is read by that name" {
 	assert js.ok;
 	assert js.value.contains("Number.MAX_SAFE_INTEGER + 1");
 }
+
+test "JS: an extern let bound by a from name is written through that name" {
+	const js = compileToJS("extern let counter: number from \"globalThis.msCounter\";\ncounter = 3;\ncounter += 1;");
+	assert js.ok;
+	assert js.value.contains("globalThis.msCounter = 3");
+	assert js.value.contains("globalThis.msCounter += 1");
+}
