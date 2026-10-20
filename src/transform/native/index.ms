@@ -22,7 +22,6 @@ import { injectIntChecks, lowerNumberBitwiseOperands } from "./intCheckInject";
 import { coerceOptionals } from "./optionalCoercion";
 import { lowerBuiltins } from "./builtinLower";
 import { lowerStringOps } from "./stringOpLower";
-import { lowerAssert } from "./assertLower";
 import { lowerEnumToString } from "./enumToStringLower";
 import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerDownConversions } from "./downConvLower";
@@ -35,7 +34,6 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	result = coerceOptionals(result, ctx);
 	result = lowerBuiltins(result, ctx);
 	result = lowerStringOps(result, ctx);
-	result = lowerAssert(result, ctx);
 	// Last: injection must run after every pass that can request an Enum_toString
 	// (builtinLower/debugLower here + the stage-1 lowerBuiltins run in transformProgram).
 	result = lowerEnumToString(result, ctx);

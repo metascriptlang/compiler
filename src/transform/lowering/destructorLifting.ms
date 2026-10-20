@@ -2065,15 +2065,16 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (t.kind == TypeKind.GenericInstance) {
+		const seen = peelTransparentInstance(t);
+		if (seen != t) { liftTypeOps(seen, lctx, loc); return; }
+	}
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) { liftTypeOps(nullableRef, lctx, loc); return; }
 	refuseArrayOfHookedDistinct(t, lctx, loc);
-		// Skip match-type variant structs (typeName like "Alias.Key") — their
-		// hooks are emitted via the parent Union's `<Union>_v<N>` helper
-		// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
-		// invalid C identifier anyway).
-		if (t.kind == TypeKind.Struct && t.typeName != ""
-			&& t.typeName.indexOf(".") < 0 && hasTypeIdentity(t)) {
+		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
+		// with the defining module's emission or codegen's ensureTypeInfoDef.
+		if (t.kind == TypeKind.Struct && t.typeName != "" && hasTypeIdentity(t)) {
 			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
 		} else if (t.kind == TypeKind.Struct && t.typeName == ""
 			&& t.typeNames.length > 0

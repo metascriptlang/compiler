@@ -18,6 +18,7 @@ import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
 import { forEachChild } from "../ast/visitor";
 import { callDecoratorDefers, callCheckExpr } from "./checkerCallbacks";
+import { refuseComputedGotoDecorator } from "./computedGoto";
 import { mangleModuleName } from "../codegen/c/names";
 import { setOpByKey, getOpByKey } from "../codegen/c/types";
 
@@ -252,6 +253,7 @@ export function collectDecorated(ctx: CheckerContext, node: Node): void {
 export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const dd = node.data as DecoratedDeclData;
 	const exportNameRejected = reportExportNameMisuse(ctx, dd);
+	refuseComputedGotoDecorator(ctx, dd.decorators);
 	const declName = getDeclName(dd.decoratedNode);
 	if (declName == "") return;
 	const named = lookupSymbol(ctx.table, declName);
@@ -569,7 +571,7 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 	node.resolvedSym = sym;
 	// Register extension (instance or static) with direct sym link
 	if (extTypeName != "" && ctx.extensionRegistry != null) {
-		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, "", noneType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
+		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, "", isStaticExtensionFlag(d.fnFlags), sym, 1));
 	}
 }
 
@@ -917,7 +919,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		methodSym.defaultParams = md.methodDefaults;
 	}
 	if (md.methodIsStatic) methodSym.staticOwner = classSym;
-	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, "", fnType, md.methodIsStatic, methodSym, 1));
+	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, "", md.methodIsStatic, methodSym, 1));
 	if (!md.methodIsStatic && !isExternClass && builtinKind == "") {
 		dispatchRecordMethod(classSym, md.methodName, methodSym);
 	}

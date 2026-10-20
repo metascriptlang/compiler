@@ -19,7 +19,7 @@
 // memory). The macro body stays monolithic; AST construction is inlined.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, implementationOf } from "../discDetect";
+import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, unwrapType, implementationOf } from "../discDetect";
 import { _cborEnumOrd, getDynamicField, asString, asBoolean, asNumber, asInt64,
 	cborToStringArray, cborToBooleanArray, cborToNumberArray, cborToFloat32Array,
 	cborToInt8Array, cborToInt16Array, cborToInt32Array, cborToInt64Array,
@@ -78,9 +78,8 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below
 	}
 	// Peel Ref<Struct> wrapper (interface/class types are reference-typed).
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	tt = unwrapType(tt);
+	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// V3 — Tagged union (DU) decoding. Mirror JSON decode B-2.3:
 	// dispatch on disc field accessor, emit per-variant ObjectLiteral
@@ -227,12 +226,12 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 		const ftype: Node = implementationOf(fieldTypes[i]);
 
 		// Nested struct field: peel Ref<Struct> → TypeObject, then emit a
-		// recursive cborValueToStruct call with a typed witness `null as
-		// <Inner> | null`. Inner type name comes from TypeObjectData
-		// .typExprTypeName, populated by mapTypeToAst's structToAst.
+		// recursive cborValueToStruct call with the witness
+		// `MemberExpr(witness, field)`, which carries the field's type in nodeType.
 		let innerStruct: Node | null = null;
 		if (ftype.kind == NodeKind.TypeGeneric) {
-			const peeled = ftype.typExprArgs[0];
+			let peeled = unwrapType(ftype);
+			if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
 			if (peeled.kind == NodeKind.TypeObject) innerStruct = peeled;
 		} else if (ftype.kind == NodeKind.TypeObject) {
 			innerStruct = ftype;
@@ -242,7 +241,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			if (innerName == "") {
 				error("cborValueToStruct: anonymous nested struct fields unsupported (field '" + fname + "'); name the inner struct via interface/class", witness);
 			}
-			// cborValueToStruct(getDynamicField(cv, "f"), null as Inner | null)
+			// cborValueToStruct(getDynamicField(cv, "f"), witness.f)
 			const recursiveCall: Node = {
 				kind: NodeKind.CallExpr,
 				line: cv.line,
@@ -269,18 +268,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 							},
 						],
 					},
-					{
-						kind: NodeKind.TypeAssertion,
-						line: cv.line,
-						column: cv.column,
-						asExpr: {
-							kind: NodeKind.NullLiteral,
-							line: cv.line,
-							column: cv.column,
-							nullPlaceholder: true,
-						},
-						asType: innerName + " | null",
-					},
+					{ kind: NodeKind.MemberExpr, line: cv.line, column: cv.column, object: witness, property: fname, nodeType: ftype, isOptional: false },
 				],
 			};
 			keyNodes.push(fname);
@@ -335,7 +323,8 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 					error("cborValueToStruct: anonymous struct element arrays unsupported (field '" + fname + "')", witness);
 				}
 			} else if (elemType.kind == NodeKind.TypeGeneric) {
-				const peeled: Node = elemType.typExprArgs[0];
+				let peeled: Node = unwrapType(elemType);
+				if (peeled.kind == NodeKind.TypeGeneric) peeled = unwrapType(peeled);
 				if (namesStruct(peeled)) {
 					elemIsStruct = true;
 					en = peeled.name;

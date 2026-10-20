@@ -38,7 +38,7 @@ export enum CborKind {
 	Simple,     // major 7, other simple values (0..19, 24..31 reserved)
 }
 
-export type CborValueData = match (kind: CborKind) {
+export struct CborValueData = match (kind: CborKind) {
 	CborKind.Int       => { intVal: int64 },
 	CborKind.Bytes     => { bytesVal: Buffer },
 	CborKind.Text      => { textVal: string },

@@ -1,4 +1,4 @@
-import { compileToCWithStd, compileToCWithStdModules, compileProjectToJSWithStd } from "../helpers";
+import { compileToCWithStd, compileProjectToJSWithStd } from "../helpers";
 
 const HEAD = "struct S { n: int32; name: string; }\nstruct R { items: int32[]; k: int32; }\nclass Bag { items: S[] = []; count: int32 = 0; }\n"
 	+ "struct World { pets: S[]; k: int32; }\nstruct L { tags: Vec<int32>; n: int32; }\n"
@@ -7,9 +7,9 @@ const HEAD = "struct S { n: int32; name: string; }\nstruct R { items: int32[]; k
 	+ "function kOf(this w: World): int32 { return w.k; }\n"
 	+ "function bump(p: Ptr<S>): void { p[].n = p[].n + 1; }\n";
 
-function compiles(body: string, stdModules: boolean = false): string {
+function compiles(body: string): string {
 	const source = HEAD + `function run(): int32 { ${body} } run();`;
-	const c = stdModules ? compileToCWithStdModules(source) : compileToCWithStd(source);
+	const c = compileToCWithStd(source);
 	const js = compileProjectToJSWithStd([{ entryPath: "test/views.ms", entrySource: source }], "test/views.ms");
 	if (c.ok && !js.startsWith("ERROR:")) return "";
 	if (!c.ok && js.startsWith("ERROR:")) return c.error + "\n" + js;
@@ -61,7 +61,7 @@ test "a view stays legal when nothing can move the storage it reads" {
 		assert compiles(body) == "", body;
 	}
 	const equality = `${xs} const sp: Span<S> = xs; const k = xs.indexOf(xs[0]); return sp[0].n + (k as int32) + (xs.length as int32);`;
-	assert compiles(equality, true) == "", equality;
+	assert compiles(equality) == "", equality;
 }
 
 test "a generic routine is checked in each instance" {

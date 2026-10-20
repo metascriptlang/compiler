@@ -1,10 +1,9 @@
-import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, sameType, stringValue } from "std/meta";
+import { Node, NodeFlag, NodeKind, bindSym, define, getType, getTypeImpl, readFile, sameType, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator, snakeCase } from "./discriminator";
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
-import { readFile } from "std/fs";
-import { SEED_LIST_REQUIRED, seedTable, slottedTable } from "./accountSeeds";
+import { SEED_LIST_REQUIRED, bumpTable, seedTable, slottedTable } from "./accountSeeds";
 import {
 	argBool,
 	argBoolValid,
@@ -27,6 +26,11 @@ import {
 	logEvent,
 	scratchAddress,
 } from "./core";
+when (js) {
+	import { createNodeAt } from "std/meta";
+	import { accountLayoutText } from "./accountCodecMacro";
+	import { msSolArrayAt } from "./memory";
+}
 import {
 	createPdaAt,
 	createPdaOf,
@@ -69,7 +73,8 @@ export macro instruction(): Node {
 		if (named == "") return;
 		const root = define("projectDir");
 		const path = named.startsWith("/") || root == "" ? named : root + "/" + named;
-		const text = try readFile(path) catch "";
+		let text = "";
+		try { text = readFile(path); } catch (e) { text = ""; }
 		if (text == "") { error("the build names programKeypair '" + path + "', which cannot be read", at); }
 		const numbers: uint8[] = [];
 		let value = -1;
@@ -411,15 +416,6 @@ export macro scratch(count: Node): Node {
 	};
 	address.typeArg = typeName;
 	const found: Node = { kind: NodeKind.TryExpr, line: line, column: column, tryArg: address, hasCatch: false, catchVal: address };
-	const pointer: Node = {
-		kind: NodeKind.TypeAssertion,
-		line: line,
-		column: column,
-		asExpr: found,
-		asType: "Ptr<" + typeName + "[" + String(SCRATCH_MAX_COUNT as int32) + "]>",
-	};
-	const whole: Node = { kind: NodeKind.HiddenDeref, line: line, column: column, expr: pointer };
-	whole.flags = whole.flags.incl(NodeFlag.ExplicitDeref);
 	const zero: Node = {
 		kind: NodeKind.NumberLiteral,
 		line: line,
@@ -431,6 +427,45 @@ export macro scratch(count: Node): Node {
 		isBitPattern: false,
 	};
 	const range: Node = { kind: NodeKind.BinaryExpr, line: line, column: column, operator: "..", left: zero, right: count };
+	when (js) {
+		const scalarNames = ["uint8", "int8", "uint16", "int16", "uint32", "int32", "uint64", "int64", "float32", "float64", "boolean"];
+		const scalarWidths = [1, 1, 2, 2, 4, 4, 8, 8, 4, 8, 1];
+		let layout: Node = {
+			kind: NodeKind.CallExpr,
+			line: line,
+			column: column,
+			callee: bindSym("accountLayoutText"),
+			arguments: [],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+		layout.typeArg = typeName;
+		for (let i = 0; i < scalarNames.length; i++) {
+			if (scalarNames[i] == typeName) {
+				layout = createNodeAt(NodeKind.StringLiteral, { value: "{\"k\":\"" + typeName + "\",\"z\":" + scalarWidths[i] + "}" }, count.location);
+			}
+		}
+		const view: Node = {
+			kind: NodeKind.CallExpr,
+			line: line,
+			column: column,
+			callee: bindSym("msSolArrayAt"),
+			arguments: [layout, found, { kind: NodeKind.TypeAssertion, line: line, column: column, asExpr: count, asType: "uint64" }],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+		view.typeArg = typeName;
+		return { kind: NodeKind.ArrayAccess, line: line, column: column, array: view, index: range };
+	}
+	const pointer: Node = {
+		kind: NodeKind.TypeAssertion,
+		line: line,
+		column: column,
+		asExpr: found,
+		asType: "Ptr<" + typeName + "[" + String(SCRATCH_MAX_COUNT as int32) + "]>",
+	};
+	const whole: Node = { kind: NodeKind.HiddenDeref, line: line, column: column, expr: pointer };
+	whole.flags = whole.flags.incl(NodeFlag.ExplicitDeref);
 	return { kind: NodeKind.ArrayAccess, line: line, column: column, array: whole, index: range };
 }
 
@@ -860,7 +895,7 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 				kind: NodeKind.CallExpr,
 				line: seeds.line,
 				column: seeds.column,
-				callee: bindSym("seedTable"),
+				callee: bindSym("bumpTable"),
 				arguments: [seeds],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,

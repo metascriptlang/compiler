@@ -586,6 +586,17 @@ function fail(msg: string): never {
 }   // error: 'fail' returns 'never' but can reach the end of its body
 ```
 
+A bare `return;` beside `return <value>;` in a function without a return annotation makes the
+return type nullable, and the bare return gives `null`: `function f(c: boolean) { if (c) return; return 3; }`
+is `int32 | null` (TypeScript: `number | undefined`, and `undefined` is `null` here), and an async one is
+`Promise<int32 | null>`. A function whose only returns are bare stays `void`. Where the return type is
+written, a bare `return;` is accepted when that type holds `null` (it gives `null`) and refused when it
+needs a value (`'f' returns 'int32', and a bare 'return;' gives no value: return a value, or write the
+return type as 'int32 | null'`). Measured 2026-10-18 on C drc, orc, danger, JS and ESM (corpus
+`bareReturnBesideValueReturn`: int32, string, a class, either order, nested in a loop, an arrow,
+async through `await` and `.then`; checker3pass `bareReturnInValueFunction`). Not measured: the Raiser, and a bare return in a
+function typed `unknown`.
+
 A call to a function or method declared `never` ends the flow as `throw` does, so a guard
 `if (!r.ok) { stop("no"); }` narrows the code after it, in a loop of any depth and in a macro body
 (`error(...)` returns `never`); verified 2026-10-06, corpus `neverCallEndsFlow` and
@@ -1044,12 +1055,16 @@ export * from "./utils";
 
 **JS bundle exports.** `msc build --target=js entry.ms` gives the bundle the entry module's export
 list as its ES exports, under the source names: a function, a `const`/`let`, a non-generic class,
-`export default`, and a re-export (`export { x } from`, `export * from`) of one of those, bound to the
-same value. Each exported name is exactly one runtime value: exporting an overload set, a generic
-function or class, or an enum, directly or through a re-export, is a compile error at the `export`.
-Extension functions stay out of the bundle's exports because their export is module visibility.
-Exports of other modules stay internal, and `--split` output is unaffected. Measured 2026-10-14 with
-node 24.1 by `src/test/guard/jsBundleEntryExports.ms`.
+`export default`, an enum, and a re-export (`export { x } from`, `export * from`) of one of those, bound
+to the same value. An enum is exported as the object TS gives it, each member and its name under its
+value: `export enum Mode { On, Off = 5 }` lets a host read `Mode.Off === 5` and `Mode[5] === "Off"`, and
+`--split` exports the same object from the declaring module. Inside the program an enum stays a set of
+constants. Each other exported name is exactly one runtime value: exporting an overload set or a generic
+function or class, directly or through a re-export, is a compile error at the `export`. Extension
+functions stay out of the bundle's exports because their export is module visibility. Exports of other
+modules stay internal. Measured 2026-10-20 with node 24.1 by `src/test/guard/jsBundleEntryExports.ms`
+(an enum declared at the entry with a negative and a repeated value, one re-exported from another
+module, and both through `--split`).
 
 **Dynamic `import()`.** `await import("./x")` gives the namespace of `./x`, typed
 `Promise<typeof import("./x")>`. A module that only `import()` reaches runs its body at the first
@@ -2020,6 +2035,23 @@ an alias too), `spawn(work)` with `async function work()` is refused at the call
 promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
 flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
 
+An async function that declares `Promise<T>` and returns a `Promise<T>` awaits it, as TypeScript
+does: `return g()`, `return Promise.resolve(7)` and `return Promise.reject(new Error("boom"))` mean
+`return await …`. Inside a `try` that has a `catch` or `finally` the same return is refused, because
+TypeScript's catch would not see that promise's rejection:
+
+```typescript
+async function g(): Promise<int32> { return 5; }
+async function f(): Promise<int32> { return g(); }          // await f() gives 5
+async function h(): Promise<int32> {
+    try { return g(); } catch (e) { return 0; }            // error: a returned promise is not awaited inside try — write `return await …` so catch and finally see its result
+}
+```
+
+Measured 2026-10-20 on C (drc, orc) and JS: the three returns print `5`, `7` and `caught boom`, and
+the `try` form is refused with that message (corpus `asyncReturnPromise`, checker3pass
+`promiseFlow`). The Raiser printed the same three results; its `try` refusal was not run.
+
 `await` takes a thenable as TypeScript does, through the `then` protocol (see
 ["`then` — thenable adoption"](#then--thenable-adoption)).
 
@@ -2028,17 +2060,25 @@ flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker
 ```typescript
 fetchUser(42)
     .then((user) => { console.log(user); })
-    .catch((err) => { console.log("failed: " + err); })
+    .catch((err) => { console.log("failed: " + err.message); })
     .finally(() => { cleanup(); });
 ```
 
 | Method | Callback Signature | Returns | Behavior |
 |--------|-------------------|---------|----------|
 | `.then(fn)` | `(value: T) => void` | `Promise<void>` | Called on fulfillment, rejection propagates |
-| `.catch(fn)` | `(error: string) => void` | `Promise<T>` | Called on rejection, fulfillment passes through |
+| `.then(fn, onRejected)` | `(value: T) => void`, `(error: Error) => void` | `Promise<void>` | `onRejected` is called on the input's rejection only; a throw from `fn` rejects the output |
+| `.catch(fn)` | `(error: Error) => void` | `Promise<T>` | Called on rejection, fulfillment passes through |
 | `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved |
 
 All three return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+
+Every rejection reaches its reader as an `Error`: `try { await p } catch (e)`, `.catch` and the
+second callback of `.then` see the same object, a string reason having become an `Error` whose
+`message` is that string. Measured 2026-10-20 on C (drc, orc) and JS with `Promise.reject("boom")`
+and an executor's `reject("boom")`: all six readers print `boom`, and an `Error` subclass reaches
+`.catch` and `.then` with its own field (corpus `rejectionReasonIsAnError`). Not run: `.then` and
+`.catch` on the Raiser, which has no host bridge for them.
 
 #### Promise Combinators (Static Methods)
 
@@ -2059,11 +2099,18 @@ extern function msPromiseAny(promises: Promise<void>[]): Promise<void> from "msP
 #### Promise.resolve / Promise.reject
 
 ```typescript
-extern function msPromiseResolve(val: void): Promise<void> from "msPromiseResolve";
-extern function msPromiseReject(err: void): Promise<void> from "msPromiseReject";
+const done: Promise<int32> = Promise.resolve(7);
+const failed: Promise<int32> = Promise.reject("boom");             // rejects with an Error, message "boom"
+const coded: Promise<int32> = Promise.reject(new CodeError("x", 7)); // an Error subclass passes as it is
+const bad: Promise<int32> = Promise.reject(42);                    // error: only an 'Error' or a 'string' can be thrown, got 'int32'
 ```
 
-Create pre-settled promises. Useful for returning immediate values from functions that must return `Promise<T>`.
+Create pre-settled promises. `Promise.reject` takes what `throw` takes, under the same rule and
+diagnostic: a string becomes an `Error` carrying it, an `Error` passes, and anything else is
+refused. TypeScript accepts any reason; MetaScript has no carrier that keeps every value readable
+as `e.message` on every backend. Its result is a `Promise<never>`, which fits a promise of any
+payload. Measured 2026-10-20 on C (drc, orc) and JS; `Promise.reject("boom")` awaited in a
+try/catch also printed `boom` on the Raiser.
 
 #### new Promise(executor) — Constructor Pattern
 
@@ -2073,12 +2120,18 @@ const p = new Promise<string>((resolve, reject) => {
     if (success) {
         resolve(data);     // settles the promise as fulfilled
     } else {
-        reject("failed");  // settles the promise as rejected
+        reject("failed");  // settles the promise as rejected with an Error, message "failed"
     }
 });
 
 const result = await p;
 ```
+
+`reject` takes a `string | Error` and boxes a string as `Promise.reject` does. An executor that
+annotates it writes `reject: (reason: string | Error) => void`; `reject: (e: Error) => void` does not
+fit, because a callback taking `Error` and one taking `string | Error` are called differently.
+`reject(42)` is refused as an argument mismatch (`got int32, expected Error | string`), not with
+throw's wording, because `reject` is an ordinary callback parameter.
 
 The executor runs **synchronously**. Only the first call to `resolve` or `reject` takes effect — subsequent calls are ignored (settled flag). The constructor is lowered to `msPromiseNew(executor)` by the compiler.
 
@@ -3736,7 +3789,7 @@ const name = j.user.name;   // synthesized: j.getDynamicField("user").getDynamic
 
 Self-referential return enables infinite chaining. Non-opt-in types (e.g. `User` interface with declared fields only) remain strict like TypeScript — `u.weirdField` errors at compile.
 
-**Read-only**: synthesis fires only on the read path. `obj.foo = x` does NOT route through `getDynamicField` — the compiler's `leftPartOfAsgn` guard ensures writes still error strictly.
+**Writes**: `obj.foo = x` goes to `setDynamicField(this T, key: string, value: U)` when `T` declares one, never to `getDynamicField`; without it the write is the usual missing-member error. Measured 2026-10-16 on C and JS with `type P = distinct Todo` declaring both: `p.title`, `p.whatever` and `p.title = "b"` reach the extensions with their keys and print the same on both backends. A compound write is refused: on a `distinct` of `{ n: number }`, `p.n += 2` is `compound assignment '+=' is not supported on dynamic field 'n'` on C and JS.
 
 ##### Runtime converters
 
@@ -4311,6 +4364,218 @@ body is a compile error** — `'sink' parameter on 'eat': only an extern declara
 take ownership of an argument`. The callee-owns half (destroy at scope exit unless
 moved on) is not implemented, so accepting it there would leak every argument.
 NOT verified: `sink` on class methods and constructors, and the JS backend.
+
+## Proxy
+
+`new Proxy(target, handler)` intercepts every member read and write of `target` through
+the handler's traps, as in TypeScript, with one meaning on C and JS. Where TypeScript types
+a trap's key as `string | symbol` and its value as `any`, MetaScript types each trap by the
+key it is called with, and decides at compile time which trap runs for which key. This is
+how Proxy fits a language with no `any` and no dynamic member lookup on native targets
+(Primitive Types): nothing about a key is looked up at run time.
+
+```ms
+interface Todo { title: string; done: boolean; }
+
+class Traps {
+    get<K extends keyof Todo>(target: Todo, key: K): Todo[K] {
+        track(target, key);
+        return Reflect.get(target, key);
+    }
+    set<K extends keyof Todo>(target: Todo, key: K, value: Todo[K]): boolean {
+        notify(target, key);
+        return Reflect.set(target, key, value);
+    }
+}
+
+const p = new Proxy(todo, new Traps());   // Proxy<Todo, Traps>
+const t: string = p.title;                // traps.get(todo, "title")
+p.done = true;                            // traps.set(todo, "done", true)
+p.done = "yes";                           // error: got string, expected boolean, as in TypeScript
+p.owner;                                  // error: 'owner' is not a key of 'Todo'
+```
+
+### A `Proxy<T, H>` is not a `T`
+
+`new Proxy(target, handler)` has the type `Proxy<T, H>`, where TypeScript gives it `T`.
+It holds the target and the handler, and it converts to nothing else:
+
+```ms
+function show(t: Todo): void { console.log(t.title); }
+show(p);            // error: got Proxy<Todo, Traps>, expected Todo
+p === todo;         // error: a Proxy<Todo, Traps> and a Todo are different types
+```
+
+A function that reads a `Todo` reads its fields directly, so letting a proxy in would either
+skip the traps (a store that stops tracking, silently) or make every `Todo` read in the
+program able to dispatch (a cost on all code that never sees a proxy). A function meant to
+take the proxy names `Proxy<Todo, Traps>`, or an alias the library exports
+(`type Store<T> = Proxy<T, StoreTraps<T>>`).
+
+A `Proxy` has no members of its own: every `p.name` is a key of `T`, so no proxy member can
+shadow a field of the target. `proxyTarget(p)` returns the target, without the traps.
+
+JavaScript libraries built on Proxy meet the same split at run time: the proxy and the
+object it wraps are two identities, and Vue (`toRaw`) and Svelte
+(`state_proxy_equality_mismatch`) warn about comparing or mixing them. MetaScript reports
+it where the code is written.
+
+### Traps
+
+| trap | called for | typed as |
+|---|---|---|
+| `get` | `p.key`, `p["key"]`; on an array `p[i]` and `p.length` | `get<K extends keyof T>(target: T, key: K): T[K]` |
+| `set` | `p.key = v`, `p["key"] = v`; on an array `p[i] = v` and `p.length = n` | `set<K extends keyof T>(target: T, key: K, value: T[K]): boolean` |
+| `has` | the steps of an array method that test an index | `has<K extends keyof T>(target: T, key: K): boolean` |
+| `deleteProperty` | the steps of an array method that remove the last index | `deleteProperty<K extends keyof T>(target: T, key: K): boolean` |
+
+A `set` or `deleteProperty` that returns `false` fails the write with an `Error`, as
+TypeScript's strict mode does: `'set' on a Proxy returned false for the key 'title'`.
+
+A trap the handler leaves out does what `Reflect` does on the target. `has` and
+`deleteProperty` answer only the steps of array methods: MetaScript has no `for…in` and no
+`delete` on an object of known keys, and `"title" in p` is an error (`'in' on a Proxy<Todo,
+Traps> would skip its 'has' trap: test the key on proxyTarget(p)`). The other traps of
+TypeScript's `ProxyHandler` are refused with an error naming the trap: `ownKeys`, because no
+operation lists the keys of a proxy, so it would never run; `defineProperty`,
+`getOwnPropertyDescriptor`, `getPrototypeOf`, `setPrototypeOf`, `isExtensible`,
+`preventExtensions`, `apply` and `construct`, because they belong to JavaScript's object
+model of property descriptors, prototypes and callable objects, which MetaScript objects do
+not have.
+
+The trap call is written where the proxy is used, so the handler's class needs to be visible
+there: a handler used outside its module is exported from it, or the access is an error
+saying so (`the 'get' trap of 'Hidden' cannot be called here: export 'Hidden' from its
+module`).
+
+### `Reflect`
+
+`Reflect.get`, `Reflect.set`, `Reflect.has` and `Reflect.deleteProperty` do the plain
+operation, typed like the traps, so a trap can do its work and then defer to it.
+
+| | an object | an array |
+|---|---|---|
+| `get(t, k)` | the field | the element, or the length for `"length"` |
+| `set(t, k, v)` | writes the field, `true` | writes the element; at index `length` appends; `"length"` shorter cuts the array, equal keeps it |
+| `has(t, k)` | `true` | whether the index is inside the array; `true` for `"length"` |
+| `deleteProperty(t, k)` | `false` | at the last index removes it; past the end `true`; `false` for `"length"` |
+
+An array in MetaScript has no holes, so what would leave one is an `Error` where JavaScript
+would make the hole: `Reflect.set` past the length (`a write at index 5 would leave a hole in
+an array of length 1`), a `"length"` larger than the array, and `deleteProperty` at an index
+other than the last.
+
+### A key written in the source costs no lookup
+
+Each trap is instantiated once per key it is called with, the key a constant of that
+instance. `target[key]` with a constant key is the field itself, so on C `p.n` through the
+`get` above costs the read of `todo.n` plus the trap body: no string compare, no hash. A key
+held in a variable of a key type is refused (`a Proxy is indexed by a key written in the
+source; '"title" | "done"' is not one`), as `todo[k]` is; a `const` holding one literal key
+is that key.
+
+A compound write is a read then a write: `p.n += 2` is `set(t, "n", get(t, "n") + 2)`, and
+`p.n++` the same with `+ 1`, as a statement. A receiver or an index with effects is evaluated
+once: `next()[at()] += 1` calls each once.
+
+### Arrays
+
+On a `Proxy<E[], H>` an index read or write goes to `get` / `set` with the index as key,
+typed `number`, with the element `E` as value, and `length` is the key `"length"`, typed
+`number`. For `T = E[]`, `keyof T` is `number | "length"` and `T[K]` is `E` for a number `K`
+and `number` for `"length"`, so one handler generic over `T` serves objects and arrays.
+
+A method call runs the method's steps as the language specification defines them for any
+object, each step through a trap: `p.push(x)` is `get "length"`, `set` at that index,
+`set "length"`; `p.pop()` is `get "length"`, `get` the last, `deleteProperty` it, `set
+"length"`; `p.shift()` moves each element down one (`has`, `get`, `set` per element) and then
+deletes the last and sets `length`. The methods with steps in std are `push`, `pop`, `shift`,
+`splice(start, count)`, `reverse`, `fill`, `sort` (with or without a comparator), `map`,
+`filter`, `some`, `find`, `findIndex`, `findLastIndex`, `indexOf`, `lastIndexOf`,
+`includes`, `join`, `slice` and `at`; each takes the arguments and returns what the same
+method of a plain MetaScript array does (`push` returns nothing, `pop` of an empty array is
+an error). Any other method, or another arity, is an error naming it, never a call on the
+raw array that would skip the traps:
+
+```ms
+q.count();          // error: 'count' with 0 argument(s) has no trap form on a Proxy of an array:
+                    //        declare 'count' in 'H' to override it, or call it on proxyTarget(p)
+```
+
+`for (const x of p)` reads as JavaScript's array iterator does: `get "length"`, then `get`
+the index, for each element, and a last `get "length"`.
+
+A handler may override a method by declaring it with the method's name; the compiler then
+calls `handler.method(target, ...args)` instead of the steps:
+
+```ms
+class ListTraps<E> {
+    get<T, K extends keyof T>(target: T, key: K): T[K] { track(target, key); return Reflect.get(target, key); }
+    set<T, K extends keyof T>(target: T, key: K, value: T[K]): boolean { notify(target, key); return Reflect.set(target, key, value); }
+    push(target: E[], item: E): void {
+        target.push(item);
+        notify(target, "length");
+    }
+}
+
+const p = new Proxy(items, new ListTraps<number>());
+p.push(3);          // traps.push(items, 3): no get or set
+p[0] = p[1];        // traps.get(items, 1), then traps.set(items, 0, …)
+```
+
+The override works on the target directly and does its own tracking. It exists for the
+methods where the steps cost too much (`shift` on `n` elements is about `3n` trap calls) or
+where reading `length` inside a write would track it and re-run the reader that wrote it,
+the loop Vue's array instrumentation exists to break.
+
+A method through a proxy of an object is an error (`a Proxy calls no method of its
+target`), unless the handler overrides it: a method of `T` would run on the target behind the
+traps. A field that holds a function is a key like any other, read through `get` and called.
+`for…of` over a proxy of an object is an error (`for-of over a Proxy needs an array target;
+'Todo' is not one`).
+
+One difference from JavaScript remains: there, `p.push(x)` first calls `get` with the key
+`"push"` and calls what it returns. MetaScript does not call `get` for a method key, because
+returning the method as a value would cost a closure per call.
+
+### Same meaning on C and JS
+
+The JavaScript backend emits the same trap calls as C: no JavaScript `Proxy` object is
+created, so both backends run the same std steps in the same order and give the same
+result. A `Proxy` therefore cannot cross an `extern` boundary into foreign JavaScript, which
+would see no interception; that is an error at the boundary.
+
+### Why this shape
+
+- **Interception at compile time, on a type with no fields of its own.** A `Proxy<T, H>`
+  shows no fields, so the checker rewrites every member access of it into the trap call for
+  its key. Design inspiration: Nim's `distinct` types with its dot operators, and Haxe's
+  `abstract` types with `@:op(a.b)`, which compile to C++ and JS from one source.
+- **A trap typed by its key.** `get<K extends keyof T>(…): T[K]` follows TypeScript's own
+  `keyof` and indexed access types; Swift's key-path member lookup types the member the
+  same way (`KeyPath<Root, Leaf>`, `Leaf` taken from the member).
+- **One instance per key.** Generic code instantiated per compile-time value, as Zig's
+  `@field` with a `comptime` name and Nim's `static` parameters do, makes a constant key a
+  field access.
+- **Not a `T`.** Every typed language with member interception keeps the wrapper apart
+  from the wrapped type: Nim's `distinct`, Haxe's `abstract` without a `to` conversion,
+  Swift's dynamic-member wrappers, Scala's `Dynamic`, dioxus's `Store<T>`.
+- **Arrays follow the specification, with overrides.** The steps are what JavaScript
+  does, so code ported from Solid, Vue or Svelte meets the traps it expects, and `Reflect`
+  is the default each trap defers to, as in JavaScript. The override is Vue's array
+  instrumentation, chosen statically.
+
+Rejected:
+
+- **A proxy is a `T`**, as TypeScript types it: every object of `T` would carry a dispatch
+  on every member access, paid by all code for the sake of the proxied values.
+- **A conversion from `Proxy<T, H>` to `T`**: the converted value reads a copy or the raw
+  target, so tracking and writes are lost without a word.
+- **Array methods only as handler-declared methods** (dioxus, Vue's collections): every
+  handler would restate each array method, and what `push` means would differ per handler.
+- **A call trap** for method calls (Nim's `.()`, Scala's `applyDynamic`): a trap
+  TypeScript's `ProxyHandler` does not have.
+- **`get` called for method keys**, as JavaScript does: one closure per method call.
 
 ## Memory Management
 

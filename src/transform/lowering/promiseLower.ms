@@ -10,8 +10,7 @@
 //
 // What lives here:
 //   - per-T suffix/dispatch helpers (futureTypedSuffix, futureThenFnForInner,
-//     futureCatchFnForInner, futureFinallyFnForInner, promiseAllFnForInner,
-//     typedFutureReadFn)
+//     futureCatchFnForInner, futureFinallyFnForInner, promiseAllFnForInner)
 //   - box/unbox helpers for primitive values flowing through msFuture* slots
 //   - typeTagFor (int/double/string/ptr tag dispatch for msFutureThenTyped etc.)
 //   - handlers for PromiseThen / PromiseCatch / PromiseFinally / PromiseResolve
@@ -31,11 +30,11 @@ import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeR
 // ===== Type-tag dispatch =====
 
 // Runtime type-tag for msFutureThenTyped / msFutureCatchTyped. Matches
-// MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string).
+// MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string, 4=void).
 function typeTagFor(t: Type | null): number {
 	if (t == null) return 0;
 	return match (t.kind) {
-		TypeKind.Void => 0,
+		TypeKind.Void => 4,
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
 		TypeKind.String => 3,
 		TypeKind.Struct | TypeKind.Ref | TypeKind.Ptr | TypeKind.Array => 0,
@@ -96,22 +95,6 @@ function promiseAllFnForInner(t: Type | null): string {
 	return "";
 }
 
-// Typed future readers — msFutureReadT reads the typed inline value from
-// the future struct (msFuture_T.value). All futures use typed inline
-// storage; no boxed path exists.
-// Exported for awaitLower.ms which selects the typed read per Promise<T>.
-export function typedFutureReadFn(t: Type): string {
-	if (t == null) return "";
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
-		TypeKind.Boolean => "msFutureReadBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msFutureReadInt32",
-		TypeKind.String => "msFutureReadString",
-		_ => "",
-	};
-}
-
 // ===== Call-construction helpers =====
 
 // Build a call to `fnName(args...)` and tag it with the requested result type.
@@ -141,19 +124,23 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 	const cb = handlers[0];
 	return match (builtinKind) {
 		"PromiseThen" => {
+			const onRejected = handlers.length > 1 ? handlers[1] : null;
 			const typedFn = futureThenFnForInner(innerType);
-			if (typedFn != "") return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
-			if (boxedInFuture(innerType) && innerType!.kind != TypeKind.Array) {
-				return mkTypedCall("msFutureThenBoxed", [receiver, cb], node.nodeType, loc);
+			if (typedFn != "") {
+				if (onRejected != null) return mkTypedCall(typedFn + "WithRejected", [receiver, cb, onRejected], node.nodeType, loc);
+				return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
 			}
-			const tag = typeTagFor(innerType);
-			return mkTypedCall("msFutureThenTyped", [receiver, cb, makeNumber(tag, loc)], node.nodeType, loc);
+			if (boxedInFuture(innerType) && innerType!.kind != TypeKind.Array) {
+				return mkTypedCall("msFutureThenBoxed", onRejected != null ? [receiver, cb, onRejected] : [receiver, cb], node.nodeType, loc);
+			}
+			const tag = makeNumber(typeTagFor(innerType), loc);
+			if (onRejected != null) return mkTypedCall("msFutureThenTypedWithRejected", [receiver, cb, tag, onRejected], node.nodeType, loc);
+			return mkTypedCall("msFutureThenTyped", [receiver, cb, tag], node.nodeType, loc);
 		},
 		"PromiseCatch" => {
-			// Error handler always receives msString (MetaScript errors are strings).
 			const typedFn = futureCatchFnForInner(innerType);
 			if (typedFn != "") return mkTypedCall(typedFn, [receiver, cb], node.nodeType, loc);
-			return mkTypedCall("msFutureCatchTyped", [receiver, cb, makeNumber(3, loc)], node.nodeType, loc);
+			return mkTypedCall("msFutureCatchTyped", [receiver, cb, makeNumber(0, loc)], node.nodeType, loc);
 		},
 		_ => {
 			// PromiseFinally — wildcard is safe: outer dispatch restricts to these three.

@@ -40,10 +40,12 @@ after another, and compare every red against src/test/known-red.json.
   --release      the full ladder, whatever the diff says
   --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests fmt corpus san guard solana
   --dry-run      print the chosen lanes and the paths that pulled each one in
-  --record       run the ladder on a clean main and rewrite known-red.json
+  --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
+  --local        with --record: write the reds the shared set lacks to this machine's
+                 ~/.metascript/known-red.local.json instead; a red only one host
+                 sees is recorded there, never in the tracked set
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
-  --inert <from> <to>  exit 0 when every path changed from..to picks no lane
   --select       print the corpus programs whose emitted C or JS differs from the merge base
   --tree-key <rev>  print the key of the src and std tree at <rev> (what msc.key holds)
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
@@ -86,9 +88,13 @@ Control compilers and matching successful program signatures are shared under
 Unsealed entries, changed program keys and failed emits are never reused; four
 published control entries are kept. --lanes, --release and blind paths run the lane whole.
 
-A known red that has turned green fails too: the set is then claiming a failure
-that no longer happens, so drop the entry in the commit that fixed it. Unlike a
-new red it does not stop the later lanes — one run should show every stale entry.
+A known red that has turned green is named as known-now-green but does not fail
+the run: whether this change or an earlier commit on main fixed it, dropping the
+entry only makes the set stricter. A GREEN run writes the tracked set without
+those entries to out/gate/known-red.pruned.json, and tools/wt.sh land commits it
+as "test: drop known-red entries that are green" before main moves. A stale entry
+of the machine-local file is named with the command that refreshes it instead,
+because every worktree on the host reads that file.
 
 Every entry needs a non-empty "note" saying why it is still red or naming the
 card that owns it; an empty one stops the run before any lane. --record writes
@@ -99,7 +105,13 @@ program rather than by lane. Their reds are counted and printed but are never ne
 never known, and never known-now-green — a program that fails half the time cannot
 answer either question. Putting one there needs a run that shows both outcomes.
 
-exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
+A run that ends BUSY (75) keeps the lanes that ended green in out/gate/resume. The
+next run reads their logs instead of running them, and waits for load only before a
+phase with a lane left to run, when HEAD, a clean status, the resolved --base, the
+lanes and options, ./msc, both known-red files, the corpus/guard/hcr selector
+environment and the candidate binary are all unchanged; any other ending drops the record.
+
+exit: 0 no new red · 1 new red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = refuse at once, < 0 = skip the load check)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
       MSCORPUS_BUILD_JOBS width of selector emit and corpus build workers, kept across phases; it replaces the GATE_PAR cap on them
@@ -238,12 +250,6 @@ tier_select() {
   return 0
 }
 
-inert_range() {
-  local paths
-  paths=$(git diff --name-only --no-renames "$1" "$2") || return 2
-  ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep . >/dev/null
-}
-
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 tree_key() {
   local t
@@ -278,6 +284,97 @@ adopt_builder() {
   fi
   refresh_builder "$CAND" "$dest" "$cand_key" || return 0
 }
+
+file_digest() { if [ -f "$1" ]; then digest <"$1"; else echo none; fi; }
+
+resume_key() {
+  local head base_sha
+  [ "$record" -eq 0 ] && [ -z "$(git status --porcelain)" ] || return 1
+  head=$(git rev-parse HEAD) && base_sha=$(git rev-parse --verify -q "$base^{commit}") || return 1
+  {
+    printf 'gate-resume-v1\nhead %s\nbase %s\nlanes %s\nopts %s|%s|%s|%s\n' "$head" "$base_sha" "$lanes" "$release" "$lanes_arg" "$select" "$raiser_on"
+    printf 'builder %s\nknown %s\nlocal %s\n' "$(file_digest "$BUILDER")" "$(file_digest "$KNOWN")" "$(file_digest "$KNOWN_LOCAL")"
+    env | grep -E '^(MSCORPUS|GUARD|HCR)_' | grep -vE '^(MSCORPUS_BUILD_JOBS|MSCORPUS_JOBS|GUARD_SHARD|GUARD_CLAIMS|HCR_SHARD)=' | sort || true
+  } | digest
+}
+
+resume_open() {
+  local f="$OUT/resume"
+  KEPT="" RESUME_KEY=$(resume_key) || RESUME_KEY=""
+  if [ -n "$RESUME_KEY" ] && [ "$(sed -n 's/^key //p' "$f" 2>/dev/null)" = "$RESUME_KEY" ] && grep -qx busy "$f" \
+    && [ "$(sed -n 's/^cand //p' "$f")" = "$(file_digest "$CAND")" ]; then
+    KEPT=$(sed -n 's/^green //p' "$f" | paste -sd' ' -)
+  fi
+  rm -f "$f"
+  [ -z "$RESUME_KEY" ] || printf 'key %s\n' "$RESUME_KEY" >"$f"
+  [ -z "$KEPT" ] || say "gate: resuming after a load timeout on the same tree and candidate, kept green: $KEPT"
+}
+resume_kept() { case " $KEPT " in *" $1 "*) return 0 ;; esac; return 1; }
+resume_green() { [ -z "$RESUME_KEY" ] || printf 'green %s\n' "$1" >>"$OUT/resume"; }
+resume_busy() { [ -z "$RESUME_KEY" ] || printf 'cand %s\nbusy\n' "$(file_digest "$CAND")" >>"$OUT/resume"; }
+resume_close() { rm -f "$OUT/resume"; }
+skip_lane() { { [ "$reuse" -eq 1 ] || resume_kept "$1"; } && [ "$(tail -1 "$OUT/$1.log" 2>/dev/null)" = END ]; }
+
+load1() {
+  if [ -r /proc/loadavg ]; then cut -d' ' -f1 /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi
+}
+admit() {
+  local max=${GATE_WAIT_MAX:-1800} waited=0 n l
+  [ "$max" -ge 0 ] || return 0
+  n=$(cores)
+  while :; do
+    l=$(load1)
+    awk -v l="$l" -v n="$n" 'BEGIN{exit !(l<=n)}' && { ADMIT_WAITED=$((ADMIT_WAITED + waited)); return 0; }
+    [ "$waited" -lt "$max" ] || { ADMIT_WAITED=$((ADMIT_WAITED + waited)); ledger busy 0 75 0 0 0 0 "$ADMIT_WAITED"; resume_busy; say "gate: BUSY load $l > $n cores after ${waited}s"; exit 75; }
+    say "gate: waiting, load $l > $n cores (${waited}s/${max}s)"
+    sleep 60; waited=$((waited + 60))
+  done
+}
+
+resume_self_test() (
+  local d bad=0 g="git -c user.name=t -c user.email=t@t" k
+  d=$(mktemp -d) || return 1
+  TOP="$d/wt" OUT="$d/wt/out/gate" CAND="$d/wt/out/gate/msc" BUILDER="$d/wt/msc" KNOWN="$d/known.json" KNOWN_LOCAL="$d/local.json"
+  GATE_LEDGER="$d/gate.tsv" base=main lanes="build suite corpus solana" release=0 lanes_arg="" select=1 raiser_on=0 record=0 reuse=0
+  unset MSCORPUS_FILTER MSCORPUS_ONLY
+  mkdir -p "$OUT" && cd "$d" && git init -q -b main wt && cd wt || return 1
+  printf 'out/\nmsc\n' >.gitignore; printf '{}\n' >"$KNOWN"; printf 'a\n' >a.ms
+  $g add -A && $g commit -qm base && git branch -q base0 && printf 'b\n' >b.ms && $g add -A && $g commit -qm work || return 1
+  printf 'builder\n' >"$BUILDER"; printf 'cand\n' >"$CAND"
+  for k in build suite corpus solana; do printf 'x\nSECS=1\nRC=0\nEND\n' >"$OUT/$k.log"; done
+  greens() { resume_open >/dev/null; resume_green build; resume_green suite; }
+  seed() { greens; resume_busy; }
+  kept_after() { resume_open >/dev/null; [ "$KEPT" = "$1" ] || { printf 'FAIL resume: %s: kept "%s", want "%s"\n' "$2" "$KEPT" "$1"; bad=1; }; }
+  seed; kept_after "build suite" "a BUSY run on the same tree"
+  skip_lane suite && skip_lane build && ! skip_lane corpus || { printf 'FAIL resume: skip_lane does not follow the kept set\n'; bad=1; }
+  printf 'x\n' >"$OUT/suite.log"; ! skip_lane suite || { printf 'FAIL resume: a kept lane whose log did not end was skipped\n'; bad=1; }
+  printf 'x\nSECS=1\nRC=0\nEND\n' >"$OUT/suite.log"
+  resume_green build; resume_green suite; resume_green corpus; resume_busy
+  kept_after "build suite corpus" "a second BUSY run keeps what the first kept"
+  resume_green build; kept_after "" "a run that did not end BUSY"
+  seed; resume_close; kept_after "" "a run that ended GREEN or RED"
+  greens; ( GATE_WAIT_MAX=0 ADMIT_WAITED=0; cores() { echo 1; }; load1() { echo 99; }; admit >/dev/null ); k=$?
+  [ "$k" -eq 75 ] || { printf 'FAIL resume: admit past GATE_WAIT_MAX exited %s, not 75\n' "$k"; bad=1; }
+  kept_after "build suite" "the record admit leaves when it gives up"
+  seed; printf 'c\n' >c.ms; $g add -A; $g commit -qm more; kept_after "" "another HEAD"
+  seed; printf 'dirty\n' >>a.ms; kept_after "" "a dirty tree"; git checkout -q -- a.ms
+  seed; printf 'untracked\n' >u.ms; kept_after "" "an untracked file"; rm -f u.ms
+  seed; base=base0; kept_after "" "another base"; base=main
+  seed; lanes="build suite corpus"; kept_after "" "other lanes"; lanes="build suite corpus solana"
+  seed; release=1; kept_after "" "--release"; release=0
+  seed; printf 'builder2\n' >"$BUILDER"; kept_after "" "another builder"
+  seed; printf '{"suite":{}}\n' >"$KNOWN"; kept_after "" "another known-red set"
+  seed; printf '{}\n' >"$KNOWN_LOCAL"; kept_after "" "a machine-local known-red file appeared"
+  seed; printf '{"suite":{}}\n' >"$KNOWN_LOCAL"; kept_after "" "another machine-local known-red set"
+  seed; export MSCORPUS_FILTER=leak; kept_after "" "a corpus filter"; unset MSCORPUS_FILTER
+  seed; export MSCORPUS_BUILD_JOBS=3; kept_after "build suite" "a different build width"; unset MSCORPUS_BUILD_JOBS
+  seed; printf 'cand2\n' >"$CAND"; kept_after "" "another candidate"
+  seed; rm -f "$CAND"; kept_after "" "a candidate that is gone"
+  seed; record=1; kept_after "" "--record"; record=0
+  [ ! -e "$OUT/resume" ] || { printf 'FAIL resume: --record left a record behind\n'; bad=1; }
+  cd / && rm -rf "$d"
+  return $bad
+)
 
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
@@ -503,6 +600,98 @@ program_keys() {
 cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
 
 GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
+KNOWN_LOCAL="${GATE_KNOWN_LOCAL:-${HOME:-$USERPROFILE}/.metascript/known-red.local.json}"
+
+known_of() {
+  local f
+  for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r --arg l "$1" '.[$l] // {} | keys[]' "$f"
+  done | tr -d '\r' | sort -u
+}
+
+flaky_ids() {
+  local f
+  for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r '.flaky // {} | keys[]' "$f"
+  done | tr -d '\r' | sort -u
+}
+
+known_file_of() {
+  if [ -f "$KNOWN_LOCAL" ] && jq -e --arg l "$1" --arg n "$2" '.[$l][$n] != null' "$KNOWN_LOCAL" >/dev/null 2>&1; then
+    echo "$KNOWN_LOCAL"
+  else
+    echo "src/test/known-red.json"
+  fi
+}
+
+known_format() {
+  jq -r '
+    "{\n" + ([to_entries | sort_by(.key)[] |
+      "  \(.key | @json): {" +
+      (if (.value | length) == 0 then "" else
+        "\n" + ([.value | to_entries | sort_by(.key)[] | "    \(.key | @json): \(.value | tojson)"] | join(",\n")) + "\n  "
+      end) + "}"] | join(",\n")) + "\n}"'
+}
+
+prune_known() {
+  local stale=$1 dest=$2
+  [ -f "$KNOWN" ] || return 0
+  jq --rawfile stale "$stale" '
+    reduce ($stale | split("\n")[] | select(length > 0) | split("\t")) as [$l, $n]
+      (.; if has($l) then .[$l] |= del(.[$n]) else . end)' "$KNOWN" | known_format >"$dest.next" || { rm -f "$dest.next"; return 1; }
+  if [ "$(jq -S . "$dest.next")" = "$(jq -S . "$KNOWN")" ]; then rm -f "$dest.next"; else mv "$dest.next" "$dest"; fi
+}
+
+known_local_self_test() (
+  local d bad=0
+  case "$KNOWN_LOCAL" in "$GATES_DIR"/*) printf 'FAIL known local: %s sits in the gate queue directory, whose scan refuses it\n' "$KNOWN_LOCAL"; bad=1 ;; esac
+  d=$(mktemp -d) || return 1
+  KNOWN="$d/shared.json" KNOWN_LOCAL="$d/local.json"
+  printf '{"corpus":{"a [c]":{"since":"x","note":"n"}},"flaky":{"f":{"since":"x","note":"n"}}}\n' >"$KNOWN"
+  [ "$(known_of corpus | paste -sd, -)" = "a [c]" ] || { printf 'FAIL known local: a missing local file changed the shared set\n'; bad=1; }
+  printf '{"corpus":{"b [c]":{"since":"y","note":"host"}},"flaky":{"g":{"since":"y","note":"host"}}}\n' >"$KNOWN_LOCAL"
+  [ "$(known_of corpus | paste -sd, -)" = "a [c],b [c]" ] || { printf 'FAIL known local: the local reds are not read beside the shared ones\n'; bad=1; }
+  [ "$(flaky_ids | paste -sd, -)" = "f,g" ] || { printf 'FAIL known local: the local flaky ids are not read\n'; bad=1; }
+  [ "$(known_file_of corpus 'b [c]')" = "$KNOWN_LOCAL" ] || { printf 'FAIL known local: a local red is not named by its file\n'; bad=1; }
+  [ "$(known_file_of corpus 'a [c]')" = "src/test/known-red.json" ] || { printf 'FAIL known local: a shared red is named by the local file\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+stale_known_self_test() (
+  local d w bad=0 out rc g="git -c user.name=t -c user.email=t@t"
+  d=$(mktemp -d) || return 1
+  w="$d/wt"
+  mkdir -p "$w/tools" "$w/src/test" "$w/out/gate" "$d/home"
+  cp "$GATE_SH" "$w/tools/gate.sh"
+  printf '#!/bin/sh\nexit 0\n' >"$w/msc"; chmod +x "$w/msc"; cp "$w/msc" "$w/out/gate/msc"
+  printf 'out/\nmsc\n' >"$w/.gitignore"
+  printf '{"fmt":{"a.ms":{"since":"x","note":"n"},"b.ms":{"since":"x","note":"n"},"c.ms":{"since":"x","note":"n"}},"flaky":{"c.ms":{"since":"x","note":"n"}}}\n' >"$w/src/test/known-red.json"
+  printf '{"fmt":{"d.ms":{"since":"y","note":"host"}}}\n' >"$d/local.json"
+  (cd "$w" && git init -q -b main && $g add -A && $g commit -qm base) >/dev/null || return 1
+  run() {
+    printf '%s\nSECS=1\nRC=1\nEND\n' "$1" >"$w/out/gate/fmt.log"
+    (cd "$w" && HOME="$d/home" USERPROFILE="$d/home" GATE_KNOWN_LOCAL="$d/local.json" GATE_WAIT_MAX=-1 \
+      GATE_LEDGER="$d/gate.tsv" GATE_SELECT_LEDGER="$d/select.tsv" bash tools/gate.sh --lanes fmt --reuse 2>&1)
+  }
+  out=$(run $'LOSSY b.ms: x\nLOSSY c.ms: x'); rc=$?
+  [ "$rc" -eq 0 ] || { printf 'FAIL stale known: a run whose only finding is known-now-green exited %s:\n%s\n' "$rc" "$out"; bad=1; }
+  [[ "$out" == *"known-now-green: a.ms (src/test/known-red.json)"* && "$out" == *"known-now-green: d.ms ($d/local.json)"* ]] \
+    || { printf 'FAIL stale known: the stale entries are not named:\n%s\n' "$out"; bad=1; }
+  [[ "$out" != *"known-now-green: c.ms"* ]] || { printf 'FAIL stale known: a flaky id was reported known-now-green\n'; bad=1; }
+  [ "$(jq -c '{fmt: (.fmt | keys), flaky: (.flaky | keys)}' "$w/out/gate/known-red.pruned.json" 2>&1)" = '{"fmt":["b.ms","c.ms"],"flaky":["c.ms"]}' ] \
+    || { printf 'FAIL stale known: the pruned set is not the tracked set without a.ms: %s\n' "$(cat "$w/out/gate/known-red.pruned.json" 2>&1)"; bad=1; }
+  [ "$(known_format <"$w/out/gate/known-red.pruned.json")" = "$(cat "$w/out/gate/known-red.pruned.json")" ] \
+    || { printf 'FAIL stale known: the pruned set is not in the --record layout\n'; bad=1; }
+  [ "$(jq -c . "$d/local.json")" = '{"fmt":{"d.ms":{"since":"y","note":"host"}}}' ] || { printf 'FAIL stale known: the machine-local file was rewritten\n'; bad=1; }
+  [[ "$out" == *"--record --local"* ]] || { printf 'FAIL stale known: no refresh command for the machine-local entry\n'; bad=1; }
+  out=$(run $'LOSSY b.ms: x\nLOSSY e.ms: x'); rc=$?
+  [ "$rc" -eq 1 ] && [[ "$out" == *"new: e.ms"* ]] || { printf 'FAIL stale known: a new red beside a known-now-green exited %s\n' "$rc"; bad=1; }
+  [ ! -e "$w/out/gate/known-red.pruned.json" ] || { printf 'FAIL stale known: a RED run left a pruned set for the land to commit\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 QUEUE_POLL=2
 
 queue_write() { printf '%s %s %s\n' "$MY_TICKET" "$1" "$(basename "$TOP")" >"$GATES_DIR/.w.$$" && mv -f "$GATES_DIR/.w.$$" "$GATES_DIR/$$"; }
@@ -1369,8 +1558,8 @@ src/codegen/js/expressions.ms|build corpus suite tests
 std/crypto/sha256.ms|build corpus solana suite tests
 runtime/manual.h|boundary build corpus guard san solana suite tests
 runtime/solana/host.c|boundary build corpus guard solana suite tests
-std/solana/core.cms|build corpus guard solana suite tests
-std/solana/test.cms|build corpus guard solana suite tests
+std/solana/core.ms|build corpus guard solana suite tests
+std/solana/test.ms|build corpus guard solana suite tests
 runtime/solana/solana.h|boundary build corpus guard solana suite tests
 runtime/freestanding/musl/pow.c|boundary build corpus solana suite tests
 docs/TESTING.md|
@@ -1438,9 +1627,9 @@ CASES
   want="tools/gate.sh|tools/wt.sh"
   [ "$got" = "$want" ] || { printf 'FAIL reds tools: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf '%s\n' 'FAIL solana escrow-build: exit 1' 'FAIL solana heap-replay: exit 1' \
-    'FAIL solana std/solana/test.cms: no test result' >"$log"
+    'FAIL solana std/solana/test.ms: no test result' >"$log"
   got=$(reds_of solana "$log" 1 | paste -sd'|' -)
-  want="escrow-build|heap-replay|std/solana/test.cms"
+  want="escrow-build|heap-replay|std/solana/test.ms"
   [ "$got" = "$want" ] || { printf 'FAIL reds: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   rm -f "$log"
   got=$(printf 'key\t%s\tsrc/test/corpus/programs/%s\n' o1 100-file.ms o2 200-dir o3 630-escapes.ms o4 802-nested o5 803-up o6 804-dirty \
@@ -1545,6 +1734,8 @@ CASES
     [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
   done
   shared_cache_self_test || bad=1
+  known_local_self_test || bad=1
+  stale_known_self_test || bad=1
   support_cache_self_test || bad=1
   control_key_self_test || bad=1
   program_key_self_test || bad=1
@@ -1554,6 +1745,7 @@ CASES
   emit_many_self_test || bad=1
   emit_width_self_test || bad=1
   cand_reuse_self_test || bad=1
+  resume_self_test || bad=1
   std_swap_self_test || bad=1
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
@@ -1563,7 +1755,7 @@ CASES
   return $bad
 }
 
-base=main release=0 dry=0 record=0 reuse=0 lanes_arg="" select_only=0
+base=main release=0 dry=0 record=0 record_local=0 reuse=0 lanes_arg="" select_only=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) base=${2:?--base needs a rev}; shift ;;
@@ -1572,9 +1764,9 @@ while [ $# -gt 0 ]; do
     --dry-run) dry=1 ;;
     --select) select_only=1 ;;
     --record) record=1 ;;
+    --local) record_local=1 ;;
     --reuse) reuse=1 ;;
     --reds) reds_of "${2:?--reds needs a lane}" "${3:?--reds needs a log}" 1; exit 0 ;;
-    --inert) inert_range "${2:?--inert needs <from> <to>}" "${3:?--inert needs <from> <to>}"; exit $? ;;
     --route) route_paths; exit 0 ;;
     --self-test) self_test; exit $? ;;
     -h|--help|help) usage; exit 0 ;;
@@ -1660,6 +1852,10 @@ explain
 corpus_build_limit=${MSCORPUS_BUILD_JOBS:-}
 cap_jobs 1 "${GATE_PAR:-}" "$corpus_build_limit" >/dev/null
 
+[ "$record_local" -eq 0 ] || [ "$record" -eq 1 ] || die "--local only modifies --record"
+if [ "$record" -eq 1 ] && [ "$record_local" -eq 0 ] && [ "$(uname -s)" != Darwin ]; then
+  die "--record rewrites the tracked set, which macOS records; on this host record its own reds with --record --local"
+fi
 if [ "$record" -eq 1 ]; then
   base=main
   off_main=$(changed_paths | route_paths | awk -F'\t' '$1 != "tools" { print $2 }' | sort -u)
@@ -1672,22 +1868,6 @@ cand_key=""
 [ -n "$(git status --porcelain -- src std)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
-
-load1() {
-  if [ -r /proc/loadavg ]; then cut -d' ' -f1 /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi
-}
-admit() {
-  local max=${GATE_WAIT_MAX:-1800} waited=0 n l
-  [ "$max" -ge 0 ] || return 0
-  n=$(cores)
-  while :; do
-    l=$(load1)
-    awk -v l="$l" -v n="$n" 'BEGIN{exit !(l<=n)}' && { ADMIT_WAITED=$((ADMIT_WAITED + waited)); return 0; }
-    [ "$waited" -lt "$max" ] || { ADMIT_WAITED=$((ADMIT_WAITED + waited)); ledger busy 0 75 0 0 0 0 "$ADMIT_WAITED"; say "gate: BUSY load $l > $n cores after ${waited}s"; exit 75; }
-    say "gate: waiting, load $l > $n cores (${waited}s/${max}s)"
-    sleep 60; waited=$((waited + 60))
-  done
-}
 
 lane_cmd() {
   case "$1" in
@@ -1779,18 +1959,27 @@ solana_replays() {
     solana_check "${pin%%:*}-build" "$CAND" build "tools/solana/${pin#*:}.ms" --os=solana --release --output="$dir/${pin#*:}.so" \
       && { solana_check "${pin%%:*}-replay" node "tools/solana/${pin%%:*}.mjs" "$dir/${pin#*:}.so" || rc=1; } || rc=1
   done
+  solana_check accountLimit-build "$CAND" build tools/solana/accountLimitProbe.ms --os=solana --release --passC=-DMS_SOL_MAX_ACCOUNTS=2 --output="$dir/accountLimit2.so" \
+    && solana_check accountLimit-default-build "$CAND" build tools/solana/accountLimitProbe.ms --os=solana --release --output="$dir/accountLimit.so" \
+    && { solana_check accountLimit-replay node tools/solana/accountLimit.mjs "$dir/accountLimit2.so" "$dir/accountLimit.so" || rc=1; } || rc=1
   return $rc
 }
 
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
-  for entry in std/solana/test.cms std/solana/hostTest.ms std/solana/token.ms std/solana/index.cms std/solana/vrf.ms \
-    std/solana/idlTest.ms std/solana/accountCodecTest.ms \
-    examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
+  for entry in std/solana/test.ms std/solana/hostTest.ms std/solana/token.ms std/solana/index.ms std/solana/vrf.ms \
+    std/solana/idlTest.ms std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/simulatorContextTest.ms \
+    std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
+    std/solana/simulatorProgramsTest.ms std/solana/simulatorTokenTest.ms std/solana/simulatorInvokeTest.ms \
+    std/solana/simulatorHostTest.ms examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done
-  solana_host_test std/solana/accountCodecTest.ms --target=js || rc=1
+  for entry in std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/memoryMachineTest.jms std/solana/kernelTest.jms \
+    std/solana/simulatorContextTest.ms std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
+    std/solana/simulatorHostTest.ms; do
+    solana_host_test "$entry" --target=js || rc=1
+  done
   if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"; then
     solana_replays "$dir" || rc=1
   fi
@@ -1840,16 +2029,6 @@ run_test_lane() {
     rm -f "$part" "$part.rc"
   done <<<"$jobs"
   return $rc
-}
-
-known_of() {
-  [ -f "$KNOWN" ] || return 0
-  jq -r --arg l "$1" '.[$l] // {} | keys[]' "$KNOWN" | tr -d '\r' | sort -u
-}
-
-flaky_ids() {
-  [ -f "$KNOWN" ] || return 0
-  jq -r '.flaky // {} | keys[]' "$KNOWN" | sort -u
 }
 
 split_flaky() {
@@ -1950,8 +2129,10 @@ if [ "$select_only" -eq 1 ]; then
 fi
 
 if [ "$record" -eq 0 ] && [ -f "$KNOWN" ]; then
-  unnoted=$(jq -r 'to_entries[] | .key as $l | .value | to_entries[]
-                   | select((.value.note // "") == "") | "  no reason: \($l) · \(.key)"' "$KNOWN")
+  unnoted=$(for f in "$KNOWN" "$KNOWN_LOCAL"; do
+    [ -f "$f" ] && jq -r --arg f "$f" 'to_entries[] | .key as $l | .value | to_entries[]
+                   | select((.value.note // "") == "") | "  no reason: \($l) · \(.key) (\($f))"' "$f"
+  done)
   if [ -n "$unnoted" ]; then
     printf '%s\n' "$unnoted" >&2
     die "known red(s) without a note: each one names why it is still red, or the card that owns it"
@@ -1961,6 +2142,7 @@ record_select_off
 
 mkdir -p "$OUT"
 flaky_ids >"$OUT/flaky.ids"
+rm -f "$OUT/stale" "$OUT/known-red.pruned.json"
 
 SLOTS_DIR="$OUT/slots"
 
@@ -2046,12 +2228,12 @@ lane_body() {
 PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "solana")
 
 start=$SECONDS
-ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
+ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
 trap queue_release EXIT
 [ "$lanes" = tools ] || queue_acquire
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
-[ "$lanes" = tools ] || admit
+resume_open
 
 for phase in "${PHASES[@]}"; do
   todo=""
@@ -2061,7 +2243,9 @@ for phase in "${PHASES[@]}"; do
     for lane in $todo; do say "gate: $lane skipped, $stopped has a new red"; done
     continue
   fi
-  [ "$todo" = " tools" ] || [ "$phase" = "${PHASES[0]}" ] || admit
+  fresh=""
+  for lane in $todo; do skip_lane "$lane" || fresh="$fresh $lane"; done
+  [ "$todo" = " tools" ] || [ -z "$fresh" ] || admit
   heavy=0
   for lane in $todo; do case "$lane" in corpus|san) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
@@ -2087,7 +2271,7 @@ for phase in "${PHASES[@]}"; do
       printf '%s\n%s\n' "$only_csv" "$lanes_csv" >"$OUT/$lane.scope" ;;
     esac
     launched="$launched $lane"
-    if [ "$reuse" -eq 1 ] && [ "$(tail -1 "$log" 2>/dev/null)" = END ]; then continue; fi
+    if skip_lane "$lane"; then continue; fi
     lane_body "$lane" & pids="$pids $!"
   done
   [ -z "$pids" ] || wait $pids
@@ -2104,12 +2288,12 @@ for phase in "${PHASES[@]}"; do
   fi
   { read -r only_csv; read -r lanes_csv; } <"$OUT/$lane.scope" || { only_csv=""; lanes_csv=""; }
   reused=""
-  [ "$reuse" -eq 0 ] || reused=" (reused log)"
+  if [ "$reuse" -eq 1 ]; then reused=" (reused log)"; elif resume_kept "$lane"; then reused=" (kept from the BUSY run)"; fi
   { reds_of "$lane" "$log" "$rc"; grep -q '^TIMEOUT after ' "$log" && echo "timed out"; } | sort -u >"$OUT/$lane.red.all"
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
   if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red.all" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
-  known_of "$lane" | scope_known "$lane" >"$OUT/$lane.known"
+  known_of "$lane" | scope_known "$lane" | split_flaky drop >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
   n_red=$(grep -c . "$OUT/$lane.red" | tr -d ' ')
@@ -2127,12 +2311,14 @@ for phase in "${PHASES[@]}"; do
   say "$line"
   red_sum=$((red_sum + n_red)); new_sum=$((new_sum + n_new)); flaky_sum=$((flaky_sum + n_flaky)); ledger "$lane" "${secs:-0}" "$rc" "$n_red" "$((n_red - n_new))" "$n_new" "$n_flaky" "$ADMIT_WAITED"
   ran="$ran $lane"
+  [ "$n_new" -gt 0 ] || resume_green "$lane"
   if [ "$n_fixed" -gt 0 ] && [ "$record" -eq 0 ]; then
-    verdict=RED
     while IFS= read -r name; do
-      say "  known-now-green: $name"
+      file=$(known_file_of "$lane" "$name")
+      say "  known-now-green: $name ($file)"
+      [ "$file" != "$KNOWN_LOCAL" ] || stale_local=1
+      printf '%s\t%s\n' "$lane" "$name" >>"$OUT/stale"
     done <"$OUT/$lane.fixed"
-    say "  the set now lies: drop those from src/test/known-red.json in the commit that fixed them"
   fi
   if [ "$n_new" -gt 0 ] && [ "$record" -eq 0 ]; then
     verdict=RED; stopped=$lane
@@ -2145,34 +2331,44 @@ for phase in "${PHASES[@]}"; do
   done
 done
 
+resume_close
 if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
-  [ -f "$KNOWN" ] || echo '{}' >"$KNOWN.prev"
-  [ -f "$KNOWN" ] && cp "$KNOWN" "$KNOWN.prev"
+  target="$KNOWN"
+  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$GATES_DIR" || die "--record --local: cannot create $GATES_DIR"; }
+  [ -f "$target" ] || echo '{}' >"$target.prev"
+  [ -f "$target" ] && cp "$target" "$target.prev"
   merged="$OUT/known.merged"
-  jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$KNOWN.prev" >"$merged" \
-    || die "--record: cannot read $KNOWN.prev"
+  jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$target.prev" >"$merged" \
+    || die "--record: cannot read $target.prev"
   for lane in $ran; do
     case " $KNOWN_LANES " in *" $lane "*) ;; *) continue ;; esac
-    jq --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.red" '
+    if [ "$record_local" -eq 1 ]; then
+      jq -r --arg l "$lane" '.[$l] // {} | keys[]' "$KNOWN" | tr -d '\r' | sort -u | comm -23 "$OUT/$lane.red" - >"$OUT/$lane.record"
+    else
+      cp "$OUT/$lane.red" "$OUT/$lane.record"
+    fi
+    jq --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.record" '
       . as $prev
       | ($reds | split("\n") | map(select(length > 0))) as $names
       | $prev + {($l): ($names | map({key: ., value: (($prev[$l] // {})[.] // {since: $sha, note: ""})}) | from_entries)}' "$merged" >"$merged.next" \
       && mv "$merged.next" "$merged" || die "--record: merging the $lane reds failed"
   done
-  jq -r '
-    "{\n" + ([to_entries | sort_by(.key)[] |
-      "  \(.key | @json): {" +
-      (if (.value | length) == 0 then "" else
-        "\n" + ([.value | to_entries | sort_by(.key)[] | "    \(.key | @json): \(.value | tojson)"] | join(",\n")) + "\n  "
-      end) + "}"] | join(",\n")) + "\n}"' "$merged" >"$KNOWN" || die "--record: writing $KNOWN failed"
-  diff -u "$KNOWN.prev" "$KNOWN" | sed -n '3,$p'
-  rm -f "$KNOWN.prev"
-  say "gate: RECORDED $(jq '[.[] | length] | add // 0' "$KNOWN") known red(s) at $sha ($(fmt_secs $((SECONDS - start)))) -> src/test/known-red.json"
+  known_format <"$merged" >"$target" || die "--record: writing $target failed"
+  diff -u "$target.prev" "$target" | sed -n '3,$p'
+  rm -f "$target.prev"
+  say "gate: RECORDED $(jq '[.[] | length] | add // 0' "$target") known red(s) at $sha ($(fmt_secs $((SECONDS - start)))) -> ${target#"$TOP"/}"
   ledger total $((SECONDS - start)) 0 "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
   exit 0
 fi
 
+if [ -s "$OUT/stale" ] && [ "$verdict" = GREEN ]; then
+  say "gate: $(grep -c . "$OUT/stale" | tr -d ' ') known red(s) pass now; each one masks a regression until it is dropped"
+  prune_known "$OUT/stale" "$OUT/known-red.pruned.json" || die "writing $OUT/known-red.pruned.json failed"
+  [ ! -f "$OUT/known-red.pruned.json" ] \
+    || say "  src/test/known-red.json without them: ${OUT#"$TOP"/}/known-red.pruned.json; tools/wt.sh land commits it as \"test: drop known-red entries that are green\""
+  [ "$stale_local" -eq 0 ] || say "  $KNOWN_LOCAL: refresh this host's set with tools/gate.sh --record --local on a clean main"
+fi
 say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))${blocked:+ · not run on this host:$blocked}"
 ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
 if [ "$verdict" = GREEN ]; then adopt_builder GREEN "$ran"; exit 0; fi

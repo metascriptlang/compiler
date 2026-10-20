@@ -29,21 +29,24 @@ async function main(): Promise<void> {
 	assert text.contains("await the promise the function returns instead of spawning it"), text;
 }
 
-test "an async body that returns a promise is refused; returning its awaited value is not" {
+test "an async body that returns a promise awaits it; inside try it is refused" {
 	const result = checkOnly(`
 async function work(): Promise<number> { return 41; }
 async function wrap() { return work(); }
 const arrowWrap = async () => { return work(); };
 async function fine() { return await work(); }
+async function guarded(): Promise<number> { try { return work(); } catch (e) { return 0; } }
 function workSync(): number { return 41; }
 async function main(): Promise<void> {
-	const a = await fine();
+	const a: number = await wrap();
+	const w: number = await arrowWrap();
+	const f: number = await fine();
 	const b = await spawn(() => workSync());
 	const c = await work();
 }
 `);
 	const text = result.errors.join("\n");
-	assert text.contains("async function 'wrap' returns 'Promise<number>' from its body, which makes a " + NESTED), text;
-	assert text.contains("an async arrow function returns 'Promise<number>'"), text;
-	assert result.errors.length == 2, "only the two promise-returning bodies: " + text;
+	assert !text.contains(NESTED), text;
+	assert text.contains("write `return await"), text;
+	assert result.errors.length == 1, "only the return inside try: " + text;
 }

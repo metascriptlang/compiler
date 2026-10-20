@@ -69,6 +69,23 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 	return null as unknown as ModuleExports;
 }
 
+export function macroPreludeKind(ctx: CheckerContext, name: string): string {
+	if (ctx.exportRegistry != null) {
+		for (const mod of ctx.exportRegistry.entries) {
+			for (const e of mod.symbols) {
+				if (e.name == name && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym.builtinKind;
+			}
+		}
+	}
+	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
+	for (const members of prelude.preludeModuleScopes.values()) {
+		for (const s of members) {
+			if (s.name == name && s.builtinKind.startsWith("Meta")) return s.builtinKind;
+		}
+	}
+	return "";
+}
+
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
 	const modExports = findModuleExports(registry, modulePath);
 	if (modExports == null) return null as unknown as ExportedSymInfo;
@@ -183,20 +200,12 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 // ===== Extension Registry (extension method tracking) =====
 // Tracks "function f(this self: Type)" declarations for method resolution.
 
-// fnType: registration-time cache — may be stale. Use getExtFnType() for reads.
-// sym: AUTHORITATIVE source of type info (sym.symbolType = standard reference symbol type equivalent).
+// sym: the declaring routine; its symbolType is the method's type (getExtFnType).
 // class (not interface) — reference parity: symbol is a ref type. Lookup results must be
 // nullable (null = not found), which requires pointer semantics.
-//
-// INVARIANT (reference parity: sym.type is the single type source):
-//   sym is the authoritative type source. Use getExtFnType(ext) to read the type.
-//   fnType is a FALLBACK for when sym is null (early collectPass, before symbol is available).
-//   When sym is non-null, fnType MUST be noneType() — never the same Type as sym.symbolType.
-//   Storing the same Type in both causes double-decref on destruction (DRC double ownership).
 export class ExtensionMethod {
 	methodName: string;
 	sourcePath: string;
-	fnType: Type;           // fallback only — use getExtFnType(ext), never read directly
 	isStatic: boolean;
 	sym: Symbol | null;            // authoritative type source (sym.symbolType)
 	scopeDepth: number;     // 0 = imported/prelude, 1 = current module (for overload resolution)
@@ -220,19 +229,12 @@ export function createExtensionRegistry(): ExtensionRegistry {
 	};
 }
 
-// Create an ExtensionMethod with proper ownership invariant enforced.
-// When sym is provided, fnType is set to noneType() — sym.symbolType is authoritative.
-// This prevents double-decref when both fnType and sym.symbolType reference the same Type.
-export function createExtMethod(methodName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
-	return {
-		methodName, sourcePath,
-		fnType: sym != null ? noneType() : fnType,
-		isStatic, sym, scopeDepth,
-	};
+export function createExtMethod(methodName: string, sourcePath: string, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
+	return { methodName, sourcePath, isStatic, sym, scopeDepth };
 }
 
 export function reexportExt(ext: ExtensionMethod, methodName: string, sourcePath: string, sym: Symbol, scopeDepth: number): ExtensionMethod {
-	return createExtMethod(methodName, sourcePath, ext.fnType, ext.isStatic, sym, scopeDepth);
+	return createExtMethod(methodName, sourcePath, ext.isStatic, sym, scopeDepth);
 }
 
 let _defaultsCheckedAtDeclaration: HashSet<Node> = new HashSet<Node>();
@@ -370,16 +372,11 @@ export function filterStaticExtsByOwner(exts: ExtensionMethod[], owner: Symbol):
 	return results;
 }
 
-// ===== Canonical Extension Type (Standard reference symbol type equivalent) =====
-// Standard reference: the symbol's type is the single source of truth.
-// ext.fnType is a registration-time snapshot that may be stale (noneType from collectPass).
-// Always use this helper instead of reading ext.fnType directly.
-
 export function getExtFnType(ext: ExtensionMethod): Type {
 	if (ext.sym != null && ext.sym.symbolType != null && ext.sym.symbolType.kind == TypeKind.Function) {
 		return ext.sym.symbolType;
 	}
-	return ext.fnType;
+	return noneType();
 }
 
 // Reference parity: an infix/prefix operator is resolved exactly like a normal
@@ -408,7 +405,7 @@ function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol, export
 		if (cands[i].sym == sym) return;
 		i = i + 1;
 	}
-	cands.push(createExtMethod(sym.name, "", noneType(), false, sym, 1));
+	cands.push(createExtMethod(sym.name, "", false, sym, 1));
 }
 
 function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): ExtensionMethod {
@@ -1255,8 +1252,10 @@ export class CheckerContext {
 	readonlyBoundary: Cursor<Scope>;
 	staticInitBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
+	typeTestDepth: int32;
 	inLoop: boolean;           // break/continue validation
 	inSwitch: boolean;         // break-inside-switch validation (TS: break may target a switch)
+	computedGotoMarks: Node[]; // @computedGoto statements of the loops being checked
 	decoratorsPending: boolean;
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
 	moduleGraph: ModuleGraph;
@@ -1345,8 +1344,10 @@ export function createContext(): CheckerContext {
 		readonlyBoundary: null as unknown as Cursor<Scope>,
 		staticInitBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
+		typeTestDepth: 0,
 		inLoop: false,
 		inSwitch: false,
+		computedGotoMarks: [],
 		decoratorsPending: false,
 		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,
@@ -1614,7 +1615,7 @@ test "create empty" {
 
 test "register and find" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const m: ExtensionMethod = { methodName: "trim", sourcePath: "/a.ms", isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findAllExtensionsByName(r, "trim");
 	assert found.length == 1;
@@ -1628,9 +1629,9 @@ test "not found" {
 
 test "extension name lookups keep registration order across truncation" {
 	const r = createExtensionRegistry();
-	const a: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const x: ExtensionMethod = { methodName: "other", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const b: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const a: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", isStatic: false, sym: null };
+	const x: ExtensionMethod = { methodName: "other", sourcePath: "/a.ms", isStatic: false, sym: null };
+	const b: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", isStatic: false, sym: null };
 	registerExtension(r, a);
 	registerExtension(r, x);
 	registerExtension(r, b);
@@ -1645,7 +1646,7 @@ test "extension name lookups keep registration order across truncation" {
 	truncateExtensions(r, 0);
 	assert !hasExtensionByName(r, "m");
 	assert !hasExtensionByName(r, "other");
-	const c: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const c: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", isStatic: false, sym: null };
 	registerExtension(r, c);
 	assert findAllExtensionsByName(r, "m").length == 1;
 	assert findAllExtensionsByName(r, "m")[0] == c;
@@ -1654,7 +1655,7 @@ test "extension name lookups keep registration order across truncation" {
 function staticExtOf(owner: Symbol | null): ExtensionMethod {
 	const sym = makeSymbol("m", SymbolKind.Function, noneType(), false);
 	sym.staticOwner = owner;
-	return { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym };
+	return { methodName: "m", sourcePath: "/a.ms", isStatic: true, sym };
 }
 
 test "static ext filter keeps only statics owned by that symbol" {
@@ -1663,7 +1664,7 @@ test "static ext filter keeps only statics owned by that symbol" {
 	const mine = staticExtOf(owner);
 	const theirs = staticExtOf(sameNamed);
 	const ownerless = staticExtOf(null);
-	const inst: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: makeSymbol("m", SymbolKind.Function, noneType(), false) };
+	const inst: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", isStatic: false, sym: makeSymbol("m", SymbolKind.Function, noneType(), false) };
 	inst.sym!.staticOwner = owner;
 	const got = filterStaticExtsByOwner([mine, theirs, ownerless, inst], owner);
 	assert got.length == 1;
@@ -1807,7 +1808,7 @@ test "getStaticExtTypeName" {
 
 test "static extension in registry" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "floor", sourcePath: "", fnType: noneType(), isStatic: true, sym: null };
+	const m: ExtensionMethod = { methodName: "floor", sourcePath: "", isStatic: true, sym: null };
 	registerExtension(r, m);
 	const found = findAllExtensionsByName(r, "floor");
 	assert found.length == 1;
@@ -1816,7 +1817,7 @@ test "static extension in registry" {
 
 test "instance extension isStatic false" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", sourcePath: "", fnType: noneType(), isStatic: false, sym: null };
+	const m: ExtensionMethod = { methodName: "trim", sourcePath: "", isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findAllExtensionsByName(r, "trim");
 	assert found.length == 1;

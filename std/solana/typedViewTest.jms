@@ -1,0 +1,85 @@
+import { Discriminator, accountDiscriminator, word } from "./discriminator";
+import { msSolAccountAt, msSolHostEnter, msSolHostInput } from "./kernel";
+import { msSolFill, msSolLoadU64, msSolLoadU8, msSolStoreU64, msSolStoreU8 } from "./memory";
+import { Pubkey } from "./pubkey";
+import { serializeInput } from "./simulatorContextFixture";
+import { mutable, owned } from "./typed";
+
+struct Counter { value: uint64; owner: Pubkey; }
+struct Ledger { entries: uint32[3]; flag: boolean; }
+
+export function discriminator(this typeof Counter): Discriminator {
+	return @comptime { return accountDiscriminator("Counter"); };
+}
+
+export function discriminator(this typeof Ledger): Discriminator {
+	return @comptime { return accountDiscriminator("Ledger"); };
+}
+
+const COUNTER_DATA = 8 + 40;
+const LEDGER_DATA = 8 + 16;
+const PROGRAM: uint8 = 0xa0;
+
+function enter(length: int32, name: string): uint64 {
+	let data: uint8[] = [];
+	for (let at = 0; at < length; at++) { data.push(0); }
+	const bytes = serializeInput([0], [length], data, PROGRAM);
+	const input = msSolHostInput(bytes.length as uint64);
+	for (let at = 0; at < bytes.length; at++) { msSolStoreU8(input + (at as uint64), bytes[at]); }
+	msSolHostEnter(input);
+	const record = msSolAccountAt(0);
+	msSolFill(record + 88, 0, length as uint64);
+	msSolStoreU64(record + 88, word(accountDiscriminator(name)));
+	return record;
+}
+
+function bump(counter: Ptr<Counter>): void { counter.value += 1; }
+
+test "an author mutates Mutable data through the view and the account bytes change" {
+	const record = enter(COUNTER_DATA, "Counter");
+	const found = mutable<Counter>(0);
+	assert found.ok;
+	if (found.ok) {
+		const counter = found.value.data();
+		assert counter.value == 0;
+		counter.value += 1;
+		bump(counter);
+		counter.owner.bytes[0] = 7;
+		assert msSolLoadU64(record + 96) == 2 && msSolLoadU8(record + 104) == 7;
+		msSolStoreU64(record + 96, 40);
+		assert counter.value == 40 && counter[].value == 40;
+		const snap = counter[];
+		counter.value += 2;
+		assert snap.value == 40 && counter.value == 42;
+		assert counter.owner != Pubkey.zero();
+	}
+}
+
+test "a second program entry sees the bytes the first one left" {
+	const record = enter(COUNTER_DATA, "Counter");
+	const first = mutable<Counter>(0);
+	assert first.ok;
+	if (first.ok) { first.value.data().value = 9; }
+	assert msSolLoadU64(record + 96) == 9;
+}
+
+test "an Owned proof reads through a read-only view and a different type reaches another layout" {
+	const record = enter(LEDGER_DATA, "Ledger");
+	msSolStoreU64(record + 96, 0x0000000200000001);
+	msSolStoreU8(record + 96 + 12, 1);
+	const found = owned<Ledger>(0);
+	assert found.ok;
+	if (found.ok) {
+		const ledger = found.value.data();
+		assert ledger.entries[0] == 1 && ledger.entries[1] == 2 && ledger.entries[2] == 0 && ledger.flag;
+		assert ledger.entries.length == 3;
+	}
+	const wrong = mutable<Counter>(0);
+	assert !wrong.ok;
+}
+
+test "a Mutable proof over a wrongly sized account reports the program error and builds no view" {
+	enter(LEDGER_DATA + 8, "Counter");
+	const found = mutable<Counter>(0);
+	assert !found.ok;
+}

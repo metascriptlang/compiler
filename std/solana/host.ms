@@ -1,0 +1,445 @@
+import {
+	AccountMeta,
+	Clock,
+	account,
+	accountCount,
+	clock,
+	failWith,
+	instructionData,
+	logU64,
+	transfer,
+	writableAccount,
+	recordAddress,
+} from "./core";
+import { ProgramError } from "./error";
+import {
+	msSolHostEnter,
+	msSolHostFaultCodeOf,
+	msSolHostFaultMessage,
+	msSolHostInput,
+	msSolHostInvocationAt,
+	msSolHostInvocationTotal,
+	msSolHostLeave,
+	msSolHostLogAt,
+	msSolHostLogTotal,
+	msSolHostRentReadTotal,
+	msSolHostResult,
+	msSolHostSetClock,
+	msSolHostSetSysvarStatus,
+} from "./kernel";
+import { msSolLoadU8, msSolLoadU64, msSolStoreU8, msSolStoreU64 } from "./memory";
+when (js) {
+	import { msSolCopy, msSolSpanAddress } from "./memory";
+} else {
+	import { msSolPointer } from "./memory";
+}
+import { Pubkey } from "./pubkey";
+
+export struct HostAccount {
+	key: Pubkey;
+	owner: Pubkey;
+	lamports: uint64;
+	data: uint8[];
+	signer: boolean;
+	writable: boolean;
+	executable: boolean;
+}
+
+export struct HostRun {
+	result: uint64;
+	fault: string;
+}
+
+export const REFUSED: uint64 = 0xffffffffffffffff;
+export const NOT_SIMULATED: uint64 = 0xfffffffffffffffe;
+
+const MAX_INSTRUCTION_ACCOUNTS: int32 = 255;
+
+export struct HostInvocation {
+	program: Pubkey;
+	accounts: AccountMeta[];
+	data: uint8[];
+	signers: uint64;
+	signerSeeds: uint8[][][];
+}
+
+function storeKey(address: uint64, key: Pubkey): void {
+	when (js) {
+		msSolCopy(address, msSolSpanAddress(key.bytes), 32);
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		at[] = key;
+	}
+}
+
+function loadKey(address: uint64): Pubkey {
+	when (js) {
+		let key = Pubkey.zero();
+		msSolCopy(msSolSpanAddress(key.bytes), address, 32);
+		return key;
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		return at[];
+	}
+}
+
+function flag(value: boolean): uint8 {
+	if (value) { return 1; }
+	return 0;
+}
+
+function firstOccurrence(accounts: HostAccount[], index: int32): int32 {
+	for (let earlier = 0; earlier < index; earlier++) {
+		if (accounts[earlier].key.equals(accounts[index].key)) { return earlier; }
+	}
+	return index;
+}
+
+function paddedLength(length: uint64): uint64 {
+	return (length + 7) / 8 * 8;
+}
+
+function serializedLength(accounts: HostAccount[], data: Readonly<Span<uint8>>): uint64 {
+	let size: uint64 = 8;
+	for (let index = 0; index < accounts.length; index++) {
+		if (firstOccurrence(accounts, index) != index) {
+			size = size + 8;
+		} else {
+			size = size + 88 + paddedLength(accounts[index].data.length as uint64) + 10240 + 8;
+		}
+	}
+	return size + 8 + (data.length as uint64) + 32;
+}
+
+function serialized(program: Pubkey, accounts: HostAccount[], data: Readonly<Span<uint8>>): uint64 {
+	const input = msSolHostInput(serializedLength(accounts, data));
+	msSolStoreU64(input, accounts.length as uint64);
+	let cursor = input + 8;
+	const addresses: uint64[] = [];
+	for (let index = 0; index < accounts.length; index++) {
+		const first = firstOccurrence(accounts, index);
+		addresses.push(cursor);
+		if (first != index) {
+			msSolStoreU8(cursor, first as uint8);
+			cursor = cursor + 8;
+			continue;
+		}
+		const holder = accounts[index];
+		msSolStoreU8(cursor, 0xff);
+		msSolStoreU8(cursor + 1, flag(holder.signer));
+		msSolStoreU8(cursor + 2, flag(holder.writable));
+		msSolStoreU8(cursor + 3, flag(holder.executable));
+		storeKey(cursor + 8, holder.key);
+		storeKey(cursor + 40, holder.owner);
+		msSolStoreU64(cursor + 72, holder.lamports);
+		msSolStoreU64(cursor + 80, holder.data.length as uint64);
+		for (let offset = 0; offset < holder.data.length; offset++) {
+			msSolStoreU8(cursor + 88 + (offset as uint64), holder.data[offset]);
+		}
+		cursor = cursor + 88 + paddedLength(holder.data.length as uint64) + 10240;
+		msSolStoreU64(cursor, 0xffffffffffffffff);
+		cursor = cursor + 8;
+	}
+	msSolStoreU64(cursor, data.length as uint64);
+	for (let offset = 0; offset < data.length; offset++) {
+		msSolStoreU8(cursor + 8 + (offset as uint64), data[offset]);
+	}
+	storeKey(cursor + 8 + (data.length as uint64), program);
+	return input;
+}
+
+function readBack(accounts: HostAccount[], input: uint64, lengths: uint64[]): void {
+	let cursor = input + 8;
+	for (let index = 0; index < accounts.length; index++) {
+		const first = firstOccurrence(accounts, index);
+		if (first != index) {
+			accounts[index] = {
+				...accounts[index],
+				owner: accounts[first].owner,
+				lamports: accounts[first].lamports,
+				data: accounts[first].data,
+			};
+			cursor = cursor + 8;
+			continue;
+		}
+		const length = msSolLoadU64(cursor + 80);
+		const bytes: uint8[] = [];
+		for (let offset: uint64 = 0; offset < length; offset++) {
+			bytes.push(msSolLoadU8(cursor + 88 + offset));
+		}
+		accounts[index] = {
+			...accounts[index],
+			owner: loadKey(cursor + 40),
+			lamports: msSolLoadU64(cursor + 72),
+			data: bytes,
+		};
+		cursor = cursor + 88 + paddedLength(lengths[index]) + 10240 + 8;
+	}
+}
+
+export function run(
+	program: Pubkey,
+	accounts: HostAccount[],
+	data: Readonly<Span<uint8>>,
+	entry: () => void,
+): HostRun {
+	if (accounts.length > MAX_INSTRUCTION_ACCOUNTS) {
+		return {
+			result: REFUSED,
+			fault: `MaxAccountsExceeded: an instruction of ${accounts.length} accounts is refused, the runtime sends at most 255 (agave program-runtime/src/serialization.rs:23,201-202)`,
+		};
+	}
+	const lengths: uint64[] = [];
+	for (const holder of accounts) { lengths.push(holder.data.length as uint64); }
+	const input = serialized(program, accounts, data);
+	msSolHostEnter(input);
+	entry();
+	msSolHostLeave();
+	const faulted = msSolHostFaultCodeOf();
+	if (faulted != 0) { return { result: faulted, fault: msSolHostFaultMessage() }; }
+	const result = msSolHostResult();
+	if (result == 0) { readBack(accounts, input, lengths); }
+	return { result: result, fault: "" };
+}
+
+export function logs(): string[] {
+	const lines: string[] = [];
+	for (let index: uint64 = 0; index < msSolHostLogTotal(); index++) {
+		lines.push(msSolHostLogAt(index));
+	}
+	return lines;
+}
+
+export function rentReads(): uint64 { return msSolHostRentReadTotal(); }
+
+export function invocations(): HostInvocation[] {
+	const found: HostInvocation[] = [];
+	for (let index: uint64 = 0; index < msSolHostInvocationTotal(); index++) {
+		const record = msSolHostInvocationAt(index);
+		const metaCount = msSolLoadU64(record + 32);
+		const metas = msSolLoadU64(record + 40);
+		const metaList: AccountMeta[] = [];
+		for (let meta: uint64 = 0; meta < metaCount; meta++) {
+			const entry = metas + meta * 34;
+			metaList.push({
+				key: loadKey(entry),
+				writable: msSolLoadU8(entry + 32) != 0,
+				signer: msSolLoadU8(entry + 33) != 0,
+			});
+		}
+		const dataLength = msSolLoadU64(record + 48);
+		const dataAddress = msSolLoadU64(record + 56);
+		const bytes: uint8[] = [];
+		for (let offset: uint64 = 0; offset < dataLength; offset++) {
+			bytes.push(msSolLoadU8(dataAddress + offset));
+		}
+		const signerCount = msSolLoadU64(record + 64);
+		let cursor = msSolLoadU64(record + 72);
+		const signerSeeds: uint8[][][] = [];
+		for (let signer: uint64 = 0; signer < signerCount; signer++) {
+			const seedCount = msSolLoadU64(cursor);
+			cursor = cursor + 8;
+			const seeds: uint8[][] = [];
+			for (let seed: uint64 = 0; seed < seedCount; seed++) {
+				const length = msSolLoadU64(cursor);
+				cursor = cursor + 8;
+				const seedBytes: uint8[] = [];
+				for (let offset: uint64 = 0; offset < length; offset++) {
+					seedBytes.push(msSolLoadU8(cursor + offset));
+				}
+				cursor = cursor + length;
+				seeds.push(seedBytes);
+			}
+			signerSeeds.push(seeds);
+		}
+		found.push({
+			program: loadKey(record),
+			accounts: metaList,
+			data: bytes,
+			signers: signerCount,
+			signerSeeds: signerSeeds,
+		});
+	}
+	return found;
+}
+
+export function textBytes(text: string): uint8[] {
+	const bytes: uint8[] = [];
+	for (let index = 0; index < text.length; index++) {
+		bytes.push(text.charCodeAt(index) as uint8);
+	}
+	return bytes;
+}
+
+export function signerIs(call: HostInvocation, signer: int32, expected: uint8[][]): boolean {
+	if (signer >= call.signerSeeds.length) { return false; }
+	const actual = call.signerSeeds[signer];
+	if (actual.length != expected.length) { return false; }
+	for (let seed = 0; seed < actual.length; seed++) {
+		if (actual[seed].length != expected[seed].length) { return false; }
+		for (let offset = 0; offset < actual[seed].length; offset++) {
+			if (actual[seed][offset] != expected[seed][offset]) { return false; }
+		}
+	}
+	return true;
+}
+
+export function setClock(clock: Clock): void {
+	msSolHostSetClock(
+		clock.slot,
+		clock.epochStartTimestamp as uint64,
+		clock.epoch,
+		clock.leaderScheduleEpoch,
+		clock.unixTimestamp as uint64,
+	);
+}
+
+export function setSysvarStatus(status: uint64): void { msSolHostSetSysvarStatus(status); }
+
+function keyOf(word: uint64): Pubkey {
+	let key = Pubkey.zero();
+	for (let index = 0; index < 8; index++) {
+		key.bytes[index] = ((word >> ((index * 8) as uint64)) & 255) as uint8;
+	}
+	return key;
+}
+
+function holderOf(word: uint64, data: uint8[], signer: boolean, writable: boolean): HostAccount {
+	return {
+		key: keyOf(word),
+		owner: keyOf(9),
+		lamports: 1000,
+		data: data,
+		signer: signer,
+		writable: writable,
+		executable: false,
+	};
+}
+
+function counterStep(): Result<uint64, ProgramError> {
+	const target = try writableAccount(0);
+	const amount = try instructionData().readU64(0);
+	const data = target.data();
+	const next = (try data.readU64(0)) + amount;
+	const _written = try data.writeU64(0, next);
+	logU64(next);
+	return Result.ok(next);
+}
+
+function addToCounter(): void {
+	const result = counterStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+function secondStep(): Result<uint64, ProgramError> {
+	const first = try account(0);
+	const second = try writableAccount(1);
+	if (first.recordAddress() != second.recordAddress()) { return Result.err(ProgramError.invalidArgument()); }
+	return second.data().writeU64(0, 42);
+}
+
+function writeThroughSecond(): void {
+	const result = secondStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+function logSlot(): void {
+	const now = clock();
+	if (!now.ok) { failWith(now.error); return; }
+	logU64(now.value.slot);
+}
+
+function payStep(): Result<uint64, ProgramError> {
+	const source = try account(0);
+	const destination = try account(1);
+	return transfer(source, destination, 10);
+}
+
+function payTen(): void {
+	const result = payStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+test "a run writes the program's account changes back and records its logs" {
+	const accounts: HostAccount[] = [holderOf(1, [5, 0, 0, 0, 0, 0, 0, 0], false, true)];
+	const amount: uint8[] = [3, 0, 0, 0, 0, 0, 0, 0];
+	const outcome = run(keyOf(9), accounts, amount, addToCounter);
+	assert outcome.result == 0;
+	assert outcome.fault == "";
+	assert accounts[0].data[0] == 8;
+	assert logs()[0] == "Program log: 0x0, 0x0, 0x0, 0x0, 0x8";
+}
+
+test "a failing program reports the error code it exits with" {
+	const accounts: HostAccount[] = [holderOf(1, [5, 0, 0, 0, 0, 0, 0, 0], false, true)];
+	const short: uint8[] = [3];
+	const outcome = run(keyOf(9), accounts, short, addToCounter);
+	assert outcome.result == ProgramError.accountDataTooSmall().code;
+	assert accounts[0].data[0] == 5;
+}
+
+test "a repeated account is serialized once and both indexes reach it" {
+	const accounts: HostAccount[] = [
+		holderOf(1, [0, 0, 0, 0, 0, 0, 0, 0], false, true),
+		holderOf(1, [0, 0, 0, 0, 0, 0, 0, 0], false, true),
+	];
+	const empty: uint8[] = [];
+	const outcome = run(keyOf(9), accounts, empty, writeThroughSecond);
+	assert outcome.result == 0;
+	assert accounts[0].data[0] == 42;
+	assert accounts[1].data[0] == 42;
+}
+
+test "a CPI is recorded with its program, accounts and data" {
+	const payer = { ...holderOf(1, [], true, true), owner: Pubkey.zero() };
+	const accounts: HostAccount[] = [payer, { ...holderOf(2, [], false, true), lamports: 1000000000 }];
+	const empty: uint8[] = [];
+	const outcome = run(keyOf(9), accounts, empty, payTen);
+	assert outcome.result == 0;
+	const calls = invocations();
+	assert calls.length == 1;
+	assert calls[0].program.isZero();
+	assert calls[0].accounts.length == 2;
+	assert calls[0].accounts[0].key.equals(keyOf(1));
+	assert calls[0].accounts[0].signer && calls[0].accounts[0].writable;
+	assert !calls[0].accounts[1].signer && calls[0].accounts[1].writable;
+	assert calls[0].data.length == 12;
+	assert calls[0].data[0] == 2 && calls[0].data[4] == 10;
+}
+
+let ranWith: int32 = -1;
+
+function noteAccounts(): void {
+	ranWith = accountCount();
+}
+
+function manyAccounts(count: int32): HostAccount[] {
+	const held: HostAccount[] = [];
+	for (let index = 0; index < count; index++) {
+		held.push(holderOf((index as uint64) + 1, [], false, false));
+	}
+	return held;
+}
+
+test "an instruction of 255 accounts runs and one of 256 is refused before the program runs, as the runtime refuses it" {
+	const empty: uint8[] = [];
+	ranWith = -1;
+	const allowed = run(keyOf(9), manyAccounts(255), empty, noteAccounts);
+	assert allowed.result == 0;
+	assert allowed.fault == "";
+	assert ranWith == 255;
+	ranWith = -1;
+	const refused = run(keyOf(9), manyAccounts(256), empty, noteAccounts);
+	assert refused.result == REFUSED;
+	assert refused.fault.indexOf("MaxAccountsExceeded") == 0;
+	assert ranWith == -1;
+}
+
+test "a program reads the clock the test sets" {
+	setClock({ slot: 77, epochStartTimestamp: 1, epoch: 3, leaderScheduleEpoch: 4, unixTimestamp: 5 });
+	const accounts: HostAccount[] = [];
+	const empty: uint8[] = [];
+	const outcome = run(keyOf(9), accounts, empty, logSlot);
+	assert outcome.result == 0;
+	assert logs()[0] == "Program log: 0x0, 0x0, 0x0, 0x0, 0x4d";
+}

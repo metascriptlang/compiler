@@ -248,9 +248,8 @@ void* msPromiseAny(msRefArray* arr) {
 static void msFutureThenCb(void* raw) {
 	msFutureThenEnv* e = (msFutureThenEnv*)raw;
 	if (e->input->base.failed || e->input->base.cancelled) {
-		msFutureFailShared(e->output, e->input->base.error);
-		msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled);
-		free(e);
+		msFutureThenRejected(e);
+		msFutureThenEnvFree(e);
 		return;
 	}
 	void* val = e->input->value;
@@ -281,7 +280,11 @@ static void msFutureThenCb(void* raw) {
 		else ((void(*)(msString))fn)(sval);
 		break;
 	}
-	default: /* PTR or VOID — pass void* directly */
+	case MS_TYPETAG_VOID:
+		if (env) ((void(*)(void*))fn)(env);
+		else ((void(*)(void))fn)();
+		break;
+	default: /* PTR — pass void* directly */
 		if (env) ((void(*)(void*, void*))fn)(val, env);
 		else ((void(*)(void*))fn)(val);
 		break;
@@ -293,8 +296,7 @@ static void msFutureThenCb(void* raw) {
 	} else {
 		msFutureComplete(e->output, NULL);
 	}
-	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled);
-	free(e);
+	msFutureThenEnvFree(e);
 }
 
 msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
@@ -302,11 +304,11 @@ msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
 }
 
 void* msFutureThenTyped(void* input, msClosure onFulfilled, int typeTag) {
-	msFuture* output = (msFuture*)msFutureCreate();
-	msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
-	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled; env->typeTag = typeTag;
-	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureThenCb, .env = env});
-	return output;
+	return msFutureThenTypedWithRejected(input, onFulfilled, typeTag, (msClosure){0});
+}
+
+void* msFutureThenTypedWithRejected(void* input, msClosure onFulfilled, int typeTag, msClosure onRejected) {
+	return msFutureThenAttach(input, onFulfilled, onRejected, typeTag, (msClosureFn)msFutureThenCb);
 }
 
 /* ===== Promise.catch ===== */
@@ -317,19 +319,8 @@ static void msFutureCatchCb(void* raw) {
 		void* err = e->input->base.error;  /* lent: the input keeps its count */
 		void* fn = (void*)e->onRejected.fn;
 		void* env = e->onRejected.env;
-		/* Error is always a string (msString*) in MetaScript */
-		switch (e->typeTag) {
-		case MS_TYPETAG_STRING: {
-			msString sval = err ? *(msString*)err : MS_EMPTY_STRING;
-			if (env) ((void(*)(msString, void*))fn)(sval, env);
-			else ((void(*)(msString))fn)(sval);
-			break;
-		}
-		default:
-			if (env) ((void(*)(void*, void*))fn)(err, env);
-			else ((void(*)(void*))fn)(err);
-			break;
-		}
+		if (env) ((void(*)(void*, void*))fn)(err, env);
+		else ((void(*)(void*))fn)(err);
 		if (msErr) {
 			msFutureFail(e->output, (void*)msCurrException);
 			msErr = false; msCurrException = NULL;

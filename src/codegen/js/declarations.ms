@@ -6,6 +6,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
+import { useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
@@ -89,7 +90,19 @@ export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 }
 
 // ===== Enum Declaration =====
-// TypeScript IIFE pattern: var E; (function(E) { E[E["A"]=0]="A"; })(E || (E = {}));
+
+function enumMemberValue(d: EnumDeclData, i: number): number {
+	return (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
+}
+
+export function jsEnumObject(local: string, d: EnumDeclData): string {
+	let out = `const ${local} = {};\n`;
+	for (let i = 0; i < d.enumMembers.length; i += 1) {
+		const name = escapeJSString(d.enumMembers[i]);
+		out = out + `${local}[${local}["${name}"] = ${enumMemberValue(d, i)}] = "${name}";\n`;
+	}
+	return out;
+}
 
 function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): void {
 	const d = node.data as EnumDeclData;
@@ -100,9 +113,8 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	// linePrefix carries `export ` to members past the first — the caller
 	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
-		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${val};\n`);
+		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${enumMemberValue(d, i)};\n`);
 	}
 }
 
@@ -177,6 +189,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 		match (member.kind) {
 			NodeKind.MethodDecl => {
 				if ((member.data as MethodDeclData).methodIsStatic) { staticMethods.push(member); }
+				else if (gen.actorHandle != null && isActorMessage(member)) { emitActorMessageMethod(gen, member); }
 				else { emitMethodDecl(gen, member); }
 			},
 			NodeKind.ConstructorDecl => { emitConstructorDecl(gen, member); },
@@ -287,10 +300,6 @@ export function emitClassDecl(gen: JSGenerator, node: Node): void {
 
 // ===== Actor Declaration =====
 
-// Actor on js degenerates to a native ES class (PARALOCK tier 1): sync method
-// bodies run sequentially on the single-threaded event loop — exactly actor
-// semantics without any machinery; async bodies may interleave at await
-// points (documented divergence, the same class as "js spawn = scheduling").
 // Same adapter shape the C backend's actorLower uses to build its state class.
 export function emitActorDecl(gen: JSGenerator, node: Node): void {
 	if (node.flags.has(NodeFlag.ExternC)) return;
@@ -316,6 +325,7 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 		classExtends: "",
 		classBody: body,
 		nameLocation: d.nameLocation,
+		classImplements: [],
 	} as ClassDeclData, node.location);
 	cls.resolvedSym = node.resolvedSym;
 	gen.actorHandle = pidField;
@@ -338,6 +348,11 @@ function skipThisParams(params: string[]): string[] {
 
 export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as MethodDeclData;
+	emitMethodDeclNamed(gen, node, jsMethodMemberName(d.methodName, node.resolvedSym));
+}
+
+function emitMethodDeclNamed(gen: JSGenerator, node: Node, memberName: string): void {
+	const d = node.data as MethodDeclData;
 	if (isExternFlag(d.methodFlags)) return;
 	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
 	if (isGenericRoutine(node, d.methodFlags)) return;
@@ -350,12 +365,37 @@ export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 		"async_generator" => { emit(gen, "async *"); },
 		_ => { if (autoAsync) emit(gen, "async "); },
 	};
-	emit(gen, jsMethodMemberName(d.methodName, node.resolvedSym));
+	emit(gen, memberName);
 	emit(gen, "(");
 	emitJoinedSafeParams(gen, node, skipThisParams(d.methodParams), ", ", safeJsName);
 	emit(gen, ") ");
 	emitBodyOrEmpty(gen, d.methodBody);
 	emitNewline(gen);
+}
+
+function isActorMessage(node: Node): boolean {
+	const d = node.data as MethodDeclData;
+	if (isExternFlag(d.methodFlags) || d.methodFlags.indexOf("overload", 0) >= 0) return false;
+	return d.methodName != "onTerminate" && d.methodName != "onExit" && d.methodName != "onDown" && d.methodName != "onIdle";
+}
+
+function emitActorMessageMethod(gen: JSGenerator, node: Node): void {
+	const d = node.data as MethodDeclData;
+	useActorRuntime(gen);
+	const memberName = jsMethodMemberName(d.methodName, node.resolvedSym);
+	const implName = "$impl_" + memberName;
+	emitMethodDeclNamed(gen, node, implName);
+	const params = skipThisParams(d.methodParams);
+	const isVoid = d.methodReturnType == "" || d.methodReturnType == "void";
+	emitIndent(gen);
+	emit(gen, memberName);
+	emit(gen, "(");
+	emitJoinedSafeParams(gen, node, params, ", ", safeJsName);
+	emit(gen, isVoid ? ") { msActorRt().send(this, () => this." : ") { return msActorRt().call(this, () => this.");
+	emit(gen, implName);
+	emit(gen, "(");
+	emitJoinedSafeParams(gen, node, params, ", ", safeJsName);
+	emit(gen, ")); }\n");
 }
 
 // ===== Constructor Declaration =====
@@ -536,11 +576,16 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			emit(gen, ";\n");
 		},
 		NodeKind.EnumDecl => {
+			const ed = inner.data as EnumDeclData;
 			if (gen.multiFile) {
-				const ed = inner.data as EnumDeclData;
 				for (const m of ed.enumMembers) { gen.exportedNames.push(enumMemberName(inner.resolvedSym, safeJsName(ed.enumName), m)); }
 			}
 			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
+			if (gen.multiFile) {
+				gen.exportedNames.push(safeJsName(ed.enumName));
+				emitIndent(gen);
+				emit(gen, `export ${jsEnumObject(safeJsName(ed.enumName), ed)}`);
+			}
 		},
 		NodeKind.ClassDecl => {
 			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as ClassDeclData).className)); }

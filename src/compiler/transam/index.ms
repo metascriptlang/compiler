@@ -511,6 +511,8 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (findModuleExports(db.exportRegistry, filePath) != null) return;
 	const program = dbParse(db, filePath);
 	if (program == null) return;
+	dbRecordDepImports(db, filePath, program);
+	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
 	const tmpCtx = createTempCollectContext(filePath);
 	tmpCtx.exportRegistry = db.exportRegistry;
 	const depMod = createModule(filePath);
@@ -1260,6 +1262,28 @@ test "module exports keep a decorated exported class" {
 	dbEnsureModuleExports(db, "decmod.ms");
 	const info = findExportedSymbol(db.exportRegistry, "decmod.ms", "Widget");
 	assert info != null;
+}
+
+test "one module's exports resolve the types it imports from a module not yet registered" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/box.ms", "export struct Box { v: int32; }");
+	dbSetFileText(db, "/test/use.ms", 'import { Box } from "./box";\nexport function f(b: Box): int32 { return b.v; }');
+	dbEnsureModuleExports(db, "/test/use.ms");
+	const f = findExportedSymbol(db.exportRegistry, "/test/use.ms", "f");
+	assert f != null;
+	const param = f.sym.symbolType.typeChildren[0];
+	assert param.sym != null && param.sym.modulePath == "/test/box.ms";
+}
+
+test "one module's exports resolve what it imports from std" {
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/test/kinds.ms", 'import { NodeKind } from "std/meta";\nexport function kindOf(k: NodeKind): int32 { return k as int32; }');
+	dbEnsureModuleExports(db, "/test/kinds.ms");
+	const f = findExportedSymbol(db.exportRegistry, "/test/kinds.ms", "kindOf");
+	assert f != null;
+	const param = f.sym.symbolType.typeChildren[0];
+	assert param.sym != null && param.sym.builtinKind == "MetaNodeKind";
 }
 
 test "a dependency's exported type keeps its declaring module" {

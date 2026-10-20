@@ -2,14 +2,17 @@
 // exports under their source names: `export default`, named and star re-exports included;
 // a sibling module's export of the same name stays internal, extension functions stay out
 // without an error, and an entry without a runtime export gets no export statement. An
-// exported name that is not one runtime value (overload set, generic function or class,
-// enum, directly or re-exported) is a compile error at the `export`.
+// exported enum, directly or re-exported, is an object of its members with the reverse
+// mapping TS gives, in the bundle and under `--split`. An exported name that is not one
+// runtime value (overload set, generic function or class, directly or re-exported) is a
+// compile error at the `export`.
 //
 // WHY A SUBPROCESS: the observable is the bundle as a host imports it, which no
 // in-process test reaches. The compiler under test is $MSC, else `./msc`.
 //
 // RED PRE-FIX: node sees `[ 'default', 'module.exports' ]` and no `respond` (before
-// 30482927f); on 30482927f the re-exports are missing and every refused kind builds.
+// 30482927f); on 30482927f the re-exports are missing and every refused kind builds;
+// before wt/export-enum-bundle an exported enum is refused and `--split` exports no `Mode`.
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, cwd, exit, env } from "std/process";
@@ -27,8 +30,10 @@ function report(msg: string): void {
 	failed = failed + 1;
 }
 
-function build(entry: string, out: string): boolean {
-	const r = execFileResult(msc, ["build", "--target=js", entry, `--output=${out}`], dir);
+function build(entry: string, out: string, split: boolean = false): boolean {
+	const args = ["build", "--target=js", entry, `--output=${out}`];
+	if (split) args.push("--split");
+	const r = execFileResult(msc, args, dir);
 	if (r.exitCode != 0) report(`build ${entry}: ${r.output}${r.errorOutput}`);
 	return r.exitCode == 0;
 }
@@ -56,16 +61,18 @@ const libSource = [
 	"export function pick(a: int32): int32 { return a; }",
 	"export function pick(a: string): string { return a; }",
 	"export function same<T>(x: T): T { return x; }",
-	"export enum Color { Red, Blue }",
 	"",
 ].join("\n");
 writeFile(`${dir}/app/src/lib.ms`, libSource);
 writeFile(`${dir}/lib.ms`, libSource);
+writeFile(`${dir}/app/src/colors.ms`, "export enum Color { Red, Blue }\nexport function blue(): Color { return Color.Blue; }\n");
 writeFile(`${dir}/app/src/hub.ms`, "export function hubbed(): string { return \"hub\"; }\nexport const level = 4;\nexport struct Pair { a: int32; }\n");
 writeFile(`${dir}/app/src/main.ms`, [
 	"import { suffix } from \"./lib\";",
 	"export { suffix, limit as cap } from \"./lib\";",
 	"export * from \"./hub\";",
+	"export { Color } from \"./colors\";",
+	"export enum Mode { On, Off = 5, Below = -1, Same = 5 }",
 	"export struct Point { x: int32; y: int32; }",
 	"export function respond(path: string): string { return \"page \" + path + suffix(); }",
 	"export function shift(p: Point, d: int32): Point { return { x: p.x + d, y: p.y + d }; }",
@@ -83,8 +90,18 @@ if (build("app/src/main.ms", "app.js")) {
 		"import * as m from \"./app.js\";",
 		"const p = m.shift({ x: 1, y: 2 }, 10);",
 		"console.log(Object.keys(m).sort().join(\",\"), m.respond(\"/x\"), m.version, p.x, p.y, m.default.fetch(\"/y\"), m.suffix(), m.cap, m.hubbed(), m.level);",
+		"console.log(JSON.stringify(m.Mode), JSON.stringify(m.Color));",
 		"",
-	].join("\n"), "cap,default,hubbed,level,respond,shift,suffix,version page /x! 3 11 12 page /y! ! 9 hub 4");
+	].join("\n"), "Color,Mode,cap,default,hubbed,level,respond,shift,suffix,version page /x! 3 11 12 page /y! ! 9 hub 4\n"
+		+ "{\"0\":\"On\",\"5\":\"Same\",\"On\":0,\"Off\":5,\"Below\":-1,\"-1\":\"Below\",\"Same\":5} {\"0\":\"Red\",\"1\":\"Blue\",\"Red\":0,\"Blue\":1}");
+}
+if (build("app/src/main.ms", "split", true)) {
+	host([
+		"import { Mode } from \"./split/app/src/main.js\";",
+		"import { Color } from \"./split/app/src/colors.js\";",
+		"console.log(JSON.stringify(Mode), Color[Color.Blue]);",
+		"",
+	].join("\n"), "{\"0\":\"On\",\"5\":\"Same\",\"On\":0,\"Off\":5,\"Below\":-1,\"-1\":\"Below\",\"Same\":5} Blue");
 }
 if (build("plain.ms", "plain.js")) {
 	const plain = readFile(`${dir}/plain.js`);
@@ -94,10 +111,9 @@ if (build("plain.ms", "plain.js")) {
 refused("export function o(a: int32): int32 { return a; }\nexport function o(a: string): string { return a; }", "cannot export 'o': it is an overload set of 2 functions");
 refused("export function id<T>(x: T): T { return x; }", "cannot export 'id': it is a generic function");
 refused("export class Box<T> { v: T; constructor(v: T) { this.v = v; } }", "cannot export 'Box': it is a generic class");
-refused("export enum Mode { On, Off }", "cannot export 'Mode': it is an enum");
 refused("export { pick } from \"./lib\";", "cannot export 'pick' (re-exported from './lib'): it is an overload set of 2 functions");
 refused("export { same } from \"./lib\";", "cannot export 'same' (re-exported from './lib'): it is a generic function");
-refused("export * from \"./lib\";", "cannot export 'Color' (re-exported from './lib'): it is an enum");
+refused("export * from \"./lib\";", "cannot export 'same' (re-exported from './lib'): it is a generic function");
 
 if (failed != 0) exit(1);
 console.log("GUARD-OK");

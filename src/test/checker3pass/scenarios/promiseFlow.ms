@@ -26,3 +26,78 @@ const b = new Promise<Promise<int32>>((resolve, reject) => { });
 `).errors.join("\n");
 	assert nested.contains("is refused: its resolve would receive a promise"), "a promise of a promise must be refused: " + nested;
 }
+
+test "a returned promise inside try with a catch or finally is refused with the rewrite" {
+	const errors = checkOnly(DECLS + `
+async function inCatch(n: int32): Promise<int32> {
+	try { return load(n); } catch (e) { return -1; }
+}
+async function inFinally(n: int32): Promise<int32> {
+	try { return load(n); } finally { load(0); }
+}
+async function inCatchWithFinally(n: int32): Promise<int32> {
+	try { throw new Error("x"); } catch (e) { return load(n); } finally { load(0); }
+}
+`).errors;
+	const text = errors.join("\n");
+	assert text.contains("a returned promise is not awaited inside try — write `return await …` so catch and finally see its result"), "return load(n) in try must be refused: " + text;
+	assert errors.length == 3, "catch, finally and catch-with-finally are three refusals: " + text;
+}
+
+test "a returned promise outside try is awaited: functions, arrows, a rejection and a resolved value" {
+	const result = checkOnly(DECLS + `
+async function viaFn(n: int32): Promise<int32> { return load(n); }
+async function guarded(n: int32): Promise<int32> {
+	try { return await load(n); } catch (e) { return -1; } finally { load(0); }
+}
+async function afterTry(n: int32): Promise<int32> {
+	try { await load(n); } catch (e) { }
+	return load(n);
+}
+async function nestedFn(n: int32): Promise<int32> {
+	try {
+		const inner = async (): Promise<int32> => { return load(n); };
+		return await inner();
+	} catch (e) { return -1; }
+}
+const arrow = async (n: int32): Promise<int32> => { return load(n); };
+const expr = async (n: int32) => load(n);
+async function rejected(): Promise<int32> { return Promise.reject(new Error("e")); }
+async function resolved(): Promise<int32> { return Promise.resolve(7); }
+`);
+	assert result.errors.length == 0, "valid promise flow must check: " + result.errors.join("\n");
+}
+
+test "a rejection reason follows the throw rule: a string or an Error passes, anything else is refused as throw refuses it" {
+	const valid = checkOnly(DECLS + `
+class CodeError extends Error { code: int32 = 7; }
+const a: Promise<int32> = Promise.reject("boom");
+const b: Promise<int32> = Promise.reject(new CodeError("coded"));
+const c = new Promise<int32>((resolve, reject) => { reject("boom"); });
+const d = new Promise<int32>((resolve, reject) => { reject(new Error("e")); });
+a.catch((e: Error): void => { const m: string = e.message; });
+b.then((v: int32): void => {}, (e: Error): void => { const m: string = e.message; });
+`);
+	assert valid.errors.length == 0, "string and Error reasons must check: " + valid.errors.join("\n");
+	const refused = checkOnly(DECLS + `
+class Oops { code: int32 = 3; }
+const a: Promise<int32> = Promise.reject(42);
+const b: Promise<int32> = Promise.reject(new Oops());
+function thrown(): void { throw 42; }
+`).errors;
+	const text = refused.join("\n");
+	assert text.contains("only an 'Error' or a 'string' can be thrown, got 'int32'"), text;
+	assert text.contains("only an 'Error' or a 'string' can be thrown, got 'Oops'"), text;
+	assert refused.length == 3, "reject(42), reject(new Oops()) and throw 42, each once: " + text;
+	const executor = checkOnly(DECLS + `
+const c = new Promise<int32>((resolve, reject) => { reject(42); });
+`).errors.join("\n");
+	assert executor.contains("got int32, expected Error | string"), executor;
+}
+
+test "an executor whose reject is annotated narrower than string | Error is refused naming that parameter" {
+	const text = checkOnly(DECLS + `
+const p = new Promise<int32>((res: (v: int32) => void, rej: (e: Error) => void): void => { rej(new Error("x")); });
+`).errors.join("\n");
+	assert text.contains("parameter 'rej' is typed '(e: Error) => void', but the expected function passes it '(reason: Error | string) => void'; declare the parameter '(reason: Error | string) => void' or leave it unannotated"), text;
+}

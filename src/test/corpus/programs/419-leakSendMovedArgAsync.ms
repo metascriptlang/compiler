@@ -18,18 +18,15 @@
 //   steppers never fired, the actor suspended forever (repro: 30k sends, ~50%
 //   of runs hung at 0.05s-per-clean-run; post-fix 25/25 and 6/6 at 1.2M on
 //   both hosts).
-//   The @maxrss bound is the completing program's real floor, measured after
-//   the hang fix made completion reachable at all: peak ≈ 133 MB (Windows) /
-//   172 MB (Linux) — the in-flight parked-take set (envs + futures + spawn
-//   tasks the event loop has not drained yet), NOT a per-send leak; the ledger
-//   stays the leak signal (Box balances; `Sink 1/0` and `msFuture N/0` are the
-//   known blind patterns: runtime-freed actor shell, NULL destroyFn).
-//   RSS is the only assertion: the running total is NOT checked anywhere,
-//   because a suspending `take` does not hold up the mailbox — `get()` is
-//   answered while earlier takes are still parked on their spawn, so any total
-//   read mid-loop is a scheduling sample, not an invariant. The periodic
-//   `await s.get()` bounds the message backlog so peak RSS measures in-flight
-//   state rather than queue depth.
+//   The @maxrss bound was measured after the hang fix made completion reachable
+//   at all: peak ≈ 133 MB (Windows) / 172 MB (Linux). Since a suspended actor
+//   parks (PARALOCK-runtime Amendment Q) only one take is in flight, and the
+//   peak (116–119 MB, macOS, 2026-10-17) is the per-dispatch `implFut` leak —
+//   96 B × 1.2M, open queue "implFut has no owner"; the ledger cannot see it
+//   (Box balances; `Sink 1/0` and `msFuture N/0` are the known blind patterns:
+//   runtime-freed actor shell, NULL destroyFn).
+//   RSS is the only assertion: the running total is NOT checked anywhere. The
+//   periodic `await s.get()` bounds the message backlog.
 //   RELATED: an `Arc<T>` param on an async actor method takes the SHARE release,
 //   which was never gated, so that shape also wrapped an await in try/finally —
 //   it failed to BUILD on every native lane until the try×await split landed

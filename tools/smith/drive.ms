@@ -1,11 +1,12 @@
 import { cwd, env, execFileResult, findOnPath, platform } from "std/process";
-import { copyFile, ensureDir, exists, readFile, realpath, removeAll, writeFile } from "std/fs";
+import { copyFile, ensureDir, exists, readDir, readFile, realpath, removeAll, writeFile } from "std/fs";
 import { basename } from "std/fs/path";
 import { djb2, fingerprint, hashToHex } from "std/hash";
-import { Features, defaults, format, overlay, swarm } from "./features";
-import { generate } from "./gen";
+import { ALL_FAMS, Fam, Features, defaults, format, overlay, swarm } from "./features";
+import { hitLines } from "./hits";
+import { File, generateProject, isModuleFileName } from "./proj";
 
-const GENERATOR_SOURCES: string[] = ["rng.ms", "features.ms", "gen.ms"];
+const GENERATOR_SOURCES: string[] = ["rng.ms", "features.ms", "gen.ms", "proj.ms"];
 const CELL_FILES: string[] = ["out.log", "done", "build.log", "err.log", "stdout.log"];
 const FINDING_KINDS: string[] = ["wrong-code", "crash", "unrated", "timeout", "unjudged", "san"];
 const REQUIRED_KEYS: string[] = ["seed", "features", "kind", "split", "generator", "msc", "msc-hash", "msc-version", "support", "runner", "mode"];
@@ -43,6 +44,11 @@ export struct Identity {
 	runner: string;
 }
 
+struct Listed {
+	name: string;
+	hash: string;
+}
+
 struct Recorded {
 	seed: uint64;
 	features: Features;
@@ -56,6 +62,7 @@ struct Recorded {
 	mode: string;
 	lanes: string[];
 	laneLines: string[];
+	files: Listed[];
 }
 
 function slashes(p: string): string { return p.replaceAll("\\", "/"); }
@@ -295,7 +302,21 @@ function classify(log: string, name: string, cells: string, san: boolean): Verdi
 	return { kind: "wrong-code", split: outputSplit(cells, name, lanes), lanes: lanes, lines: lines };
 }
 
-function metaText(seed: uint64, f: Features, id: Identity, v: Verdict, san: boolean): string {
+function projectLines(f: Features, files: File[]): string {
+	if (f.modules == 0) { return ""; }
+	let text = "layout: project\n";
+	for (const file of files) { text += "file: " + file.name + " " + contentHash(file.text) + "\n"; }
+	return text;
+}
+
+function programText(f: Features, files: File[]): string {
+	if (f.modules == 0) { return files[0].text; }
+	let text = "";
+	for (const file of files) { text += "=== " + file.name + "\n" + file.text; }
+	return text;
+}
+
+function metaText(seed: uint64, f: Features, id: Identity, v: Verdict, san: boolean, files: File[]): string {
 	let lanes = "";
 	for (const r of v.lanes) { lanes += "lane: " + r.lane + " " + (r.pass ? "pass" : "fail") + " " + r.detail + "\n"; }
 	return "seed: " + String(seed) + "\n" +
@@ -309,6 +330,7 @@ function metaText(seed: uint64, f: Features, id: Identity, v: Verdict, san: bool
 		"support: " + id.support + "\n" +
 		"runner: " + id.runner + "\n" +
 		"mode: " + (san ? MODE_SAN : MODE_PARITY) + "\n" +
+		projectLines(f, files) +
 		lanes;
 }
 
@@ -316,9 +338,14 @@ function bundleDir(parent: string, name: string, meta: string, program: string):
 	return parent + "/" + name + "-" + hashToHex(djb2(meta + "\n" + program)).slice(0, 8);
 }
 
-function writeBundle(dir: string, p: Paths, name: string, program: string, meta: string, v: Verdict): void {
+function writeBundle(dir: string, p: Paths, name: string, f: Features, files: File[], meta: string, v: Verdict): void {
 	ensureDir(dir + "/lanes");
-	writeFile(dir + "/program.ms", program);
+	if (f.modules == 0) {
+		writeFile(dir + "/program.ms", files[0].text);
+	} else {
+		ensureDir(dir + "/project");
+		for (const file of files) { writeFile(dir + "/project/" + file.name, file.text); }
+	}
 	writeFile(dir + "/meta.txt", meta);
 	writeFile(dir + "/verdict.txt", v.lines);
 	for (const r of v.lanes) {
@@ -331,6 +358,76 @@ function writeBundle(dir: string, p: Paths, name: string, program: string, meta:
 
 function isFinding(kind: string): boolean { return kind != "clean"; }
 
+function stage(p: Paths, name: string, f: Features, files: File[]): string {
+	if (f.modules == 0) {
+		writeFile(p.programs + "/" + name + ".ms", files[0].text);
+		return "";
+	}
+	const dir = p.programs + "/" + name;
+	ensureDir(dir);
+	for (const file of files) { writeFile(dir + "/" + file.name, file.text); }
+	const held = readDir(dir);
+	if (held.length != files.length) { return "the staged project " + name + " holds " + String(held.length) + " entries for " + String(files.length) + " generated files"; }
+	for (const file of files) { if (!held.includes(file.name)) { return "the staged project " + name + " lacks " + file.name; } }
+	return "";
+}
+
+export function skippedLanes(entry: string): string[] {
+	const out: string[] = [];
+	for (const line of entry.split("\n")) {
+		const t = line.trim();
+		if (t != "" && !t.startsWith("//")) { break; }
+		if (t.startsWith("// @skip-js") && !inList(out, "js")) { out.push("js"); }
+		if (t.startsWith("// @skip-raiser") && !inList(out, "raiser")) { out.push("raiser"); }
+	}
+	return out;
+}
+
+function noLaneReason(lane: string, skipped: int32, programs: int32, log: string): string {
+	const directive = lane == "raiser" ? "raiser" : "js";
+	if ((lane == "raiser" || lane == "js" || lane == "esm") && skipped == programs) { return "every program carries @skip-" + directive; }
+	if (log.contains("MSCORPUS_LANES — only")) { return "narrowed by MSCORPUS_LANES"; }
+	if (lane == "raiser" && log.contains("raiser lane off")) { return "raiser lane off, MSCORPUS_RAISER=1 turns it on"; }
+	if ((lane == "js" || lane == "esm") && log.contains("js lane is DISABLED")) { return "node not found"; }
+	return "no cell reported";
+}
+
+export function laneLines(requested: string[], seen: string[][], skips: string[][], log: string): string[] {
+	const programs = seen.length;
+	let present = "";
+	let absent = "";
+	for (const lane of requested) {
+		let ran = 0;
+		for (const lanes of seen) { if (inList(lanes, lane)) { ran++; } }
+		if (ran > 0) {
+			present += (present == "" ? "" : " ") + lane + (ran == programs ? "" : " " + String(ran) + "/" + String(programs));
+			continue;
+		}
+		const directive = lane == "raiser" ? "raiser" : "js";
+		let skipped = 0;
+		for (const s of skips) { if (inList(s, directive)) { skipped++; } }
+		absent += (absent == "" ? "" : ", ") + lane + " (" + noLaneReason(lane, skipped, programs, log) + ")";
+	}
+	let skipJs = 0;
+	let skipRaiser = 0;
+	for (const s of skips) {
+		if (inList(s, "js")) { skipJs++; }
+		if (inList(s, "raiser")) { skipRaiser++; }
+	}
+	return [
+		"  lanes: " + (present == "" ? "none" : present) + "; unavailable: " + (absent == "" ? "none" : absent),
+		"  directives: @skip-js=" + String(skipJs) + " @skip-raiser=" + String(skipRaiser) + " of " + String(programs) + " program(s)",
+	];
+}
+
+function familiesOf(vectors: Features[]): Fam[] {
+	const out: Fam[] = [];
+	for (const fam of ALL_FAMS) {
+		for (const f of vectors) { if (f.fams.has(fam) && !out.includes(fam)) { out.push(fam); } }
+	}
+	return out;
+}
+
 export function runSeeds(first: uint64, count: int32, base: Features, swarmed: boolean, san: boolean): int32 {
 	const p = paths();
 	if (!exists(p.root + "/src/test/corpus/run.ms")) { return fail("run from the repo root: no src/test/corpus/run.ms under " + p.root); }
@@ -340,17 +437,23 @@ export function runSeeds(first: uint64, count: int32, base: Features, swarmed: b
 	const stale = prepareSandbox(p);
 	if (stale != "") { return fail(stale); }
 	const names: string[] = [];
-	const programs: string[] = [];
+	const sources: File[][] = [];
 	const vectors: Features[] = [];
+	const texts: string[] = [];
+	const skips: string[][] = [];
 	for (let i = 0; i < count; i++) {
 		const seed = first + (i as uint64);
 		const f = swarmed ? base.swarm(seed) : base;
 		vectors.push(f);
 		const name = programName(seed, f);
-		const program = generate(seed, f);
-		writeFile(p.programs + "/" + name + ".ms", program);
+		const made = generateProject(seed, f);
+		if (!made.ok) { return fail("seed " + String(seed) + ": " + made.error); }
+		const staged = stage(p, name, f, made.value);
+		if (staged != "") { return fail(staged); }
 		names.push(name);
-		programs.push(program);
+		sources.push(made.value);
+		texts.push(programText(f, made.value));
+		skips.push(skippedLanes(made.value[0].text));
 	}
 	console.log("smith run — seeds " + String(first) + ".." + String(first + ((count - 1) as uint64)) + ", " + (san ? "SAN lane, " : "") + (swarmed ? "swarm over " : "") + base.format());
 	console.log("  msc " + id.msc + " (" + id.mscVersion + ", " + id.mscHash + "; " + id.support + ")");
@@ -360,21 +463,30 @@ export function runSeeds(first: uint64, count: int32, base: Features, swarmed: b
 	let clean = 0;
 	let findings = 0;
 	let notBugs = 0;
+	let invalid = 0;
+	const seen: string[][] = [];
 	for (let i = 0; i < count; i++) {
 		const seed = first + (i as uint64);
 		const v = classify(log.value, names[i], p.cells, san);
 		if (v.kind == "missing") { return fail("the corpus harness reported nothing for " + names[i] + "; see " + p.sandbox + "/runner.log"); }
+		seen.push(v.lanes.map((r: LaneResult): string => r.lane));
+		if (v.kind == "unrated") { invalid++; }
 		if (!isFinding(v.kind)) {
 			clean++;
 			continue;
 		}
-		const meta = metaText(seed, vectors[i], id, v, san);
-		const dir = bundleDir(p.bundles, names[i], meta, programs[i]);
+		const meta = metaText(seed, vectors[i], id, v, san, sources[i]);
+		const dir = bundleDir(p.bundles, names[i], meta, programText(vectors[i], sources[i]));
 		const known = exists(dir);
-		if (!known) { writeBundle(dir, p, names[i], programs[i], meta, v); }
+		if (!known) { writeBundle(dir, p, names[i], vectors[i], sources[i], meta, v); }
 		if (v.kind == "timeout" || v.kind == "unjudged") { notBugs++; } else { findings++; }
 		console.log("  " + names[i] + " " + v.kind + (v.split == "" ? "" : " [" + v.split + "]") + (known ? " (bundle already recorded, left untouched) → " : " → ") + dir);
 	}
+	const fams = familiesOf(vectors);
+	if (fams.length == 0) { console.log("  hits: no family in the vector"); }
+	for (const line of hitLines(fams, texts)) { console.log(line); }
+	console.log("  invalid: " + String(invalid) + " (the same failure on every lane, unrated; a generator defect until a compiler repro shows otherwise)");
+	for (const line of laneLines(san ? ["san"] : LANE_ORDER, seen, skips, log.value)) { console.log(line); }
 	console.log(String(count) + " programs · " + String(clean) + " clean · " + String(findings) + " finding(s) · " +
 		String(notBugs) + " timeout/unjudged (not a bug until a longer deadline or a second lane proves it)");
 	return findings + notBugs > 0 ? 1 : 0;
@@ -427,6 +539,59 @@ function inList(list: string[], item: string): boolean {
 	return false;
 }
 
+function listedHas(listed: Listed[], name: string): boolean {
+	for (const l of listed) { if (l.name == name) { return true; } }
+	return false;
+}
+
+export function isProjectBundle(meta: string): boolean {
+	const layout = metaField(meta, "layout");
+	return layout !== null && layout == "project";
+}
+
+function parseFiles(meta: string, project: boolean): Result<Listed[], string> {
+	const layout = metaField(meta, "layout");
+	if (layout !== null && layout != "project") { return Result.err("meta.txt layout '" + layout + "' is not project"); }
+	if (project != isProjectBundle(meta)) { return Result.err("meta.txt layout and the modules of its features disagree"); }
+	const listed: Listed[] = [];
+	for (const line of meta.split("\n")) {
+		if (!line.startsWith("file: ")) { continue; }
+		const parts = line.slice("file: ".length, line.length).split(" ");
+		if (parts.length != 2 || parts[1] == "") { return Result.err("meta.txt has a malformed file line '" + line + "'"); }
+		if (!isModuleFileName(parts[0])) { return Result.err("meta.txt lists '" + parts[0] + "', which is not a generated module name"); }
+		if (listedHas(listed, parts[0])) { return Result.err("meta.txt lists " + parts[0] + " twice"); }
+		listed.push({ name: parts[0], hash: parts[1] });
+	}
+	if (project && !listedHas(listed, "main.ms")) { return Result.err("meta.txt lists no main.ms for its project"); }
+	if (!project && listed.length > 0) { return Result.err("meta.txt lists files but its layout is not project"); }
+	return Result.ok(listed);
+}
+
+function projectCause(listed: Listed[], held: string[], present: string[], now: File[]): string {
+	for (let i = 0; i < listed.length; i++) {
+		if (!present.includes(listed[i].name)) { return "the bundle lacks the module file " + listed[i].name; }
+		if (contentHash(held[i]) != listed[i].hash) { return "the module file " + listed[i].name + " does not match the hash meta.txt recorded; it was edited after the bundle was written"; }
+	}
+	for (const name of present) {
+		if (!listedHas(listed, name)) { return "the bundle holds " + name + ", which meta.txt does not list"; }
+	}
+	if (now.length != listed.length) { return "the generator changed since the bundle was written: it now emits " + String(now.length) + " files, the bundle lists " + String(listed.length); }
+	for (let i = 0; i < now.length; i++) {
+		if (now[i].name != listed[i].name) { return "the generator changed since the bundle was written: file " + String(i) + " is now " + now[i].name + ", the bundle lists " + listed[i].name; }
+		if (now[i].text != held[i]) { return "the generator changed since the bundle was written: " + now[i].name + " no longer regenerates"; }
+	}
+	return "";
+}
+
+function projectVerdict(dir: string, listed: Listed[], now: File[]): string {
+	const held: string[] = [];
+	for (const l of listed) {
+		const text = readFile(dir + "/project/" + l.name);
+		held.push(text.ok ? text.value : "");
+	}
+	return projectCause(listed, held, readDir(dir + "/project"), now);
+}
+
 function parseMeta(meta: string): Result<Recorded, string> {
 	const values: string[] = [];
 	for (const key of REQUIRED_KEYS) {
@@ -453,6 +618,7 @@ function parseMeta(meta: string): Result<Recorded, string> {
 		laneLines.push(line);
 	}
 	if (lanes.length == 0) { return Result.err("meta.txt records no lane"); }
+	const files = try parseFiles(meta, fr.value.modules > 0);
 	return Result.ok({
 		seed: seedText.parseInt() as uint64,
 		features: fr.value,
@@ -466,6 +632,7 @@ function parseMeta(meta: string): Result<Recorded, string> {
 		mode: values[10],
 		lanes: lanes,
 		laneLines: laneLines,
+		files: files,
 	});
 }
 
@@ -498,9 +665,10 @@ export function rerunBundle(dir: string): int32 {
 	const p = paths();
 	const label = basename(dir);
 	const metaRead = readFile(dir + "/meta.txt");
-	const programRead = readFile(dir + "/program.ms");
 	if (!metaRead.ok) { return voidBundle(label, "no readable meta.txt in " + dir); }
-	if (!programRead.ok) { return voidBundle(label, "no readable program.ms in " + dir); }
+	const project = isProjectBundle(metaRead.value);
+	const programRead = readFile(dir + "/program.ms");
+	if (!project && !programRead.ok) { return voidBundle(label, "no readable program.ms in " + dir); }
 	if (exists(p.sandbox) && (slashes(realpath(dir)) + "/").startsWith(slashes(realpath(p.sandbox)) + "/")) {
 		return voidBundle(label, "the bundle lives inside the scratch sandbox that every run wipes; copy it out first");
 	}
@@ -510,8 +678,20 @@ export function rerunBundle(dir: string): int32 {
 	const san = r.mode == MODE_SAN;
 	const f = r.features;
 	const name = programName(r.seed, f);
-	const program = generate(r.seed, f);
-	if (program != programRead.value) {
+	const made = generateProject(r.seed, f);
+	if (!made.ok) { return voidBundle(name, "seed + features no longer generate: " + made.error); }
+	const files = made.value;
+	if (project) {
+		const cause = projectVerdict(dir, r.files, files);
+		if (cause != "") {
+			console.log("VOID " + name + " — " + cause);
+			if (cause.startsWith("the generator changed")) {
+				console.log("  bundle generator " + r.generator);
+				console.log("  now    generator " + generatorIdentity(p.root));
+			}
+			return 1;
+		}
+	} else if (programRead.ok && files[0].text != programRead.value) {
 		const now = generatorIdentity(p.root);
 		const cause = r.generator == now ? "program.ms was edited after the bundle was written" : "the generator changed since the bundle was written";
 		console.log("VOID " + name + " — seed + features no longer give program.ms: " + cause);
@@ -538,7 +718,8 @@ export function rerunBundle(dir: string): int32 {
 	}
 	const stale = prepareSandbox(p);
 	if (stale != "") { return fail(stale); }
-	writeFile(p.programs + "/" + name + ".ms", program);
+	const staged = stage(p, name, f, files);
+	if (staged != "") { return fail(staged); }
 	const log = runCorpus(p, msc, san);
 	if (!log.ok) { return fail(log.error); }
 	const v = classify(log.value, name, p.cells, san);
@@ -559,15 +740,15 @@ export function rerunBundle(dir: string): int32 {
 		const then = laneFile(dir + "/lanes", x.lane + "." + outFile(r.mode));
 		if (now != then) { diffs += "  lane " + x.lane + " " + outFile(r.mode) + " differs from the bundle\n"; }
 	}
-	const observed = metaText(r.seed, f, id, v, san);
-	const kept = bundleDir(p.reruns, label, observed, program);
-	if (!exists(kept)) { writeBundle(kept, p, name, program, observed, v); }
+	const observed = metaText(r.seed, f, id, v, san, files);
+	const kept = bundleDir(p.reruns, label, observed, programText(f, files));
+	if (!exists(kept)) { writeBundle(kept, p, name, f, files, observed, v); }
 	if (diffs != "") {
 		console.log("NOT REPRODUCED " + name + " — observation kept in " + kept);
 		console.log(diffs.trimEnd());
 		return 1;
 	}
-	console.log("REPRODUCED " + name + " — " + v.kind + (v.split == "" ? "" : " [" + v.split + "]") + ", program byte-identical, every lane output identical; observation kept in " + kept);
+	console.log("REPRODUCED " + name + " — " + v.kind + (v.split == "" ? "" : " [" + v.split + "]") + (project ? ", every project file byte-identical" : ", program byte-identical") + ", every lane output identical; observation kept in " + kept);
 	return 0;
 }
 
@@ -583,7 +764,7 @@ const SAMPLE_IDENTITY: Identity = {
 function sampleMeta(san: boolean): string {
 	const lanes: LaneResult[] = [{ lane: "c", pass: true, detail: "exit=0" }, { lane: "js", pass: false, detail: "exit=1 [x y]" }];
 	const v: Verdict = { kind: san ? "san" : "wrong-code", split: "c | js", lanes: lanes, lines: "" };
-	return metaText(7, Features.defaults(), SAMPLE_IDENTITY, v, san);
+	return metaText(7, Features.defaults(), SAMPLE_IDENTITY, v, san, []);
 }
 
 function withoutKey(meta: string, key: string): string {
@@ -679,4 +860,178 @@ test "a sanitizer line compares without its pid and addresses" {
 	assert stableDetail(a) == "lane: san fail exit=134 [==_==ERROR: AddressSanitizer: heap-use-after-free on address 0x_ at pc 0x_ bp 0x_]";
 	assert stableDetail("lane: c fail exit=1 [x == 2] 0x [a==b]") == "lane: c fail exit=1 [x == 2] 0x [a==b]";
 	assert stableDetail("lane: js fail exit=1 [g0 1 != 2]") != stableDetail("lane: js fail exit=1 [g0 1 != 3]");
+}
+
+const PROJECT_TMP: string = "/tmp/smith-project-test";
+
+function sampleProject(): File[] {
+	const f = Features.defaults().overlay("modules=3");
+	if (!f.ok) { return []; }
+	const made = generateProject(5, f.value);
+	return made.ok ? made.value : [];
+}
+
+function projectMeta(files: File[]): string {
+	const f = Features.defaults().overlay("modules=3");
+	const lanes: LaneResult[] = [{ lane: "c", pass: true, detail: "exit=0" }, { lane: "js", pass: false, detail: "exit=1 [x y]" }];
+	const v: Verdict = { kind: "wrong-code", split: "c | js", lanes: lanes, lines: "" };
+	return f.ok ? metaText(5, f.value, SAMPLE_IDENTITY, v, false, files) : "";
+}
+
+test "a project's metadata lists every file with its hash and round-trips" {
+	const files = sampleProject();
+	assert files.length >= 2;
+	const meta = projectMeta(files);
+	assert isProjectBundle(meta) && !isProjectBundle(sampleMeta(false));
+	assert !sampleMeta(false).contains("layout:") && !sampleMeta(false).contains("file:");
+	const r = parseMeta(meta);
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.files.length == files.length;
+		for (let i = 0; i < files.length; i++) {
+			assert r.value.files[i].name == files[i].name && r.value.files[i].hash == contentHash(files[i].text);
+		}
+		assert r.value.features.modules == 3 && r.value.lanes.length == 2;
+	}
+}
+
+test "metadata naming a path that is not a generated module name is refused" {
+	const meta = projectMeta(sampleProject());
+	for (const bad of ["../m0.ms", "sub/m0.ms", "/etc/passwd", "m0.js", "m0.jms", "x.ms", "..", "m0.ms/../main.ms"]) {
+		const r = parseMeta(meta.replaceAll("file: m0.ms", "file: " + bad));
+		assert !r.ok;
+		if (!r.ok) { assert r.error.contains("not a generated module name"); }
+	}
+	assert !parseMeta(meta.replaceAll("file: m0.ms", "file: main.ms")).ok;
+	assert !parseMeta(meta.replaceAll("file: main.ms", "file: m0.ms")).ok;
+	assert !parseMeta(meta.replaceAll("file: m0.ms ", "file: m0.ms")).ok;
+}
+
+test "layout and the modules of the features must agree" {
+	const meta = projectMeta(sampleProject());
+	assert !parseMeta(withoutKey(meta, "layout")).ok;
+	assert !parseMeta(meta.replaceAll("layout: project", "layout: tree")).ok;
+	assert !parseMeta(sampleMeta(false).replaceAll("mode: parity", "mode: parity\nlayout: project")).ok;
+	assert !parseMeta(sampleMeta(false).replaceAll("mode: parity", "mode: parity\nfile: main.ms h:1")).ok;
+}
+
+test "a project bundle is addressed by every one of its files" {
+	const files = sampleProject();
+	const f = Features.defaults().overlay("modules=3");
+	assert f.ok;
+	if (!f.ok) { return; }
+	const a = bundleDir("/b", "n", "meta", programText(f.value, files));
+	assert a == bundleDir("/b", "n", "meta", programText(f.value, sampleProject()));
+	const edited: File[] = [];
+	for (let i = 0; i < files.length; i++) { edited.push(i == files.length - 1 ? { name: files[i].name, text: files[i].text + " " } : files[i]); }
+	assert a != bundleDir("/b", "n", "meta", programText(f.value, edited));
+}
+
+test "a rerun is void when a module file is tampered with, missing, unlisted or no longer regenerates" {
+	const files = sampleProject();
+	const f = Features.defaults().overlay("modules=3");
+	assert f.ok;
+	if (!f.ok) { return; }
+	const meta = projectMeta(files);
+	const dir = PROJECT_TMP + "/bundle";
+	removeAll(PROJECT_TMP);
+	const p = pathsUnder(PROJECT_TMP, PROJECT_TMP + "/work");
+	const v: Verdict = { kind: "wrong-code", split: "c | js", lanes: [], lines: "" };
+	writeBundle(dir, p, "n", f.value, files, meta, v);
+	assert exists(dir + "/project/main.ms") && !exists(dir + "/program.ms");
+	const listed = parseMeta(meta);
+	assert listed.ok;
+	if (!listed.ok) { return; }
+	const l = listed.value.files;
+	assert projectVerdict(dir, l, files) == "";
+	const last = files[files.length - 1].name;
+	writeFile(dir + "/project/" + last, files[files.length - 1].text + "\n");
+	assert projectVerdict(dir, l, files).contains("edited after the bundle was written");
+	writeFile(dir + "/project/" + last, files[files.length - 1].text);
+	assert projectVerdict(dir, l, files) == "";
+	writeFile(dir + "/project/stray.ms", "x");
+	assert projectVerdict(dir, l, files).contains("does not list");
+	removeAll(dir + "/project/stray.ms");
+	const regenerated: File[] = [];
+	for (let i = 0; i < files.length; i++) { regenerated.push(i == 1 ? { name: files[i].name, text: files[i].text + " " } : files[i]); }
+	assert projectVerdict(dir, l, regenerated).contains("the generator changed");
+	assert projectVerdict(dir, l, [files[0]]).contains("the generator changed");
+	removeAll(dir + "/project/" + last);
+	assert projectVerdict(dir, l, files).contains("lacks the module file " + last);
+	removeAll(dir + "/project");
+	assert projectVerdict(dir, l, files).contains("lacks the module file");
+	removeAll(PROJECT_TMP);
+}
+
+test "a staged project is a directory program with exactly its files, a single file stays a file" {
+	const p = pathsUnder(PROJECT_TMP, PROJECT_TMP + "/work");
+	removeAll(PROJECT_TMP);
+	ensureDir(p.programs);
+	const project = Features.defaults().overlay("modules=3");
+	const single = Features.defaults();
+	assert project.ok;
+	if (!project.ok) { return; }
+	const files = sampleProject();
+	assert stage(p, "proj", project.value, files) == "";
+	assert readDir(p.programs + "/proj").length == files.length;
+	for (const file of files) { assert exists(p.programs + "/proj/" + file.name); }
+	const one = generateProject(5, single);
+	assert one.ok;
+	if (one.ok) {
+		assert stage(p, "solo", single, one.value) == "";
+		assert exists(p.programs + "/solo.ms") && !exists(p.programs + "/solo");
+	}
+	removeAll(PROJECT_TMP);
+}
+
+test "every generated project passes msc check" {
+	assert findOnPath("msc") != "";
+	removeAll(PROJECT_TMP);
+	for (let modules = 2; modules <= 4; modules++) {
+		for (let seed = 1; seed <= 4; seed++) {
+			const f = Features.defaults().overlay("modules=" + String(modules));
+			assert f.ok;
+			if (!f.ok) { continue; }
+			const made = generateProject(seed as uint64, f.value);
+			assert made.ok;
+			if (!made.ok) { continue; }
+			const dir = PROJECT_TMP + "/check" + String(modules) + "x" + String(seed);
+			ensureDir(dir);
+			for (const file of made.value) { writeFile(dir + "/" + file.name, file.text); }
+			const r = execFileResult("msc", ["check", "main.ms", "--no-color"], dir);
+			if (!r.started || r.exitCode != 0) { console.log(dir + ": " + r.output + r.errorOutput); }
+			assert r.started && r.exitCode == 0;
+		}
+	}
+	removeAll(PROJECT_TMP);
+}
+
+test "the directive head names the lanes a program skips and stops at its first statement" {
+	assert skippedLanes("// smith seed 1\n// @skip-raiser: why\n// @skip-js: why\nconst a = 1;\n// @skip-js: late\n").join(",") == "raiser,js";
+	assert skippedLanes("// smith seed 1\nconst a = 1;\n// @skip-js: late\n").length == 0;
+	assert skippedLanes("// @skip-js: a\n// @skip-js: b\n").length == 1;
+}
+
+test "the lane line counts a lane that some programs lack and names why a lane is absent" {
+	const seen = [["c", "js", "esm"], ["c", "js", "esm"], ["c"]];
+	const skips = [[], [], ["js"]];
+	const lines = laneLines(["c", "js", "esm", "raiser"], seen, skips, "  !! raiser lane off - no program runs on the Raiser VM; MSCORPUS_RAISER=1 turns it on\n");
+	assert lines[0] == "  lanes: c js 2/3 esm 2/3; unavailable: raiser (raiser lane off, MSCORPUS_RAISER=1 turns it on)";
+	assert lines[1] == "  directives: @skip-js=1 @skip-raiser=0 of 3 program(s)";
+}
+
+test "an absent lane reports the first cause the runner log and the programs establish" {
+	const one = [["c"]];
+	assert laneLines(["c", "js"], one, [["js"]], "")[0] == "  lanes: c; unavailable: js (every program carries @skip-js)";
+	assert laneLines(["c", "js"], one, [[]], "  !! node not found - the js lane is DISABLED on this host;")[0] == "  lanes: c; unavailable: js (node not found)";
+	assert laneLines(["c", "raiser"], one, [[]], "  !! MSCORPUS_LANES — only c cells are built")[0] == "  lanes: c; unavailable: raiser (narrowed by MSCORPUS_LANES)";
+	assert laneLines(["c", "orc"], one, [[]], "")[0] == "  lanes: c; unavailable: orc (no cell reported)";
+	assert laneLines(["c"], one, [[]], "")[0] == "  lanes: c; unavailable: none";
+	assert laneLines(["san"], [[]], [[]], "")[0] == "  lanes: none; unavailable: san (no cell reported)";
+}
+
+test "a program the runner refuses on every lane is the one the summary counts as invalid" {
+	const log = "✗ FAIL smith1-aaaaaaaa [c] — compile error\n✗ FAIL smith1-aaaaaaaa [js] — compile error\n";
+	assert classify(log, "smith1-aaaaaaaa", "/nowhere", false).kind == "unrated";
+	assert classify("✓ smith1-aaaaaaaa [c]\n✗ FAIL smith1-aaaaaaaa [js] — x\n", "smith1-aaaaaaaa", "/nowhere", false).kind == "crash";
 }

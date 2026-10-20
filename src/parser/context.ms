@@ -508,7 +508,7 @@ export function captureGenericTypeArgs(state: ParserState): string {
 		const closers = angleCloserWidth(tok.kind);
 		if (closers == 0) {
 			if (tok.kind == TokenKind.Lt) { depth += 1; }
-			tokens.push(tok.value);
+			tokens.push(tok.kind == TokenKind.String ? "\"" + tok.value + "\"" : tok.value);
 			depths.push(depth);
 		}
 		for (let c = 0; c < closers && depth > 0; c += 1) {

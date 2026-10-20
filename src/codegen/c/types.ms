@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, isStringLiteralUnion, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -45,6 +45,7 @@ export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<Che
 	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(t.sym, typeName) : typeName;
 	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
+	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
 	if (named && t.sym != null) return mangledTypeName(t.sym, typeName);
 	if (named) return resolvedTypeCName(t, cc != null);
 	return typeName;
@@ -253,6 +254,12 @@ export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Read
 	for (let i = 0; i < count; i += 1) {
 		const typed = i < fnType.typeChildren.length;
 		if (typed && hasNoRuntimeRepr(fnType.typeChildren[i])) continue;
+		if (typed && isOpenArrayParam(fnType.typeChildren[i])) {
+			const elemPtr = getTypeDesc(g, skipModifier(fnType.typeChildren[i])!.typeReturn) + "*";
+			parts.push(named ? `${elemPtr} ${openArrayDataName(safeName(names[i]))}` : elemPtr);
+			parts.push(named ? `int64_t ${openArrayLenName(safeName(names[i]))}` : "int64_t");
+			continue;
+		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		const mut = (mutBits & (1 << (i as int32))) != 0;
 		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
@@ -354,6 +361,7 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 			return t.typeName;
 		},
 		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
 			let k = "fn(";
@@ -368,6 +376,7 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0], open) : "varargs:empty",
 		TypeKind.Union => {
+			if (t.typeInst != null) return anonFieldKey(t.typeInst, open);
 			if (t.typeName.length > 0) return "union:" + structKeyIdentity(t);
 			let k = "union(";
 			let i = 0;
@@ -533,6 +542,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.CString => "cstring",
 		TypeKind.StringLiteral => "strlit:" + t.typeName,
 		TypeKind.BooleanLiteral => "boollit:" + t.typeName,
+		TypeKind.NumberLiteral => "numlit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { return "enum:" + mangledTypeName(t.sym, t.typeName); },
@@ -580,6 +590,8 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Var => { return "var:" + typeKey(t.typeReturn); },
 		TypeKind.Borrow => { return "borrow:" + typeKey(t.typeReturn); },
 		TypeKind.GenericInstance => {
+			const seen = peelTransparentInstance(t);
+			if (seen != t && seen.kind == TypeKind.Union && seen.typeInst == null) return typeKey(seen);
 			let giKey = `ginst:${monoInstanceName(t)}`;
 			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKey(arg)}`;
 			return giKey;
@@ -587,6 +599,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.TypeReference => { return "typeref:" + nominalTypeKey(t); },
 		TypeKind.Distinct => { return "distinct:" + nominalTypeKey(t); },
 		TypeKind.Union => {
+			if (t.typeInst != null) return typeKey(t.typeInst);
 			if (t.typeName.length > 0) {
 				return "union:" + structKeyIdentity(t);
 			} else {
@@ -646,6 +659,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",
 		TypeKind.Alias => t.typeReturn == null ? "void" : getSimpleTypeDesc(t.typeReturn),
+		TypeKind.NumberLiteral => getSimpleTypeDesc(numberLiteralBase(t)),
 		TypeKind.Void => "void",
 		// `Null` as a TYPE (not the literal value) appears when a generic param
 		// monomorphizes to T=Null — e.g. `id(null)` without contextual type.
@@ -697,8 +711,7 @@ export function isNilableValueType(t: Type): boolean {
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
 // Determines if a param type should be passed by pointer in C.
 // Reference: skipTypes(typedescInst) strips Sink/Lent before dispatch.
-// Object types over the threshold, tuple same threshold,
-// Result/Union/Span always by pointer.
+// Object types over the threshold, tuple same threshold, Result and Union always.
 function ptrThreshold(tg: TargetInfo): int32 { return tg.floatSize * 3; }
 
 export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
@@ -715,7 +728,7 @@ export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 	return match (inner.kind) {
 		TypeKind.Tuple => sizeOfType(tg, inner) > ptrThreshold(tg),
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
-		TypeKind.Union | TypeKind.Span => true,
+		TypeKind.Union => true,
 		TypeKind.GenericInstance => {
 			const repr = genericInstanceAbiRepr(inner);
 			return repr == inner ? !isAwaitable(inner) : ccgIntroducedPtr(tg, repr);
@@ -723,6 +736,15 @@ export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 		_ => false,
 	};
 }
+
+export function isOpenArrayParam(t: Type | null): boolean {
+	if (t == null || t.kind == TypeKind.Var) return false;
+	const inner = skipModifier(t);
+	return inner != null && inner.kind == TypeKind.Span;
+}
+
+export function openArrayDataName(param: string): string { return param + "Data_0"; }
+export function openArrayLenName(param: string): string { return param + "Len_0"; }
 
 // Mutation forces T* for Struct, Function (msClosure 16B), and small Tuple.
 // Actor lowering sets mutation bits via markValueLayoutParamsAsMutated.
@@ -948,6 +970,7 @@ export enum PromiseAllShape {
 	None,
 	Int32,
 	Int64,
+	Integer,
 	Boxed,
 }
 
@@ -959,6 +982,7 @@ export function promiseAllShape(inner: Type | null): PromiseAllShape {
 		if (simple == "double" || simple == "bool" || simple == "MS_BOOL" || simple == "msString" || simple.endsWith("*")) return PromiseAllShape.None;
 		if (simple == "int32_t") return PromiseAllShape.Int32;
 		if (simple == "int64_t") return PromiseAllShape.Int64;
+		if (isIntegerType(inner)) return PromiseAllShape.Integer;
 		return PromiseAllShape.Boxed;
 	}
 	if (isAwaitable(inner)) return PromiseAllShape.None;
@@ -1263,6 +1287,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// The null pointer is the natural sentinel — no Maybe wrapper needed.
 			const refMember = unwrapRefNullUnion(t);
 			if (refMember != null) return getTypeDesc(g, refMember);
+			if (t.typeInst != null) return genInstanceUnion(g, t.typeInst, t);
 			return genUnionType(g, t);
 		},
 		TypeKind.Tuple => genTupleType(g, t),
@@ -1291,6 +1316,10 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// `type UserId = distinct number` case handled above.
 			const instRepr = distinctInstanceRepr(t);
 			if (instRepr != null) return getTypeDesc(g, instRepr);
+			const sharedBody = t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
+			if (sharedBody != null && sharedBody.kind == TypeKind.Union && sharedBody == peelToStructOrUnion(t.typeExtra)) return getTypeDesc(g, sharedBody);
+			const instBody: Type | null = genericParamsOf(t) == "" && t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
+			if (instBody != null && instBody.kind == TypeKind.Union) return genInstanceUnion(g, t, instBody);
 			const instName = monoInstanceName(t);
 			const cacheKey = `object:${instName}`;
 			const cached = typeCacheGet(g.typeCache, cacheKey);
@@ -1300,20 +1329,12 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// Peel Ref/GenericInstance to reach the underlying Struct/Union body
 			// (e.g. `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union).
 			const baseType: Type | null = peelToStructOrUnion(t.typeExtra);
-			const instBody: Type | null = genericParamsOf(t) == "" && t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
 			if (instBody != null && instBody.kind == TypeKind.Struct) {
 				const bodyNames: string[] = [];
 				for (const n of instBody.typeNames) bodyNames.push(n);
 				const bodyChildren: Type[] = [];
 				for (const c of instBody.typeChildren) bodyChildren.push(c);
 				return genObjectType(g, spelled(createStruct(instName, bodyNames, bodyChildren, isStructType(instBody))));
-			}
-			if (instBody != null && instBody.kind == TypeKind.Union) {
-				const renamed = emptyType();
-				assignType(renamed, instBody);
-				renamed.typeName = instName;
-				spelled(renamed);
-				return genUnionType(g, renamed);
 			}
 			if (baseType != null && baseType.kind == TypeKind.Struct) {
 				// Substitute generic params in fields with concrete type args
@@ -1488,13 +1509,27 @@ function layoutAssert(g: CGen, t: Type, cType: string): string {
 // Each variant Object type in typeChildren gets its own named struct.
 // The `as` cast maps to .vN member access at the codegen level.
 
+function genInstanceUnion(g: CGen, gi: Type, body: Type): string {
+	const instName = monoInstanceName(gi);
+	const cacheKey = `object:${instName}`;
+	const cached = typeCacheGet(g.typeCache, cacheKey);
+	if (cached != "") return cached;
+	typeCacheSet(g.typeCache, cacheKey, instName);
+	const renamed = emptyType();
+	assignType(renamed, body);
+	renamed.typeName = instName;
+	spelled(renamed);
+	return genUnionType(g, renamed);
+}
+
 function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
-	// Pure string literal union → msString (TypeScript: string at runtime)
-	if (isStringLiteralUnion(t)) {
-		typeCacheSet(g.typeCache, typeKey(t), "msString");
-		return "msString";
+	const carried = literalUnionBase(t);
+	if (carried != null) {
+		const carriedDesc = getTypeDesc(g, carried);
+		typeCacheSet(g.typeCache, typeKey(t), carriedDesc);
+		return carriedDesc;
 	}
 
 	// Single cache lookup via typeKey. Naming is unique per type:
@@ -1674,7 +1709,8 @@ function genArrayType(g: CGen, t: Type): string {
 	const elemKey = (resolvedElem != null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey != "" && isBeingDefined(g, elemKey);
 
-	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : elementTypeDesc(g, t.typeReturn);
+	const byValue = !selfRef && resolvedElem != null && holdsStructByValue(resolvedElem);
+	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : (byValue ? "" : getTypeDesc(g, t.typeReturn));
 
 	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
@@ -1690,22 +1726,20 @@ function genArrayType(g: CGen, t: Type): string {
 		// Reference parity: two-struct split { len, p* } + __Content { cap, T data[] }.
 		// Forward decls in ForwardDecls, slim struct in Types, content in SeqTypes.
 		// SeqTypes is emitted after Types — element type is always complete by then.
+		// A by-value element is spelled by the name getTypeDesc gives it once defined
+		// (defineDeferredElements), never by a name derived beside it.
 		const contentName = arrTypeName + "__Content";
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${arrTypeName} ${arrTypeName};`);
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${contentName} ${contentName};`);
 		addLine(sec(g, CSection.Types), `struct ${arrTypeName} { int64_t len; ${contentName}* p; };`);
-		addLine(sec(g, CSection.SeqTypes), `struct ${contentName} { int64_t cap; ${elemType} data[]; };`);
+		if (byValue && resolvedElem != null) {
+			g.deferredElements.push({ elem: resolvedElem, contentName: contentName });
+		} else {
+			addLine(sec(g, CSection.SeqTypes), `struct ${contentName} { int64_t cap; ${elemType} data[]; };`);
+		}
 	}
 
 	return arrTypeName;
-}
-
-function elementTypeDesc(g: CGen, elem: Type | null): string {
-	if (elem == null || !holdsStructByValue(elem)) return getTypeDesc(g, elem);
-	const name = elemArrayCName(elem);
-	ensureForwardDecl(g, name);
-	g.deferredElements.push(elem);
-	return name;
 }
 
 function holdsStructByValue(t: Type): boolean {
@@ -1721,7 +1755,10 @@ export function defineDeferredElements(g: CGen): void {
 	while (g.deferredElements.length > 0) {
 		const pending = g.deferredElements;
 		g.deferredElements = [];
-		for (const t of pending) getTypeDesc(g, t);
+		for (const d of pending) {
+			const elemType = getTypeDesc(g, d.elem);
+			addLine(sec(g, CSection.SeqTypes), `struct ${d.contentName} { int64_t cap; ${elemType} data[]; };`);
+		}
 	}
 }
 
@@ -1898,6 +1935,7 @@ function closureBaseTypeToC(g: CGen, pt: Type): string {
 }
 
 function closureParamTypeToC(g: CGen, pt: Type): string {
+	if (isOpenArrayParam(pt)) return getTypeDesc(g, skipModifier(pt)!.typeReturn) + "*, int64_t";
 	const base = closureBaseTypeToC(g, pt);
 	// Reference parity: ccgIntroducedPtr params are passed by pointer in C
 	if (pt != null && ccgIntroducedPtr(g.target, pt)) return base + "*";
@@ -2002,7 +2040,8 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	const futName = "msFuture_" + mangle(innerDesc);
 	const arrName = arrayCTypeName(arrT);
 	const payloadName = getArrayContentType(arrName);
-	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", arrTypeInfo);
+	const copyStmt = shape == PromiseAllShape.Integer ? "MS_COPY_SAME" : "MS_COPY_BOXED_MOVE";
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, copyStmt, arrTypeInfo);
 	return "msPromiseAllFor_" + futName;
 }
 
@@ -2107,16 +2146,17 @@ function genTupleType(g: CGen, t: Type): string {
 	typeCacheSet(g.typeCache, key, name);
 	ensureForwardDecl(g, name);
 
-	// Emit struct: fields named _0, _1, ...
+	const fieldDescs: string[] = [];
+	for (const child of t.typeChildren) fieldDescs.push(getTypeDesc(g, child));
+
 	const b = sec(g, CSection.Types);
 	addLine(b, `#ifndef ${name}_DEFINED`);
 	addLine(b, `#define ${name}_DEFINED`);
 	addLine(b, `struct ${name} {`);
 	b.indent += 1;
 	let i = 0;
-	while (i < t.typeChildren.length) {
-		const ft = getTypeDesc(g, t.typeChildren[i]);
-		addLine(b, `${ft} _${i};`);
+	while (i < fieldDescs.length) {
+		addLine(b, `${fieldDescs[i]} _${i};`);
 		i += 1;
 	}
 	b.indent -= 1;
@@ -2353,6 +2393,21 @@ test "same anonymous type gets same name (deterministic)" {
 	assert anonTypeName(anon1) == anonTypeName(anon2);
 }
 
+test "anonymous type name ignores a generic field's lazily instantiated body" {
+	const gi = createGenericInstance(createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true), [createPrimitive(TypeKind.Int32)]);
+	const anon = createStruct("", ["v", "t"], [gi, createPrimitive(TypeKind.Uint8)], true);
+	const before = anonTypeName(anon);
+	gi.typeReturn = createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true);
+	assert anonTypeName(anon) == before;
+}
+
+test "anonymous type name tells generic arguments apart" {
+	const base = createStruct("Box", ["item"], [createPrimitive(TypeKind.Int32)], true);
+	const ofInt = createStruct("", ["v"], [createGenericInstance(base, [createPrimitive(TypeKind.Int32)])], true);
+	const ofString = createStruct("", ["v"], [createGenericInstance(base, [createPrimitive(TypeKind.String)])], true);
+	assert anonTypeName(ofInt) != anonTypeName(ofString);
+}
+
 test "anonymous type cache key distinguishes" {
 	const names1: string[] = [];
 	names1.push("x");
@@ -2382,6 +2437,21 @@ test "tuple type desc emits struct" {
 	assert name != "void*";
 	assert name.length > 8; // "msTuple_" + hash
 	assert types.length > 0;
+}
+
+test "a tuple's element types are defined before the tuple struct opens" {
+	const g = createCGen(null as unknown as CheckerContext, "");
+	const face = createEnum("Face", ["None", "Back"]);
+	face.sym = makeSymbol("Face", SymbolKind.Enum, face, false);
+	const t = createTuple([createTuple([face, createPrimitive(TypeKind.Int32)]), createPrimitive(TypeKind.Int32)]);
+	const outer = getTypeDesc(g, t);
+	const inner = getTypeDesc(g, t.typeChildren[0]);
+	const types = extract(sec(g, CSection.Types));
+	const enumAt = types.indexOf("typedef uint8_t Face");
+	const innerAt = types.indexOf(`struct ${inner} {`);
+	const outerAt = types.indexOf(`struct ${outer} {`);
+	assert enumAt >= 0 && enumAt < innerAt;
+	assert types.indexOf("};", innerAt) < outerAt;
 }
 
 test "tuple needsRC with string element" {

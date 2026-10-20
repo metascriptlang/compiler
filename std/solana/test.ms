@@ -1,0 +1,5293 @@
+import {
+	External, Signer as ChainAuth, WritablePda as DerivedSlot, accounts, external, externalMutable,
+} from "./typed";
+import { argBoolValid, argBytesFit, argU8, argU16, argU64, recordAddress } from "./core";
+import { scopedKeysResult } from "./testArgumentScope";
+import { FarBase, FarDerived, FarKept, FarPinned, FarPinnedChild } from "./testBaseScope";
+import {
+	directDelegated, directExternal, directExternalMutable, directMutable, directOwned, directProgram,
+} from "./testDirectCalls";
+import {
+	ScopedByteArgs as ForeignByteInput,
+	ScopedChainAccounts, ScopedPet, ScopedProgramAccounts, scopedChainResult,
+	scopedDirectProgram, scopedOwnedResult, scopedProgramResult,
+} from "./testChainScope";
+import {
+	Account,
+	BorshReader,
+	BorshWriter,
+	DELEGATION_PROGRAM_ID,
+	Discriminator,
+	ProgramError,
+	Pubkey,
+	System,
+	Token,
+	Token2022,
+	AssociatedToken,
+	ASSOCIATED_TOKEN_PROGRAM_ID,
+	TOKEN_2022_PROGRAM_ID,
+	TOKEN_PROGRAM_ID,
+	accountDiscriminator,
+	failWith,
+	mutable,
+	owned,
+	program,
+	signer,
+	writable,
+	instructionDiscriminator,
+	account,
+	accountCount,
+	allocate,
+	assignTo,
+	createAccount,
+	createProgramAccount,
+	transfer,
+	close,
+	create,
+	createPda,
+	signed,
+	leBytes,
+	pda,
+	realloc,
+	writableSigner,
+	transferLamports,
+	Mutable,
+	Owned,
+	Program,
+	Signer,
+	Writable,
+	WritablePda,
+	WritableSigner,
+	Delegated,
+	delegated,
+	pdaWithBump,
+	pubkeyOf,
+	instructionData,
+	logPubkey,
+	logText,
+	logU64,
+	clock,
+	returnData,
+	returnDataFrom,
+	SYSTEM_PROGRAM_ID,
+	setReturnData,
+	programId,
+	ProgramAddress,
+	Bytes,
+	InstructionAccount,
+	putBool,
+	putBytes,
+	putI16,
+	putI32,
+	putI64,
+	putI8,
+	putPrefix,
+	putPubkey,
+	putSpan,
+	putU16,
+	putU32,
+	putU64,
+	putU8,
+	invoke,
+	invokeList,
+	invokeSigned,
+} from "./index";
+import { SignerSeeds, bytesAddress, createAddressWithBump, findExpected, seedText, tableAddress } from "./seed";
+import { seedTable, slottedTable } from "./accountSeeds";
+import { canonicalBump, canonicalBumpOwned, canonicalBumpProven, closedProgramAccount, createdAccount, createProgramAccountSeeded, minimumBalance, resizedProgramAccount, seedsGivenFailure, seedsGivenOwnedFailure, slottedCanonicalBump, unchecked } from "./core";
+import { verifiedPdaWithBump } from "./typed";
+import { HostAccount, REFUSED, invocations, logs, rentReads, run, setClock, setSysvarStatus, signerIs, textBytes } from "./host";
+import {
+	address,
+	args,
+	bump,
+	constraint,
+	emit,
+	findProgramAddress,
+	findProgramAddressOf,
+	hasOne,
+	instruction,
+	programAddress,
+	programAddressOf,
+	seeds,
+	scratch,
+	signed,
+	signedPda,
+} from "./macro";
+import { anchorIdl } from "./idl";
+import { decode, encode } from "./accountCodec";
+import { HYDRA_PROGRAM_ID } from "./hydra";
+import { MAGIC_PROGRAM_ID, MAGIC_VAULT_ID } from "./magicblock";
+import { Node, NodeKind, bindSym } from "std/meta";
+import { sha256 } from "std/crypto/sha256";
+import { isEdwardsPoint } from "std/crypto/ed25519/point";
+
+import { msSolLoadU64, msSolProgramId, msSolSpanAddress, msSolStoreU8 } from "./memory";
+import { msSolDeriveAddress } from "./kernel";
+
+
+export struct Counter {
+	value: uint64;
+	owner: Pubkey;
+}
+
+export function discriminator(this typeof Counter): Discriminator {
+	return @comptime { return accountDiscriminator("Counter"); };
+}
+
+function keyOf(seed: uint8): Pubkey {
+	let key = Pubkey.zero();
+	key.bytes[0] = seed;
+	return key;
+}
+
+function counterBytes(tag: Discriminator, value: uint8, length: int32): uint8[] {
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	bytes.push(value);
+	while (bytes.length < length) { bytes.push(0); }
+	return bytes;
+}
+
+function holder(
+	seed: uint8,
+	owner: Pubkey,
+	bytes: uint8[],
+	signer: boolean,
+	writable: boolean,
+): HostAccount {
+	return {
+		key: keyOf(seed),
+		owner: owner,
+		lamports: 1000,
+		data: bytes,
+		signer: signer,
+		writable: writable,
+		executable: false,
+	};
+}
+
+function codeOf<T>(result: Result<T, ProgramError>): void {
+	if (!result.ok) { failWith(result.error); }
+}
+
+function signerEntry(): void { codeOf(signer(0)); }
+function writableEntry(): void { codeOf(writable(0)); }
+function missingEntry(): void { codeOf(signer(3)); }
+function systemProgramEntry(): void { codeOf(program<System>(0)); }
+function ownedEntry(): void { codeOf(owned<Counter>(0)); }
+
+function bumpEntry(): void {
+	const counter = mutable<Counter>(0);
+	if (!counter.ok) {
+		failWith(counter.error);
+		return;
+	}
+	const at = counter.value.data();
+	at.value = at.value + 1;
+}
+
+function twiceEntry(): void {
+	codeOf(mutable<Counter>(0));
+	codeOf(mutable<Counter>(1));
+}
+
+function programKey(): Pubkey { return keyOf(200); }
+
+function counterTag(): Discriminator {
+	return Counter.discriminator();
+}
+
+function patternedKey(): Pubkey {
+	let key = Pubkey.zero();
+	for (let i = 0; i < 32; i++) { key.bytes[i] = (i + 1) as uint8; }
+	return key;
+}
+
+function programIdEntry(): void {
+	if (!programId().equals(patternedKey())) { failWith(ProgramError.invalidArgument()); }
+}
+
+function accountKeyEntry(): void {
+	const found = writable(0);
+	if (!found.ok) {
+		failWith(found.error);
+		return;
+	}
+	if (!found.value.key().equals(patternedKey())) { failWith(ProgramError.invalidArgument()); }
+}
+
+function logKeyEntry(): void { logPubkey(patternedKey()); }
+
+test "a program id is read from the bytes the runtime put in the input buffer" {
+	const none: HostAccount[] = [];
+	assert run(patternedKey(), none, [], programIdEntry).result == 0;
+	assert run(keyOf(3), none, [], programIdEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "an account key is read from its record in the input buffer" {
+	const matching = [holder(1, keyOf(9), [], true, true)];
+	matching[0].key = patternedKey();
+	assert run(programKey(), matching, [], accountKeyEntry).result == 0;
+	const other = [holder(1, keyOf(9), [], true, true)];
+	assert run(programKey(), other, [], accountKeyEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "a Pubkey stored in program memory is logged from its own bytes" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], logKeyEntry).result == 0;
+	let found = false;
+	for (const line of logs()) {
+		if (line == "Program log: " + patternedKey().toBase58()) { found = true; }
+	}
+	assert found;
+}
+
+test "a signer verifier refuses an unsigned account with Anchor's AccountNotSigner" {
+	const unsigned = [holder(1, keyOf(9), [], false, true)];
+	assert run(programKey(), unsigned, [], signerEntry).result ==
+		ProgramError.accountNotSigner().code;
+	const signed = [holder(1, keyOf(9), [], true, false)];
+	assert run(programKey(), signed, [], signerEntry).result == 0;
+}
+
+test "a writable verifier refuses a read-only account with ConstraintMut" {
+	const readOnly = [holder(1, keyOf(9), [], false, false)];
+	assert run(programKey(), readOnly, [], writableEntry).result ==
+		ProgramError.constraintMut().code;
+}
+
+test "a missing account is AccountNotEnoughKeys" {
+	const one = [holder(1, keyOf(9), [], true, true)];
+	assert run(programKey(), one, [], missingEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
+}
+
+test "a program verifier checks the key, then that it is executable" {
+	let wrong = holder(1, keyOf(9), [], false, false);
+	assert run(programKey(), [wrong], [], systemProgramEntry).result ==
+		ProgramError.invalidProgramId().code;
+	let system = holder(1, keyOf(9), [], false, false);
+	system.key = Pubkey.zero();
+	assert run(programKey(), [system], [], systemProgramEntry).result ==
+		ProgramError.invalidProgramExecutable().code;
+	system.executable = true;
+	assert run(programKey(), [system], [], systemProgramEntry).result == 0;
+}
+
+export struct CustomProgram {}
+export function id(this typeof CustomProgram): Pubkey { return keyOf(77); }
+
+function tokenProgramEntry(): void { codeOf(program<Token>(0)); }
+function token2022ProgramEntry(): void { codeOf(program<Token2022>(0)); }
+function associatedTokenProgramEntry(): void { codeOf(program<AssociatedToken>(0)); }
+function customProgramEntry(): void { codeOf(program<CustomProgram>(0)); }
+
+function programHolder(key: Pubkey, executable: boolean): HostAccount {
+	let account = holder(9, keyOf(9), [], false, false);
+	account.key = key;
+	account.executable = executable;
+	return account;
+}
+
+function programSlotMisses(entry: () => void, right: Pubkey): int32 {
+	let misses = 0;
+	if (run(programKey(), [programHolder(right, true)], [], entry).result != 0) { misses++; }
+	if (run(programKey(), [programHolder(right, false)], [], entry).result !=
+		ProgramError.invalidProgramExecutable().code) { misses++; }
+	for (const word of [0, 8, 16, 24, 31]) {
+		let wrong = right;
+		wrong.bytes[word] = wrong.bytes[word] ^ 1;
+		if (run(programKey(), [programHolder(wrong, true)], [], entry).result !=
+			ProgramError.invalidProgramId().code) { misses++; }
+	}
+	for (const other of [Pubkey.zero(), TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, keyOf(77)]) {
+		if (other == right) { continue; }
+		if (run(programKey(), [programHolder(other, true)], [], entry).result !=
+			ProgramError.invalidProgramId().code) { misses++; }
+	}
+	return misses;
+}
+
+test "every Program<P> slot refuses a key that differs from its id in any word" {
+	assert programSlotMisses(systemProgramEntry, Pubkey.zero()) == 0;
+	assert programSlotMisses(tokenProgramEntry, TOKEN_PROGRAM_ID) == 0;
+	assert programSlotMisses(token2022ProgramEntry, TOKEN_2022_PROGRAM_ID) == 0;
+	assert programSlotMisses(associatedTokenProgramEntry, ASSOCIATED_TOKEN_PROGRAM_ID) == 0;
+	assert programSlotMisses(customProgramEntry, keyOf(77)) == 0;
+}
+
+test "an owned verifier checks owner, discriminator presence, discriminator, then size" {
+	const tag = counterTag();
+	const foreign = [holder(1, keyOf(9), counterBytes(tag, 0, 48), false, false)];
+	assert run(programKey(), foreign, [], ownedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const empty = [holder(1, programKey(), [1, 2], false, false)];
+	assert run(programKey(), empty, [], ownedEntry).result ==
+		ProgramError.accountDiscriminatorNotFound().code;
+	const other = accountDiscriminator("Other");
+	const mismatched = [holder(1, programKey(), counterBytes(other, 0, 48), false, false)];
+	assert run(programKey(), mismatched, [], ownedEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const short = [holder(1, programKey(), counterBytes(tag, 0, 20), false, false)];
+	assert run(programKey(), short, [], ownedEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+	const good = [holder(1, programKey(), counterBytes(tag, 0, 48), false, false)];
+	assert run(programKey(), good, [], ownedEntry).result == 0;
+}
+
+test "a mutable account writes through its data in place" {
+	const accounts = [holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, true)];
+	assert run(programKey(), accounts, [], bumpEntry).result == 0;
+	assert accounts[0].data[8] == 42;
+	const readOnly = [holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, false)];
+	assert run(programKey(), readOnly, [], bumpEntry).result == ProgramError.constraintMut().code;
+}
+
+test "one account passed twice cannot be mutable twice" {
+	const same = holder(1, programKey(), counterBytes(counterTag(), 0, 48), false, true);
+	const accounts = [same, same];
+	assert run(programKey(), accounts, [], twiceEntry).result ==
+		ProgramError.constraintDuplicateMutableAccount().code;
+	const other = holder(2, programKey(), counterBytes(counterTag(), 0, 48), false, true);
+	const distinctTwo = [same, other];
+	assert run(programKey(), distinctTwo, [], twiceEntry).result == 0;
+}
+
+export enum CounterOp {
+	Make,
+	TakeAll,
+}
+
+export struct MakeArgs {
+	seed: uint64;
+	flag: boolean;
+	receiver: Pubkey;
+}
+
+function make(): Result<uint64, ProgramError> {
+	const made = try args<MakeArgs>();
+	const flag: uint32 = made.flag ? 1 : 0;
+	const last: uint32 = made.receiver.bytes[31] as uint32;
+	return Result.err(ProgramError.custom((made.seed as uint32) * 10 + flag + last));
+}
+
+function dispatch(): Result<uint64, ProgramError> {
+	return match (try instruction<CounterOp>()) {
+		CounterOp.Make => make(),
+		CounterOp.TakeAll => Result.ok(2),
+	};
+}
+
+function dispatchEntry(): void { codeOf(dispatch()); }
+
+function instructionBytes(name: string, tail: uint8[]): uint8[] {
+	const discriminator = instructionDiscriminator(name);
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 8; i++) { bytes.push(discriminator.bytes[i]); }
+	for (const byte of tail) { bytes.push(byte); }
+	return bytes;
+}
+
+function makeTail(seed: uint8, flag: uint8, last: uint8, length: int32): uint8[] {
+	const tail: uint8[] = [seed, 0, 0, 0, 0, 0, 0, 0, flag];
+	for (let i = 0; i < 31; i++) { tail.push(0); }
+	tail.push(last);
+	while (tail.length > length) { tail.pop(); }
+	return tail;
+}
+
+test "instruction dispatch reads Anchor discriminators and Borsh arguments" {
+	const none: HostAccount[] = [];
+	const makeData = instructionBytes("Make", makeTail(7, 1, 5, 41));
+	const made = run(programKey(), none, makeData, dispatchEntry);
+	assert made.result == ProgramError.custom(76).code;
+	const taken = run(programKey(), none, instructionBytes("TakeAll", []), dispatchEntry);
+	assert taken.result == 0;
+}
+
+export enum SparseOp { Alpha = 5, Beta = 9, Gamma, Zero = 0 }
+export enum ReversedOp { Last = 2, Middle = 1, First = 0 }
+
+function sparseDispatch(): Result<uint64, ProgramError> {
+	return match (try instruction<SparseOp>()) {
+		SparseOp.Alpha => Result.err(ProgramError.custom(5)),
+		SparseOp.Beta => Result.err(ProgramError.custom(9)),
+		SparseOp.Gamma => Result.err(ProgramError.custom(10)),
+		SparseOp.Zero => Result.ok(0),
+	};
+}
+
+function sparseValue(): Result<uint64, ProgramError> {
+	const op = try instruction<SparseOp>();
+	return Result.err(ProgramError.custom(1000 + (op as uint32)));
+}
+
+function reversedDispatch(): Result<uint64, ProgramError> {
+	return match (try instruction<ReversedOp>()) {
+		ReversedOp.Last => Result.err(ProgramError.custom(2)),
+		ReversedOp.Middle => Result.err(ProgramError.custom(1)),
+		ReversedOp.First => Result.ok(0),
+	};
+}
+
+function sparseDispatchEntry(): void { codeOf(sparseDispatch()); }
+function sparseValueEntry(): void { codeOf(sparseValue()); }
+function reversedDispatchEntry(): void { codeOf(reversedDispatch()); }
+
+test "instruction dispatch gives the member an enum with gaps in its values declares, zero included" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, instructionBytes("Alpha", []), sparseDispatchEntry).result == ProgramError.custom(5).code;
+	assert run(programKey(), none, instructionBytes("Beta", []), sparseDispatchEntry).result == ProgramError.custom(9).code;
+	assert run(programKey(), none, instructionBytes("Gamma", []), sparseDispatchEntry).result == ProgramError.custom(10).code;
+	assert run(programKey(), none, instructionBytes("Zero", []), sparseDispatchEntry).result == 0;
+	assert run(programKey(), none, instructionBytes("Alpha", []), sparseValueEntry).result == ProgramError.custom(1005).code;
+	assert run(programKey(), none, instructionBytes("Gamma", []), sparseValueEntry).result == ProgramError.custom(1010).code;
+	assert run(programKey(), none, instructionBytes("Zero", []), sparseValueEntry).result == ProgramError.custom(1000).code;
+	assert run(programKey(), none, instructionBytes("Delta", []), sparseDispatchEntry).result ==
+		ProgramError.instructionFallbackNotFound().code;
+	const short: uint8[] = [1, 2, 3];
+	assert run(programKey(), none, short, sparseDispatchEntry).result == ProgramError.instructionMissing().code;
+}
+
+test "instruction dispatch gives the member an enum declares when its values run against the declaration order" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, instructionBytes("Last", []), reversedDispatchEntry).result == ProgramError.custom(2).code;
+	assert run(programKey(), none, instructionBytes("Middle", []), reversedDispatchEntry).result == ProgramError.custom(1).code;
+	assert run(programKey(), none, instructionBytes("First", []), reversedDispatchEntry).result == 0;
+}
+
+function ranByIdl(idl: JsonValue, entry: () => void): string {
+	const none: HostAccount[] = [];
+	let ran = "";
+	for (let i = 0; i < idl.instructions.length(); i++) {
+		const listed = idl.instructions.at(i);
+		const data: uint8[] = [];
+		for (let b = 0; b < 8; b++) { data.push(listed.discriminator.at(b).asInt32() as uint8); }
+		ran = ran + listed.name.asString() + "=" + String(run(programKey(), none, data, entry).result) + " ";
+	}
+	return ran;
+}
+
+test "each discriminator the IDL lists for an enum with gaps in its values runs the arm of the member it names" {
+	const parsed = JSON.parseValue(anchorIdl<SparseOp>({
+		name: "sparse",
+		address: "",
+		Alpha: [NoArrayAccounts],
+		Beta: [NoArrayAccounts],
+		Gamma: [NoArrayAccounts],
+		Zero: [NoArrayAccounts],
+		accounts: [],
+		events: [],
+		errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		assert ranByIdl(parsed.value, sparseDispatchEntry) == "alpha=" + String(ProgramError.custom(5).code) +
+			" beta=" + String(ProgramError.custom(9).code) + " gamma=" + String(ProgramError.custom(10).code) + " zero=0 ";
+		assert ranByIdl(parsed.value, sparseValueEntry) == "alpha=" + String(ProgramError.custom(1005).code) +
+			" beta=" + String(ProgramError.custom(1009).code) + " gamma=" + String(ProgramError.custom(1010).code) +
+			" zero=" + String(ProgramError.custom(1000).code) + " ";
+	}
+}
+
+test "each discriminator the IDL lists for an enum whose values run against the declaration order runs the arm of the member it names" {
+	const parsed = JSON.parseValue(anchorIdl<ReversedOp>({
+		name: "reversed",
+		address: "",
+		Last: [NoArrayAccounts],
+		Middle: [NoArrayAccounts],
+		First: [NoArrayAccounts],
+		accounts: [],
+		events: [],
+		errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		assert ranByIdl(parsed.value, reversedDispatchEntry) == "last=" + String(ProgramError.custom(2).code) +
+			" middle=" + String(ProgramError.custom(1).code) + " first=0 ";
+	}
+}
+
+export enum FailingOp { Fail }
+export enum ContiguousFailure { First, Second, Third }
+export enum SparseFailure { Low = 5, High = 9, Next, None = 0 }
+export enum ReversedFailure { Last = 2, Middle = 1, First = 0 }
+export enum OffsetFailure { Start = 3, Then, After }
+export enum FoldedFailure { Shifted = 1 << 2, Next, Summed = Shifted + 10, Top = 2147483647 }
+
+converter contiguousFailure(error: ContiguousFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter sparseFailure(error: SparseFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter reversedFailure(error: ReversedFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter offsetFailure(error: OffsetFailure): ProgramError { return ProgramError.userError(error as uint32); }
+converter foldedFailure(error: FoldedFailure): ProgramError { return ProgramError.userError(error as uint32); }
+
+let raisedContiguous = ContiguousFailure.First;
+let raisedSparse = SparseFailure.Low;
+let raisedReversed = ReversedFailure.Last;
+let raisedOffset = OffsetFailure.Start;
+let raisedFolded = FoldedFailure.Shifted;
+
+function raiseContiguous(): Result<uint64, ContiguousFailure> { return Result.err(raisedContiguous); }
+function raiseSparse(): Result<uint64, SparseFailure> { return Result.err(raisedSparse); }
+function raiseReversed(): Result<uint64, ReversedFailure> { return Result.err(raisedReversed); }
+function raiseOffset(): Result<uint64, OffsetFailure> { return Result.err(raisedOffset); }
+function raiseFolded(): Result<uint64, FoldedFailure> { return Result.err(raisedFolded); }
+
+function contiguousFailureStep(): Result<uint64, ProgramError> { const value = try raiseContiguous(); return Result.ok(value); }
+function sparseFailureStep(): Result<uint64, ProgramError> { const value = try raiseSparse(); return Result.ok(value); }
+function reversedFailureStep(): Result<uint64, ProgramError> { const value = try raiseReversed(); return Result.ok(value); }
+function offsetFailureStep(): Result<uint64, ProgramError> { const value = try raiseOffset(); return Result.ok(value); }
+function foldedFailureStep(): Result<uint64, ProgramError> { const value = try raiseFolded(); return Result.ok(value); }
+
+function contiguousFailureEntry(): void { codeOf(contiguousFailureStep()); }
+function sparseFailureEntry(): void { codeOf(sparseFailureStep()); }
+function reversedFailureEntry(): void { codeOf(reversedFailureStep()); }
+function offsetFailureEntry(): void { codeOf(offsetFailureStep()); }
+function foldedFailureEntry(): void { codeOf(foldedFailureStep()); }
+
+function returnedBy(entry: () => void): uint64 {
+	const none: HostAccount[] = [];
+	return run(programKey(), none, [], entry).result;
+}
+
+function listedFor(idl: string, name: string): uint64 {
+	const parsed = JSON.parseValue(idl);
+	if (!parsed.ok) { return 0; }
+	const errors = parsed.value.errors;
+	for (let i = 0; i < errors.length(); i++) {
+		if (errors.at(i).name.asString() == name) { return ProgramError.custom(errors.at(i).code.asInt64() as uint32).code; }
+	}
+	return 0;
+}
+
+test "the IDL lists for each member of an error enum without explicit values the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "contiguous", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: ContiguousFailure });
+	raisedContiguous = ContiguousFailure.First;
+	assert returnedBy(contiguousFailureEntry) == listedFor(idl, "First");
+	raisedContiguous = ContiguousFailure.Second;
+	assert returnedBy(contiguousFailureEntry) == listedFor(idl, "Second");
+	raisedContiguous = ContiguousFailure.Third;
+	assert returnedBy(contiguousFailureEntry) == listedFor(idl, "Third");
+	assert listedFor(idl, "Third") == ProgramError.custom(6002).code;
+}
+
+test "the IDL lists for each member of an error enum with gaps in its values the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "sparse", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: SparseFailure });
+	raisedSparse = SparseFailure.Low;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "Low");
+	raisedSparse = SparseFailure.High;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "High");
+	raisedSparse = SparseFailure.Next;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "Next");
+	raisedSparse = SparseFailure.None;
+	assert returnedBy(sparseFailureEntry) == listedFor(idl, "None");
+	assert listedFor(idl, "High") == ProgramError.custom(6009).code;
+}
+
+test "the IDL lists for each member of an error enum whose values run against the declaration order the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "reversed", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: ReversedFailure });
+	raisedReversed = ReversedFailure.Last;
+	assert returnedBy(reversedFailureEntry) == listedFor(idl, "Last");
+	raisedReversed = ReversedFailure.Middle;
+	assert returnedBy(reversedFailureEntry) == listedFor(idl, "Middle");
+	raisedReversed = ReversedFailure.First;
+	assert returnedBy(reversedFailureEntry) == listedFor(idl, "First");
+	assert listedFor(idl, "Last") == ProgramError.custom(6002).code;
+}
+
+test "the IDL lists for each member of an error enum that starts above zero the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "offset", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: OffsetFailure });
+	raisedOffset = OffsetFailure.Start;
+	assert returnedBy(offsetFailureEntry) == listedFor(idl, "Start");
+	raisedOffset = OffsetFailure.Then;
+	assert returnedBy(offsetFailureEntry) == listedFor(idl, "Then");
+	raisedOffset = OffsetFailure.After;
+	assert returnedBy(offsetFailureEntry) == listedFor(idl, "After");
+	assert listedFor(idl, "Start") == ProgramError.custom(6003).code;
+}
+
+test "the IDL lists for each member of an error enum with computed values, up to the largest, the code the program returns for it" {
+	const idl = anchorIdl<FailingOp>({ name: "folded", address: "", Fail: [NoArrayAccounts], accounts: [], events: [], errors: FoldedFailure });
+	raisedFolded = FoldedFailure.Shifted;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Shifted");
+	raisedFolded = FoldedFailure.Next;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Next");
+	raisedFolded = FoldedFailure.Summed;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Summed");
+	raisedFolded = FoldedFailure.Top;
+	assert returnedBy(foldedFailureEntry) == listedFor(idl, "Top");
+	assert listedFor(idl, "Top") == ProgramError.custom(2147489647).code;
+}
+
+let wrappedByte: uint8 = 0;
+let wrappedWord: uint16 = 0;
+let wrappedWide: uint64 = 0;
+let wrappedBytesFit = false;
+let missingBoolValid = false;
+
+function wrappingArgsEntry(): void {
+	wrappedByte = argU8(0xffffffffffffffff);
+	wrappedWord = argU16(0xfffffffffffffffe);
+	wrappedWide = argU64(0xfffffffffffffff8);
+	wrappedBytesFit = argBytesFit(0xffffffffffffffff);
+	missingBoolValid = argBoolValid(64);
+}
+
+function wrappingArgsProbe(): void {
+	const data: uint8[] = [1, 1, 1, 1, 1, 1, 1, 1];
+	for (let i = 0; i < 64; i++) { data.push(0); }
+	run(programKey(), [], data, wrappingArgsEntry);
+}
+
+test "wrapping uint8 argument offset cannot read the instruction prefix" {
+	wrappingArgsProbe();
+	assert wrappedByte == 0;
+}
+
+test "wrapping uint16 argument offset cannot read the instruction prefix" {
+	wrappingArgsProbe();
+	assert wrappedWord == 0;
+}
+
+test "wrapping uint64 argument offset cannot read the instruction prefix" {
+	wrappingArgsProbe();
+	assert wrappedWide == 0;
+}
+
+test "wrapping Bytes argument cannot pass raw validation" {
+	wrappingArgsProbe();
+	assert !wrappedBytesFit;
+}
+
+test "missing bool argument cannot pass raw validation" {
+	wrappingArgsProbe();
+	assert !missingBoolValid;
+}
+
+export struct FixedArrayArgs {
+	flag: boolean;
+	bytes: uint8[32];
+	last: uint8;
+}
+
+function fixedArrayStep(): Result<uint64, ProgramError> {
+	const input = try args<FixedArrayArgs>();
+	const flag: uint32 = input.flag ? 1 : 0;
+	return Result.err(ProgramError.custom(flag + (input.bytes[0] as uint32) +
+		(input.bytes[31] as uint32) + (input.last as uint32)));
+}
+
+function fixedArrayEntry(): void { codeOf(fixedArrayStep()); }
+
+test "args<T>() reads fixed32 byte arrays at odd offsets and refuses every truncation or invalid boolean" {
+	const tail: uint8[] = [1];
+	for (let i = 1; i <= 32; i++) { tail.push(i as uint8); }
+	tail.push(8);
+	const complete = instructionBytes("Fixed", tail);
+	assert run(programKey(), [], complete, fixedArrayEntry).result == ProgramError.custom(42).code;
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, fixedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+	tail[0] = 2;
+	assert run(programKey(), [], instructionBytes("Fixed", tail), fixedArrayEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+}
+
+type FourArgBytes = uint8[4];
+
+struct MixedArrayArgs {
+	prefix: boolean;
+	empty: uint8[0];
+	one: uint8[1];
+	four: FourArgBytes;
+	eight: uint8[8];
+	nearKey: uint8[31];
+	pastKey: uint8[33];
+	last: boolean;
+}
+
+function mixedArrayStep(): Result<uint64, ProgramError> {
+	const input = try args<MixedArrayArgs>();
+	let sum: uint32 = input.prefix ? 1 : 0;
+	sum += (input.last ? 1000 : 0) as uint32;
+	sum += input.empty.length as uint32;
+	let weight: uint32 = 1;
+	for (const byte of input.one) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.four) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.eight) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.nearKey) { sum += (byte as uint32) * weight; weight++; }
+	for (const byte of input.pastKey) { sum += (byte as uint32) * weight; weight++; }
+	return Result.err(ProgramError.custom(sum));
+}
+
+function mixedArrayEntry(): void { codeOf(mixedArrayStep()); }
+
+function mixedArrayTail(): uint8[] {
+	const tail: uint8[] = [1];
+	for (let i = 1; i <= 77; i++) { tail.push(i as uint8); }
+	tail.push(1);
+	return tail;
+}
+
+test "args<T>() reads zero, one, aliased four, eight, thirty-one and thirty-three bytes" {
+	const data = instructionBytes("Mixed", mixedArrayTail());
+	assert run(programKey(), [], data, mixedArrayEntry).result == ProgramError.custom(156156).code;
+}
+
+test "args<T>() refuses every truncation of mixed fixed byte arrays" {
+	const complete = instructionBytes("Mixed", mixedArrayTail());
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, mixedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+test "args<T>() refuses invalid boolean neighbours of fixed byte arrays" {
+	for (const bad of [0, 78]) {
+		const tail = mixedArrayTail();
+		tail[bad] = 2;
+		assert run(programKey(), [], instructionBytes("Mixed", tail), mixedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+function scopedArrayScore(input: ForeignByteInput): uint32 {
+	if (input.tail != 0x0102030405060708 as uint64) { return 99; }
+	return (input.prefix ? 1 : 0) as uint32 + (input.bytes[0] as uint32) +
+		(input.bytes[1] as uint32) * 2 + (input.bytes[2] as uint32) * 3 +
+		(input.bytes[3] as uint32) * 4;
+}
+
+function importedArrayStep(): Result<uint64, ProgramError> {
+	const input = try args<ForeignByteInput>();
+	return Result.err(ProgramError.custom(scopedArrayScore(input)));
+}
+function importedArrayEntry(): void { codeOf(importedArrayStep()); }
+
+test "args<T>() preserves imported aliases of private records and fixed-byte field aliases" {
+	const data = instructionBytes("Scoped", [1, 2, 3, 5, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+	assert run(programKey(), [], data, importedArrayEntry).result == ProgramError.custom(52).code;
+}
+
+test "args<T>() refuses every truncation of an imported private record alias" {
+	const complete = instructionBytes("Scoped", [1, 2, 3, 5, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, importedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+test "args<T>() validates raw booleans before reading imported private record aliases" {
+	for (let bad = 2; bad < 256; bad++) {
+		const data = instructionBytes("Scoped", [bad as uint8, 2, 3, 5, 7, 8, 7, 6, 5, 4, 3, 2, 1]);
+		assert run(programKey(), [], data, importedArrayEntry).result ==
+			ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+let scopedKeyChecksum: uint64 = 0;
+function scopedKeysEntry(): void {
+	const result = scopedKeysResult();
+	if (result.ok) { scopedKeyChecksum = result.value; }
+	codeOf(result);
+}
+
+test "imported private Pubkey arrays need no caller Pubkey import" {
+	const tail: uint8[] = [];
+	for (let byte = 0; byte < 96; byte++) { tail.push(byte as uint8); }
+	assert run(programKey(), [], instructionBytes("Keys", tail), scopedKeysEntry).result == 0;
+	assert scopedKeyChecksum == 4560;
+}
+
+test "imported private Pubkey arrays reject every truncated wire" {
+	const tail: uint8[] = [];
+	for (let size = 0; size < 96; size++) {
+		scopedKeyChecksum = 42;
+		assert run(programKey(), [], instructionBytes("Keys", tail), scopedKeysEntry).result == 102;
+		assert scopedKeyChecksum == 42;
+		tail.push(size as uint8);
+	}
+}
+
+struct SignedBoundaryArgs {
+	one: int8;
+	two: int16;
+	four: int32;
+	eight: int64;
+}
+let signedOne: int64 = 0;
+let signedTwo: int64 = 0;
+let signedFour: int64 = 0;
+let signedEight: int64 = 0;
+
+function signedBoundaryStep(): Result<uint64, ProgramError> {
+	const x = try args<SignedBoundaryArgs>();
+	signedOne = x.one as int64;
+	signedTwo = x.two as int64;
+	signedFour = x.four as int64;
+	signedEight = x.eight;
+	return Result.ok(0);
+}
+function signedBoundaryEntry(): void { codeOf(signedBoundaryStep()); }
+
+test "signed instruction readers preserve minima and maxima at odd Borsh offsets" {
+	for (const high of [false, true]) {
+		const tail: uint8[] = [];
+		for (const width of [1, 2, 4, 8]) {
+			for (let byte = 0; byte < width - 1; byte++) { tail.push(high ? 255 : 0); }
+			tail.push(high ? 127 : 128);
+		}
+		assert run(programKey(), [], instructionBytes("Signed", tail), signedBoundaryEntry).result == 0;
+		assert signedOne == (high ? 127 : -128);
+		assert signedTwo == (high ? 32767 : -32768);
+		assert signedFour == (high ? 2147483647 : -2147483648);
+		const maximum: int64 = 9223372036854775807;
+		const minimum: int64 = -maximum - 1;
+		assert signedEight == (high ? maximum : minimum);
+	}
+}
+
+test "signed instruction readers preserve all narrow wire values" {
+	for (let byte = 0; byte < 256; byte++) {
+		const tail: uint8[] = [byte as uint8];
+		for (let i = 1; i < 15; i++) { tail.push(0); }
+		assert run(programKey(), [], instructionBytes("Signed", tail), signedBoundaryEntry).result == 0;
+		assert signedOne == (byte < 128 ? byte : byte - 256) as int64;
+		assert signedTwo == 0 && signedFour == 0 && signedEight == 0;
+	}
+}
+
+struct ScalarArrayArgs {
+	prefix: uint8;
+	u8: uint8[2];
+	u16: uint16[2];
+	u32: uint32[2];
+	u64: uint64[2];
+	i8: int8[2];
+	i16: int16[2];
+	i32: int32[2];
+	i64: int64[2];
+	flags: boolean[2];
+	last: uint8;
+}
+
+function scalarArrayStep(): Result<uint64, ProgramError> {
+	const x = try args<ScalarArrayArgs>();
+	if (x.u8[0] != 1 || x.u8[1] != 2 || x.u16[0] != 1 || x.u16[1] != 2 ||
+		x.u32[0] != 1 || x.u32[1] != 2 || x.u64[0] != 1 || x.u64[1] != 2 ||
+		x.i8[0] != -1 || x.i8[1] != 2 || x.i16[0] != -1 || x.i16[1] != 2 ||
+		x.i32[0] != -1 || x.i32[1] != 2 || x.i64[0] != -1 || x.i64[1] != 2 ||
+		!x.flags[0] || x.flags[1] || x.prefix != 5 || x.last != 7) {
+		return Result.err(ProgramError.custom(99));
+	}
+	return Result.err(ProgramError.custom(29));
+}
+function scalarArrayEntry(): void { codeOf(scalarArrayStep()); }
+
+function scalarArrayTail(): uint8[] {
+	const tail: uint8[] = [5];
+	for (const negative of [false, true]) {
+		for (const width of [1, 2, 4, 8]) {
+			for (let byte = 0; byte < width; byte++) {
+				tail.push(negative ? 255 : byte == 0 ? 1 : 0);
+			}
+			tail.push(2);
+			for (let byte = 1; byte < width; byte++) { tail.push(0); }
+		}
+	}
+	tail.push(1); tail.push(0); tail.push(7);
+	return tail;
+}
+
+test "args<T>() decodes signed and unsigned fixed integer arrays and boolean arrays without padding" {
+	assert run(programKey(), [], instructionBytes("Scalar", scalarArrayTail()), scalarArrayEntry).result ==
+		ProgramError.custom(29).code;
+}
+
+test "args<T>() refuses every truncation of fixed scalar arrays" {
+	const complete = instructionBytes("Scalar", scalarArrayTail());
+	for (let length = 0; length < complete.length; length++) {
+		const short: uint8[] = [];
+		for (let i = 0; i < length; i++) { short.push(complete[i]); }
+		assert run(programKey(), [], short, scalarArrayEntry).result == ProgramError.instructionDidNotDeserialize().code;
+	}
+}
+
+test "args<T>() validates every raw boolean array element before typed reads" {
+	for (const index of [61, 62]) {
+		for (let bad = 2; bad < 256; bad++) {
+			const tail = scalarArrayTail();
+			tail[index] = bad as uint8;
+			assert run(programKey(), [], instructionBytes("Scalar", tail), scalarArrayEntry).result ==
+				ProgramError.instructionDidNotDeserialize().code;
+		}
+	}
+}
+
+export struct UploadArgs {
+	index: uint16;
+	chunk: Bytes;
+}
+
+function uploadStep(): Result<uint64, ProgramError> {
+	const upload = try args<UploadArgs>();
+	const last = try upload.chunk.readU8(upload.chunk.length - 1);
+	const code = (upload.index as uint32) * 1000 + (upload.chunk.length as uint32) * 10;
+	return Result.err(ProgramError.custom(code + (last as uint32)));
+}
+
+function uploadEntry(): void { codeOf(uploadStep()); }
+
+test "args<T>() reads a trailing Bytes field as Borsh's length-prefixed bytes" {
+	const none: HostAccount[] = [];
+	const upload = instructionBytes("Upload", [3, 0, 4, 0, 0, 0, 9, 8, 7, 6]);
+	assert run(programKey(), none, upload, uploadEntry).result == ProgramError.custom(3046).code;
+	const short = instructionBytes("Upload", [3, 0, 5, 0, 0, 0, 9, 8, 7, 6]);
+	assert run(programKey(), none, short, uploadEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+	const noLength = instructionBytes("Upload", [3, 0, 4, 0]);
+	assert run(programKey(), none, noLength, uploadEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+}
+
+test "dispatch refuses short data, an unknown instruction and short or invalid arguments" {
+	const none: HostAccount[] = [];
+	const short: uint8[] = [1, 2, 3];
+	assert run(programKey(), none, short, dispatchEntry).result ==
+		ProgramError.instructionMissing().code;
+	assert run(programKey(), none, instructionBytes("Other", []), dispatchEntry).result ==
+		ProgramError.instructionFallbackNotFound().code;
+	const truncated = instructionBytes("Make", makeTail(7, 1, 5, 40));
+	assert run(programKey(), none, truncated, dispatchEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+	const badBool = instructionBytes("Make", makeTail(7, 2, 5, 41));
+	assert run(programKey(), none, badBool, dispatchEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+}
+
+function createEntry(): void {
+	const result = createStep();
+	codeOf(result);
+}
+
+function createStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const counter = try create<Counter>(payer, target);
+	const at = counter.data();
+	at.value = 5;
+	return Result.ok(0);
+}
+
+function createTwiceStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const first = try create<Counter>(payer, try writable(1));
+	const second = try create<Counter>(payer, try writable(2));
+	first.data().value = 1;
+	second.data().value = 2;
+	return Result.ok(0);
+}
+
+function createTwiceEntry(): void { codeOf(createTwiceStep()); }
+
+test "the rent sysvar is read once per instruction however many accounts it creates, and again by the next instruction" {
+	const one = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), one, [], createEntry).result == 0;
+	assert rentReads() == 1;
+	const two = [wallet(1, 10000000), blank(keyOf(3)), blank(keyOf(4))];
+	assert run(programKey(), two, [], createTwiceEntry).result == 0;
+	assert rentReads() == 1;
+	assert two[1].lamports == two[2].lamports && two[1].lamports > 0;
+	assert two[1].data[8] == 1 && two[2].data[8] == 2;
+	assert run(programKey(), [wallet(1, 10000000), blank(keyOf(5))], [], createEntry).result == 0;
+	assert rentReads() == 1;
+}
+
+function createPdaEntry(): void {
+	const result = createPdaStep();
+	codeOf(result);
+}
+
+function createPdaStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const made = try createPda<Counter>(payer, target, ["counter"]);
+	const at = made.asMutable().data();
+	at.value = made.foundBump() as uint64;
+	return Result.ok(0);
+}
+
+function verifyPdaEntry(): void {
+	const result = verifyPdaStep();
+	codeOf(result);
+}
+
+function verifyPdaStep(): Result<uint64, ProgramError> {
+	const counter = try mutable<Counter>(0);
+	const found = try pda(counter, ["counter"]);
+	return Result.ok(found.foundBump() as uint64);
+}
+
+function closeEntry(): void {
+	const result = closeStep();
+	codeOf(result);
+}
+
+function closeStep(): Result<uint64, ProgramError> {
+	return close(try mutable<Counter>(0), try writable(1));
+}
+
+function reallocEntry(): void {
+	const result = reallocStep();
+	codeOf(result);
+}
+
+function reallocStep(): Result<uint64, ProgramError> {
+	return realloc(try mutable<Counter>(0), 148, try writableSigner(1));
+}
+
+function wallet(seed: uint8, lamports: uint64): HostAccount {
+	let account = holder(seed, Pubkey.zero(), [], true, true);
+	account.lamports = lamports;
+	return account;
+}
+
+function blank(key: Pubkey): HostAccount {
+	return {
+		key: key,
+		owner: Pubkey.zero(),
+		lamports: 0,
+		data: [],
+		signer: true,
+		writable: true,
+		executable: false,
+	};
+}
+
+test "create allocates through the System program and writes Anchor's discriminator" {
+	const accounts = [wallet(1, 10000000), blank(keyOf(2))];
+	assert run(programKey(), accounts, [], createEntry).result == 0;
+	assert accounts[1].owner == programKey();
+	assert accounts[1].data.length == 48;
+	assert accounts[1].lamports > 0 && accounts[0].lamports == 10000000 - accounts[1].lamports;
+	const tag = counterTag();
+	for (let i = 0; i < 8; i++) { assert accounts[1].data[i] == tag.bytes[i]; }
+	assert accounts[1].data[8] == 5;
+	const twice = [wallet(1, 10000000), wallet(1, 10000000)];
+	assert run(programKey(), twice, [], createEntry).result ==
+		ProgramError.constraintDuplicateMutableAccount().code;
+}
+
+test "createPda accepts only the canonical address and records its bump" {
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	assert derived.ok;
+	if (derived.ok) {
+		const accounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), accounts, [], createPdaEntry).result == 0;
+		assert accounts[1].data[8] == derived.value.bump;
+		const verified = [accounts[1]];
+		assert run(programKey(), verified, [], verifyPdaEntry).result == 0;
+	}
+	const wrong = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), wrong, [], createPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+export struct DeclaredCounter {
+	payer: WritableSigner;
+	@seeds("counter", payer) @bump target: WritablePda;
+}
+
+function declaredCreateStep(): Result<uint64, ProgramError> {
+	const x = try accounts<DeclaredCounter>();
+	const made = try createPda<Counter>(x.payer, x.target, ["counter", x.payer]);
+	if (made.foundBump() != x.target.foundBump()) { return Result.err(ProgramError.invalidSeeds()); }
+	made.asMutable().data().value = made.foundBump() as uint64;
+	const _grown = try realloc(made.asMutable(), 148, x.payer);
+	return Result.ok(0);
+}
+
+function declaredCreateEntry(): void { codeOf(declaredCreateStep()); }
+
+test "a declared @seeds @bump keeps the canonical bump in the proof, createPda signs with it and a realloc after it keeps its length" {
+	const payer = wallet(1, 10000000);
+	const derived = findProgramAddressOf(programKey(), ["counter", payer.key]);
+	assert derived.ok;
+	if (derived.ok) {
+		const accounts = [payer, blank(derived.value.key)];
+		assert run(programKey(), accounts, [], declaredCreateEntry).result == 0;
+		assert accounts[1].data[8] == derived.value.bump && accounts[1].data.length == 148;
+		const calls = invocations();
+		assert calls.length == 2 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [...payer.key.bytes], [derived.value.bump]]);
+	}
+	const wrong = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), wrong, [], declaredCreateEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+test "createPda on a declared WritablePda refuses the address its seeds give with bump 0" {
+	const payer = wallet(7, 10000000);
+	const derived = findProgramAddressOf(programKey(), ["counter", payer.key]);
+	const zero: uint8 = 0;
+	const low = programAddressOf(programKey(), ["counter", payer.key, [zero]]);
+	assert derived.ok && low.ok;
+	if (derived.ok && low.ok) {
+		assert derived.value.bump != 0;
+		const lowest = [payer, blank(low.value)];
+		assert run(programKey(), lowest, [], declaredCreateEntry).result == ProgramError.constraintSeeds().code;
+		assert invocations().length == 0 && lowest[1].data.length == 0 && lowest[1].owner == Pubkey.zero();
+		const canonical = [payer, blank(derived.value.key)];
+		assert run(programKey(), canonical, [], declaredCreateEntry).result == 0;
+		assert canonical[1].owner == programKey() && canonical[1].data[8] == derived.value.bump;
+	}
+}
+
+export struct AliasedCounter {
+	payer: WritableSigner;
+	@seeds("counter", payer) @bump target: DerivedSlot;
+}
+
+export struct SignerThenPda {
+	signer: ChainAuth;
+	@seeds("slot") @bump slot: DerivedSlot;
+}
+
+function aliasedCreateStep(): Result<uint64, ProgramError> {
+	const x = try accounts<AliasedCounter>();
+	const made = try createPda<Counter>(x.payer, x.target, ["counter", x.payer]);
+	made.asMutable().data().value = x.target.foundBump() as uint64;
+	return Result.ok(0);
+}
+
+function aliasedCreateEntry(): void { codeOf(aliasedCreateStep()); }
+
+test "a WritablePda imported under another name keeps the canonical bump its @seeds found" {
+	const payer = wallet(1, 10000000);
+	const derived = findProgramAddressOf(programKey(), ["counter", payer.key]);
+	assert derived.ok;
+	if (derived.ok) {
+		assert derived.value.bump != 0;
+		const accounts = [payer, blank(derived.value.key)];
+		assert run(programKey(), accounts, [], aliasedCreateEntry).result == 0;
+		assert accounts[1].data[8] == derived.value.bump;
+		assert signerIs(invocations()[0], 0, [textBytes("counter"), [...payer.key.bytes], [derived.value.bump]]);
+	}
+}
+
+test "close refunds every lamport, hands the account to the System program and empties it" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	let refund = wallet(2, 1000000000);
+	const accounts = [counter, refund];
+	assert run(programKey(), accounts, [], closeEntry).result == 0;
+	assert accounts[0].lamports == 0 && accounts[1].lamports == 1000000700;
+	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0;
+	const self = [counter, counter];
+	assert run(programKey(), self, [], closeEntry).result == ProgramError.constraintDuplicateMutableAccount().code;
+}
+
+test "realloc grows the data with zeros and tops up rent from the payer" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 1;
+	const accounts = [counter, wallet(2, 10000000)];
+	assert run(programKey(), accounts, [], reallocEntry).result == 0;
+	assert accounts[0].data.length == 148 && accounts[0].data[147] == 0;
+	assert accounts[0].lamports > 1 && accounts[1].lamports == 10000001 - accounts[0].lamports;
+}
+
+function reallocSizedStep(): Result<uint64, ProgramError> {
+	const size = try instructionData().readU16(0);
+	return realloc(try mutable<Counter>(0), size as uint64, try writableSigner(1));
+}
+
+function reallocSizedEntry(): void { codeOf(reallocSizedStep()); }
+
+function sizeBytes(size: int32): uint8[] { return [(size & 255) as uint8, (size >> 8) as uint8]; }
+
+function richCounter(length: int32, lamports: uint64): HostAccount {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, length), false, true);
+	counter.lamports = lamports;
+	return counter;
+}
+
+function growCreatedStep(): Result<uint64, ProgramError> {
+	const target = (try instructionData().readU16(0)) as uint64;
+	const fresh = try account(1);
+	const _created = try createAccount(try account(0), fresh, try minimumBalance(10240), 48, programKey());
+	const _grown = try fresh.resize(target);
+	return Result.ok(0);
+}
+
+function growCreatedEntry(): void { codeOf(growCreatedStep()); }
+
+function growHugeStep(): Result<uint64, ProgramError> {
+	const target = try instructionData().readU64(0);
+	const fresh = try account(1);
+	const _created = try createAccount(try account(0), fresh, try minimumBalance(10240), 48, programKey());
+	const _grown = try fresh.resize(target);
+	return Result.ok(0);
+}
+
+function growHugeEntry(): void { codeOf(growHugeStep()); }
+
+function u64Bytes(v: uint64): uint8[] {
+	const out: uint8[] = [];
+	for (let i: uint64 = 0; i < 8; i += 1) out.push(((v >> (i * 8)) & 255) as uint8);
+	return out;
+}
+
+test "a resize to a length past int64 is refused as a realloc, not stopped" {
+	for (const huge of [9223372036854775808 as uint64, 9223372036854775856 as uint64, 18446744073709551615 as uint64]) {
+		const refused = [wallet(1, 1000000000), wallet(2, 0), wallet(3, 77)];
+		assert run(programKey(), refused, u64Bytes(huge), growHugeEntry).result == ProgramError.invalidRealloc().code;
+	}
+}
+
+test "an account a CPI created grows only into the bytes the runtime reserved for it before the CPI" {
+	const kept = [wallet(1, 1000000000), wallet(2, 0), wallet(3, 77)];
+	assert run(programKey(), kept, sizeBytes(10240), growCreatedEntry).result == 0;
+	assert kept[1].data.length == 10240 && kept[2].lamports == 77;
+	for (const beyond of [10241, 10248, 10288, 20480]) {
+		const refused = [wallet(1, 1000000000), wallet(2, 0), wallet(3, 77)];
+		assert run(programKey(), refused, sizeBytes(beyond), growCreatedEntry).result == ProgramError.invalidRealloc().code;
+	}
+}
+
+const tenSol: uint64 = 10000000000;
+const fiveSol: uint64 = 5000000000;
+
+test "realloc to a larger size moves only the rent deficit, and nothing when the balance already covers it" {
+	const rich = [richCounter(48, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), rich, sizeBytes(148), reallocSizedEntry).result == 0;
+	assert rich[0].data.length == 148;
+	assert rich[0].lamports == fiveSol && rich[1].lamports == tenSol;
+	const poorHeld = rentFloor(100);
+	const poor = [richCounter(48, poorHeld), wallet(2, tenSol)];
+	assert run(programKey(), poor, sizeBytes(148), reallocSizedEntry).result == 0;
+	const deficit = rentFloor(148) - poorHeld;
+	assert poor[0].lamports == poorHeld + deficit && poor[1].lamports == tenSol - deficit;
+}
+
+test "realloc to the same size moves no lamports from a rich account" {
+	const same = [richCounter(48, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), same, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert same[0].lamports == fiveSol && same[1].lamports == tenSol;
+	assert same[0].data.length == 48;
+}
+
+test "realloc to a smaller size refunds only the rent of the removed bytes, capped by what sits above the new floor" {
+	const reclaim = rentFloor(148) - rentFloor(48);
+	const rich = [richCounter(148, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), rich, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert rich[0].data.length == 48;
+	assert rich[0].lamports == fiveSol - reclaim && rich[1].lamports == tenSol + reclaim;
+	const tight = [richCounter(148, rentFloor(48) + 100), wallet(2, tenSol)];
+	assert run(programKey(), tight, sizeBytes(48), reallocSizedEntry).result == 0;
+	assert tight[0].lamports == rentFloor(48) && tight[1].lamports == tenSol + 100;
+	const under = [richCounter(148, 500), wallet(2, tenSol)];
+	assert run(programKey(), under, sizeBytes(48), reallocSizedEntry).fault.startsWith("InsufficientFundsForRent");
+	assert under[0].lamports == 500 && under[1].lamports == tenSol;
+	const full: uint64 = 0xFFFFFFFFFFFFFFFF;
+	const overflow = [richCounter(148, fiveSol), wallet(2, full)];
+	assert run(programKey(), overflow, sizeBytes(48), reallocSizedEntry).result ==
+		ProgramError.arithmeticOverflow().code;
+}
+
+test "realloc below the discriminator and the account type is refused, at the floor it is accepted" {
+	const floor = 8 + (sizeof(Counter) as int32);
+	for (const size of [0, 8, floor - 1]) {
+		const accounts = [richCounter(148, fiveSol), wallet(2, tenSol)];
+		assert run(programKey(), accounts, sizeBytes(size), reallocSizedEntry).result ==
+			ProgramError.accountDataTooSmall().code;
+		assert accounts[0].data.length == 148 && accounts[0].lamports == fiveSol;
+	}
+	const at = [richCounter(148, fiveSol), wallet(2, tenSol)];
+	assert run(programKey(), at, sizeBytes(floor), reallocSizedEntry).result == 0;
+}
+
+function aliasedResizeEntry(): void {
+	const size = instructionData().readU16(0);
+	if (!size.ok) { failWith(size.error); return; }
+	const held = account(0);
+	if (!held.ok) { failWith(held.error); return; }
+	const resized = resizedProgramAccount(held.value, size.value as uint64, held.value, 0);
+	if (!resized.ok) { failWith(resized.error); }
+}
+
+test "a payer that is the resized account itself pays no deficit and moves no refund" {
+	const deficient = [richCounter(48, 1)];
+	assert run(programKey(), deficient, sizeBytes(148), aliasedResizeEntry).result ==
+		ProgramError.invalidArgument().code;
+	const covered = [richCounter(48, fiveSol)];
+	assert run(programKey(), covered, sizeBytes(148), aliasedResizeEntry).result == 0;
+	assert covered[0].lamports == fiveSol && covered[0].data.length == 148;
+	const shrunk = [richCounter(148, fiveSol)];
+	assert run(programKey(), shrunk, sizeBytes(48), aliasedResizeEntry).result == 0;
+	assert shrunk[0].lamports == fiveSol && shrunk[0].data.length == 48;
+}
+
+export struct WritableTwice { first: Writable; second: Writable; }
+export struct SignerThenWritable { watcher: Signer; target: Writable; }
+export struct WritableThenSigner { target: Writable; watcher: Signer; }
+export struct WritableSignerThenWritable { payer: WritableSigner; target: Writable; }
+export struct SignersTwice { first: Signer; second: Signer; }
+export struct MutableThenWritable { counter: Mutable<Counter>; target: Writable; }
+export struct WritableThenMutable { target: Writable; counter: Mutable<Counter>; }
+export struct OneWritable { target: Writable; }
+export struct WritableThenSignerPair { target: Writable; watcher: Signer; }
+export struct OkVerifier { unused: uint8; }
+export function acceptsOwner(this typeof OkVerifier, owner: Pubkey): boolean { return true; }
+export function verify(this typeof OkVerifier, index: int32): Result<Account, ProgramError> {
+	return unchecked(index);
+}
+
+function duplicateEntry<T>(): void {
+	const found = accounts<T>();
+	if (!found.ok) { failWith(found.error); }
+}
+function writableTwiceEntry(): void { duplicateEntry<WritableTwice>(); }
+function signerThenWritableEntry(): void { duplicateEntry<SignerThenWritable>(); }
+function writableThenSignerEntry(): void { duplicateEntry<WritableThenSigner>(); }
+function writableSignerThenWritableEntry(): void { duplicateEntry<WritableSignerThenWritable>(); }
+function signersTwiceEntry(): void { duplicateEntry<SignersTwice>(); }
+function mutableThenWritableEntry(): void { duplicateEntry<MutableThenWritable>(); }
+function writableThenMutableEntry(): void { duplicateEntry<WritableThenMutable>(); }
+function oneWritableEntry(): void { duplicateEntry<OneWritable>(); }
+function writableThenSignerPairEntry(): void { duplicateEntry<WritableThenSignerPair>(); }
+function pdaAfterSignerStep(): Result<uint64, ProgramError> {
+	const _found = try accounts<SignerThenPda>();
+	return Result.ok(0);
+}
+function writablePdaAfterSignerEntry(): void { codeOf(pdaAfterSignerStep()); }
+function externalMutableTwiceEntry(): void {
+	const first = externalMutable<OkVerifier>(0);
+	if (!first.ok) { failWith(first.error); return; }
+	codeOf(externalMutable<OkVerifier>(1));
+}
+function remainingReadEntry(): void {
+	const declared = accounts<SignersTwice>();
+	if (!declared.ok) { failWith(declared.error); return; }
+	codeOf(account(2));
+}
+
+function duplicateOf(code: uint64): boolean { return code == ProgramError.constraintDuplicateMutableAccount().code; }
+
+test "a writable field that repeats another account of the same instruction is refused, whichever writable proof it is" {
+	const a = wallet(1, 1000);
+	const b = wallet(2, 1000);
+	assert duplicateOf(run(programKey(), [a, a], [], writableTwiceEntry).result);
+	assert run(programKey(), [a, b], [], writableTwiceEntry).result == 0;
+	assert duplicateOf(run(programKey(), [a, a], [], writableSignerThenWritableEntry).result);
+	assert run(programKey(), [a, b], [], writableSignerThenWritableEntry).result == 0;
+	const counter = holder(3, programKey(), counterBytes(counterTag(), 0, 48), false, true);
+	assert duplicateOf(run(programKey(), [counter, counter], [], mutableThenWritableEntry).result);
+	assert duplicateOf(run(programKey(), [counter, counter], [], writableThenMutableEntry).result);
+	assert run(programKey(), [counter, a], [], mutableThenWritableEntry).result == 0;
+	assert run(programKey(), [a, counter], [], writableThenMutableEntry).result == 0;
+	assert duplicateOf(run(programKey(), [a, a], [], writablePdaAfterSignerEntry).result);
+	assert duplicateOf(run(programKey(), [a, a], [], externalMutableTwiceEntry).result);
+	assert run(programKey(), [a, b], [], externalMutableTwiceEntry).result == 0;
+}
+
+test "an account shared with a read-only field is refused on the writable side and allowed between read-only fields" {
+	const a = wallet(1, 1000);
+	const b = wallet(2, 1000);
+	assert duplicateOf(run(programKey(), [a, a], [], signerThenWritableEntry).result);
+	assert duplicateOf(run(programKey(), [a, a], [], writableThenSignerEntry).result);
+	assert run(programKey(), [a, b], [], signerThenWritableEntry).result == 0;
+	assert run(programKey(), [a, a], [], signersTwiceEntry).result == 0;
+}
+
+test "a trailing account repeating a declared writable field is refused, one repeating a read-only field is not" {
+	const a = wallet(1, 1000);
+	const b = wallet(2, 1000);
+	assert duplicateOf(run(programKey(), [a, b, a], [], writableThenSignerPairEntry).result);
+	assert duplicateOf(run(programKey(), [a, b, a], [], oneWritableEntry).result);
+	assert run(programKey(), [a, b, b], [], writableThenSignerPairEntry).result == 0;
+	assert run(programKey(), [a, b, a], [], remainingReadEntry).result == 0;
+}
+
+export struct BumpAccounts {
+	owner: Signer;
+	counter: Mutable<Counter>;
+	refund: Writable;
+	systemProgram: Program<System>;
+}
+
+function bumpAccountsStep(): Result<uint64, ProgramError> {
+	const x = try accounts<BumpAccounts>();
+	const at = x.counter.data();
+	at.value = at.value + 1;
+	return Result.ok(0);
+}
+
+function bumpAccountsEntry(): void { codeOf(bumpAccountsStep()); }
+
+function systemProgramAccount(): HostAccount {
+	let account = holder(9, keyOf(0), [], false, false);
+	account.key = Pubkey.zero();
+	account.executable = true;
+	return account;
+}
+
+test "accounts<T>() verifies each field by its proof type, in declaration order" {
+	const owner = holder(1, keyOf(9), [], true, false);
+	const counter = holder(2, programKey(), counterBytes(counterTag(), 3, 48), false, true);
+	const refund = wallet(3, 0);
+	const accounts = [owner, counter, refund, systemProgramAccount()];
+	assert run(programKey(), accounts, [], bumpAccountsEntry).result == 0;
+	assert accounts[1].data[8] == 4;
+	const unsignedOwner = holder(1, keyOf(9), [], false, false);
+	const unsigned = [unsignedOwner, counter, refund, systemProgramAccount()];
+	assert run(programKey(), unsigned, [], bumpAccountsEntry).result ==
+		ProgramError.accountNotSigner().code;
+	const notProgram = [owner, counter, refund, wallet(4, 0)];
+	assert run(programKey(), notProgram, [], bumpAccountsEntry).result ==
+		ProgramError.invalidProgramId().code;
+	const short = [owner, counter];
+	assert run(programKey(), short, [], bumpAccountsEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
+	const shortAndUnsigned = [unsignedOwner, counter];
+	assert run(programKey(), shortAndUnsigned, [], bumpAccountsEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
+}
+
+function trailingAccountsStep(): Result<uint64, ProgramError> {
+	const declared = try accounts<BumpAccounts>();
+	if (!declared.owner.key().equals(keyOf(1))) { return Result.err(ProgramError.custom(1)); }
+	let score: uint32 = 0;
+	for (let index = 4; index < accountCount(); index++) {
+		const tail = try account(index);
+		if (!tail.key().equals(keyOf((index + 1) as uint8))) { return Result.err(ProgramError.custom(2)); }
+		score += tail.dataLength() as uint32;
+	}
+	if (account(accountCount()).ok) { return Result.err(ProgramError.custom(3)); }
+	return Result.err(ProgramError.custom(100 + score));
+}
+function trailingAccountsEntry(): void { codeOf(trailingAccountsStep()); }
+
+test "declared account proofs leave empty and ordered trailing raw accounts accessible" {
+	for (let count = 0; count <= 3; count++) {
+		const given = [
+			holder(1, keyOf(9), [], true, false),
+			holder(2, programKey(), counterBytes(counterTag(), 3, 48), false, true),
+			wallet(3, 0),
+			systemProgramAccount(),
+		];
+		let score: uint32 = 100;
+		for (let i = 0; i < count; i++) {
+			const bytes: uint8[] = [];
+			for (let b = 0; b <= i; b++) { bytes.push(7); }
+			given.push(holder((i + 5) as uint8, keyOf(9), bytes, false, false));
+			score += bytes.length as uint32;
+		}
+		assert run(programKey(), given, [], trailingAccountsEntry).result == ProgramError.custom(score).code;
+		assert given[1].data[8] == 3;
+	}
+}
+
+export struct Made {
+	amount: uint64;
+	maker: Pubkey;
+	done: boolean;
+}
+
+function emitEntry(): void {
+	const made: Made = { amount: 1234, maker: keyOf(7), done: true };
+	emit<Made>(made);
+}
+
+test "emit logs Anchor's event discriminator and the Borsh fields as Program data" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], emitEntry).result == 0;
+	const expected = "Program data: " +
+		"8FsHQdtzMuDSBAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ==";
+	let found = false;
+	for (const line of logs()) {
+		if (line == expected) { found = true; }
+	}
+	assert found;
+}
+
+function logTextEntry(): void {
+	logText("escrow made");
+	logText("giá 5 ✓");
+	logText("");
+	logText(instructionData());
+}
+
+test "logText writes a literal and the bytes of a buffer as one Program log line each" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, textBytes("memo: paid"), logTextEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 4;
+	assert lines[0] == "Program log: escrow made";
+	assert lines[1] == "Program log: giá 5 ✓";
+	assert lines[2] == "Program log: ";
+	assert lines[3] == "Program log: memo: paid";
+}
+
+function logRawEntry(): void {
+	logText(instructionData());
+}
+
+test "logText of bytes that are not UTF-8 logs them as a Program data line instead of ending the instruction" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [0xff, 0xff], logRawEntry).result == 0;
+	assert logs()[0] == "Program data: //8=";
+	assert run(programKey(), none, [0x6f, 0x6b, 0xed, 0xa0, 0x80], logRawEntry).result == 0;
+	assert logs()[0] == "Program data: b2vtoIA=";
+	assert run(programKey(), none, [0x68, 0xc3, 0xa9], logRawEntry).result == 0;
+	assert logs()[0] == "Program log: hé";
+}
+
+export struct Paid { amount: uint64; }
+export struct PaidTo extends Paid { receiver: Pubkey; done: boolean; }
+
+function paidToEntry(): void {
+	const paid: PaidTo = { amount: 1234, receiver: keyOf(7), done: true };
+	emit<PaidTo>(paid);
+}
+
+test "emit writes the fields an event inherits ahead of its own" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], paidToEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 1;
+	assert lines[0] == "Program data: bZ+QC3gMP1rSBAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ==";
+}
+
+function storedCounterEntry(): void {
+	const counter = owned<Counter>(0);
+	if (!counter.ok) { failWith(counter.error); return; }
+	const stored = counter.value.data();
+	emit<Counter>(stored);
+}
+
+test "emit reads an event through the pointer to an account's data" {
+	const counter = holder(2, programKey(), counterBytes(counterTag(), 3, 48), false, false);
+	assert run(programKey(), [counter], [], storedCounterEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 1;
+	assert lines[0] == "Program data: fpJvTqpKDPgDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+}
+
+export struct SeedArgs { seed: uint64; }
+export struct FlaggedSeedArgs extends SeedArgs { flag: boolean; }
+
+function flaggedSeedStep(): Result<uint64, ProgramError> {
+	const given = try args<FlaggedSeedArgs>();
+	const flag: uint32 = given.flag ? 1 : 0;
+	return Result.err(ProgramError.custom((given.seed as uint32) * 10 + flag));
+}
+
+function flaggedSeedEntry(): void { codeOf(flaggedSeedStep()); }
+
+test "args reads the fields an argument struct inherits ahead of its own" {
+	const none: HostAccount[] = [];
+	const whole: uint8[] = [7, 0, 0, 0, 0, 0, 0, 0, 1];
+	assert run(programKey(), none, instructionBytes("Any", whole), flaggedSeedEntry).result == ProgramError.custom(71).code;
+	const short: uint8[] = [7, 0, 0, 0, 0, 0, 0, 0];
+	assert run(programKey(), none, instructionBytes("Any", short), flaggedSeedEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+	const notBool: uint8[] = [7, 0, 0, 0, 0, 0, 0, 0, 2];
+	assert run(programKey(), none, instructionBytes("Any", notBool), flaggedSeedEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+}
+
+export struct Wide {
+	small: uint8;
+	signedSmall: int8;
+	flag: boolean;
+	short: uint16;
+	signedShort: int16;
+	word: uint32;
+	signedWord: int32;
+	long: uint64;
+	signedLong: int64;
+	owner: Pubkey;
+}
+
+export struct Edge {
+	owner: Pubkey;
+	largest: uint64;
+	smallest: int64;
+	flag: boolean;
+	lowest: int8;
+	lowestShort: int16;
+	lowestWord: int32;
+}
+
+function wideEntry(): void {
+	const wide: Wide = {
+		small: 171,
+		signedSmall: -5,
+		flag: true,
+		short: 0x0102,
+		signedShort: -300,
+		word: 0x01020304,
+		signedWord: -70000,
+		long: 0x0102030405060708,
+		signedLong: -9000000000000,
+		owner: patternedKey(),
+	};
+	emit<Wide>(wide);
+	const edge: Edge = {
+		owner: patternedKey(),
+		largest: 0xffffffffffffffff,
+		smallest: -9223372036854775807 - 1,
+		flag: false,
+		lowest: -128,
+		lowestShort: -32768,
+		lowestWord: -2147483647 - 1,
+	};
+	emit<Edge>(edge);
+}
+
+test "emit writes every field width, signed or not, in declaration order" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], wideEntry).result == 0;
+	const wide = "Program data: G5rYD/n75SGr+wECAdT+BAMCAZDu/v8IBwYFBAMCAQBwMobQ9///" +
+		"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
+	const edge = "Program data: 196v8E6Mk6EBAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fIP//////////" +
+		"AAAAAAAAAIAAgACAAAAAgA==";
+	const lines = logs();
+	assert lines.length == 2;
+	assert lines[0] == wide && lines[1] == edge;
+}
+
+export struct Crowd {
+	key0: Pubkey;
+	key1: Pubkey;
+	key2: Pubkey;
+	key3: Pubkey;
+	key4: Pubkey;
+	key5: Pubkey;
+	key6: Pubkey;
+	key7: Pubkey;
+	key8: Pubkey;
+	key9: Pubkey;
+	key10: Pubkey;
+	key11: Pubkey;
+	key12: Pubkey;
+	key13: Pubkey;
+	key14: Pubkey;
+	key15: Pubkey;
+	key16: Pubkey;
+	key17: Pubkey;
+	key18: Pubkey;
+	key19: Pubkey;
+	key20: Pubkey;
+	key21: Pubkey;
+	key22: Pubkey;
+	key23: Pubkey;
+	key24: Pubkey;
+	key25: Pubkey;
+	key26: Pubkey;
+	key27: Pubkey;
+	key28: Pubkey;
+	key29: Pubkey;
+	key30: Pubkey;
+	first: uint64;
+	second: uint64;
+	third: uint64;
+}
+
+function crowdEntry(): void {
+	const crowd: Crowd = {
+		key0: patternedKey(),
+		key1: patternedKey(),
+		key2: patternedKey(),
+		key3: patternedKey(),
+		key4: patternedKey(),
+		key5: patternedKey(),
+		key6: patternedKey(),
+		key7: patternedKey(),
+		key8: patternedKey(),
+		key9: patternedKey(),
+		key10: patternedKey(),
+		key11: patternedKey(),
+		key12: patternedKey(),
+		key13: patternedKey(),
+		key14: patternedKey(),
+		key15: patternedKey(),
+		key16: patternedKey(),
+		key17: patternedKey(),
+		key18: patternedKey(),
+		key19: patternedKey(),
+		key20: patternedKey(),
+		key21: patternedKey(),
+		key22: patternedKey(),
+		key23: patternedKey(),
+		key24: patternedKey(),
+		key25: patternedKey(),
+		key26: patternedKey(),
+		key27: patternedKey(),
+		key28: patternedKey(),
+		key29: patternedKey(),
+		key30: patternedKey(),
+		first: 1,
+		second: 2,
+		third: 3,
+	};
+	emit<Crowd>(crowd);
+}
+
+test "emit holds an event of exactly the 1024 bytes its buffer has" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], crowdEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 1;
+	const prefix = "Program data: ";
+	const line = lines[0];
+	assert line.length == prefix.length + 1368;
+	assert line.startsWith(prefix + "wsnqdi2Mq1oBAgMEBQYHCAkKCwwNDg8QERITFBUW");
+	assert line.endsWith("HR4fIAEAAAAAAAAAAgAAAAAAAAADAAAAAAAAAA==");
+}
+
+function inputBufferEntry(): void {
+	const first = account(0);
+	if (!first.ok) { failWith(ProgramError.custom(1)); return; }
+	const held = first.value;
+	if (held.data().address != held.recordAddress() + 88) { failWith(ProgramError.custom(2)); return; }
+	const data = instructionData();
+	if (data.address + data.length != msSolProgramId()) { failWith(ProgramError.custom(3)); return; }
+	const inner = data.range(1, 2);
+	if (!inner.ok || inner.value.address != data.address + 1) { failWith(ProgramError.custom(4)); return; }
+	const meta = InstructionAccount.writable(held);
+	if (meta.pubkey() != held.key()) { failWith(ProgramError.custom(5)); }
+}
+
+test "every view and address a program can hold points into the input buffer the runtime built" {
+	const accounts = [holder(1, keyOf(9), [1, 2, 3], false, true)];
+	const input: uint8[] = [9, 1, 2, 3];
+	assert run(programKey(), accounts, input, inputBufferEntry).result == 0;
+	const empty: uint8[] = [0, 0, 0];
+	assert run(programKey(), accounts, empty, inputBufferEntry).result == 0;
+}
+
+function returnDataEntry(): void {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const found = returnData();
+	if (found === null) { failWith(ProgramError.custom(1)); return; }
+	if (!found.program.equals(programId())) { failWith(ProgramError.custom(2)); return; }
+	if (found.length != 3) { failWith(ProgramError.custom(3)); return; }
+	const first = found.readU8(0);
+	const last = found.readU8(2);
+	if (!first.ok || first.value != 7 || !last.ok || last.value != 9) { failWith(ProgramError.custom(4)); }
+}
+
+function fullReturnDataEntry(): void {
+	let big: uint8[1024] = [];
+	for (let index = 0; index < 1024; index++) { big[index] = ((index * 7) & 0xff) as uint8; }
+	setReturnData(big);
+	const found = returnData();
+	if (found === null) { failWith(ProgramError.custom(1)); return; }
+	if (found.length != 1024) { failWith(ProgramError.custom(3)); return; }
+	for (let index = 0; index < 1024; index++) {
+		const byte = found.readU8(index as uint64);
+		if (!byte.ok || byte.value != ((index * 7) & 0xff)) { failWith(ProgramError.custom(5)); return; }
+	}
+	const word = found.readU64(8);
+	if (!word.ok || word.value != 0x69625b544d463f38) { failWith(ProgramError.custom(6)); }
+}
+
+function noReturnDataEntry(): void {
+	if (returnData() !== null) { failWith(ProgramError.custom(7)); }
+}
+
+test "returnData reads back the program, the length and every byte, up to the 1,024 the runtime holds" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataEntry).result == 0;
+	assert run(programKey(), none, [], fullReturnDataEntry).result == 0;
+	assert run(programKey(), none, [], noReturnDataEntry).result == 0;
+}
+
+function returnDataFromStep(): Result<uint64, ProgramError> {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const found = try returnDataFrom(programId());
+	if (found === null) { return Result.err(ProgramError.custom(1)); }
+	if (found.length != 3 || (try found.readU8(2)) != 9) { return Result.err(ProgramError.custom(2)); }
+	return Result.ok(0);
+}
+
+function returnDataFromOtherStep(): Result<uint64, ProgramError> {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const found = try returnDataFrom(keyOf(42));
+	return Result.err(ProgramError.custom(found === null ? 3 : 4));
+}
+
+function returnDataFromNoneStep(): Result<uint64, ProgramError> {
+	const found = try returnDataFrom(programId());
+	return found === null ? Result.ok(0) : Result.err(ProgramError.custom(5));
+}
+
+function returnDataFromInvokedStep(): Result<uint64, ProgramError> {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const _paid = try transferLamports(try writableSigner(0), try writable(1), 300);
+	if ((try returnDataFrom(SYSTEM_PROGRAM_ID)) !== null) { return Result.err(ProgramError.custom(6)); }
+	if ((try returnDataFrom(programId())) !== null) { return Result.err(ProgramError.custom(7)); }
+	return Result.ok(0);
+}
+
+function returnDataFromEntry(): void { codeOf(returnDataFromStep()); }
+function returnDataFromOtherEntry(): void { codeOf(returnDataFromOtherStep()); }
+function returnDataFromNoneEntry(): void { codeOf(returnDataFromNoneStep()); }
+function returnDataFromInvokedEntry(): void { codeOf(returnDataFromInvokedStep()); }
+
+test "returnDataFrom yields the data the named program set" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataFromEntry).result == 0;
+}
+
+test "returnDataFrom refuses data another program set" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataFromOtherEntry).result == ProgramError.incorrectProgramId().code;
+}
+
+test "returnDataFrom is null when no return data is set" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataFromNoneEntry).result == 0;
+}
+
+test "returnDataFrom is null after an invocation that set none, whatever was set before it" {
+	assert run(programKey(), [wallet(1, 1000), wallet(2, 1000000000)], [], returnDataFromInvokedEntry).result == 0;
+}
+
+test "clock reads every field the runtime wrote" {
+	setClock({
+		slot: 77,
+		epochStartTimestamp: -5,
+		epoch: 3,
+		leaderScheduleEpoch: 4,
+		unixTimestamp: 1700000000,
+	});
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], clockEntry).result == 0;
+}
+
+function clockEntry(): void {
+	const read = clock();
+	if (!read.ok) { failWith(read.error); return; }
+	const now = read.value;
+	if (now.slot != 77) { failWith(ProgramError.custom(1)); }
+	if (now.epochStartTimestamp != -5) { failWith(ProgramError.custom(2)); }
+	if (now.epoch != 3) { failWith(ProgramError.custom(3)); }
+	if (now.leaderScheduleEpoch != 4) { failWith(ProgramError.custom(4)); }
+	if (now.unixTimestamp != 1700000000) { failWith(ProgramError.custom(5)); }
+}
+
+function resultWithSysvarStatus(status: uint64, accounts: HostAccount[], entry: () => void): uint64 {
+	setSysvarStatus(status);
+	const outcome = run(programKey(), accounts, [], entry);
+	setSysvarStatus(0);
+	return outcome.result;
+}
+
+function deadlineStep(): Result<uint64, ProgramError> {
+	const now = try clock();
+	logU64(7);
+	if (now.unixTimestamp > 1700000000) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(0);
+}
+
+function deadlineEntry(): void { codeOf(deadlineStep()); }
+
+test "a clock the runtime did not write fails the instruction instead of reading as time zero" {
+	setClock({ slot: 77, epochStartTimestamp: -5, epoch: 3, leaderScheduleEpoch: 4, unixTimestamp: 1700000001 });
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], deadlineEntry).result == ProgramError.custom(1).code;
+	assert logs().length == 1;
+	assert resultWithSysvarStatus(2, none, deadlineEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
+	assert resultWithSysvarStatus(1, none, deadlineEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
+	assert run(programKey(), none, [], deadlineEntry).result == ProgramError.custom(1).code;
+}
+
+function rentFloorStep(): Result<uint64, ProgramError> {
+	const floor = try minimumBalance(100);
+	logU64(floor);
+	return Result.ok(floor);
+}
+
+function rentFloorEntry(): void { codeOf(rentFloorStep()); }
+
+test "a rent the runtime did not write fails the instruction instead of pricing every account at zero" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], rentFloorEntry).result == 0;
+	assert logs().length == 1;
+	assert resultWithSysvarStatus(2, none, rentFloorEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
+	assert resultWithSysvarStatus(1, none, rentFloorEntry) == ProgramError.unsupportedSysvar().code;
+	assert logs().length == 0;
+	assert run(programKey(), none, [], rentFloorEntry).result == 0;
+}
+
+function rentFloor(space: uint64): uint64 {
+	const floor = minimumBalance(space);
+	if (!floor.ok) { failWith(floor.error); return 0; }
+	return floor.value;
+}
+
+const MAX_DATA_LENGTH: uint64 = 10485760;
+
+function rentOfLengthEntry(): void {
+	const lengths: uint64[] = [MAX_DATA_LENGTH + 1, 0xffffffffffffff80, 0xffffffffffffffff, 0x7fffffffffffffff];
+	for (const length of lengths) {
+		const refused = minimumBalance(length);
+		if (refused.ok || refused.error.code != ProgramError.invalidArgument().code) { failWith(ProgramError.custom(1)); return; }
+	}
+}
+
+function rentAtBoundEntry(): void {
+	const atBound = minimumBalance(MAX_DATA_LENGTH);
+	if (!atBound.ok || atBound.value != (MAX_DATA_LENGTH + 128) * 6960) { failWith(ProgramError.custom(1)); }
+}
+
+test "minimumBalance refuses a length above the runtime's account size limit instead of wrapping" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], rentAtBoundEntry).result == 0;
+	assert run(programKey(), none, [], rentOfLengthEntry).result == 0;
+}
+
+function oversizedCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	const target = try account(1);
+	return createProgramAccount(payer, target, MAX_DATA_LENGTH + 1, keyOf(9));
+}
+
+function oversizedCreateEntry(): void {
+	const result = oversizedCreateStep();
+	failWith(result.ok ? ProgramError.custom(1) : result.error);
+}
+
+test "createProgramAccount refuses a space above the limit before it sends any instruction" {
+	const funded = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), funded, [], oversizedCreateEntry).result == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
+}
+
+function failTwiceEntry(): void {
+	failWith(ProgramError.custom(5));
+	failWith(ProgramError.custom(6));
+}
+
+test "failWith keeps the first error of the instruction" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], failTwiceEntry).result == ProgramError.custom(5).code;
+}
+
+test "create<T> fails the instruction when the runtime did not write the rent" {
+	const funded = [wallet(1, 10000000), blank(keyOf(3))];
+	assert resultWithSysvarStatus(2, funded, createEntry) == ProgramError.unsupportedSysvar().code;
+	assert run(programKey(), [wallet(1, 10000000), blank(keyOf(5))], [], createEntry).result == 0;
+	assert rentReads() == 1;
+}
+
+function payEntry(): void {
+	const result = payStep();
+	codeOf(result);
+}
+
+function payStep(): Result<uint64, ProgramError> {
+	return transferLamports(try writableSigner(0), try writable(1), 300);
+}
+
+test "transferLamports moves lamports through the System program" {
+	const accounts = [wallet(1, 1000), wallet(2, 1000000000)];
+	assert run(programKey(), accounts, [], payEntry).result == 0;
+	assert accounts[0].lamports == 700 && accounts[1].lamports == 1000000300;
+	const poor = [wallet(1, 100), wallet(2, 5)];
+	assert run(programKey(), poor, [], payEntry).result != 0;
+}
+
+function counterAddress(): ProgramAddress {
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
+function delegatedCounter(key: Pubkey, owner: Pubkey, bytes: uint8[]): HostAccount {
+	return { ...holder(1, owner, bytes, false, false), key: key };
+}
+
+function delegatedEntry(): void {
+	const found = delegated<Counter>(0);
+	if (!found.ok) {
+		failWith(found.error);
+		return;
+	}
+	if (found.value.data().value != 41) { failWith(ProgramError.invalidAccountData()); }
+}
+
+function delegatedPdaStep(): Result<uint8, ProgramError> {
+	const found = try delegated<Counter>(0);
+	const pinned = try instructionData().readU8(0);
+	if (pinned == 0) { return pda(found, ["counter"]); }
+	return pdaWithBump(found, ["counter"], pinned);
+}
+
+function delegatedPdaEntry(): void { codeOf(delegatedPdaStep()); }
+
+test "a delegated verifier checks the delegation program as owner, then discriminator and size" {
+	const tag = counterTag();
+	const dlp = DELEGATION_PROGRAM_ID;
+	const undelegated = [holder(1, programKey(), counterBytes(tag, 41, 48), false, false)];
+	assert run(programKey(), undelegated, [], delegatedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const empty = [holder(1, dlp, [1, 2], false, false)];
+	assert run(programKey(), empty, [], delegatedEntry).result ==
+		ProgramError.accountDiscriminatorNotFound().code;
+	const other = accountDiscriminator("Other");
+	const mismatched = [holder(1, dlp, counterBytes(other, 41, 48), false, false)];
+	assert run(programKey(), mismatched, [], delegatedEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const short = [holder(1, dlp, counterBytes(tag, 41, 20), false, false)];
+	assert run(programKey(), short, [], delegatedEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+	const good = [holder(1, dlp, counterBytes(tag, 41, 48), false, false)];
+	assert run(programKey(), good, [], delegatedEntry).result == 0;
+}
+
+test "a delegated account must sit at the program's PDA, with the canonical or the given bump" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const dlp = DELEGATION_PROGRAM_ID;
+	const address = counterAddress();
+	const atPda = [delegatedCounter(address.key, dlp, bytes)];
+	const canonical: uint8[] = [0];
+	assert run(programKey(), atPda, canonical, delegatedPdaEntry).result == 0;
+	const elsewhere = [delegatedCounter(keyOf(7), dlp, bytes)];
+	assert run(programKey(), elsewhere, canonical, delegatedPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const given: uint8[] = [address.bump];
+	assert run(programKey(), atPda, given, delegatedPdaEntry).result == 0;
+	const wrongBump: uint8[] = [address.bump - 1];
+	assert run(programKey(), atPda, wrongBump, delegatedPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+export struct ClaimAccounts {
+	owner: Signer;
+	@seeds("counter") @bump pet: Delegated<Counter>;
+}
+
+function claimStep(): Result<uint64, ProgramError> {
+	const x = try accounts<ClaimAccounts>();
+	return Result.ok(x.pet.data().value);
+}
+
+function claimEntry(): void {
+	const result = claimStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+export struct PinnedClaimAccounts {
+	owner: Signer;
+	@address(counterAddress().key) pet: Delegated<Counter>;
+}
+
+function pinnedClaimStep(): Result<uint64, ProgramError> {
+	const x = try accounts<PinnedClaimAccounts>();
+	return Result.ok(x.pet.data().value);
+}
+
+function pinnedClaimEntry(): void { codeOf(pinnedClaimStep()); }
+
+test "a Delegated<T> field pinned by @address is verified, and one at another address is refused" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const owner = holder(2, keyOf(9), [], true, false);
+	const pet = delegatedCounter(counterAddress().key, DELEGATION_PROGRAM_ID, bytes);
+	assert run(programKey(), [owner, pet], [], pinnedClaimEntry).result == 0;
+	const elsewhere = delegatedCounter(keyOf(55), DELEGATION_PROGRAM_ID, bytes);
+	assert run(programKey(), [owner, elsewhere], [], pinnedClaimEntry).result ==
+		ProgramError.constraintAddress().code;
+}
+
+test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const owner = holder(2, keyOf(9), [], true, false);
+	const pet = delegatedCounter(counterAddress().key, DELEGATION_PROGRAM_ID, bytes);
+	assert run(programKey(), [owner, pet], [], claimEntry).result == 0;
+	const undelegated = delegatedCounter(counterAddress().key, programKey(), bytes);
+	assert run(programKey(), [owner, undelegated], [], claimEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+}
+
+test "the put functions write Borsh little-endian fields and answer an offset past the storage for a write that does not fit" {
+	let fields: uint8[14] = [];
+	let at = putU64(fields, 0, 0x0102030405060708);
+	at = putBool(fields, at, true);
+	at = putI32(fields, at, -2);
+	at = putU8(fields, at, 9);
+	assert at == 14;
+	const expected: uint8[] = [8, 7, 6, 5, 4, 3, 2, 1, 1, 254, 255, 255, 255, 9];
+	for (let index = 0; index < 14; index++) { assert fields[index] == expected[index]; }
+	let key: uint8[32] = [];
+	assert putPubkey(key, 0, keyOf(7)) == 32 && key[0] == 7 && key[31] == 0;
+	let eight: uint8[8] = [];
+	const over = putU8(eight, putU64(eight, 0, 1), 2);
+	assert over == 9;
+	assert eight[0] == 1 && eight[1] == 0;
+	assert putU8(eight, over, 3) == 9;
+	assert putU64(eight, over, 3) == 9;
+	assert eight[0] == 1 && eight[7] == 0;
+}
+
+test "each width fits exactly the room it needs and is refused one byte short" {
+	let storage: uint8[8] = [];
+	assert putU8(storage, 7, 1) == 8 && putU8(storage, 8, 1) == 9;
+	assert putU16(storage, 6, 1) == 8 && putU16(storage, 7, 1) == 9;
+	assert putU32(storage, 4, 1) == 8 && putU32(storage, 5, 1) == 9;
+	assert putU64(storage, 0, 1) == 8 && putU64(storage, 1, 1) == 9;
+	assert putI8(storage, 7, -1) == 8 && putI16(storage, 6, -1) == 8;
+	assert putI32(storage, 4, -1) == 8 && putI64(storage, 0, -1) == 8;
+	assert storage[0] == 255 && storage[7] == 255;
+	let wide: uint8[32] = [];
+	assert putPubkey(wide, 0, keyOf(1)) == 32 && putPubkey(wide, 1, keyOf(1)) == 33;
+	assert putU8([], 0, 1) == 1;
+}
+
+test "putBytes and putSpan copy a view, keep the offset as the length and are refused one past the storage" {
+	let source: uint8[3] = [4, 5, 6];
+	const view: Bytes = { address: msSolSpanAddress(source), length: 3 };
+	let room: uint8[6] = [];
+	let at = putU8(room, 0, 1);
+	at = putBytes(room, at, view);
+	at = putU16(room, at, 0x0807);
+	assert at == 6;
+	const expected: uint8[] = [1, 4, 5, 6, 7, 8];
+	for (let index = 0; index < 6; index++) { assert room[index] == expected[index]; }
+	let tight: uint8[3] = [];
+	assert putBytes(tight, putU8(tight, 0, 1), view) == 4;
+	assert tight[1] == 0 && tight[2] == 0;
+	let spanned: uint8[6] = [];
+	assert putSpan(spanned, putU8(spanned, 0, 1), source) == 4;
+	assert spanned[1] == 4 && spanned[2] == 5 && spanned[3] == 6;
+	assert putSpan(tight, putU8(tight, 0, 1), source) == 4;
+}
+
+test "putPrefix copies only the length asked, leaves the rest of the storage and is refused past the source or the storage" {
+	let source: uint8[4] = [4, 5, 6, 7];
+	let room: uint8[6] = [9, 9, 9, 9, 9, 9];
+	assert putPrefix(room, 1, source, 2) == 3;
+	const expected: uint8[] = [9, 4, 5, 9, 9, 9];
+	for (let index = 0; index < 6; index++) { assert room[index] == expected[index]; }
+	assert putPrefix(room, 0, source, 0) == 0;
+	assert room[0] == 9;
+	assert putPrefix(room, 0, source, 5) == 7 && room[0] == 9;
+	assert putPrefix(room, 4, source, 3) == 7 && room[4] == 9 && room[5] == 9;
+	assert putPrefix(room, 7, source, 0) == 7;
+}
+
+test "the writers take a sized storage in method form" {
+	let storage: uint8[12] = [];
+	const length = storage.putU64(storage.putU32(0, 2), 513);
+	assert length == 12;
+	assert storage[0] == 2 && storage[4] == 1 && storage[5] == 2;
+	assert storage.putU8(12, 1) == 13;
+}
+
+export enum GaugeOp {
+	Bump,
+}
+
+export struct Gauge {
+	level: uint16;
+	spare: uint16;
+}
+
+export enum GaugeMode {
+	Idle,
+	Hot,
+	Cold,
+}
+
+export struct Meter {
+	total: uint64;
+	gauges: Gauge[2];
+	modes: BitSet<GaugeMode>;
+	owner: Pubkey;
+	tags: uint8[3];
+}
+
+test "anchorIdl describes nested structs as defined types and fixed arrays as arrays" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "gauges",
+		address: "",
+		Bump: [BumpAccounts],
+		accounts: [Meter],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const types = parsed.value.types;
+		assert types.length() == 2;
+		assert types.at(0).name.asString() == "Meter";
+		const gauges = types.at(0).type.fields.at(1).type.array;
+		assert gauges.at(0).defined.name.asString() == "Gauge" && gauges.at(1).asInt32() == 2;
+		assert types.at(0).type.fields.at(2).type.asString() == "u8";
+		const tags = types.at(0).type.fields.at(4).type.array;
+		assert tags.at(0).asString() == "u8" && tags.at(1).asInt32() == 3;
+		assert types.at(1).name.asString() == "Gauge";
+		assert types.at(1).serialization.asString() == "bytemuck";
+		assert types.at(1).type.fields.at(1).type.asString() == "u16";
+	}
+}
+
+struct NoArrayAccounts {}
+struct KeyAndArrayArgs { key: Pubkey; bytes: uint8[32]; }
+
+test "anchorIdl keeps Pubkey distinct from a fixed32 instruction byte array" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "keys_and_bytes",
+		address: "",
+		Bump: [NoArrayAccounts, KeyAndArrayArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = parsed.value.instructions.at(0).args;
+		assert given.at(0).type.asString() == "pubkey";
+		assert given.at(1).type.array.at(0).asString() == "u8";
+		assert given.at(1).type.array.at(1).asInt32() == 32;
+	}
+}
+
+test "anchorIdl describes fixed-byte instruction arguments including zero and local aliases" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "byte_arrays",
+		address: "",
+		Bump: [NoArrayAccounts, MixedArrayArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = parsed.value.instructions.at(0).args;
+		assert given.length() == 8;
+		assert given.at(0).type.asString() == "bool";
+		assert given.at(7).type.asString() == "bool";
+		const lengths: int32[] = [0, 1, 4, 8, 31, 33];
+		for (let i = 0; i < lengths.length; i++) {
+			const array = given.at(i + 1).type.array;
+			assert array.at(0).asString() == "u8";
+			assert array.at(1).asInt32() == lengths[i];
+		}
+	}
+}
+
+test "anchorIdl describes all fixed integer and boolean instruction arrays" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "scalar_arrays",
+		address: "",
+		Bump: [NoArrayAccounts, ScalarArrayArgs],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = parsed.value.instructions.at(0).args;
+		const names = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "bool"];
+		assert given.length() == 11;
+		for (let i = 0; i < names.length; i++) {
+			assert given.at(i + 1).type.array.at(0).asString() == names[i];
+			assert given.at(i + 1).type.array.at(1).asInt32() == 2;
+		}
+	}
+}
+
+export enum Species {
+	Cat,
+	Dog,
+}
+
+export enum PetWide {
+	Low = 0,
+	High = 300,
+}
+
+export enum PetSigned {
+	Below = -1,
+	Zero = 0,
+}
+
+export struct Pet {
+	hearts: uint16;
+	species: Species;
+	level: uint8;
+}
+
+export function discriminator(this typeof Pet): Discriminator {
+	return @comptime { return accountDiscriminator("Pet"); };
+}
+
+export struct Tally {
+	signed: PetSigned;
+	wide: PetWide;
+	spare: uint16;
+}
+
+export function discriminator(this typeof Tally): Discriminator {
+	return @comptime { return accountDiscriminator("Tally"); };
+}
+
+export enum PetOp {
+	Feed,
+}
+
+export struct FeedAccounts {
+	pet: Mutable<Pet>;
+}
+
+test "anchorIdl describes an enum field by the integer it is stored in" {
+	const idl = anchorIdl<PetOp>({
+		name: "pets",
+		address: "",
+		Feed: [FeedAccounts],
+		accounts: [Pet, Tally],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const types = parsed.value.types;
+		assert types.at(0).name.asString() == "Pet";
+		assert types.at(0).type.fields.at(1).type.asString() == "u8";
+		assert types.at(1).name.asString() == "Tally";
+		assert types.at(1).type.fields.at(0).type.asString() == "i32";
+		assert types.at(1).type.fields.at(1).type.asString() == "u16";
+	}
+	assert sizeof(Pet) == 4 && sizeof(Tally) == 8;
+}
+
+function feedEntry(): void {
+	const pet = mutable<Pet>(0);
+	if (!pet.ok) {
+		failWith(pet.error);
+		return;
+	}
+	const at = pet.value.data();
+	if (at.species == Species.Cat) at.species = Species.Dog;
+	at.level = at.level + 1;
+}
+
+test "an account with an enum field round-trips through the host at the enum's width" {
+	const bytes: uint8[] = [];
+	const tag = Pet.discriminator();
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	bytes.push(7);
+	bytes.push(0);
+	bytes.push(0);
+	bytes.push(41);
+	const accounts = [holder(1, programKey(), bytes, false, true)];
+	assert run(programKey(), accounts, [], feedEntry).result == 0;
+	assert accounts[0].data[10] == 1 && accounts[0].data[11] == 42 && accounts[0].data[8] == 7;
+}
+
+function hostProgram(): Pubkey {
+	return pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
+}
+
+function foundAt(found: Result<ProgramAddress, ProgramError>, key: Pubkey, bump: uint8): boolean {
+	return found.ok && found.value.bump == bump && found.value.key.equals(key);
+}
+
+test "a seed list derives the address the heap seeds derived, kind by kind" {
+	const program = hostProgram();
+	let five = Pubkey.zero();
+	five.bytes[0] = 5;
+	assert foundAt(
+		findProgramAddressOf(program, ["identity"]),
+		pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["pet", [7]]),
+		pubkeyOf("93PwUMspkoH1MnRnJgVx8hcRkw1uXygXkK6LaovKJwE5"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["pk", five]),
+		pubkeyOf("65QKPW56NGMfywzKLBCHUcoXdHGiFG87TP7xLby1toZq"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["n", leBytes(0x0102030405060708 as uint64)]),
+		pubkeyOf("HZQsCyXSzhvuj7DCbx4exy39BBuLSEFnUMMUm2fAfqzF"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["all", [9], five, leBytes(258 as uint64)]),
+		pubkeyOf("AFwfQ1B22ZmWpoExE5vELZJFFWLMpLPoi5e8rngVFHgd"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]),
+		pubkeyOf("BTXAfu37pBqYg3YPwGthTeCscLRn3tWcsQB2Y4rof6EE"),
+		253,
+	);
+}
+
+test "a seed list takes a byte array, a span and a heap array like a byte literal" {
+	const program = hostProgram();
+	const fixed: uint8[1] = [7];
+	const span: Readonly<Span<uint8>> = fixed;
+	const heap: uint8[] = [7];
+	const literal = findProgramAddressOf(program, ["pet", [7]]);
+	assert literal.ok;
+	for (const found of [
+		findProgramAddressOf(program, ["pet", fixed]),
+		findProgramAddressOf(program, ["pet", span]),
+		findProgramAddressOf(program, ["pet", heap]),
+	]) {
+		assert found.ok;
+		if (found.ok && literal.ok) {
+			assert found.value.key.equals(literal.value.key);
+			assert found.value.bump == literal.value.bump;
+		}
+	}
+}
+
+test "programAddress rebuilds the address its bump was found for, and no other" {
+	const program = hostProgram();
+	const bump: uint8 = 255;
+	const identity = pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX");
+	const rebuilt = programAddressOf(program, ["identity", [bump]]);
+	assert rebuilt.ok;
+	if (rebuilt.ok) { assert rebuilt.value.equals(identity); }
+	const other: uint8 = 254;
+	const different = programAddressOf(program, ["identity", [other]]);
+	if (different.ok) { assert !different.value.equals(identity); }
+}
+
+test "findProgramAddress skips bumps whose address is on the curve" {
+	const found = findProgramAddressOf(hostProgram(), [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14],
+	]);
+	assert foundAt(
+		found,
+		pubkeyOf("6RWy3mtB7rxdHcS6tgrBqmtuUQ8tTjg5JHaK9g458kYj"),
+		249,
+	);
+}
+
+test "a list of sixteen seeds finds nothing and seventeen seeds create nothing" {
+	const program = hostProgram();
+	const sixteen = findProgramAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+	]);
+	assert !sixteen.ok;
+	if (!sixteen.ok) { assert sixteen.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const seventeen = programAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
+	]);
+	assert !seventeen.ok;
+	if (!seventeen.ok) { assert seventeen.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const sixteenCreated = programAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+	]);
+	if (!sixteenCreated.ok) {
+		assert sixteenCreated.error.code == ProgramError.invalidSeeds().code;
+	}
+}
+
+test "a seed of thirty-three bytes is refused by find and by create" {
+	const program = hostProgram();
+	const found = findProgramAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	assert !found.ok;
+	if (!found.ok) { assert found.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const created = programAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	assert !created.ok;
+	if (!created.ok) { assert created.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const wide: uint8[33] = [];
+	const bytes = programAddressOf(program, [wide]);
+	assert !bytes.ok;
+	if (!bytes.ok) { assert bytes.error.code == ProgramError.maxSeedLengthExceeded().code; }
+}
+
+export struct SeedAccounts {
+	owner: Signer;
+	vault: Writable;
+	pet: Mutable<Counter>;
+	plain: Account;
+}
+
+function accountSeedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<SeedAccounts>();
+	const byAccount = try findProgramAddress(["k", x.owner, x.vault, x.pet, x.plain]);
+	const byKey = try findProgramAddress([
+		"k",
+		x.owner.key(),
+		x.vault.key(),
+		x.pet.key(),
+		x.plain.key(),
+	]);
+	if (byAccount.key != byKey.key || byAccount.bump != byKey.bump) {
+		return Result.err(ProgramError.invalidSeeds());
+	}
+	const rebuilt = try programAddress(["k", x.owner, x.vault, x.pet, x.plain, [byAccount.bump]]);
+	if (rebuilt != byAccount.key) { return Result.err(ProgramError.constraintSeeds()); }
+	const reversed = try findProgramAddress(["k", x.plain, x.pet, x.vault, x.owner]);
+	if (reversed.key == byAccount.key) { return Result.err(ProgramError.constraintAddress()); }
+	return Result.ok(byAccount.bump as uint64);
+}
+
+function accountSeedEntry(): void { codeOf(accountSeedStep()); }
+
+test "an account is a seed through its key, whatever proof it carries" {
+	const accounts = [
+		holder(2, keyOf(9), [], true, false),
+		holder(3, Pubkey.zero(), [], false, true),
+		holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, true),
+		holder(4, Pubkey.zero(), [], false, false),
+	];
+	assert run(programKey(), accounts, [], accountSeedEntry).result == 0;
+}
+
+function keyBytes(key: Pubkey): uint8[] {
+	const bytes: uint8[] = [];
+	for (let index = 0; index < 32; index++) { bytes.push(key.bytes[index]); }
+	return bytes;
+}
+
+function vaultSigner(): uint8[][] {
+	return [textBytes("vault"), keyBytes(keyOf(5)), [5]];
+}
+
+function counterSigner(): uint8[][] {
+	return [textBytes("counter"), [7]];
+}
+
+function ping(target: Account, signers: Readonly<Span<SignerSeeds>> = []): Result<uint64, ProgramError> {
+	let storage: uint8[1] = [];
+	const length = putU8(storage, 0, 3);
+	return invokeSigned(
+		keyOf(9),
+		[InstructionAccount.writable(target)],
+		storage,
+		length,
+		signers,
+	);
+}
+
+macro forwardSigned(call: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("signed"),
+		arguments: [call, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro forwardFind(program: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: seeds.line,
+		column: seeds.column,
+		callee: bindSym("findProgramAddressOf"),
+		arguments: [program, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+function signingStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const first = try account(0);
+	const second = try account(1);
+	if (op == 0) { return signed(transfer(first, second, 10), ["vault", keyOf(5), [5]]); }
+	if (op == 1) {
+		return signed(createAccount(first, second, 100, 8, keyOf(9)), ["vault", keyOf(5), [5]]);
+	}
+	if (op == 2) { return signed(assignTo(second, keyOf(9)), ["vault", keyOf(5), [5]]); }
+	if (op == 3) { return signed(allocate(second, 16), ["vault", keyOf(5), [5]]); }
+	if (op == 4) {
+		return signed(createProgramAccount(first, second, 16, keyOf(9)), ["vault", keyOf(5), [5]]);
+	}
+	if (op == 5) { return signed(ping(second), ["vault", keyOf(5), [5]]); }
+	if (op == 6) {
+		return signed(ping(second), [["vault", keyOf(5), [5]], ["counter", [7]]]);
+	}
+	if (op == 11) {
+		return signed(ping(second), [
+			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
+		]);
+	}
+	if (op == 12) {
+		return signed(ping(second), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	}
+	if (op == 13) {
+		return signed(ping(second), [
+			[16], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+		]);
+	}
+	if (op == 8) { return signed(ping(second), ["k", first, second, [7]]); }
+	if (op == 14) { return forwardSigned(ping(second), ["k", first, second, [7]]); }
+	if (op == 9) { return signed(ping(second), [[6]]); }
+	if (op == 10) {
+		const wide: uint64 = 258;
+		return signed(ping(second), [["b", leBytes(wide)], [[1], [4]], [first, "z"]]);
+	}
+	return ping(second);
+}
+
+function signingEntry(): void { codeOf(signingStep()); }
+
+function signingRun(op: uint8, target: HostAccount): HostAccount[] {
+	const accounts = [wallet(1, 10000000), target];
+	const input: uint8[] = [op];
+	run(programKey(), accounts, input, signingEntry);
+	return accounts;
+}
+
+test "a signed System call sends the seeds it was given, in order" {
+	for (const op of [0, 1, 2, 3]) {
+		signingRun(op as uint8, op == 1 ? blank(keyOf(2)) : wallet(2, 1000000000));
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, vaultSigner());
+	}
+	assert signingRun(0, wallet(2, 1000000000))[1].lamports == 1000000010;
+}
+
+test "a signer list takes a string, an account, a byte array, and a list of lists takes several signers" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const input: uint8[] = [8];
+	run(programKey(), accounts, input, signingEntry);
+	let calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("k"), keyBytes(keyOf(1)), keyBytes(keyOf(2)), [7]]);
+	signingRun(9, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1 && signerIs(calls[0], 0, [[6]]);
+	signingRun(10, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 3;
+	assert signerIs(calls[0], 0, [textBytes("b"), [2, 1, 0, 0, 0, 0, 0, 0]]);
+	assert signerIs(calls[0], 1, [[1], [4]]);
+	assert signerIs(calls[0], 2, [keyBytes(keyOf(1)), textBytes("z")]);
+}
+
+test "a signer list that a user macro forwards to signed reads its seed types" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const input: uint8[] = [14];
+	run(programKey(), accounts, input, signingEntry);
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("k"), keyBytes(keyOf(1)), keyBytes(keyOf(2)), [7]]);
+}
+
+test "a seed list that a user macro forwards to the seed table reads its seed types" {
+	const program = hostProgram();
+	let five = Pubkey.zero();
+	five.bytes[0] = 5;
+	assert foundAt(
+		forwardFind(program, ["pk", five]),
+		pubkeyOf("65QKPW56NGMfywzKLBCHUcoXdHGiFG87TP7xLby1toZq"),
+		255,
+	);
+	assert foundAt(
+		forwardFind(program, ["pet", [7]]),
+		pubkeyOf("93PwUMspkoH1MnRnJgVx8hcRkw1uXygXkK6LaovKJwE5"),
+		255,
+	);
+}
+
+test "a signer of seventeen seeds or of a thirty-three byte seed is refused, sixteen seeds are sent" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const refused: uint8[] = [11];
+	assert run(programKey(), accounts, refused, signingEntry).result ==
+		ProgramError.maxSeedLengthExceeded().code;
+	assert invocations().length == 0;
+	const wide: uint8[] = [12];
+	assert run(programKey(), accounts, wide, signingEntry).result == REFUSED;
+	assert invocations().length == 0;
+	const sixteen: uint8[] = [13];
+	assert run(programKey(), accounts, sixteen, signingEntry).result == 0;
+	assert invocations().length == 1 && invocations()[0].signerSeeds[0].length == 16;
+}
+
+macro forwardCreated(call: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("initializedCounter"),
+		arguments: [call],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+function initializedCounter(counter: Mutable<Counter>): Result<uint64, ProgramError> {
+	const at = counter.data();
+	at.value = 9;
+	return Result.ok(0);
+}
+
+function createSignedStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const bump = try instructionData().readU8(1);
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	if (op == 0) {
+		const counter = try signed(create<Counter>(payer, target), ["counter", [bump]]);
+		counter.data().value = 5;
+		return Result.ok(0);
+	}
+	if (op == 1) {
+		const made = signed(create<Counter>(payer, target), ["counter", [bump]]);
+		const counter = try made;
+		counter.data().value = 6;
+		return Result.ok(0);
+	}
+	if (op == 2) { return forwardCreated(try create<Counter>(payer, target)); }
+	if (op == 3) {
+		const counter = try forwardSigned(create<Counter>(payer, target), ["counter", [bump]]);
+		counter.data().value = 8;
+		return Result.ok(0);
+	}
+	const counter = try create<Counter>(payer, target);
+	counter.data().value = 7;
+	return Result.ok(0);
+}
+
+function createSignedEntry(): void { codeOf(createSignedStep()); }
+
+test "create signs with the seeds of its target" {
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	assert derived.ok;
+	if (derived.ok) {
+		const bump = derived.value.bump;
+		const signing: uint8[] = [0, bump];
+		let pdaTarget = blank(derived.value.key);
+		pdaTarget.signer = false;
+		const accounts = [wallet(1, 10000000), pdaTarget];
+		assert run(programKey(), accounts, signing, createSignedEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].program.equals(systemKey()) && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [bump]]);
+		assert accounts[1].data.length == 8 + (sizeof(Counter) as int32);
+		assert accounts[1].data[8] == 5;
+		const tag = accountDiscriminator("Counter");
+		for (let index = 0; index < 8; index++) {
+			assert accounts[1].data[index] == tag.bytes[index];
+		}
+	}
+}
+
+test "create without seeds records no signer, and an explicit type argument under try is a macro argument" {
+	const unsigned: uint8[] = [4, 0];
+	const accounts = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), accounts, unsigned, createSignedEntry).result == 0;
+	assert invocations().length == 1 && invocations()[0].signers == 0;
+	assert accounts[1].data[8] == 7;
+	const tried: uint8[] = [2, 0];
+	const second = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), second, tried, createSignedEntry).result == 0;
+	assert second[1].data[8] == 9;
+}
+
+test "createProgramAccount forwards signer seeds in one CPI for blank and prefunded targets" {
+	for (const funded of [0, 1, 10000000]) {
+		const accounts = signingRun(4, wallet(2, funded as uint64));
+		const required: uint64 = 1002240;
+		const before = funded as uint64;
+		const expected = before < required ? required : before;
+		assert accounts[1].lamports == expected && accounts[1].owner.equals(keyOf(9));
+		assert accounts[0].lamports == 10000000 - (expected - before);
+		assert accounts[1].data.length == 16;
+		for (const byte of accounts[1].data) { assert byte == 0; }
+		const calls = invocations();
+		assert calls.length == 1 && signerIs(calls[0], 0, vaultSigner());
+		assert calls[0].data[0] == 13;
+	}
+}
+
+test "an instruction is invoked with one signer, with two, or with none" {
+	signingRun(5, wallet(2, 5000));
+	let calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, vaultSigner());
+	signingRun(6, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 2;
+	assert signerIs(calls[0], 0, vaultSigner()) && signerIs(calls[0], 1, counterSigner());
+	signingRun(7, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 0 && calls[0].signerSeeds.length == 0;
+}
+
+test "createPda signs with its seeds and the found bump" {
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [derived.value.bump]]);
+	}
+}
+
+function createPdaByteSeedStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, ["counter", [7]]);
+	return Result.ok(0);
+}
+
+function createPdaByteSeedEntry(): void { codeOf(createPdaByteSeedStep()); }
+
+test "createPda keeps a one-byte seed of its own apart from the slot the found bump goes into" {
+	const derived = findProgramAddressOf(programKey(), ["counter", [7]]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaByteSeedEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [7], [derived.value.bump]]);
+	}
+}
+
+function createPdaFifteenStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	return Result.ok(0);
+}
+
+function createPdaFifteenEntry(): void { codeOf(createPdaFifteenStep()); }
+
+function createPdaSixteenStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]);
+	return Result.ok(0);
+}
+
+function createPdaSixteenEntry(): void { codeOf(createPdaSixteenStep()); }
+
+test "createPda signs with fifteen seeds and the bump, and refuses sixteen seeds before it creates anything" {
+	const derived = findProgramAddressOf(programKey(), [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaFifteenEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1 && calls[0].signerSeeds[0].length == 16;
+	}
+	const refused = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), refused, [], createPdaSixteenEntry).result == ProgramError.maxSeedLengthExceeded().code;
+	assert invocations().length == 0;
+}
+
+function vaultHashAt(bump: uint8): Pubkey {
+	let preimage: uint8[] = [118, 97, 117, 108, 116];
+	for (const byte of keyOf(5).bytes) { preimage.push(byte); }
+	preimage.push(bump);
+	for (const byte of programKey().bytes) { preimage.push(byte); }
+	for (const byte of "ProgramDerivedAddress".asBytes()) { preimage.push(byte); }
+	return { bytes: sha256(preimage).bytes };
+}
+
+function vaultCanonicalBump(): uint8 {
+	for (let bump = 255; bump >= 1; bump--) {
+		if (!isEdwardsPoint(vaultHashAt(bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function vaultAliasBump(): uint8 {
+	for (let bump = (vaultCanonicalBump() as int32) - 1; bump >= 1; bump--) {
+		if (!isEdwardsPoint(vaultHashAt(bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function vaultFundedAt(key: Pubkey, lamports: uint64): HostAccount {
+	return { ...blank(key), lamports: lamports };
+}
+
+test "the vault seeds put an on-curve hash above the canonical bump and an off-curve alias below it" {
+	assert isEdwardsPoint(vaultHashAt(255).bytes);
+	assert vaultCanonicalBump() < 255 && vaultCanonicalBump() > 1;
+	assert vaultAliasBump() > 0 && vaultAliasBump() < vaultCanonicalBump();
+	assert !isEdwardsPoint(vaultHashAt(vaultAliasBump()).bytes);
+}
+
+function findExpectedEntry(): void {
+	const seeds = seedTable(["vault", keyOf(5)]);
+	const program = msSolProgramId();
+	const canonical = vaultCanonicalBump();
+	const found = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(canonical).bytes));
+	if (!found.ok || found.value != canonical) { failWith(ProgramError.userError(1)); return; }
+	const above = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(255).bytes));
+	if (!above.ok || above.value != 255) { failWith(ProgramError.userError(2)); return; }
+	const alias = findExpected(seeds, program, msSolSpanAddress(vaultHashAt(vaultAliasBump()).bytes));
+	if (alias.ok || alias.error.code != ProgramError.invalidSeeds().code) { failWith(ProgramError.userError(3)); return; }
+	const elsewhere = findExpected(seeds, program, msSolSpanAddress(keyOf(77).bytes));
+	if (elsewhere.ok) { failWith(ProgramError.userError(4)); return; }
+	const sixteen = findExpected(seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]), program, msSolSpanAddress(keyOf(77).bytes));
+	if (sixteen.ok || sixteen.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(5)); }
+}
+
+test "findExpected takes the canonical bump, lets an on-curve hash above it match, and refuses a lower off-curve alias and sixteen seeds" {
+	assert run(programKey(), [], [], findExpectedEntry).result == 0;
+}
+
+function createVaultPdaStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const _made = try createPda<Counter>(payer, target, ["vault", keyOf(5)]);
+	return Result.ok(0);
+}
+
+function createVaultPdaEntry(): void { codeOf(createVaultPdaStep()); }
+
+test "createPda at the canonical address signs with the canonical bump" {
+	const accounts = [wallet(1, 10000000), blank(vaultHashAt(vaultCanonicalBump()))];
+	assert run(programKey(), accounts, [], createVaultPdaEntry).result == 0;
+	const calls = invocations();
+	assert calls.length == 1 && signerIs(calls[0], 0, [textBytes("vault"), keyBytes(keyOf(5)), [vaultCanonicalBump()]]);
+}
+
+test "createPda at an address on the curve fails inside the CPI and creates nothing, funded or not" {
+	for (const funded of [0, 1, 10000000]) {
+		const accounts = [wallet(1, 10000000), vaultFundedAt(vaultHashAt(255), funded as uint64)];
+		const outcome = run(programKey(), accounts, [], createVaultPdaEntry);
+		assert outcome.result == REFUSED;
+		assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+		assert invocations().length == 0;
+		assert accounts[1].lamports == funded as uint64 && accounts[1].data.length == 0 && accounts[1].owner.equals(Pubkey.zero());
+		assert accounts[0].lamports == 10000000;
+	}
+}
+
+test "createPda refuses a lower off-curve alias and another address with ConstraintSeeds before any CPI" {
+	for (const key of [vaultHashAt(vaultAliasBump()), keyOf(77)]) {
+		const accounts = [wallet(1, 10000000), blank(key)];
+		const outcome = run(programKey(), accounts, [], createVaultPdaEntry);
+		assert outcome.result == ProgramError.constraintSeeds().code && outcome.fault == "";
+		assert invocations().length == 0;
+		assert accounts[1].lamports == 0 && accounts[1].data.length == 0;
+	}
+}
+
+function signedVaultStep(): Result<uint64, ProgramError> {
+	const vault = try account(0);
+	const recipient = try account(1);
+	return signedPda(transfer(vault, recipient, 10), vault, ["vault", keyOf(5)]);
+}
+
+function signedVaultEntry(): void { codeOf(signedVaultStep()); }
+
+test "signedPda signs a transfer with the canonical bump it found" {
+	const accounts = [vaultFundedAt(vaultHashAt(vaultCanonicalBump()), 1000), wallet(2, 1000000000)];
+	assert run(programKey(), accounts, [], signedVaultEntry).result == 0;
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("vault"), keyBytes(keyOf(5)), [vaultCanonicalBump()]]);
+	assert accounts[0].lamports == 990 && accounts[1].lamports == 1000000010;
+}
+
+test "signedPda sends an address on the curve to the runtime, which refuses it, and sends a lower alias nowhere" {
+	const onCurve = [vaultFundedAt(vaultHashAt(255), 1000), wallet(2, 5000)];
+	const outcome = run(programKey(), onCurve, [], signedVaultEntry);
+	assert outcome.result == REFUSED;
+	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+	assert invocations().length == 0 && onCurve[0].lamports == 1000 && onCurve[1].lamports == 5000;
+	for (const key of [vaultHashAt(vaultAliasBump()), keyOf(77)]) {
+		const refused = [vaultFundedAt(key, 1000), wallet(2, 5000)];
+		const second = run(programKey(), refused, [], signedVaultEntry);
+		assert second.result == ProgramError.constraintSeeds().code && second.fault == "";
+		assert invocations().length == 0 && refused[0].lamports == 1000 && refused[1].lamports == 5000;
+	}
+}
+
+test "a signer whose seeds hash onto the curve is refused by the host before the call is recorded" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const outcome = run(programKey(), accounts, [], onCurveSignerEntry);
+	assert outcome.result == REFUSED;
+	assert outcome.fault.indexOf("Could not create program address with signer seeds") >= 0;
+	assert invocations().length == 0 && accounts[0].lamports == 10000 && accounts[1].lamports == 5000;
+}
+
+function onCurveSignerEntry(): void {
+	const first = account(0);
+	const second = account(1);
+	if (!first.ok || !second.ok) { return; }
+	codeOf(signed(transfer(first.value, second.value, 10), ["vault", keyOf(5), [255]]));
+}
+
+function canonicalBumpOwnedEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const bump = canonicalBumpOwned(slot.value, slottedTable(["vault", keyOf(5)]));
+	if (!bump.ok) { failWith(bump.error); return; }
+	if (bump.value != vaultCanonicalBump()) { failWith(ProgramError.userError(1)); }
+}
+
+test "canonicalBumpOwned compares the owner itself, then finds the canonical bump" {
+	const key = vaultHashAt(vaultCanonicalBump());
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), key)], [], canonicalBumpOwnedEntry).result == 0;
+	assert run(programKey(), [atKey(holder(1, Pubkey.zero(), [], false, false), key)], [], canonicalBumpOwnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [atKey(holder(1, keyOf(77), [], false, false), key)], [], canonicalBumpOwnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+}
+
+function sameBytes(left: uint8[], right: uint8[]): boolean {
+	if (left.length != right.length) { return false; }
+	for (let index = 0; index < left.length; index++) {
+		if (left[index] != right[index]) { return false; }
+	}
+	return true;
+}
+
+function systemKey(): Pubkey { return Pubkey.zero(); }
+
+function recordedStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const first = try account(0);
+	const second = try account(1);
+	if (op == 0) { return createAccount(first, second, 946560, 8, keyOf(9)); }
+	if (op == 1) { return assignTo(second, keyOf(9)); }
+	if (op == 2) { return transfer(first, second, 10); }
+	if (op == 3) { return allocate(second, 16); }
+	return createProgramAccount(first, second, 16, keyOf(9));
+}
+
+function recordedEntry(): void { codeOf(recordedStep()); }
+
+function recordedRun(op: uint8, target: HostAccount): uint64 {
+	const accounts = [wallet(1, 10000000), target];
+	const input: uint8[] = [op];
+	return run(programKey(), accounts, input, recordedEntry).result;
+}
+
+function owner9(): uint8[] {
+	const bytes: uint8[] = [9];
+	while (bytes.length < 32) { bytes.push(0); }
+	return bytes;
+}
+
+function joined(head: uint8[], tail: uint8[]): uint8[] {
+	const bytes: uint8[] = [];
+	for (const value of head) { bytes.push(value); }
+	for (const value of tail) { bytes.push(value); }
+	return bytes;
+}
+
+test "createAccount sends the System program two writable signers and 52 bytes" {
+	assert recordedRun(0, blank(keyOf(2))) == 0;
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 0;
+	const sent = calls[0];
+	assert sent.program.equals(systemKey());
+	assert sent.accounts.length == 2;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	assert sent.accounts[1].key.equals(keyOf(2)) && sent.accounts[1].writable && sent.accounts[1].signer;
+	const head: uint8[] = [0, 0, 0, 0, 128, 113, 14, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, joined(head, owner9()));
+}
+
+test "createAccount on an address that already holds lamports tops up the shortfall, then allocates and assigns" {
+	assert recordedRun(0, wallet(2, 1)) == 0;
+	let calls = invocations();
+	assert calls.length == 3;
+	const topUp: uint8[] = [2, 0, 0, 0, 127, 113, 14, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, topUp);
+	assert calls[1].data[0] == 8 && calls[2].data[0] == 1;
+	assert calls[0].accounts[0].key.equals(keyOf(1)) && calls[0].accounts[1].key.equals(keyOf(2));
+	assert calls[1].accounts[0].key.equals(keyOf(2)) && calls[2].accounts[0].key.equals(keyOf(2));
+
+	assert recordedRun(0, wallet(2, 946560)) == 0;
+	calls = invocations();
+	assert calls.length == 2 && calls[0].data[0] == 8 && calls[1].data[0] == 1;
+}
+
+test "assign, transfer and allocate send the System program their accounts and data" {
+	assert recordedRun(1, wallet(2, 1000000000)) == 0;
+	let sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
+	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	const assignHead: uint8[] = [1, 0, 0, 0];
+	assert sameBytes(sent.data, joined(assignHead, owner9()));
+
+	assert recordedRun(2, wallet(2, 1000000000)) == 0;
+	sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 2;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	assert sent.accounts[1].key.equals(keyOf(2)) && sent.accounts[1].writable && !sent.accounts[1].signer;
+	const transferBytes: uint8[] = [2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, transferBytes);
+
+	assert recordedRun(3, wallet(2, 1000000000)) == 0;
+	sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
+	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	const allocateBytes: uint8[] = [8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, allocateBytes);
+}
+
+test "createProgramAccount emits a single exact prefund creation with target first and optional funding" {
+	assert recordedRun(4, blank(keyOf(2))) == 0;
+	let calls = invocations();
+	assert calls.length == 1;
+	const createHead: uint8[] = [13, 0, 0, 0, 0, 75, 15, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, joined(createHead, owner9()));
+	assert calls[0].accounts[0].key.equals(keyOf(2)) && calls[0].accounts[0].signer;
+	assert calls[0].accounts[1].key.equals(keyOf(1)) && calls[0].accounts[1].signer;
+
+	assert recordedRun(4, wallet(2, 1)) == 0;
+	calls = invocations();
+	assert calls.length == 1;
+	const fundedHead: uint8[] = [13, 0, 0, 0, 255, 74, 15, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, joined(fundedHead, owner9()));
+	assert calls[0].accounts.length == 2 && calls[0].accounts[0].key.equals(keyOf(2));
+	assert calls[0].accounts[1].key.equals(keyOf(1));
+
+	const richAccounts = [wallet(1, 10000000), wallet(2, 10000000)];
+	const richInput: uint8[] = [4];
+	assert run(programKey(), richAccounts, richInput, recordedEntry).result == 0;
+	const rich = richAccounts[1];
+	calls = invocations();
+	assert calls.length == 1 && calls[0].accounts.length == 1;
+	const richHead: uint8[] = [13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, joined(richHead, owner9()));
+	assert rich.lamports == 10000000 && rich.data.length == 16 && rich.owner.equals(keyOf(9));
+}
+
+function forwarded(first: Account, signers: Readonly<Span<SignerSeeds>> = []): Result<uint64, ProgramError> {
+	let storage: uint8[4] = [];
+	const length = putU32(storage, 0, 5);
+	return invokeSigned(
+		keyOf(9),
+		[InstructionAccount.writable(first)],
+		storage,
+		length,
+		signers,
+	);
+}
+
+function listed(first: Account, count: uint64): Result<uint64, ProgramError> {
+	let metas: InstructionAccount[] = [];
+	for (let index = 0; index < 65; index++) {
+		metas.push(InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0));
+	}
+	let storage: uint8[4] = [];
+	return invokeList(keyOf(9), metas[0..(count as int32)], storage, putU8(storage, 0, 1));
+}
+
+function invokeStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const a = try account(0);
+	const b = try account(1);
+	const c = try account(2);
+	let storage: uint8[16] = [];
+	if (op == 0) { return invoke(keyOf(9), [], storage, putU8(storage, 0, 7)); }
+	if (op == 1) {
+		return invoke(
+			keyOf(9),
+			[InstructionAccount.writable(a)],
+			storage,
+			putU64(storage, putU32(storage, 0, 2), 10),
+		);
+	}
+	if (op == 2) {
+		return invoke(
+			keyOf(9),
+			[
+				InstructionAccount.writableSigner(a),
+				InstructionAccount.readonlySigner(b),
+				InstructionAccount.readonly(c),
+				InstructionAccount.flagged(a, true, false),
+				InstructionAccount.flagged(c, false, true),
+			],
+			storage,
+			putU8(storage, putU8(storage, 0, 1), 2),
+		);
+	}
+	if (op == 3) {
+		return signed(
+			invoke(keyOf(9), [InstructionAccount.writable(a)], storage, putU8(storage, 0, 3)),
+			["vault", [7]],
+		);
+	}
+	if (op == 4) { return signed(forwarded(a), [["a"], ["b", [1]]]); }
+	if (op == 5) { return forwarded(a); }
+	if (op == 6) {
+		return invoke(
+			keyOf(9),
+			[
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.readonlySigner(a),
+			],
+			storage,
+			putU8(storage, 0, 6),
+		);
+	}
+	if (op == 7) { return listed(a, 3); }
+	if (op == 8) { return listed(a, 65); }
+	if (op == 10) { return listed(a, 64); }
+	if (op == 9) {
+		return invoke(
+			keyOf(9),
+			[InstructionAccount.writable(a)],
+			storage,
+			putU8(storage, putU64(storage, putU64(storage, 0, 1), 2), 3),
+		);
+	}
+	return Result.err(ProgramError.invalidArgument());
+}
+
+function invokeEntry(): void { codeOf(invokeStep()); }
+
+function invokeRun(op: uint8): uint64 {
+	const accounts = [wallet(1, 100), holder(2, programKey(), [], true, true), holder(3, programKey(), [], true, true)];
+	const input: uint8[] = [op];
+	return run(programKey(), accounts, input, invokeEntry).result;
+}
+
+test "invoke lists no account, one account or several with their flags, and sends the bytes written" {
+	assert invokeRun(0) == 0;
+	let sent = invocations();
+	assert sent.length == 1 && sent[0].program.equals(keyOf(9));
+	assert sent[0].accounts.length == 0 && sent[0].signers == 0;
+	const one: uint8[] = [7];
+	assert sameBytes(sent[0].data, one);
+
+	assert invokeRun(1) == 0;
+	sent = invocations();
+	assert sent[0].accounts.length == 1 && sent[0].accounts[0].key.equals(keyOf(1));
+	assert sent[0].accounts[0].writable && !sent[0].accounts[0].signer;
+	const two: uint8[] = [2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent[0].data, two);
+
+	assert invokeRun(2) == 0;
+	const flags = invocations()[0].accounts;
+	assert flags.length == 5;
+	assert flags[0].key.equals(keyOf(1)) && flags[0].writable && flags[0].signer;
+	assert flags[1].key.equals(keyOf(2)) && !flags[1].writable && flags[1].signer;
+	assert flags[2].key.equals(keyOf(3)) && !flags[2].writable && !flags[2].signer;
+	assert flags[3].key.equals(keyOf(1)) && flags[3].writable && !flags[3].signer;
+	assert flags[4].key.equals(keyOf(3)) && !flags[4].writable && flags[4].signer;
+	const pair: uint8[] = [1, 2];
+	assert sameBytes(invocations()[0].data, pair);
+}
+
+test "signed signs an invoke, and a function that forwards its signers signs the same way" {
+	assert invokeRun(3) == 0;
+	let sent = invocations();
+	assert sent.length == 1 && sent[0].signers == 1;
+	assert signerIs(sent[0], 0, [textBytes("vault"), [7]]);
+	assert invokeRun(4) == 0;
+	sent = invocations();
+	assert sent[0].signers == 2;
+	assert signerIs(sent[0], 0, [textBytes("a")]) && signerIs(sent[0], 1, [textBytes("b"), [1]]);
+	const five: uint8[] = [5, 0, 0, 0];
+	assert sameBytes(sent[0].data, five);
+	assert invokeRun(5) == 0;
+	assert invocations()[0].signers == 0;
+}
+
+test "sixteen accounts are sent, in order, and the sixteenth keeps its own flags" {
+	assert invokeRun(6) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 16;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[1].key.equals(keyOf(2));
+	assert sent.accounts[14].key.equals(keyOf(3)) && sent.accounts[14].writable;
+	assert sent.accounts[15].key.equals(keyOf(1));
+	assert !sent.accounts[15].writable && sent.accounts[15].signer;
+}
+
+test "a run-time list sends sixty-four accounts in order with their own flags" {
+	assert invokeRun(10) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 64;
+	for (let index = 0; index < 64; index++) {
+		assert sent.accounts[index].key.equals(keyOf(1));
+		assert sent.accounts[index].writable == (index % 2 == 0);
+		assert sent.accounts[index].signer == (index % 3 == 0);
+	}
+}
+
+test "a run-time list sends its accounts, and one past sixty-four or data past its buffer is refused" {
+	assert invokeRun(7) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 3;
+	assert sent.accounts[0].writable && sent.accounts[0].signer;
+	assert !sent.accounts[1].writable && !sent.accounts[1].signer;
+	assert sent.accounts[2].writable && !sent.accounts[2].signer;
+	assert invokeRun(8) == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
+	assert invokeRun(9) == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
+}
+
+export struct Safe {
+	owner: Pubkey;
+	limit: uint64;
+	bump: uint8;
+}
+
+export function discriminator(this typeof Safe): Discriminator {
+	return @comptime { return accountDiscriminator("Safe"); };
+}
+
+function safeBytes(owner: Pubkey, limit: uint8, bump: uint8): uint8[] {
+	const bytes: uint8[] = [];
+	const tag = Safe.discriminator();
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	for (let i = 0; i < 32; i++) { bytes.push(owner.bytes[i]); }
+	bytes.push(limit);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	bytes.push(bump);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	return bytes;
+}
+
+function safeAddress(owner: Pubkey): ProgramAddress {
+	const derived = findProgramAddressOf(programKey(), ["safe", owner]);
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
+function atKey(account: HostAccount, key: Pubkey): HostAccount {
+	return { ...account, key: key };
+}
+
+function readOnly(account: HostAccount): HostAccount {
+	return { ...account, writable: false };
+}
+
+function safeAt(key: Pubkey, owner: Pubkey, limit: uint8, bump: uint8): HostAccount {
+	return atKey(holder(1, programKey(), safeBytes(owner, limit, bump), false, true), key);
+}
+
+function systemAccountKey(): HostAccount {
+	return atKey(holder(5, Pubkey.zero(), [], false, false), Pubkey.zero());
+}
+
+function ownerWallet(): HostAccount {
+	return holder(2, Pubkey.zero(), [], true, false);
+}
+
+function pinnedSafe(limit: uint8): HostAccount {
+	const found = safeAddress(keyOf(2));
+	return safeAt(found.key, keyOf(2), limit, found.bump);
+}
+
+export struct PinnedSafe {
+	owner: Signer;
+	@seeds("safe", owner) @bump(safe.bump) safe: Mutable<Safe>;
+}
+
+export struct CanonicalSafe {
+	owner: Signer;
+	@seeds("safe", owner) @bump safe: Mutable<Safe>;
+}
+
+function pinnedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<PinnedSafe>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function canonicalStep(): Result<uint64, ProgramError> {
+	const x = try accounts<CanonicalSafe>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function pinnedEntry(): void { codeOf(pinnedStep()); }
+function canonicalEntry(): void { codeOf(canonicalStep()); }
+
+test "@seeds with @bump(account.field) accepts the address the stored bump gives and nothing else" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [ownerWallet(), pinnedSafe(9)], [], pinnedEntry).result == 0;
+	const wrongBump = [ownerWallet(), safeAt(found.key, keyOf(2), 9, found.bump - 1)];
+	assert run(programKey(), wrongBump, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
+	assert run(programKey(), elsewhere, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const otherSeed = [holder(3, Pubkey.zero(), [], true, false), pinnedSafe(9)];
+	assert run(programKey(), otherSeed, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+test "@bump(account.field) on an Owned or Mutable field leaves the owner to the field's proof and still refuses a foreign owner" {
+	const found = safeAddress(keyOf(2));
+	const foreign = atKey(holder(1, keyOf(77), safeBytes(keyOf(2), 9, found.bump), false, true), found.key);
+	assert run(programKey(), [ownerWallet(), foreign], [], pinnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const system = atKey(holder(1, Pubkey.zero(), safeBytes(keyOf(2), 9, found.bump), false, true), found.key);
+	assert run(programKey(), [ownerWallet(), system], [], pinnedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+}
+
+test "a bare @bump accepts the canonical address only" {
+	assert run(programKey(), [ownerWallet(), pinnedSafe(9)], [], canonicalEntry).result == 0;
+	const found = safeAddress(keyOf(2));
+	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
+	assert run(programKey(), elsewhere, [], canonicalEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+function safeHashAt(owner: Pubkey, bump: uint8): Pubkey {
+	let preimage: uint8[] = [115, 97, 102, 101];
+	for (const byte of owner.bytes) { preimage.push(byte); }
+	preimage.push(bump);
+	for (const byte of programKey().bytes) { preimage.push(byte); }
+	for (const byte of "ProgramDerivedAddress".asBytes()) { preimage.push(byte); }
+	return { bytes: sha256(preimage).bytes };
+}
+
+function ownerWithLowerOffCurveBump(): uint8 {
+	for (let seed = 1; seed < 100; seed++) {
+		const found = safeAddress(keyOf(seed as uint8));
+		for (let bump = (found.bump as int32) - 1; bump >= 1; bump--) {
+			if (!isEdwardsPoint(safeHashAt(keyOf(seed as uint8), bump as uint8).bytes)) { return seed as uint8; }
+		}
+	}
+	return 0;
+}
+
+function lowerOffCurveBump(owner: Pubkey): uint8 {
+	const found = safeAddress(owner);
+	for (let bump = (found.bump as int32) - 1; bump >= 1; bump--) {
+		if (!isEdwardsPoint(safeHashAt(owner, bump as uint8).bytes)) { return bump as uint8; }
+	}
+	return 0;
+}
+
+function verifiedStep(): Result<uint64, ProgramError> {
+	const safe = try mutable<Safe>(0);
+	const checked = try pda(safe, ["safe", keyOf(2)]);
+	if (checked.foundBump() != safeAddress(keyOf(2)).bump) { return Result.err(ProgramError.userError(7)); }
+	return Result.ok(0);
+}
+
+function verifiedEntry(): void { codeOf(verifiedStep()); }
+
+test "a program-owned account at a higher-bump hash that is on the curve is the canonical address, and the lower hashes are refused" {
+	const seed = ownerWithLowerOffCurveBump();
+	assert seed != 0;
+	const owner = keyOf(seed);
+	const found = safeAddress(owner);
+	assert found.bump < 255;
+	const lower = lowerOffCurveBump(owner);
+	assert lower != 0;
+	const wallet = holder(seed, Pubkey.zero(), [], true, false);
+	assert run(programKey(), [wallet, safeAt(found.key, owner, 9, found.bump)], [], canonicalEntry).result == 0;
+	const code = ProgramError.constraintSeeds().code;
+	assert run(programKey(), [wallet, safeAt(safeHashAt(owner, lower), owner, 9, lower)], [], canonicalEntry).result == code;
+	assert run(programKey(), [wallet, safeAt(safeHashAt(owner, found.bump - 1), owner, 9, found.bump - 1)], [], canonicalEntry).result == code;
+	let flipped = found.key;
+	flipped.bytes[31] = flipped.bytes[31] ^ 1;
+	assert run(programKey(), [wallet, safeAt(flipped, owner, 9, found.bump)], [], canonicalEntry).result == code;
+}
+
+test "pda on a Mutable returns the canonical bump and refuses a lower bump's address and a foreign key" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [safeAt(found.key, keyOf(2), 9, found.bump)], [], verifiedEntry).result == 0;
+	const lower = lowerOffCurveBump(keyOf(2));
+	if (lower != 0) {
+		assert run(programKey(), [safeAt(safeHashAt(keyOf(2), lower), keyOf(2), 9, lower)], [], verifiedEntry).result ==
+			ProgramError.constraintSeeds().code;
+	}
+	assert run(programKey(), [safeAt(keyOf(77), keyOf(2), 9, found.bump)], [], verifiedEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+export struct OwnedSafe {
+	owner: Signer;
+	@hasOne(owner) safe: Mutable<Safe>;
+	@hasOne(owner, ProgramError.userError(3)) other: Owned<Safe>;
+}
+
+function ownedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<OwnedSafe>();
+	return Result.ok(x.safe.data().limit + x.other.data().limit);
+}
+
+function ownedSafeEntry(): void { codeOf(ownedStep()); }
+
+test "@hasOne compares the account's field of that name to the key of the sibling, with ConstraintHasOne or the error given" {
+	const mine = pinnedSafe(9);
+	const second = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
+	assert run(programKey(), [ownerWallet(), mine, second], [], ownedSafeEntry).result == 0;
+	const stranger = safeAt(mine.key, keyOf(9), 9, 0);
+	assert run(programKey(), [ownerWallet(), stranger, second], [], ownedSafeEntry).result ==
+		ProgramError.constraintHasOne().code;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 4, 0));
+	assert run(programKey(), [ownerWallet(), mine, strangers], [], ownedSafeEntry).result ==
+		ProgramError.userError(3).code;
+}
+
+export struct Titled { stamp: uint64; owner: Pubkey; }
+export struct Capped extends Titled { limit: uint64; }
+export struct Sealed extends Capped { bump: uint8; }
+
+export function discriminator(this typeof Capped): Discriminator {
+	return @comptime { return accountDiscriminator("Capped"); };
+}
+
+export function discriminator(this typeof Sealed): Discriminator {
+	return @comptime { return accountDiscriminator("Sealed"); };
+}
+
+function titledBytes(tag: Discriminator, stamp: uint8, owner: Pubkey, limit: uint8, tail: uint8[]): uint8[] {
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	bytes.push(stamp);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	for (let i = 0; i < 32; i++) { bytes.push(owner.bytes[i]); }
+	bytes.push(limit);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	for (const byte of tail) { bytes.push(byte); }
+	return bytes;
+}
+
+function cappedAt(stamp: uint8, owner: Pubkey, limit: uint8): HostAccount {
+	return holder(8, programKey(), titledBytes(Capped.discriminator(), stamp, owner, limit, []), false, false);
+}
+
+export struct CappedAccounts {
+	owner: Signer;
+	@hasOne(owner) @constraint(vault.stamp == 7, ProgramError.userError(4)) vault: Owned<Capped>;
+}
+
+function cappedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<CappedAccounts>();
+	return Result.ok(x.vault.data().limit);
+}
+
+function cappedEntry(): void { codeOf(cappedStep()); }
+
+test "@hasOne and @constraint read a field the data struct inherits one struct up" {
+	assert run(programKey(), [ownerWallet(), cappedAt(7, keyOf(2), 9)], [], cappedEntry).result == 0;
+	assert run(programKey(), [ownerWallet(), cappedAt(7, keyOf(9), 9)], [], cappedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), cappedAt(2, keyOf(7), 9)], [], cappedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), cappedAt(6, keyOf(2), 9)], [], cappedEntry).result ==
+		ProgramError.userError(4).code;
+}
+
+function sealedAddress(owner: Pubkey, stamp: uint8): ProgramAddress {
+	const derived = findProgramAddressOf(programKey(), ["sealed", owner, [stamp, 0, 0, 0, 0, 0, 0, 0]]);
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
+function sealedAt(key: Pubkey, stamp: uint8, owner: Pubkey, limit: uint8, bump: uint8): HostAccount {
+	const tail: uint8[] = [bump, 0, 0, 0, 0, 0, 0, 0];
+	return atKey(holder(8, programKey(), titledBytes(Sealed.discriminator(), stamp, owner, limit, tail), false, true), key);
+}
+
+export struct SealedAccounts {
+	owner: Signer;
+	@hasOne(owner) @seeds("sealed", sealed.owner, leBytes(sealed.stamp)) @bump(sealed.bump) @constraint(sealed.limit > 5)
+	sealed: Mutable<Sealed>;
+}
+
+function sealedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<SealedAccounts>();
+	return Result.ok(x.sealed.data().limit);
+}
+
+function sealedEntry(): void { codeOf(sealedStep()); }
+
+test "@hasOne, @seeds, @bump and @constraint read the fields a data struct inherits one and two structs up" {
+	const found = sealedAddress(keyOf(2), 7);
+	assert found.bump != 0;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 7, keyOf(2), 9, found.bump)], [], sealedEntry).result == 0;
+	const strangers = sealedAddress(keyOf(9), 7);
+	assert run(programKey(), [ownerWallet(), sealedAt(strangers.key, 7, keyOf(9), 9, strangers.bump)], [], sealedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 6, keyOf(2), 9, found.bump)], [], sealedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 7, keyOf(2), 9, found.bump - 1)], [], sealedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	assert run(programKey(), [ownerWallet(), sealedAt(found.key, 7, keyOf(2), 5, found.bump)], [], sealedEntry).result ==
+		ProgramError.constraintRaw().code;
+}
+
+export struct NearDerived extends FarBase { target: Writable; }
+
+function farDerivedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<FarDerived>();
+	if (!x.owner.key().equals(keyOf(2)) || !x.refund.key().equals(keyOf(3))) {
+		return Result.err(ProgramError.custom(1));
+	}
+	return Result.ok(0);
+}
+
+function nearDerivedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<NearDerived>();
+	if (!x.owner.key().equals(keyOf(2)) || !x.target.key().equals(keyOf(3))) {
+		return Result.err(ProgramError.custom(1));
+	}
+	return Result.ok(0);
+}
+
+function farDerivedEntry(): void { codeOf(farDerivedStep()); }
+function nearDerivedEntry(): void { codeOf(nearDerivedStep()); }
+
+test "accounts<T>() verifies the fields of a base declared in another module, under a struct of that module or of this one" {
+	const unsigned = holder(2, Pubkey.zero(), [], false, false);
+	for (const entry of [farDerivedEntry, nearDerivedEntry]) {
+		assert run(programKey(), [ownerWallet(), wallet(3, 0)], [], entry).result == 0;
+		assert run(programKey(), [unsigned, wallet(3, 0)], [], entry).result ==
+			ProgramError.accountNotSigner().code;
+		assert run(programKey(), [ownerWallet(), readOnly(wallet(3, 0))], [], entry).result ==
+			ProgramError.constraintMut().code;
+		assert run(programKey(), [ownerWallet()], [], entry).result ==
+			ProgramError.accountNotEnoughKeys().code;
+	}
+}
+
+export struct LoneBase { owner: Signer; }
+export struct LoneChild extends LoneBase {}
+
+function loneChildStep(): Result<uint64, ProgramError> {
+	const x = try accounts<LoneChild>();
+	if (!x.owner.key().equals(keyOf(2))) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(0);
+}
+
+function loneChildEntry(): void { codeOf(loneChildStep()); }
+
+test "accounts<T>() verifies the only field of a struct when the struct inherits it" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), [ownerWallet()], [], loneChildEntry).result == 0;
+	assert run(programKey(), [holder(2, Pubkey.zero(), [], false, false)], [], loneChildEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), none, [], loneChildEntry).result == ProgramError.accountNotEnoughKeys().code;
+}
+
+function farPinnedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<FarPinnedChild>();
+	if (!x.refund.key().equals(keyOf(3))) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(0);
+}
+
+function farPinnedEntry(): void { codeOf(farPinnedStep()); }
+
+test "accounts<T>() runs the decorators of a base that another module declares beside the struct extending it" {
+	assert run(programKey(), [systemAccountKey(), wallet(3, 0)], [], farPinnedEntry).result == 0;
+	assert run(programKey(), [holder(5, Pubkey.zero(), [], false, false), wallet(3, 0)], [], farPinnedEntry).result ==
+		ProgramError.constraintAddress().code;
+	assert run(programKey(), [systemAccountKey(), readOnly(wallet(3, 0))], [], farPinnedEntry).result ==
+		ProgramError.constraintMut().code;
+}
+
+export struct NearKept extends FarKept { limit: uint64; }
+
+export function discriminator(this typeof NearKept): Discriminator {
+	return @comptime { return accountDiscriminator("NearKept"); };
+}
+
+export struct NearKeptAccounts {
+	owner: Signer;
+	@hasOne(owner) vault: Owned<NearKept>;
+}
+
+function nearKeptStep(): Result<uint64, ProgramError> {
+	const x = try accounts<NearKeptAccounts>();
+	return Result.err(ProgramError.custom(x.vault.data().limit as uint32));
+}
+
+function nearKeptEntry(): void { codeOf(nearKeptStep()); }
+
+function nearKeptAt(owner: Pubkey, limit: uint8): HostAccount {
+	const bytes: uint8[] = [];
+	const tag = NearKept.discriminator();
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	for (let i = 0; i < 32; i++) { bytes.push(owner.bytes[i]); }
+	bytes.push(limit);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	return holder(8, programKey(), bytes, false, false);
+}
+
+test "a decorator reads a field the data struct inherits from a base declared in another module" {
+	assert run(programKey(), [ownerWallet(), nearKeptAt(keyOf(2), 9)], [], nearKeptEntry).result ==
+		ProgramError.custom(9).code;
+	assert run(programKey(), [ownerWallet(), nearKeptAt(keyOf(9), 9)], [], nearKeptEntry).result ==
+		ProgramError.constraintHasOne().code;
+}
+
+test "anchorIdl lists the accounts and the data fields of a base declared in another module" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "far",
+		address: "",
+		Bump: [FarDerived],
+		accounts: [NearKept],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const listed = parsed.value.instructions.at(0).accounts;
+		assert listed.length() == 2;
+		assert listed.at(0).name.asString() == "owner" && listed.at(0).signer.asBoolean();
+		assert listed.at(1).name.asString() == "refund" && listed.at(1).writable.asBoolean();
+		const fields = parsed.value.types.at(0).type.fields;
+		assert fields.length() == 2;
+		assert fields.at(0).name.asString() == "owner" && fields.at(0).type.asString() == "pubkey";
+		assert fields.at(1).name.asString() == "limit" && fields.at(1).type.asString() == "u64";
+	}
+}
+
+test "anchorIdl lists the seeds accounts<T>() derives from the fields a data struct inherits" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "sealed",
+		address: "",
+		Bump: [SealedAccounts],
+		accounts: [Sealed],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const derived = parsed.value.instructions.at(0).accounts.at(1).pda.seeds;
+		assert derived.length() == 3;
+		assert derived.at(1).path.asString() == "sealed.owner" && derived.at(1).account.asString() == "Sealed";
+		assert derived.at(2).path.asString() == "sealed.stamp" && derived.at(2).account.asString() == "Sealed";
+	}
+}
+
+export struct Shelf { front: Capped; count: uint64; }
+
+export function discriminator(this typeof Shelf): Discriminator {
+	return @comptime { return accountDiscriminator("Shelf"); };
+}
+
+function inheritedDataIdl(): string {
+	return anchorIdl<GaugeOp>({
+		name: "inherited_data",
+		address: "",
+		Bump: [NoArrayAccounts, FlaggedSeedArgs],
+		accounts: [Capped, Sealed, Shelf],
+		events: [PaidTo],
+		errors: "",
+	});
+}
+
+function idlTypeFields(idl: JsonValue, name: string): JsonValue {
+	const types = idl.types;
+	for (let t = 0; t < types.length(); t++) {
+		if (types.at(t).name.asString() == name) { return types.at(t).type.fields; }
+	}
+	return types.at(types.length());
+}
+
+struct IdlRead { text: string; next: int32; }
+
+function idlRead(idl: JsonValue, fields: JsonValue, bytes: Readonly<Span<uint8>>, start: int32, prefix: string): IdlRead {
+	let text = "";
+	let at = start;
+	for (let f = 0; f < fields.length(); f++) {
+		const name = prefix + fields.at(f).name.asString();
+		const kind = fields.at(f).type.asString();
+		let width = 0;
+		if (kind == "u8" || kind == "bool") { width = 1; }
+		if (kind == "u16") { width = 2; }
+		if (kind == "i32") { width = 4; }
+		if (kind == "u64") { width = 8; }
+		if (kind == "pubkey") { width = 32; }
+		if (width == 0) {
+			const nested = idlRead(idl, idlTypeFields(idl, fields.at(f).type.defined.name.asString()), bytes, at, name + ".");
+			text = text + nested.text;
+			at = nested.next;
+			continue;
+		}
+		let value: uint64 = 0;
+		for (let b = 0; b < width && b < 8 && at + b < bytes.length; b++) { value |= (bytes[at + b] as uint64) << ((b * 8) as uint64); }
+		text = text + name + "=" + String(value) + " ";
+		at = at + width;
+	}
+	return { text: text, next: at };
+}
+
+function blankAccount(seed: uint8, tag: Discriminator, size: int32): HostAccount {
+	return holder(seed, programKey(), counterBytes(tag, 0, 8 + size), false, true);
+}
+
+function inheritedWriteStep(): Result<uint64, ProgramError> {
+	const capped = (try mutable<Capped>(0)).data();
+	capped.stamp = 11;
+	capped.owner = keyOf(12);
+	capped.limit = 13;
+	const sealed = (try mutable<Sealed>(1)).data();
+	sealed.stamp = 21;
+	sealed.owner = keyOf(22);
+	sealed.limit = 23;
+	sealed.bump = 24;
+	const shelf = (try mutable<Shelf>(2)).data();
+	shelf.front.stamp = 31;
+	shelf.front.owner = keyOf(32);
+	shelf.front.limit = 33;
+	shelf.count = 34;
+	return Result.ok(0);
+}
+
+function inheritedWriteEntry(): void { codeOf(inheritedWriteStep()); }
+
+function inheritedBlank(): HostAccount[] {
+	return [
+		blankAccount(1, Capped.discriminator(), sizeof(Capped) as int32),
+		blankAccount(2, Sealed.discriminator(), sizeof(Sealed) as int32),
+		blankAccount(3, Shelf.discriminator(), sizeof(Shelf) as int32),
+	];
+}
+
+test "the IDL's fields of an account read back what the program stored in a struct that extends another, one and two levels" {
+	const written = inheritedBlank();
+	assert run(programKey(), written, [], inheritedWriteEntry).result == 0;
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const idl = parsed.value;
+		const capped = idlRead(idl, idlTypeFields(idl, "Capped"), written[0].data, 8, "");
+		assert capped.text == "stamp=11 owner=12 limit=13 ";
+		assert capped.next == written[0].data.length;
+		const sealed = idlRead(idl, idlTypeFields(idl, "Sealed"), written[1].data, 8, "");
+		assert sealed.text == "stamp=21 owner=22 limit=23 bump=24 ";
+		assert sealed.next == 8 + 49;
+	}
+}
+
+test "the IDL's type of a nested struct field lists the fields that struct inherits" {
+	const written = inheritedBlank();
+	assert run(programKey(), written, [], inheritedWriteEntry).result == 0;
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const idl = parsed.value;
+		const shelf = idlRead(idl, idlTypeFields(idl, "Shelf"), written[2].data, 8, "");
+		assert shelf.text == "front.stamp=31 front.owner=32 front.limit=33 count=34 ";
+		assert shelf.next == written[2].data.length;
+	}
+}
+
+test "the IDL's arguments read the bytes args<T>() reads for a struct that extends another" {
+	const none: HostAccount[] = [];
+	const data = instructionBytes("Bump", [7, 0, 0, 0, 0, 0, 0, 0, 1]);
+	assert run(programKey(), none, data, flaggedSeedEntry).result == ProgramError.custom(71).code;
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const given = idlRead(parsed.value, parsed.value.instructions.at(0).args, data, 8, "");
+		assert given.text == "seed=7 flag=1 ";
+		assert given.next == data.length;
+	}
+}
+
+function decodeBase64(text: string): uint8[] {
+	const out: uint8[] = [];
+	when (js) {
+		const decoded = Buffer.fromString(text, "base64");
+		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
+	} else {
+		const decoded = Buffer.fromString(text, "base64").asBytes();
+		for (let i = 0; i < decoded.length; i++) { out.push(decoded[i]); }
+	}
+	return out;
+}
+
+test "the IDL's fields of an event read back what emit<E>() logged for a struct that extends another" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], paidToEntry).result == 0;
+	const logged = decodeBase64(logs()[0].slice("Program data: ".length));
+	const parsed = JSON.parseValue(inheritedDataIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const paid = idlRead(parsed.value, idlTypeFields(parsed.value, "PaidTo"), logged, 8, "");
+		assert paid.text == "amount=1234 receiver=7 done=1 ";
+		assert paid.next == logged.length;
+	}
+}
+
+export struct SignedBase { owner: Signer; }
+export struct SignedChild extends SignedBase { refund: Writable; }
+
+function signedChildStep(): Result<uint64, ProgramError> {
+	const x = try accounts<SignedChild>();
+	if (!x.owner.key().equals(keyOf(2)) || !x.refund.key().equals(keyOf(3))) {
+		return Result.err(ProgramError.custom(1));
+	}
+	return Result.ok(0);
+}
+
+function signedChildEntry(): void { codeOf(signedChildStep()); }
+
+test "accounts<T>() verifies the fields a struct inherits ahead of its own" {
+	assert run(programKey(), [ownerWallet(), wallet(3, 0)], [], signedChildEntry).result == 0;
+	const unsigned = holder(2, Pubkey.zero(), [], false, false);
+	assert run(programKey(), [unsigned, wallet(3, 0)], [], signedChildEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), [ownerWallet(), readOnly(wallet(3, 0))], [], signedChildEntry).result ==
+		ProgramError.constraintMut().code;
+	assert run(programKey(), [ownerWallet()], [], signedChildEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
+}
+
+export struct InheritedRoot { @address(keyOf(2)) owner: Signer; }
+export struct InheritedMiddle extends InheritedRoot { @hasOne(owner) safe: Mutable<Safe>; }
+export struct InheritedLeaf extends InheritedMiddle { refund: Writable; }
+
+function inheritedLeafStep(): Result<uint64, ProgramError> {
+	const x = try accounts<InheritedLeaf>();
+	if (!x.refund.key().equals(keyOf(3))) { return Result.err(ProgramError.custom(1)); }
+	return Result.ok(x.safe.data().limit);
+}
+
+function inheritedLeafEntry(): void { codeOf(inheritedLeafStep()); }
+
+test "accounts<T>() runs the checks and decorators of a field declared two structs up" {
+	const safe = safeAt(keyOf(8), keyOf(2), 4, 0);
+	assert run(programKey(), [ownerWallet(), safe, wallet(3, 0)], [], inheritedLeafEntry).result == 0;
+	const unsigned = holder(2, Pubkey.zero(), [], false, false);
+	assert run(programKey(), [unsigned, safe, wallet(3, 0)], [], inheritedLeafEntry).result ==
+		ProgramError.accountNotSigner().code;
+	const stranger = holder(9, Pubkey.zero(), [], true, false);
+	assert run(programKey(), [stranger, safeAt(keyOf(8), keyOf(9), 4, 0), wallet(3, 0)], [], inheritedLeafEntry).result ==
+		ProgramError.constraintAddress().code;
+	assert run(programKey(), [ownerWallet(), safeAt(keyOf(8), keyOf(9), 4, 0), wallet(3, 0)], [], inheritedLeafEntry).result ==
+		ProgramError.constraintHasOne().code;
+	assert run(programKey(), [ownerWallet(), safe, readOnly(wallet(3, 0))], [], inheritedLeafEntry).result ==
+		ProgramError.constraintMut().code;
+}
+
+test "anchorIdl lists a struct's inherited accounts in the order accounts<T>() reads them" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "inherited",
+		address: "",
+		Bump: [InheritedLeaf],
+		accounts: [],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const listed = parsed.value.instructions.at(0).accounts;
+		assert listed.length() == 3;
+		assert listed.at(0).name.asString() == "owner" && listed.at(0).signer.asBoolean();
+		assert listed.at(1).name.asString() == "safe" && listed.at(1).writable.asBoolean();
+		assert listed.at(2).name.asString() == "refund" && listed.at(2).writable.asBoolean();
+	}
+}
+
+export struct Addressed {
+	safe: Owned<Safe>;
+	@address(safe.owner) payer: Signer;
+	@address(Pubkey.zero(), ProgramError.userError(4)) system: Account;
+}
+
+function addressedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Addressed>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function addressedEntry(): void { codeOf(addressedStep()); }
+
+test "@address compares the field's key to a key, a field of another account's data or a call, with ConstraintAddress or the error given" {
+	const safe = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
+	const system = holder(5, Pubkey.zero(), [], false, false);
+	const payer = ownerWallet();
+	const accounts = [safe, payer, systemAccountKey()];
+	assert run(programKey(), accounts, [], addressedEntry).result == 0;
+	const stranger = [safe, holder(3, Pubkey.zero(), [], true, false), accounts[2]];
+	assert run(programKey(), stranger, [], addressedEntry).result ==
+		ProgramError.constraintAddress().code;
+	const elsewhere = [safe, payer, system];
+	assert run(programKey(), elsewhere, [], addressedEntry).result ==
+		ProgramError.userError(4).code;
+}
+
+export struct Bounded {
+	@constraint(safe.limit > 5) @constraint(safe.limit < 100, ProgramError.userError(5))
+	safe: Owned<Safe>;
+}
+
+function boundedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Bounded>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function boundedEntry(): void { codeOf(boundedStep()); }
+
+test "@constraint holds a condition over the accounts and their data, with ConstraintRaw or the error given" {
+	const inside = [readOnly(safeAt(keyOf(8), keyOf(2), 50, 0))];
+	assert run(programKey(), inside, [], boundedEntry).result == 0;
+	const low = [readOnly(safeAt(keyOf(8), keyOf(2), 5, 0))];
+	assert run(programKey(), low, [], boundedEntry).result == ProgramError.constraintRaw().code;
+	const high = [readOnly(safeAt(keyOf(8), keyOf(2), 100, 0))];
+	assert run(programKey(), high, [], boundedEntry).result == ProgramError.userError(5).code;
+}
+
+let builtErrors: uint64 = 0;
+
+function counted(ordinal: uint32): ProgramError {
+	builtErrors = builtErrors + 1;
+	return ProgramError.userError(ordinal);
+}
+
+export struct Lazy {
+	owner: Signer;
+	@hasOne(owner, counted(3)) @constraint(safe.limit > 5, counted(5)) safe: Owned<Safe>;
+	@address(Pubkey.zero(), counted(4)) system: Account;
+}
+
+function lazyStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Lazy>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function lazyEntry(): void { codeOf(lazyStep()); }
+
+test "a custom error is built when its check fails and not before, as Anchor builds it in the failing branch" {
+	const system = systemAccountKey();
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
+	const mine = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	builtErrors = 0;
+	assert run(programKey(), [ownerWallet(), mine, system], [], lazyEntry).result == 0;
+	assert builtErrors == 0;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 50, 0));
+	assert run(programKey(), [ownerWallet(), strangers, system], [], lazyEntry).result ==
+		ProgramError.userError(3).code;
+	assert builtErrors == 1;
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	assert run(programKey(), [ownerWallet(), low, system], [], lazyEntry).result ==
+		ProgramError.userError(5).code;
+	assert builtErrors == 2;
+	assert run(programKey(), [ownerWallet(), mine, stranger], [], lazyEntry).result ==
+		ProgramError.userError(4).code;
+	assert builtErrors == 3;
+}
+
+export struct EnumErrors {
+	owner: Signer;
+	@hasOne(owner, OffsetFailure.Start) @constraint(safe.limit > 5, SparseFailure.High)
+	safe: Owned<Safe>;
+	@address(Pubkey.zero(), OffsetFailure.Then) system: Account;
+}
+
+function enumErrorsStep(): Result<uint64, ProgramError> {
+	const x = try accounts<EnumErrors>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function enumErrorsEntry(): void { codeOf(enumErrorsStep()); }
+
+test "@hasOne, @constraint and @address take a member of an error enum and return the code its converter gives" {
+	const system = systemAccountKey();
+	const mine = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	assert run(programKey(), [ownerWallet(), mine, system], [], enumErrorsEntry).result == 0;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 50, 0));
+	assert run(programKey(), [ownerWallet(), strangers, system], [], enumErrorsEntry).result ==
+		ProgramError.userError(3).code;
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	assert run(programKey(), [ownerWallet(), low, system], [], enumErrorsEntry).result ==
+		ProgramError.userError(9).code;
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
+	assert run(programKey(), [ownerWallet(), mine, stranger], [], enumErrorsEntry).result ==
+		ProgramError.userError(4).code;
+}
+
+export struct Ordered {
+	owner: Signer;
+	@address(Pubkey.zero()) @constraint(safe.limit > 5) @hasOne(owner) @seeds("safe", owner) @bump(safe.bump)
+	safe: Mutable<Safe>;
+}
+
+function orderedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Ordered>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function orderedEntry(): void { codeOf(orderedStep()); }
+
+test "a field's constraints run seeds, has_one, constraint, address, whatever order they are written in" {
+	const found = safeAddress(keyOf(2));
+	const wrongAll = safeAt(safeAddress(keyOf(3)).key, keyOf(9), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongAll], [], orderedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const wrongRelation = safeAt(found.key, keyOf(9), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongRelation], [], orderedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	const wrongLimit = safeAt(found.key, keyOf(2), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongLimit], [], orderedEntry).result ==
+		ProgramError.constraintRaw().code;
+	const mine = safeAt(found.key, keyOf(2), 50, found.bump);
+	assert run(programKey(), [ownerWallet(), mine], [], orderedEntry).result ==
+		ProgramError.constraintAddress().code;
+}
+
+export struct Chained {
+	@constraint(safe.limit > 5) safe: Owned<Safe>;
+	@address(Pubkey.zero()) @constraint(safe.limit > 100) second: Account;
+	last: Signer;
+}
+
+function chainedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Chained>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function chainedEntry(): void { codeOf(chainedStep()); }
+
+test "every field is verified by its type before any constraint runs, and a field's constraints precede the next field's" {
+	const system = systemAccountKey();
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
+	const signedLast = holder(6, Pubkey.zero(), [], true, false);
+	const unsignedLast = holder(6, Pubkey.zero(), [], false, false);
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	const high = readOnly(safeAt(keyOf(8), keyOf(2), 120, 0));
+	assert run(programKey(), [low, stranger, unsignedLast], [], chainedEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), [low, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [high, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintAddress().code;
+	const middle = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	assert run(programKey(), [middle, system, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [middle, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [high, system, signedLast], [], chainedEntry).result == 0;
+}
+
+export struct TwoTypes {
+	counter: Mutable<Counter>;
+	safe: Mutable<Safe>;
+}
+
+function twoTypesStep(): Result<uint64, ProgramError> {
+	const x = try accounts<TwoTypes>();
+	return Result.ok(x.counter.data().value + x.safe.data().limit);
+}
+
+function twoTypesEntry(): void { codeOf(twoTypesStep()); }
+
+test "accounts<T>() reads the discriminator of each account type, so an account of the other type is refused" {
+	const counter = holder(1, programKey(), counterBytes(counterTag(), 3, 48), false, true);
+	const safe = safeAt(keyOf(2), keyOf(9), 4, 0);
+	assert run(programKey(), [counter, safe], [], twoTypesEntry).result == 0;
+	assert run(programKey(), [safe, counter], [], twoTypesEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const counters = [counter, holder(3, programKey(), counterBytes(counterTag(), 5, 48), false, true)];
+	assert run(programKey(), counters, [], twoTypesEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+}
+
+export struct BySeed {
+	owner: Signer;
+	@seeds("safe", owner, leBytes(given.seed)) @bump(safe.bump) safe: Mutable<Safe>;
+}
+
+function bySeedStep(): Result<uint64, ProgramError> {
+	const given = try args<MakeArgs>();
+	const x = try accounts<BySeed>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function bySeedEntry(): void { codeOf(bySeedStep()); }
+
+test "a seed names an instruction argument through the local that holds it where accounts<T>() is written" {
+	const seven: uint64 = 7;
+	const derived = findProgramAddressOf(programKey(), ["safe", keyOf(2), leBytes(seven)]);
+	assert derived.ok;
+	if (derived.ok) {
+		const found = derived.value;
+		const safe = safeAt(found.key, keyOf(2), 9, found.bump);
+		const bytes = makeTail(7, 0, 0, 41);
+		const data: uint8[] = [0, 0, 0, 0, 0, 0, 0, 0];
+		for (const byte of bytes) { data.push(byte); }
+		assert run(programKey(), [ownerWallet(), safe], data, bySeedEntry).result == 0;
+		const other = makeTail(8, 0, 0, 41);
+		const wrong: uint8[] = [0, 0, 0, 0, 0, 0, 0, 0];
+		for (const byte of other) { wrong.push(byte); }
+		assert run(programKey(), [ownerWallet(), safe], wrong, bySeedEntry).result ==
+			ProgramError.constraintSeeds().code;
+	}
+}
+
+export enum WireSpecies { Cat, Dog, Fox }
+export enum WireSparse { Zero = 0, Two = 2, Nine = 9 }
+export enum WireSigned { Minus = -7, Zero = 0, Plus = 70000 }
+export enum WireWide { Zero = 0, Large = 300 }
+export enum WireFour { Zero, One, Two, Three }
+export struct WireFlags { alive: boolean; kind: WireSpecies; }
+export struct WirePet { flags: WireFlags; kinds: WireSpecies[64]; }
+export struct WireSparseAccount { kind: WireSparse; }
+export struct WireSignedAccount { kind: WireSigned; }
+export struct WireWideAccount { kind: WireWide; }
+export struct WireMaskedAccount { alive: boolean; kind: WireFour; }
+export struct WireNumericGap { alive: boolean; ignored: uint8; kind: WireSpecies; }
+
+export function discriminator(this typeof WirePet): Discriminator {
+	return @comptime { return accountDiscriminator("WirePet"); };
+}
+export function discriminator(this typeof WireSparseAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireSparseAccount"); };
+}
+export function discriminator(this typeof WireSignedAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireSignedAccount"); };
+}
+export function discriminator(this typeof WireWideAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireWideAccount"); };
+}
+export function discriminator(this typeof WireMaskedAccount): Discriminator {
+	return @comptime { return accountDiscriminator("WireMaskedAccount"); };
+}
+export function discriminator(this typeof WireNumericGap): Discriminator {
+	return @comptime { return accountDiscriminator("WireNumericGap"); };
+}
+
+function wireBytes<T>(payload: uint8[]): uint8[] {
+	const bytes: uint8[] = [];
+	for (const b of T.discriminator().bytes) { bytes.push(b); }
+	for (const b of payload) { bytes.push(b); }
+	while (bytes.length < 8 + (sizeof(T) as int32)) { bytes.push(0); }
+	return bytes;
+}
+
+function wirePetBytes(): uint8[] {
+	const payload: uint8[] = [1, 2];
+	for (let i = 0; i < 64; i += 1) { payload.push((i % 3) as uint8); }
+	return wireBytes<WirePet>(payload);
+}
+
+function wireOwnedEntry(): void { codeOf(owned<WirePet>(0)); }
+function wireMutableEntry(): void { codeOf(mutable<WirePet>(0)); }
+function wireDelegatedEntry(): void { codeOf(delegated<WirePet>(0)); }
+function wireSparseEntry(): void { codeOf(owned<WireSparseAccount>(0)); }
+function wireSignedEntry(): void { codeOf(owned<WireSignedAccount>(0)); }
+function wireWideEntry(): void { codeOf(owned<WireWideAccount>(0)); }
+function wireMaskedEntry(): void { codeOf(owned<WireMaskedAccount>(0)); }
+function wireNumericGapEntry(): void { codeOf(owned<WireNumericGap>(0)); }
+
+export struct WireOwnedAccounts { pet: Owned<WirePet>; }
+function wireAccountsResult(): Result<WireOwnedAccounts, ProgramError> {
+	return accounts<WireOwnedAccounts>();
+}
+function wireAccountsEntry(): void { codeOf(wireAccountsResult()); }
+
+function wireProofResults(bytes: uint8[]): uint64[] {
+	return [
+		run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireOwnedEntry).result,
+		run(programKey(), [holder(1, programKey(), bytes, false, true)], [], wireMutableEntry).result,
+		run(programKey(), [holder(1, DELEGATION_PROGRAM_ID, bytes, false, false)], [], wireDelegatedEntry).result,
+		run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireAccountsEntry).result,
+	];
+}
+
+test "typed proof families validate raw nested booleans and fixed enum arrays" {
+	for (const code of wireProofResults(wirePetBytes())) { assert code == 0; }
+	for (const offset of [0, 1, 2, 65]) {
+		for (const invalid of [3, 128, 255]) {
+			const bytes = wirePetBytes();
+			bytes[8 + offset] = invalid as uint8;
+			for (const code of wireProofResults(bytes)) { assert code == ProgramError.accountDidNotDeserialize().code; }
+		}
+	}
+	const badBool = wirePetBytes();
+	badBool[8] = 2;
+	for (const code of wireProofResults(badBool)) { assert code == ProgramError.accountDidNotDeserialize().code; }
+	const zero = wireBytes<WirePet>([]);
+	for (const code of wireProofResults(zero)) { assert code == 0; }
+}
+
+export struct WireRoot { alive: boolean; }
+export struct WireMiddle extends WireRoot { kind: WireSparse; }
+export struct WireLeaf extends WireMiddle { level: uint8; }
+
+export function discriminator(this typeof WireMiddle): Discriminator {
+	return @comptime { return accountDiscriminator("WireMiddle"); };
+}
+export function discriminator(this typeof WireLeaf): Discriminator {
+	return @comptime { return accountDiscriminator("WireLeaf"); };
+}
+
+function wireMiddleEntry(): void { codeOf(owned<WireMiddle>(0)); }
+function wireLeafEntry(): void { codeOf(mutable<WireLeaf>(0)); }
+
+function wireInheritedResults(payload: uint8[]): uint64[] {
+	return [
+		run(programKey(), [holder(1, programKey(), wireBytes<WireMiddle>(payload), false, false)], [], wireMiddleEntry).result,
+		run(programKey(), [holder(1, programKey(), wireBytes<WireLeaf>(payload), false, true)], [], wireLeafEntry).result,
+	];
+}
+
+test "a typed proof validates the raw boolean and enum a data struct inherits one and two structs up" {
+	for (const code of wireInheritedResults([1, 9, 200])) { assert code == 0; }
+	for (const code of wireInheritedResults([2, 9, 200])) { assert code == ProgramError.accountDidNotDeserialize().code; }
+	for (const code of wireInheritedResults([1, 3, 200])) { assert code == ProgramError.accountDidNotDeserialize().code; }
+}
+
+test "raw enum validation checks exact sparse signed and wide membership" {
+	for (const value of [0, 2, 9]) {
+		const bytes = wireBytes<WireSparseAccount>([value as uint8]);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSparseEntry).result == 0;
+	}
+	for (const value of [1, 3, 8, 10, 255]) {
+		const bytes = wireBytes<WireSparseAccount>([value as uint8]);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSparseEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+	const minus = wireBytes<WireSignedAccount>([249, 255, 255, 255]);
+	const zero = wireBytes<WireSignedAccount>([0, 0, 0, 0]);
+	const plus = wireBytes<WireSignedAccount>([112, 17, 1, 0]);
+	for (const bytes of [minus, zero, plus]) {
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSignedEntry).result == 0;
+	}
+	for (const payload of [[250, 255, 255, 255] as uint8[], [111, 17, 1, 0] as uint8[], [1, 0, 0, 0] as uint8[]]) {
+		const bytes = wireBytes<WireSignedAccount>(payload);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireSignedEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+	for (const payload of [[0, 0] as uint8[], [44, 1] as uint8[]]) {
+		const bytes = wireBytes<WireWideAccount>(payload);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireWideEntry).result == 0;
+	}
+	const wideHole = wireBytes<WireWideAccount>([43, 1]);
+	assert run(programKey(), [holder(1, programKey(), wideHole, false, false)], [], wireWideEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+}
+
+export enum WireApart { One = 1, Four = 4 }
+export enum WireBackward { Last = 2, Middle = 1, First = 0 }
+export enum WireCrowded {
+	C000, C001, C002, C003, C004, C005, C006, C007, C008, C009, C010, C011, C012, C013, C014, C015,
+	C016, C017, C018, C019, C020, C021, C022, C023, C024, C025, C026, C027, C028, C029, C030, C031,
+	C032, C033, C034, C035, C036, C037, C038, C039, C040, C041, C042, C043, C044, C045, C046, C047,
+	C048, C049, C050, C051, C052, C053, C054, C055, C056, C057, C058, C059, C060, C061, C062, C063,
+	C064, C065, C066, C067, C068, C069, C070, C071, C072, C073, C074, C075, C076, C077, C078, C079,
+	C080, C081, C082, C083, C084, C085, C086, C087, C088, C089, C090, C091, C092, C093, C094, C095,
+	C096, C097, C098, C099, C100, C101, C102, C103, C104, C105, C106, C107, C108, C109, C110, C111,
+	C112, C113, C114, C115, C116, C117, C118, C119, C120, C121, C122, C123, C124, C125, C126, C127,
+	D000 = 0, D001, D002, D003, D004, D005, D006, D007, D008, D009, D010, D011, D012, D013, D014, D015,
+	D016, D017, D018, D019, D020, D021, D022, D023, D024, D025, D026, D027, D028, D029, D030, D031,
+	D032, D033, D034, D035, D036, D037, D038, D039, D040, D041, D042, D043, D044, D045, D046, D047,
+	D048, D049, D050, D051, D052, D053, D054, D055, D056, D057, D058, D059, D060, D061, D062, D063,
+	D064, D065, D066, D067, D068, D069, D070, D071, D072, D073, D074, D075, D076, D077, D078, D079,
+	D080, D081, D082, D083, D084, D085, D086, D087, D088, D089, D090, D091, D092, D093, D094, D095,
+	D096, D097, D098, D099, D100, D101, D102, D103, D104, D105, D106, D107, D108, D109, D110, D111,
+	D112, D113, D114, D115, D116, D117, D118, D119, D120, D121, D122, D123, D124, D125, D126, D127,
+	Last = 0,
+}
+export struct WireKinds {
+	signed: WireSigned;
+	wide: WireWide;
+	stamp: uint16;
+	apart: WireApart;
+	backward: WireBackward;
+	crowded: WireCrowded;
+	last: uint8;
+}
+
+export function discriminator(this typeof WireKinds): Discriminator {
+	return @comptime { return accountDiscriminator("WireKinds"); };
+}
+
+export struct WireCrowdedPair { crowded: WireCrowded; gap: uint8; wide: uint16; }
+
+function wireKindsBytes(): uint8[] { return wireBytes<WireKinds>([0, 0, 0, 0, 0, 0, 0, 0, 1]); }
+
+function wireKindsStep(): Result<uint64, ProgramError> {
+	const kinds = (try mutable<WireKinds>(0)).data();
+	kinds.signed = WireSigned.Plus;
+	kinds.wide = WireWide.Large;
+	kinds.stamp = 9;
+	kinds.apart = WireApart.Four;
+	kinds.backward = WireBackward.Last;
+	kinds.crowded = WireCrowded.C127;
+	kinds.last = 7;
+	return Result.ok(0);
+}
+
+function wireKindsEntry(): void { codeOf(wireKindsStep()); }
+
+test "the IDL's fields of an account read back the value of each enum member the program stored, at the width the program stores it" {
+	const stored = [holder(1, programKey(), wireKindsBytes(), false, true)];
+	assert run(programKey(), stored, [], wireKindsEntry).result == 0;
+	const parsed = JSON.parseValue(anchorIdl<FailingOp>({
+		name: "kinds", address: "", Fail: [NoArrayAccounts], accounts: [WireKinds], events: [], errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		const kinds = idlRead(parsed.value, idlTypeFields(parsed.value, "WireKinds"), stored[0].data, 8, "");
+		assert kinds.text == "signed=70000 wide=300 stamp=9 apart=4 backward=2 crowded=127 last=7 ";
+		assert kinds.next == stored[0].data.length;
+	}
+}
+
+test "the IDL lays a field out after an enum of many members by the one byte the program stores it in" {
+	const parsed = JSON.parseValue(anchorIdl<FailingOp>({
+		name: "pair", address: "", Fail: [NoArrayAccounts], accounts: [WireCrowdedPair], events: [], errors: "",
+	}));
+	assert parsed.ok;
+	if (parsed.ok) {
+		const bytes: uint8[] = [127, 5, 44, 1];
+		const pair = idlRead(parsed.value, idlTypeFields(parsed.value, "WireCrowdedPair"), bytes, 0, "");
+		assert pair.text == "crowded=127 gap=5 wide=300 ";
+		assert pair.next == sizeof(WireCrowdedPair) as int32;
+	}
+}
+
+function wireKindsOwnedEntry(): void { codeOf(owned<WireKinds>(0)); }
+
+function wireKindsWith(offset: int32, value: int32): uint8[] {
+	const bytes = wireKindsBytes();
+	bytes[8 + offset] = value as uint8;
+	return bytes;
+}
+
+function wireKindsProof(offset: int32, value: int32): uint64 {
+	return run(programKey(), [holder(1, programKey(), wireKindsWith(offset, value), false, false)], [], wireKindsOwnedEntry).result;
+}
+
+test "raw enum validation accepts the values of an enum with no zero member, of one declared in descending order and of one with repeated values, and nothing between" {
+	for (const apart of [1, 4]) { assert wireKindsProof(8, apart) == 0; }
+	for (const apart of [0, 2, 3, 5, 255]) { assert wireKindsProof(8, apart) == ProgramError.accountDidNotDeserialize().code; }
+	for (const backward of [0, 1, 2]) { assert wireKindsProof(9, backward) == 0; }
+	for (const backward of [3, 255]) { assert wireKindsProof(9, backward) == ProgramError.accountDidNotDeserialize().code; }
+	for (const crowded of [0, 1, 127]) { assert wireKindsProof(10, crowded) == 0; }
+	for (const crowded of [128, 255]) { assert wireKindsProof(10, crowded) == ProgramError.accountDidNotDeserialize().code; }
+}
+
+test "the account codec reads and writes the members of those enums by their values and refuses the values between" {
+	const stored = [holder(1, programKey(), wireKindsBytes(), false, true)];
+	assert run(programKey(), stored, [], wireKindsEntry).result == 0;
+	const decoded = decode<WireKinds>(stored[0].data);
+	assert decoded.ok;
+	if (decoded.ok) {
+		const kinds = decoded.value;
+		assert kinds.apart == WireApart.Four && kinds.backward == WireBackward.Last && kinds.crowded == WireCrowded.C127;
+		assert kinds.signed == WireSigned.Plus && kinds.wide == WireWide.Large;
+		const encoded = encode(kinds);
+		assert encoded.ok;
+		if (encoded.ok) {
+			assert encoded.value.length == stored[0].data.length;
+			for (let i = 0; i < encoded.value.length; i++) { assert encoded.value[i] == stored[0].data[i]; }
+		}
+	}
+	for (const hole of [wireKindsWith(8, 0), wireKindsWith(8, 2), wireKindsWith(9, 3), wireKindsWith(10, 128)]) {
+		const refused = decode<WireKinds>(hole);
+		assert !refused.ok;
+		if (!refused.ok) { assert refused.error.code == ProgramError.accountDidNotDeserialize().code; }
+	}
+}
+
+test "power-of-two byte masks validate every lane and ignore plain numeric fields" {
+	for (const flag of [0, 1]) {
+		for (const kind of [0, 1, 2, 3]) {
+			const bytes = wireBytes<WireMaskedAccount>([flag as uint8, kind as uint8]);
+			assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireMaskedEntry).result == 0;
+		}
+	}
+	for (const payload of [[2, 0] as uint8[], [0, 4] as uint8[], [128, 3] as uint8[], [1, 255] as uint8[]]) {
+		const bytes = wireBytes<WireMaskedAccount>(payload);
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireMaskedEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+	const bytes = wireBytes<WireNumericGap>([1, 255, 2]);
+	assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireNumericGapEntry).result == 0;
+}
+
+function wireRetryEntry(): void {
+	const rejected = mutable<WirePet>(0);
+	if (rejected.ok) { failWith(ProgramError.custom(51)); return; }
+	if (rejected.error.code != ProgramError.accountDidNotDeserialize().code) { failWith(rejected.error); return; }
+	const raw = account(0);
+	if (!raw.ok) { failWith(raw.error); return; }
+	msSolStoreU8(raw.value.recordAddress() + 96, 0);
+	codeOf(mutable<WirePet>(0));
+}
+
+function wireBorrowPrecedenceEntry(): void {
+	const first = mutable<WirePet>(0);
+	if (!first.ok) { failWith(first.error); return; }
+	const raw = first.value.asAccount();
+	msSolStoreU8(raw.recordAddress() + 96, 2);
+	const second = mutable<WirePet>(0);
+	if (second.ok) { failWith(ProgramError.custom(52)); return; }
+	if (second.error.code != ProgramError.accountBorrowFailed().code) { failWith(second.error); }
+}
+
+test "invalid field rejection does not claim mutable ownership and preserves envelope precedence" {
+	const bytes = wirePetBytes();
+	bytes[8] = 2;
+	assert run(programKey(), [holder(1, programKey(), bytes, false, true)], [], wireRetryEntry).result == 0;
+	assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireMutableEntry).result ==
+		ProgramError.constraintMut().code;
+	assert run(programKey(), [holder(1, keyOf(9), bytes, false, true)], [], wireMutableEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const mismatch = wirePetBytes();
+	mismatch[0] ^= 1;
+	mismatch[8] = 2;
+	assert run(programKey(), [holder(1, programKey(), mismatch, false, true)], [], wireMutableEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	assert run(programKey(), [holder(1, programKey(), wirePetBytes(), false, true)], [], wireBorrowPrecedenceEntry).result == 0;
+}
+
+function wireCreateStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const made = try create<WirePet>(payer, target);
+	if (made.data().flags.alive || (made.data().flags.kind as uint8) != 0) {
+		return Result.err(ProgramError.custom(53));
+	}
+	return Result.ok(0);
+}
+function wireCreateEntry(): void { codeOf(wireCreateStep()); }
+
+test "creating zero-initialized boolean and zero-containing enum fields returns a valid proof" {
+	const accounts = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), accounts, [], wireCreateEntry).result == 0;
+	assert accounts[1].data.length == 8 + (sizeof(WirePet) as int32);
+}
+
+export struct WireFlagArray { items: WireFlags[3]; }
+type WireAmount = uint16 & { __brand: "WireAmount" };
+export struct WirePlainWrapped { bits: BitSet<WireFour>; amount: WireAmount; }
+
+export function discriminator(this typeof WireFlagArray): Discriminator {
+	return @comptime { return accountDiscriminator("WireFlagArray"); };
+}
+export function discriminator(this typeof WirePlainWrapped): Discriminator {
+	return @comptime { return accountDiscriminator("WirePlainWrapped"); };
+}
+function wireFlagArrayEntry(): void { codeOf(owned<WireFlagArray>(0)); }
+function wirePlainWrappedEntry(): void { codeOf(owned<WirePlainWrapped>(0)); }
+
+test "raw validation walks arrays of nested structs without loading beyond the payload" {
+	const good = wireBytes<WireFlagArray>([1, 2, 0, 1, 1, 0]);
+	assert run(programKey(), [holder(1, programKey(), good, false, false)], [], wireFlagArrayEntry).result == 0;
+	for (let i = 0; i < 6; i += 1) {
+		const bytes = wireBytes<WireFlagArray>([1, 2, 0, 1, 1, 0]);
+		bytes[8 + i] = 255;
+		assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wireFlagArrayEntry).result ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+}
+
+test "bit masks and branded numeric fields remain safe unconstrained wire storage" {
+	const bytes = wireBytes<WirePlainWrapped>([255, 0, 52, 18]);
+	assert run(programKey(), [holder(1, programKey(), bytes, false, false)], [], wirePlainWrappedEntry).result == 0;
+}
+
+export struct WireChainConstraints {
+	@constraint(false, counted(12)) first: Account;
+	pet: Mutable<WirePet>;
+}
+
+function wireChainConstraintsResult(): Result<WireChainConstraints, ProgramError> {
+	return accounts<WireChainConstraints>();
+}
+function wireChainConstraintsEntry(): void { codeOf(wireChainConstraintsResult()); }
+
+export struct WireChainSkip {
+	first: Signer;
+	pet: Mutable<WirePet>;
+}
+
+function wireChainSkipEntry(): void {
+	const rejected = accounts<WireChainSkip>();
+	if (rejected.ok) { failWith(ProgramError.custom(53)); return; }
+	if (rejected.error.code != ProgramError.accountNotSigner().code) { failWith(rejected.error); return; }
+	codeOf(mutable<WirePet>(1));
+}
+
+test "the account chain rejects raw fields before lazy constraints and skips later claims after failure" {
+	const first = holder(2, keyOf(9), [], false, false);
+	const bytes = wirePetBytes();
+	bytes[8] = 2;
+	builtErrors = 0;
+	assert run(programKey(), [first, holder(1, programKey(), bytes, false, true)], [], wireChainConstraintsEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+	assert builtErrors == 0;
+	assert run(programKey(), [first, holder(1, programKey(), wirePetBytes(), false, true)], [], wireChainConstraintsEntry).result ==
+		ProgramError.userError(12).code;
+	assert builtErrors == 1;
+	assert run(programKey(), [first, holder(1, programKey(), wirePetBytes(), false, true)], [], wireChainSkipEntry).result == 0;
+}
+
+function wireChainConditionalEntry(): void {
+	const skipped = false && accounts<WireOwnedAccounts>().ok;
+	if (skipped) { failWith(ProgramError.custom(54)); return; }
+	const selected = true ? accounts<WireOwnedAccounts>() : accounts<WireOwnedAccounts>();
+	codeOf(selected);
+}
+
+test "an undecorated account chain retains guarded expression use" {
+	assert run(programKey(), [holder(1, programKey(), wirePetBytes(), false, false)], [], wireChainConditionalEntry).result == 0;
+}
+
+export struct WireAliasedChain { owner: ChainAuth; }
+function wireAliasedChainEntry(): void {
+	codeOf(accounts<WireAliasedChain>());
+}
+test "account chains retain the written proof import alias" {
+	assert run(programKey(), [holder(1, keyOf(9), [], true, false)], [], wireAliasedChainEntry).result == 0;
+	assert run(programKey(), [holder(1, keyOf(9), [], false, false)], [], wireAliasedChainEntry).result ==
+		ProgramError.accountNotSigner().code;
+}
+
+function wireScopedChainEntry(): void {
+	codeOf(scopedChainResult());
+	codeOf(accounts<ScopedChainAccounts>());
+}
+test "account chains infer their error type and retain proof annotations across module scopes" {
+	assert run(programKey(), [holder(1, keyOf(9), [], true, false)], [], wireScopedChainEntry).result == 0;
+	assert run(programKey(), [holder(1, keyOf(9), [], false, false)], [], wireScopedChainEntry).result ==
+		ProgramError.accountNotSigner().code;
+}
+
+function wireModuleProgramResult(): Result<uint64, ProgramError> {
+	const local = try accounts<ScopedProgramAccounts>();
+	const imported = try scopedProgramResult();
+	const direct = try program<System>(1);
+	const remote = try scopedDirectProgram();
+	return Result.ok(local.owner.key().bytes[0] as uint64);
+}
+function wireModuleProgramEntry(): void { codeOf(wireModuleProgramResult()); }
+function wireModuleOwnedEntry(): void {
+	const local = owned<ScopedPet>(0);
+	const remote = scopedOwnedResult();
+	if (local.ok || remote.ok) { failWith(ProgramError.custom(56)); return; }
+	if (local.error.code != remote.error.code) { failWith(ProgramError.custom(57)); return; }
+	failWith(remote.error);
+}
+
+test "proof kernels and result wrappers retain checked types across module consumers" {
+	const owner = holder(1, keyOf(9), [], true, false);
+	assert run(programKey(), [owner, systemProgramAccount()], [], wireModuleProgramEntry).result == 0;
+	let refused = systemProgramAccount();
+	refused.executable = false;
+	assert run(programKey(), [owner, refused], [], wireModuleProgramEntry).result ==
+		ProgramError.invalidProgramExecutable().code;
+	assert run(programKey(), [], [], wireModuleOwnedEntry).result == ProgramError.accountNotEnoughKeys().code;
+}
+
+struct Auth { value: uint64; }
+
+function wireNamesakeProofEntry(): void { codeOf(accounts<ScopedProgramAccounts>()); }
+test "accounts<T>() of another module proves the field types that module declared, not a namesake written here" {
+	const namesake: Auth = { value: 7 };
+	assert namesake.value == 7;
+	assert run(programKey(), [holder(1, keyOf(9), [], false, false), systemProgramAccount()], [], wireNamesakeProofEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), [holder(1, keyOf(9), [], true, false), systemProgramAccount()], [], wireNamesakeProofEntry).result == 0;
+}
+
+function wireThirdModuleEntry(): void {
+	const first = directOwned();
+	const second = directMutable();
+	const third = directDelegated();
+	const fourth = directExternal();
+	const fifth = directExternalMutable();
+	if (first.ok || second.ok || third.ok) { failWith(ProgramError.custom(58)); return; }
+	if (first.error.code != second.error.code || first.error.code != third.error.code) { failWith(ProgramError.custom(59)); return; }
+	if (fourth.ok || fifth.ok) { failWith(ProgramError.custom(60)); return; }
+	if (fourth.error.code != 77 || fifth.error.code != 77) { failWith(ProgramError.custom(61)); return; }
+	codeOf(directProgram());
+}
+
+test "repeated direct proof calls in a third consumer module keep their checked results" {
+	const owner = holder(1, keyOf(9), [], true, false);
+	assert run(programKey(), [owner, systemProgramAccount()], [], wireThirdModuleEntry).result == 0;
+	let refused = systemProgramAccount();
+	refused.executable = false;
+	assert run(programKey(), [owner, refused], [], wireThirdModuleEntry).result ==
+		ProgramError.invalidProgramExecutable().code;
+}
+
+export struct ForgetfulVerifier { unused: uint8; }
+export function acceptsOwner(this typeof ForgetfulVerifier, owner: Pubkey): boolean { return owner == keyOf(9); }
+export function verify(this typeof ForgetfulVerifier, index: int32): Result<Account, ProgramError> {
+	return unchecked(index);
+}
+
+function forgetfulEntry(): void { codeOf(external<ForgetfulVerifier>(0)); }
+function forgetfulMutableEntry(): void { codeOf(externalMutable<ForgetfulVerifier>(0)); }
+
+test "external<T> and externalMutable<T> call T.acceptsOwner themselves, so a verify that forgets the owner still refuses a foreign owner" {
+	const foreign = holder(1, keyOf(33), [], true, true);
+	const accepted = holder(1, keyOf(9), [], true, true);
+	assert run(programKey(), [foreign], [], forgetfulEntry).result == ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [accepted], [], forgetfulEntry).result == 0;
+	assert run(programKey(), [foreign], [], forgetfulMutableEntry).result == ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [accepted], [], forgetfulMutableEntry).result == 0;
+}
+
+export struct ZeroCodeVerifier { unused: uint8; }
+export function acceptsOwner(this typeof ZeroCodeVerifier, owner: Pubkey): boolean { return true; }
+export function verify(this typeof ZeroCodeVerifier, index: int32): Result<Account, ProgramError> {
+	return Result.err({ code: 0 });
+}
+
+export struct ZeroCodeExternalChain {
+	@constraint(zeroCodePassed()) first: Account;
+	value: External<ZeroCodeVerifier>;
+	pet: Mutable<WirePet>;
+}
+
+export struct ZeroCodeConstraintChain {
+	@constraint(false, zeroCodeError()) first: Account;
+	@constraint(zeroCodePassed()) last: Account;
+}
+
+function zeroCodeError(): ProgramError { return { code: 0 }; }
+function zeroCodePassed(): boolean { builtErrors += 1; return true; }
+
+function zeroCodeExternalResult(): Result<ZeroCodeExternalChain, ProgramError> {
+	return accounts<ZeroCodeExternalChain>();
+}
+function zeroCodeConstraintResult(): Result<ZeroCodeConstraintChain, ProgramError> {
+	return accounts<ZeroCodeConstraintChain>();
+}
+
+function zeroCodeVerifierEntry(): void {
+	const single = external<ZeroCodeVerifier>(0);
+	if (single.ok) { failWith(ProgramError.custom(55)); return; }
+	if (single.error.code != 0) { failWith(ProgramError.custom(56)); return; }
+	const mutableSingle = externalMutable<ZeroCodeVerifier>(0);
+	if (mutableSingle.ok) { failWith(ProgramError.custom(57)); return; }
+	if (mutableSingle.error.code != 0) { failWith(ProgramError.custom(58)); return; }
+	const chain = zeroCodeExternalResult();
+	if (chain.ok) { failWith(ProgramError.custom(59)); return; }
+	if (chain.error.code != 0) { failWith(ProgramError.custom(60)); return; }
+	codeOf(mutable<WirePet>(2));
+}
+
+function zeroCodeConstraintEntry(): void {
+	const chain = zeroCodeConstraintResult();
+	if (chain.ok) { failWith(ProgramError.custom(61)); return; }
+	if (chain.error.code != 0) { failWith(ProgramError.custom(62)); }
+}
+
+test "a zero-valued arbitrary verifier or custom constraint error stays a failed Result without exposing proofs" {
+	const found = [
+		holder(1, keyOf(9), [], false, true),
+		holder(2, keyOf(9), [], false, true),
+		holder(3, programKey(), wirePetBytes(), false, true),
+	];
+	builtErrors = 0;
+	assert run(programKey(), found, [], zeroCodeVerifierEntry).result == 0;
+	assert builtErrors == 0;
+	assert run(programKey(), found, [], zeroCodeConstraintEntry).result == 0;
+	assert builtErrors == 0;
+}
+
+function ownerFirstEntry(): void {
+	const found = safeAddress(keyOf(2));
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const code = seedsGivenOwnedFailure(slot.value, slottedTable(["safe", keyOf(2)]), found.bump);
+	if (code != 0) { failWith({ code: code }); }
+}
+
+test "the hash-only given-bump check refuses the owner before it looks at the seeds" {
+	const found = safeAddress(keyOf(2));
+	const owned = atKey(holder(1, programKey(), [], false, false), found.key);
+	assert run(programKey(), [owned], [], ownerFirstEntry).result == 0;
+	const system = atKey(holder(1, Pubkey.zero(), [], false, false), found.key);
+	assert run(programKey(), [system], [], ownerFirstEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const foreign = atKey(holder(1, keyOf(77), [], false, false), found.key);
+	assert run(programKey(), [foreign], [], ownerFirstEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+}
+
+function ownedWrongBumpEntry(): void {
+	const found = safeAddress(keyOf(2));
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const code = seedsGivenOwnedFailure(slot.value, slottedTable(["safe", keyOf(2)]), found.bump - 1);
+	if (code != 0) { failWith({ code: code }); }
+}
+
+test "the hash-only given-bump check answers ConstraintSeeds for another bump or another address" {
+	const found = safeAddress(keyOf(2));
+	const owned = atKey(holder(1, programKey(), [], false, false), found.key);
+	assert run(programKey(), [owned], [], ownedWrongBumpEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const elsewhere = atKey(holder(1, programKey(), [], false, false), keyOf(77));
+	assert run(programKey(), [elsewhere], [], ownerFirstEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+function onCurveEntry(): void {
+	const slot = unchecked(0);
+	const seeds = seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]);
+	if (!slot.ok || msSolDeriveAddress(tableAddress(seeds), 15, 255, msSolProgramId(), slot.value.keyAddress()) == 2) {
+		failWith(ProgramError.invalidSeeds());
+		return;
+	}
+	const owned = seedsGivenOwnedFailure(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]), 255);
+	if (owned != 0) { failWith(ProgramError.userError(1)); return; }
+	const given = seedsGivenFailure(slot.value.keyAddress(), slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14]]), 255);
+	if (given != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); }
+}
+
+test "an account not proven owned keeps the curve check, an owned one does not need it" {
+	const onCurve = holder(1, hostProgram(), [], false, false);
+	assert run(hostProgram(), [onCurve], [], onCurveEntry).result == 0;
+}
+
+function canonicalBumpEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const found = safeAddress(keyOf(2));
+	const same = canonicalBump(slot.value, seedTable(["safe", keyOf(2)]));
+	if (!same.ok || same.value != found.bump) { failWith(ProgramError.userError(1)); return; }
+	const other = canonicalBump(slot.value, seedTable(["safe", keyOf(3)]));
+	if (other.ok || other.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); return; }
+	const many = canonicalBump(slot.value, seedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (many.ok || many.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(3)); return; }
+	const wide = canonicalBump(slot.value, seedTable([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]]));
+	if (wide.ok || wide.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(4)); }
+}
+
+test "canonicalBump finds the bump of the account it is given and refuses another, too many seeds and a wide seed with their codes" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), found.key)], [], canonicalBumpEntry).result == 0;
+}
+
+function slottedBumpEntry(): void {
+	const slot = unchecked(0);
+	if (!slot.ok) { failWith(slot.error); return; }
+	const found = safeAddress(keyOf(2));
+	const same = slottedCanonicalBump(slot.value, slottedTable(["safe", keyOf(2)]));
+	if (!same.ok || same.value != found.bump) { failWith(ProgramError.userError(1)); return; }
+	const other = slottedCanonicalBump(slot.value, slottedTable(["safe", keyOf(3)]));
+	if (other.ok || other.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); return; }
+	const many = slottedCanonicalBump(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (many.ok || many.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(3)); return; }
+	const wide = slottedCanonicalBump(slot.value, slottedTable([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]]));
+	if (wide.ok || wide.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(4)); return; }
+	const proven = canonicalBumpProven(slot.value, slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]));
+	if (proven.ok || proven.error.code != ProgramError.maxSeedLengthExceeded().code) { failWith(ProgramError.userError(5)); return; }
+	const given = seedsGivenFailure(slot.value.keyAddress(), slottedTable([[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15]]), found.bump);
+	if (given != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(6)); }
+}
+
+test "a slotted table finds the bump of its account and refuses another, sixteen seeds and a wide seed with the codes of the copied table" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [atKey(holder(1, programKey(), [], false, false), found.key)], [], slottedBumpEntry).result == 0;
+}
+
+function mutableBumpEntry(): void {
+	const found = safeAddress(keyOf(2));
+	const safe = mutable<Safe>(0);
+	if (!safe.ok) { failWith(safe.error); return; }
+	const checked = safe.value.verifiedPdaWithBump(slottedTable(["safe", keyOf(2)]), found.bump);
+	if (!checked.ok) { failWith(checked.error); return; }
+	const wrong = safe.value.verifiedPdaWithBump(slottedTable(["safe", keyOf(2)]), found.bump - 1);
+	if (wrong.ok) { failWith(ProgramError.userError(1)); return; }
+	if (wrong.error.code != ProgramError.constraintSeeds().code) { failWith(ProgramError.userError(2)); }
+}
+
+test "verifiedPdaWithBump on a Mutable accepts the stored bump and refuses another with ConstraintSeeds" {
+	assert run(programKey(), [pinnedSafe(9)], [], mutableBumpEntry).result == 0;
+}
+
+// Account lifecycle: what init, close and the raw create/close helpers refuse. Anchor v2 reference:
+// lang-v2/src/cpi.rs create_account_with_signers, tests/close_semantics.rs, tests/lamports.rs.
+
+function counterAccount(lamports: uint64): HostAccount {
+	let account = holder(2, programKey(), counterBytes(counterTag(), 9, 48), true, true);
+	account.lamports = lamports;
+	return account;
+}
+
+test "create refuses a target that already holds an initialized account and leaves it intact" {
+	const initialized = counterAccount(5000000);
+	const accounts = [wallet(1, 10000000), initialized];
+	assert run(programKey(), accounts, [], createEntry).result == ProgramError.custom(0).code;
+	assert accounts[1].data.length == 48 && accounts[1].data[8] == 9;
+	assert accounts[0].lamports == 10000000 && accounts[1].lamports == 5000000;
+	const foreign = holder(2, keyOf(77), [], true, true);
+	assert run(programKey(), [wallet(1, 10000000), foreign], [], createEntry).result ==
+		ProgramError.custom(0).code;
+	const data = holder(2, Pubkey.zero(), [1, 2, 3, 4], true, true);
+	assert run(programKey(), [wallet(1, 10000000), data], [], createEntry).result ==
+		ProgramError.custom(0).code;
+}
+
+test "create on a pre-funded system account tops up only the shortfall and keeps its lamports" {
+	const rich = wallet(2, 5000000);
+	const accounts = [wallet(1, 10000000), rich];
+	assert run(programKey(), accounts, [], createEntry).result == 0;
+	assert accounts[1].owner == programKey() && accounts[1].data.length == 48;
+	assert accounts[1].lamports == 5000000 && accounts[0].lamports == 10000000;
+	const poor = wallet(2, 1000);
+	const topped = [wallet(1, 10000000), poor];
+	assert run(programKey(), topped, [], createEntry).result == 0;
+	assert topped[1].lamports == minimumBalanceOf(48) && topped[0].lamports == 10000000 - (minimumBalanceOf(48) - 1000);
+}
+
+function minimumBalanceOf(space: uint64): uint64 {
+	return 2 * (space + 128) * 3480;
+}
+
+function rawSelfCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	return createProgramAccount(payer, payer, 8, programId());
+}
+
+function rawSelfCreateEntry(): void { codeOf(rawSelfCreateStep()); }
+
+test "createProgramAccount refuses the payer as its own target, as Anchor v2 does with InvalidArgument" {
+	const accounts = [wallet(1, 10000000)];
+	const outcome = run(programKey(), accounts, [], rawSelfCreateEntry);
+	assert outcome.result == ProgramError.invalidArgument().code;
+	assert accounts[0].owner == Pubkey.zero();
+}
+
+function seededSelfCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	const bump = try createProgramAccountSeeded(payer, payer, 8, programId(), [seedText("pet")]);
+	return Result.ok(bump as uint64);
+}
+
+function seededSelfCreateEntry(): void { codeOf(seededSelfCreateStep()); }
+
+test "createProgramAccountSeeded refuses the payer as its own target" {
+	const accounts = [wallet(1, 10000000)];
+	assert run(programKey(), accounts, [], seededSelfCreateEntry).result == ProgramError.invalidArgument().code;
+	assert accounts[0].owner == Pubkey.zero();
+}
+
+function seededCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	const target = try account(1);
+	const _bump = try createProgramAccountSeeded(payer, target, 16, programId(), [seedText("pet")]);
+	return Result.ok(0);
+}
+
+function seededCreateEntry(): void { codeOf(seededCreateStep()); }
+
+function nonCanonicalPetKey(canonical: ProgramAddress): Pubkey {
+	for (let bump = canonical.bump - 1; bump > 0; bump--) {
+		const other = createAddressWithBump([seedText("pet")], bump, bytesAddress(programKey().bytes));
+		if (other.ok) { return other.value; }
+	}
+	return Pubkey.zero();
+}
+
+test "createProgramAccountSeeded signs with the canonical bump it derives and refuses a target at another bump of the same seeds" {
+	const canonical = findProgramAddressOf(programKey(), ["pet"]);
+	assert canonical.ok;
+	if (canonical.ok) {
+		const payer = wallet(1, 10000000);
+		const made = [payer, blank(canonical.value.key)];
+		assert run(programKey(), made, [], seededCreateEntry).result == 0;
+		assert signerIs(invocations()[0], 0, [textBytes("pet"), [canonical.value.bump]]);
+		assert made[1].owner == programKey();
+		const other = nonCanonicalPetKey(canonical.value);
+		assert other != canonical.value.key;
+		const refused = [wallet(1, 10000000), blank(other)];
+		assert run(programKey(), refused, [], seededCreateEntry).result == ProgramError.constraintSeeds().code;
+		assert invocations().length == 0;
+		assert refused[1].owner == Pubkey.zero();
+	}
+}
+
+function shortCreateStep(): Result<uint64, ProgramError> {
+	const payer = try account(0);
+	const target = try account(1);
+	const space = try instructionData().readU8(0);
+	const made = try createdAccount(payer, target, space as uint64, 0x0102030405060708);
+	return Result.ok(made.dataLength());
+}
+
+function shortCreateEntry(): void { codeOf(shortCreateStep()); }
+
+test "createdAccount refuses a space that cannot hold the 8-byte discriminator it writes" {
+	for (const space of [0 as uint8, 4, 7]) {
+		const accounts = [wallet(1, 10000000), blank(keyOf(2))];
+		const outcome = run(programKey(), accounts, [space as uint8], shortCreateEntry);
+		assert outcome.result == ProgramError.accountDataTooSmall().code;
+		assert accounts[1].owner == Pubkey.zero();
+	}
+	const exact = [wallet(1, 10000000), blank(keyOf(2))];
+	assert run(programKey(), exact, [8], shortCreateEntry).result == 0;
+	assert exact[1].data.length == 8;
+}
+
+function rawCloseStep(): Result<uint64, ProgramError> {
+	return closedProgramAccount(try account(0), try account(1));
+}
+
+function rawCloseEntry(): void { codeOf(rawCloseStep()); }
+
+test "closedProgramAccount refuses a read-only destination before it moves a lamport, as Anchor v2 does with ConstraintMut" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	let refund = wallet(2, 50);
+	refund.writable = false;
+	const accounts = [counter, refund];
+	const outcome = run(programKey(), accounts, [], rawCloseEntry);
+	assert outcome.result == ProgramError.constraintMut().code;
+	assert accounts[0].lamports == 700 && accounts[1].lamports == 50;
+}
+
+test "closedProgramAccount refuses a read-only target" {
+	let readonlyCounter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, false);
+	readonlyCounter.lamports = 700;
+	const first = [readonlyCounter, wallet(2, 50)];
+	assert run(programKey(), first, [], rawCloseEntry).result == ProgramError.constraintMut().code;
+	assert first[0].lamports == 700;
+}
+
+test "closedProgramAccount refuses a target another program owns and moves nothing" {
+	let foreign = holder(1, keyOf(77), counterBytes(counterTag(), 9, 48), false, true);
+	foreign.lamports = 700;
+	const second = [foreign, wallet(2, 50)];
+	assert run(programKey(), second, [], rawCloseEntry).result != 0;
+	assert second[0].lamports == 700 && second[0].owner == keyOf(77);
+}
+
+function closeScrubStep(): Result<uint64, ProgramError> {
+	const target = try account(0);
+	const before = msSolLoadU64(target.recordAddress() + 88);
+	const moved = try closedProgramAccount(target, try account(1));
+	if (msSolLoadU64(target.recordAddress() + 88) == before) { return Result.err(ProgramError.userError(1)); }
+	return Result.ok(moved);
+}
+
+function closeScrubEntry(): void { codeOf(closeScrubStep()); }
+
+test "close scrubs the discriminator bytes, as Anchor v2 writes its closed sentinel over them" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	const accounts = [counter, wallet(2, 1000000000)];
+	assert run(programKey(), accounts, [], closeScrubEntry).result == 0;
+}
+
+test "after a close the account is no longer this program's: a later instruction refuses it even when it is re-funded" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	const accounts = [counter, wallet(2, 1000000000)];
+	assert run(programKey(), accounts, [], closeEntry).result == 0;
+	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0 && accounts[0].lamports == 0;
+	accounts[0].lamports = 5000000;
+	accounts[0].writable = true;
+	assert run(programKey(), [accounts[0]], [], bumpEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	assert run(programKey(), [accounts[0]], [], ownedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const revived: HostAccount = { ...accounts[0], owner: programKey() };
+	assert run(programKey(), [revived], [], bumpEntry).result ==
+		ProgramError.accountDiscriminatorNotFound().code;
+}
+
+function closeThenCreateStep(): Result<uint64, ProgramError> {
+	const counter = try mutable<Counter>(0);
+	const refund = try writable(2);
+	const payer = try writableSigner(2);
+	const _closed = try close(counter, refund);
+	const reborn = try create<Counter>(payer, try writable(0));
+	reborn.data().value = 1;
+	return Result.ok(0);
+}
+
+function closeThenCreateEntry(): void { codeOf(closeThenCreateStep()); }
+
+test "a create on an account closed earlier in the same instruction is refused: the close keeps its exclusive borrow" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), true, true);
+	counter.lamports = 700;
+	const accounts = [counter, wallet(2, 50), wallet(3, 10000000)];
+	assert run(programKey(), accounts, [], closeThenCreateEntry).result ==
+		ProgramError.accountBorrowFailed().code;
+}
+
+struct Crit {
+	hp: uint32;
+	alive: boolean;
+	owner: Pubkey;
+	rolls: uint16[3];
+}
+
+let scratchFirstSeen: uint64 = 0;
+let scratchSecondSeen: uint64 = 0;
+let scratchFirstKept: uint64 = 0;
+let scratchLengths: uint64 = 0;
+
+function scratchStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU8(0);
+	const first = scratch<Crit>(count as int32);
+	for (const crit of first) {
+		scratchFirstSeen = scratchFirstSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
+	}
+	for (let index = 0; index < first.length; index++) {
+		first[index].hp = 100 + (index as uint32);
+		first[index].rolls[2] = 7;
+		first[index].alive = true;
+		first[index].owner.bytes[31] = 3;
+	}
+	const second = scratch<Crit>(count as int32);
+	for (const crit of second) {
+		scratchSecondSeen = scratchSecondSeen + (crit.hp as uint64) + (crit.alive ? 1 : 0) +
+			(crit.rolls[2] as uint64) + (crit.owner.bytes[31] as uint64);
+	}
+	for (let index = 0; index < second.length; index++) { second[index].hp = 5; }
+	for (const crit of first) { scratchFirstKept = scratchFirstKept + (crit.hp as uint64); }
+	const bytes = scratch<uint8>(3);
+	bytes[2] = 9;
+	scratchLengths = (first.length as uint64) * 100 + (second.length as uint64) * 10 + (bytes.length as uint64);
+	return Result.ok(0);
+}
+
+function scratchEntry(): void { codeOf(scratchStep()); }
+
+test "scratch hands out zeroed spans of the length asked for that never overlap" {
+	const input: uint8[] = [10];
+	assert run(programKey(), [], input, scratchEntry).result == 0;
+	assert scratchFirstSeen == 0 && scratchSecondSeen == 0;
+	assert scratchFirstKept == 1045;
+	assert scratchLengths == 10 * 100 + 10 * 10 + 3;
+}
+
+function scratchSizeStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU16(0);
+	const big = scratch<uint8>(count as int32);
+	if (big.length > 0) { big[big.length - 1] = 1; }
+	const tail = try instructionData().readU8(2);
+	if (tail == 1) {
+		const more = scratch<uint8>(1);
+		more[0] = 1;
+	}
+	return Result.ok(0);
+}
+
+function scratchSizeEntry(): void { codeOf(scratchSizeStep()); }
+
+function scratchSizeRun(count: int32, tail: uint8): uint64 {
+	const input: uint8[] = [(count & 255) as uint8, ((count >> 8) & 255) as uint8, tail];
+	return run(programKey(), [], input, scratchSizeEntry).result;
+}
+
+test "scratch answers InvalidArgument when the heap cannot hold the request, and takes what fits to the last byte" {
+	assert scratchSizeRun(0, 1) == 0;
+	let fits = 0;
+	let refused = 32768;
+	while (refused - fits > 1) {
+		const middle = (fits + refused) / 2;
+		if (scratchSizeRun(middle, 0) == 0) { fits = middle; } else { refused = middle; }
+	}
+	assert fits > 32000 && fits < 32768;
+	assert scratchSizeRun(refused, 0) == ProgramError.invalidArgument().code;
+	assert scratchSizeRun(fits, 0) == 0;
+	assert scratchSizeRun(fits, 1) == ProgramError.invalidArgument().code;
+	assert scratchSizeRun(fits - 8, 1) == 0;
+	assert scratchSizeRun(65535, 0) == ProgramError.invalidArgument().code;
+}
+
+function scratchNegativeStep(): Result<uint64, ProgramError> {
+	const count = try instructionData().readU8(0);
+	const wide: int32 = (count as int32) - 1;
+	const none = scratch<uint8>(wide);
+	return Result.ok(none.length as uint64);
+}
+
+function scratchNegativeEntry(): void { codeOf(scratchNegativeStep()); }
+
+let scratchWholeSeen: uint64 = 0;
+
+function scratchWholeStep(): Result<uint64, ProgramError> {
+	const crits = scratch<Crit>(2);
+	crits[0].hp = 41;
+	crits[0].owner.bytes[5] = 6;
+	crits[1] = crits[0];
+	crits[0].hp = 1;
+	scratchWholeSeen = (crits[1].hp as uint64) * 1000 + (crits[1].owner.bytes[5] as uint64) * 10 + (crits[0].hp as uint64);
+	return Result.ok(0);
+}
+
+function scratchWholeEntry(): void { codeOf(scratchWholeStep()); }
+
+test "scratch stores a whole element through the span and the copy keeps its own bytes" {
+	assert run(programKey(), [], [], scratchWholeEntry).result == 0;
+	assert scratchWholeSeen == 41061;
+}
+
+test "scratch refuses a negative count and gives an empty span for zero" {
+	const zero: uint8[] = [1];
+	assert run(programKey(), [], zero, scratchNegativeEntry).result == 0;
+	const negative: uint8[] = [0];
+	assert run(programKey(), [], negative, scratchNegativeEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "the MagicBlock and Hydra modules are linked into this test run, so their host tests run with it" {
+	assert HYDRA_PROGRAM_ID != MAGIC_PROGRAM_ID && MAGIC_VAULT_ID != MAGIC_PROGRAM_ID;
+}
+
+test "std/solana gives a native program the Borsh writer and reader its clients use" {
+	let reader = BorshReader.of(BorshWriter.create().u64(7).bytes);
+	const back = reader.u64();
+	assert back.ok;
+	if (back.ok) { assert back.value == 7; }
+}
+
+let scratchScalarsSeen = "";
+
+function scratchScalarsStep(): Result<uint64, ProgramError> {
+	const words = scratch<uint64>(3);
+	words[0] = 0xffffffffffffff01;
+	words[2] = 7;
+	const flags = scratch<boolean>(2);
+	flags[1] = true;
+	const halves = scratch<int16>(2);
+	halves[0] = -3;
+	scratchScalarsSeen = `${words[0]} ${words[1]} ${words[2]} ${flags[0]} ${flags[1]} ${halves[0]} ${halves[1]}`;
+	return Result.ok(0);
+}
+
+function scratchScalarsEntry(): void { codeOf(scratchScalarsStep()); }
+
+test "scratch of uint64, boolean and int16 reads back what was stored, zero elsewhere" {
+	assert run(programKey(), [], [], scratchScalarsEntry).result == 0;
+	assert scratchScalarsSeen == "18446744073709551361 0 7 false true -3 0";
+}

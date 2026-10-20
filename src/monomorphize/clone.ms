@@ -306,6 +306,10 @@ export function monoConcreteTypeName(t: Type | null): string {
 				+ " ? " + monoConcreteTypeName(t.typeChildren[2])
 				+ " : " + monoConcreteTypeName(t.typeChildren[3]);
 		},
+		TypeKind.StringLiteral => `"${t.typeName}"`,
+		TypeKind.IndexedAccess => t.typeChildren.length < 2 ? "unknown"
+			: monoConcreteTypeName(t.typeChildren[0]) + "[" + monoConcreteTypeName(t.typeChildren[1]) + "]",
+		TypeKind.KeyOf => t.typeChildren.length < 1 ? "unknown" : "keyof " + monoConcreteTypeName(t.typeChildren[0]),
 		TypeKind.Tuple => {
 			// Roundtrip the `[A, B]` literal through resolveAnnotation back to a Tuple —
 			// "unknown" would erase the element types and drop per-element DRC cleanup.

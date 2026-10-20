@@ -8,12 +8,13 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric } from "./types";
+import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric, numberLiteralTypeOf, markDuVariant } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
+import { proxyAtExtern } from "./proxy";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, createState, isAtEnd } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -435,6 +436,13 @@ function instanceOfAliasToNamedType(ctx: CheckerContext, alias: Symbol, baseName
 	return isRef ? createRef(inst) : inst;
 }
 
+function resolveTypeTest(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
+	ctx.typeTestDepth = ctx.typeTestDepth + 1;
+	const tested = resolveAnnotation(text, ctx, line, col);
+	ctx.typeTestDepth = ctx.typeTestDepth - 1;
+	return tested;
+}
+
 function checkTypeArgConstraints(ctx: CheckerContext, baseName: string, genericParams: string, args: Type[], line: int32, col: int32): void {
 	const paramList = splitTopLevel(genericParams, ",");
 	for (let ci = 0; ci < paramList.length && ci < args.length; ci += 1) {
@@ -442,7 +450,7 @@ function checkTypeArgConstraints(ctx: CheckerContext, baseName: string, genericP
 		const colonPos = findChar(paramStr, ":");
 		if (colonPos <= 0) continue;
 		const constraintName = paramStr.slice(colonPos + 1, paramStr.length).trim();
-		const constraintType = resolveAnnotation(constraintName, ctx, line, col);
+		const constraintType = resolveTypeTest(constraintName, ctx, line, col);
 		if (!isUnresolvedType(constraintType)
 				&& !isUnresolvedType(args[ci])
 				&& args[ci].kind != TypeKind.GenericParam
@@ -538,6 +546,32 @@ function refuseVoidMember(ctx: CheckerContext, parts: string[], members: Type[],
 	addError(ctx, msg, line, col);
 }
 
+function resolveKeyOf(operand: string, ctx: CheckerContext, line: int32, col: int32): Type {
+	const objectType = resolveAnnotation(operand, ctx, line, col);
+	if (objectType.kind == TypeKind.Error) return objectType;
+	if (hasGenericParams(objectType)) return createKeyOfType(objectType);
+	const keys = keyOfType(objectType);
+	if (keys == null) {
+		if (line > 0) addError(ctx, `'keyof ${operand.trim()}' has no keys: '${typeDisplayName(objectType)}' is not an object type with properties`, line, col);
+		return errorType();
+	}
+	return keys;
+}
+
+// `T[K]` where K is a string literal type, a union of them or a type parameter;
+// null when the brackets hold something else, so the sized-array path reports it.
+function resolveIndexedAccess(objectText: string, indexText: string, ctx: CheckerContext, line: int32, col: int32): Type | null {
+	const indexType = resolveAnnotation(indexText, ctx, 0, 0);
+	const isKey = indexType.kind == TypeKind.GenericParam || isKeyConstraint(indexType);
+	if (!isKey) return null;
+	const objectType = resolveAnnotation(objectText, ctx, line, col);
+	if (objectType.kind == TypeKind.Error) return objectType;
+	const access = indexedAccessOf(objectType, indexType);
+	if (access != null) return access;
+	if (line > 0) addError(ctx, `'${indexText}' is not a key of '${typeDisplayName(objectType)}'`, line, col);
+	return errorType();
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -620,7 +654,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				const truePart = afterQ.slice(0, colonIdx).trim();
 				const falsePart = afterQ.slice(colonIdx + 1, afterQ.length).trim();
 				const checkType = resolveAnnotation(checkPart, ctx, line, col);
-				const extendsType = resolveAnnotation(constraintPart, ctx, line, col);
+				const extendsType = resolveTypeTest(constraintPart, ctx, line, col);
 				const inferSaved = inferScope.length;
 				collectInferParamNames(extendsType, inferScope);
 				const trueType = resolveAnnotation(truePart, ctx, line, col);
@@ -704,11 +738,21 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		return createStringLiteral(trimmed.slice(1, trimmed.length - 1));
 	}
 
+	if (trimmed.length > 6 && trimmed.slice(0, 6) == "keyof ") return resolveKeyOf(trimmed.slice(6, trimmed.length), ctx, line, col);
+
 	// Boolean literal type: `true` / `false` → BooleanLiteral (TypeScript parity)
 	// Required for discriminated union narrowing on boolean discriminants
 	// (e.g. `type Result<T,E> = { ok: true, value: T } | { ok: false, error: E }`).
 	if (trimmed == "true") return createBooleanLiteral(true);
 	if (trimmed == "false") return createBooleanLiteral(false);
+
+	const digits = trimmed.startsWith("-") ? trimmed.slice(1, trimmed.length).trim() : trimmed;
+	if (digits.length > 0 && digits.byteAt(0) >= "0".code && digits.byteAt(0) <= "9".code) {
+		const lit = numberLiteralTypeOf(trimmed.startsWith("-") ? "-" + digits : digits);
+		if (lit != null) return lit;
+		addError(ctx, "'" + trimmed + "' is not a numeric literal type: write a decimal value within int64 or a finite float64", line, col);
+		return errorType();
+	}
 
 	// Object literal type: { field: Type; ... } or { field: Type, ... }
 	// Also handles index signature: { [key: K]: V } → normalized to Map<K, V>.
@@ -828,6 +872,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 
 			const dim = constArrayDimension(sizeStr, ctx, line, col);
 			if (dim < 0) {
+				const access = resolveIndexedAccess(inner, sizeStr, ctx, line, col);
+				if (access != null) return access;
 				if (line > 0) {
 					addError(ctx, `array size '${sizeStr}' must be a compile-time integer constant`, line, col);
 					return errorType();
@@ -1015,6 +1061,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		"null" => nullType(),
 		"never" => neverType(),
 		"unknown" => unknownType(),
+		"object" => {
+			if (line > 0 && ctx.typeTestDepth == 0) {
+				addError(ctx, "'object' only tests a type here, after 'extends' (`V extends object ? A : B`, `<T extends object>`); a value typed 'object' has no representation - type it as a class, an interface or 'unknown'", line, col);
+				return errorType();
+			}
+			return nonPrimitiveType();
+		},
 		"any" => {
 			if (line > 0) {
 				addError(ctx, "'any' is not a MetaScript type - use 'unknown' with an explicit cast", line, col);
@@ -1434,7 +1487,7 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): void 
 		const constraintStr = paramStr.slice(colonPos + 1, paramStr.length);
 		const gp = createGenericParam(paramName);
 		// Store constraint type in typeExtra
-		gp.typeExtra = resolveAnnotation(constraintStr, ctx, 0, 0);
+		gp.typeExtra = resolveTypeTest(constraintStr, ctx, 0, 0);
 		defineSymbol(ctx.table, makeSymbol(paramName, SymbolKind.TypeAlias, gp, false));
 	} else {
 		// No constraint: "T"
@@ -1696,6 +1749,8 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnFlags.indexOf("extern", 0) >= 0 && !ctx.modulePath.endsWith(".jms")) {
 		refuseUnknownAtCBoundary(ctx, d.fnName, paramTypes, returnType, node);
 	}
+	const proxySpot = d.fnFlags.indexOf("extern", 0) >= 0 ? proxyAtExtern(ctx, paramTypes, returnType) : "";
+	if (proxySpot != "") addError(ctx, "extern '" + d.fnName + "' " + proxySpot + ": a Proxy crosses into foreign code, which reads it without its traps — " + (proxySpot == "return type" ? "return the target and wrap it here" : "pass proxyTarget(p)"), node.location.line, node.location.column);
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;
@@ -1994,6 +2049,13 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		const pt = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
 		parentTypes.push(pt);
 	}
+	const baseExprs: Node[] = [];
+	for (let i = 0; i < parentTypes.length; i += 1) {
+		const base = createNodeAt(NodeKind.Identifier, { name: d.interfaceExtends[i] } as IdentifierData, node.location);
+		base.nodeType = parentTypes[i];
+		baseExprs.push(base);
+	}
+	node.baseExprs = baseExprs;
 
 	if (hasGenerics) {
 		closeScope(ctx.table);
@@ -2163,7 +2225,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 				defineGenericParam(ctx, p.trim());
 			}
 		}
-		const resolved = resolveDiscriminatedUnion(ctx, d);
+		const resolved = resolveDiscriminatedUnion(ctx, d, node.flags.has(NodeFlag.ValueUnion));
 		if (hasGenericAliasDU) {
 			closeScope(ctx.table);
 		}
@@ -2266,7 +2328,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 //   typeChildren = variant types, typeName = alias name,
 //   typeExtra = discriminant enum Type,
 //   typeNames = [discFieldName, variantKey0, variantKey1, ...]
-function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): Type | null {
+function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData, valueUnion: boolean): Type | null {
 	// Resolve discriminant type — must be an enum or boolean.
 	// Boolean disc is the natural fit for two-variant unions like
 	// `type Result<T,E> = match (ok: boolean) { true => {...}, false => {...} }`.
@@ -2302,37 +2364,36 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 		}
 	}
 
-	// Resolve each variant type.
-	// - Enum disc: stamp variant with `<alias>.<key>` (dotted form). The dot
-	//   serves dual purpose: error messages display `MyData.Ok`, and
-	//   `variantStructCName` excludes dotted names from direct C use (falls
-	//   back to synthetic `<Union>_v<N>` which matches the typedef emitted
-	//   by `genUnionType`).
-	// - Boolean disc: variants stay anonymous. Inject the disc field as
-	//   `BooleanLiteral` for narrowing; C stores no field of one value (`storesNothing`).
+	// Resolve each variant type. Every variant carries the disc field as a
+	// literal type (`BooleanLiteral` or `EnumLiteral`), so a narrowed variant
+	// used as a whole value keeps it. A `struct` union unwraps each written
+	// object to a by-value arm, stamps an enum arm `<alias>.<key>` (dotted: error
+	// messages display `MyData.Ok`; `variantStructCName` excludes dotted names
+	// from direct C use and falls back to the synthetic `<Union>_v<N>` that
+	// `genUnionType` emits) and C stores no field of one value in it
+	// (`storesNothing`). A `type` union keeps each object a reference and
+	// anonymous, as the written union of objects does.
 	const variantTypes: Type[] = [];
 	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
 		let resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
-		if (resolved != null && resolved.kind == TypeKind.Ref && resolved.typeReturn != null
-				&& d.variantTypes[vi].trim().charAt(0) == "{") {
-			resolved = resolved.typeReturn;
-		}
-		if (resolved != null && resolved.kind == TypeKind.Struct && vi < d.variantKeys.length) {
-			if (isBooleanDisc) {
-				const discValue = d.variantKeys[vi] == "true";
-				const discFieldType = createBooleanLiteral(discValue);
-				const newNames: string[] = [d.discriminantName];
-				for (const n of resolved.typeNames) newNames.push(n);
-				const newChildren: Type[] = [discFieldType];
-				for (const c of resolved.typeChildren) newChildren.push(c);
-				resolved.typeNames = newNames;
-				resolved.typeChildren = newChildren;
-			} else {
-				const bareKey = bareAfterDelim(d.variantKeys[vi], ".");
-				resolved.typeName = d.aliasName + "." + bareKey;
-				spelled(resolved);
+		const written = d.variantTypes[vi].trim().charAt(0) == "{" && resolved != null && resolved.kind == TypeKind.Ref && resolved.typeReturn != null;
+		const body = written ? resolved.typeReturn : resolved;
+		if (body != null && body.kind == TypeKind.Struct && vi < d.variantKeys.length) {
+			const bareKey = bareAfterDelim(d.variantKeys[vi], ".");
+			const discFieldType = isBooleanDisc ? createBooleanLiteral(d.variantKeys[vi] == "true") : createEnumLiteral(discType, bareKey);
+			const newNames: string[] = [d.discriminantName];
+			for (const n of body.typeNames) newNames.push(n);
+			const newChildren: Type[] = [discFieldType];
+			for (const c of body.typeChildren) newChildren.push(c);
+			body.typeNames = newNames;
+			body.typeChildren = newChildren;
+			if (valueUnion && !isBooleanDisc) {
+				body.typeName = d.aliasName + "." + bareKey;
+				spelled(body);
+				markDuVariant(body);
 			}
 		}
+		if (written && valueUnion) resolved = body;
 		variantTypes.push(resolved);
 	}
 
@@ -2347,6 +2408,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 		names.push(key);
 	}
 	unionType.typeNames = names;
+	if (valueUnion) unionType.typeFlags = unionType.typeFlags.incl(TypeFlag.ValueUnion);
 	return unionType;
 }
 
@@ -2851,7 +2913,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		for (let i = 0; i < fields.length; i += 1) {
 			body.push(createNodeAt(NodeKind.PropertyDecl, { propName: fields[i], propType: types[i], propIsStatic: false, propIsReadonly: false, propVisibility: "", propInitializer: null as unknown as Node }, zl));
 		}
-		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
+		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl, classImplements: [] }, zl);
 	} else {
 		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}

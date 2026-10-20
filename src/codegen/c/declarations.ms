@@ -5,17 +5,17 @@
 
 import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ProgramData, PropertyDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind, MethodDeclData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, getProperty, peelToStructOrUnion } from "../../checker/types";
+import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, getProperty, peelToStructOrUnion, skipModifier } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, factClaimGeneric, scopeMangledParam,
+	setLocalSymName, factClaimGeneric, scopeMangledParam, emitProcLocalsLine,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isOpenArrayParam, openArrayDataName, openArrayLenName, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { copiesInline, inlineDeclOf } from "./forward";
@@ -177,6 +177,11 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
 				if (paramSym != null) p.indirectSyms.push(paramSym);
+			}
+			if (pi < fnType.typeChildren.length && isOpenArrayParam(fnType.typeChildren[pi])) {
+				const spanName = safeName(d.params[pi]);
+				const spanType = getTypeDesc(g, skipModifier(fnType.typeChildren[pi]));
+				emitProcLocalsLine(p, `${spanType} ${spanName} = { ${openArrayDataName(spanName)}, ${openArrayLenName(spanName)} };`);
 			}
 		}
 		genStmt(g, p, d.fnBody);

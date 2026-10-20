@@ -28,7 +28,7 @@ try { await fVoid(); log += "continued"; } catch (e) { log += `void ${e.message}
 try { const a = await fNull(); log += `continued ${a === null ? "null" : a}`; } catch (e) { log += `null ${e.message}|`; }
 try { await Promise.reject(new Error("reject")); log += "continued"; } catch (e) { log += `reject ${e.message}|`; }
 try {
-	const a = await new Promise<Pt>((resolve: (value: Pt) => void, reject: (reason: Error) => void): void => { reject(new Error("rejectPt")); });
+	const a = await new Promise<Pt>((resolve: (value: Pt) => void, reject: (reason: string | Error) => void): void => { reject(new Error("rejectPt")); });
 	log += `continued ${a.x}`;
 } catch (e) { log += `rejectPt ${e.message}|`; }
 {

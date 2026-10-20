@@ -185,6 +185,33 @@ export macro seedTable(list: Node): Node {
 	return { kind: NodeKind.ArrayLiteral, line: list.line, column: list.column, elements: slices };
 }
 
+// `seedTable` with one free slice after the seeds, for the bump.
+export macro bumpTable(list: Node): Node {
+	if (list.kind !== NodeKind.ArrayLiteral) {
+		error(SEED_LIST_REQUIRED, list);
+	}
+	const elements: Node[] = [];
+	for (const seed of list.elements) { elements.push(seed); }
+	elements.push({
+		kind: NodeKind.CallExpr,
+		line: list.line,
+		column: list.column,
+		callee: bindSym("seedFree"),
+		arguments: [],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	});
+	return {
+		kind: NodeKind.CallExpr,
+		line: list.line,
+		column: list.column,
+		callee: bindSym("seedTable"),
+		arguments: [{ kind: NodeKind.ArrayLiteral, line: list.line, column: list.column, elements: elements }],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
 // `seedTable` with three free slices after the seeds and a byte for the bump, as `SlottedSeeds`: the hash is staged
 // in the list's own table.
 export macro slottedTable(list: Node): Node {

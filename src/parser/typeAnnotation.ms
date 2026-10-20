@@ -132,10 +132,15 @@ export function parseTypeExpr(state: ParserState): Node {
 	return first;
 }
 
+function isNegativeNumberAhead(state: ParserState): boolean {
+	return current(state).kind == TokenKind.Minus && state.position + 1 < state.tokens.length
+		&& state.tokens[state.position + 1].kind == TokenKind.Number;
+}
+
 function parseTypeAtom(state: ParserState): Node {
 	const token = current(state);
 
-	if (token.kind == TokenKind.Distinct) {
+	if (token.kind == TokenKind.Distinct || token.kind == TokenKind.Keyof) {
 		advance(state);
 		return parseTypeAtom(state);
 	}
@@ -165,6 +170,13 @@ function parseTypeAtom(state: ParserState): Node {
 	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		return applyArraySuffix(state, createNode(NodeKind.Identifier, { name: "[tuple]" }, token));
+	}
+
+	if (isNegativeNumberAhead(state)) {
+		advance(state);
+		const digits = current(state);
+		advance(state);
+		return createNode(NodeKind.Identifier, { name: "-" + digits.value }, token);
 	}
 
 	// Named type: identifier (possibly with generics and array suffix)
@@ -460,6 +472,11 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		skipTypeAtomNoOptional(state);
 		return;
 	}
+	if (token.kind == TokenKind.Keyof) {
+		advance(state);
+		skipTypeAtomNoOptional(state);
+		return;
+	}
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {
 		advance(state); // consume 'infer'
@@ -489,6 +506,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		return;
 	}
+	if (isNegativeNumberAhead(state)) advance(state);
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state);
@@ -517,6 +535,11 @@ function skipTypeAtom(state: ParserState): void {
 
 	if (token.kind == TokenKind.Distinct) {
 		addError(state, distinctMisplacedMessage(token.line));
+		advance(state);
+		skipTypeAtom(state);
+		return;
+	}
+	if (token.kind == TokenKind.Keyof) {
 		advance(state);
 		skipTypeAtom(state);
 		return;
@@ -571,6 +594,7 @@ function skipTypeAtom(state: ParserState): void {
 		return;
 	}
 
+	if (isNegativeNumberAhead(state)) advance(state);
 	// Named type (identifier or keyword type)
 	advance(state);
 	// Qualified/enum-literal type: K.A — consume .Ident chain greedily

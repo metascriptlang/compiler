@@ -10,6 +10,10 @@ export enum Ty {
 	Uint32,
 	Uint64,
 	Float64,
+	Float32,
+	Char,
+	BigInt,
+	Bool,
 }
 
 export enum Fam {
@@ -20,6 +24,29 @@ export enum Fam {
 	Coll,
 	Str,
 	Own,
+	Iter,
+	Seq,
+	Gcls,
+	Enum,
+	Exc,
+	Native,
+	Spawn,
+	Actor,
+	Race,
+	Cls,
+	Conv,
+	Meta,
+	Async,
+}
+
+export enum Mod {
+	Alias,
+	Namespace,
+	Reexport,
+	Star,
+	Cycle,
+	Init,
+	Select,
 }
 
 export enum W {
@@ -44,6 +71,19 @@ export enum W {
 	FamColl,
 	FamStr,
 	FamOwn,
+	FamIter,
+	FamSeq,
+	FamGcls,
+	FamEnum,
+	FamExc,
+	FamNative,
+	FamSpawn,
+	FamActor,
+	FamRace,
+	FamCls,
+	FamConv,
+	FamMeta,
+	FamAsync,
 	ClosureNamed,
 	ClosureArray,
 	ClosureIife,
@@ -58,6 +98,8 @@ export enum W {
 	GenericPick,
 	GenericMap,
 	GenericBox,
+	GenericInfer,
+	GenericBound,
 	AggField,
 	AggMethod,
 	AggFresh,
@@ -69,6 +111,7 @@ export enum W {
 	AggClass,
 	AggAlias,
 	AggPoke,
+	AggSpread,
 	CollIndex,
 	CollSize,
 	CollGet,
@@ -96,16 +139,178 @@ export enum W {
 	StrEdit,
 	OwnField,
 	OwnHeld,
+	OwnView,
 	OwnDecl,
 	OwnCopy,
 	OwnMove,
 	OwnRef,
 	OwnOut,
 	OwnSink,
+	OwnFreeze,
+	OwnRo,
+	IterNth,
+	IterLast,
+	IterDecl,
+	IterDrain,
+	IterManual,
+	SeqElem,
+	SeqSize,
+	SeqSpan,
+	SeqBorrow,
+	SeqTuple,
+	SeqTupleEdit,
+	SeqVec,
+	SeqVecEdit,
+	SeqSpread,
+	SeqDestruct,
+	SeqRest,
+	SeqSpanSet,
+	SeqRef,
+	SeqMove,
+	SeqLoop,
+	GclsCell,
+	GclsMap,
+	GclsNest,
+	GclsPair,
+	GclsStack,
+	GclsBest,
+	GclsWrap,
+	GclsInfer,
+	GclsDecl,
+	GclsSet,
+	GclsRef,
+	GclsOwn,
+	EnumNumeric,
+	EnumMatch,
+	EnumBitset,
+	EnumAlias,
+	EnumDistinct,
+	EnumLiteral,
+	EnumDisc,
+	EnumUnknown,
+	EnumNever,
+	EnumInter,
+	EnumCond,
+	ExcCatch,
+	ExcFinally,
+	ExcRethrow,
+	ExcUnwind,
+	ExcDefer,
+	ExcDeferLoop,
+	ExcRecover,
+	ExcResult,
+	ExcNarrow,
+	ExcWrap,
+	ExcOrElse,
+	ExcNullable,
+	NativePtr,
+	NativeRef,
+	NativeArith,
+	NativeHeap,
+	NativeLibc,
+	NativeCstr,
+	NativeOut,
+	NativeSink,
+	NativeRead,
+	NativeSize,
+	NativeView,
+	SpawnFan,
+	SpawnAll,
+	SpawnMove,
+	SpawnShare,
+	SpawnLocked,
+	SpawnArc,
+	SpawnNest,
+	SpawnFail,
+	SpawnTimed,
+	ActorState,
+	ActorCall,
+	ActorChain,
+	ActorMany,
+	ActorSpawn,
+	ActorStop,
+	RaceFirst,
+	RaceTie,
+	RaceAny,
+	RaceFail,
+	RaceAbort,
+	RaceTimer,
+	ClsField,
+	ClsCall,
+	ClsStatic,
+	ClsIface,
+	ClsIs,
+	ClsNew,
+	ClsMutate,
+	ClsAlias,
+	ClsLoop,
+	ClsLiteral,
+	ClsDeclPlain,
+	ClsDeclInherit,
+	ClsDeclAccessor,
+	ClsDeclStatic,
+	ClsDeclImplements,
+	ClsDeclVisible,
+	ClsDeclAbstract,
+	ClsDeclBlock,
+	ConvCast,
+	ConvFrac,
+	ConvText,
+	ConvExt,
+	ConvRef,
+	ConvStatic,
+	ConvProto,
+	ConvOp,
+	MetaBlock,
+	MetaFn,
+	MetaMacro,
+	MetaJsx,
+	MetaWhen,
+	MetaInline,
+	MetaDecor,
+	AsyncAwait,
+	AsyncImmediate,
+	AsyncSeq,
+	AsyncTick,
+	AsyncResolve,
+	AsyncInterleave,
+	AsyncAll,
+	AsyncCatch,
+	AsyncHold,
+	AsyncLocal,
+	AsyncResult,
+	AsyncFunc,
+	AsyncArrow,
+	AsyncMethod,
 	ExprFam,
 	StmtFam,
 	StmtElse,
 	UnionLen,
+	MetaSpread,
+	CoreExpr,
+	CoreStmt,
+	CoreFn,
+	CorePow,
+	CoreNullish,
+	CoreCvt,
+	CoreOptional,
+	CoreCmp,
+	CoreWhile,
+	CoreDo,
+	CoreSwitch,
+	CoreMatch,
+	CoreCompound,
+	CoreCell,
+	CoreIncDec,
+	CoreVoid,
+	CoreAlias,
+	CoreDefault,
+	CoreRest,
+	CoreOverload,
+	CoreRecurse,
+	CoreFnValue,
+	CoreZero,
+	CoreUshr,
 }
 
 export const W_KEYS: string[] = [
@@ -130,6 +335,19 @@ export const W_KEYS: string[] = [
 	"w.fam.coll",
 	"w.fam.str",
 	"w.fam.own",
+	"w.fam.iter",
+	"w.fam.seq",
+	"w.fam.gcls",
+	"w.fam.enum",
+	"w.fam.exc",
+	"w.fam.native",
+	"w.fam.spawn",
+	"w.fam.actor",
+	"w.fam.race",
+	"w.fam.cls",
+	"w.fam.conv",
+	"w.fam.meta",
+	"w.fam.async",
 	"w.closure.named",
 	"w.closure.array",
 	"w.closure.iife",
@@ -144,6 +362,8 @@ export const W_KEYS: string[] = [
 	"w.generic.pick",
 	"w.generic.map",
 	"w.generic.box",
+	"w.generic.infer",
+	"w.generic.bound",
 	"w.agg.field",
 	"w.agg.method",
 	"w.agg.fresh",
@@ -155,6 +375,7 @@ export const W_KEYS: string[] = [
 	"w.agg.class",
 	"w.agg.alias",
 	"w.agg.poke",
+	"w.agg.spread",
 	"w.coll.index",
 	"w.coll.size",
 	"w.coll.get",
@@ -182,53 +403,258 @@ export const W_KEYS: string[] = [
 	"w.str.edit",
 	"w.own.field",
 	"w.own.held",
+	"w.own.view",
 	"w.own.decl",
 	"w.own.copy",
 	"w.own.move",
 	"w.own.ref",
 	"w.own.out",
 	"w.own.sink",
+	"w.own.freeze",
+	"w.own.ro",
+	"w.iter.nth",
+	"w.iter.last",
+	"w.iter.decl",
+	"w.iter.drain",
+	"w.iter.manual",
+	"w.seq.elem",
+	"w.seq.size",
+	"w.seq.span",
+	"w.seq.borrow",
+	"w.seq.tuple",
+	"w.seq.tupleEdit",
+	"w.seq.vec",
+	"w.seq.vecEdit",
+	"w.seq.spread",
+	"w.seq.destruct",
+	"w.seq.rest",
+	"w.seq.spanSet",
+	"w.seq.ref",
+	"w.seq.move",
+	"w.seq.loop",
+	"w.gcls.cell",
+	"w.gcls.map",
+	"w.gcls.nest",
+	"w.gcls.pair",
+	"w.gcls.stack",
+	"w.gcls.best",
+	"w.gcls.wrap",
+	"w.gcls.infer",
+	"w.gcls.decl",
+	"w.gcls.set",
+	"w.gcls.ref",
+	"w.gcls.own",
+	"w.enum.numeric",
+	"w.enum.match",
+	"w.enum.bitset",
+	"w.enum.alias",
+	"w.enum.distinct",
+	"w.enum.literal",
+	"w.enum.disc",
+	"w.enum.unknown",
+	"w.enum.never",
+	"w.enum.inter",
+	"w.enum.cond",
+	"w.exc.catch",
+	"w.exc.finally",
+	"w.exc.rethrow",
+	"w.exc.unwind",
+	"w.exc.defer",
+	"w.exc.deferloop",
+	"w.exc.recover",
+	"w.exc.result",
+	"w.exc.narrow",
+	"w.exc.wrap",
+	"w.exc.orelse",
+	"w.exc.nullable",
+	"w.native.ptr",
+	"w.native.ref",
+	"w.native.arith",
+	"w.native.heap",
+	"w.native.libc",
+	"w.native.cstr",
+	"w.native.out",
+	"w.native.sink",
+	"w.native.read",
+	"w.native.size",
+	"w.native.view",
+	"w.spawn.fan",
+	"w.spawn.all",
+	"w.spawn.move",
+	"w.spawn.share",
+	"w.spawn.locked",
+	"w.spawn.arc",
+	"w.spawn.nest",
+	"w.spawn.fail",
+	"w.spawn.timed",
+	"w.actor.state",
+	"w.actor.call",
+	"w.actor.chain",
+	"w.actor.many",
+	"w.actor.spawn",
+	"w.actor.stop",
+	"w.race.first",
+	"w.race.tie",
+	"w.race.any",
+	"w.race.fail",
+	"w.race.abort",
+	"w.race.timer",
+	"w.cls.field",
+	"w.cls.call",
+	"w.cls.static",
+	"w.cls.iface",
+	"w.cls.is",
+	"w.cls.new",
+	"w.cls.mutate",
+	"w.cls.alias",
+	"w.cls.loop",
+	"w.cls.literal",
+	"w.cls.decl.plain",
+	"w.cls.decl.inherit",
+	"w.cls.decl.accessor",
+	"w.cls.decl.static",
+	"w.cls.decl.implements",
+	"w.cls.decl.visible",
+	"w.cls.decl.abstract",
+	"w.cls.decl.block",
+	"w.conv.cast",
+	"w.conv.frac",
+	"w.conv.text",
+	"w.conv.ext",
+	"w.conv.ref",
+	"w.conv.static",
+	"w.conv.proto",
+	"w.conv.op",
+	"w.meta.block",
+	"w.meta.fn",
+	"w.meta.macro",
+	"w.meta.jsx",
+	"w.meta.when",
+	"w.meta.inline",
+	"w.meta.decor",
+	"w.async.await",
+	"w.async.immediate",
+	"w.async.seq",
+	"w.async.tick",
+	"w.async.resolve",
+	"w.async.interleave",
+	"w.async.all",
+	"w.async.catch",
+	"w.async.hold",
+	"w.async.local",
+	"w.async.result",
+	"w.async.func",
+	"w.async.arrow",
+	"w.async.method",
 	"w.expr.fam",
 	"w.stmt.fam",
 	"w.stmt.else",
 	"w.union.len",
+	"w.meta.spread",
+	"w.core.expr",
+	"w.core.stmt",
+	"w.core.fn",
+	"w.core.pow",
+	"w.core.nullish",
+	"w.core.cvt",
+	"w.core.optional",
+	"w.core.cmp",
+	"w.core.while",
+	"w.core.do",
+	"w.core.switch",
+	"w.core.match",
+	"w.core.compound",
+	"w.core.cell",
+	"w.core.incdec",
+	"w.core.void",
+	"w.core.alias",
+	"w.core.default",
+	"w.core.rest",
+	"w.core.overload",
+	"w.core.recurse",
+	"w.core.fnvalue",
+	"w.core.zero",
+	"w.core.ushr",
 ];
 
 export const W_DEFAULTS: int32[] = [
 	25, 30, 8, 10, 8, 19,
 	25, 25, 8, 12, 12, 6, 6, 6,
-	1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 2,
+	1, 1, 1, 1, 2, 1, 1,
 	1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1,
 	1, 1, 1,
 	1, 1, 1, 1, 1, 1,
+	1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1,
+	1, 1, 1,
+	1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1,
-	20, 20, 50, 30,
+	1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	20, 20, 50, 30, 50,
+	25, 25, 25, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 5,
 ];
 
-const W_GROUPS: int32[][] = [
-	[0, 5],
-	[6, 13],
-	[14, 20],
-	[21, 23],
-	[24, 28],
-	[29, 33],
-	[34, 37],
-	[38, 44],
-	[45, 49],
-	[50, 57],
-	[58, 60],
-	[61, 63],
-	[64, 69],
-	[70, 71],
-	[72, 77],
+const W_GROUPS: W[][] = [
+	[W.ExprLeaf, W.ExprCall],
+	[W.StmtLet, W.StmtReturn],
+	[W.FamClosure, W.FamAsync],
+	[W.ClosureNamed, W.ClosureIife],
+	[W.ClosureDecl, W.ClosureRoutine],
+	[W.GenericId, W.GenericBound],
+	[W.AggField, W.AggEq],
+	[W.AggStruct, W.AggSpread],
+	[W.CollIndex, W.CollRest],
+	[W.CollDecl, W.CollFixed],
+	[W.StrSize, W.StrTest],
+	[W.StrDecl, W.StrAssign],
+	[W.StrConcat, W.StrEdit],
+	[W.OwnField, W.OwnView],
+	[W.OwnDecl, W.OwnRo],
+	[W.IterNth, W.IterLast],
+	[W.IterDecl, W.IterManual],
+	[W.SeqElem, W.SeqBorrow],
+	[W.SeqTuple, W.SeqLoop],
+	[W.GclsCell, W.GclsInfer],
+	[W.GclsDecl, W.GclsOwn],
+	[W.EnumNumeric, W.EnumCond],
+	[W.ExcCatch, W.ExcNarrow],
+	[W.ExcWrap, W.ExcNullable],
+	[W.NativePtr, W.NativeSink],
+	[W.NativeRead, W.NativeView],
+	[W.SpawnFan, W.SpawnTimed],
+	[W.ActorState, W.ActorStop],
+	[W.RaceFirst, W.RaceTimer],
+	[W.ClsField, W.ClsIs],
+	[W.ClsNew, W.ClsLiteral],
+	[W.ClsDeclPlain, W.ClsDeclBlock],
+	[W.ConvCast, W.ConvOp],
+	[W.MetaBlock, W.MetaDecor],
+	[W.AsyncAwait, W.AsyncImmediate],
+	[W.AsyncSeq, W.AsyncResult],
+	[W.AsyncFunc, W.AsyncMethod],
 ];
 
 export enum Plant {
@@ -236,6 +662,8 @@ export enum Plant {
 	Backend,
 	Opt,
 	San,
+	Model,
+	Meta,
 }
 
 export struct Features {
@@ -250,6 +678,8 @@ export struct Features {
 	entries: int32;
 	top: int32;
 	plant: Plant;
+	modules: int32;
+	shapes: BitSet<Mod>;
 	w: int32[];
 }
 
@@ -265,7 +695,26 @@ export const ALL_TYS: Ty[] = [
 	Ty.Float64,
 ];
 
-export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own];
+export const NEW_TYS: Ty[] = [Ty.Float32, Ty.Char, Ty.BigInt, Ty.Bool];
+
+const LISTED_TYS: Ty[] = [
+	Ty.Int8,
+	Ty.Int16,
+	Ty.Int32,
+	Ty.Int64,
+	Ty.Uint8,
+	Ty.Uint16,
+	Ty.Uint32,
+	Ty.Uint64,
+	Ty.Float64,
+	Ty.Float32,
+	Ty.Char,
+	Ty.BigInt,
+	Ty.Bool,
+];
+
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic, Fam.Agg, Fam.Coll, Fam.Str, Fam.Own, Fam.Iter, Fam.Seq, Fam.Gcls, Fam.Enum, Fam.Exc, Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race, Fam.Cls, Fam.Conv, Fam.Meta, Fam.Async];
+export const OPT_IN_FAMS: Fam[] = [Fam.Native, Fam.Spawn, Fam.Actor, Fam.Race, Fam.Async];
 
 export function famName(f: Fam): string {
 	return match (f) {
@@ -276,6 +725,19 @@ export function famName(f: Fam): string {
 		Fam.Coll => "coll",
 		Fam.Str => "str",
 		Fam.Own => "own",
+		Fam.Iter => "iter",
+		Fam.Seq => "seq",
+		Fam.Gcls => "gcls",
+		Fam.Enum => "enum",
+		Fam.Exc => "exc",
+		Fam.Native => "native",
+		Fam.Spawn => "spawn",
+		Fam.Actor => "actor",
+		Fam.Race => "race",
+		Fam.Cls => "cls",
+		Fam.Conv => "conv",
+		Fam.Meta => "meta",
+		Fam.Async => "async",
 	};
 }
 
@@ -283,7 +745,28 @@ function famFromName(name: string): Result<Fam, string> {
 	for (const f of ALL_FAMS) {
 		if (famName(f) == name) { return Result.ok(f); }
 	}
-	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, none)");
+	return Result.err("unknown family '" + name + "' (closure, union, generic, agg, coll, str, own, iter, seq, gcls, enum, exc, native, spawn, actor, race, cls, conv, meta, async, none)");
+}
+
+export const ALL_MODS: Mod[] = [Mod.Alias, Mod.Namespace, Mod.Reexport, Mod.Star, Mod.Cycle, Mod.Init, Mod.Select];
+
+export function modName(m: Mod): string {
+	return match (m) {
+		Mod.Alias => "alias",
+		Mod.Namespace => "ns",
+		Mod.Reexport => "reexport",
+		Mod.Star => "star",
+		Mod.Cycle => "cycle",
+		Mod.Init => "init",
+		Mod.Select => "select",
+	};
+}
+
+function modFromName(name: string): Result<Mod, string> {
+	for (const m of ALL_MODS) {
+		if (modName(m) == name) { return Result.ok(m); }
+	}
+	return Result.err("unknown module shape '" + name + "' (alias, ns, reexport, star, cycle, init, select, none)");
 }
 
 export function tyName(t: Ty): string {
@@ -297,11 +780,15 @@ export function tyName(t: Ty): string {
 		Ty.Uint32 => "uint32",
 		Ty.Uint64 => "uint64",
 		Ty.Float64 => "float64",
+		Ty.Float32 => "float32",
+		Ty.Char => "char",
+		Ty.BigInt => "bigint",
+		Ty.Bool => "boolean",
 	};
 }
 
 function tyFromName(name: string): Result<Ty, string> {
-	for (const t of ALL_TYS) {
+	for (const t of LISTED_TYS) {
 		if (tyName(t) == name) { return Result.ok(t); }
 	}
 	return Result.err("unknown type '" + name + "'");
@@ -313,6 +800,8 @@ function plantName(p: Plant): string {
 		Plant.Backend => "backend",
 		Plant.Opt => "opt",
 		Plant.San => "san",
+		Plant.Model => "model",
+		Plant.Meta => "meta",
 	};
 }
 
@@ -322,7 +811,9 @@ function plantFromName(name: string): Result<Plant, string> {
 		"backend" => Result.ok(Plant.Backend),
 		"opt" => Result.ok(Plant.Opt),
 		"san" => Result.ok(Plant.San),
-		_ => Result.err("unknown plant '" + name + "' (none, backend, opt, san)"),
+		"model" => Result.ok(Plant.Model),
+		"meta" => Result.ok(Plant.Meta),
+		_ => Result.err("unknown plant '" + name + "' (none, backend, opt, san, model, meta)"),
 	};
 }
 
@@ -331,6 +822,9 @@ export function defaults(this typeof Features): Features {
 	for (const t of ALL_TYS) { types = types.incl(t); }
 	let fams = 0 as BitSet<Fam>;
 	for (const f of ALL_FAMS) { fams = fams.incl(f); }
+	let shapes = 0 as BitSet<Mod>;
+	for (const m of ALL_MODS) { shapes = shapes.incl(m); }
+	for (const f of OPT_IN_FAMS) { fams = fams.excl(f); }
 	return {
 		types: types,
 		fams: fams,
@@ -343,13 +837,15 @@ export function defaults(this typeof Features): Features {
 		entries: 4,
 		top: 1,
 		plant: Plant.None,
+		modules: 0,
+		shapes: shapes,
 		w: W_DEFAULTS.map((n: int32): int32 => n),
 	};
 }
 
 export function format(this f: Features): string {
 	let types = "";
-	for (const t of ALL_TYS) {
+	for (const t of LISTED_TYS) {
 		if (f.types.has(t)) { types = types == "" ? tyName(t) : types + "," + tyName(t); }
 	}
 	let fams = "";
@@ -366,7 +862,16 @@ export function format(this f: Features): string {
 		" trips=" + String(f.trips) +
 		" entries=" + String(f.entries) +
 		" top=" + String(f.top) +
-		" plant=" + plantName(f.plant) + weightText(f.w);
+		" plant=" + plantName(f.plant) + moduleText(f) + weightText(f.w);
+}
+
+function moduleText(f: Features): string {
+	if (f.modules == 0) { return ""; }
+	let shapes = "";
+	for (const m of ALL_MODS) {
+		if (f.shapes.has(m)) { shapes = shapes == "" ? modName(m) : shapes + "," + modName(m); }
+	}
+	return " modules=" + String(f.modules) + " modshapes=" + (shapes == "" ? "none" : shapes);
 }
 
 function weightText(w: int32[]): string {
@@ -387,9 +892,9 @@ function weightIndex(key: string): int32 {
 function weightsSound(w: int32[]): Result<boolean, string> {
 	for (const g of W_GROUPS) {
 		let sum = 0;
-		for (let i = g[0]; i <= g[1]; i++) { sum += w[i]; }
+		for (let i = g[0] as int32; i <= (g[1] as int32); i++) { sum += w[i]; }
 		if (sum == 0) {
-			return Result.err(W_KEYS[g[0]] + " .. " + W_KEYS[g[1]] + " are all 0; one must be positive");
+			return Result.err(W_KEYS[g[0] as int32] + " .. " + W_KEYS[g[1] as int32] + " are all 0; one must be positive");
 		}
 	}
 	return Result.ok(true);
@@ -428,23 +933,46 @@ function parseFams(text: string): Result<BitSet<Fam>, string> {
 	return Result.ok(fams);
 }
 
+function hasLegacy(types: BitSet<Ty>): boolean {
+	for (const t of ALL_TYS) { if (types.has(t)) { return true; } }
+	return false;
+}
+
+function parseShapes(text: string): Result<BitSet<Mod>, string> {
+	let shapes = 0 as BitSet<Mod>;
+	if (text == "none") { return Result.ok(shapes); }
+	for (const name of text.split(",")) {
+		const m = try modFromName(name);
+		shapes = shapes.incl(m);
+	}
+	return Result.ok(shapes);
+}
+
 export function swarm(this base: Features, seed: uint64): Features {
 	const r = Rng.seeded(seed ^ (0x5357524D53574152 as uint64));
 	const density = r.next();
 	let types = 0 as BitSet<Ty>;
-	for (const t of ALL_TYS) {
+	for (const t of LISTED_TYS) {
 		if (base.types.has(t) && r.next() < density) { types = types.incl(t); }
 	}
-	if (types.isEmpty()) {
+	const legacyBase = hasLegacy(base.types);
+	if (legacyBase ? !hasLegacy(types) : types.isEmpty()) {
 		const kept: Ty[] = [];
-		for (const t of ALL_TYS) { if (base.types.has(t)) { kept.push(t); } }
+		for (const t of legacyBase ? ALL_TYS : LISTED_TYS) { if (base.types.has(t)) { kept.push(t); } }
 		types = types.incl(kept[r.below(kept.length)]);
 	}
 	let fams = 0 as BitSet<Fam>;
 	for (const f of ALL_FAMS) {
 		if (base.fams.has(f) && r.next() < density) { fams = fams.incl(f); }
 	}
-	return { ...base, types: types, fams: fams };
+	let shapes = base.shapes;
+	if (base.modules > 0) {
+		shapes = 0 as BitSet<Mod>;
+		for (const m of ALL_MODS) {
+			if (base.shapes.has(m) && r.next() < density) { shapes = shapes.incl(m); }
+		}
+	}
+	return { ...base, types: types, fams: fams, shapes: shapes };
 }
 
 export function overlay(this base: Features, text: string): Result<Features, string> {
@@ -461,6 +989,10 @@ export function overlay(this base: Features, text: string): Result<Features, str
 			f = { ...f, fams: try parseFams(value) };
 		} else if (key == "plant") {
 			f = { ...f, plant: try plantFromName(value) };
+		} else if (key == "modules") {
+			f = { ...f, modules: try boundedInt(key, value, 0, 8) };
+		} else if (key == "modshapes") {
+			f = { ...f, shapes: try parseShapes(value) };
 		} else if (key == "funcs") {
 			f = { ...f, funcs: try boundedInt(key, value, 1, 64) };
 		} else if (key == "globals") {
@@ -490,6 +1022,9 @@ export function overlay(this base: Features, text: string): Result<Features, str
 	}
 	const sound = weightsSound(f.w);
 	if (!sound.ok) { return Result.err(sound.error); }
+	if (!f.fams.isEmpty() && !hasLegacy(f.types)) {
+		return Result.err("fams need one of int8 .. float64 in types=; write fams=none for a vector of float32, char, bigint and boolean only");
+	}
 	return Result.ok(f);
 }
 
@@ -552,7 +1087,7 @@ test "an unknown weight, a bad value and an all-zero group are refused" {
 	assert !Features.defaults().overlay("w.expr.leaf=101").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=x").ok;
 	assert !Features.defaults().overlay("w.expr.leaf=0 w.expr.binary=0 w.expr.unary=0 w.expr.convert=0 w.expr.ternary=0 w.expr.call=0").ok;
-	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0").ok;
+	assert !Features.defaults().overlay("w.fam.closure=0 w.fam.union=0 w.fam.generic=0 w.fam.agg=0 w.fam.coll=0 w.fam.str=0 w.fam.own=0 w.fam.iter=0 w.fam.seq=0 w.fam.gcls=0 w.fam.enum=0 w.fam.exc=0 w.fam.native=0 w.fam.spawn=0 w.fam.actor=0 w.fam.race=0 w.fam.cls=0 w.fam.conv=0 w.fam.meta=0 w.fam.async=0").ok;
 }
 
 test "swarm keeps the weights of its base" {
@@ -565,9 +1100,91 @@ test "swarm keeps the weights of its base" {
 
 test "weight keys and defaults line up with the enum" {
 	assert W_KEYS.length == W_DEFAULTS.length;
-	assert W_KEYS.length == (W.UnionLen as int32) + 1;
+	assert W_KEYS.length == (W.CoreUshr as int32) + 1;
 	assert W_KEYS[W.StmtBreak as int32] == "w.stmt.break";
 	assert W_KEYS[W.GenericBox as int32] == "w.generic.box";
+}
+
+test "each gap weight key sits at its enum position with default 1 inside its group" {
+	const ids = [W.GenericInfer, W.GenericBound, W.AggSpread, W.OwnView, W.OwnFreeze, W.OwnRo, W.GclsInfer, W.EnumInter, W.EnumCond, W.ClsDeclAbstract, W.ClsDeclBlock];
+	const keys = ["w.generic.infer", "w.generic.bound", "w.agg.spread", "w.own.view", "w.own.freeze", "w.own.ro", "w.gcls.infer", "w.enum.inter", "w.enum.cond", "w.cls.decl.abstract", "w.cls.decl.block"];
+	const lasts = [W.GenericBound, W.GenericBound, W.AggSpread, W.OwnView, W.OwnRo, W.OwnRo, W.GclsInfer, W.EnumCond, W.EnumCond, W.ClsDeclBlock, W.ClsDeclBlock];
+	for (let i = 0; i < ids.length; i++) {
+		assert W_KEYS[ids[i] as int32] == keys[i];
+		assert W_DEFAULTS[ids[i] as int32] == 1;
+		let inGroup = false;
+		for (const g of W_GROUPS) { if ((ids[i] as int32) >= (g[0] as int32) && (ids[i] as int32) <= (g[1] as int32) && g[1] == lasts[i]) { inGroup = true; } }
+		assert inGroup;
+	}
+}
+
+test "each core weight key sits at its enum position with its default" {
+	const keys = [
+		"w.core.expr", "w.core.stmt", "w.core.fn", "w.core.pow", "w.core.nullish", "w.core.cvt", "w.core.optional", "w.core.cmp",
+		"w.core.while", "w.core.do", "w.core.switch", "w.core.match", "w.core.compound", "w.core.cell", "w.core.incdec", "w.core.void", "w.core.alias",
+		"w.core.default", "w.core.rest", "w.core.overload", "w.core.recurse", "w.core.fnvalue", "w.core.zero", "w.core.ushr",
+	];
+	for (let i = 0; i < keys.length; i++) {
+		assert W_KEYS[(W.CoreExpr as int32) + i] == keys[i];
+		assert W_DEFAULTS[(W.CoreExpr as int32) + i] == (i < 3 ? 25 : keys[i] == "w.core.ushr" ? 5 : 1);
+	}
+	assert keys.length == (W.CoreUshr as int32) - (W.CoreExpr as int32) + 1;
+}
+
+test "the new types are named, parse back, and stay out of the default vector" {
+	const base = Features.defaults();
+	for (const t of NEW_TYS) { assert !base.types.has(t); }
+	assert !base.format().contains("float32") && !base.format().contains("boolean");
+	const r = base.overlay("types=int32,float32,char,bigint,boolean");
+	assert r.ok;
+	if (r.ok) {
+		for (const t of NEW_TYS) { assert r.value.types.has(t); }
+		assert r.value.format().contains(" types=int32,float32,char,bigint,boolean ") || r.value.format().startsWith("types=int32,float32,char,bigint,boolean ");
+		const back = base.overlay(r.value.format());
+		assert back.ok;
+		if (back.ok) { assert back.value.format() == r.value.format(); }
+	}
+}
+
+test "a family vector needs a legacy type and a type-only vector says so" {
+	assert !Features.defaults().overlay("types=float32,char").ok;
+	assert !Features.defaults().overlay("types=bigint fams=closure").ok;
+	assert Features.defaults().overlay("types=float32,char,boolean fams=none").ok;
+	assert Features.defaults().overlay("fams=none types=bigint").ok;
+	assert Features.defaults().overlay("types=int8,boolean").ok;
+}
+
+test "swarm keeps a legacy type whenever its base has one and stays inside the base for new types" {
+	const base = Features.defaults().overlay("types=int8,int32,float32,char,bigint,boolean");
+	assert base.ok;
+	if (base.ok) {
+		for (let s = 0; s < 128; s++) {
+			const f = base.value.swarm(s as uint64);
+			assert f.types.has(Ty.Int8) || f.types.has(Ty.Int32);
+			assert !f.types.has(Ty.Int64) && !f.types.has(Ty.Float64);
+			assert Features.defaults().overlay(f.format()).ok;
+		}
+	}
+	const only = Features.defaults().overlay("types=float32,char fams=none");
+	assert only.ok;
+	if (only.ok) {
+		for (let s = 0; s < 32; s++) {
+			const f = only.value.swarm(s as uint64);
+			assert !f.types.isEmpty() && !f.types.has(Ty.Int32);
+		}
+	}
+}
+
+test "the weight groups tile the grouped keys and each holds one prefix" {
+	let next = W.ExprLeaf as int32;
+	for (const g of W_GROUPS) {
+		assert (g[0] as int32) == next;
+		const first = W_KEYS[g[0] as int32];
+		const prefix = first.slice(0, first.lastIndexOf(".") + 1);
+		for (let i = g[0] as int32; i <= (g[1] as int32); i++) { assert W_KEYS[i].startsWith(prefix); }
+		next = (g[1] as int32) + 1;
+	}
+	assert next == (W.ExprFam as int32);
 }
 
 test "an unknown key is refused" {
@@ -605,8 +1222,9 @@ test "swarm samples one density per vector, not a fixed coin per feature" {
 		if (f.fams == base.fams) { all++; }
 		if (f.fams.isEmpty()) { none++; }
 	}
-	assert all > 409 && all < 614;
-	assert none > 409 && none < 614;
+	const expected = 4096 / (ALL_FAMS.length - OPT_IN_FAMS.length + 1);
+	assert all > expected * 9 / 10 && all < expected * 135 / 100;
+	assert none > expected * 9 / 10 && none < expected * 135 / 100;
 }
 
 test "swarm density also correlates a restricted two-family vector" {
@@ -636,4 +1254,106 @@ test "swarm is a function of seed and base, keeps a type, and stays inside the b
 			assert !a.fams.has(Fam.Closure);
 		}
 	}
+}
+
+test "seq and gcls parse by name and their weights round-trip" {
+	const r = Features.defaults().overlay("fams=seq,gcls w.seq.rest=0 w.seq.tupleEdit=7 w.gcls.own=3 w.fam.seq=5");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.fams.has(Fam.Seq) && r.value.fams.has(Fam.Gcls) && !r.value.fams.has(Fam.Closure);
+		assert r.value.format().contains(" fams=seq,gcls ");
+		const back = Features.defaults().overlay(r.value.format());
+		assert back.ok;
+		if (back.ok) { assert back.value.format() == r.value.format(); }
+	}
+	assert !Features.defaults().overlay("w.seq.elem=0 w.seq.size=0 w.seq.span=0 w.seq.borrow=0").ok;
+	assert !Features.defaults().overlay("w.gcls.decl=0 w.gcls.set=0 w.gcls.ref=0 w.gcls.own=0").ok;
+}
+
+test "plant=model parses, formats back and a near name is refused" {
+	const r = Features.defaults().overlay("plant=model");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.plant == Plant.Model;
+		assert r.value.format().contains(" plant=model");
+		const back = Features.defaults().overlay(r.value.format());
+		assert back.ok;
+		if (back.ok) { assert back.value.plant == Plant.Model; }
+	}
+	assert !Features.defaults().overlay("plant=models").ok;
+}
+
+test "the task families parse by name and each shape group refuses an all-zero row" {
+	const r = Features.defaults().overlay("fams=spawn,actor,race w.spawn.fan=0 w.actor.stop=3 w.race.timer=2");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.fams.has(Fam.Spawn) && r.value.fams.has(Fam.Actor) && r.value.fams.has(Fam.Race);
+		assert !r.value.fams.has(Fam.Iter);
+		assert r.value.format().contains(" fams=spawn,actor,race ");
+		assert r.value.format().endsWith(" w.spawn.fan=0 w.actor.stop=3 w.race.timer=2");
+	}
+	assert !Features.defaults().overlay("fams=spawn,fork").ok;
+	assert !Features.defaults().overlay("w.spawn.fan=0 w.spawn.all=0 w.spawn.move=0 w.spawn.share=0 w.spawn.locked=0 w.spawn.arc=0 w.spawn.nest=0 w.spawn.fail=0 w.spawn.timed=0").ok;
+	assert !Features.defaults().overlay("w.actor.state=0 w.actor.call=0 w.actor.chain=0 w.actor.many=0 w.actor.spawn=0 w.actor.stop=0").ok;
+	assert !Features.defaults().overlay("w.race.first=0 w.race.tie=0 w.race.any=0 w.race.fail=0 w.race.abort=0 w.race.timer=0").ok;
+}
+
+test "the default vector leaves out the families that skip a lane or serialize the run" {
+	const base = Features.defaults();
+	for (const f of OPT_IN_FAMS) { assert !base.fams.has(f); }
+	for (const f of ALL_FAMS) {
+		let optIn = false;
+		for (const o of OPT_IN_FAMS) { if (o == f) { optIn = true; } }
+		assert base.fams.has(f) != optIn;
+	}
+	const r = base.overlay("fams=native,spawn");
+	assert r.ok;
+	if (r.ok) { assert r.value.fams.has(Fam.Native) && r.value.fams.has(Fam.Spawn); }
+}
+
+test "fams=meta selects the meta family alone and plant=meta round trips" {
+	const r = Features.defaults().overlay("fams=meta plant=meta");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.fams.has(Fam.Meta) && !r.value.fams.has(Fam.Iter) && !r.value.fams.has(Fam.Closure);
+		assert r.value.plant == Plant.Meta;
+		const back = Features.defaults().overlay(r.value.format());
+		assert back.ok;
+		if (back.ok) { assert back.value.format() == r.value.format() && back.value.plant == Plant.Meta; }
+	}
+	assert !Features.defaults().overlay("plant=metal").ok;
+	assert Features.defaults().overlay("w.meta.when=0 w.meta.inline=0 w.meta.decor=0").ok;
+	assert !Features.defaults().overlay("w.meta.block=0 w.meta.fn=0 w.meta.macro=0 w.meta.jsx=0 w.meta.when=0 w.meta.inline=0 w.meta.decor=0").ok;
+}
+
+test "modules=0 prints no module key and a project vector parses back to itself" {
+	assert !Features.defaults().format().contains("modules");
+	const r = Features.defaults().overlay("modules=3 modshapes=ns,star");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.format().contains(" plant=none modules=3 modshapes=ns,star");
+		const again = Features.defaults().overlay(r.value.format());
+		assert again.ok;
+		if (again.ok) { assert again.value.format() == r.value.format(); }
+	}
+}
+
+test "an unknown module shape and more than eight modules are refused" {
+	assert !Features.defaults().overlay("modshapes=alias,mixin").ok;
+	assert !Features.defaults().overlay("modules=9").ok;
+	const none = Features.defaults().overlay("modules=2 modshapes=none");
+	assert none.ok;
+	if (none.ok) { assert none.value.format().contains(" modshapes=none"); }
+}
+
+test "swarm draws module shapes only for a project" {
+	const single = Features.defaults();
+	const project = Features.defaults().overlay("modules=3");
+	assert project.ok;
+	let drawn = false;
+	for (let seed = 0; seed < 256; seed++) {
+		assert single.swarm(seed as uint64).shapes == single.shapes;
+		if (project.ok && project.value.swarm(seed as uint64).shapes != project.value.shapes) { drawn = true; }
+	}
+	assert drawn;
 }

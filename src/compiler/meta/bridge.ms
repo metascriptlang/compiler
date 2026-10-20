@@ -64,9 +64,8 @@ import {
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
-import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner, isFrameValue } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
-import { collectDeclaredNames } from "../../checker/instantiate";
 import { int64Bits } from "../../utils/stdBackport";
 import {
 	RaiserValueKind, RaiserValue,
@@ -583,6 +582,11 @@ export function attachFieldTypeNodes(impl: RaiserValue, decl: Node, shape: Type,
 		const nodes: Node[] = [];
 		for (const name of (decl.data as InterfaceDeclData).interfaceFields) nodes.push(fieldTypeNode(fieldTypeIn(shape, name), decl.location));
 		heapObjectSetField(objHeap, impl.intVal, "typeExprs", serializeNodes(nodes, objHeap, arrHeap, false));
+		if (decl.baseExprs != null) {
+			const bases: Node[] = [];
+			for (const b of decl.baseExprs) bases.push(fieldTypeNode(b.nodeType, decl.location));
+			heapObjectSetField(objHeap, impl.intVal, "baseExprs", serializeNodes(bases, objHeap, arrHeap, false));
+		}
 		return;
 	}
 	if (decl.kind != NodeKind.ClassDecl) return;
@@ -792,6 +796,14 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	}
 	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
 	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint64) as int64));
+	if (node.resolvedSym != null && declaresLocal(node)) {
+		heapObjectSetField(objHeap, handle, "declSymHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
+	}
+	if (node.paramSyms != null) {
+		const ph = heapAllocArray(arrHeap);
+		for (const p of node.paramSyms) heapArrayPush(arrHeap, ph, raiserInt(registerBoundSym(p) as int64));
+		heapObjectSetField(objHeap, handle, "paramSymHandles", raiserArray(ph));
+	}
 
 	match (node.kind) {
 		// === Literals ===
@@ -1172,6 +1184,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "className", d.className);
 			setStr(objHeap, handle, "classExtends", d.classExtends);
 			setNodes(objHeap, arrHeap, handle, "classBody", d.classBody);
+			setStrs(objHeap, arrHeap, handle, "classImplements", d.classImplements);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ActorDecl => {
@@ -1522,22 +1535,45 @@ function readFieldDecorators(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap
 	return rows;
 }
 
-function rebindRedeclaredLocals(body: Node, params: string[]): void {
-	if (body == null) return;
-	const names: string[] = [];
-	for (const p of params) names.push(p);
-	collectDeclaredNames(body, names);
-	rebindDeclaredNames(body, names);
+function declaresLocal(node: Node): boolean {
+	return node.kind == NodeKind.VariableDecl || node.kind == NodeKind.ForOfStmt || node.kind == NodeKind.TryCatchStmt;
 }
 
-function rebindDeclaredNames(body: Node, names: string[]): void {
-	if (body == null || names.length == 0) return;
+let _wireDeclared: Map<Node, Symbol> = new Map<Node, Symbol>();
+
+function wireParamSyms(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64): Symbol[] {
+	const out: Symbol[] = [];
+	const ph = heapObjectGetField(objHeap, h, "paramSymHandles");
+	if (ph.kind != RaiserValueKind.Array) return out;
+	for (let i = 0; i < heapArrayLen(arrHeap, ph.intVal); i += 1) {
+		const s = boundSymAt(heapArrayGet(arrHeap, ph.intVal, i).intVal as int32);
+		if (s != null) out.push(s);
+	}
+	return out;
+}
+
+function rebindRedeclaredLocals(params: Symbol[], body: Node): void {
+	if (body == null) return;
+	const declared: Symbol[] = [];
+	for (const p of params) declared.push(p);
+	collectWireDeclared(body, declared);
+	unbindDeclared(body, declared);
+}
+
+function collectWireDeclared(node: Node, into: Symbol[]): void {
+	const sym = _wireDeclared.get(node);
+	if (sym != null) into.push(sym);
+	forEachChild(node, (child: Node): void => { if (child != null) collectWireDeclared(child, into); });
+}
+
+function unbindDeclared(body: Node, declared: Symbol[]): void {
+	if (body == null || declared.length == 0) return;
 	if (body.kind == NodeKind.Identifier && body.flags.has(NodeFlag.BoundSym) && body.resolvedSym != null
-		&& isFrameValue(body.resolvedSym) && names.includes((body.data as IdentifierData).name)) {
+		&& declared.includes(body.resolvedSym!)) {
 		body.resolvedSym = null;
 		body.flags = body.flags.excl(NodeFlag.BoundSym);
 	}
-	forEachChild(body, (child: Node): void => { rebindDeclaredNames(child, names); });
+	forEachChild(body, (child: Node): void => { unbindDeclared(child, declared); });
 }
 
 let _gensymSuffix = "";
@@ -1617,6 +1653,11 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 					}
 					out.flags = out.flags.union(rawFlags.intersection(PARSER_NODE_FLAGS));
 					if (typed != null && readBool(objHeap, handle, "folded")) out.flags = out.flags.incl(NodeFlag.Folded);
+					const declHandle = heapObjectGetField(objHeap, handle, "declSymHandle");
+					if (declHandle.kind == RaiserValueKind.Int && declaresLocal(out)) {
+						const declSym = boundSymAt(declHandle.intVal as int32);
+						if (declSym != null) _wireDeclared.set(out, declSym);
+					}
 				}
 				return out;
 			}
@@ -1639,7 +1680,7 @@ function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: Ra
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
 
-const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor;
+const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor;
 
 export interface WireRefusal {
 	message: string;
@@ -1819,7 +1860,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				arrowDefaults.push(null as unknown as Node);
 				dpi = dpi + 1;
 			}
-			rebindRedeclaredLocals(arrowBody, arrowParams);
+			rebindRedeclaredLocals(wireParamSyms(objHeap, arrHeap, h), arrowBody);
 			return createNodeAt(NodeKind.ArrowFunction, {
 				arrowParams, arrowParamTypes, arrowBody, arrowFlags, arrowReturnType,
 				arrowDefaults,
@@ -1831,7 +1872,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const funcExprBody = readNode(objHeap, arrHeap, h, "funcExprBody", loc);
 			const funcExprFlags = readStr(objHeap, h, "funcExprFlags");
 			const funcExprReturnType = readStr(objHeap, h, "funcExprReturnType");
-			rebindRedeclaredLocals(funcExprBody, funcExprParams);
+			rebindRedeclaredLocals(wireParamSyms(objHeap, arrHeap, h), funcExprBody);
 			return createNodeAt(NodeKind.FunctionExpr, {
 				funcExprParams, funcExprParamTypes, funcExprBody, funcExprFlags, funcExprReturnType,
 			}, loc);
@@ -2061,7 +2102,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const fnBody = readNode(objHeap, arrHeap, h, "fnBody", loc);
 			const fnFlags = readStr(objHeap, h, "fnFlags");
 			const fnReturnType = readStr(objHeap, h, "fnReturnType");
-			rebindRedeclaredLocals(fnBody, params);
+			rebindRedeclaredLocals(wireParamSyms(objHeap, arrHeap, h), fnBody);
 			const fnDefaults = readDefaults(objHeap, arrHeap, h, "fnDefaults", loc);
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
@@ -2130,8 +2171,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const className = readStr(objHeap, h, "className");
 			const classExtends = readStr(objHeap, h, "classExtends");
 			const classBody = readNodes(objHeap, arrHeap, h, "classBody", loc);
+			const classImplements = readStrs(objHeap, arrHeap, h, "classImplements");
 			const decl = createNodeAt(NodeKind.ClassDecl, {
-				className, classExtends, classBody, nameLocation: loc,
+				className, classExtends, classBody, nameLocation: loc, classImplements,
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;
@@ -4177,6 +4219,20 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	assert d.interfaceExtends[0] == "Base";
 }
 
+test "round-trip ClassDecl keeps classImplements" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.ClassDecl, {
+		className: "Pet", classDisplayName: "Pet", classExtends: "Animal", classBody: [] as Node[], nameLocation: loc,
+		classImplements: ["Named", "Box<T>"],
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as ClassDeclData;
+	assert d.classImplements.length == 2;
+	assert d.classImplements[1] == "Box<T>";
+}
+
 test "round-trip StructDecl keeps interfaceExtends" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
@@ -4236,7 +4292,7 @@ test "round-trip keeps the generic params of an interface, a struct, a class and
 		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	strukt.typeArg = "T:number";
-	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classDisplayName: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
+	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classDisplayName: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc, classImplements: [] as string[] }, synthToken(loc));
 	cls.typeArg = "A,B:number";
 	const act = createNode(NodeKind.ActorDecl, { actorName: "Worker", actorBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	act.typeArg = "M";

@@ -1,6 +1,5 @@
-// @stdout: async 2 2 2 2 3 3 3 rejected bad gen 1 2 3 4 catchless
-// @xfail(raiser): a finally block after a suspend in an async function is skipped on the Raiser (inbox 2026-10-18-raiser-skips-finally-after-a-suspend-in-an-async-function)
-// note: a catch binding read in a state machine whose try also has a finally reads the caught exception (C rejected the read as an undeclared identifier); a raise leaving a finally reaches the enclosing catch, and a catch-less finally re-raises (C swallowed both); async and generator, suspend in try, catch or finally, nested.
+// @stdout: async 2 2 2 2 3 3 3 rejected bad gen 1 2 3 4 catchless nested2 4 gen2 1 2 3 l2
+// note: a catch binding read in a state machine whose try also has a finally reads the caught exception (C rejected the read as an undeclared identifier); a raise leaving a finally reaches the enclosing catch, and a catch-less finally re-raises (C swallowed both); async and generator, suspend in try, catch or finally, nested one and two levels deep.
 
 async function fail(): Promise<int32> { throw new Error("bad"); }
 async function ok(): Promise<int32> { return 5; }
@@ -40,6 +39,22 @@ async function catchlessFinallyRejects(): Promise<int32> {
 	return 9;
 }
 
+async function nested2(): Promise<int32> {
+	try {
+		try {
+			try { return await fail(); } catch (e) { await ok(); throw new Error("l1"); } finally { console.log("nested2 level0 finally"); }
+		} catch (e) { console.log(`nested2 level1 ${e.message}`); await ok(); throw new Error("l2"); } finally { console.log("nested2 level1 finally"); }
+	} catch (e) { console.log(`nested2 level2 ${e.message}`); return 4; } finally { await ok(); console.log("nested2 level2 finally"); }
+}
+
+function* gen2(): Iterator<int32> {
+	try {
+		try {
+			try { yield 1; throw new Error("l0"); } catch (e) { yield 2; throw new Error("l1"); } finally { console.log("gen2 level0 finally"); }
+		} catch (e) { console.log(`gen2 level1 ${e.message}`); yield 3; throw new Error("l2"); } finally { console.log("gen2 level1 finally"); }
+	} finally { console.log("gen2 level2 finally"); }
+}
+
 function* gen(): Iterator<int32> {
 	try { yield 1; throw new Error("bad"); } catch (e) { console.log(`gen caught ${e.message}`); yield 2; } finally { console.log("gen finally"); }
 	try { yield 3; throw new Error("late"); } catch (e) { yield 4; console.log(`gen caught after yield ${e.message}`); } finally { console.log("gen finally 2"); }
@@ -58,6 +73,9 @@ async function main(): Promise<void> {
 	try { rej = `resolved ${await catchlessFinallyRejects()}`; } catch (e) { rej = `rejected ${e.message}`; }
 	let g = "";
 	try { for (const v of gen()) { if (v < 5) g = g + ` ${v}`; } } catch (e) { g = g + ` ${e.message}`; }
-	console.log(`async ${a} ${b} ${c} ${d} ${n} ${r} ${cl} ${rej} gen${g}`);
+	const n2 = await nested2();
+	let g2 = "";
+	try { for (const v of gen2()) g2 = g2 + ` ${v}`; } catch (e) { g2 = g2 + ` ${e.message}`; }
+	console.log(`async ${a} ${b} ${c} ${d} ${n} ${r} ${cl} ${rej} gen${g} nested2 ${n2} gen2${g2}`);
 }
 main();

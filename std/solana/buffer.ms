@@ -1,0 +1,107 @@
+import { Pubkey } from "./pubkey";
+import { Bytes } from "./bytes";
+import { msSolCopy, msSolSpanAddress, msSolStoreU16, msSolStoreU32, msSolStoreU64, msSolStoreU8 } from "./memory";
+
+export { Bytes } from "./bytes";
+
+when (!js) {
+	import { msSolPointer } from "./memory";
+}
+
+export function storePubkey(key: Pubkey, address: uint64): void {
+	when (js) {
+		msSolCopy(address, msSolSpanAddress(key.bytes), 32);
+	} else {
+		const at = msSolPointer(address) as Ptr<Pubkey>;
+		at[] = key;
+	}
+}
+
+function fits(storage: Span<uint8>, at: uint64, width: uint64): boolean {
+	const capacity = storage.length as uint64;
+	return at <= capacity && width <= capacity - at;
+}
+
+function refused(storage: Span<uint8>): uint64 {
+	return (storage.length as uint64) + 1;
+}
+
+export function putU8(this storage: Span<uint8>, at: uint64, value: uint8): uint64 {
+	if (!fits(storage, at, 1)) { return refused(storage); }
+	when (js) {
+		msSolStoreU8(msSolSpanAddress(storage) + at, value);
+	} else {
+		const base = storage as Ptr<uint8>;
+		base[at] = value;
+	}
+	return at + 1;
+}
+
+export function putU16(this storage: Span<uint8>, at: uint64, value: uint16): uint64 {
+	if (!fits(storage, at, 2)) { return refused(storage); }
+	msSolStoreU16(msSolSpanAddress(storage) + at, value);
+	return at + 2;
+}
+
+export function putU32(this storage: Span<uint8>, at: uint64, value: uint32): uint64 {
+	if (!fits(storage, at, 4)) { return refused(storage); }
+	msSolStoreU32(msSolSpanAddress(storage) + at, value);
+	return at + 4;
+}
+
+export function putU64(this storage: Span<uint8>, at: uint64, value: uint64): uint64 {
+	if (!fits(storage, at, 8)) { return refused(storage); }
+	msSolStoreU64(msSolSpanAddress(storage) + at, value);
+	return at + 8;
+}
+
+export function putI8(this storage: Span<uint8>, at: uint64, value: int8): uint64 {
+	return putU8(storage, at, value as uint8);
+}
+
+export function putI16(this storage: Span<uint8>, at: uint64, value: int16): uint64 {
+	return putU16(storage, at, value as uint16);
+}
+
+export function putI32(this storage: Span<uint8>, at: uint64, value: int32): uint64 {
+	return putU32(storage, at, value as uint32);
+}
+
+export function putI64(this storage: Span<uint8>, at: uint64, value: int64): uint64 {
+	return putU64(storage, at, value as uint64);
+}
+
+export function putBool(this storage: Span<uint8>, at: uint64, value: boolean): uint64 {
+	return putU8(storage, at, value ? 1 : 0);
+}
+
+export function putPubkey(this storage: Span<uint8>, at: uint64, value: Pubkey): uint64 {
+	if (!fits(storage, at, 32)) { return refused(storage); }
+	when (js) {
+		storePubkey(value, msSolSpanAddress(storage) + at);
+	} else {
+		const base = storage as Ptr<uint8>;
+		const dest = (base + at) as Ptr<Pubkey>;
+		dest[] = value;
+	}
+	return at + 32;
+}
+
+export function putAddress(this storage: Span<uint8>, at: uint64, source: uint64, length: uint64): uint64 {
+	if (!fits(storage, at, length)) { return refused(storage); }
+	if (length > 0) { msSolCopy(msSolSpanAddress(storage) + at, source, length); }
+	return at + length;
+}
+
+export function putBytes(this storage: Span<uint8>, at: uint64, value: Bytes): uint64 {
+	return putAddress(storage, at, value.address, value.length);
+}
+
+export function putSpan(this storage: Span<uint8>, at: uint64, value: Readonly<Span<uint8>>): uint64 {
+	return putAddress(storage, at, msSolSpanAddress(value), value.length as uint64);
+}
+
+export function putPrefix(this storage: Span<uint8>, at: uint64, value: Readonly<Span<uint8>>, length: uint64): uint64 {
+	if (length > (value.length as uint64)) { return refused(storage); }
+	return putAddress(storage, at, msSolSpanAddress(value), length);
+}

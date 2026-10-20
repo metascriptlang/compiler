@@ -467,11 +467,10 @@ static inline msString msUnboxString(void* p) {
 #ifndef msFuture_msString_DEFINED
 #define msFuture_msString_DEFINED
 MS_FUTURE_STRUCT(msFuture_msString, msString);
-MS_DEFINE_FUTURE_CHAIN(msFutureChain_msString, msFuture_msString)
 MS_DEFINE_FUTURE_THEN(msFutureThen_msString, msFuture_msString, msString, msString, MS_DROP_STRING_SLOT)
 MS_DEFINE_FUTURE_FINALLY(msFutureFinally_msString, msFuture_msString)
 
-/* Typed .catch — error handler always receives msString.
+/* Typed .catch — the error handler receives the Error the future failed with.
  * Success path propagates typed value via msFutureCompleteT. */
 MS_DEFINE_FUTURE_CATCH(msFutureCatch_double,   msFuture_double)
 MS_DEFINE_FUTURE_CATCH(msFutureCatch_int32,    msFuture_int32)

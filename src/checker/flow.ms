@@ -19,14 +19,16 @@ import {
 } from "../ast/node";
 import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
+	createStringLiteral, createNumberLiteral, integerLiteralName, fractionLiteralName, numberLiteralBase, isFloatType, float64Type, int32Type,
 	detectUnionDiscriminant, enumMemberLiteralOf,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
-	isAtomicRef, peelToStructOrUnion, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
-	classAncestorInstance, isNullableShape,
+	isAtomicRef, peelToStructOrUnion, matchUnionBehindInstance, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
+	classAncestorInstance,
 } from "./types";
 import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
+import { parseNumberLiteral } from "../utils/string";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 // ===== FlowType =====
@@ -134,6 +136,14 @@ function appendIfUnique(types: Type[], t: Type | null): void {
 // `s` to the outer `s`). When getFlowTypeOfReference is called by the
 // checker, both sides always have resolvedSym populated.
 
+function skipReferenceHidden(n: Node): Node {
+	let walk: Node = n;
+	while (walk.kind == NodeKind.HiddenDeref || walk.kind == NodeKind.HiddenAddr || walk.kind == NodeKind.HiddenSubConv) {
+		walk = walk.kind == NodeKind.HiddenSubConv ? (walk.data as HiddenStdConvData).convExpr : (walk.data as { expr: Node }).expr;
+	}
+	return walk;
+}
+
 function isMatchingReference(source: Node, target: Node): boolean {
 	if (source == null || target == null) return false;
 	// Unwrap checker-inserted hidden conversions. The condition expression is
@@ -141,14 +151,8 @@ function isMatchingReference(source: Node, target: Node): boolean {
 	// rewritten by the checker to wrap reference-typed reads in HiddenDeref
 	// so codegen knows to deref the pointer. Without unwrapping, the structural
 	// comparison fails between the bind-time condition and check-time access.
-	while (source.kind == NodeKind.HiddenDeref || source.kind == NodeKind.HiddenAddr) {
-		const hd = source.data as { expr: Node };
-		source = hd.expr;
-	}
-	while (target.kind == NodeKind.HiddenDeref || target.kind == NodeKind.HiddenAddr) {
-		const hd = target.data as { expr: Node };
-		target = hd.expr;
-	}
+	source = skipReferenceHidden(source);
+	target = skipReferenceHidden(target);
 	if (source == target) return true;
 	if (source.kind != target.kind) return false;
 	match (source.kind) {
@@ -230,12 +234,21 @@ export function getFlowTypeOfReference(refNode: Node, declaredType: Type): Type 
 	if (declaredType == null) return declaredType;
 	const flow = refNode.flowNode;
 	if (flow == null) return declaredType;
-	const state = createFlowState(refNode, declaredType);
+	const base = matchUnionBehindInstance(declaredType);
+	const state = createFlowState(refNode, base);
 	if (endsInNeverCall(flow)) return declaredType;
 	const ft = getTypeAtFlowNode(state, flow);
 	const t = ft.t;
-	if (t == null) return declaredType;
+	if (t == null || t == base || (base != declaredType && holdsEveryMember(t, base))) return declaredType;
 	return t;
+}
+
+function holdsEveryMember(t: Type, whole: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeChildren == null || t.typeChildren.length != whole.typeChildren.length) return false;
+	for (const member of whole.typeChildren) {
+		if (!t.typeChildren.includes(member)) return false;
+	}
+	return true;
 }
 
 function endsInNeverCall(flow: FlowNode | null): boolean {
@@ -1008,6 +1021,10 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 	// `typeExtra`, and the argument at the predicate position matches our
 	// reference, narrow to (or exclude) the predicate's target type.
 	if (expr.kind == NodeKind.CallExpr) {
+		const cd = expr.data as CallExprData;
+		if (isSynthesizedNullableEquality(cd)) {
+			return narrowTypeByEquality(t, skipHiddenConv(cd.arguments[0]), skipHiddenConv(cd.arguments[1]), "===", refNode, assumeTrue);
+		}
 		return narrowTypeByPredicate(t, expr, refNode, assumeTrue);
 	}
 	// Truthiness narrowing: bare expression used as a condition.
@@ -1032,6 +1049,12 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		}
 	}
 	return t;
+}
+
+function isSynthesizedNullableEquality(cd: CallExprData): boolean {
+	const callee = cd.callee;
+	return callee.kind == NodeKind.Identifier && callee.flags.has(NodeFlag.BoundSym)
+		&& (callee.data as IdentifierData).name == "nullableEquals" && cd.arguments.length == 2;
 }
 
 // Narrow a discriminated union by a boolean-discriminator field's truthy/falsy state.
@@ -1704,17 +1727,15 @@ export function narrowTypeByDiscriminantProperty(
 		i = i + 1;
 	}
 	if (remaining.length == 0) return t;
-	if (isDiscriminatedUnion(t)) return unionPreservingDiscriminant(t, remaining);
 	if (remaining.length == 1) return remaining[0];
+	if (isDiscriminatedUnion(t)) return unionPreservingDiscriminant(t, remaining);
 	return createUnion(remaining);
 }
 
 // Residual union after excluding variants from a metadata-carrying DU.
 // Copies the discriminant contract (`typeExtra` = disc type, `typeNames` =
 // [discName, variantKey...]) so disc re-reads keep resolving and codegen's
-// `_tag` route keeps firing. Match-type variants don't physically carry the
-// disc field, so a bare createUnion residual would reject `n.kind` — and a
-// single-variant residual must stay a 1-child union for the same reason.
+// `_tag` route keeps firing.
 function unionPreservingDiscriminant(parent: Type, remaining: Type[]): Type {
 	const u = createUnionInOrder(remaining);
 	if (u.kind != TypeKind.Union) return u;
@@ -1733,9 +1754,10 @@ function unionPreservingDiscriminant(parent: Type, remaining: Type[]): Type {
 	return u;
 }
 
-// Narrow a union type by equality to a literal. Handles:
-//   - null literal: remove/keep Null member
-//   - future: string, number, boolean literals
+// Narrow by equality to a literal. `=== null` keeps or drops the null member;
+// `=== "a"` and `=== 2` filter a union's members: the true branch drops every
+// scalar member of another base and every literal of the same base with
+// another value, the false branch drops the literal itself.
 function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: boolean): Type | null {
 	if (t == null) return t;
 	if (isNullLiteral(literal)) {
@@ -1745,6 +1767,65 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 		// !assumeTrue (!== null) removes it via removeNullFromType.
 		return assumeTrue ? extractNullFromType(t) : removeNullFromType(t);
 	}
-	// Other literal kinds: no narrowing in Phase 2 (Phase 6 adds string/number literal narrowing)
-	return t;
+	const value = equalityLiteralType(skipHiddenConv(literal));
+	if (value == null) return t;
+	if (isMaybeType(t) && t.typeReturn != null) {
+		const narrowed = filterByLiteral(t.typeReturn!, value, assumeTrue);
+		if (assumeTrue) return narrowed.kind == TypeKind.Never ? t : narrowed;
+		if (narrowed == t.typeReturn) return t;
+		return narrowed.kind == TypeKind.Never ? nullType() : nullableUnionOf([narrowed, nullType()]);
+	}
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	const narrowed = filterByLiteral(t, value, assumeTrue);
+	return narrowed.kind == TypeKind.Never ? t : narrowed;
+}
+
+function filterByLiteral(t: Type, value: Type, assumeTrue: boolean): Type {
+	if (t.kind != TypeKind.Union || t.typeChildren == null) {
+		return (assumeTrue ? excludedByEquality(t, value) : sameLiteralType(t, value)) ? neverType() : t;
+	}
+	const kept: Type[] = [];
+	for (const member of t.typeChildren) {
+		if (member == null) return t;
+		if (assumeTrue ? excludedByEquality(member, value) : sameLiteralType(member, value)) continue;
+		kept.push(member);
+	}
+	if (kept.length == 0) return neverType();
+	if (kept.length == t.typeChildren.length) return t;
+	return unionPreservingDiscriminant(t, kept);
+}
+
+function equalityLiteralType(node: Node): Type | null {
+	if (node.kind == NodeKind.StringLiteral) return createStringLiteral((node.data as StringLiteralData).value);
+	let negated = false;
+	let operand = node;
+	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "-") {
+		negated = true;
+		operand = (node.data as UnaryExprData).operand;
+	}
+	if (operand.kind != NodeKind.NumberLiteral) return null;
+	const d = operand.data as NumberLiteralData;
+	if (d.isFloat) return createNumberLiteral(fractionLiteralName(negated ? 0 - d.value : d.value), float64Type());
+	return createNumberLiteral(integerLiteralName(negated ? 0 - d.intVal : d.intVal), int32Type());
+}
+
+function scalarBaseOf(t: Type): TypeKind {
+	if (t.kind == TypeKind.String || t.kind == TypeKind.StringLiteral) return TypeKind.String;
+	if (t.kind == TypeKind.NumberLiteral || isNumeric(t)) return TypeKind.Number;
+	if (t.kind == TypeKind.Boolean || t.kind == TypeKind.BooleanLiteral) return TypeKind.Boolean;
+	return TypeKind.Error;
+}
+
+function sameLiteralType(member: Type, value: Type): boolean {
+	if (member.kind != value.kind) return false;
+	if (member.typeName == value.typeName) return true;
+	return member.kind == TypeKind.NumberLiteral && (isFloatType(numberLiteralBase(member)) || isFloatType(numberLiteralBase(value)))
+		&& parseNumberLiteral(member.typeName) == parseNumberLiteral(value.typeName);
+}
+
+function excludedByEquality(member: Type, value: Type): boolean {
+	const base = scalarBaseOf(member);
+	if (base == TypeKind.Error) return false;
+	if (base != scalarBaseOf(value)) return true;
+	return member.kind == value.kind && !sameLiteralType(member, value);
 }

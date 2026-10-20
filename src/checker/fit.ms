@@ -2,13 +2,13 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, isGeneratorFlags } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType } from "./types";
+import { peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -35,10 +35,10 @@ function promoteNumeric(a: Type, b: Type): Type {
 function widenBranchLiteral(t: Type): Type {
 	if (t.kind == TypeKind.StringLiteral) return stringType();
 	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
-	return closureStorageType(t);
+	return closureStorageType(widenNumberLiteralType(t));
 }
 
-function branchContributesToJoin(t: Type | null): boolean {
+export function branchContributesToJoin(t: Type | null): boolean {
 	return t != null && !isUnresolvedType(t)
 		&& t.kind != TypeKind.Never && t.kind != TypeKind.Void
 		&& t.kind != TypeKind.Error;
@@ -513,7 +513,7 @@ function builtinText(ctx: CheckerContext, value: Node): Node {
 
 // A union the std dump can read: one whose variants lead with a string-literal field, or one holding only primitives.
 function foldableUnion(u: Type): boolean {
-	if (isStringLike(u) || unwrapRefNullUnion(u) != null || u.typeChildren.length == 0) return false;
+	if (isStringLike(u) || literalUnionBase(u) != null || unwrapRefNullUnion(u) != null || u.typeChildren.length == 0) return false;
 	let primitive = true;
 	for (const m of u.typeChildren) {
 		if (m == null || m.kind == TypeKind.Null) return false;
@@ -803,7 +803,7 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 	if (formal.typeReturn != null) {
 		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType);
 		if (thunk != null as unknown as Node) payload = thunk;
-		if (formal.typeReturn.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isStringLike(exprType)) && isTagCarriedUnion(formal.typeReturn)) {
+		if (formal.typeReturn.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType)) && isTagCarriedUnion(formal.typeReturn)) {
 			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType);
 			if (injected != null as unknown as Node) payload = injected;
 		}
@@ -1072,7 +1072,7 @@ function binaryOperandSkip(t: Type): boolean {
 	return k == TypeKind.Error || k == TypeKind.Null
 		|| k == TypeKind.GenericParam || k == TypeKind.GenericInstance
 		|| k == TypeKind.TypeReference || k == TypeKind.Inferred || k == TypeKind.None
-		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional
+		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional || k == TypeKind.IndexedAccess || k == TypeKind.KeyOf
 		|| k == TypeKind.Result || k == TypeKind.BigInt;
 }
 
@@ -1157,7 +1157,7 @@ function equalityOperandsOk(ao: Type, bo: Type): boolean {
 	}
 	if (a.kind == TypeKind.Set || b.kind == TypeKind.Set) return sameSetElement(a, b);
 	if (a.kind == TypeKind.BigInt || b.kind == TypeKind.BigInt) return a.kind == b.kind || a.kind == TypeKind.Void || b.kind == TypeKind.Void;
-	if (isNumeric(a) && isNumeric(b)) return true;
+	if (isNumeric(widenNumberLiteralType(a)) && isNumeric(widenNumberLiteralType(b))) return true;
 	if (a.kind == TypeKind.StringLiteral && b.kind == TypeKind.StringLiteral) return a.typeName == b.typeName;
 	if (isStringLike(a) && isStringLike(b)) return true;
 	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
@@ -2210,25 +2210,27 @@ function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }
 
-export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): Node {
-	if (unwrapRefNullUnion(formal) != null) return null as unknown as Node;
+export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type): Node {
+	const formal = matchUnionBehindInstance(formalSlot);
+	if (matchUnionBehindInstance(exprType) != exprType || unwrapRefNullUnion(formal) != null) return null as unknown as Node;
 	// A flow-narrowed reference types as the variant, but its storage is the
 	// declared union struct — wrapping it would deref that struct as a variant
 	// pointer. Into the declared union itself the fit is an identity pass;
 	// stamping the position's type as the union keeps every downstream repr
 	// decision (address-of at the call, return/NRVO shape) identical to an
-	// un-narrowed reference. Any other union numbers its members differently,
-	// so the member is projected out and tagged again.
+	// un-narrowed reference. Any other slot union numbers its members differently,
+	// so the member is projected out and tagged again. A slotless target (a
+	// string-literal union) takes the member through the narrowed read's projection.
 	const declared = declaredTagUnionOf(expr);
 	if (declared != null) {
-		if (formal.kind != TypeKind.Union) return null as unknown as Node;
-		if (sameType(declared, formal)) {
-			expr.nodeType = formal;
+		if (!isSlotUnion(formal)) return null as unknown as Node;
+		if (sameType(declared, formal) || sameType(declaredInstanceOf(expr), formalSlot)) {
+			expr.nodeType = formalSlot;
 			return expr;
 		}
 		const projected = projectTagUnionMember(expr, declared, exprType);
 		if (projected == null as unknown as Node) return null as unknown as Node;
-		return widenVariantToUnion(projected, formal, exprType);
+		return widenVariantToUnion(projected, formalSlot, exprType);
 	}
 	const valueType = unwrapRef(exprType);
 	const exactSlot = unionSlotOf(formal, exprType);
@@ -2248,8 +2250,8 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 		drefNode.nodeType = valueType;
 		operand = drefNode;
 	}
-	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: operand, convType: formal }, convTok);
-	convNode.nodeType = formal;
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: operand, convType: formalSlot }, convTok);
+	convNode.nodeType = formalSlot;
 	// Same stamp convention as the object-literal path: codegen reads the slot,
 	// it never re-derives one (+1 so 0 keeps meaning "not set").
 	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
@@ -2285,7 +2287,7 @@ export function storedTypeOfNullRead(expr: Node, exprType: Type, formal: Type): 
 	return stored;
 }
 
-function declaredTypeOfLocation(loc: Node): Type | null {
+export function declaredTypeOfLocation(loc: Node): Type | null {
 	if (loc.kind == NodeKind.Identifier) return loc.resolvedSym != null && loc.resolvedSym.symbolType != null ? peelTransparentInstance(loc.resolvedSym.symbolType) : null;
 	if (loc.kind != NodeKind.MemberExpr) return null;
 	const md = loc.data as MemberExprData;
@@ -2297,25 +2299,33 @@ function declaredTypeOfLocation(loc: Node): Type | null {
 	return null;
 }
 
-export function declaredTagUnionOf(expr: Node): Type | null {
+function declaredInstanceOf(expr: Node): Type | null {
 	let walk: Node = expr;
 	while (walk != null && walk.kind == NodeKind.TypeAssertion) {
 		walk = (walk.data as TypeAssertionData).asExpr;
 	}
-	if (walk == null) return null;
-	const t = declaredTypeOfLocation(walk);
-	return t != null && isSlotUnion(t) ? t : null;
+	return walk == null ? null : declaredTypeOfLocation(walk);
+}
+
+function keepInstance(expr: Node, body: Type): Type {
+	const held = declaredInstanceOf(expr);
+	return held != null && matchUnionBehindInstance(held) == body ? held : body;
+}
+
+export function declaredTagUnionOf(expr: Node): Type | null {
+	const t = declaredInstanceOf(expr);
+	if (t == null) return null;
+	const body = matchUnionBehindInstance(t);
+	return isSlotUnion(body) ? body : null;
 }
 
 export function isSlotUnion(t: Type): boolean {
 	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	if (unwrapRefNullUnion(t) != null) return false;
-	let allStrLit = true;
 	for (const child of t.typeChildren) {
 		if (child == null || child.kind == TypeKind.Null) return false;
-		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
-	return !allStrLit;
+	return literalUnionBase(t) == null;
 }
 
 export function convertsBetweenUnions(source: Type | null, target: Type | null): boolean {
@@ -2518,18 +2528,32 @@ function flatUnionTakesNull(t: Type): boolean {
 // Same stamp convention (+1 so 0 means "not set"); the emitter tells the two
 // directions apart by convType: union = inject, member = project.
 export function narrowUnionToVariant(expr: Node, exprTypeRaw: Type): Node {
-	const exprType = peelTransparentInstance(exprTypeRaw);
-	if (exprType.kind == TypeKind.Union && !isStrLitSet(exprType)) return null as unknown as Node;
+	const exprType = matchUnionBehindInstance(peelTransparentInstance(exprTypeRaw));
+	if (exprType.kind == TypeKind.Union && !isLiteralSet(exprType)) return null as unknown as Node;
 	const declared = declaredTagUnionOf(expr);
 	if (declared == null) return null as unknown as Node;
 	const projected = projectTagUnionMember(expr, declared, exprType);
-	if (projected != null as unknown as Node && expr.kind == NodeKind.Identifier) expr.nodeType = declared;
+	if (projected != null as unknown as Node && expr.kind == NodeKind.Identifier) expr.nodeType = keepInstance(expr, declared);
 	return projected;
 }
 
+export function widenNumberLiteral(node: Node): Node {
+	const held = node.nodeType;
+	if (held == null) return node;
+	const widened = widenNumberLiteralType(held);
+	if (widened == held) return node;
+	let read = node;
+	if (declaredTagUnionOf(node) != null) {
+		const projected = narrowUnionToVariant(node, held);
+		if (projected != null as unknown as Node) read = projected;
+	}
+	read.nodeType = widened;
+	return read;
+}
+
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
-	if (exprType.kind == TypeKind.Union && !isStringLike(exprType)) return -1;
-	if (isStringLike(exprType)) return unionSlotOf(declared, exprType);
+	if (exprType.kind == TypeKind.Union && literalUnionBase(exprType) == null) return -1;
+	if (isStringLike(exprType) || isLiteralSet(exprType)) return unionSlotOf(declared, exprType);
 	let ci: int32 = 0;
 	for (const child of declared.typeChildren) {
 		if (child == exprType) return ci;
@@ -2543,12 +2567,12 @@ export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type
 	const holders = objectPathHolders(declared, exprType);
 	if (holders.length > 0) {
 		const k = vi >= 0 && holders.indexOf(vi) >= 0 ? vi : holders[0];
-		expr.nodeType = declared;
+		expr.nodeType = keepInstance(expr, declared);
 		return objectMemberConversion(hiddenSlotConv(expr, declared.typeChildren[k], k), declared, exprType, holders, convert);
 	}
 	if (vi < 0) return null as unknown as Node;
-	expr.nodeType = declared;
-	return hiddenSlotConv(expr, isStringLike(exprType) ? exprType : declared.typeChildren[vi], vi);
+	expr.nodeType = keepInstance(expr, declared);
+	return hiddenSlotConv(expr, isStringLike(exprType) || isLiteralSet(exprType) ? exprType : declared.typeChildren[vi], vi);
 }
 
 export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type, convert: boolean = false): Node {
@@ -2603,8 +2627,8 @@ function objectMemberConversion(read: Node, declared: Type, target: Type, holder
 	return conv;
 }
 
-export function isStrLitSet(t: Type | null): boolean {
-	return t != null && t.kind != TypeKind.String && isStringLike(t);
+export function isLiteralSet(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.NumberLiteral || literalUnionBase(t) != null);
 }
 
 function assertionPayload(t: Type): Type {
@@ -2617,7 +2641,7 @@ export function assertionNarrows(srcType: Type, target: Type): boolean {
 	const from = assertionPayload(srcType);
 	const to = assertionPayload(target);
 	if (isSlotUnion(from) && tagUnionMemberSlot(from, to) >= 0) return true;
-	return from.kind == TypeKind.String && isStrLitSet(to);
+	return from.kind == TypeKind.String && isLiteralSet(to);
 }
 
 export function checkedAssertion(expr: Node, target: Type): Node {
@@ -2641,7 +2665,7 @@ export function assertIntoNullable(expr: Node, srcType: Type, target: Type): Nod
 	if (isSlotUnion(srcType) && tagUnionMemberSlot(srcType, payload) >= 0) {
 		return synthMaybeWrap(checkedAssertion(checkedProjection(expr, srcType, payload), payload), target, payload);
 	}
-	if (srcType.kind == TypeKind.String && isStrLitSet(payload)) {
+	if (srcType.kind == TypeKind.String && isLiteralSet(payload)) {
 		return synthMaybeWrap(checkedAssertion(expr, payload), target, payload);
 	}
 	if (slotRefuses(srcType, payload)) return null as unknown as Node;
@@ -2788,6 +2812,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (peeledFormal != formal || peeledExpr != exprType) return fitSlot(ctx, expr, peeledFormal, peeledExpr);
 	const stored = storedTypeOfNullRead(expr, exprType, formal);
 	if (stored != exprType) return fitSlot(ctx, expr, formal, stored);
+	if (!holdsNumberLiteral(formal) && widenNumberLiteralType(exprType) != exprType) {
+		const read = widenNumberLiteral(expr);
+		return fitSlot(ctx, read, formal, read.nodeType);
+	}
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
 	const viewed = viewRefusal(expr, formal);
 	if (viewed != "") { addError(ctx, viewed, expr.location.line, expr.location.column); return expr; }
@@ -2863,11 +2891,15 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		expr.nodeType = formal;
 		return expr;
 	}
+	if (exprType.kind != TypeKind.GenericInstance && exprType.kind != TypeKind.Union && matchUnionBehindInstance(formal) != formal) {
+		const widened = widenVariantToUnion(expr, formal, exprType);
+		if (widened != null as unknown as Node) return widened;
+	}
 	// A variant value meeting a union formal converts HERE so every fit
 	// position (var init, assign, return, ternary, call arg) shares the one
 	// wrap — no position can forget it. Nilable pointer unions collapse to a
 	// bare pointer and take no tag.
-	if (formal.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isStringLike(exprType))
+	if (formal.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType))
 		&& unwrapRefNullUnion(formal) == null) {
 		const widened = widenVariantToUnion(expr, formal, exprType);
 		if (widened != null as unknown as Node) return widened;
@@ -2881,7 +2913,12 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			return expr;
 		}
 	}
-	if ((formal.kind != TypeKind.Union || isStrLitSet(formal)) && (exprType.kind != TypeKind.Union || isStrLitSet(exprType))) {
+	const variantRefusal = variantIntoObjectRefusal(expr, exprType, formal);
+	if (variantRefusal != "") {
+		addError(ctx, variantRefusal, expr.location.line, expr.location.column);
+		return expr;
+	}
+	if ((formal.kind != TypeKind.Union || isLiteralSet(formal)) && (exprType.kind != TypeKind.Union || isLiteralSet(exprType))) {
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
 	}
@@ -2984,6 +3021,25 @@ export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, forma
 		|| hasGenericParams(formal) || isMaybeType(formal)) return true;
 	if (isUnresolvedType(exprType) || isUnknownType(exprType) || exprType.kind == TypeKind.Never) return true;
 	return !slotRefuses(exprType, formal) || convertsBetween(ctx, exprType, formal) || hasValueOfProtocol(ctx, exprType);
+}
+
+export function variantIntoObjectRefusal(expr: Node, exprType: Type | null, formalIn: Type | null): string {
+	const formal = skipModifier(formalIn);
+	if (formal == null || exprType == null || formal.kind != TypeKind.Ref || isAtomicRef(formal) || formal.typeReturn == null) return "";
+	const object = formal.typeReturn;
+	if (object.kind != TypeKind.Struct || (object.sym != null && object.sym.symbolKind != SymbolKind.Interface)) return "";
+	if (exprType.kind != TypeKind.Struct || declaredTagUnionOf(expr) == null) return "";
+	const union = declaredInstanceOf(expr)!;
+	const named = expr.kind == NodeKind.Identifier;
+	const name = named ? (expr.data as IdentifierData).name : "value";
+	const unionName = union.kind == TypeKind.Union && union.typeName != "" ? union.typeName : typeDisplayName(union);
+	let tag = "";
+	if (exprType.typeNames.length > 0) tag = " (" + exprType.typeNames[0] + ": " + typeDisplayName(exprType.typeChildren[0]) + ")";
+	let shape = typeDisplayName(formal);
+	if (shape.endsWith("; }")) shape = shape.slice(0, shape.length - 3) + " }";
+	const share = isResult(union) || !union.typeFlags.has(TypeFlag.ValueUnion) ? "" : ", or declare '" + unionName + "' with 'type' to share it";
+	return (named ? "'" + name + "'" : "the value") + " is a value of '" + unionName + "'" + tag + "; '" + shape + "' takes an object (a reference). Copy it with '{ ..."
+		+ name + " }', take the parameter as '" + unionName + "'" + share + ".";
 }
 
 function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): void {

@@ -21,7 +21,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 ## Rules
 
 - **The VM knows no AST** — `src/raiser/` never imports a node type; codegen hands it a `RaiserModule`.
-- **Dispatch is an `if` / `else if` chain in `vm.ms`, one arm per opcode** — not `match`: `break` / `continue` in an arm would target the generated switch, not the dispatch loop.
+- **Dispatch is one `match (op)` in `vm.ms`, one arm per opcode** — it compiles to a C `switch` over the opcode (a jump table); a `break` or `continue` in an arm still targets the dispatch loop, not the generated switch.
 - **`gcMode` picks the memory regime per VM** — `createVM` and `createContext` default to `"arena"` (no refcount); `cmdRunRaiser` sets `"orc"`. RC and the cycle collector run only under `"orc"`.
 - **Every value that crosses strand heaps goes through `copyGraph`** — `spawn` copies the closure env and the global slots into the new strand's heap, `futureComplete` copies the result into the future's own heap, the awaiting reader copies it out.
 - **A parked strand rewinds to its `Await` and runs it again on resume** — no partial-instruction state is saved anywhere.

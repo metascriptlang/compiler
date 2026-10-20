@@ -41,7 +41,7 @@ trap 'stop_runner; if [ "$FAIL" -eq 0 ]; then rm -rf "$T"; else printf "landQueu
 setup() {
   stop_runner
   rm -rf "$T/ws" "$T/ctl" "$T/fakebin" "$T/decoy" "$T/decoy-wt"; mkdir -p "$T/ws/.wt" "$T/ctl" "$T/fakebin"
-  export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT
+  export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT MSC_REMOTE_VERDICTS=$T/ws/verdicts
   export MSC_LAND_QUEUE_IDLE=${IDLE:-2} MSC_LAND_QUEUE_POLL=1 MSC_LAND_QUEUE_WAIT_POLL=1
   unset MSC_WT_ROOT WT_CARD_ROOT WT_WORKTREE_ROOT WT_BASE CLAUDE_PROJECT_DIR GATE_PAR MSCORPUS_BUILD_JOBS
   R=$T/ws/repo
@@ -51,15 +51,17 @@ setup() {
   cp "$ADAPTER" "$R/tools/wt.sh"; cp "$RUNNER" "$R/tools/landQueue.sh"
   cat >"$R/tools/gate.sh" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1" = --inert ]; then exit "$(cat "$LQ_TEST/inert" 2>/dev/null || echo 0)"; fi
 [ "$1" = --tree-key ] && exit 0
 name=$(git symbolic-ref --short HEAD)
 printf '%s head=%s files=%s par=%s jobs=%s\n' "$name" "$(git rev-parse --short HEAD)" "$(git ls-tree --name-only HEAD | grep -v '^tools$' | paste -sd, -)" "${GATE_PAR:-}" "${MSCORPUS_BUILD_JOBS:-}" >>"$LQ_TEST/gates.log"
 v=$(cat verdict 2>/dev/null || echo green)
+n=$(( $(cat "$LQ_TEST/count.${name#wt/}" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$LQ_TEST/count.${name#wt/}"
 case "$v" in
+  busy3) [ "$n" -gt 3 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; exit 0 ;;
+  busyred) [ "$n" -gt 1 ] || { echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75; }; echo "gate: RED (tests) 0m01s"; exit 1 ;;
   green) exit 0 ;;
+  prune) mkdir -p out/gate; printf '{"kept":{}}\n' >out/gate/known-red.pruned.json; exit 0 ;;
   red) echo "gate: RED (tests) 0m01s"; exit 1 ;;
-  busy) echo "gate: BUSY load 99 > 14 cores after 1800s"; exit 75 ;;
   hold) touch "$LQ_TEST/holding.${name#wt/}"; while [ ! -e "$LQ_TEST/release" ]; do sleep 0.2; done; exit 0 ;;
 esac
 EOF
@@ -75,6 +77,11 @@ mkwt() {
   git -C "$w" add -A; git -C "$w" commit -qm "add $n"
 }
 
+remotegreen() {
+  mkdir -p "$MSC_REMOTE_VERDICTS"
+  printf 'patch=%s\nbase=%s\nhost=test-host\nresult=GREEN\n' \
+    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
+}
 setverdict() { printf '%s\n' "$2" >"$T/ws/.wt/wt-$1/verdict"; git -C "$T/ws/.wt/wt-$1" commit -qam "verdict $2"; }
 sbwt() { env -u WT_CWD -u CLAUDE_PROJECT_DIR bash "$WT" "$@"; }
 enqueue() { (cd "$T/ws/.wt/wt-$1" && sbwt land "$1" --async) >"$T/ctl/enq.$1" 2>&1; }
@@ -120,24 +127,40 @@ rh=$(waitfor h); rd=$(waitfor d)
 check "S4 h landed" '[ "$rh" = 0 ] && onmain h.txt'
 check "S4 dirty d reported red, not dropped silently" '[ "$rd" = 1 ] && grep -q "uncommitted" "$MSC_LAND_QUEUE/d.red"'
 
-echo "== S5 main moves during the gate by a tested path: requeued, regated, landed"
-setup; mkwt m hold
-echo 1 >"$LQ_TEST/inert"
+echo "== S5 main moves during the gate through a file the slice changes, the rebase is clean: one gate, landed"
+setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+mkwt m hold
+sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-m/shared.txt"; rm -f "$T/ws/.wt/wt-m/shared.txt.bak"; git -C "$T/ws/.wt/wt-m" commit -qam "edit shared top"
 enqueue m
 for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.m" ] && break; sleep 0.25; done
-echo other >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main"
+sed -i.bak 's/^3$/three/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared next line on main"
 touch "$LQ_TEST/release"
 rm=$(waitfor m 60)
-check "S5 landed after retry" '[ "$rm" = 0 ] && onmain m.txt && onmain other.txt'
-check "S5 gated twice" '[ "$(grep -c "^wt/m " "$T/ctl/gates.log")" = 2 ]'
-check "S5 second gate saw other.txt" '[ "$(grep "^wt/m " "$T/ctl/gates.log" | tail -1 | grep -c other\.txt)" = 1 ]'
+check "S5 landed" '[ "$rm" = 0 ] && onmain m.txt && [ "$(git -C "$R" show main:shared.txt | paste -sd, -)" = one,2,three,4,5 ]'
+check "S5 gated once" '[ "$(grep -c "^wt/m " "$T/ctl/gates.log")" = 1 ]'
 
-echo "== S6 gate BUSY is retried, then red after the try limit"
-setup; mkwt y busy
+echo "== S5b main moves during the gate by files the slice leaves alone: one gate, landed"
+setup; mkwt m2 hold
+enqueue m2
+for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.m2" ] && break; sleep 0.25; done
+echo other >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main"
+touch "$LQ_TEST/release"
+rm2=$(waitfor m2 60)
+check "S5b landed beside other.txt" '[ "$rm2" = 0 ] && onmain m2.txt && onmain other.txt'
+check "S5b gated once" '[ "$(grep -c "^wt/m2 " "$T/ctl/gates.log")" = 1 ]'
+
+echo "== S6 gate BUSY is queued again without counting a try, past the try limit, and lands"
+setup; mkwt y busy3
 enqueue y
 ry=$(waitfor y 60)
-check "S6 busy ends red after 3 tries" '[ "$ry" = 1 ] && [ "$(grep -c "^wt/y " "$T/ctl/gates.log")" = 3 ]'
-check "S6 runner log shows retries" '[ "$(grep -c "y: retry" "$MSC_LAND_QUEUE/runner.log")" = 2 ]'
+check "S6 four BUSY-then-green gates land" '[ "$ry" = 0 ] && onmain y.txt && [ "$(grep -c "^wt/y " "$T/ctl/gates.log")" = 4 ]'
+check "S6 no BUSY counted a try" '[ "$(grep -c "y: land, try 1$" "$MSC_LAND_QUEUE/runner.log")" = 4 ] && [ "$(grep -c "y: machine busy" "$MSC_LAND_QUEUE/runner.log")" = 3 ]'
+
+echo "== S6b a red after a BUSY try is red, not mistaken for the earlier BUSY"
+setup; mkwt b2 busyred
+enqueue b2
+rb2=$(waitfor b2 60)
+check "S6b red after one BUSY" '[ "$rb2" = 1 ] && ! onmain b2.txt && [ "$(grep -c "^wt/b2 " "$T/ctl/gates.log")" = 2 ] && grep -q "gate: RED" "$MSC_LAND_QUEUE/b2.red"'
 
 echo "== S7 enqueue with no name from inside the worktree; hyphen names do not collide"
 setup; mkwt alias; mkwt fix-alias
@@ -185,9 +208,8 @@ rw=$(waitfor w 30)
 check "S12 gated at once beside msc.exe" '[ "$rw" = 0 ] && onmain w.txt && ! grep -q "machine busy" "$MSC_LAND_QUEUE/runner.log"'
 unset MSC_LAND_QUEUE_BUSY_MAX
 
-echo "== S13 a commit made during the gate, main moved by an inert path: nothing ungated lands"
+echo "== S13 a commit made during the gate, main moved by a file the slice leaves alone: nothing ungated lands"
 setup; mkwt g hold
-echo 0 >"$LQ_TEST/inert"
 enqueue g
 for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.g" ] && break; sleep 0.25; done
 echo late >"$T/ws/.wt/wt-g/late.txt"; git -C "$T/ws/.wt/wt-g" add late.txt; git -C "$T/ws/.wt/wt-g" commit -qm "add late"
@@ -252,6 +274,73 @@ rz=$(waitfor z 60)
 git -C "$T/ws/.wt/wt-z" checkout -q --detach
 rz2=$(waitfor z 20)
 check "S19 wait by name ignores a detached HEAD" '[ "$rz" = 0 ] && [ "$rz2" = 0 ] && grep -q "z landed" "$T/ctl/wait.z"'
+
+echo "== S20 a green gate that pruned the known-red set: the land commits the pruned set and lands it"
+setup; mkwt k
+mkdir -p "$T/ws/.wt/wt-k/src/test"; printf '{"kept":{},"stale":{}}\n' >"$T/ws/.wt/wt-k/src/test/known-red.json"
+git -C "$T/ws/.wt/wt-k" add -A; git -C "$T/ws/.wt/wt-k" commit -qm "add known"; setverdict k prune
+enqueue k
+rk=$(waitfor k 60)
+check "S20 k landed with the pruned set" '[ "$rk" = 0 ] && onmain k.txt && [ "$(git -C "$R" show main:src/test/known-red.json)" = "{\"kept\":{}}" ]'
+check "S20 the pruned set is its own commit on main" '[ "$(git -C "$R" log -1 --format=%s main)" = "test: drop known-red entries that are green" ] && [ "$(git -C "$R" diff --name-only main~1 main)" = src/test/known-red.json ]'
+check "S20 the gate's pruned file is consumed" '[ ! -e "$T/ws/.wt/wt-k/out/gate/known-red.pruned.json" ]'
+
+echo "== S21 a worktree builder that cannot check the caught-up tree is replaced before the gate"
+setup; mkwt s
+printf '#!/usr/bin/env bash\n# stale\nexit 1\n' >"$T/ws/.wt/wt-s/msc"; chmod +x "$T/ws/.wt/wt-s/msc"
+printf '#!/usr/bin/env bash\n# main builder\nexit 0\n' >"$R/msc"; chmod +x "$R/msc"
+enqueue s
+rs=$(waitfor s 60)
+check "S21 s landed" '[ "$rs" = 0 ] && onmain s.txt'
+check "S21 the worktree builder is main's" 'grep -q "main builder" "$T/ws/.wt/wt-s/msc" && grep -q "picking a builder again" "$MSC_LAND_QUEUE/s.land.log"'
+
+echo "== S22 a remote GREEN for the same patch on the current main lands without a local gate"
+setup; mkwt rv red
+remotegreen rv
+enqueue rv
+rr=$(waitfor rv 60)
+check "S22 rv landed" '[ "$rr" = 0 ] && onmain rv.txt'
+check "S22 no local gate ran" '! grep -q "^wt/rv " "$T/ctl/gates.log" 2>/dev/null'
+check "S22 the land names the remote gate" 'grep -q "reusing the green remote gate of test-host" "$MSC_LAND_QUEUE/rv.land.log"'
+
+echo "== S23 main moved after the remote gate by files the slice leaves alone: still no local gate"
+setup; mkwt rm red
+remotegreen rm
+echo other >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main"
+enqueue rm
+rr=$(waitfor rm 60)
+check "S23 rm landed beside other.txt" '[ "$rr" = 0 ] && onmain rm.txt && onmain other.txt'
+check "S23 no local gate ran" '! grep -q "^wt/rm " "$T/ctl/gates.log" 2>/dev/null'
+
+echo "== S24 main moved after the remote gate through a file the slice changes, the rebase is clean: still no local gate"
+setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+mkwt ro
+sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-ro/shared.txt"; rm -f "$T/ws/.wt/wt-ro/shared.txt.bak"; git -C "$T/ws/.wt/wt-ro" commit -qam "edit shared top"
+remotegreen ro
+sed -i.bak 's/^3$/three/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared next line on main"
+enqueue ro
+rr=$(waitfor ro 60)
+check "S24 ro landed beside main's edit" '[ "$rr" = 0 ] && onmain ro.txt && [ "$(git -C "$R" show main:shared.txt | paste -sd, -)" = one,2,three,4,5 ]'
+check "S24 no local gate ran" '! grep -q "^wt/ro " "$T/ctl/gates.log" 2>/dev/null'
+
+echo "== S24b main edited the slice's own line after the remote gate: the rebase conflicts, nothing lands"
+setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+mkwt rc
+sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-rc/shared.txt"; rm -f "$T/ws/.wt/wt-rc/shared.txt.bak"; git -C "$T/ws/.wt/wt-rc" commit -qam "edit shared top"
+remotegreen rc
+sed -i.bak 's/^1$/uno/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit the same line on main"
+enqueue rc
+rr=$(waitfor rc 60)
+check "S24b refused at the conflict, main keeps its own line" '[ "$rr" = 1 ] && grep -q conflicts "$T/ctl/enq.rc" && ! onmain rc.txt && [ "$(git -C "$R" show main:shared.txt | head -1)" = uno ]'
+check "S24b no local gate ran" '! grep -q "^wt/rc " "$T/ctl/gates.log" 2>/dev/null'
+
+echo "== S25 the slice gained a commit after the remote gate: the land gates"
+setup; mkwt rp
+remotegreen rp
+echo more >"$T/ws/.wt/wt-rp/more.txt"; git -C "$T/ws/.wt/wt-rp" add more.txt; git -C "$T/ws/.wt/wt-rp" commit -qm "add more"
+enqueue rp
+rr=$(waitfor rp 60)
+check "S25 rp landed after a local gate" '[ "$rr" = 0 ] && onmain more.txt && grep -q "^wt/rp " "$T/ctl/gates.log"'
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -16,7 +16,6 @@ import {
 	Signer,
 	Writable,
 	WritableSigner,
-	asAccount,
 } from "./typed";
 import { ProgramError } from "./error";
 import { invoke, invokeSigned } from "./invoke";

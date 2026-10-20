@@ -506,6 +506,8 @@ static inline void msMsgReplyDispatch(void* fut) {
  * the finished future re-fire through msFutureAddCallback's finished-path. */
 static inline void msMsgReplyFail(void* fut) {
     if (fut == NULL) return;
+    /* A completed reply's in-flight ref is released by the drain its completer posted to. */
+    if (atomic_load_explicit(&((msFutureBase*)fut)->finished, memory_order_acquire)) return;
     msFutureFail(fut, NULL);
 #if MS_FUTURE_SUBMIT_REF
     void* f = fut;
@@ -543,33 +545,19 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
     }
     msActorClearFlag(a, MS_ACTOR_SUSPENDED);
     /* Normal resume: suspendedFut stays set — the visit clears it (gate stays
-     * closed until the visit owns the shell under processing). Re-enqueue on the
-     * run queue (Pony parity: CAS prevents double-push vs a concurrent send). */
-    {
-        bool exp = false;
-        if (atomic_compare_exchange_strong_explicit(&a->scheduled, &exp, true,
-                memory_order_acq_rel, memory_order_relaxed)) {
-            if (sid >= 0 && sid < msSchedulerCount) {
-                msSchedRunPush(&msSchedulers[sid], a);
-            }
-            if (sid == 0) msActorWakeEventLoop();
-            else msPoolWakeWorker(sid);
-        }
+     * closed until the visit owns the shell under processing). */
+    atomic_store_explicit(&a->scheduled, true, memory_order_release);
+    if (sid >= 0 && sid < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[sid], a);
     }
+    if (sid == 0) msActorWakeEventLoop();
+    else msPoolWakeWorker(sid);
 }
 
 /* Suspend actor: save async _impl future, register resume callback.
  * For CALL methods, replyFut is chained separately by the dispatch function. */
 static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
     if (a == NULL) return;
-    /* R1 entry check: stop won the race to the suspend point — fail the reply,
-     * don't suspend, register no resume callback (no shell reference outlives
-     * this call). The visit's reap gate collects on the next pass. */
-    if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
-        if (replyFut != NULL) msMsgReplyFail(replyFut);
-        msHazardClear(a);
-        return;
-    }
     a->suspendedReplyFut = replyFut;
     atomic_store_explicit(&a->suspendedFut, implFut, memory_order_release);
     msActorSetFlag(a, MS_ACTOR_SUSPENDED);
@@ -726,26 +714,13 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         void* sfp = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
         if (sfp != NULL) {
             msFutureBase* sf = (msFutureBase*)sfp;
-            bool resumed = atomic_load_explicit(&sf->finished, memory_order_acquire);
-            if (!resumed) {
-                /* Still suspended — deschedule BEFORE releasing processing, or the
-                 * resume callback's scheduled-CAS can never re-enqueue (strand). */
-                atomic_store_explicit(&a->scheduled, false, memory_order_release);
-                /* Re-check: resume may have completed between the loads — reclaim
-                 * the visit (CAS back) or the mailbox stalls until the next send. */
-                if (atomic_load_explicit(&sf->finished, memory_order_acquire)) {
-                    bool reclaim = false;
-                    resumed = atomic_compare_exchange_strong_explicit(&a->scheduled,
-                        &reclaim, true, memory_order_acq_rel, memory_order_relaxed);
-                }
-                if (!resumed) {
-                    msCurrentActor = prevActor;
-                    atomic_store_explicit(&a->processing, false, memory_order_release);
-                    return 0;
-                }
+            if (!atomic_load_explicit(&sf->finished, memory_order_acquire)) {
+                msCurrentActor = prevActor;
+                atomic_store_explicit(&a->processing, false, memory_order_release);
+                return 0;
             }
             /* Resumed: _impl stepper already completed the reply future via
-             * msFutureChain. Clear suspension state, fall through to mailbox drain. */
+             * its reply chain. Clear suspension state, fall through to mailbox drain. */
             atomic_store_explicit(&a->suspendedFut, NULL, memory_order_release);
             a->suspendedReplyFut = NULL;
         }
@@ -795,6 +770,14 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         /* Don't free msg here — MPSC pop made it the new tail stub.
          * It gets freed on the NEXT pop when a newer message takes its place. */
         processed++;
+        if (atomic_load_explicit(&a->suspendedFut, memory_order_relaxed) != NULL
+                || (atomic_load_explicit(&a->syncFlags, memory_order_relaxed) & MS_ACTOR_SUSPENDED) != 0) {
+            atomic_store_explicit(&a->scheduled, false, memory_order_release);
+            msCurrentActor = prevActor;
+            atomic_store_explicit(&a->processing, false, memory_order_release);
+            msFutureReleaseFlush();
+            return processed;
+        }
     }
 
     /* Scheduling decision, made WHILE HOLDING processing. Flags (heuristics) from the
@@ -928,6 +911,41 @@ static inline void msMsgCompleteVoid(void* fut) {
     atomic_store_explicit(&f->finished, true, memory_order_release);
     msMsgReplyDispatch(fut);
 }
+
+typedef struct { void* src; void* dst; } msMsgReplyChainPair;
+
+#define MS_DEFINE_REPLY_CHAIN(name, valueType) \
+static inline void name##_cb(void* raw, ...) { \
+    typedef struct { msFutureBase base; valueType value; } layout; \
+    msMsgReplyChainPair* pair = (msMsgReplyChainPair*)raw; \
+    layout* src = (layout*)pair->src; \
+    layout* dst = (layout*)pair->dst; \
+    free(pair); \
+    if (atomic_load_explicit(&dst->base.finished, memory_order_acquire)) return; \
+    if (src->base.failed) { \
+        dst->base.error = src->base.error; \
+        src->base.error = NULL; \
+        dst->base.failed = true; \
+    } else { \
+        dst->value = src->value; \
+    } \
+    atomic_store_explicit(&dst->base.finished, true, memory_order_release); \
+    msMsgReplyDispatch(dst); \
+} \
+static inline void name(void* src, void* dst) { \
+    if (src == NULL || dst == NULL) return; \
+    msMsgReplyChainPair* pair = (msMsgReplyChainPair*)malloc(sizeof(msMsgReplyChainPair)); \
+    pair->src = src; \
+    pair->dst = dst; \
+    msFutureAddCallback(src, (msClosure){ .fn = (msClosureFn)name##_cb, .env = (void*)pair }); \
+}
+
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainDouble, double)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainInt32, int32_t)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainInt64, int64_t)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainBool, bool)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainString, msString)
+MS_DEFINE_REPLY_CHAIN(msMsgReplyChainPtr, void*)
 
 /* Set onTerminate callback (called by actorLower wiring).
  * Takes void* for fn to avoid function pointer type mismatch — _impl takes ActorType* not void*. */
@@ -1598,28 +1616,13 @@ static inline bool msActorPollLocal(void) {
     return didWork;
 }
 
-/* Exit-poll: drain ALL run queues + scan ALL registries (belt-and-suspenders).
- * Called at program exit to flush remaining messages. */
+/* Exit-poll: drain ALL run queues. Called at program exit to flush remaining messages. */
 static inline bool msActorPollAll(void) {
     bool didWork = false;
-    /* Drain run queues first */
     for (int s = 0; s < msSchedulerCount; s++) {
         msActor* a;
         while ((a = msSchedRunPop(&msSchedulers[s])) != NULL) {
             if (!msActorHasFlag(a, MS_ACTOR_MUTED)) {
-                int n = msActorProcess(a, MS_ACTOR_BATCH);
-                if (n > 0) didWork = true;
-            }
-        }
-    }
-    /* Scan registry for stragglers not in run queue */
-    for (int s = 0; s < msSchedulerCount; s++) {
-        msSchedActors* sched = &msSchedulers[s];
-        int cnt2 = atomic_load_explicit(&sched->count, memory_order_acquire);
-        for (int i = 0; i < cnt2; i++) {
-            msActor* a = sched->actors[i];
-            if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
-            if (atomic_load_explicit(&a->hasWork, memory_order_acquire)) {
                 int n = msActorProcess(a, MS_ACTOR_BATCH);
                 if (n > 0) didWork = true;
             }

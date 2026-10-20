@@ -200,7 +200,7 @@ export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const verbatim = aliasWithInnerComments(node, options);
 	if (verbatim != "") return docText(verbatim);
 	const distinct = d.aliasIsDistinct ? "distinct " : "";
-	const head = "type " + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
+	const head = (node.flags.has(NodeFlag.ValueUnion) ? "struct " : "type ") + d.aliasName + genericsFor(options, d.nameLocation, d.aliasName, d.aliasGenericParams);
 	if (d.discriminantName != "" && d.discriminantName != null) {
 		// Discriminated union: type X<...> = match (disc: Enum) { ... }
 		// Use docIndent so the layout engine respects useTabs/tabWidth.
@@ -363,7 +363,7 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			}
 			for (const dec of decorators) {
 				lead.push(callPrintNode(dec, options));
-				lead.push(ownLine ? docHardLine() : docText(" "));
+				lead.push(ownLine ? docHardLine() : docLine());
 			}
 		}
 		if (attached != null) {
@@ -418,6 +418,9 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	const parts: Doc[] = [docText("class " + d.className + generics)];
 	if (d.classExtends != "") {
 		parts.push(docText(" extends " + d.classExtends));
+	}
+	if (d.classImplements.length > 0) {
+		parts.push(docText(" implements " + d.classImplements.join(", ")));
 	}
 	parts.push(docText(" {"));
 	if (d.classBody.length > 0) {

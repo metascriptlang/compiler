@@ -87,11 +87,15 @@ export function heldHandle(v: RaiserValue): RaiserValue {
 
 // --- Deep copy (avoids pointer aliasing) ---
 
+// strVal is non-empty only in a String or FieldAddr value, so a copy between
+// two other kinds has no text to move.
 export function copyValueInto(dst: RaiserValue, src: RaiserValue): void {
+	const carriesText = src.kind == RaiserValueKind.String || src.kind == RaiserValueKind.FieldAddr
+		|| dst.kind == RaiserValueKind.String || dst.kind == RaiserValueKind.FieldAddr;
 	dst.kind = src.kind;
 	dst.intVal = src.intVal;
 	dst.floatVal = src.floatVal;
-	dst.strVal = src.strVal;
+	if (carriesText) dst.strVal = src.strVal;
 }
 
 // --- Accessors ---
@@ -493,24 +497,30 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: 
 // heaps are threaded through. Destroy is generic (the heap object is self-describing).
 
 export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
-	const val = heldHandle(held);
-	if (val.kind == RaiserValueKind.Array) {
-		arrHeap.arrays[val.intVal].rc = arrHeap.arrays[val.intVal].rc + 1;
-	} else if (val.kind == RaiserValueKind.Object) {
-		objHeap.objects[val.intVal].rc = objHeap.objects[val.intVal].rc + 1;
-	}
+	rcIncrefHandle(arrHeap, objHeap, held.kind, held.intVal);
 }
 
 export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
-	const val = heldHandle(held);
-	if (val.kind == RaiserValueKind.Array) {
-		const data = arrHeap.arrays[val.intVal];
+	rcDecrefHandle(arrHeap, objHeap, held.kind, held.intVal);
+}
+
+export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, kind: RaiserValueKind, handle: int64): void {
+	if (kind == RaiserValueKind.Array || kind == RaiserValueKind.ElemAddr) {
+		arrHeap.arrays[handle].rc = arrHeap.arrays[handle].rc + 1;
+	} else if (kind == RaiserValueKind.Object || kind == RaiserValueKind.FieldAddr) {
+		objHeap.objects[handle].rc = objHeap.objects[handle].rc + 1;
+	}
+}
+
+export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, kind: RaiserValueKind, handle: int64): void {
+	if (kind == RaiserValueKind.Array || kind == RaiserValueKind.ElemAddr) {
+		const data = arrHeap.arrays[handle];
 		data.rc = data.rc - 1;
-		if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, val.intVal); }
-	} else if (val.kind == RaiserValueKind.Object) {
-		const data = objHeap.objects[val.intVal];
+		if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, handle); }
+	} else if (kind == RaiserValueKind.Object || kind == RaiserValueKind.FieldAddr) {
+		const data = objHeap.objects[handle];
 		data.rc = data.rc - 1;
-		if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, val.intVal); }
+		if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, handle); }
 	}
 }
 
@@ -941,4 +951,17 @@ test "clearObjectHeap resets storage" {
 	// Re-allocate works after clear
 	const h2 = heapAllocObject(heap);
 	assert h2 == 0;
+}
+
+test "a kind below Array holds no handle the counters touch" {
+	const arrays = createArrayHeap();
+	const objects = createStructHeap();
+	heapAllocArray(arrays);
+	heapAllocObject(objects);
+	arrays.arrays[0].rc = 1;
+	objects.objects[0].rc = 1;
+	for (let k = 0; k < (RaiserValueKind.Array as number); k++) rcIncrefHandle(arrays, objects, k as RaiserValueKind, 0);
+	assert arrays.arrays[0].rc == 1 && objects.objects[0].rc == 1;
+	for (let k = 0; k < (RaiserValueKind.Array as number); k++) rcDecrefHandle(arrays, objects, k as RaiserValueKind, 0);
+	assert arrays.arrays[0].rc == 1 && objects.objects[0].rc == 1 && arrays.freeList.length == 0;
 }

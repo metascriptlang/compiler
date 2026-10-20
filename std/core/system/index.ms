@@ -110,6 +110,9 @@ extern function msFutureReadDouble(fut: Ptr<void>): number from "msFutureReadDou
 extern function msFutureReadInt32(fut: Ptr<void>): int32 from "msFutureReadInt32";
 
 @compilerFunc @throws
+extern function msFutureReadInt64(fut: Ptr<void>): int64 from "msFutureReadInt64";
+
+@compilerFunc @throws
 extern function msFutureReadBool(fut: Ptr<void>): boolean from "msFutureReadBool";
 
 @compilerFunc @throws
@@ -314,6 +317,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msStringAppendChar(dest: Ptr<void>, ch: char): void;
+
+	@compilerFunc
+	extern function msStringAppendCodePoint(dest: Ptr<void>, cp: number): void;
 
 	@compilerFunc
 	extern function msStringSetChar(s: Ptr<void>, idx: int64, ch: string): void;
@@ -811,6 +817,9 @@ when (mscDeclaresRuntime) {
 	extern function msBoxInt32(v: int32): Ptr<void>;
 
 	@compilerFunc
+	extern function msBoxInt64(v: int64): Ptr<void>;
+
+	@compilerFunc
 	extern function msBoxBool(v: boolean): Ptr<void>;
 
 	@compilerFunc
@@ -871,46 +880,64 @@ when (mscDeclaresRuntime) {
 	extern function msHcrVariableStorage(cell: Ptr<void>): Ptr<void>;
 
 	@compilerFunc
-	extern function msFutureChain(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainDouble(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_double(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainInt32(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_int32(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainInt64(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_int64(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainBool(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_bool(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainString(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_msString(src: Ptr<void>, dst: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msFutureChain_ptr(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainPtr(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msFutureThen_double(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_doubleWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_int32(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThen_int32WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureThen_int64(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_int64WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_bool(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThen_boolWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureThen_msString(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_msStringWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_ptr(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_ptrWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_ref(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThen_refWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureCatch_double(input: Ptr<void>, onRejected: () => void): Ptr<void>;
@@ -953,6 +980,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msFutureThenTyped(input: Ptr<void>, onFulfilled: () => void, typeTag: int32): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThenTypedWithRejected(input: Ptr<void>, onFulfilled: () => void, typeTag: int32, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureCatchTyped(input: Ptr<void>, onRejected: () => void, typeTag: int32): Ptr<void>;

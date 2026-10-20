@@ -143,6 +143,7 @@ export class CBlock {
 	nestedTryDepth: number;  // snapshot of CProc.nestedTryStmts.length at block entry
 	breakUsed: boolean;    // a labeled break targeted this block — emit the `<label>_x_:` landing after it
 	continueUsed: boolean; // a labeled continue targeted this block — emit the `<label>:` landing inside it
+	landing: string;       // non-empty: a labeled break jumps to this label instead of `<label>_x_`
 }
 
 export function createBlock(id: number, isLoop: boolean): CBlock {
@@ -156,6 +157,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 		nestedTryDepth: 0,
 		breakUsed: false,
 		continueUsed: false,
+		landing: "",
 	};
 }
 
@@ -190,6 +192,7 @@ export class CProc {
 	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
 	// here so identifiers created by DRC (which lack resolvedSym) can resolve the unique name.
 	localNameMap: string[];   // parallel arrays: [originalName, uniqueName, ...]
+	reemitting: boolean;  // a statement is being generated again: a local it declares is assigned, never declared
 }
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
@@ -244,6 +247,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		localSyms: [],
 		localSymNames: [],
 		localNameMap: [],
+		reemitting: false,
 	};
 }
 
@@ -415,6 +419,15 @@ export function readProcStmts(p: CProc): string {
 // Read proc-level locals content (block[0])
 export function readProcLocals(p: CProc): string {
 	return p.blocks[0].locals.parts.join("");
+}
+
+// Where a raise inside `p` jumps: the nearest enclosing try, else the BeforeRet_ epilogue.
+export function raiseTarget(p: CProc): string {
+	if (p.nestedTryStmts.length == 0) {
+		p.beforeRetNeeded = true;
+		return "BeforeRet_";
+	}
+	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
 }
 
 // Single funnel for ordinary proc bodies (reference genProcAux parity): drain
@@ -718,6 +731,11 @@ export interface DeferredStructDef {
 	def: string;
 }
 
+export interface DeferredElement {
+	elem: Type;
+	contentName: string;
+}
+
 // ===== CGen — module-level state (Standard reference parity) =====
 
 export class CGen {
@@ -751,7 +769,7 @@ export class CGen {
 	unionsInProgress: string[];
 	deferredStructs: DeferredStructDef[];
 	inlineCopies: Symbol[];
-	deferredElements: Type[];
+	deferredElements: DeferredElement[];
 }
 
 export interface TestEntry {

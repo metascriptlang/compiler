@@ -4,7 +4,7 @@ import { lookupSymbol, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/s
 import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
-import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
+import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap, raiseFromHost } from "../../raiser/hostRegistry";
 import { mapTypeToAst, nodeToValue, boundSymAt, boundSymOfObject, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
@@ -12,6 +12,7 @@ import { boxString, unboxString } from "../../raiser/marshal";
 import { definedValue } from "../defines";
 import { getParserDefines } from "../../parser/context";
 import { checkFunctionOnDemand } from "../../checker/checkPass";
+import { readFile } from "std/fs";
 
 export function stillDecoratedMessage(name: string): string {
 	return `'${name}' is still being decorated - its type is not available until its decorators finish`;
@@ -245,6 +246,16 @@ function hostDefine(args: RaiserValue[]): RaiserValue {
 	return boxString(definedValue(getParserDefines(), unboxString(args[0])));
 }
 
+function hostReadFile(args: RaiserValue[]): RaiserValue {
+	const path = unboxString(args[0]);
+	const read = readFile(path);
+	if (!read.ok) {
+		raiseFromHost("cannot read file '" + path + "'", false);
+		return boxString("");
+	}
+	return boxString(read.value);
+}
+
 function hostExpansionFile(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
 	if (ctx == null) return boxString("");
@@ -254,6 +265,7 @@ function hostExpansionFile(args: RaiserValue[]): RaiserValue {
 export function registerTypeQueryHostFns(): void {
 	registerHostFn("msMetaDefine", hostDefine, HostCapability.Pure);
 	registerHostFn("msMetaExpansionFile", hostExpansionFile, HostCapability.Pure);
+	registerHostFn("msMetaReadFile", hostReadFile, HostCapability.FileRead);
 	registerHostFn("msMetaBindSym", hostBindSym, HostCapability.Pure);
 	registerHostFn("msMetaGetType", hostGetType, HostCapability.Pure);
 	registerHostFn("msMetaGetImpl", hostGetImpl, HostCapability.Pure);

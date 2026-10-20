@@ -15,7 +15,7 @@ function resultDiv(a: float64, b: float64): Result<float64, string> {
 
 enum ReferenceKind { Ok, Err }
 
-type ReferenceBody<T, E> = match (kind: ReferenceKind) {
+struct ReferenceBody<T, E> = match (kind: ReferenceKind) {
 	ReferenceKind.Ok => { value: T },
 	ReferenceKind.Err => { error: E },
 };
@@ -26,7 +26,7 @@ function numericReference(value: float64): VariantRef<float64, string> { return 
 
 function textError(error: string): VariantRef<float64, string> { return { kind: ReferenceKind.Err, error: error }; }
 
-type PayloadBody<T, E> = match (kind: ReferenceKind) {
+struct PayloadBody<T, E> = match (kind: ReferenceKind) {
 	ReferenceKind.Ok => { value: T },
 	ReferenceKind.Err => { error: E },
 };

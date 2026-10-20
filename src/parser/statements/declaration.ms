@@ -630,6 +630,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 // ===== Discriminated Union Declaration =====
 // syntax: type X = match (discName: EnumOrBool) { Key => { fields }, ... };
+//         struct X = match (...) { ... };  the same arms held by value (NodeFlag.ValueUnion)
 //   - Enum discriminator: keys are enum members (`MyKind.Ok`, `MyKind.Err`)
 //   - Boolean discriminator: keys are `true` / `false` literals
 
@@ -959,6 +960,11 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 	// which contain semicolons — don't terminate the RHS prematurely.
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Assign) {
 		advance(state);
+		if (nodeKind == NodeKind.StructDecl && current(state).kind == TokenKind.Match) {
+			const decl = try parseDiscriminatedUnionDecl(state, nameToken.value, genericNames, token, nameToken);
+			decl.flags = decl.flags.incl(NodeFlag.ValueUnion);
+			return Result.ok(decl);
+		}
 		const rhsStart = state.position;
 		let braceDepth = 0;
 		while (!isAtEnd(state)) {
@@ -1050,10 +1056,21 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		}
 	}
 
-	// Optional implements: class Foo implements Bar, Baz — skip
+	// Optional implements: class Foo implements Bar, Baz<T> — kept as written for the formatter;
+	// the checker relates a class to an interface by shape, not by this list.
+	const implementsNames: string[] = [];
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Implements) {
 		advance(state);
-		while (!isAtEnd(state) && current(state).kind != TokenKind.LBrace) {
+		while (!isAtEnd(state) && isIdentLike(current(state))) {
+			const start = state.position;
+			advance(state);
+			while (!isAtEnd(state) && current(state).kind == TokenKind.Dot && isIdentLike(peek(state, 1))) {
+				advance(state);
+				advance(state);
+			}
+			skipGenericParams(state);
+			implementsNames.push(collectTokenText(state, start, state.position).trim());
+			if (isAtEnd(state) || current(state).kind != TokenKind.Comma) break;
 			advance(state);
 		}
 	}
@@ -1085,6 +1102,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		classExtends: extendsName,
 		classBody: members,
 		nameLocation: makeLocFromToken(nameToken),
+		classImplements: implementsNames,
 	}, classToken);
 	classNode.typeArg = classGenerics;
 	classNode.comments = bodyComments;
@@ -1853,6 +1871,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 				classExtends: extendsName,
 				classBody: members,
 				nameLocation: makeLocFromToken(nameToken),
+				classImplements: [],
 			}, externToken);
 			classNode.typeArg = genericNames;
 			classNode.flags = classNode.flags.incl(NodeFlag.ExternC);

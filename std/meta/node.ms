@@ -52,6 +52,10 @@ export enum TypeKind {
 	BigInt,
 	Set,
 	Module,
+	IndexedAccess,
+	KeyOf,
+	NumberLiteral,
+	NonPrimitive,
 }
 
 // ===== Calling Convention =====
@@ -81,6 +85,7 @@ export enum TypeFlag {
 	BorrowDot,
 	Spelled,              // the compiler spelled this name from an owner and arguments: it is the identity and no declaring symbol exists
 	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
+	ValueUnion,           // a discriminated union declared `struct X = match`: a value, copied where a `type X = match` union is shared
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -130,6 +135,7 @@ export enum AttachedOp {
 //                    null = absent). Populated by destructorLifting; see setAttachedOp /
 //                    getAttachedOp in src/checker/types.ms.
 //   sym            — back-pointer to the declaring Symbol (Class/Interface/Enum decls).
+//   typeInst       — a union built as a generic instance's body: that instance, which names it.
 export class Type {
 	kind: TypeKind;
 	typeName: string;
@@ -142,6 +148,7 @@ export class Type {
 	callConv: CallingConvention;
 	attachedOps: (Symbol | null)[];
 	sym: Symbol | null;
+	typeInst: Type | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;
 }
@@ -304,10 +311,13 @@ export enum NodeFlag {
 	AssertedNull,  // checker: `null as T` folded to a typed null literal; its value is the asserted T, so an assignment narrows to T
 	UserOpStores,  // checker: this compound assignment calls its base operator's declared routine and stores the result in its target
 	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
+	ValueUnion,    // parser: this TypeAliasDecl is a discriminated union written `struct X = match`
+	QuoteSplice,   // parser: this call is a quote's `${ }` interpolation, a splice by syntax whatever `splice` names in scope
 }
 
 // ===== Node Kind Enum =====
 
+@builtin("MetaNodeKind")
 export enum NodeKind {
 	// Literals
 	NumberLiteral, StringLiteral, BooleanLiteral, NullLiteral, BigIntLiteral, RegexLiteral,
@@ -368,12 +378,14 @@ export enum NodeKind {
 
 // ===== Declaration Kind Enum =====
 
+@builtin("MetaDeclKind")
 export enum DeclKind {
 	Const,
 	Let,
 	Var,
 }
 
+@builtin("MetaExternKind")
 export enum ExternKind {
 	Invalid,
 	Function,
@@ -474,7 +486,7 @@ export type NodeData =
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // InterfaceDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // StructDecl
-	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
+	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] } // ConstructorDecl
@@ -597,6 +609,7 @@ export class FlowNode {
 
 // ===== Node Interface =====
 
+@builtin("MetaNode")
 export class Node {
 	kind: NodeKind;
 	location: SourceLocation;
@@ -614,6 +627,7 @@ export class Node {
 	comments: Token[]; // Added for comment preservation
 	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
+	baseExprs: Node[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	paramSyms: Symbol[] | null;
 	typeArg: string; // Use site: explicit generic args ("Person" from parse<Person>()); class/interface/struct/actor/extern decl: its generic params ("K,V")
@@ -701,7 +715,7 @@ export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsD
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
 export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
-export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
+export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] };
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
@@ -754,6 +768,7 @@ export type ComputedPropertyData = { computedKey: Node, computedValue: Node };
 
 // ===== Constructors =====
 
+@builtin("MetaCreateNode")
 export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	return {
 		kind,
@@ -766,6 +781,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		comments: [],
 		typeExpr: null,
 		typeExprs: null,
+		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,
 		typeArg: "",
@@ -786,6 +802,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 // wide NodeData union, then scoring picks the specific overload.
 
 // Literals
+@builtin("MetaCreateNodeAt")
 export function createNodeAt(kind: NodeKind.NumberLiteral, data: NumberLiteralData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.StringLiteral, data: StringLiteralData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.BooleanLiteral, data: BooleanLiteralData, loc: SourceLocation): Node;
@@ -893,6 +910,7 @@ export function createNodeAt(kind: NodeKind.ComputedProperty, data: ComputedProp
 // This is the body; all overload signatures above delegate here via the checker's
 // overload resolution. It also serves as the fallback for callers that pass a
 // runtime (non-literal) NodeKind or a NodeData value that isn't known to narrow.
+@builtin("MetaCreateNodeAt")
 export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation): Node {
 	return {
 		kind,
@@ -905,6 +923,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 		comments: [],
 		typeExpr: null,
 		typeExprs: null,
+		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,
 		typeArg: "",

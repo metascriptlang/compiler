@@ -226,10 +226,27 @@ export function unboxFnNameForType(t: Type | null): string {
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
 		TypeKind.Boolean => "msUnboxBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32
 			| TypeKind.Enum | TypeKind.Module => "msUnboxInt32",
+		TypeKind.Int64 | TypeKind.Uint64 => "msUnboxInt64",
 		TypeKind.String => "msUnboxString",
+		_ => "",
+	};
+}
+
+// Typed future readers — msFutureReadT reads the typed inline value from
+// the future struct (msFuture_T.value). All futures use typed inline
+// storage; no boxed path exists.
+export function typedFutureReadFn(t: Type | null): string {
+	if (t == null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
+		TypeKind.Boolean => "msFutureReadBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Module => "msFutureReadInt32",
+		TypeKind.Int64 | TypeKind.Uint64 => "msFutureReadInt64",
+		TypeKind.String => "msFutureReadString",
 		_ => "",
 	};
 }

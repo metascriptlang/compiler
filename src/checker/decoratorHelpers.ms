@@ -18,7 +18,7 @@ export interface DecoratorInfo {
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline",
+	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto",
 ];
 const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws", "delegate"];
 

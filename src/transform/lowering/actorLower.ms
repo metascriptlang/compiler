@@ -106,22 +106,21 @@ function msgCompleteName(mk: string): string {
 	};
 }
 
-function futureChainFn(mk: string): string {
+function replyChainFn(mk: string): string {
 	return match (mk) {
-		"double" => "msFutureChain_double",
-		"int32"  => "msFutureChain_int32",
-		"int64"  => "msFutureChain_int64",
-		"bool"   => "msFutureChain_bool",
-		"string" => "msFutureChain_msString",
-		"ptr"    => "msFutureChain_ptr",
-		_ => "msFutureChain",
+		"double" => "msMsgReplyChainDouble",
+		"int32"  => "msMsgReplyChainInt32",
+		"int64"  => "msMsgReplyChainInt64",
+		"bool"   => "msMsgReplyChainBool",
+		"string" => "msMsgReplyChainString",
+		_ => "msMsgReplyChainPtr",
 	};
 }
 
-function futureChainFnForReturn(retType: Type | null): string {
-	if (retType == null) return "msFutureChain";
+function replyChainFnForReturn(retType: Type | null): string {
+	if (retType == null) return "msMsgReplyChainPtr";
 	const inner = retType.typeReturn != null ? retType.typeReturn : retType;
-	return futureChainFn(typeMsgKind(inner));
+	return replyChainFn(typeMsgKind(inner));
 }
 
 // "string" = 2 slots (16B inlined); "array"/"struct" = 1 slot (heap-boxed).
@@ -350,7 +349,7 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 				// CALL: store reply future, chain _impl's future → reply future.
 				// Select typed chain variant based on method's declared return type
 				// so msString (16B) and other typed values are copied correctly.
-				const chainFn = futureChainFnForReturn(m.nodeType);
+				const chainFn = replyChainFnForReturn(m.nodeType);
 				const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
 				const replyFutSym = mintSym(ctx, SymbolKind.Variable, "_replyFut", VOID_PTR);
 				const replyDecl = makeVarDecl(replyFutSym.name, futAccessCall, DeclKind.Const, loc);
@@ -462,6 +461,7 @@ function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, lo
 		classExtends: "",
 		classBody: structMembers,
 		nameLocation: d.nameLocation,
+		classImplements: [],
 	}, syntheticToken(loc));
 	classNode.resolvedSym = node.resolvedSym;
 	classNode.nodeType = node.nodeType;

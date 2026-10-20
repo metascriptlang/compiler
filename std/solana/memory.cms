@@ -1,0 +1,48 @@
+@include("runtime/solana/solana.h");
+@compile("runtime/solana/host.c");
+
+import { SeedSlice, SignerSeeds } from "./addressTables";
+
+export extern function msSolPointer(address: uint64): Ptr<void>;
+export extern function msSolLoadU8(address: uint64): uint8;
+export extern function msSolLoadU16(address: uint64): uint16;
+export extern function msSolLoadU32(address: uint64): uint32;
+export extern function msSolLoadU64(address: uint64): uint64;
+export extern function msSolStoreU8(address: uint64, value: uint8): void;
+export extern function msSolStoreU16(address: uint64, value: uint16): void;
+export extern function msSolStoreU32(address: uint64, value: uint32): void;
+export extern function msSolStoreU64(address: uint64, value: uint64): void;
+export extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
+export extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
+export extern function msSolCompare(left: uint64, right: uint64, length: uint64): int32;
+export extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+export extern function msSolStringAddress(text: string): uint64;
+export extern function msSolStringLength(text: string): uint64;
+export extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
+export extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
+export extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
+export extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
+export extern function msSolDataRoom(record: uint64): uint64;
+export extern function msSolClaimRecord(address: uint64): void;
+export extern function msSolHostRaise(code: uint64, text: string): void;
+export extern function msSolHostFaultCodeOf(): uint64;
+export extern function msSolMemoryFaultText(): string from "msSolHostFaultMessage";
+export extern function msSolMemoryClearFault(): void from "msSolHostClearFault";
+export extern function msSolProgramId(): uint64;
+
+// A seed row read through a typed pointer, so the C compiler can forward a row the caller has just written
+@inline export function msSolSeedRowLength(table: uint64, index: uint64): uint64 {
+	const rows = msSolPointer(table) as Ptr<SeedSlice>;
+	return rows[index].length;
+}
+
+@inline export function msSolSeedRowAddress(table: uint64, index: uint64): uint64 {
+	const rows = msSolPointer(table) as Ptr<SeedSlice>;
+	return rows[index].address;
+}
+
+@inline export function msSolSeedRowSet(table: uint64, index: uint64, address: uint64, length: uint64): void {
+	const rows = msSolPointer(table) as Ptr<SeedSlice>;
+	rows[index].address = address;
+	rows[index].length = length;
+}

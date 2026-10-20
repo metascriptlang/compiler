@@ -5,7 +5,7 @@ import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, F
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, EnumDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
@@ -18,10 +18,12 @@ import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileI
 import { createJSHelpers, escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
-import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
+import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute, RaiserContext } from "../raiser/context";
+import { RaiserModule } from "../raiser/module";
+import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
+import { mangleModuleName, mangleProcName, mangleQualified, mangledGlobalName, safeName } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -32,8 +34,9 @@ import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelM
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
 import { refuseBigIntOnRaiser } from "../checker/bigIntOnRaiser";
-import { checkJsBundleExports, BundleReexport } from "../checker/jsBundleExports";
+import { checkJsBundleExports, BundleExport } from "../checker/jsBundleExports";
 import { jsBundleReferenceName } from "../codegen/js/expressions";
+import { jsEnumObject } from "../codegen/js/declarations";
 import { getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
@@ -185,11 +188,17 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection, tar
 
 // Report graph-level errors (e.g., missing entry) and circular dep warnings.
 function reportGraphErrors(graph: ModuleGraph): void {
+	const hook = _diagnosticHook;
 	for (const err of graph.errors) {
-		printDiag(red("graph error: ") + err);
+		if (hook != null) hook("", { message: err, line: 0, column: 0, severity: ErrorSeverity.Error });
+		else printDiag(red("graph error: ") + err);
 	}
 	for (const dep of graph.circularDeps) {
 		let circMsg = `circular import: ${dep.fromPath} <-> ${dep.toPath}`;
+		if (hook != null) {
+			hook(dep.fromPath, { message: circMsg, line: dep.importLine as int32, column: 0, severity: ErrorSeverity.Warning });
+			continue;
+		}
 		if (dep.importLine > 0) {
 			circMsg = circMsg + ` (line ${dep.importLine})`;
 		}
@@ -211,8 +220,19 @@ function printDiag(line: string): void {
 	writeStderr(line + "\n");
 }
 
+let _diagnosticHook: ((file: string, e: ModuleError) => void) | null = null;
+
+export function setDiagnosticHook(hook: ((file: string, e: ModuleError) => void) | null): void {
+	_diagnosticHook = hook;
+}
+
 // Render a single structured error in Rust-style format
 function renderModuleError(modPath: string, source: string, e: ModuleError): void {
+	const hook = _diagnosticHook;
+	if (hook != null) {
+		hook(modPath, e);
+		return;
+	}
 	// Header: "error: message" or "warning: message"
 	const isWarn = e.severity == ErrorSeverity.Warning;
 	const levelStr = match (isWarn) {
@@ -434,7 +454,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 		}
 	}
 	if (graphErrors > 0) {
-		printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
+		if (_diagnosticHook == null) printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
 		stopBuild();
 	}
 	return graph;
@@ -1397,11 +1417,25 @@ function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: str
 	return ctxs;
 }
 
-function bundleExportList(names: string[], locals: string[], reexports: BundleReexport[]): string {
+function bundleExportList(names: string[], locals: string[], extra: BundleExport[]): string {
 	const specifiers: string[] = [];
+	let enumObjects = "";
+	const madeObjects = new Set<string>();
 	for (let i = 0; i < names.length; i += 1) specifiers.push(exportSpecifier(locals[i], names[i]));
-	for (const r of reexports) specifiers.push(exportSpecifier(jsBundleReferenceName(r.sym, r.name), r.name));
-	return specifiers.length == 0 ? "" : `export { ${specifiers.join(", ")} };\n`;
+	for (const r of extra) {
+		if (r.sym.symbolKind != SymbolKind.Enum) {
+			specifiers.push(exportSpecifier(jsBundleReferenceName(r.sym, r.name), r.name));
+			continue;
+		}
+		if (r.sym.declNode == null || r.sym.declNode.kind != NodeKind.EnumDecl) throw new Error(`internal: exported enum '${r.name}' has no declaration`);
+		const local = mangledGlobalName(r.sym, r.sym.name);
+		if (!madeObjects.has(local)) {
+			madeObjects.add(local);
+			enumObjects = enumObjects + jsEnumObject(local, r.sym.declNode.data as EnumDeclData);
+		}
+		specifiers.push(exportSpecifier(local, r.name));
+	}
+	return specifiers.length == 0 ? "" : `${enumObjects}export { ${specifiers.join(", ")} };\n`;
 }
 
 function exportSpecifier(local: string, name: string): string {
@@ -4103,10 +4137,10 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 // ===== Raiser (Bytecode VM) Run =====
 
-export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), argv0: string = ""): void {
-	const t0 = performance.now();
+export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
+	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
-	const graph = loadAndCheckGraph(filePath, config, opts);
+	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Orc, session != null ? session.check : null);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);
@@ -4128,7 +4162,24 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		unitPrograms.push(checked.program);
 		unitCtxs.push(checked.ctx);
 	}
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	const kept = session != null && session.keep ? session : null;
+	if (kept != null) {
+		const routeOrder: Node[] = [];
+		for (const modPath of unitPaths) {
+			const created = kept.check.instances.get(modPath);
+			if (created != null) for (const instNode of created) routeOrder.push(instNode);
+		}
+		retainCheckedInstances(unitCtxs);
+		const byOwner = routeInstances(routeOrder, (path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), false, null);
+		for (let i = 0; i < unitPrograms.length; i += 1) {
+			const program = cloneNodeKeepSem(unitPrograms[i]);
+			const routed = byOwner.get(unitPaths[i]);
+			if (routed != null) for (const inst of routed) (program.data as ProgramData).programStmts.push(cloneNodeKeepSem(inst));
+			unitPrograms[i] = program;
+		}
+	} else {
+		placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	}
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);
@@ -4150,30 +4201,40 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	// through the same registry — load it first or both see an empty table.
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
-	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath));
+	const raiserMod = generateRaiserProject(modules, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryCanonical : "");
 	// Comptime parity: queued bytecode-compile errors are collected and
 	// reported, not fatal — std module bodies the program never calls can
 	// contain unbridgeable externs or unresolved helpers. A nil that leaks
 	// into live code is visible here as a "cannot evaluate" line.
+	const hook = _diagnosticHook;
 	for (const e of takeRaiserCompileErrors()) {
-		printDiag(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
+		if (hook != null) hook("", { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Warning });
+		else printDiag(`${yellow("raiser warning")}: ${e.message} at ${e.line}:${e.column}`);
 	}
+	return raiserMod;
+}
 
-	if (opts.showTime) printTiming("compiled", t0);
-
+export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink): RaiserContext {
 	const ctx = createRaiserContext();
 	ctx.gcMode = "orc";
+	ctx.programArgv = programArgv;
+	ctx.printSink = printSink;
+	raiserLoad(ctx, mod);
+	raiserExecute(ctx);
+	return ctx;
+}
+
+export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), argv0: string = ""): void {
+	const t0 = performance.now();
+	const raiserMod = compileRaiser(filePath, opts, resolveSection);
+	if (opts.showTime) printTiming("compiled", t0);
+
 	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
 	for (const a of opts.extraArgs) programArgv.push(a);
-	ctx.programArgv = programArgv;
-	ctx.printSink = (text: string): void => { console.log(text); };
-	raiserLoad(ctx, raiserMod);
-	const ranOk = raiserExecute(ctx);
+	const ctx = runRaiser(raiserMod, programArgv, (text: string): void => { console.log(text); });
 
-	if (!ranOk) {
-		if (ctx.lastError != "") {
-			printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
-		}
+	if (ctx.lastError != "") {
+		printDiag(`${error("raiser runtime error")}: ${ctx.lastError}`);
 		exit(1);
 	}
 
