@@ -26,7 +26,25 @@ import { setOpByKey, getOpByKey } from "../codegen/c/types";
 
 export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
+	for (const stmt of stmts.programStmts) noteExplicitExportNames(ctx, stmt);
 	for (const stmt of stmts.programStmts) collectTopLevelStmt(ctx, stmt);
+}
+
+function noteExplicitExportNames(ctx: CheckerContext, stmt: Node): void {
+	let node = stmt;
+	while (node.kind == NodeKind.DecoratedDecl) {
+		node = (node.data as DecoratedDeclData).decoratedNode;
+	}
+	if (node.kind != NodeKind.ExportDecl) return;
+	const decl = (node.data as ExportDeclData).exportedDecl;
+	if (decl.kind == NodeKind.ImportDecl) {
+		const imp = decl.data as ImportDeclData;
+		if (imp.importNames.length == 1 && imp.importNames[0] == "*") return;
+		for (const alias of imp.importAliases) ctx.explicitExportNames.add(alias);
+	} else {
+		const name = getDeclName(decl);
+		if (name != "") ctx.explicitExportNames.add(name);
+	}
 }
 
 export function collectTopLevelStmt(ctx: CheckerContext, stmt: Node): void {
@@ -1477,6 +1495,7 @@ function reexportPastBinding(ctx: CheckerContext, bound: Symbol, expInfo: Export
 }
 
 export function collectExport(ctx: CheckerContext, node: Node): void {
+	noteExplicitExportNames(ctx, node);
 	const d = node.data as ExportDeclData;
 
 	// Re-export case: export { X, Y } from "./mod" — exportedDecl is an ImportDecl
@@ -1500,6 +1519,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 					if (modExports != null) {
 						for (let si = 0; si < modExports.symbols.length; si += 1) {
 							const expInfo = modExports.symbols[si];
+							if (ctx.explicitExportNames.has(expInfo.name)) continue;
 							const bound = lookupLocal(ctx.table, expInfo.name);
 							if (bound != null) {
 								reexportPastBinding(ctx, bound, expInfo, sourcePath, imp.importSource, node);

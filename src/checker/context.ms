@@ -1317,6 +1317,7 @@ export class CheckerContext {
 	interf: Symbol[];
 	interfSet: HashSet<Symbol>;
 	interfNames: HashMap<Symbol, string[]>;
+	explicitExportNames: HashSet<string>;
 	importSet: HashSet<Symbol>;
 	shadowedImports: HashMap<Symbol, Symbol>;
 	usedImports: HashSet<Symbol>;
@@ -1409,6 +1410,7 @@ export function createContext(): CheckerContext {
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
 		interfNames: new HashMap<Symbol, string[]>(),
+		explicitExportNames: new HashSet<string>(),
 		importSet: new HashSet<Symbol>(),
 		shadowedImports: new HashMap<Symbol, Symbol>(),
 		usedImports: new HashSet<Symbol>(),

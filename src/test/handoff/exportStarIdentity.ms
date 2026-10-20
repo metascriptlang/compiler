@@ -81,6 +81,41 @@ test "exportStarIdentity: a hub over a hub keeps both modules' extensions" {
 	assert d == "", d;
 }
 
+test "exportStarIdentity: explicit local exports win before and after star exports" {
+	const declarations = [
+		`export * from "./base";\nexport const dup: int32 = 5;\n`,
+		`export const dup: int32 = 5;\nexport * from "./base";\n`,
+	];
+	for (const declaration of declarations) {
+		const files: MapEntry[] = [
+			{
+				entryPath: "src/base.ms",
+				entrySource: "export const dup: int32 = 1; export const only: int32 = 10;",
+			},
+		];
+		const diagnostics = diagnostics680(files, declaration);
+		assert diagnostics == "", diagnostics;
+	}
+}
+
+test "exportStarIdentity: explicit named reexports win before and after star exports" {
+	const declarations = [
+		`export * from "./base";\nexport { dup } from "./chosen";\n`,
+		`export { dup } from "./chosen";\nexport * from "./base";\n`,
+	];
+	for (const declaration of declarations) {
+		const files: MapEntry[] = [
+			{
+				entryPath: "src/base.ms",
+				entrySource: "export const dup: int32 = 1; export const only: int32 = 10;",
+			},
+			{ entryPath: "src/chosen.ms", entrySource: "export const dup: int32 = 5;" },
+		];
+		const diagnostics = diagnostics680(files, declaration);
+		assert diagnostics == "", diagnostics;
+	}
+}
+
 test "exportStarIdentity: two star exports of different types under one name are refused at the hub" {
 	const files: MapEntry[] = [
 		{ entryPath: "src/x.ms", entrySource: "export struct A { v: int32; }\n" },
