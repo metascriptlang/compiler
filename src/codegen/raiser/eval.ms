@@ -767,6 +767,37 @@ test "engine: sleepAsync parks the strand for at least its delay" {
 	assert performance.now() - started >= 30;
 }
 
+test "engine: a sleep armed at the end of a millisecond still waits its whole delay" {
+	const vm = evalOrcVM(RAISER_TIER_SLEEP
+		+ " extern function now(): number from \"msPerformanceNow\";"
+		+ " let early: int32 = 0; let i: int32 = 0;"
+		+ " while (i < 40) {"
+		+ "   let t = now(); while (t - ((t as int64) as number) < 0.99) { t = now(); }"
+		+ "   const started = now(); await nap(2); if (now() - started < 2) { early += 1; }"
+		+ "   i += 1;"
+		+ " }"
+		+ " console.log(`early ${early}`);");
+	assert vm.error == "";
+	assert vm.output == "early 0\n";
+}
+
+test "engine: several sleepers armed together each wait their own delay" {
+	const vm = evalOrcVM(RAISER_TIER_SLEEP
+		+ " extern function now(): number from \"msPerformanceNow\";"
+		+ " function sleeper(ms: int32): int32 {"
+		+ "   let t = now(); while (t - ((t as int64) as number) < 0.99) { t = now(); }"
+		+ "   const started = now(); await nap(ms); return now() - started >= ms ? 1 : 0;"
+		+ " }"
+		+ " let ok: int32 = 0; let round: int32 = 0;"
+		+ " while (round < 10) {"
+		+ "   const a = spawn(() => sleeper(3)); const b = spawn(() => sleeper(1)); const c = spawn(() => sleeper(2));"
+		+ "   ok += (await a) + (await b) + (await c); round += 1;"
+		+ " }"
+		+ " console.log(`on time ${ok}/30`);");
+	assert vm.error == "";
+	assert vm.output == "on time 30/30\n";
+}
+
 test "engine: two sleepers wake in deadline order, not spawn order" {
 	const vm = evalOrcVM(RAISER_TIER_SLEEP
 		+ " const b = spawn(() => { await nap(2); console.log(\"b\"); return 1; });"
