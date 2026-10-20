@@ -566,7 +566,7 @@ Self-build timings on a typical dev laptop (Apple Silicon, 8-core, warm OS cache
 Validated via `--gc=none` A/B: rebuilt msc without DRC, re-ran self-build.
 Phase A dropped **24.7s → 14.6s** — confirms **~10s of Phase A is pure RC refcount ops**.
 
-**We cannot ship `msc` with `--gc=none`** because `msc lsp` is long-running and would leak. The target is to reclaim that ~10s via smarter data structures and eliminated allocations, not by turning off DRC.
+**We cannot ship `msc` with `--mm=none`** because `msc lsp` is long-running and would leak. The target is to reclaim that ~10s via smarter data structures and eliminated allocations, not by turning off DRC.
 
 ---
 
@@ -845,7 +845,7 @@ How to time anything on this shared machine:
 
 ## Non-goals
 
-- Shipping `msc` compiled with `--gc=none` — breaks `msc lsp` (long-running, would leak)
+- Shipping `msc` compiled with `--mm=none` — breaks `msc lsp` (long-running, would leak)
 - Rewriting the compiler in a different language
 - External profilers / instrumentation harnesses — timing breakdown via `--time` is sufficient
 

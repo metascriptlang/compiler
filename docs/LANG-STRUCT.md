@@ -345,10 +345,9 @@ Implementation needed:
 
 `GcMode` enum on CheckerContext. `analyzeProgram` in analyzer/index.ms:
 - `GcMode.None` / `GcMode.Manual` → skip DRC entirely (bare/freestanding mode, see docs/BARE.md)
-- `GcMode.Drc` → ARC (incref/decref only)
-- `GcMode.Orc` → ARC + cycle collector (**default**)
+- `GcMode.Drc` → RC + cycle collector (**default**; the collector is always linked)
 
-GC mode is explicitly chosen via `--gc=drc|orc|none|manual` flag. Default is `--gc=orc`.
+The memory mode is chosen via `--mm=drc|manual|none`. Default is `--mm=drc`; `--gc=` is refused.
 
 **Other struct enhancements (not yet):**
 
@@ -424,7 +423,7 @@ struct Admin {
 | | — `ref` modifier | DONE |
 | | — `mutatedParams` analysis | DONE |
 | | — Auto-optimized param ABI | DONE (infrastructure) |
-| | — GcMode explicit (`--gc=orc\|drc\|none\|manual`) | DONE |
+| | — GcMode explicit (`--mm=drc\|manual\|none`) | DONE |
 | | — `readonly` modifier | Not started |
 | | — Intersection syntax, method rejection | Not started |
 | ~~2.7~~ | ~~Discriminated unions (type = match)~~ | ~~DONE~~ |

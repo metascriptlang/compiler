@@ -4,14 +4,17 @@ Zig-inspired memory model for MetaScript targeting constrained environments (Sol
 
 ## Two Orthogonal Axes
 
-### `--gc=` (Memory Management)
+### `--mm=` (Memory Management)
 
 | Flag | Allocator | RC | Free | Use Case |
 |------|-----------|-----|------|----------|
-| `--gc=orc` | malloc | ARC + cycle collector | Yes (scope exit) | **Default**, desktop apps |
-| `--gc=drc` | malloc | ARC (incref/decref only) | Yes (scope exit) | No cycle collection |
-| `--gc=none` | malloc | None | Never | Debug, leak testing |
-| `--gc=manual` | malloc | None | defer / manual free | Performance, game engines, libraries |
+| `--mm=drc` | malloc | ARC + cycle collector (always linked) | Yes (scope exit; cycles at collection) | **Default** |
+| `--mm=none` | malloc | None | Never | Debug, leak testing |
+| `--mm=manual` | malloc | None | defer / manual free | Performance, game engines, libraries |
+
+`--gc=` is refused with an error that names `--mm`; there is no mode without the cycle collector.
+`--os=bare` implies `--mm=manual` unless `--mm=` is given; `--os=solana` is always `manual` (or `none`
+when asked), whatever `--mm=` says (`targetMemoryMode`, `src/compiler/buildConfig.ms`).
 
 ### `--os=` (Platform Target)
 
@@ -28,15 +31,15 @@ Zig-inspired memory model for MetaScript targeting constrained environments (Sol
 
 ### Valid Combinations
 
-| | `--gc=orc` | `--gc=drc` | `--gc=none` | `--gc=manual` |
-|---|---|---|---|---|
-| `--os=auto` | **Default** | No cycle collection | Debug/leak test | Performance, game engines |
-| `--os=bare` | Not supported | Not supported | Not useful | Freestanding target |
-| `--os=solana` | Not supported | Not supported | Not useful | Blockchain contract |
-| `--os=wasm` | Not supported | Not supported | Not useful | Blockchain contract |
-| `--os=linux/macos/windows` | Cross-compile | Cross-compile | Cross debug | Cross manual |
+| | `--mm=drc` | `--mm=none` | `--mm=manual` |
+|---|---|---|---|
+| `--os=auto` | **Default** | Debug/leak test | Performance, game engines |
+| `--os=bare` | Partial: a sync hello builds and runs, async fails in the C compile (2026-10-20) | Not useful | **Default here**, freestanding target |
+| `--os=solana` | Not supported (resolved to manual) | Not useful | Blockchain contract |
+| `--os=wasm` | Not supported | Not useful | Blockchain contract |
+| `--os=linux/macos/windows` | Cross-compile | Cross debug | Cross manual |
 
-Key insight: three axes — `--gc` (memory management), `--os` (platform), and **mode** (full / freestanding / contract). Contract mode is triggered by blockchain `--os` targets and means: no mutable globals, no init guards, no TypeInfo, flat DCE'd codegen.
+Key insight: three axes — `--mm` (memory management), `--os` (platform), and **mode** (full / freestanding / contract). Contract mode is triggered by blockchain `--os` targets and means: no mutable globals, no init guards, no TypeInfo, flat DCE'd codegen.
 
 ### `--os=emcc` vs `--os=wasm`
 
@@ -104,7 +107,7 @@ Read `<mangled>` out of the generated `_dispatch.c` (`out/<mode>/.cache/_dispatc
 1. **WASI imports appear and must be shimmed.** Rooting the runtime pulls `wasi_snapshot_preview1.{proc_exit, fd_close, fd_write, fd_seek}`. Defining `__wasi_*` in a `@compile`-ed `.c` resolves them internally and the imports disappear — verified, back to exactly the host imports you declared. Same strategy as `spacetimedb-bindings-cpp/src/abi/wasi_shims.cpp` (~190 LOC, nearly all stubs returning success; `fd_write` forwards to the host log).
 2. **`-sJSPI` is linked when a runtime sleep or timer entry is reachable after DCE** (`msSleepMs`, `msSleepAsync`, `msSetTimeout`, `msSetInterval`, matched by the C name of a live extern), and nothing else is: a wait from sync code suspends the wasm stack only through a sleep or a pending timer, because `spawn` runs inline on emcc. The compiler itself links JSPI, because its Raiser VM sleeps until its next timer. A JSPI build does not load in a host without JSPI (Chrome/Edge 137, Firefox 153, Safari 27 and later have it; node 24.1 needs `--experimental-wasm-jspi`). Measured 2026-10-18 by `src/test/nativeBuildBoundary.ms` group `emcc-jspi`: an awaited `new Promise` plus a `spawn` links neither JSPI nor Asyncify and prints `49`; six sync waits on `setTimeout` link JSPI and print `total=21`; a direct `msSleepMs` extern links JSPI and prints `slept`. Not measured for this `--app=lib` custom-host build.
 
-**`--gc=manual` is not usable here yet**: it fails to compile three prelude modules (`std/core/websocket/state.ms`, `std/net/index.cms`, `std/core/websocket/client.cms`). Underlying C error not yet captured. Until that is fixed, custom-host wasm runs on the default GC.
+**`--mm=manual` is not usable here yet** (recorded under its old spelling `--gc=manual`, not re-probed after the `--mm` rename): it fails to compile three prelude modules (`std/core/websocket/state.ms`, `std/net/index.cms`, `std/core/websocket/client.cms`). Underlying C error not yet captured. Until that is fixed, custom-host wasm runs on the default memory mode.
 
 ## Stylus proof tooling — Arbitrum Sepolia
 
@@ -148,7 +151,9 @@ this document were not re-audited by this tooling run.
 ### MetaScript counter in Nitro — measured 2026-09-28
 
 The generic target is `--os=bare --cpu=wasm32 --gc=manual --app=lib`, not
-`--os=wasm` or a chain-specific compiler target. The ordinary LLVM Clang/wasm-ld
+`--os=wasm` or a chain-specific compiler target. The commands below are the 2026-09-28 record;
+`--gc=manual` is spelled `--mm=manual` since 2026-10-20, and `--os=bare` already implies it (the
+wasm32 build was not re-run under the new spelling). The ordinary LLVM Clang/wasm-ld
 toolchain emits the contract; no Rust contract or WASI host is involved.
 
 On source tree `aa2a89d6118531a64f7a4b4be98102df1e3d1973` (based on landed
@@ -292,9 +297,9 @@ The user chose this no-faucet simulation for the video instead of public
 transactions. It still needs network access to the RPC; it is not an offline
 localnet, and these runs establish no persisted public deployment.
 
-## Phase 1: `--gc=manual` (No RC, malloc available) — DONE
+## Phase 1: `--mm=manual` (No RC, malloc available) — DONE
 
-DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to `--gc=orc` — only the linked runtime header differs.
+DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to the RC mode's (`--gc=orc` when this was written) — only the linked runtime header differs.
 
 **What was built:**
 
@@ -325,7 +330,7 @@ testArrayPush, testJson, httpConcurrent — inherited from the original write-up
 
 ## Phase 2: `--os=bare` (Freestanding, no libc) — mechanism DONE, end-to-end link RED on this host
 
-When `--os=bare` is combined with `--gc=manual`, the runtime uses a static arena instead of malloc. All runtime `.c` files route through the arena via preprocessor redirects. No libc dependency.
+When `--os=bare` is combined with `--mm=manual` (its default), the runtime uses a static arena instead of malloc. All runtime `.c` files route through the arena via preprocessor redirects. No libc dependency.
 
 **Approach:** Same `.c` files for all modes, behavior switches via preprocessor. `manual.h` defines `#define malloc → msArenaAlloc` when `MSOS_BARE` is set. The build system passes `-DMSOS_BARE -include runtime/manual.h` to clang (`src/compiler/compile.ms:587-591`; `--os=solana` passes `-DMSOS_SOLANA -DMSOS_BARE`), forcing arena redirects before each `.c` file's own headers. Codegen additionally emits `#define MSOS_BARE` as line 6 of **every** generated module TU (`src/codegen/c/index.ms:46-55`) — verified by `--emit=c`, 9 of 10 emitted files carry it (`_dispatch.c` does not).
 
@@ -436,7 +441,7 @@ Toolchain integration, entry points, freestanding headers, CLI automation.
 | `src/codegen/c/index.ms` | `#define MSOS_SOLANA`/`MSOS_BARE` in generated C (`:46-55`); `entrypoint()` in dispatcher; skip libc headers |
 | `src/codegen/c/literals.ms` | `static const` string literals (`.rodata`, COW-safe) — correctness fix for all targets |
 | `src/checker/context.ms` | `osTarget` field on CheckerContext |
-| `src/compiler/compile.ms` | Solana toolchain setup (auto-detect BPF clang + sbpf-linker), force `--gc=manual` + release mode, graceful @compile failures, LLVM bitcode pipeline, BPF validation via `llc` |
+| `src/compiler/compile.ms` | Solana toolchain setup (auto-detect BPF clang + sbpf-linker), force `--mm=manual` + release mode, graceful @compile failures, LLVM bitcode pipeline, BPF validation via `llc` |
 | `src/compiler/cc.ms` | `resolveBpfClang()`, `resolveSbpfLinker()`, `validateBpfBitcode()`, `linkSolana()` (`ld.lld`, after the LTO merge below), `cliCompileFlags` BPF early-return with `-emit-llvm` |
 | `src/compiler/options.ms` | `--os` target validation |
 | `src/index.ms` | Exclude bare/solana from zig cc auto-detection |
@@ -605,7 +610,7 @@ The compiler already computes a DCE alive set (Phase B in `cmdBuildC`). But it o
 
 1. **Skip dead modules in Phase C** — if no symbol from a module is in the alive set, don't compile it. This eliminates json, buffer, promise, struct for a hello world. Benefits all targets (faster builds). **Done** for the modules a program does not reach; measured 2026-10-04 on tree `fa27682b2a79` (the candidate built from it against base `da84849e`, one fresh HOME each, platform-tools v1.57): `console.log(0)` with `--os=solana` built 9 modules (system, array, meta/node, json, promise, struct, math, object, the program) and now builds 1; `.text` 19,312 → 19,296 B and the unstripped link 23,112 → 22,112 B, so the saving is compile time and the symbol table, not code: `--gc-sections` already dropped the dead functions. `examples/escrow/program.ms` with the std/solana of that minute went 21 → 14 modules and 53,056 → 53,040 B of `.text`; `node tools/solana/escrow.mjs` passes on both. Two accidental roots had kept the modules alive (every exported class's `<Class>_init`, and the `nodeCache` init of `std/meta/node.ms`), and an alive set that had marked no name was read as "DCE off". Not measured: the other Phase 3b items, a host `--os=bare` build, a Windows host.
 
-2. **Skip TypeInfo for `--gc=manual`** — TypeInfo structs are mutable globals used only by DRC. In manual mode they're dead weight. Skipping them eliminates the main source of `.data` relocations.
+2. **Skip TypeInfo for `--mm=manual`** — TypeInfo structs are mutable globals used only by DRC. In manual mode they're dead weight. Skipping them eliminates the main source of `.data` relocations.
 
 3. **Skip init guards for blockchain** — `DatInit`/`Init` guard booleans are mutable globals preventing re-entry. Blockchain programs run once — guards are unnecessary. Remove them when `--os` is a blockchain target (solana, wasm).
 
@@ -695,11 +700,13 @@ and reported post-DCE, so a module that is dead under the alive set costs nothin
 | `build async.ms --os=bare --gc=drc` | 0 | 1 — proceeds to the pre-existing bare+drc engine gap |
 | `build async.ms` (host default) | 0 | 0, builds |
 
-An explicit `--gc=` always wins over the `--os` implication, which is what the third row pins: the
-gate keys on the effective gc mode, not on the platform.
+An explicit `--mm=` wins over the `--os=bare` implication, which is what the third row pins (its
+`--gc=drc` is today's `--mm=drc`; re-probed 2026-10-20: `build async.ms --os=bare --mm=drc` reports no
+E01 and fails in the C compile): the gate keys on the effective memory mode, not on the platform.
+`--os=solana` is the exception: it resolves to `manual` whatever `--mm=` says.
 
 The language server reports the same sites as **warnings** (severity 2) when `build.ms` declares a
-freestanding target via `lsp = { os, gc }` — see docs/PACKAGE.md "`lsp` — editor-only target" for
+freestanding target via `lsp = { os, mm }` — see docs/PACKAGE.md "`lsp` — editor-only target" for
 matrix. A project with no `lsp` section resolves to the host os and never to `manual`, so it gets
 zero new diagnostics.
 
@@ -743,10 +750,10 @@ In C codegen terms:
 
 ⚠ **Not re-measured 2026-09-06.** The 2026-09-06 pass measured the Phase 1 / Phase 2 / E01 rows
 only; every row below is inherited from the original write-up and none of them was individually
-probed. `console.log` + `string` are covered transitively by the green `--gc=manual` hello build
+probed. `console.log` + `string` are covered transitively by the green `--gc=manual` (now `--mm=manual`) hello build
 (Phase 2 table); the rest are unverified.
 
-| Feature | Why it works under --gc=manual |
+| Feature | Why it works under --mm=manual |
 |---------|------------------------------|
 | `Result<T,E> + try` | Value type, no allocation, same as Zig error unions |
 | `struct` (value types) | Stack-allocated, copied by value, no RC |
@@ -760,21 +767,20 @@ probed. `console.log` + `string` are covered transitively by the green `--gc=man
 | `@comptime` | Compile-time evaluation, zero runtime cost |
 | Sized integers (`int32`, `uint64`, etc.) | Direct C types, no overhead |
 | `unreachable` | Emits `__builtin_unreachable()` or abort |
-| `interface` (heap ref type) | Arena-allocated, same pointer layout as ARC/ORC |
+| `interface` (heap ref type) | Arena-allocated, same pointer layout as the RC mode |
 | `string` operations | Same `msString` type, arena-backed allocation |
 | `Array<T>` operations | Same array types, arena-backed allocation |
 | `console.log` | `msPrintln` provided by manual.h (weak symbol, overridable) |
 
 ## Target Matrix
 
-| Target | `--gc` | `--os` | Mode | Phase Required |
+| Target | `--mm` | `--os` | Mode | Phase Required |
 |--------|--------|--------|------|----------------|
-| Desktop (current) | `orc` | `auto` | Full runtime | Already works |
-| Desktop (no cycles) | `drc` | `auto` | Full runtime | Already works |
+| Desktop (current) | `drc` | `auto` | Full runtime | Already works |
 | Desktop (manual) | `manual` | `auto` | Full runtime | Phase 1 (done) |
 | Game engines | `manual` | `auto` | Full runtime | Phase 1 (done) |
-| Cross-compile Linux | `orc`/`drc`/`manual` | `linux` | Full runtime | Already works |
-| Cross-compile Windows | `orc`/`drc`/`manual` | `windows` | Full runtime | Already works |
+| Cross-compile Linux | `drc`/`manual` | `linux` | Full runtime | Already works |
+| Cross-compile Windows | `drc`/`manual` | `windows` | Full runtime | Already works |
 | Embedded (ARM Cortex) | `manual` | `bare` | Freestanding | Phase 2 (mechanism done, link unverified — see Phase 2) |
 | Kernel modules | `manual` | `bare` | Freestanding | Phase 2 (mechanism done, link unverified — see Phase 2) |
 | Solana/SBPF | `manual` | `solana` | Contract | Phase 3a (infra done), 3b (DCE TODO) |
@@ -782,17 +788,17 @@ probed. `console.log` + `string` are covered transitively by the green `--gc=man
 | Move (Sui/Aptos) | — | — | New backend | Future |
 
 **Three runtime modes:**
-- **Full runtime**: ARC/ORC available, libc, module init system, mutable globals OK
+- **Full runtime**: RC with the cycle collector, libc, module init system, mutable globals OK
 - **Freestanding**: No libc, static arena, module init with guards, mutable globals OK
 - **Contract**: No libc, no mutable globals, no init guards, no TypeInfo, flat DCE'd codegen
 
-## ARC/ORC ↔ Manual Interop (Mixed-Mode Libraries)
+## RC ↔ Manual Interop (Mixed-Mode Libraries)
 
-A library compiled with `--gc=manual` is importable from ARC/ORC code. Types are layout-compatible (same `msString`, `msRefHeader` struct layout). The compiler auto-generates bridge code at import boundaries.
+A library compiled with `--mm=manual` is importable from RC (`--mm=drc`) code. Types are layout-compatible (same `msString`, `msRefHeader` struct layout). The compiler auto-generates bridge code at import boundaries.
 
-**Direction 1: ARC/ORC → Manual (passing in)** — FREE. `msString` already has `ptr+len` inside.
+**Direction 1: RC → Manual (passing in)** — FREE. `msString` already has `ptr+len` inside.
 
-**Direction 2: Manual → ARC/ORC (returning)** — COPY. Compiler wraps arena-allocated return values into RC'd types via `msStringNew()`.
+**Direction 2: Manual → RC (returning)** — COPY. Compiler wraps arena-allocated return values into RC'd types via `msStringNew()`.
 
 **Implementation**: Future phase, ~150 additional lines.
 
@@ -802,8 +808,8 @@ All C runtime files live under `runtime/` (separated from `std/` which contains 
 
 ```
 runtime/
-  drc.h / .c              ← ARC (--gc=drc) or ORC (--gc=orc, adds -DMSGC_ORC)
-  manual.h                ← no RC; MSOS_BARE=arena, else=malloc (--gc=manual)
+  drc.h / .c              ← RC + cycle collector (--mm=drc; the collector is compiled out under MSGC_MANUAL)
+  manual.h                ← no RC, defines MSGC_MANUAL; MSOS_BARE=arena, else=malloc (--mm=manual)
   types.h                 ← msRefHeader, msTypeInfo (shared by both)
   arena.h                 ← arena allocator implementation
   fs.h, process.h, os.h  ← single-file modules (flat, no subdirs)
