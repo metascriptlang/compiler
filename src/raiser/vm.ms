@@ -1742,7 +1742,7 @@ function runStrandSlice(vm: RaiserVM): void {
 				if (held.kind != RaiserValueKind.Nil) {
 					const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[held.intVal].classType : RAISER_NO_CLASS;
 					if (!raiserIsInstance(classType, constStringText(getFuncConst(func, ib)))) {
-						vm.ip = ip; vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic))); break;
+						vm.ip = ip; vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : held.kind == RaiserValueKind.Object ? "Object" : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic))); break;
 					}
 				}
 			},

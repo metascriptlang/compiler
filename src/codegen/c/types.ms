@@ -1154,7 +1154,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 			if (base != null) baseRef = typeInfoPointer(g, base);
 		}
 		const label = typeInfoLabel(g, info);
-		const shown = info.kind == TypeInfoKind.Object ? typeDisplayName(info.subject) : "";
+		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayName(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
 			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = 0, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
