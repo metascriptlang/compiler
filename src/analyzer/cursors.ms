@@ -32,6 +32,10 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { receiverOf } from "../checker/effects";
+import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot } from "./writeEffects";
+import { createDrcContext, classifyRc } from "./scope";
+import { makeCtx } from "../transform/testUtil";
+import { RcInfo } from "./classify";
 
 // ===== VarFlag (per-variable analysis flags) =====
 
@@ -40,6 +44,10 @@ const VF_PREVENT_CURSOR: int32 = 2;
 const VF_IS_REASSIGNED: int32 = 4;
 const VF_IS_COND_REASSIGNED: int32 = 8;
 const VF_IS_PARAM: int32 = 16;
+
+let borrowedSlots: string[][] = [];
+let writeSites: Node[] = [];
+let writeTimes: int32[] = [];
 
 function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): void {
 	registerPartitionVariable(p, sym, isParam, VF_IS_PARAM);
@@ -102,6 +110,55 @@ function allRoots(p: Partitions, node: Node, result: Symbol[]): void {
 		},
 		_ => {},
 	};
+}
+
+function sourceSlots(p: Partitions, node: Node, out: string[]): void {
+	if (node == null) return;
+	const slot = stepSlot(node);
+	if (slot != null) out.push(slot!);
+	match (node.kind) {
+		NodeKind.Identifier => {
+			const lent = lentTempInit(p, node.resolvedSym);
+			if (lent != null) sourceSlots(p, lent, out);
+		},
+		NodeKind.MemberExpr => sourceSlots(p, (node.data as MemberExprData).object, out),
+		NodeKind.ArrayAccess => sourceSlots(p, (node.data as ArrayAccessData).array, out),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => sourceSlots(p, (node.data as { expr: Node }).expr, out),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => sourceSlots(p, (node.data as HiddenStdConvData).convExpr, out),
+		NodeKind.TypeAssertion => sourceSlots(p, (node.data as TypeAssertionData).asExpr, out),
+		NodeKind.ConditionalExpr => {
+			const d = node.data as ConditionalExprData;
+			sourceSlots(p, d.ternaryConsequent, out);
+			sourceSlots(p, d.ternaryAlternate, out);
+		},
+		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { sourceSlots(p, e, out); } },
+		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { sourceSlots(p, e, out); } },
+		NodeKind.SpreadExpr => sourceSlots(p, (node.data as SpreadExprData).spreadArg, out),
+		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { sourceSlots(p, a, out); } },
+		NodeKind.CallExpr => {
+			if (isLentCall(node)) {
+				out.push(ANY_HEAP_SLOT);
+				const first = lentSource(node);
+				if (first != null) sourceSlots(p, first, out);
+			} else if (containsPointer(node.nodeType, 0)) {
+				for (const a of (node.data as CallExprData).arguments) { sourceSlots(p, a, out); }
+			}
+		},
+		_ => {},
+	};
+}
+
+function writtenWhileAlive(slots: string[], start: int32, end: int32): boolean {
+	if (slots.length == 0) return false;
+	for (let k = 0; k < writeSites.length; k += 1) {
+		if (writeTimes[k] >= start && writeTimes[k] <= end && mayWrite(writeSites[k], slots)) return true;
+	}
+	return false;
+}
+
+function recordWrite(p: Partitions, site: Node): void {
+	writeSites.push(site);
+	writeTimes.push(p.abstractTime);
 }
 
 function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, src: Node): void {
@@ -433,6 +490,7 @@ function deps(p: Partitions, dest: Symbol | null, src: Node): void {
 
 	// Classify: does dest own data or borrow?
 	destMightOwn(p, destId, src);
+	sourceSlots(p, src, borrowedSlots[destId]);
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
 	const srcRoots: Symbol[] = [];
@@ -492,12 +550,14 @@ function trav(p: Partitions, node: Node | null): void {
 				allRoots(p, d.left, lhsRoots);
 				for (const r of lhsRoots) { potentialMutation(p, r); }
 				connectStore(p, lhsRoots, d.left.nodeType, d.right);
+				recordWrite(p, node);
 
 				// Cursor deps for assignment
 				const lhs = getIdentSym(d.left);
 				if (lhs != null) deps(p, lhs, d.right);
 			} else {
 				trav(p, d.right);
+				recordWrite(p, node);
 			}
 		},
 
@@ -533,6 +593,7 @@ function trav(p: Partitions, node: Node | null): void {
 				}
 			}
 			for (const arg of d.arguments) { potentialMutationViaArg(p, arg); }
+			recordWrite(p, node);
 		},
 
 		// Loops: double traverse for soundness
@@ -643,6 +704,7 @@ function trav(p: Partitions, node: Node | null): void {
 			trav(p, d.newCallee);
 			for (const a of d.newArguments) { trav(p, a); }
 			for (const a of d.newArguments) { potentialMutationViaArg(p, a); }
+			recordWrite(p, node);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			trav(p, (node.data as HiddenStdConvData).convExpr);
@@ -691,6 +753,7 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 			const g = p.graphs[p.vars[r].con.target];
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
+		if (writtenWhileAlive(borrowedSlots[i], v.aliveStart, v.aliveEnd)) { i += 1; continue; }
 
 		result.push(v.sym);
 		i += 1;
@@ -712,6 +775,10 @@ export function inferCursors(body: Node): void {
 
 	// Reset time for pass 2 (consistent abstractTime required)
 	p.abstractTime = 0;
+	borrowedSlots = [];
+	for (let i = 0; i < p.vars.length; i += 1) { borrowedSlots.push([]); }
+	writeSites = [];
+	writeTimes = [];
 
 	// Pass 2: build union-find graphs and track mutations
 	trav(p, body);
@@ -726,7 +793,9 @@ function getStmts(input: string): Node[] {
 	const result = parseSource(input);
 	if (!result.ok) return [];
 	const prog = result.value;
-	checkProgram(prog);
+	const checker = checkProgram(prog);
+	const dctx = createDrcContext(makeCtx());
+	resetWriteEffects(checker, (t: Type | null): RcInfo => classifyRc(t, dctx));
 	const d = prog.data as ProgramData;
 	return d.programStmts;
 }
@@ -786,7 +855,7 @@ test "returned variable is cursor (return copies, safe)" {
 test "call argument is cursor (call copies, safe)" {
 	// x borrows from arr[0]. Passing to call: inject.ms copies (incref).
 	// No mutation on arr's graph → cursor is safe.
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; process(x); }");
+	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; take(x); }\nfunction take(s: string): void {}");
 	inferCursors(body);
 	assert isCursorNamed(body, "x");
 }
@@ -862,7 +931,7 @@ test "source mutated during cursor lifetime: NOT cursor" {
 
 test "source mutated BEFORE cursor: IS cursor" {
 	// arr.push() happens before x borrows → mutation not in cursor lifetime.
-	const body = getFuncBody("function f(arr: string[]) { arr.push(\"new\"); const x = arr[0]; process(x); }");
+	const body = getFuncBody("function f(arr: string[]) { arr.push(\"new\"); const x = arr[0]; take(x); }\nfunction take(s: string): void {}");
 	inferCursors(body);
 	assert isCursorNamed(body, "x");
 }
@@ -907,7 +976,7 @@ test "connected variables share mutation graph" {
 }
 
 test "same-named declarations in sibling scopes are separate variables" {
-	const body = getFuncBody("function f(arr: string[]) { if (true) { const x = arr[0]; process(x); } else { const x = getValue(); } }");
+	const body = getFuncBody("function f(arr: string[]) { if (true) { const x = arr[0]; take(x); } else { const x = getValue(); } }\nfunction take(s: string): void {}\nfunction getValue(): string { return \"v\"; }");
 	inferCursors(body);
 	assert isCursorNamed(body, "x");
 }
@@ -938,6 +1007,24 @@ test "passing the array an element was borrowed from mutates its graph" {
 
 test "passing a value without references keeps the borrow a cursor" {
 	const body = getFuncNamed(BOXES + "function f(h: Holder): void { const c = h.child; show(\"x\"); show(c.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "c");
+}
+
+test "a callee that writes the borrowed field through another path ends the cursor" {
+	const body = getFuncNamed(BOXES + "function f(h: Holder, g: Holder): void { const c = h.child; replaceChild(g); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
+}
+
+test "a store to the borrowed field through another path ends the cursor" {
+	const body = getFuncNamed(BOXES + "function f(h: Holder, g: Holder): void { const c = h.child; g.child = new Box(\"n\"); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
+}
+
+test "a store to another field keeps the cursor" {
+	const body = getFuncNamed(BOXES + "function f(h: Holder, t: Top): void { const c = h.child; t.mid = new Holder(\"m\"); show(c.v); }", "f");
 	inferCursors(body);
 	assert isCursorNamed(body, "c");
 }
