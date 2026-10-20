@@ -59,6 +59,7 @@ import "./scenarios/nullableLiteralUnionTarget";
 import "./scenarios/literalEqualityNarrowsNullable";
 import "./scenarios/matchStructEquality";
 import "./scenarios/objectOnlyAfterExtends";
+import "./scenarios/instanceExtensionOffTypeName";
 import "./scenarios/objectViewMissingField";
 import "./scenarios/distinctClassFromValue";
 import "./scenarios/spreadLiteralUnionMember";
