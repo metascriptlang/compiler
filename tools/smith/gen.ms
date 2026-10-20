@@ -1632,7 +1632,9 @@ class Gen {
 		const a = left.startsWith("\"") ? "(" + left + " as string)" : left;
 		const b = this.strText(depth + 1);
 		const c = test.startsWith(".") ? "(" + a + ")" + test + b + ")" : "(" + a + test + b + ")";
+		this.arithInElse++;
 		const text = "(" + c + " ? " + this.expr(t, depth + 1) + " : " + this.elseExpr(t, depth) + ")";
+		this.arithInElse--;
 		return this.ternary(text);
 	}
 
@@ -9383,6 +9385,37 @@ test "no ternary sits under arithmetic inside an else arm" {
 	assert outside > 30;
 }
 
+function ternaryArms(text: string): string {
+	let depth = 0;
+	for (let i = 0; i < text.length - 2; i++) {
+		const c = text[i];
+		if (c == "(") { depth++; }
+		if (c == ")") { depth--; }
+		if (depth == 1 && text.slice(i, i + 3) == " ? ") { return text.slice(i + 3, text.length); }
+	}
+	return "";
+}
+
+test "the arms of a string-test ternary hold no ternary (inbox ternary-hoist-lost-when-else-holds-a-nested-ternary)" {
+	const g = new Gen();
+	g.rng = Rng.seeded(7 as uint64);
+	g.tys = [Ty.Int32, Ty.Uint8];
+	g.fams = [Fam.Coll, Fam.Str, Fam.Own];
+	g.exprMax = 4;
+	g.w = withWeights("w.expr.ternary=60 w.expr.fam=60").w;
+	let tests = 0;
+	for (let i = 0; i < 300; i++) {
+		g.costCap = TOP_COST_CAP;
+		g.cost = 0 as int64;
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.strExpr(Ty.Uint8, 0);
+		const arms = ternaryArms(text);
+		if (arms != "") { tests++; }
+		assert !arms.contains(" ? ");
+	}
+	assert tests > 100;
+}
+
 test "a float element is never searched or kept in a Set" {
 	const f = withWeights("fams=coll types=int32,float64 stmts=8 w.stmt.fam=80 w.coll.keyed=20 w.coll.size=20");
 	let searched = 0;
@@ -12042,7 +12075,7 @@ test "each gap shape is reached and its weight at 0 removes it" {
 
 test "the gap shapes at weight 0 keep the stream of the generator without them" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=coll", "fams=str", "fams=iter", "types=int8,uint8,uint32,uint64,float64 fams=none", "types=int32,float32,char,bigint,boolean fams=none depth=2"];
-	const pins: int64[] = [133744062, 894288676, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 780017775, 752400772, 172228344, 445957813, 145030451, 656332730, 47405754, 455897030];
+	const pins: int64[] = [133744062, 894288676, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 659951096, 797917457, 172228344, 445957813, 145030451, 656332730, 47405754, 455897030];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + GAP_OFF + " " + TYPE_OFF + " w.meta.spread=0 w.async.result=0");
 		for (let s = 0; s < 2; s++) {
@@ -12207,8 +12240,8 @@ test "core weights at 0 keep the stream of the generator without core" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=union", "fams=generic", "fams=agg", "fams=coll", "fams=str", "fams=own", "fams=iter", "types=int8,uint32,float64", "types=int64 fams=none", "types=float64,int32 depth=2", "types=int32 stmts=12 expr=4 trips=16"];
 	const pins: int64[] = [
 		777384880, 838568104, 87231079, 497882655, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
-		412924459, 288809904, 959089982, 370177479, 817021040, 106325321, 718724068, 606921276, 651104178, 2913754,
-		354326690, 178907495, 247101655, 884432220, 429445262, 460525096, 207847309, 349738871,
+		412924459, 288809904, 959089982, 370177479, 603192299, 217576910, 718724068, 606921276, 651104178, 2913754,
+		553907640, 178907495, 247101655, 884432220, 429445262, 460525096, 207847309, 349738871,
 	];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + CORE_OFF + " " + TYPE_OFF);
