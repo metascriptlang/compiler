@@ -2271,6 +2271,10 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		if (reportedErrorSince(ctx, operandMark)) return;
 		if (viewed != null) node.nodeType = viewed;
 	}
+	if (srcType != null && !reportedErrorSince(ctx, operandMark) && distinctClassFromValue(srcType, targetType)) {
+		addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": it is not an object, and only an object of the class " + typeDisplayName(peelDistinct(targetType)!) + " converts to it", asLoc.line, asLoc.column);
+		return;
+	}
 	const distinctBase = srcType != null && !reportedErrorSince(ctx, operandMark) ? checkedDistinctBase(srcType, targetType) : null;
 	if (distinctBase != null) {
 		const checked = createNodeAt(NodeKind.TypeAssertion, { asExpr: d.asExpr, asType: typeDisplayName(distinctBase) } as TypeAssertionData, d.asExpr.location);
@@ -3807,6 +3811,19 @@ function checkedDistinctBase(srcType: Type, targetType: Type): Type | null {
 	const base = peelDistinct(held);
 	return base != null && objectConversion(srcType, base) == ObjConv.Checked ? base : null;
 }
+
+function distinctClassFromValue(srcType: Type, targetType: Type): boolean {
+	const held = skipModifier(targetType) ?? targetType;
+	const base = distinctBody(held) != null ? peelDistinct(held) : null;
+	if (base == null || base.kind != TypeKind.Ref || runtimeClassSym(base.typeReturn) == null) return false;
+	const bare = skipModifier(srcType) ?? srcType;
+	const body = bare.kind == TypeKind.Ref && bare.typeReturn != null ? bare.typeReturn : bare;
+	return isNumeric(body) || NOT_AN_OBJECT.indexOf(body.kind) >= 0;
+}
+
+const NOT_AN_OBJECT: TypeKind[] = [TypeKind.String, TypeKind.Boolean, TypeKind.Char, TypeKind.Array, TypeKind.SizedArray,
+	TypeKind.Span, TypeKind.Function, TypeKind.Tuple, TypeKind.CString, TypeKind.Enum, TypeKind.StringLiteral, TypeKind.EnumLiteral,
+	TypeKind.BooleanLiteral, TypeKind.NumberLiteral, TypeKind.BigInt, TypeKind.Set];
 
 function peelDistinct(t: Type | null): Type | null {
 	let s = skipModifier(t) ?? t;
