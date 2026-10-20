@@ -14,7 +14,7 @@ import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, promiseAllCellKey, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym } from "./types";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -833,16 +833,32 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	if (init.flags.has(NodeFlag.Closure)) return false;
 	const od = init.data as ObjectLiteralData;
 	if (od.properties.length == 0) return false;
-	for (const prop of od.properties) {
+	const owner = peelToStructOrUnion(node.nodeType);
+	for (let i = 0; i < od.properties.length; i += 1) {
+		const prop = od.properties[i];
 		if (prop == null) return false;
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+			if (prop.kind != NodeKind.BooleanLiteral) return false;
+			continue;
+		}
 		const bakeable = match (prop.kind) {
 			NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
-			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure),
+			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure) && closureWithoutEnv(prop),
 			_ => false,
 		};
 		if (!bakeable) return false;
 	}
 	return true;
+}
+
+function closureWithoutEnv(pair: Readonly<Node>): boolean {
+	const pd = pair.data as ObjectLiteralData;
+	const env = pd.keys.indexOf("env");
+	const fn = pd.keys.indexOf("fn");
+	if (env < 0 || fn < 0 || pd.properties[env].kind != NodeKind.NullLiteral) return false;
+	const routine = pd.properties[fn].resolvedSym;
+	return pd.properties[fn].kind == NodeKind.Identifier && routine != null
+		&& (routine.symbolKind == SymbolKind.Function || routine.symbolKind == SymbolKind.Method);
 }
 
 export function bakesIntoStaticCell(node: Readonly<Node>): boolean {
