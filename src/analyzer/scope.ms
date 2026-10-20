@@ -77,6 +77,7 @@ export interface DrcContext {
 	                                // initializer call is parked on (msWaitForReady), so actor proxy
 	                                // args there stay borrows instead of SEND-class consumption
 	globalsToDestroy: VarInfo[];
+	resultIsCursor: boolean;
 }
 
 // ===== Constructors =====
@@ -98,6 +99,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		capturedSyms: [],
 		rcMemo: new HashMap<Type, RcInfo>(),
 		globalsToDestroy: [],
+		resultIsCursor: false,
 	};
 }
 
