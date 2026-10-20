@@ -958,24 +958,6 @@ when (mscDeclaresRuntime) {
 	extern function msFutureCatch_ptr(input: Ptr<void>, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
-	extern function msFutureFinally_double(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_int32(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_int64(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_bool(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_msString(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_ptr(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
 	extern function msFutureFinally(input: Ptr<void>, onSettled: () => void): Ptr<void>;
 
 	@compilerFunc
