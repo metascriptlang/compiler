@@ -2006,14 +2006,14 @@ test "orc: a bare return in a constructor still yields the object" {
 }
 
 
-const finallyInFlight = "let log = ''; function note(s: string): void { log = log + s + '|'; } function boom(m: number): void { throw m; }"
+const finallyInFlight = "let log = ''; function note(s: string): void { log = log + s + '|'; } class Boom { n: number; constructor(n: number) { this.n = n; } } function boom(m: number): void { throw new Boom(m); }"
 	+ " function ownCatch(): void { try { boom(9); } catch (e) { note('own'); } }"
-	+ " function replaced(): void { try { try { boom(1); } finally { note('f'); boom(2); } } catch (e) { note(String(e as number)); } }"
-	+ " function viaCall(): void { try { try { boom(3); } finally { ownCatch(); } } catch (e) { note(String(e as number)); } }"
-	+ " function sameFrame(): void { try { try { boom(3); } finally { try { boom(9); } catch (e) { note('own'); } } } catch (e) { note(String(e as number)); } }"
+	+ " function replaced(): void { try { try { boom(1); } finally { note('f'); boom(2); } } catch (e) { note(String((e as Boom).n)); } }"
+	+ " function viaCall(): void { try { try { boom(3); } finally { ownCatch(); } } catch (e) { note(String((e as Boom).n)); } }"
+	+ " function sameFrame(): void { try { try { boom(3); } finally { try { boom(9); } catch (e) { note('own'); } } } catch (e) { note(String((e as Boom).n)); } }"
 	+ " function returns(): number { try { return 7; } finally { ownCatch(); try { boom(8); } catch (e) { note('own2'); } } }"
 	+ " function normal(): void { try { note('body'); } finally { ownCatch(); note('fin'); } }"
-	+ " function twoLevels(): void { try { try { try { boom(4); } finally { ownCatch(); note('f1'); } } finally { ownCatch(); note('f2'); } } catch (e) { note(String(e as number)); } }"
+	+ " function twoLevels(): void { try { try { try { boom(4); } finally { ownCatch(); note('f1'); } } finally { ownCatch(); note('f2'); } } catch (e) { note(String((e as Boom).n)); } }"
 	+ " function cancelled(): number { try { try { boom(5); } finally { return 3; } } catch (e) { return 4; } }"
 	+ " replaced(); viaCall(); sameFrame(); note(`${returns()}`); normal(); twoLevels(); note(`${cancelled()}`); console.log(log);";
 const finallyInFlightOut = "f|2|own|3|own|3|own|own2|7|body|own|fin|own|f1|own|f2|4|3|\n";
@@ -2114,7 +2114,7 @@ test "register classes: this and the environment of a closure inside a loop insi
 		+ " mk(): number { let t: number = 0; for (let i = 0; i < 3; i++) { const f = (): number => i + this.n; t += f(); } return t; } }"
 		+ " console.log(`${new C().get() + new C().mk()}`);";
 	assert classTable(compiledFunc(code, "C_get")).charAt(0) == "R", classTable(compiledFunc(code, "C_get"));
-	assert classTable(funcNamed(code, "$lifted_anon")).charAt(0) == "D", classTable(funcNamed(code, "$lifted_anon"));
+	assert classTable(funcNamed(code, "$lifted_anon")).charAt(0) == "R", classTable(funcNamed(code, "$lifted_anon"));
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "7\n", vm.output;
