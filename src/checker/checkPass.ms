@@ -6145,6 +6145,15 @@ test "buildPreludeContext: a fresh prelude check leaves the gensym counter and t
 	}
 }
 
+test "a prelude checked from the relative std root names its modules as the absolute root does" {
+	const relative = checkPreludeFromSource("", ".cms");
+	const absolute = checkPreludeFromSource(join(cwd(), "std"), ".cms");
+	assert relative.ownModules.size > 0 && relative.ownModules.size == absolute.ownModules.size;
+	for (const path of relative.ownModules) assert absolute.ownModules.has(path), path;
+	assert relative.preludeModuleScopes.size > 0 && relative.preludeModuleScopes.size == absolute.preludeModuleScopes.size;
+	for (const path of relative.preludeModuleScopes.keys()) assert absolute.preludeModuleScopes.has(path), path;
+}
+
 function pendingCountOfCheck(prelude: CheckerContext, src: string): int32 {
 	const pr = parseSource(src);
 	if (!pr.ok) return -1;
