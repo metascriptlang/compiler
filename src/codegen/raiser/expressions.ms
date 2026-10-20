@@ -20,6 +20,7 @@ import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
+import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
@@ -120,6 +121,11 @@ function comparisonOpcodeImm(op: string): RaiserOpcode {
 
 function isEqualityOp(op: string): boolean {
 	return op == "==" || op == "===" || op == "!=" || op == "!==";
+}
+
+// A union keeps the member it holds beside its payload, so two of them compare by the value they hold.
+function holdsUnion(node: Node): boolean {
+	return node.nodeType != null && isSlotUnion(peelTransparentInstance(node.nodeType));
 }
 
 function immLiteral(node: Node): boolean {
@@ -842,6 +848,10 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 	const op = d.operator;
 	if (!isComparisonOp(op)) return null;
 	const lReg = compileExpr(s, d.left);
+	if (isEqualityOp(op) && (holdsUnion(d.left) || holdsUnion(d.right))) {
+		const heldReg = compileExpr(s, d.right);
+		return raiserABC(op == "==" || op == "===" ? RaiserOpcode.EqVal : RaiserOpcode.NeVal, lReg, heldReg, 1);
+	}
 	const integerCompare = !exprIsString(s, d.left) && !exprIsString(s, d.right) && !isFloatExpr(d.left) && !isFloatExpr(d.right)
 		&& !((isUint64Type(d.left.nodeType) || isUint64Type(d.right.nodeType)) && !isEqualityOp(op));
 	if (integerCompare && immLiteral(d.right)) {
