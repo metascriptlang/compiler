@@ -323,6 +323,17 @@ rr=$(waitfor ro 60)
 check "S24 ro landed beside main's edit" '[ "$rr" = 0 ] && onmain ro.txt && [ "$(git -C "$R" show main:shared.txt | paste -sd, -)" = one,2,three,4,5 ]'
 check "S24 no local gate ran" '! grep -q "^wt/ro " "$T/ctl/gates.log" 2>/dev/null'
 
+echo "== S24b main edited the slice's own line after the remote gate: the rebase conflicts, nothing lands"
+setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+mkwt rc
+sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-rc/shared.txt"; rm -f "$T/ws/.wt/wt-rc/shared.txt.bak"; git -C "$T/ws/.wt/wt-rc" commit -qam "edit shared top"
+remotegreen rc
+sed -i.bak 's/^1$/uno/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit the same line on main"
+enqueue rc
+rr=$(waitfor rc 60)
+check "S24b refused at the conflict, main keeps its own line" '[ "$rr" = 1 ] && grep -q conflicts "$T/ctl/enq.rc" && ! onmain rc.txt && [ "$(git -C "$R" show main:shared.txt | head -1)" = uno ]'
+check "S24b no local gate ran" '! grep -q "^wt/rc " "$T/ctl/gates.log" 2>/dev/null'
+
 echo "== S25 the slice gained a commit after the remote gate: the land gates"
 setup; mkwt rp
 remotegreen rp
