@@ -2067,6 +2067,22 @@ test "unknown flows only into a slot that takes unknown" {
 	assert isAssignable(cls, unknownType());
 }
 
+test "an unknown argument ranks only against a formal that takes unknown" {
+	const gp = createGenericParam("E");
+	assert typeRelation(createArray(gp), unknownType()) == TypeRelation.None;
+	assert typeRelation(createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true)), unknownType()) == TypeRelation.None;
+	assert typeRelation(gp, unknownType()) == TypeRelation.Generic;
+	assert typeRelation(createUnion([unknownType(), nullType()]), unknownType()) == TypeRelation.Generic;
+	assert typeRelation(unknownType(), unknownType()) == TypeRelation.Exact;
+}
+
+test "a generic container formal is more specific than an unknown one" {
+	const arrayFormal = createFunction([createArray(createGenericParam("E"))], ["x"], stringType());
+	const unknownFormal = createFunction([unknownType()], ["x"], stringType());
+	assert checkGenericSpecialization(arrayFormal, unknownFormal) > 0;
+	assert checkGenericSpecialization(unknownFormal, arrayFormal) < 0;
+}
+
 test "a function taking a class does not stand in for one taking unknown" {
 	const cls = createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true));
 	const takesClass = createFunction([cls], ["e"], voidType());
