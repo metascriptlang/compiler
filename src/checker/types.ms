@@ -104,6 +104,7 @@ export function assignType(target: Type, source: Type): void {
 	target.typeValue = source.typeValue;
 	target.callConv = source.callConv;
 	target.attachedOps = source.attachedOps;
+	target.optionalFields = source.optionalFields;
 }
 
 // ===== Constructors =====
@@ -1665,6 +1666,7 @@ export function copyTypeShallow(t: Type): Type {
 	c.callConv = t.callConv;
 	c.attachedOps = t.attachedOps;
 	c.sym = t.sym;
+	c.optionalFields = t.optionalFields;
 	return c;
 }
 
@@ -3742,6 +3744,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Curs
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
+	result.optionalFields = t.optionalFields;
 	// createStruct recomputes HasAsgn from substituted children; DuVariant is an
 	// identity bit (set at createUnion) that must survive the rebuild or mono'd
 	// generic-union payloads lose their DU ownership marker.
@@ -4054,6 +4057,7 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: 
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
+	result.optionalFields = t.optionalFields;
 	if (t.typeFlags.has(TypeFlag.DuVariant)) {
 		result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
 		result.sym = t.sym;

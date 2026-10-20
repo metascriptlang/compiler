@@ -151,6 +151,7 @@ export class Type {
 	typeInst: Type | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;
+	optionalFields: string[] | null; // Struct: the fields written `name?`, own and inherited
 }
 
 // ===== Symbol Kind =====
@@ -317,6 +318,7 @@ export enum NodeFlag {
 	QuoteSplice,   // parser: this call is a quote's `${ }` interpolation, a splice by syntax whatever `splice` names in scope
 	TypeOnlyImport, // checker: every binding of this ImportDecl is used only as a type, so it does not evaluate its module
 	TypeModifier,   // parser: the declaration is spelled `import type` / `export type`; `importTypeNames` holds the specifiers spelled `type A`
+	Optional,      // parser: this class field was written `name?`
 }
 
 // ===== Node Kind Enum =====
@@ -488,8 +490,8 @@ export type NodeData =
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // InterfaceDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // StructDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[] } // InterfaceDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[] } // StructDecl
 	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
@@ -522,7 +524,7 @@ export type NodeData =
 	// TypeIntersection — same Node[] shape, no disc info (intersections aren't DUs).
 	| { typExprMembers: Node[] }                                   // TypeIntersection
 	| { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] } // TypeFunction
-	| { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string }   // TypeObject
+	| { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string, typExprOptionalFields: string[] }   // TypeObject
 	// Program root
 	| { programStmts: Node[] }                                     // Program
 	// Actor (appended after Program to preserve union discriminant ordering)
@@ -717,8 +719,8 @@ export type ImportDeclData = { importNames: string[], importAliases: string[], i
 export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
-export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
-export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
+export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[] };
+export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[] };
 export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] };
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
@@ -759,7 +761,7 @@ export type TypeFunctionData = { typExprParams: Node[], typExprReturn: Node, typ
 // typExprIndexKey / typExprIndexValue are non-null ONLY when the type is an index signature
 // like { [key: K]: V }. After checker normalization this becomes Map<K, V>. Mixed (named fields
 // + index signature in the same type) is rejected by the parser. See docs and plan for details.
-export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string };
+export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string, typExprOptionalFields: string[] };
 
 // JSX (compile-time only — erased by consuming macro before codegen)
 export type JSXElementData = { jsxTag: string, jsxAttrs: Node[], jsxChildren: Node[], jsxSelfClosing: boolean };

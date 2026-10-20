@@ -358,6 +358,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 	advance(state); // consume {
 
 	const fieldNames: string[] = [];
+	const optionalFields: string[] = [];
 	const fieldTypes: Node[] = [];
 	let indexKey: Node = null as unknown as Node;
 	let indexValue: Node = null as unknown as Node;
@@ -409,10 +410,11 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		}
 
 		if (isTypeIdent(current(state)) && !hasIndexSig) {
-			fieldNames.push(current(state).value);
+			const fieldName = current(state).value;
+			fieldNames.push(fieldName);
 			advance(state); // consume field name
-			// Optional ? marker
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
+				optionalFields.push(fieldName);
 				advance(state);
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
@@ -444,6 +446,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		typExprIndexValue: indexValue,
 		typExprFieldDecorators: emptyDecorators,
 		typExprTypeName: "",
+		typExprOptionalFields: optionalFields,
 	}, braceToken);
 }
 
