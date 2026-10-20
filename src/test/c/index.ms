@@ -83,3 +83,4 @@ import "./returnElementCopy";
 import "./topLevelCursors";
 import "./proxyStaticKey";
 import "./inductionPointer";
+import "./typeInfoHookAdapters";
