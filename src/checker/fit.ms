@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
@@ -461,6 +461,102 @@ export function fitComparedOperands(ctx: CheckerContext, d: BinaryExprData, left
 	if (leftNamed) d.left = asClosure(d.left, left);
 	if (rightNamed) d.right = asClosure(d.right, right);
 	return true;
+}
+
+export function builtinComparisonHolds(ctx: CheckerContext, op: string, left: Type, right: Type): boolean {
+	if (ownDistinct(left) || ownDistinct(right)) return false;
+	if (op == "==") return unequalMatchStruct(ctx, left, []) == null && unequalMatchStruct(ctx, right, []) == null && !binaryOperandsFail(ctx, op, left, right);
+	return (op == "<" || op == "<=") && !relationalOperandsFail(ctx, op, left, right);
+}
+
+function delegateBases(sym: Symbol): Type[] | null {
+	const fnType = sym.symbolType;
+	if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length != 2) return null;
+	const bases: Type[] = [];
+	let hasDistinct = false;
+	for (const param of fnType.typeChildren) {
+		const base = distinctBody(param);
+		if (base != null) hasDistinct = true;
+		bases.push(base ?? param);
+	}
+	return hasDistinct ? bases : null;
+}
+
+export function comparesAtBase(ctx: CheckerContext, sym: Symbol | null): boolean {
+	if (sym == null || !hasFlag(sym, SymbolFlag.Borrow)) return false;
+	if (sym.name != "==" && sym.name != "<" && sym.name != "<=") return false;
+	const bases = delegateBases(sym);
+	if (bases == null) return false;
+	const chained = ctx.extensionRegistry != null ? resolveUserOperator(ctx, sym.name, bases) : null as unknown as ExtensionMethod;
+	if (chained == null || chained.sym == null) return builtinComparisonHolds(ctx, sym.name, bases[0], bases[1]);
+	if (!hasFlag(chained.sym, SymbolFlag.Borrow)) return true;
+	return chained.sym != sym && comparesAtBase(ctx, chained.sym);
+}
+
+function primaryComparison(op: string): string {
+	if (op == "!=" || op == "===" || op == "!==") return "==";
+	if (op == ">") return "<";
+	if (op == ">=") return "<=";
+	return op;
+}
+
+function declaredComparison(ctx: CheckerContext, op: string, pair: Type[]): ExtensionMethod | null {
+	if (ctx.extensionRegistry == null) return null;
+	const ext = resolveUserOperator(ctx, op, pair);
+	return ext != null ? ext : null;
+}
+
+export enum DistinctComparison { None, AtBase, Bound, Refused }
+
+export function fitDistinctComparison(ctx: CheckerContext, node: Node, d: BinaryExprData, leftType: Type, rightType: Type): DistinctComparison {
+	if (!ownDistinct(leftType) && !ownDistinct(rightType)) return DistinctComparison.None;
+	if (hasGenericParams(leftType) || hasGenericParams(rightType)) return DistinctComparison.None;
+	const op = d.operator;
+	const own = declaredComparison(ctx, op, [leftType, rightType]);
+	if (own != null && !comparesAtBase(ctx, own.sym)) return DistinctComparison.None;
+	const primary = primaryComparison(op);
+	const swapped = op == ">" || op == ">=";
+	const pair = swapped ? [rightType, leftType] : [leftType, rightType];
+	const found = own != null ? own : declaredComparison(ctx, primary, pair);
+	if (found == null) {
+		refuseDistinctComparison(ctx, node, op, primary, leftType, rightType);
+		return DistinctComparison.Refused;
+	}
+	if (comparesAtBase(ctx, found.sym)) {
+		const leftBase = distinctBase(leftType);
+		const rightBase = distinctBase(rightType);
+		if (leftBase != null) d.left = wrapInConv(d.left, leftBase);
+		if (rightBase != null) d.right = wrapInConv(d.right, rightBase);
+		return DistinctComparison.AtBase;
+	}
+	if (op == "==" || op == "===") return DistinctComparison.None;
+	if (swapped) {
+		const first = d.left;
+		d.left = d.right;
+		d.right = first;
+		d.operator = primary;
+		return DistinctComparison.Bound;
+	}
+	const direct = boundCallOf(found.sym!, [d.left, d.right], node.location);
+	callCheckExpr(ctx, direct, null);
+	replaceWithCall(node, direct, true);
+	return DistinctComparison.Bound;
+}
+
+function refuseDistinctComparison(ctx: CheckerContext, node: Node, op: string, primary: string, leftType: Type, rightType: Type): void {
+	const at = node.location;
+	const left = typeDisplayName(leftType);
+	const right = typeDisplayName(rightType);
+	if (!sameType(skipModifier(leftType), skipModifier(rightType))) {
+		addError(ctx, `operator '${op}' cannot compare '${left}' with '${right}': a distinct type compares only with itself — convert one side with \`as\``, at.line, at.column);
+		return;
+	}
+	const base = distinctBody(skipModifier(leftType));
+	const follows = primary != op && op != "===" ? ` (\`${op}\` follows from \`${primary}\`)` : "";
+	const fix = base != null && builtinComparisonHolds(ctx, primary, base, base)
+		? `add \`@delegate function \`${primary}\`(this a: ${left}, b: ${left}): boolean;\` to compare as '${typeDisplayName(base)}'`
+		: `declare \`function \`${primary}\`(this a: ${left}, b: ${left}): boolean { … }\``;
+	addError(ctx, `operator '${op}' cannot be applied to type '${left}': a distinct type does not inherit the comparisons of its base; ${fix}${follows}`, at.line, at.column);
 }
 
 function brandBase(t: Type | null): Type | null {
@@ -3446,7 +3542,7 @@ export function settleYields(ctx: CheckerContext, name: string, at: SourceLocati
 	return createIterator(elem);
 }
 
-import { makeSymbol } from "./symbol";
+import { makeSymbol, hasFlag } from "./symbol";
 
 function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
 	const t = createStruct(name, names, types, isValue);
