@@ -239,6 +239,7 @@ export enum SymbolFlag {
 	HoistedCall, // a `__call_N_` temp the conditional lowering binds to a raising call: the value is the call and nothing else
 	InitFlag, // a module binding's initialized flag (moduleTdz); HCR keeps it in step with the binding's state cell
 	Anon, // minted by a transform: its name is generated and positional, never one the author wrote
+	UnavailableOp, // a lifted hook no site may call: the analyzer refuses each copy that needs it (reference: sfError on a hook)
 }
 
 // ===== Symbol =====

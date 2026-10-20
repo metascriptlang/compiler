@@ -29,7 +29,7 @@ import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
-import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
@@ -68,6 +68,7 @@ class LiftCtx {
 	refusedArrayElems: HashSet<Type>;
 	hookFreeTypes: HashSet<Type>;
 	jsBackend: boolean;
+	callsUnavailableCopy: boolean; // the copy hook being lifted calls an UnavailableOp one
 	dropOwner: Symbol | null;
 }
 
@@ -616,6 +617,17 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 	};
 }
 
+function beginHookLift(lctx: LiftCtx): boolean {
+	const outer = lctx.callsUnavailableCopy;
+	lctx.callsUnavailableCopy = false;
+	return outer;
+}
+
+function endHookLift(lctx: LiftCtx, outer: boolean, hook: string, sym: Symbol, unavailable: boolean): void {
+	if (hook == "copy" && (unavailable || lctx.callsUnavailableCopy)) setFlag(sym, SymbolFlag.UnavailableOp);
+	lctx.callsUnavailableCopy = outer;
+}
+
 // --- Standard value-type object hook generator ---
 // Reference parity: Named-type hooks take pointer params (ccgIntroducedPtr).
 // Wrap field accesses in HiddenAddr so codegen emits &(self.field).
@@ -626,6 +638,7 @@ function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 		return;
 	}
 	const op = requireOpByKey(t, attachedOpOf(hook));
+	if (hook == "copy" && hasFlag(op, SymbolFlag.UnavailableOp)) lctx.callsUnavailableCopy = true;
 	// Named-type hooks expect pointers — wrap in HiddenAddr
 	const ax = makeHiddenAddr(xf, loc);
 	if (hook == "destroy" || hook == "wasMoved") {
@@ -1247,6 +1260,7 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 // null for value types. When non-null, param types use classType so codegen
 // emits Doc* instead of Doc — matching the pointer the runtime passes.
 function generateHook(hook: string, typeName: string, cName: string, objType: Type, subject: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
 	const isTrace = hook == "trace";
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
@@ -1373,6 +1387,8 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// trace param[1] is the raw callback/env pointer — reference: getSysType(pointer)
 	if (isTrace) setHookParamType(fnNode, 1, createPtr(voidType()));
 	const sym = liftOp(fnNode, objType, objType, attachedOpOf(hook), cName + suffix);
+	const copyUnavailable = classType == null && hookSym == null && hasUserDefinedHook(subject, "destroy", lctx);
+	endHookLift(lctx, outerLift, hook, sym, copyUnavailable);
 	lctx.collector.push(fnNode);
 	return sym;
 }
@@ -1624,6 +1640,7 @@ function generateUnionEq(typeName: string, t: Type, lctx: LiftCtx, loc: SourceLo
 // sites and the overwritten tuple's heap payload leaks.
 
 function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
@@ -1657,7 +1674,7 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	const paramType = createVar(t);
 	setHookParamType(fnNode, 0, paramType);
 	if (!isUnary) setHookParamType(fnNode, 1, paramType);
-	liftOp(fnNode, t, t, attachedOpOf(hook), tupleName + suffix);
+	endHookLift(lctx, outerLift, hook, liftOp(fnNode, t, t, attachedOpOf(hook), tupleName + suffix), false);
 	lctx.collector.push(fnNode);
 }
 
@@ -1717,6 +1734,7 @@ function sizedArrayNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): bool
 function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const elem = t.typeReturn;
 	if (elem == null) return;
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
@@ -1738,7 +1756,7 @@ function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftC
 		: makeFnDecl(name + suffix, [s1, s2], [name, name], makeBlock(buf.items, loc), "", "void", loc);
 	setHookParamType(fnNode, 0, createVar(t));
 	if (!isUnary) setHookParamType(fnNode, 1, createVar(t));
-	liftOp(fnNode, t, t, attachedOpOf(hook), name + suffix);
+	endHookLift(lctx, outerLift, hook, liftOp(fnNode, t, t, attachedOpOf(hook), name + suffix), false);
 	lctx.collector.push(fnNode);
 }
 
@@ -1844,6 +1862,7 @@ function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: So
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const isTrace = hook == "trace";
 	const sym = requireOpByKey(isTrace ? createRef(arrayType) : arrayType, attachedOpOf(hook));
+	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
 	const hookParamT = hook == "destroy" ? arrayType : createPtr(arrayType);
 	const secondT = isTrace ? createPtr(voidType()) : arrayType;
@@ -1898,6 +1917,7 @@ function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: So
 	sym.state = SymbolState.Checked;
 	sym.declNode = fnNode;
 	fnNode.resolvedSym = sym;
+	endHookLift(lctx, outerLift, hook, sym, false);
 	lctx.collector.push(fnNode);
 }
 
@@ -2226,6 +2246,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refusedArrayElems: new HashSet<Type>(),
 		hookFreeTypes: new HashSet<Type>(),
 		jsBackend: jsBackend,
+		callsUnavailableCopy: false,
 		dropOwner: null,
 	};
 }

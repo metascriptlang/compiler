@@ -503,9 +503,21 @@ function constantTreeOf(expr: Node, depth: int32): Node {
 	return none;
 }
 
-export function foldConstInitializer(binding: Node): void {
+function holdsHookedValue(t: Type | null, declaresHook: (owner: Type) => boolean, depth: int32): boolean {
+	if (t == null || depth > READONLY_DATA_DEPTH_LIMIT) return false;
+	if (t.kind == TypeKind.SizedArray) return holdsHookedValue(t.typeReturn, declaresHook, depth + 1);
+	if (t.kind != TypeKind.Struct) return false;
+	if (declaresHook(t)) return true;
+	for (const f of t.typeChildren) {
+		if (holdsHookedValue(f, declaresHook, depth + 1)) return true;
+	}
+	return false;
+}
+
+export function foldConstInitializer(binding: Node, declaresHook: (owner: Type) => boolean): void {
 	const d = binding.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const || d.initializer == null || !readonlyDataTypeShape(binding.nodeType, 0)) return;
+	if (holdsHookedValue(binding.nodeType, declaresHook, 0)) return;
 	if (isScalarLiteral(d.initializer) || readonlyDataInitializer(d.initializer, 0)) return;
 	const folded = constantTreeOf(d.initializer, 0);
 	if (folded == null) return;

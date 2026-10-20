@@ -21,6 +21,7 @@ function note(what: string): void {
 function onDestroy(this x: Handle): void { note("handle"); }
 function onDestroy<T>(this x: Slot<T>): void { note("slot"); }
 function onDestroy(this x: Entry): void { note("mapStruct"); }
+function onCopy(this ref dst: Entry, src: Entry): void { dst.id = src.id; dst.name = src.name; }
 function onDestroy(this x: Node): void { note("mapClass"); }
 function onDestroy(this x: Shared): void { note("mapShared"); }
 function onDestroy(this x: Fd): void {

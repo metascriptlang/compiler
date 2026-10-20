@@ -10,9 +10,10 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import { bakesIntoStaticCell } from "../checker/reachability";
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
+import { createPrimitive, typeDisplayName, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
+import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
@@ -600,10 +601,31 @@ function reportFailedMove(srcExpr: Node, dctx: DrcContext): void {
 	});
 }
 
+function unavailableCopyRoot(t: Type, depth: int32): Type {
+	if (depth > 16 || t.typeChildren == null) return t;
+	for (const part of t.typeChildren) {
+		const op = part != null ? getOpByKey(part, AttachedOp.AttachedAsgn) : null;
+		if (op != null && hasFlag(op, SymbolFlag.UnavailableOp)) return unavailableCopyRoot(part, depth + 1);
+	}
+	return t;
+}
+
+function reportUnavailableCopy(srcExpr: Node, rcInfo: RcInfo, viaDup: boolean, dctx: DrcContext): void {
+	const op = viaDup && rcInfo.dupFn != null ? null : rcInfo.copyFn;
+	if (op == null || !hasFlag(op, SymbolFlag.UnavailableOp) || dctx.ctx.checkerCtx == null || srcExpr.nodeType == null) return;
+	const root = unavailableCopyRoot(srcExpr.nodeType, 0);
+	const held = root == srcExpr.nodeType ? "" : `'${typeDisplayName(srcExpr.nodeType)}' holds a value of '${typeDisplayName(root)}', and `;
+	const message = `cannot copy '${moveSourceText(srcExpr)}': ${held}'${typeDisplayName(root)}' declares onDestroy and no onCopy, so each copy would run onDestroy — make this its last use, pass it with 'move', or declare onCopy`;
+	dctx.ctx.checkerCtx.errors.push({
+		message, line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
+	});
+}
+
 function passCopyToSink(srcExpr: Node, dctx: DrcContext, viaDup: boolean = false): Node {
 	const rcInfo = sinkClassify(srcExpr.nodeType, dctx);
 	if (!rcInfo.needsCleanup) return srcExpr;
 	reportFailedMove(srcExpr, dctx);
+	reportUnavailableCopy(srcExpr, rcInfo, viaDup, dctx);
 
 	const loc = srcExpr.location;
 	const tmpSym = freshTempSym(dctx.ctx, "borrow", srcExpr.nodeType);
@@ -1200,6 +1222,7 @@ function resolveLhs(flags: int32, dest: Node, destSym: Symbol | null, loc: Sourc
 function genCopy(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcInfo: RcInfo,
 		flags: int32, dctx: DrcContext, loc: SourceLocation): Node {
 	reportFailedMove(rhs, dctx);
+	reportUnavailableCopy(rhs, rcInfo, false, dctx);
 	// Binary copy (Named/String): =copy(&dest, src) handles old-value atomically
 	if (isBinaryCopy(rcInfo) && rcInfo.copyFn != null) {
 		const lhsExpr = resolveLhs(flags, dest, destSym, loc);
