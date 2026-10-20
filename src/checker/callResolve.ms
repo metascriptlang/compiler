@@ -410,13 +410,9 @@ function deriveCallBindings(
 	expectedType: Type | null,
 ): UnifyBindings {
 	const bindings = createUnifyBindings();
-	if (calleeSym != null
-		&& calleeSym.declNode != null
-		&& calleeSym.declNode.kind == NodeKind.FunctionDecl) {
+	if (calleeSym != null) {
 		const names = extractGenericNames(getGenericDeclFlags(calleeSym.declNode));
-		if (names.length > 0) {
-			mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, names, ctx));
-		}
+		mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, names, ctx));
 	}
 	mergeUnifyBindings(bindings, bindFromExpectedReturn(calleeType, expectedType));
 	return bindings;
@@ -896,6 +892,12 @@ function takesContext(n: Node): boolean {
 	return n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr;
 }
 
+function resolvedValueContext(ctx: CheckerContext, node: Node, expected: Type | null): Type | null {
+	const spelled = bindFromExplicitTypeArgs(node, ["T"], ctx);
+	if (spelled.types.length > 0) return spelled.types[0];
+	return expected != null && isAwaitable(expected) ? awaitedType(expected) : null;
+}
+
 function adoptPromiseInputs(ctx: CheckerContext, node: Node, expected: Type | null): Type | null {
 	if (node.kind != NodeKind.CallExpr) return expected;
 	const d = node.data as CallExprData;
@@ -909,7 +911,7 @@ function adoptPromiseInputs(ctx: CheckerContext, node: Node, expected: Type | nu
 		return expected;
 	}
 	if (name == "resolve") {
-		callCheckExpr(ctx, arg, expected != null && isAwaitable(expected) ? awaitedType(expected) : null);
+		callCheckExpr(ctx, arg, resolvedValueContext(ctx, node, expected));
 		const adoption = thenableAdoption(ctx, arg, "The value 'Promise.resolve' takes");
 		if (adoption == null) return expected;
 		node.data = adoption.call.data;
@@ -3246,9 +3248,13 @@ function declTakesReceiver(declNode: Node): boolean {
 }
 
 function getGenericDeclFlags(declNode: Node): string {
-	if (declNode == null) return "";
-	if (declNode.kind == NodeKind.FunctionDecl) return (declNode.data as FunctionDeclData).fnFlags;
-	if (declNode.kind == NodeKind.MethodDecl) return (declNode.data as MethodDeclData).methodFlags;
+	let decl = declNode;
+	while (decl != null && decl.kind == NodeKind.DecoratedDecl) {
+		decl = (decl.data as DecoratedDeclData).decoratedNode;
+	}
+	if (decl == null) return "";
+	if (decl.kind == NodeKind.FunctionDecl) return (decl.data as FunctionDeclData).fnFlags;
+	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).methodFlags;
 	return "";
 }
 
