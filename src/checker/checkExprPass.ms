@@ -1649,7 +1649,9 @@ function typeBinaryOperands(ctx: CheckerContext, node: Node, d: BinaryExprData, 
 			|| (effLeft.kind == TypeKind.Tuple && effRight.kind == TypeKind.Tuple)
 			|| (tplOpName == "!=" && effLeft.kind == TypeKind.SizedArray
 				&& effRight.kind == TypeKind.SizedArray)
-					|| (effLeft.kind == TypeKind.Ref && effRight.kind == TypeKind.Ref && sameType(effLeft, effRight)))) {
+					|| (effLeft.kind == TypeKind.Ref && effRight.kind == TypeKind.Ref && sameType(effLeft, effRight))
+			|| (tplOpName == "!=" && !isBuiltinOperand(effLeft) && sameType(effLeft, effRight) && ctx.extensionRegistry != null
+				&& resolveUserOperator(ctx, "==", [effLeft, effRight]) != null))) {
 		const opConc = ctx.extensionRegistry != null
 			? resolveOperatorCall(ctx.table, ctx.extensionRegistry, tplOpName, [effLeft, effRight])
 			: null as unknown as ExtensionMethod;
