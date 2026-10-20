@@ -1839,14 +1839,15 @@ function retag(kind: int32, raw: int32): int32 {
 // before any call that reads it.
 function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	assertPacked(func);
+	dispatch(vm, func.packed, vm.regs.words, vm.regs.refs);
+}
+
+function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Span<int64>): void {
 	const mod = vm.mod;
 	let funcIdx = vm.funcIdx;
 	let func = getModuleFunc(mod, funcIdx);
-	assertPacked(func);
-	let code = func.packed;
-	let regs = vm.regs;
-	let words = regs.words;
-	let refs = regs.refs;
 	let ip = vm.ip;
 	let wb = vm.wordBase;
 	let rb = vm.refBase;
@@ -1967,8 +1968,14 @@ function runStrandSlice(vm: RaiserVM): void {
 					vm.callStack.depth = depth + 1;
 					wb = wb + (blocks[ic] as int32);
 					rb = rb + (blocks[ic + 1] as int32);
-					if (words.length < wb + callee.wordRegs) ensureWords(regs, wb + callee.wordRegs);
-					if (refs.length < rb + callee.refRegs) ensureRefs(regs, rb + callee.refRegs);
+					if (words.length < wb + callee.wordRegs) {
+						ensureWords(vm.regs, wb + callee.wordRegs);
+						words = vm.regs.words;
+					}
+					if (refs.length < rb + callee.refRegs) {
+						ensureRefs(vm.regs, rb + callee.refRegs);
+						refs = vm.regs.refs;
+					}
 					funcIdx = ib;
 					func = callee;
 					code = callee.packed;
@@ -2617,6 +2624,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			if (vmStepHeap(vm, op, ta, tb, tc, func, pc)) {
 				ip = vm.ip;
 				if (vm.halted) break;
+				words = vm.regs.words;
+				refs = vm.regs.refs;
 			} else {
 				vmStepSlow(vm, op, ta, tb, tc, func);
 				if (vm.halted || vm.yielded) break;
@@ -2629,11 +2638,8 @@ function runStrandSlice(vm: RaiserVM): void {
 					code = func.packed;
 					if (code.length != func.code.length) assertPacked(func);
 				}
-				if (vm.regs != regs) {
-					regs = vm.regs;
-					words = regs.words;
-					refs = regs.refs;
-				}
+				words = vm.regs.words;
+				refs = vm.regs.refs;
 			}
 		}
 	}
