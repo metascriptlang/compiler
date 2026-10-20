@@ -461,7 +461,9 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 function holdsLocation(node: Node): boolean {
 	if (node.kind == NodeKind.HiddenAddr) return true;
 	const sym = node.resolvedSym;
-	return node.kind == NodeKind.Identifier && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Var;
+	if (node.kind != NodeKind.Identifier || sym == null || sym.symbolType == null) return false;
+	const held = sym.symbolType.kind;
+	return held == TypeKind.Var || held == TypeKind.Borrow || held == TypeKind.Ref || held == TypeKind.Ptr;
 }
 
 function compileExprRaw(s: RaiserCompState, node: Node): int32 {
