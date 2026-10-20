@@ -31,6 +31,7 @@ import {
 } from "./scope";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
 import { inferCursors } from "./cursors";
+import { borrowedArgsToCopy } from "./writeEffects";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 import { checkedCtx, bindCStd } from "../transform/testUtil";
@@ -509,6 +510,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		isActorSendHandoff = true;
 	}
 
+	const keepAlive = borrowedArgsToCopy(node);
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
@@ -523,6 +525,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			}
 		}
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
+		if (argMode == DrcMode.Normal && keepAlive[i]) cd.arguments[i] = keepArgumentAlive(cd.arguments[i], dctx);
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(cd.arguments, marks, dctx);
@@ -532,6 +535,13 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 	}
 	return node;
+}
+
+function keepArgumentAlive(arg: Node, dctx: DrcContext): Node {
+	const copied = passCopyToSink(arg, dctx);
+	if (copied === arg || copied.resolvedSym == null) return arg;
+	registerVar(dctx, classifyRc(arg.nodeType, dctx), false, copied.resolvedSym);
+	return copied;
 }
 
 function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {

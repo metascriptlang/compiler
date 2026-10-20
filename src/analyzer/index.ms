@@ -4,16 +4,17 @@
 //
 // analyzeProgram is the main entry point called from src/index.ms.
 
-import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, Type } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { flowLap, flowMark } from "../compiler/flows";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CheckerContext, GcMode } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
-import { createDrcContext, pushScope, popScope } from "./scope";
+import { createDrcContext, pushScope, popScope, classifyRc } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
-import { classifyType, RcKind, noRcInfo } from "./classify";
+import { resetWriteEffects } from "./writeEffects";
+import { classifyType, RcKind, RcInfo, noRcInfo } from "./classify";
 
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
@@ -27,6 +28,7 @@ export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node 
 	flowMark();
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
+	resetWriteEffects(checkerCtx, (t: Type | null): RcInfo => classifyRc(t, dctx));
 	flowLap("analyze.context");
 	const injected = injectProgram(program, dctx);
 	flowLap("analyze.inject");
