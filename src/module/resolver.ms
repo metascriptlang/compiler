@@ -182,7 +182,9 @@ function addExtensionCandidates(result: ResolveCandidates, base: string, extensi
 
 // For a specifier with an explicit extension, resolve it directly.
 function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: string, config: ResolverConfig): ResolveCandidates {
-	if (isRelative(spec)) {
+	if (isAbsolute(spec)) {
+		result.push(normalize(spec));
+	} else if (isRelative(spec)) {
 		const baseDir = dirname(fromFile);
 		result.push(join(baseDir, spec));
 	} else if (isStdImport(spec)) {
