@@ -31,7 +31,7 @@ export function hash<T>(this x: T): int64 {
 }
 
 export macro hashOf(t: Node): Node {
-	let tt = t.nodeType;
+	const tt = t.nodeType;
 	const parts: Node[] = [];
 	let nullable = false;
 	if (tt.kind == NodeKind.TypeUnion) {
@@ -74,10 +74,22 @@ export macro hashOf(t: Node): Node {
 			i = i + 1;
 		}
 	} else {
-		if (tt.kind == NodeKind.TypeGeneric) {
-			tt = tt.typExprArgs[0];
+		const shape = getTypeImpl(t);
+		if (shape == null) error("hash: type implementation is unavailable", t);
+		if (tt.kind == NodeKind.TypeGeneric && tt.typExprBase.name == "Ref") {
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "hashPointer" },
+				arguments: [{ kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "Ptr<void>" }],
+			};
 		}
-		if (tt.kind == NodeKind.EnumDecl) {
+		let base = shape;
+		let distinct = false;
+		while (base.kind == NodeKind.TypeGeneric && base.typExprBase.name == "Distinct") {
+			base = base.typExprArgs[0];
+			distinct = true;
+		}
+		if (base.kind == NodeKind.EnumDecl) {
 			const ordinal: Node = { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "int64" };
 			return {
 				kind: NodeKind.CallExpr, line: t.line, column: t.column,
@@ -85,10 +97,22 @@ export macro hashOf(t: Node): Node {
 				arguments: [{ kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: ordinal, asType: "uint64" }],
 			};
 		}
-		if (tt.kind != NodeKind.TypeObject) {
+		if (distinct) {
+			const ordinals = ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "char", "boolean"];
+			if (base.kind != NodeKind.Identifier || ordinals.indexOf(base.name) < 0) {
+				error("hash: a distinct key takes its base's hash only over an integer, char, boolean or enum — give it `hash(this k: K): int64`", t);
+			}
+			const asBase: Node = { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: base.name };
+			return {
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: asBase, property: "hash", isOptional: false },
+				arguments: [],
+			};
+		}
+		if (shape.kind != NodeKind.TypeObject) {
 			error("hash: no hash for this key type — give it `hash(this k: K): int64`", t);
 		}
-		for (const f of tt.typExprFieldNames) {
+		for (const f of shape.typExprFieldNames) {
 			const field: Node = { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: f, isOptional: false };
 			parts.push({
 				kind: NodeKind.CallExpr, line: t.line, column: t.column,
