@@ -39,11 +39,15 @@ function literalElemType(el: Node): Type | null {
 	if (el.kind != NodeKind.SpreadExpr) return el.nodeType;
 	const tuple = spreadTuple(el);
 	if (tuple != null) return joinBranchTypes(tuple.typeChildren);
-	let src = (el.data as SpreadExprData).spreadArg.nodeType;
-	if (src != null && src.kind == TypeKind.Ref && src.typeReturn != null) src = src.typeReturn;
+	const arg = (el.data as SpreadExprData).spreadArg.nodeType;
+	const src = arg != null ? withoutRef(peelTransparentInstance(withoutRef(arg))) : null;
 	if (src != null && (src.kind == TypeKind.Array || src.kind == TypeKind.SizedArray || src.kind == TypeKind.Span)
 			&& src.typeReturn != null) return src.typeReturn;
 	return el.nodeType;
+}
+
+function withoutRef(t: Type): Type {
+	return t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
 }
 
 function spreadTuple(spread: Node): Type | null {
