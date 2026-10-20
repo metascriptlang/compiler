@@ -20,7 +20,7 @@ import {
 import { orcCollectCycles } from "./orc";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
+import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, hostFnSpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink, boxString } from "./marshal";
 import { int64Bits } from "../utils/stdBackport";
 
@@ -2973,6 +2973,10 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	if (vm.hostCallsRestricted && !hostFnAllowedInRestrictedMode(name)) {
 		vmError(vm, `Restricted dependency compile-time code '${vm.hostPolicySource}' cannot call host function '${name}'`);
+		return;
+	}
+	if (!vm.orc && hostFnSpawnsChild(name)) {
+		vmError(vm, "spawn is not available in compile-time evaluation: the child process would outlive the build");
 		return;
 	}
 

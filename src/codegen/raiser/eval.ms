@@ -820,6 +820,20 @@ test "engine: sleepAsync is refused in compile-time evaluation" {
 	assert r.lastError.includes("sleepAsync is not available in compile-time evaluation");
 }
 
+const RAISER_TIER_CHILD = "extern function msProcChildSpawn(path: string, args: string[], cwd: string, mergeStderr: int32): int64; extern function msProcChildKill(h: int64): int32; extern function msProcChildFree(h: int64): void;";
+
+test "engine: spawning a child is refused in compile-time evaluation" {
+	const r = evalFull(RAISER_TIER_CHILD + " return msProcChildSpawn(\"/bin/sleep\", [\"5\"], \"\", 0);");
+	assert r.lastError.includes("spawn is not available in compile-time evaluation");
+}
+
+test "engine: spawning a child runs at run time" {
+	const vm = evalOrcVM(RAISER_TIER_CHILD
+		+ " const h = msProcChildSpawn(\"/bin/sleep\", [\"5\"], \"\", 0); const killed = msProcChildKill(h); msProcChildFree(h); console.log(`${h > 0} ${killed}`);");
+	assert vm.error == "";
+	assert vm.output == "true 0\n";
+}
+
 test "engine: shift left on int64 keeps bits past 31" {
 	const r = evalSourceFull("function shl(one: int64, n: int64): int64 { return one << n; } return shl(1, 39);");
 	assert r.lastError == "";

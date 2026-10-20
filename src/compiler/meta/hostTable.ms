@@ -1102,7 +1102,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
 	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
-	registerHostFn("msProcChildSpawn", _bridgeMsProcChildSpawn);
+	registerHostFn("msProcChildSpawn", _bridgeMsProcChildSpawn, HostCapability.ChildProcess);
 	registerHostFn("msProcChildIsUnsupported", _bridgeMsProcChildIsUnsupported);
 	registerHostFn("msProcChildPid", _bridgeMsProcChildPid);
 	registerHostFn("msProcChildErrno", _bridgeMsProcChildErrno);

@@ -15,6 +15,7 @@ export enum HostCapability {
 	Unsafe,
 	Pure,
 	FileRead,
+	ChildProcess,
 }
 
 interface HostEntry {
@@ -65,6 +66,13 @@ export function hostFnAllowedInRestrictedMode(name: string): boolean {
 		if (entry.name != name) continue;
 		return entry.capability == HostCapability.Pure
 			|| entry.capability == HostCapability.FileRead;
+	}
+	return false;
+}
+
+export function hostFnSpawnsChild(name: string): boolean {
+	for (const entry of _registry.entries) {
+		if (entry.name == name) return entry.capability == HostCapability.ChildProcess;
 	}
 	return false;
 }
