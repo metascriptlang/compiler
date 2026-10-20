@@ -3,11 +3,15 @@
 // @stdout: break left done=true
 // @stdout: callee throw left done=true
 // @stdout: failed task left done=true
+// @stdout: throw with failed task left done=true
 // @stdout: churn ok
+// @stdout: Error: unhandled rejection: return left a failed task
+// @stdout: Error: unhandled rejection: throw left a failed task
+// @exit: 1
 // @serial
 // @skip-js: spawn on JS is a microtask that starts after the scope has left, and an unawaited spawn has no join there (ULTRALOCK T2, JS row)
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
-// note: a scope left before it awaits its spawn (by throw, return, break or a callee's throw) waits for the task first, so the task never reads a capture the scope released, and releases the failure of a task it never awaited (SAN ledger: Error alloc == destroy). Each task marks a Locked flag when it starts and its scope leaves only after that, so the task is running at the exit; the caller reads `done` right after the scope has left, so done=true means the exit joined the task (old compiler: done=false, or a use-after-free once the churn reuses the cells, exit 134/138).
+// note: a scope left before it awaits its spawn (by throw, return, break or a callee's throw) waits for the task first, so the task never reads a capture the scope released, and reports the failure of a task it never awaited as an unhandled rejection at exit, exit 1, as node does for a rejected promise nobody awaited, whether the scope returned or threw (SAN ledger: Error alloc == destroy). Each task marks a Locked flag when it starts and its scope leaves only after that, so the task is running at the exit; the caller reads `done` right after the scope has left, so done=true means the exit joined the task (old compiler: done=false, or a use-after-free once the churn reuses the cells, exit 134/138).
 
 import { lockedUpdate, lockedRead } from "std/core/promise";
 
@@ -43,9 +47,9 @@ function fresh(): Locked<Flag> {
 	return new Locked({ on: false, done: false });
 }
 
-function failingTask(obj: Readonly<Holder>, s: Locked<Flag>): int32 {
+function failingTask(obj: Readonly<Holder>, s: Locked<Flag>, why: string): int32 {
 	const n = task(obj, s);
-	if (n >= 0) { throw "task failed"; }
+	if (n >= 0) { throw new Error(why); }
 	return n;
 }
 
@@ -101,9 +105,17 @@ function leaveByCalleeThrow(s: Locked<Flag>): int32 {
 
 function leaveWithFailedTask(s: Locked<Flag>): int32 {
 	const obj = new Holder(new Child(3));
-	const f = spawn(() => failingTask(obj, s));
+	const f = spawn(() => failingTask(obj, s, "return left a failed task"));
 	waitStarted(s);
 	if (obj.child.v > 0) { return -1; }
+	return await f;
+}
+
+function throwWithFailedTask(s: Locked<Flag>): int32 {
+	const obj = new Holder(new Child(3));
+	const f = spawn(() => failingTask(obj, s, "throw left a failed task"));
+	waitStarted(s);
+	if (obj.child.v > 0) { throw "parent"; }
 	return await f;
 }
 
@@ -125,5 +137,8 @@ total = total + churn();
 const s5 = fresh();
 total = total + leaveWithFailedTask(s5);
 console.log(`failed task left done=${isDone(s5)}`);
+total = total + churn();
+const s6 = fresh();
+try { total = total + throwWithFailedTask(s6); } catch (e) { console.log(`throw with failed task left done=${isDone(s6)}`); }
 total = total + churn();
 console.log(total > 0 ? "churn ok" : "churn lost");

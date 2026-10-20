@@ -243,6 +243,7 @@ static inline void msFutureDestroy(void* f) { msFutureDestroyInner(f); }
  * rejection: reported at process exit with exit code 1 (Node parity). */
 void msNoteOrphanFailure(void* fut);
 void msClearOrphanFailure(void* fut);
+void msNoteOrphanError(void* err);
 
 /* Standard reference future.finished parity */
 static inline bool msFutureFinished(void* fp) {
