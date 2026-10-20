@@ -76,6 +76,13 @@ test "distinctComparison: a delegate takes only a comparison the base has" {
 	assert count("@delegate function `<=`(this a: UserId, b: UserId): int32;\n", "@delegate '<=' returns 'int32' but <=(int32, int32) returns 'boolean'") == 1;
 }
 
+test "distinctComparison: a generic routine names the delegate it cannot see" {
+	const row = "struct Row { tag: Tag; }\nfunction f(a: Row, b: Row): boolean { return a == b; }\n";
+	assert count("@delegate function `==`(this a: Tag, b: Tag): boolean;\n" + row, "its `==` is not exported, and a generic routine sees only exported operators") == 1;
+	assert refused("@delegate export function `==`(this a: Tag, b: Tag): boolean;\n" + row) == 0;
+	assert count(row, inherit) == 1;
+}
+
 test "distinctComparison: a brand compares as its base" {
 	for (const op of ["==", "!=", "<", ">="]) {
 		assert refused(compared("Id", op)) == 0, op;
