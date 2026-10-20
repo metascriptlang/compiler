@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData, UpdateExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
@@ -12,11 +12,12 @@ import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createU
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf, enumMemberLiteral, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue, floatTruncatesInto } from "./constFold";
+import { constBindingInitializer, constantLiteralOf, enumMemberLiteral, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral, constHoldsFloat, constFloatValue, floatTruncatesInto } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
 import { checkSendableSource } from "./sendable";
+import { forEachChild } from "../ast/visitor";
 
 // ===== Operator Inference =====
 
@@ -1052,6 +1053,44 @@ export function wrapInConv(expr: Node, targetType: Type): Node {
 // Wrap a string arg passed to a cstring param in a HiddenStdConv so the FFI
 // boundary conversion (msStringToCString on C; none on JS, cstring ≡ string)
 // is inserted — mirrors an explicit `as cstring` cast, for implicit call args.
+export function refuseDanglingCString(ctx: CheckerContext, expr: Node, livesForTheCall: boolean): void {
+	if (outlivesItsCString(expr)) return;
+	const sym = expr.kind == NodeKind.Identifier ? expr.resolvedSym : null;
+	if (!livesForTheCall || sym == null || sym.symbolKind != SymbolKind.Parameter) {
+		reportDanglingCString(ctx, expr);
+		return;
+	}
+	const body = ctx.currentFunction != null ? ctx.currentFunction.declNode : null;
+	if (body == null || assignsName(body, sym.name)) reportDanglingCString(ctx, expr);
+}
+
+function outlivesItsCString(expr: Node): boolean {
+	if (expr.kind == NodeKind.StringLiteral) return true;
+	if (expr.nodeType != null && expr.nodeType.kind == TypeKind.StringLiteral) return true;
+	if (expr.kind != NodeKind.Identifier) return false;
+	const init = constBindingInitializer(expr.resolvedSym);
+	return init != null && outlivesItsCString(init);
+}
+
+function assignsName(n: Node, name: string): boolean {
+	const target: Node | null = n.kind == NodeKind.BinaryExpr && writesItsLeft((n.data as BinaryExprData).operator) ? (n.data as BinaryExprData).left
+		: n.kind == NodeKind.UpdateExpr ? (n.data as UpdateExprData).updateArg : null;
+	if (target != null && target.kind == NodeKind.Identifier && (target.data as IdentifierData).name == name) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && assignsName(c, name)) found = true; });
+	return found;
+}
+
+function writesItsLeft(op: string): boolean {
+	return op.endsWith("=") && op != "==" && op != "===" && op != "!=" && op != "!==" && op != "<=" && op != ">=";
+}
+
+function reportDanglingCString(ctx: CheckerContext, expr: Node): void {
+	const what = expr.kind == NodeKind.Identifier ? "'" + (expr.data as IdentifierData).name + "'" : "this expression";
+	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or, as a call argument, a parameter the function never assigns; this string can be freed or replaced while the cstring is in use. Pass the string to a function that takes it as a parameter, or write 'as cstring' to take the address on your own responsibility",
+		expr.location.line, expr.location.column);
+}
+
 export function synthCStringConv(expr: Node, cstr: Type): Node {
 	const tok = createToken(TokenKind.Ident, "", expr.location.line);
 	const conv = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: cstr }, tok);
@@ -3344,6 +3383,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if ((exprType.kind == TypeKind.CString && formal.kind == TypeKind.String)
 		|| ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
 			&& formal.kind == TypeKind.CString)) {
+		if (formal.kind == TypeKind.CString) refuseDanglingCString(ctx, expr, false);
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;
