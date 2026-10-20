@@ -23,7 +23,7 @@ import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 setConditionalAssignFn(isAssignable);
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram } from "./instantiate";
 import { CtorRow, ctorRoutineMark, ctorRoutinesFrom, replayCtorRoutines } from "./ctorRoutine";
@@ -1281,10 +1281,7 @@ function demandMethodBody(ctx: CheckerContext, decl: Node, sym: Symbol): void {
 	const genericStr = declGenericParams(classDecl);
 	if (genericStr != "") {
 		ctx.inGenericContext = 1;
-		openScope(ctx.table, ScopeKind.Block);
-		for (const gp of splitTopLevel(genericStr, ",")) {
-			if (gp.trim() != "") defineGenericParam(ctx, gp.trim());
-		}
+		defineTypeParams(ctx, owner, genericStr);
 	}
 	const friends = expansionFriendsOf(ctx, decl);
 	const friendScope = befriend(ctx, friends);
@@ -1524,12 +1521,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const hasGenerics = genericStr != "";
 	if (hasGenerics) {
 		ctx.inGenericContext += 1;
-		openScope(ctx.table, ScopeKind.Block);
-		const genericNames = splitTopLevel(genericStr, ",");
-		for (const gp of genericNames) {
-			const trimGp = gp.trim();
-			if (trimGp != "") defineGenericParam(ctx, trimGp);
-		}
+		defineTypeParams(ctx, sym, genericStr);
 	}
 	let ctorExits: string[][] | null = null;
 	for (const member of d.classBody) {

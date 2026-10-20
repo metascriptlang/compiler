@@ -1538,8 +1538,12 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type 
 	return gp;
 }
 
-function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: string): void {
+export function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: string): void {
 	openScope(ctx.table, ScopeKind.Block);
+	if (sym.typeParams.length > 0) {
+		for (const gp of sym.typeParams) defineSymbol(ctx.table, makeSymbol(gp.typeName, SymbolKind.TypeAlias, gp, false));
+		return;
+	}
 	const constraints: string[] = [];
 	const declared: Type[] = [];
 	for (const param of splitTopLevel(params, ",")) {
@@ -1553,6 +1557,12 @@ function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: string): voi
 		if (constraints[i] != "") declared[i].typeExtra = resolveTypeTest(constraints[i], ctx, 0, 0);
 	}
 	sym.typeParams = declared;
+}
+
+function declaredMethodSym(ctx: CheckerContext, member: Node, written: Node): Symbol {
+	const sym = member.resolvedSym != null ? member.resolvedSym : written.resolvedSym;
+	if (sym == null) throw new Error(`internal: method at ${member.location.line}:${member.location.column} has no declaration symbol for its type parameters`);
+	return sym;
 }
 
 // ===== B. Resolve Declarations (Pass 2) =====
@@ -1718,12 +1728,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
  // so resolveAnnotation finds "T" -> GenericParam("T")
 	const genericNames = extractGenericParamDecls(d.fnFlags);
 
-	if (genericNames.length > 0) {
-		openScope(ctx.table, ScopeKind.Block);
-		for (const gp of genericNames) {
-			defineGenericParam(ctx, gp);
-		}
-	}
+	if (genericNames.length > 0) defineTypeParams(ctx, sym, genericNames.join(","));
 
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column, node.typeExprs);
 	resolveTypeExprs(node.typeExprs, ctx);
@@ -2617,12 +2622,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			// so resolveAnnotation finds "T" → GenericParam("T"), same as resolveFunctionDecl.
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
-			if (hasMethodGenerics) {
-				openScope(ctx.table, ScopeKind.Block);
-				for (const mgp of methodGenericNames) {
-					defineGenericParam(ctx, mgp);
-				}
-			}
+			if (hasMethodGenerics) defineTypeParams(ctx, declaredMethodSym(ctx, member, d.classBody[mi]), methodGenericNames.join(","));
 			md.methodFlags = liftParamModifiers(md.methodParams, md.methodFlags);
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			wrapModifierTypes(md.methodFlags, paramTypes);
@@ -2839,12 +2839,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			refuseActorParamModes(ctx, d.actorName, md, member);
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
-			if (hasMethodGenerics) {
-				openScope(ctx.table, ScopeKind.Block);
-				for (const mgp of methodGenericNames) {
-					defineGenericParam(ctx, mgp);
-				}
-			}
+			if (hasMethodGenerics) defineTypeParams(ctx, declaredMethodSym(ctx, member, d.actorBody[mi]), methodGenericNames.join(","));
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
 			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
