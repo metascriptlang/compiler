@@ -756,6 +756,13 @@ test "generic type text" { assert annotationText("Result<Node, string>") != ""; 
 
 test "union type text" { assert annotationText("string | number") != ""; }
 
+test "a type operator keeps its space before a bracketed operand" {
+	assert annotationText("T extends (infer E)[] ? E : never").startsWith("T extends (infer E)[]?");
+	assert annotationText("T extends [int32, string] ? 1 : 2").startsWith("T extends [int32, string]?");
+	assert annotationText("keyof (Pair)") == "keyof (Pair)";
+	assert annotationText("Array<T>[]") == "Array<T>[]";
+}
+
 // ===== TypeExpr AST Tests =====
 
 function typeExprKind(typeStr: string): NodeKind {
