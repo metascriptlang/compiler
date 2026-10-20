@@ -57,3 +57,4 @@ import "./scenarios/narrowedWriteTarget";
 import "./scenarios/nullableLiteralUnionTarget";
 import "./scenarios/objectOnlyAfterExtends";
 import "./scenarios/objectViewMissingField";
+import "./scenarios/distinctClassFromValue";
