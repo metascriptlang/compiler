@@ -1187,7 +1187,7 @@ export function refuseUnhashableKey(ctx: CheckerContext, collection: Type, at: N
 	if (owner.kind != TypeKind.GenericInstance || owner.typeChildren.length == 0 || !isStdCollection(owner)) return false;
 	const key = owner.typeChildren[0];
 	const named = peelThrough(key, PEEL_ALIAS);
-	if (named == null || distinctBody(named) == null || isBrandDistinct(named)) return false;
+	if (named == null || distinctBody(named) == null || isBrandDistinct(named) || proxyPartsOf(ctx, named) != null) return false;
 	let base: Type | null = named;
 	let body = distinctBody(named);
 	while (body != null) {
