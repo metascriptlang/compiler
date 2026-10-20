@@ -26,7 +26,7 @@ import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 
 // C bindings
 extern function msCryptoAesSeal(key: string, plainText: string, aad: string): string;
-extern function msCryptoAesOpen(key: string, sealed: string, aad: string): string;
+extern function msCryptoAesOpen(key: string, sealed: string, aad: string, ref plainText: string): int64;
 extern function msCryptoAesCbcEncrypt(key: string, plainText: string, iv: string): string;
 extern function msCryptoAesCbcDecrypt(key: string, cipherText: string, iv: string): string;
 
@@ -65,11 +65,11 @@ export function open(key: string, sealed: string, aad: string = ""): Result<stri
 	if (sealed.byteLength < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
-	const result = msCryptoAesOpen(key, sealed, aad);
-	if (result.byteLength == 0 && sealed.byteLength > 28) {
+	let plainText = "";
+	if (msCryptoAesOpen(key, sealed, aad, plainText) != 1) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
-	return Result.ok(result);
+	return Result.ok(plainText);
 }
 
 // ===== CBC Mode (expert use — no authentication) =====

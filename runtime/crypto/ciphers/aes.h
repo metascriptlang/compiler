@@ -23,8 +23,9 @@ msString msCryptoAesSeal(msString key, msString plainText, msString aad);
 
 /* Open: AES-GCM decrypt from sealed blob.
  * Input: nonce(12) || cipherText || authTag(16)
- * Returns empty string on auth failure or error. */
-msString msCryptoAesOpen(msString key, msString sealed, msString aad);
+ * Returns 1 and stores the plaintext in *plainTextOut when the tag verifies,
+ * 0 on auth failure or error (an empty plaintext is a valid success). */
+int64_t msCryptoAesOpen(msString key, msString sealed, msString aad, msString* plainTextOut);
 
 /* ===== CBC Mode (expert use) ===== */
 
