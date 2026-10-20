@@ -237,7 +237,7 @@ export function lspParseContentLength(headerLine: string): int32 {
 
 // Format a JSON-RPC message with Content-Length header for writing.
 export function lspFormatMessage(json: string): string {
-	return "Content-Length: " + lspJsonNumber(Buffer.byteLength(json)) + "\r\n\r\n" + json;
+	return "Content-Length: " + lspJsonNumber(json.byteLength) + "\r\n\r\n" + json;
 }
 
 // ===== Helpers =====
