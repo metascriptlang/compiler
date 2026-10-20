@@ -3,8 +3,9 @@
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
-import { SymbolFlag, hasFlag, lookupSymbol } from "./symbol";
-import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isStructType, isAtomicRef, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { constBindingInitializer } from "./constFold";
+import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
+import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -23,6 +24,7 @@ enum SendLeaf {
 	String = 1,        // owns memory, but a message COPIES it (msMsgSetString)
 	Array = 2,         // ownership can travel with a MOVE; aliasing it cannot
 	GenericParam = 4,  // unknowable here — re-checked at instantiation
+	Function = 8,      // only a Sendable<F>, whose source was checked where it converted
 }
 
 function isDeepSendable(t: Type | null, leaves: int32, declaresHook: (owner: Type) => boolean): boolean {
@@ -31,6 +33,7 @@ function isDeepSendable(t: Type | null, leaves: int32, declaresHook: (owner: Typ
 	return match (t.kind) {
 		TypeKind.String => (leaves & SendLeaf.String) != 0,
 		TypeKind.GenericParam => (leaves & SendLeaf.GenericParam) != 0,
+		TypeKind.Function => (leaves & SendLeaf.Function) != 0 && isSendableFunction(t),
 		TypeKind.Array => (leaves & SendLeaf.Array) != 0
 			&& (t.typeReturn == null || isDeepSendable(t.typeReturn, leaves, declaresHook)),
 		TypeKind.Struct when (isStructType(t)) => {
@@ -63,7 +66,7 @@ function isDeepSendable(t: Type | null, leaves: int32, declaresHook: (owner: Typ
 // A string is copied at the boundary and an array's ownership travels with the
 // message, so both are sendable.
 function isTypeSendable(t: Type | null): boolean {
-	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Array) as int32, declaresNoHook);
+	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Array | SendLeaf.Function) as int32, declaresNoHook);
 }
 
 function declaresNoHook(owner: Type): boolean {
@@ -179,7 +182,7 @@ export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: nu
 			const varName = argNode.kind == NodeKind.Identifier ? " " + (argNode.data as IdentifierData).name : "";
 			return ` — use \`move${varName}\` to transfer ownership`;
 		},
-		TypeKind.Function => " — closures may capture mutable state",
+		TypeKind.Function => " — closures may capture mutable state; take a Sendable<F> instead",
 		_ => "",
 	};
 	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
@@ -196,7 +199,7 @@ export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: nu
 // The walk must therefore reach EVERY read position, so it delegates to
 // forEachChild: the earlier hand-written arm list covered 4 shapes and silently
 // let `x++` (UpdateExpr) and any argument wrapped in HiddenStdConv through.
-function walkForMutableCaptures(node: Node | null, params: string[], reported: string[], ctx: CheckerContext): void {
+function walkForMutableCaptures(node: Node | null, params: string[], reported: string[], ctx: CheckerContext, by: string): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return;
 	match (node.kind) {
@@ -215,7 +218,7 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 				const sym = lookupSymbol(ctx.table, d.name);
 				const shadowed = node.resolvedSym != null && node.resolvedSym != sym;
 				if (!shadowed && sym != null && hasFlag(sym, SymbolFlag.Mutable)) {
-					addError(ctx, "mutable variable '" + d.name + "' cannot be captured by spawn — use const or move", node.location.line, node.location.column);
+					addError(ctx, "mutable variable '" + d.name + "' cannot be captured by " + by + " — use const or move", node.location.line, node.location.column);
 					reported.push(d.name);
 				}
 			}
@@ -226,10 +229,10 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => {},
 		NodeKind.MatchCase => {
 			const d = node.data as MatchCaseData;
-			walkForMutableCaptures(d.caseGuard, params, reported, ctx);
-			walkForMutableCaptures(d.caseBody, params, reported, ctx);
+			walkForMutableCaptures(d.caseGuard, params, reported, ctx, by);
+			walkForMutableCaptures(d.caseBody, params, reported, ctx, by);
 		},
-		_ => { forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx); }); },
+		_ => { forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx, by); }); },
 	};
 }
 
@@ -240,6 +243,10 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		const iifeCallee = (closure.data as CallExprData).callee;
 		if (iifeCallee.kind == NodeKind.ArrowFunction) closure = (iifeCallee.data as ArrowFunctionData).arrowBody;
 	}
+	checkClosureCaptures(ctx, closure, "spawn");
+}
+
+function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string): void {
 	let params: string[] = [];
 	let body: Node | null = null;
 	if (closure.kind == NodeKind.ArrowFunction) {
@@ -250,15 +257,49 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		const fd = closure.data as FunctionExprData;
 		params = fd.funcExprParams;
 		body = fd.funcExprBody;
+	} else if (closure.kind == NodeKind.FunctionDecl) {
+		const fd = closure.data as FunctionDeclData;
+		params = fd.params;
+		body = fd.fnBody;
 	}
 	const reported: string[] = [];
 	if (body != null) {
-		walkForMutableCaptures(body, params, reported, ctx);
+		walkForMutableCaptures(body, params, reported, ctx, by);
 		if (ctx.currentActor != null) {
 			const actorReported: string[] = [];
 			walkActorSpawnRules(ctx, body, actorReported);
 		}
 	}
+}
+
+export function checkSendableSource(ctx: CheckerContext, expr: Node): boolean {
+	const source = peelHidden(expr);
+	const mark = ctx.errors.length;
+	if (source.kind == NodeKind.ArrowFunction || source.kind == NodeKind.FunctionExpr) {
+		checkClosureCaptures(ctx, source, "a Sendable function");
+		return ctx.errors.length == mark;
+	}
+	const sym = source.kind == NodeKind.Identifier ? source.resolvedSym : null;
+	if (sym != null && judgedAtDeclaration(ctx, sym)) return ctx.errors.length == mark;
+	const name = describeExpr(source);
+	addError(ctx, `'${name}' is a plain function value that may capture mutable state, so it does not convert to Sendable<F> — pass a function declaration or a closure, or declare '${name}' as Sendable<F>`,
+		expr.location.line, expr.location.column);
+	return false;
+}
+
+function judgedAtDeclaration(ctx: CheckerContext, sym: Symbol): boolean {
+	const home = scopeHolding(ctx.table, sym);
+	if (home == null) return false;
+	const routine = sym.symbolKind == SymbolKind.Function;
+	if (routine && (home.scopeKind == ScopeKind.Global || home.scopeKind == ScopeKind.Module)) return true;
+	const bound = constBindingInitializer(sym);
+	const declared = routine ? sym.declNode : bound != null ? peelHidden(bound) : null;
+	if (declared == null || (declared.kind != NodeKind.FunctionDecl && declared.kind != NodeKind.ArrowFunction && declared.kind != NodeKind.FunctionExpr)) return false;
+	const here = ctx.table.current;
+	ctx.table.current = home;
+	checkClosureCaptures(ctx, declared, "a Sendable function");
+	ctx.table.current = here;
+	return true;
 }
 
 // The checker wraps ref-typed reads in HiddenDeref/HiddenStdConv during body

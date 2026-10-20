@@ -322,6 +322,15 @@ export function isCapturedAcross(table: SymbolTable, name: string, sym: Symbol, 
 	return true;
 }
 
+export function scopeHolding(table: SymbolTable, sym: Symbol): Cursor<Scope> {
+	const nameId = getIdentId(table.identCache, sym.name);
+	let scope = table.current;
+	while (scope != null && scope.symbols.get(nameId) != sym) {
+		scope = scope.parent;
+	}
+	return scope;
+}
+
 export function scopeDefining(table: SymbolTable, definer: string, name: string): Cursor<Scope> {
 	const definerId = getIdentId(table.identCache, definer);
 	let scope = table.current;

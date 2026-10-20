@@ -1642,6 +1642,17 @@ export function createLocked(payload: Type | null): Type {
 	return t;
 }
 
+export function isSendableFunction(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Function && t.typeFlags.has(TypeFlag.IsSendable);
+}
+
+export function createSendable(fn: Type): Type {
+	if (isSendableFunction(fn)) return fn;
+	const c = copyTypeShallow(fn);
+	c.typeFlags = c.typeFlags.incl(TypeFlag.IsSendable);
+	return c;
+}
+
 export function isLockedRef(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsLocked);
 }
@@ -4985,6 +4996,11 @@ function typeDisplayNameInner(t: Type | null): string {
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
 	if (isReadonlyView(t)) return "Readonly<" + typeDisplayName(withoutReadonlyView(t)) + ">";
+	if (isSendableFunction(t)) {
+		const plain = copyTypeShallow(t);
+		plain.typeFlags = plain.typeFlags.excl(TypeFlag.IsSendable);
+		return "Sendable<" + typeDisplayName(plain) + ">";
+	}
 	if (isIterator(t)) return "Iterator<" + typeDisplayName(getIteratorYieldType(t)) + ">";
 	// A generic instance erases to its base name, so two different
 	// instantiations render identically ("expected X, got X"). Spell the type

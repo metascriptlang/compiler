@@ -58,6 +58,7 @@ import "./numericRepresentation";
 import "./optionalParameters";
 import "./outArgumentBox";
 import "./receiverViews";
+import "./sendableFunction";
 import "./serializationVariants";
 import "./spawnThunkValues";
 import "./receiverText";

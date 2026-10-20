@@ -25,17 +25,22 @@ function constDeclType(sym: Symbol | null): Type | null {
 	return sym.declNode.nodeType != null ? sym.declNode.nodeType : sym.symbolType;
 }
 
+export function constBindingInitializer(sym: Symbol | null): Node | null {
+	if (sym == null || sym.symbolKind != SymbolKind.Variable) return null;
+	if (sym.symFlags.has(SymbolFlag.Mutable)) return null;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl) return null;
+	const d = decl.data as VariableDeclData;
+	if (d.declKind != DeclKind.Const) return null;
+	return d.initializer;
+}
+
 function constInitializer(node: Node): Node {
 	const none = null as unknown as Node;
 	const sym = node.resolvedSym;
-	if (sym == null || sym.symbolKind != SymbolKind.Variable) return none;
-	if (sym.symFlags.has(SymbolFlag.Mutable)) return none;
-	const decl = sym.declNode;
-	if (decl == null || decl.kind != NodeKind.VariableDecl) return none;
-	if (!isInlineConstantType(constDeclType(sym))) return none;
-	const d = decl.data as VariableDeclData;
-	if (d.declKind != DeclKind.Const || d.initializer == null) return none;
-	return d.initializer;
+	if (sym == null || !isInlineConstantType(constDeclType(sym))) return none;
+	const init = constBindingInitializer(sym);
+	return init == null ? none : init;
 }
 function readonlyStaticInitializer(node: Node): Node {
 	const none = null as unknown as Node;

@@ -90,6 +90,7 @@ export enum TypeFlag {
 	ArityAdapter,         // env of a closure that drops the slot's trailing arguments: identity compares its adaptee
 	CompleteStruct,       // extern struct whose declared fields are all of C's, from a header translation: its layout is folded and asserted against C
 	CUnion,               // CompleteStruct translated from a C union: its members overlay at offset 0
+	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
 }
 
 // ===== Attached Lifecycle Ops =====

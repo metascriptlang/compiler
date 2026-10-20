@@ -129,6 +129,7 @@ import "./preludeExportOwnership";
 import "./raiserProgramArgv";
 import "./raiserProjectImage";
 import "./raiserValueUnionCopy";
+import "./sendableFunction";
 import "./slotRelation";
 import "./storageMutability";
 import "./tupleIndex";
