@@ -3245,6 +3245,46 @@ test "an argument of a kind its parameter class does not hold is refused at the 
 	assert vm.error.indexOf("internal: register R0 of callee is Ref, got Int") >= 0, vm.error;
 }
 
+test "Unbox reads a box into a word register and Box leaves nil and a box as they are" {
+	const round = execModule(classedModule(
+		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Box, 1, 0, 0), raiserABC(RaiserOpcode.Unbox, 2, 1, 0), raiserABC(RaiserOpcode.Halt, 2, 0, 0)],
+		[raiserInt(9)],
+		[RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word]
+	), "orc");
+	assert round.error == "", round.error;
+	assert round.exitValue.kind == RaiserValueKind.Int && round.exitValue.intVal == 9;
+	const again = execModule(classedModule(
+		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Box, 1, 0, 0), raiserABC(RaiserOpcode.Box, 2, 1, 0), raiserABC(RaiserOpcode.LoadNil, 3, 0, 0), raiserABC(RaiserOpcode.Box, 3, 3, 0), raiserABC(RaiserOpcode.Halt, 2, 0, 0)],
+		[raiserInt(4)],
+		[RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Dyn, RaiserRegClass.Dyn]
+	), "orc");
+	assert again.error == "", again.error;
+	assert again.exitValue.intVal == 4;
+	assert heapBoxLive(again.arrayHeap) == 1;
+}
+
+test "Unbox of nil into a word register names the register" {
+	const vm = execModule(classedModule(
+		[raiserABC(RaiserOpcode.LoadNil, 0, 0, 0), raiserABC(RaiserOpcode.Unbox, 1, 0, 0), raiserABC(RaiserOpcode.Halt, 1, 0, 0)],
+		[],
+		[RaiserRegClass.Dyn, RaiserRegClass.Word]
+	));
+	assert vm.error.indexOf("internal: unbox of nil into the word register R1 of classed") >= 0, vm.error;
+}
+
+test "Unbox into a ref register reads a boxed run-time string back" {
+	const vm = execModule(classedModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABx(RaiserOpcode.LoadConst, 1, 0), raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),
+			raiserABC(RaiserOpcode.Box, 3, 2, 0), raiserABC(RaiserOpcode.Unbox, 4, 3, 0), raiserABC(RaiserOpcode.StrLen, 5, 4, 0), raiserABC(RaiserOpcode.Halt, 5, 0, 0),
+		],
+		[raiserConstString("ab")],
+		[RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Dyn, RaiserRegClass.Ref, RaiserRegClass.Word]
+	), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.exitValue.intVal == 4;
+}
+
 test "a global declared a word before its initializer ran reads as its typed zero" {
 	const mod = classedModule(
 		[raiserABx(RaiserOpcode.LoadGlobal, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
