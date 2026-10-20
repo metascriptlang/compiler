@@ -225,7 +225,7 @@ build_ctl() {
     if ! control_snapshot "$sha" "$tmp"; then rm -rf "$tmp"; return 1; fi
     builder="$tmp/builder$EXE_SUFFIX" ctl=$(control_binary "$tmp")
     cp "$BUILDER" "$builder" || { rm -rf "$tmp"; return 1; }
-    if ! (cd "$tmp" && bounded env -u NO_COLOR -u FORCE_COLOR "$builder" build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl" \
+    if ! (cd "$tmp" && bounded env -u NO_COLOR -u FORCE_COLOR "$builder" build src/index.ms --danger $CC_FLAG --output="$ctl" \
       && bounded self_host_boot "$ctl" "$CC_FLAG") >"$OUT/ctl.log" 2>&1; then
       rm -rf "$tmp"; return 1
     fi
@@ -419,7 +419,7 @@ narrow_for() {
   [ -n "$only_csv" ] || return 0
   narrow="MSCORPUS_ONLY=$only_csv "
   if [ "$1" = corpus ] && [ ! -s "$EMIT/only.san" ]; then
-    lanes_csv="c,drc,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
+    lanes_csv="c,js,esm$([ "$raiser_on" -eq 0 ] || printf ',raiser')"
     narrow="${narrow}MSCORPUS_LANES=$lanes_csv "
   fi
 }
@@ -509,8 +509,8 @@ emit_many() {
   for ((i = 0; i < ${#args[@]}; i += 3)); do
     n=${args[i]}
     cd "$root/$n" || exit 1
-    "$bin" build "${args[i + 2]}" --emit=c --gc=drc >c.log 2>&1; c_rc=$?
-    "$bin" build "${args[i + 2]}" --emit=c --gc=drc --danger >>c.log 2>&1 || c_rc=1
+    "$bin" build "${args[i + 2]}" --emit=c >c.log 2>&1; c_rc=$?
+    "$bin" build "${args[i + 2]}" --emit=c --danger >>c.log 2>&1 || c_rc=1
     "$bin" build "${args[i + 2]}" --target=js --output=out.js >js.log 2>&1; js_rc=$?
     [ -f out.js ] || : >out.js
     crc[$n]=$c_rc jrc[$n]=$js_rc count[$n]=0 ctext[$n]=""
@@ -819,7 +819,7 @@ self_host_boot() {
   for n in 2 3; do
     gen="$dir/boot$n/msc$ext"
     rm -rf "$dir/boot$n"; mkdir -p "$dir/boot$n"
-    env -u NO_COLOR -u FORCE_COLOR "$cand" build src/index.ms --gc=drc --danger $ccflag --output="$gen"; rc=$?
+    env -u NO_COLOR -u FORCE_COLOR "$cand" build src/index.ms --danger $ccflag --output="$gen"; rc=$?
     if [ "$rc" -ne 0 ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n build failed (exit $rc)"; return 1; fi
     if [ ! -f "${gen}_link.rsp" ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n wrote no link response file"; return 1; fi
     diffs=$(rsp_diff "${cand}_link.rsp" "${gen}_link.rsp")
@@ -1418,7 +1418,7 @@ control_key_self_test() (
   CONTROL_SUPPORT=support2
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: support identity change kept the key\n'; bad=1; }
   CONTROL_SUPPORT=support
-  eval "$(declare -f emit_many | sed 's/--emit=c --gc=drc --danger/--emit=c --gc=orc --danger/')"
+  eval "$(declare -f emit_many | sed 's/--emit=c --danger/--emit=c --release --danger/')"
   [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: changed emit definition kept the key\n'; bad=1; }
   cd / && rm -rf "$d"
   return $bad
@@ -1950,7 +1950,7 @@ CC_FLAG=""
 
 lane_cmd() {
   case "$1" in
-    build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
+    build) printf '%s build src/index.ms --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;

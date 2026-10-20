@@ -14,7 +14,7 @@
 //
 // GUARD-BALANCE dollarEnv_smOneState_shared_
 // GUARD-BALANCE dollarEnv_smAsyncOneState_shared_
-// GUARD-BALANCE-ORC dollarEnv_smSpanning_shared_
+// GUARD-BALANCE dollarEnv_smSpanning_shared_
 // GUARD-JS
 
 function* smSpanning(): Iterator<int32> {

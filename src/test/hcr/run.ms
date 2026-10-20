@@ -999,21 +999,19 @@ function genericCtor(): void {
 
 function genericOps(): void {
 	const tag = "hcrGenericOps";
-	for (const gc of ["drc", "orc"]) {
-		const dir = freshDir(`${TMP}/genericOps-${gc}`);
-		for (const f of readDir(`${FIXTURES}/genericOps`)) copy(`${FIXTURES}/genericOps/${f}`, `${dir}/${f}`);
-		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--gc=${gc}`], `${gc}: foreign generic lifecycle references did not build`);
-		const ran = msc(dir, ["run", "--hcr", `--gc=${gc}`, "app.ms"]);
-		let drops: int32 = 0;
-		let values = false;
-		for (const line of lines(both(ran))) {
-			if (line == "DROP") drops += 1;
-			if (line == "OPS 9 10 kept") values = true;
-		}
-		if (!succeeded(ran) || !values || drops != 3) {
-			console.log(both(ran));
-			failWith(tag, `${gc}: captured generic state must survive calls and destroy its three cells exactly once`);
-		}
+	const dir = freshDir(`${TMP}/genericOps`);
+	for (const f of readDir(`${FIXTURES}/genericOps`)) copy(`${FIXTURES}/genericOps/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "foreign generic lifecycle references did not build");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	let drops: int32 = 0;
+	let values = false;
+	for (const line of lines(both(ran))) {
+		if (line == "DROP") drops += 1;
+		if (line == "OPS 9 10 kept") values = true;
+	}
+	if (!succeeded(ran) || !values || drops != 3) {
+		console.log(both(ran));
+		failWith(tag, "captured generic state must survive calls and destroy its three cells exactly once");
 	}
 	console.log(`ok   ${tag}`);
 }

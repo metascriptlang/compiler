@@ -66,10 +66,6 @@ function main(): void {
 
 	touchLiveRing(nodes);
 	const collections = msTestOrcCollections();
-	if (collections < 0) {
-		console.log("GUARD-SKIP the collector is not linked under this gc");
-		return;
-	}
 	if (collections > maxCollections) {
 		throw new Error(`${collections} collections over a live ring of ${ringSize}, more than ${maxCollections}`);
 	}

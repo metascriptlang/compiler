@@ -46,7 +46,7 @@ function build(label: string, run: string, home: string, program: string, backen
 	ensureDir(runDir);
 	const args: string[] = backend == "js"
 		? ["build", `${dir}/${program}`, "--target=js", "--output=out.js"]
-		: ["build", `${dir}/${program}`, "--emit=c", "--gc=drc", "--cc=clang", "--output=out"];
+		: ["build", `${dir}/${program}`, "--emit=c", "--cc=clang", "--output=out"];
 	env.set("HOME", home);
 	if (packOff) env.set("MSC_NO_PRELUDE_PACK", "1");
 	const r = execFileResult(msc, args, runDir);

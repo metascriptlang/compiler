@@ -703,7 +703,7 @@ function runSpawnDrain(): void {
 	ensureDir(dir);
 	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
 	put(`${dir}/main.ms`, "class A { name() { return \"A\"; } }\nclass B extends A { name() { return \"B\"; } }\nasync function main() {\n\tconsole.log(\"pre\");\n\tconst f = spawn(() => { return true ? new B() : new A(); });\n\tconst g: A = await f;\n\tconst x = spawn(() => 1);\n\tconst y = spawn(() => 2);\n\tconst s = (await x) + (await y);\n\tconst k = spawn(() => new B());\n\tconst h: A = await k;\n\tconsole.log(`post ${g.name()} ${s} ${h.name()}`);\n}\nmain();\n");
-	need(build(dir, "spawn-drain", "probe.exe", ["--gc=drc"]) == 0, "spawn-drain build");
+	need(build(dir, "spawn-drain", "probe.exe") == 0, "spawn-drain build");
 	let complete = 0;
 	let last = "";
 	for (let i = 0; i < 10; i++) {

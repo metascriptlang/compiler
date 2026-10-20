@@ -12,7 +12,7 @@
 // resolves, or a walk over a recursive nameless type lost its visited mark; run
 // /trace-nim on settleForwardTypes (checker/resolvePass.ms).
 //
-// GUARD-BALANCE-ORC TOTAL
+// GUARD-BALANCE TOTAL
 // GUARD-JS
 
 type N = { next: N | null; s: string };

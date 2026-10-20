@@ -10,7 +10,7 @@
 // RED MEANS a generic instance's TypeInfo lost its traceFn; run /trace-nim on
 // ensureTypeInfoDef for the named instance.
 //
-// GUARD-BALANCE-ORC Node
+// GUARD-BALANCE Node
 
 class Box<T> {
 	v: T | null;

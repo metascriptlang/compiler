@@ -25,7 +25,7 @@ jobs:
           curl -fsSL https://metascriptlang.org/install.sh | sh
           echo "$HOME/.metascript/bin" >> "$GITHUB_PATH"
       - name: Build msc from source
-        run: msc build src/index.ms --gc=drc --release --cc=clang --output=msc
+        run: msc build src/index.ms --release --cc=clang --output=msc
       - name: Version
         run: ./msc --version
       - name: Compiler test suite
@@ -44,7 +44,7 @@ jobs:
           curl -fsSL https://metascriptlang.org/install.sh | sh
           echo "$HOME/.metascript/bin" >> "$GITHUB_PATH"
       - name: Build msc from source
-        run: msc build src/index.ms --gc=drc --release --cc=clang --output=msc
+        run: msc build src/index.ms --release --cc=clang --output=msc
       - name: Corpus lanes
         run: ./msc run src/test/corpus/run.ms
       - name: Sanitizer lane

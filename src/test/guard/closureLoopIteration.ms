@@ -18,8 +18,8 @@
 //
 // GUARD-BALANCE dollarEnv_clOuterArray_shared_
 // GUARD-BALANCE dollarEnv_clOuterArray_loop1_
-// GUARD-BALANCE-ORC dollarEnv_clSelfArray_shared_
-// GUARD-BALANCE-ORC dollarEnv_clSelfArray_loop3_
+// GUARD-BALANCE dollarEnv_clSelfArray_shared_
+// GUARD-BALANCE dollarEnv_clSelfArray_loop3_
 // GUARD-JS
 
 type ClGet = () => int32;

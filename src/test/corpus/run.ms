@@ -3,7 +3,7 @@
 // Every programs/*.ms (or programs/*/main.ms) is a standalone program whose
 // contract lives in its directive head:
 //
-//   // @maxrss: <MB>       -> RSS cells: build+run under --gc=drc AND --gc=orc,
+//   // @maxrss: <MB>       -> RSS cells: build+run on the c and danger lanes,
 //                             /usr/bin/time -l, assert exit + signal + peak RSS;
 //                             plus a js cell (unless @skip-js) — same
 //                             build+run+byte-compare as a parity cell, only
@@ -262,7 +262,7 @@ const EXIT_SAN_HOST_BLOCKED = 77;
 
 function sanBuildCmd(entry: string, bin: string): string {
 	const extra = SAN_WIN != "" ? " " + SAN_WIN : "";
-	return MSC_CMD + " build " + entry + " --gc=drc" + SAN_CC + " --passC=\"" + SAN_PASSC + extra + "\" --passL=\"" + SAN_PASSL + extra + "\" --output=" + bin;
+	return MSC_CMD + " build " + entry + SAN_CC + " --passC=\"" + SAN_PASSC + extra + "\" --passL=\"" + SAN_PASSL + extra + "\" --output=" + bin;
 }
 
 function asanLinkGap(): string {
@@ -404,7 +404,7 @@ function stalenessWarning(): string {
 }
 
 function laneUniverse(spec: Spec): string[] {
-	const lanes: string[] = spec.maxRssMb >= 0.0 ? ["drc", "orc", "danger", "san"] : ["c", "orc", "danger", "san"];
+	const lanes: string[] = ["c", "danger", "san"];
 	if (!spec.skipRaiser) { lanes.push("raiser"); }
 	if (!spec.skipJs) { lanes.push("js"); lanes.push("esm"); }
 	return lanes;
@@ -430,7 +430,7 @@ function commaList(text: string): string[] {
 const ONLY: string[] = commaList(envOr("MSCORPUS_ONLY", ""));
 const LANES: string[] = commaList(envOr("MSCORPUS_LANES", ""));
 const RAISER = envOr("MSCORPUS_RAISER", "") == "1" || listHas(LANES, "raiser");
-const PARITY_LANES: string[] = ["c", "drc", "orc", "danger", "js", "esm", "raiser"];
+const PARITY_LANES: string[] = ["c", "danger", "js", "esm", "raiser"];
 
 function narrowingError(specs: Spec[]): string {
 	for (const lane of LANES) {
@@ -980,42 +980,21 @@ function planJobs(specs: Spec[]): BuildJob[] {
 			jobs.push({ spec, lane: "san", cmd: sanBuildCmd(spec.entry, bin), cell: makeCell(spec, "san", bin) });
 			continue;
 		}
-		if (spec.maxRssMb >= 0.0) {
-			const modes: string[] = ["drc", "orc"];
-			for (const gc of modes) {
-				const bin = OUT_DIR + "bin/" + spec.name + "." + gc;
-				jobs.push({ spec, lane: gc, cmd: MSC_CMD + " build " + spec.entry + " --gc=" + gc + " --output=" + bin, cell: makeCell(spec, gc, bin) });
-			}
+		const cbin = OUT_DIR + "bin/" + spec.name + ".c";
+		jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --output=" + cbin, cell: makeCell(spec, "c", cbin) });
 		const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-		jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
-		// js cell rides along since the 2026-09-01 audit: same
-		// build+run+byte-compare as a parity js cell. finishCell routes it
-		// to the parity verdict — the RSS bound stays native-only.
+		jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
+		// HAS_NODE, not laneUniverse: the program's DESIGN lanes still
+		// include js (so @xfail(js) keeps validating), only this host
+		// cannot execute the cell.
 		if (!spec.skipJs && HAS_NODE) {
 			const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
 			jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
+			// Same program through the module tree: the bundle collapses
+			// every module into one scope, so it cannot see a name the
+			// declaring and referencing sides spell differently.
 			const esmdir = OUT_DIR + "esm/" + spec.name;
 			jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
-		}
-	} else {
-			const cbin = OUT_DIR + "bin/" + spec.name + ".c";
-			jobs.push({ spec, lane: "c", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --output=" + cbin, cell: makeCell(spec, "c", cbin) });
-			const obin = OUT_DIR + "bin/" + spec.name + ".corc";
-			jobs.push({ spec, lane: "orc", cmd: MSC_CMD + " build " + spec.entry + " --gc=orc --output=" + obin, cell: makeCell(spec, "orc", obin) });
-			const dbin = OUT_DIR + "bin/" + spec.name + ".danger";
-			jobs.push({ spec, lane: "danger", cmd: MSC_CMD + " build " + spec.entry + " --gc=drc --danger" + DANGER_CC + DANGER_PASSC + DANGER_PASSL + " --output=" + dbin, cell: makeCell(spec, "danger", dbin) });
-			// HAS_NODE, not laneUniverse: the program's DESIGN lanes still
-			// include js (so @xfail(js) keeps validating), only this host
-			// cannot execute the cell.
-			if (!spec.skipJs && HAS_NODE) {
-				const jsbin = OUT_DIR + "bin/" + spec.name + ".js";
-				jobs.push({ spec, lane: "js", cmd: MSC_CMD + " build " + spec.entry + " --target=js --output=" + jsbin, cell: makeCell(spec, "js", jsbin) });
-				// Same program through the module tree: the bundle collapses
-				// every module into one scope, so it cannot see a name the
-				// declaring and referencing sides spell differently.
-				const esmdir = OUT_DIR + "esm/" + spec.name;
-				jobs.push({ spec, lane: "esm", cmd: MSC_CMD + " build " + spec.entry + " --target=js --split --output=" + esmdir, cell: makeCell(spec, "esm", esmdir) });
-			}
 		}
 		if (RAISER && !spec.skipRaiser) { jobs.push({ spec, lane: "raiser", cmd: "", cell: makeCell(spec, "raiser", spec.entry) }); }
 	}
@@ -1241,7 +1220,7 @@ function main(): void {
 		progress("  !! clang missing, or present but unable to compile a hello world here — the danger" + (SAN ? " and san" : "") + " lane(s) build with the auto-detected compiler instead. On this host that means --danger WITHOUT LTO, so whole-program DCE (the class this lane exists to catch) is not exercised");
 	}
 	if (!HAS_NODE && !SAN) {
-		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (drc/orc/danger), so C↔JS backend divergence is not covered");
+		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (c/danger), so C↔JS backend divergence is not covered");
 	}
 
 	if (ONLY.length > 0) {

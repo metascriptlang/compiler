@@ -9,11 +9,10 @@
 //
 // Directives in a probe's header comments (optional):
 //   // GUARD-BALANCE <MangledType>       assert alloc==destroy for that type at exit
-//   // GUARD-BALANCE-ORC <MangledType>   same, but under orc only (cycle leaks are by-design under drc/ARC)
 //   // GUARD-TEST-BALANCE <MangledType>  run the file under `msc test` with the ledger and assert the balance there
 //   // GUARD-CHECK-FAIL <substr>         build MUST fail and the log MUST carry every substr
 //   // GUARD-JS                          also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
-//   // GUARD-TSAN                        also build --gc=drc --sanitize=thread --cc=clang + run; pass = exit 0 +
+//   // GUARD-TSAN                        also build --sanitize=thread --cc=clang + run; pass = exit 0 +
 //                                        GUARD-OK printed + no ThreadSanitizer report (unscored without the toolchain)
 //   // GUARD-OS <os>                     one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
 //                                        build must fail with every tag, else it must link (nothing is run)
@@ -21,7 +20,7 @@
 //                                        host; pass = exit 0 + GUARD-OK printed + no AddressSanitizer report
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
-// Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
+// Env: MSC=<path to msc> (default: ./msc, else installed msc)
 import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists, platform, arch } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, rename, symlink } from "std/fs";
 
@@ -174,7 +173,6 @@ interface Probe {
 	name: string;
 	path: string;
 	balance: string[];
-	balanceOrc: string[];
 	testBalance: string[];
 	checkfails: string[];
 	wantJs: boolean;
@@ -191,19 +189,14 @@ function firstWord(s: string): string {
 }
 
 function parseDirectives(probe: Probe, src: string): void {
-	const ORC = "// GUARD-BALANCE-ORC";
 	const TEST = "// GUARD-TEST-BALANCE";
 	const BAL = "// GUARD-BALANCE";
 	const CHECK = "// GUARD-CHECK-FAIL ";
 	const OS = "// GUARD-OS ";
 	for (const line of lines(src)) {
-		const orcAt = line.indexOf(ORC);
 		const testAt = line.indexOf(TEST);
 		const balAt = line.indexOf(BAL);
-		if (orcAt >= 0) {
-			const tok = firstWord(line.slice(orcAt + ORC.length, line.length));
-			if (tok != "") probe.balanceOrc.push(tok);
-		} else if (testAt >= 0) {
+		if (testAt >= 0) {
 			const tok = firstWord(line.slice(testAt + TEST.length, line.length));
 			if (tok != "") probe.testBalance.push(tok);
 		} else if (balAt >= 0) {
@@ -240,7 +233,7 @@ function discoverProbes(): Probe[] {
 	for (const name of names) {
 		const probe: Probe = {
 			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [],
+			balance: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [],
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -289,11 +282,11 @@ function checkDiagnostics(tag: string, log: string, wants: string[]): void {
 	if (good) ok(tag);
 }
 
-function runGcLane(probe: Probe, gc: string): void {
-	const tag = `${probe.name} [${gc}]`;
-	const bin = `${BIN_DIR}/${probe.name}.${gc}`;
-	const buildLog = `${LOG_DIR}/${probe.name}.${gc}.build`;
-	const b = buildProbe(probe, gc, ["build", probe.path, `--gc=${gc}`, "--passC=-DMS_DRC_LEDGER", `--output=${bin}`], buildLog);
+function runDrcLane(probe: Probe): void {
+	const tag = `${probe.name} [drc]`;
+	const bin = `${BIN_DIR}/${probe.name}.drc`;
+	const buildLog = `${LOG_DIR}/${probe.name}.drc.build`;
+	const b = buildProbe(probe, "drc", ["build", probe.path, "--passC=-DMS_DRC_LEDGER", `--output=${bin}`], buildLog);
 
 	if (probe.checkfails.length > 0) {
 		// Compiling clean means a checker rule was silently dropped.
@@ -315,8 +308,8 @@ function runGcLane(probe: Probe, gc: string): void {
 		return;
 	}
 	const run = execFileResult(exe, []);
-	writeFile(`${LOG_DIR}/${probe.name}.${gc}.out`, run.output);
-	writeFile(`${LOG_DIR}/${probe.name}.${gc}.err`, run.errorOutput);
+	writeFile(`${LOG_DIR}/${probe.name}.drc.out`, run.output);
+	writeFile(`${LOG_DIR}/${probe.name}.drc.err`, run.errorOutput);
 	const skipped = firstLineContaining(run.output, "GUARD-SKIP");
 	if (succeeded(run) && skipped != "") {
 		unscoredSkips.push(tag);
@@ -329,13 +322,8 @@ function runGcLane(probe: Probe, gc: string): void {
 		console.log("     -> drift from Nim last-ref dispose model; run /trace-nim on the named type");
 		return;
 	}
-	const eff: string[] = [];
-	for (const ty of probe.balance) eff.push(ty);
-	if (gc == "orc") {
-		for (const ty of probe.balanceOrc) eff.push(ty);
-	}
 	let good = true;
-	for (const ty of eff) {
+	for (const ty of probe.balance) {
 		const why = ledgerImbalance(run.errorOutput, ty);
 		if (why != "") {
 			fail(tag, `imbalance ${why}`);
@@ -352,7 +340,7 @@ function runOsLane(probe: Probe): void {
 	const tag = `${probe.name} [${probe.os}]`;
 	const bin = `${BIN_DIR}/${probe.name}.${probe.os}`;
 	const buildLog = `${LOG_DIR}/${probe.name}.${probe.os}.build`;
-	if (probe.balance.length > 0 || probe.balanceOrc.length > 0 || probe.testBalance.length > 0 || probe.wantJs) {
+	if (probe.balance.length > 0 || probe.testBalance.length > 0 || probe.wantJs) {
 		fail(tag, "GUARD-OS builds a binary the host cannot run; drop GUARD-BALANCE/GUARD-TEST-BALANCE/GUARD-JS");
 		return;
 	}
@@ -472,7 +460,7 @@ function tsanToolchain(): boolean {
 	if (tsanProbed == 0) {
 		const src = `${WORK}/tsanHello.ms`;
 		writeFile(src, `console.log("hi");\n`);
-		const r = execFileResult(MSC, ["build", src, "--gc=drc", "--sanitize=thread", "--cc=clang", `--output=${BIN_DIR}/tsanHello`], WORK);
+		const r = execFileResult(MSC, ["build", src, "--sanitize=thread", "--cc=clang", `--output=${BIN_DIR}/tsanHello`], WORK);
 		tsanProbed = succeeded(r) ? 1 : 2;
 	}
 	return tsanProbed == 1;
@@ -481,7 +469,7 @@ function tsanToolchain(): boolean {
 function runTsanLane(probe: Probe): void {
 	const tag = `${probe.name} [tsan]`;
 	const bin = `${BIN_DIR}/${probe.name}.tsan`;
-	const b = buildProbe(probe, "tsan", ["build", probe.path, "--gc=drc", "--sanitize=thread", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.tsan.build`);
+	const b = buildProbe(probe, "tsan", ["build", probe.path, "--sanitize=thread", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.tsan.build`);
 	if (!succeeded(b)) {
 		if (!tsanToolchain()) {
 			unscoredTsan.push(tag);
@@ -545,7 +533,7 @@ function helloEmitClean(): void {
 	const tag = "helloEmitClean";
 	const dir = freshDir("emit");
 	writeFile(`${dir}/hello_emit.ms`, "console.log(\"hi\");\n");
-	const b = execFileResult(MSC, ["build", "hello_emit.ms", "--gc=drc", `--output=${dir}/hello_emit_bin`], dir);
+	const b = execFileResult(MSC, ["build", "hello_emit.ms", `--output=${dir}/hello_emit_bin`], dir);
 	if (!succeeded(b)) {
 		fail(tag, "build error");
 		return;
@@ -580,7 +568,7 @@ console.log(`${readValue()}`);
 ");
 	// The second build is the one the project cache answers.
 	for (let i = 0; i < 2; i += 1) {
-		const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", `--output=${dir}/main_bin`], dir);
+		const b = execFileResult(MSC, ["build", "main.ms", `--output=${dir}/main_bin`], dir);
 		if (!succeeded(b)) {
 			fail(tag, "build error");
 			return;
@@ -591,7 +579,7 @@ console.log(`${readValue()}`);
 			if (f.endsWith(".c")) remove(`${dir}/out/debug/${f}`);
 		}
 	}
-	const e = execFileResult(MSC, ["build", "main.ms", "--gc=drc", `--output=${dir}/main_bin`, "--emit=c"], dir);
+	const e = execFileResult(MSC, ["build", "main.ms", `--output=${dir}/main_bin`, "--emit=c"], dir);
 	writeFile(`${LOG_DIR}/${tag}.log`, both(e));
 	let wrote = 0;
 	if (exists(`${dir}/out/debug`)) {
@@ -632,7 +620,7 @@ function deadFrameEmitsNoHooks(): void {
 		+ "export function* deadGen(label: string): Iterator<string> { const s = label + \"?\"; yield s; yield s; }\n"
 		+ "export function liveClosure(label: string): () => string { let s = label; return (): string => { s = s + \"+\"; return s; }; }\n");
 	writeFile(`${dir}/main.ms`, "import { used, liveClosure } from \"./lib\";\nconst f = liveClosure(\"a\");\nconsole.log(`${used()} ${f()} ${f()}`);\n");
-	const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", "--emit=c"], dir);
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
 	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
 	if (!succeeded(b)) {
 		fail(tag, "emit error");
@@ -654,7 +642,7 @@ function deadFrameEmitsNoHooks(): void {
 		fail(tag, "the frame hooks of liveClosure, which main calls, are missing");
 		return;
 	}
-	const r = execFileResult(MSC, ["run", "--gc=drc", "main.ms"], dir);
+	const r = execFileResult(MSC, ["run", "main.ms"], dir);
 	if (!succeeded(r) || !r.output.contains("1 a+ a++")) {
 		fail(tag, `liveClosure printed '${r.output.trim()}', expected '1 a+ a++'`);
 		return;
@@ -670,7 +658,7 @@ function fieldNameKeepsNoRoutine(): void {
 	const sentinel = "routine-named-like-a-field";
 	writeFile(`${dir}/lib.ms`, `export function used(): int32 { return 1; }\nexport function label(): string { return "${sentinel}"; }\n`);
 	writeFile(`${dir}/main.ms`, "import { used } from \"./lib\";\ninterface Tag { label: string; }\nfunction show(t: Tag): string { return t.label; }\nconsole.log(show({ label: \"x\" }) + String(used()));\n");
-	const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", "--emit=c"], dir);
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
 	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
 	if (!succeeded(b)) {
 		fail(tag, "emit error");
@@ -775,10 +763,6 @@ function main(): void {
 	ensureDir(WORK);
 	ensureDir(BIN_DIR);
 	ensureDir(LOG_DIR);
-	const modes: string[] = [];
-	for (const m of envOr("GUARD_GC", "drc orc").split(" ")) {
-		if (m != "") modes.push(m);
-	}
 	console.log(`nim-guard: compiler under test = ${MSC}`);
 	if (!HAS_NODE) {
 		console.log("nim-guard: !! node not found — GUARD-JS probes still BUILD for the js target, but their GUARD-OK run is unscored on this host");
@@ -791,7 +775,7 @@ function main(): void {
 		if (probe.os != "") {
 			runOsLane(probe);
 		} else {
-			for (const gc of modes) runGcLane(probe, gc);
+			runDrcLane(probe);
 			if (probe.wantJs) runJsLane(probe);
 			if (probe.wantTsan) runTsanLane(probe);
 			if (probe.testBalance.length > 0) runTestLane(probe);

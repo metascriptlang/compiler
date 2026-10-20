@@ -12,8 +12,8 @@
 // RED MEANS a closure array releases its environments without registering cycle candidates;
 // run /trace-nim on msClosureArrayDestroy against atomicClosureOp.
 //
-// GUARD-BALANCE-ORC Owner
-// GUARD-BALANCE-ORC Pair
+// GUARD-BALANCE Owner
+// GUARD-BALANCE Pair
 
 class Owner {
 	cb: (() => int32) | null = null;

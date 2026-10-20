@@ -15,8 +15,8 @@
 // DRC is NOT asserted: DRC does not collect cycles by design.
 //
 // RED MEANS: a TypeInfo defined in codegen lost its trace hook. Run /trace-nim on Widget.
-// GUARD-BALANCE-ORC Widget
-// GUARD-BALANCE-ORC Plain
+// GUARD-BALANCE Widget
+// GUARD-BALANCE Plain
 
 class Widget {
 	label: string = "w";
