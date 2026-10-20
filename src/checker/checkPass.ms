@@ -3659,9 +3659,8 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 			rel = rel.slice(2, rel.length);
 		}
 		basePath = indexDir + "/" + rel;
-	} else if (specifier.length > 4 && specifier.slice(0, 4) == "std/" && stdPath != "") {
-		// Absolute std path: stdPath is the std/ root
-		basePath = stdPath + "/" + specifier.slice(4, specifier.length);
+	} else if (specifier.length > 4 && specifier.slice(0, 4) == "std/") {
+		basePath = stdPath != "" ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
 	} else {
 		return { path: "", source: "" };
 	}

@@ -1196,6 +1196,7 @@ export function resolveImportSourcePath(ctx: CheckerContext, specifier: string):
 		// macro-based codecs). Without this, sourcePath is "" and the import
 		// falls back to creating a Variable symbol.
 		if (specifier.length > 4 && specifier.slice(0, 4) == "std/") {
+			if (ctx.modulePath.startsWith("std/")) return specifier;
 			const stdMarker = "/std/";
 			const idx = ctx.modulePath.indexOf(stdMarker, 0);
 			if (idx >= 0) {
