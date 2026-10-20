@@ -4759,6 +4759,7 @@ export function typeDisplayName(t: Type | null): string {
 function typeDisplayNameInner(t: Type | null): string {
 	if (t == null) return "<null>";
 	if (t.typeInst != null) return typeDisplayName(t.typeInst);
+	if (isBrandDistinct(t) && t.sym != null) return t.sym.name;
 	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);
