@@ -245,6 +245,34 @@ test "macro reflection: named shape validation accepts exactly declared keys" {
 	}
 }
 
+test "macro reflection: an error located at a key location or a quoted node reports the macro's message" {
+	const atKey = compileToCWithStd(`
+import { Node, NodeKind } from "std/meta";
+
+export macro pick(sheet: Node): Node {
+	if (sheet.kind === NodeKind.ObjectLiteral) error("pick: bad key '" + sheet.keys[0] + "'", sheet.keyLocations[0]);
+	return sheet;
+}
+
+const x = pick({ widht: 1.0 });
+`);
+	assert !atKey.ok;
+	assert atKey.error.contains("pick: bad key 'widht'"), atKey.error;
+	const atQuote = compileToCWithStd(`
+import { Node } from "std/meta";
+
+export macro made(x: Node): Node {
+	const q: Node = quote { 1 + 2 };
+	error("made: refused", q);
+	return x;
+}
+
+const y = made(1);
+`);
+	assert !atQuote.ok;
+	assert atQuote.error.contains("made: refused"), atQuote.error;
+}
+
 test "macro reflection: unavailable named types are refused" {
 	const result = compileToCWithStd(`
 import { Node, NodeKind } from "std/meta";
