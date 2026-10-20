@@ -4,7 +4,7 @@
 // site, so the handler's methods resolve as any method call written there would.
 
 import { ArrayAccessData, BinaryExprData, CallExprData, ClassDeclData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Type, TypeKind, UpdateExprData, createNodeAt } from "../ast/node";
-import { cloneNodeForCheck } from "../monomorphize/clone";
+import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callCheckStmt } from "./checkerCallbacks";
 import { CheckerContext, addError, findAllExtensionsByName, findFirstMatchingExt } from "./context";
 import { lookupSymbol } from "./symbol";
@@ -155,7 +155,7 @@ function routine(params: string[], body: Node, loc: SourceLocation): Node {
 
 // `proxyHandler(p).<trap>(proxyTarget(p), ...args)` for a receiver read without effect.
 function handlerCall(proxy: Node, trap: string, args: Node[], loc: SourceLocation): Node {
-	const callArgs: Node[] = [call("proxyTarget", [cloneNodeForCheck(proxy)], loc)].concat(args);
+	const callArgs: Node[] = [call("proxyTarget", [cloneNodeKeepSem(proxy)], loc)].concat(args);
 	return methodCall(call("proxyHandler", [proxy], loc), trap, callArgs, loc);
 }
 
@@ -218,7 +218,7 @@ export function readIndexThroughProxy(ctx: CheckerContext, node: Node, expected:
 // The write of `value` to `recv[key]`: `set`, whose false fails the write, or `Reflect.set`
 // on an array target, or the field of the target.
 function writeTo(recv: Node, key: Node, value: Node, route: Route, onArray: boolean, loc: SourceLocation): Node {
-	if (route == "trap") return call("proxyChecked", [handlerCall(recv, "set", [key, value], loc), keyLiteral("set", loc), cloneNodeForCheck(key)], loc);
+	if (route == "trap") return call("proxyChecked", [handlerCall(recv, "set", [key, value], loc), keyLiteral("set", loc), cloneNodeKeepSem(key)], loc);
 	if (onArray) return reflectCall(recv, "set", [key, value], loc);
 	const field = member(call("proxyTarget", [recv], loc), (key.data as StringLiteralData).value, loc);
 	return createNodeAt(NodeKind.BinaryExpr, { left: field, operator: "=", right: value }, loc);
@@ -226,8 +226,8 @@ function writeTo(recv: Node, key: Node, value: Node, route: Route, onArray: bool
 
 // The read `recv[key]` written again, so a compound write's read goes through `get` like any read.
 function rereadOf(recv: Node, key: Node, loc: SourceLocation): Node {
-	if (key.kind == NodeKind.StringLiteral) return member(cloneNodeForCheck(recv), (key.data as StringLiteralData).value, loc);
-	return createNodeAt(NodeKind.ArrayAccess, { array: cloneNodeForCheck(recv), index: cloneNodeForCheck(key) }, loc);
+	if (key.kind == NodeKind.StringLiteral) return member(cloneNodeKeepSem(recv), (key.data as StringLiteralData).value, loc);
+	return createNodeAt(NodeKind.ArrayAccess, { array: cloneNodeKeepSem(recv), index: cloneNodeKeepSem(key) }, loc);
 }
 
 // `recv[key] op= v` is the write of `recv[key] op v`.
@@ -374,7 +374,7 @@ function step(kind: string, handler: Type, ctx: CheckerContext, loc: SourceLocat
 		return routine(["$p", "$k"], has, loc);
 	}
 	const del = routeOf(ctx, handler, "deleteProperty", loc) == "trap"
-		? call("proxyChecked", [handlerCall(p, "deleteProperty", [k], loc), keyLiteral("deleteProperty", loc), cloneNodeForCheck(k)], loc)
+		? call("proxyChecked", [handlerCall(p, "deleteProperty", [k], loc), keyLiteral("deleteProperty", loc), cloneNodeKeepSem(k)], loc)
 		: reflectCall(p, "deleteProperty", [k], loc);
 	return routine(["$p", "$k"], block([statement(del)], loc), loc);
 }

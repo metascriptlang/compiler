@@ -3137,7 +3137,7 @@ function callSetter(ctx: CheckerContext, node: Node, d: BinaryExprData, md: Memb
 		addError(ctx, `compound assignment '${d.operator}' to accessor '${md.property}' needs a receiver that is a name or a field path: store the receiver in a local first`, node.location.line, node.location.column);
 		return errorType();
 	}
-	const read = createNodeAt(NodeKind.MemberExpr, { object: cloneNodeForCheck(md.object), property: md.property, isOptional: false }, d.left.location);
+	const read = createNodeAt(NodeKind.MemberExpr, { object: cloneNodeKeepSem(md.object), property: md.property, isOptional: false }, d.left.location);
 	const combined = createNodeAt(NodeKind.BinaryExpr, { operator: d.operator.slice(0, d.operator.length - 1), left: read, right: d.right }, node.location);
 	return rewriteAsMethodCall(ctx, node, md.object, "set_" + md.property, [combined]);
 }
