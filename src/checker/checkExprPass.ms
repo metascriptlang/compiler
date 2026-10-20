@@ -2354,6 +2354,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 			return;
 		}
 		if (reportedErrorSince(ctx, operandMark)) return;
+		if (srcType != null && refuseUncheckedObjectDownConversion(ctx, d.asExpr, srcType, targetType, asLoc.line, asLoc.column)) return;
 		if (refuseUnrelatedStructAs(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
 				if (refuseUnionReinterpretAs(ctx, (node.data as TypeAssertionData).asExpr, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
 		if (refuseContainerReinterpret(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
@@ -2406,6 +2407,28 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
 	if (!reportedErrorSince(ctx, operandMark)) checkPointerAddress(ctx, node, d.asExpr, targetType);
 	return;
+}
+
+function heldObjectRef(t: Type): Type | null {
+	const bare = skipModifier(t);
+	if (bare == null) return null;
+	const held = bare.kind == TypeKind.Union ? unwrapRefNullUnion(bare) : bare;
+	return held != null && held.kind == TypeKind.Ref && viewedObjectBody(held) != null ? held : null;
+}
+
+function refuseUncheckedObjectDownConversion(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
+	if (operand.kind == NodeKind.ObjectLiteral || hasGenericParams(srcType) || hasGenericParams(targetType)) return false;
+	const source = heldObjectRef(srcType);
+	const target = heldObjectRef(targetType);
+	if (source == null || target == null || runtimeClassSym(source.typeReturn) != null || runtimeClassSym(target.typeReturn) != null) return false;
+	if (sameType(source, target) || isAssignable(source, target) || !isAssignable(target, source)) return false;
+	const named = target.typeReturn != null && (target.typeReturn.sym != null || target.typeReturn.kind == TypeKind.GenericInstance);
+	const shown = named ? typeDisplayName(target) : "an object type";
+	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType)
+		+ ": " + (named ? shown + " is an interface" : "it is an object type") + " with no run-time identity, so `as` cannot check that the value is one"
+		+ " — keep the values in a discriminated union (a `kind` field) and narrow it, or " + (named ? "make " + shown + " a class" : "use a class") + " and test `instanceof`",
+		line, column);
+	return true;
 }
 
 function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
