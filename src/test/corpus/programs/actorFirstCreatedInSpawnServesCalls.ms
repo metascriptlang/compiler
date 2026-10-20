@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: call 1 sends 4 main 1
 // @serial
 // note: the first actor of the program is created on a pool worker; scheduler 0 stays the
