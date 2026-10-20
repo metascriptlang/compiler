@@ -842,14 +842,19 @@ void msAtomicRefArrayDestroy(msRefArray* arr) {
 void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
 	if (item != NULL) msIncref(item);
 	if (start < 0) start = 0;
+	void* fewRemoved[8];
+	void** removed = fewRemoved;
+	int64_t removedLen = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
-		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
-		for (int64_t i = start; i < start + deleteCount; i++) msDecrefCyclic(arr->p->data[i]);
-		int64_t remaining = arr->len - start - deleteCount;
+		removedLen = start + deleteCount > arr->len ? arr->len - start : deleteCount;
+		if (removedLen > 8) removed = (void**)malloc(removedLen * sizeof(void*));
+		if (removed == NULL) abort();
+		memcpy(removed, arr->p->data + start, removedLen * sizeof(void*));
+		int64_t remaining = arr->len - start - removedLen;
 		if (remaining > 0) {
-			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
+			memmove(arr->p->data + start, arr->p->data + start + removedLen, remaining * sizeof(void*));
 		}
-		arr->len -= deleteCount;
+		arr->len -= removedLen;
 	}
 	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
 		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(void*));
@@ -861,6 +866,8 @@ void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void
 	}
 	arr->p->data[start] = item;
 	arr->len += 1;
+	for (int64_t i = 0; i < removedLen; i++) msDecrefCyclic(removed[i]);
+	if (removed != fewRemoved) free(removed);
 }
 
 void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
