@@ -153,6 +153,7 @@ import "./borrowReturn";
 import "./arrayLengthGrowth";
 import "./relationalOperands";
 import "./distinctArithmetic";
+import "./distinctComparison";
 import "./typeNameValue";
 import "./dynamicImport";
 import "./routineInterface";
