@@ -376,13 +376,14 @@ static inline void msStringCopy(msString* dest, msString src) {
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
 #define msIncref(p)           msIncRef(p)
 #define msDecref(p)           do { \
-	if ((p) != NULL) { \
-		const msTypeInfo* __t = msHeader(p)->type; \
+	void* __msDecrefP = (void*)(p); \
+	if (__msDecrefP != NULL) { \
+		const msTypeInfo* __t = msHeader(__msDecrefP)->type; \
 		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(p); \
-		} else if (msDecRefIsLast(p)) { \
-			MS_DESTROY_DISPATCH(__t, p); \
-			msDestroyAndDispose(p); \
+			msFutureDeferredRelease(__msDecrefP); \
+		} else if (msDecRefIsLast(__msDecrefP)) { \
+			MS_DESTROY_DISPATCH(__t, __msDecrefP); \
+			msDestroyAndDispose(__msDecrefP); \
 		} \
 	} \
 } while(0)
@@ -391,10 +392,11 @@ static inline void msStringCopy(msString* dest, msString src) {
 /* --- Arc<T> atomic ref lifecycle (cross-thread shared; decref tail == msDecref) --- */
 #define msAtomicIncref(p)     msAtomicIncRef(p)
 #define msAtomicDecref(p)     do { \
-	if ((p) != NULL && msAtomicDecRefIsLast(p)) { \
-		const msTypeInfo* __t = msHeader(p)->type; \
-		MS_DESTROY_DISPATCH(__t, p); \
-		msDestroyAndDispose(p); \
+	void* __msAtomicDecrefP = (void*)(p); \
+	if (__msAtomicDecrefP != NULL && msAtomicDecRefIsLast(__msAtomicDecrefP)) { \
+		const msTypeInfo* __t = msHeader(__msAtomicDecrefP)->type; \
+		MS_DESTROY_DISPATCH(__t, __msAtomicDecrefP); \
+		msDestroyAndDispose(__msAtomicDecrefP); \
 	} \
 } while(0)
 
@@ -402,13 +404,14 @@ static inline void msStringCopy(msString* dest, msString src) {
 #ifdef MSGC_ORC
 #define msIncrefCyclic(p)     do { if ((p) != NULL) msOrcIncRef(p); } while(0)
 #define msDecrefCyclic(p)     do { \
-	if ((p) != NULL) { \
-		const msTypeInfo* __t = msHeader(p)->type; \
+	void* __msDecrefCyclicP = (void*)(p); \
+	if (__msDecrefCyclicP != NULL) { \
+		const msTypeInfo* __t = msHeader(__msDecrefCyclicP)->type; \
 		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
-			msFutureDeferredRelease(p); \
-		} else if (msOrcDecRefIsLast(p)) { \
-			MS_DESTROY_DISPATCH(__t, p); \
-			msDestroyAndDispose(p); \
+			msFutureDeferredRelease(__msDecrefCyclicP); \
+		} else if (msOrcDecRefIsLast(__msDecrefCyclicP)) { \
+			MS_DESTROY_DISPATCH(__t, __msDecrefCyclicP); \
+			msDestroyAndDispose(__msDecrefCyclicP); \
 		} \
 	} \
 } while(0)
