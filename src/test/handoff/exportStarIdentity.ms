@@ -70,6 +70,54 @@ test "exportStarIdentity: a static and a free function of one name both go out t
 	assert d == "", d;
 }
 
+test "exportStarIdentity: explicit free exports keep same-named static star extensions" {
+	const stars = `export struct Box { value: int32; }
+export function create(this typeof Box): Box { return { value: 7 }; }
+export struct Other { value: int32; }
+export function create(this typeof Other): Other { return { value: 9 }; }
+`;
+	const named = "export function create(): int32 { return 5; }";
+	const hubs = [
+		`export * from "./stars";\nexport { create } from "./named";`,
+		`export { create } from "./named";\nexport * from "./stars";`,
+		`export * from "./stars";\nexport function create(): int32 { return 5; }`,
+		`export function create(): int32 { return 5; }\nexport * from "./stars";`,
+	];
+	for (const hub of hubs) {
+		const files: MapEntry[] = [
+			{ entryPath: "src/stars.ms", entrySource: stars },
+			{ entryPath: "src/named.ms", entrySource: named },
+			{ entryPath: "src/hub.ms", entrySource: hub },
+		];
+		const diagnostics = diagnostics680(files,
+			`import { Box, Other, create } from "./hub";
+const value: int32 = Box.create().value + Other.create().value + create();`);
+		assert diagnostics == "", diagnostics;
+	}
+}
+
+test "exportStarIdentity: explicit static exports do not hide a free star export" {
+	const staticDecl = `export struct First { value: int32; }
+export function create(this typeof First): First { return { value: 7 }; }`;
+	const hubs = [
+		`export * from "./free";\nexport { First, create } from "./static";`,
+		`export { First, create } from "./static";\nexport * from "./free";`,
+		`export * from "./free";\n` + staticDecl,
+		staticDecl + `\nexport * from "./free";`,
+	];
+	for (const hub of hubs) {
+		const files: MapEntry[] = [
+			{ entryPath: "src/static.ms", entrySource: staticDecl },
+			{ entryPath: "src/free.ms", entrySource: "export function create(): int32 { return 5; }" },
+			{ entryPath: "src/hub.ms", entrySource: hub },
+		];
+		const diagnostics = diagnostics680(files,
+			`import { First, create } from "./hub";
+const value: int32 = First.create().value + create();`);
+		assert diagnostics == "", diagnostics;
+	}
+}
+
 test "exportStarIdentity: a hub over a hub keeps both modules' extensions" {
 	const files: MapEntry[] = [
 		{ entryPath: "src/account.ms", entrySource: ACCOUNT680 },

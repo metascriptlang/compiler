@@ -40,8 +40,21 @@ function noteExplicitExportNames(ctx: CheckerContext, stmt: Node): void {
 	if (decl.kind == NodeKind.ImportDecl) {
 		const imp = decl.data as ImportDeclData;
 		if (imp.importNames.length == 1 && imp.importNames[0] == "*") return;
-		for (const alias of imp.importAliases) ctx.explicitExportNames.add(alias);
+		const source = findModuleExports(ctx.exportRegistry, resolveImportSourcePath(ctx, imp.importSource));
+		for (let i = 0; i < imp.importAliases.length; i++) {
+			if (source != null) {
+				let bindsName = false;
+				for (const info of source.symbols) {
+					if (info.name == imp.importNames[i] && !isStaticExtensionSym(info.sym)) bindsName = true;
+				}
+				if (!bindsName) continue;
+			}
+			ctx.explicitExportNames.add(imp.importAliases[i]);
+		}
 	} else {
+		const local = declOfStatement(decl);
+		if (local.kind == NodeKind.FunctionDecl
+			&& isStaticExtensionFlag((local.data as FunctionDeclData).fnFlags)) return;
 		const name = getDeclName(decl);
 		if (name != "") ctx.explicitExportNames.add(name);
 	}
@@ -1519,7 +1532,8 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 					if (modExports != null) {
 						for (let si = 0; si < modExports.symbols.length; si += 1) {
 							const expInfo = modExports.symbols[si];
-							if (ctx.explicitExportNames.has(expInfo.name)) continue;
+							if (ctx.explicitExportNames.has(expInfo.name)
+								&& !isStaticExtensionSym(expInfo.sym)) continue;
 							const bound = lookupLocal(ctx.table, expInfo.name);
 							if (bound != null) {
 								reexportPastBinding(ctx, bound, expInfo, sourcePath, imp.importSource, node);
