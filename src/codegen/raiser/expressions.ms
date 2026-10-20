@@ -14,7 +14,7 @@ import {
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData, ClassDeclData, MethodDeclData,
 	createNodeAt
 } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField, inRefFile } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
@@ -873,11 +873,12 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 	const op = d.operator;
 	if (!isComparisonOp(op)) return null;
 	const lReg = compileExpr(s, d.left);
+	const valueOpcode = op == "==" || op == "===" ? RaiserOpcode.EqVal : RaiserOpcode.NeVal;
 	if (isEqualityOp(op) && (holdsUnion(d.left) || holdsUnion(d.right))) {
 		const heldReg = compileExpr(s, d.right);
-		return raiserABC(op == "==" || op == "===" ? RaiserOpcode.EqVal : RaiserOpcode.NeVal, lReg, heldReg, 1);
+		return raiserABC(valueOpcode, lReg, heldReg, 1);
 	}
-	const integerCompare = !exprIsString(s, d.left) && !exprIsString(s, d.right) && !isFloatExpr(d.left) && !isFloatExpr(d.right)
+	const integerCompare = !inRefFile(classOfReg(s, lReg)) && !exprIsString(s, d.left) && !exprIsString(s, d.right) && !isFloatExpr(d.left) && !isFloatExpr(d.right)
 		&& !((isUint64Type(d.left.nodeType) || isUint64Type(d.right.nodeType)) && !isEqualityOp(op));
 	if (integerCompare && immLiteral(d.right)) {
 		return raiserABC(comparisonOpcodeImm(op), lReg, immField(immLiteralValue(d.right)), 1);
@@ -891,6 +892,7 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 		const strict = op == "<" || op == ">";
 		return raiserABC(strict ? RaiserOpcode.LtStr : RaiserOpcode.LeStr, swapped ? rReg : lReg, swapped ? lReg : rReg, 1);
 	}
+	if (isEqualityOp(op) && (inRefFile(classOfReg(s, lReg)) || inRefFile(classOfReg(s, rReg)))) return raiserABC(valueOpcode, lReg, rReg, 1);
 	if (isFloatExpr(d.left) || isFloatExpr(d.right)) return raiserABC(comparisonOpcodeF64(op), floatOperand(s, lReg), floatOperand(s, rReg), 1);
 	if ((isUint64Type(d.left.nodeType) || isUint64Type(d.right.nodeType)) && op != "==" && op != "===" && op != "!=" && op != "!==") {
 		const swapped = op == ">" || op == ">=";
