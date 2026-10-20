@@ -1021,6 +1021,10 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 	// `typeExtra`, and the argument at the predicate position matches our
 	// reference, narrow to (or exclude) the predicate's target type.
 	if (expr.kind == NodeKind.CallExpr) {
+		const cd = expr.data as CallExprData;
+		if (isSynthesizedNullableEquality(cd)) {
+			return narrowTypeByEquality(t, skipHiddenConv(cd.arguments[0]), skipHiddenConv(cd.arguments[1]), "===", refNode, assumeTrue);
+		}
 		return narrowTypeByPredicate(t, expr, refNode, assumeTrue);
 	}
 	// Truthiness narrowing: bare expression used as a condition.
@@ -1045,6 +1049,12 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 		}
 	}
 	return t;
+}
+
+function isSynthesizedNullableEquality(cd: CallExprData): boolean {
+	const callee = cd.callee;
+	return callee.kind == NodeKind.Identifier && callee.flags.has(NodeFlag.BoundSym)
+		&& (callee.data as IdentifierData).name == "nullableEquals" && cd.arguments.length == 2;
 }
 
 // Narrow a discriminated union by a boolean-discriminator field's truthy/falsy state.
@@ -1758,14 +1768,30 @@ function narrowByLiteralEquality(t: Type | null, literal: Node, assumeTrue: bool
 		return assumeTrue ? extractNullFromType(t) : removeNullFromType(t);
 	}
 	const value = equalityLiteralType(skipHiddenConv(literal));
-	if (value == null || t.kind != TypeKind.Union || t.typeChildren == null || isMaybeType(t)) return t;
+	if (value == null) return t;
+	if (isMaybeType(t) && t.typeReturn != null) {
+		const narrowed = filterByLiteral(t.typeReturn!, value, assumeTrue);
+		if (assumeTrue) return narrowed.kind == TypeKind.Never ? t : narrowed;
+		if (narrowed == t.typeReturn) return t;
+		return narrowed.kind == TypeKind.Never ? nullType() : nullableUnionOf([narrowed, nullType()]);
+	}
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	const narrowed = filterByLiteral(t, value, assumeTrue);
+	return narrowed.kind == TypeKind.Never ? t : narrowed;
+}
+
+function filterByLiteral(t: Type, value: Type, assumeTrue: boolean): Type {
+	if (t.kind != TypeKind.Union || t.typeChildren == null) {
+		return (assumeTrue ? excludedByEquality(t, value) : sameLiteralType(t, value)) ? neverType() : t;
+	}
 	const kept: Type[] = [];
 	for (const member of t.typeChildren) {
 		if (member == null) return t;
 		if (assumeTrue ? excludedByEquality(member, value) : sameLiteralType(member, value)) continue;
 		kept.push(member);
 	}
-	if (kept.length == 0 || kept.length == t.typeChildren.length) return t;
+	if (kept.length == 0) return neverType();
+	if (kept.length == t.typeChildren.length) return t;
 	return unionPreservingDiscriminant(t, kept);
 }
 
