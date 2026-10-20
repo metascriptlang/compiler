@@ -1792,7 +1792,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Reference parity: stamp literal with expected type, propagate field types
 		// For class types, keep Ref wrapper so codegen knows to heap-allocate.
 		// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
-		const stampType = literalStampType(expectedType, objExpected);
+		const stampType = peelTransparentInstance(literalStampType(expectedType, objExpected));
 		node.nodeType = stampType;
 		// Pin to consts so the inner while-loop body sees non-null typeNames/
 		// typeChildren — flow narrowing on `let objExpected` doesn't reach
