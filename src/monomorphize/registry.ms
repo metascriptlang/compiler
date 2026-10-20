@@ -3,7 +3,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload } from "../checker/types";
+import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct } from "../checker/types";
 
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
@@ -135,6 +135,7 @@ function monoTypeKeyBody(t: Type): string {
 		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),
 		TypeKind.Borrow => "borrow_" + monoTypeKey(t.typeReturn),
 		TypeKind.Distinct => {
+			if (isBrandDistinct(t)) return "brand_" + monoTypeKey(t.typeReturn) + "_" + hashToBase36(t.typeName);
 			if (t.typeName == "") return "distinct_" + monoTypeKey(t.typeReturn);
 			const owner = monoOwnerPath(t);
 			const name = monoDeclaredName(t);
