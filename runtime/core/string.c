@@ -401,8 +401,6 @@ bool msStringEndsWith(msString s, msString suffix) {
 	return memcmp(s.p->data + s.len - suffix.len, suffix.p->data, suffix.len) == 0;
 }
 
-static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart);
-
 bool msStringContains(msString s, msString sub) {
 	if (sub.len == 0) return true;
 	if (sub.len > s.len) return false;
@@ -412,10 +410,9 @@ bool msStringContains(msString s, msString sub) {
 
 /* ===== Search ===== */
 
-/* Internal byte-based indexOf — for C runtime use (replace, split, count).
- * start and return value are byte offsets. */
-static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart) {
-	if (sub.len == 0) return byteStart <= s.len ? byteStart : -1;
+/* start and return value are byte offsets. */
+int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart) {
+	if (sub.len == 0) return byteStart;
 	if (byteStart < 0) byteStart = 0;
 	if (sub.len > s.len || s.p == NULL) return -1;
 	const char* haystack = s.p->data;
@@ -732,7 +729,9 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end) {
 	if (start < 0) start = 0;
 	if (end > s.len) end = s.len;
 	if (start >= end || s.p == NULL) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data + start, end - start);
+	msString slice = msStringNew(s.p->data + start, end - start);
+	if (msStrKnownAscii(s.p)) msStrMarkAscii(slice.p);
+	return slice;
 }
 
 /* Character-level slice: TypeScript String.prototype.slice() parity.
