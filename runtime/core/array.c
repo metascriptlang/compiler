@@ -907,7 +907,7 @@ void msClosureArrayDestroy(msClosureArray* arr) {
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) {
 			if (p->data[i].env != NULL) {
-				msDecref(p->data[i].env);
+				msDecrefCyclic(p->data[i].env);
 			}
 		}
 		free(p);
