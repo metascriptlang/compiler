@@ -3058,7 +3058,7 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 // `super` is only valid inside an instance method (where "this" is in scope).
 // Walks: this → enclosing class type → typeExtra → parent class.
 function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expectedType: Type | null, converting: boolean): Type | null {
-	if (expectedType != null && ((converting && isNumeric(d.ternaryConsequent.nodeType) && isNumeric(d.ternaryAlternate.nodeType))
+	if (expectedType != null && !hasGenericParams(expectedType) && ((converting && isNumeric(d.ternaryConsequent.nodeType) && isNumeric(d.ternaryAlternate.nodeType))
 		|| (branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
 		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)))) {
 		d.ternaryConsequent = fitArm(ctx, d.ternaryConsequent, expectedType, converting);
