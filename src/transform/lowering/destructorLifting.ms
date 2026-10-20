@@ -291,7 +291,6 @@ function genOpCall(sym: Symbol, hook: string, x: Node, y: Node, buf: NodeBuf, lo
 }
 
 // Copy-ref pattern: for 2-arg copy functions (msStringCopy), emit =copy(&dest, src) directly.
-// For unary incref (msIncref, msClosureCopy), emit incref-new + decref-old + assign.
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
 	const increfSym = attachedOpSym(increfFn, AttachedOp.AttachedAsgn);
 	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
@@ -307,12 +306,16 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 		genCall("msRefCopyCyclic", "copy", clonePath(x, loc), clonePath(y, loc), buf, loc);
 		return;
 	}
+	if (isRuntimeProcSym(increfSym, "msClosureCopy")) {
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc), [clonePath(y, loc)], loc), loc));
+		genCall("msClosureSink", "sink", clonePath(x, loc), clonePath(y, loc), buf, loc);
+		return;
+	}
 	// Unary incref types: Nim attachedAsgn non-cyclic order (liftdestructors.nim:776-779,
 	// bug #15753) — incref new FIRST so an rc==1 alias of dest's old value survives
 	// the decref; then decref old, then assign.
 	const decrefFn = isRuntimeProcSym(increfSym, "msIncref") ? "msDecref"
 		: isRuntimeProcSym(increfSym, "msAtomicIncref") ? "msAtomicDecref"
-		: isRuntimeProcSym(increfSym, "msClosureCopy") ? "msClosureDestroy"
 		: isRuntimeProcSym(increfSym, "msClosureIncref") ? "msClosureDecref"
 		: isRuntimeProcSym(increfSym, "msMapIncref") ? "msMapDecref"
 		: "";
@@ -707,6 +710,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Function => {
 			if (hook == "copy") {
 				genCopyRef("msClosureCopy", xf, yf, fieldName, buf, loc);
+			} else if (hook == "sink") {
+				genCall("msClosureSink", hook, xf, yf, buf, loc);
 			} else {
 				runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc);
 			}
