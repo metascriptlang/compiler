@@ -60,3 +60,14 @@ test "a narrowed variant is copied into an object, kept as its union or serializ
 	assert strictErrorCount(pairDecl + "function f(x: Pair): boolean { return x.ok; }\nif (p.ok) f(p);") == 0;
 	assert strictErrorCount(pairDecl + "function id<T>(x: T): T { return x; }\nif (p.ok) { const q = id(p); JSON.stringify(p); }") == 0;
 }
+
+test "a narrowed variant is serialized directly and through a generic, with or without an optional field" {
+	const show = "function show<T>(x: T): string { return JSON.stringify(x); }\n";
+	const optDecl = "struct Opt = match (ok: boolean) { true => { value?: string }, false => { error: string } };\n"
+		+ "function mkOpt(g: boolean): Opt { if (g) return { ok: true, value: null }; return { ok: false, error: \"no\" }; }\n"
+		+ "const o = mkOpt(true);\n";
+	assert strictErrorCount(pairDecl + "if (p.ok) JSON.stringify(p);") == 0;
+	assert strictErrorCount(pairDecl + show + "if (p.ok) show(p);") == 0;
+	assert strictErrorCount(optDecl + "if (o.ok) JSON.stringify(o);") == 0;
+	assert strictErrorCount(optDecl + show + "if (o.ok) show(o);") == 0;
+}
