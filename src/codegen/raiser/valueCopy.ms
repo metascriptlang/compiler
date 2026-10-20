@@ -1,6 +1,6 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, isStructType, needsValueCopy, valueCopyRepr } from "../../checker/types";
+import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr } from "../../checker/types";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
@@ -12,7 +12,7 @@ function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	if (valueType != null && valueType.kind == TypeKind.Alias) {
 		return copyPlan(s, valueType.typeReturn);
 	}
-	if (valueType != null && valueType.kind == TypeKind.GenericInstance) {
+	if (valueType != null && (valueType.kind == TypeKind.GenericInstance || isMaybeType(valueType))) {
 		const repr = valueCopyRepr(valueType);
 		if (repr != valueType) return copyPlan(s, repr);
 	}

@@ -631,7 +631,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	if (isRefParamTarget(left)) {
 		const pointeeType = left.resolvedSym!.symbolType.typeReturn;
 		const paramReg = resolveLocal(s, left.resolvedSym);
-		if (paramReg < 0 || !needsValueAssign(s, pointeeType)) return -1;
+		if (paramReg < 0 || heldByLocation(s, pointeeType)) return -1;
 		const srcReg = compileExpr(s, right);
 		return emitValueAssign(s, paramReg, srcReg, pointeeType);
 	}
@@ -639,7 +639,12 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	if (left.kind == NodeKind.HiddenDeref) {
 		const srcReg = compileExpr(s, right);
 		const pointee = compileExpr(s, (left.data as HiddenDerefData).expr);
-		return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		if (!heldByLocation(s, left.nodeType)) return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		const held = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, held, pointee, 0));
+		const result = emitValueAssign(s, held, srcReg, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, pointee, 0, result));
+		return result;
 	}
 	if (left.kind == NodeKind.Identifier) {
 		if (isViewBinding(left.resolvedSym)) return -1;
@@ -694,6 +699,7 @@ function isPointerTyped(node: Node): boolean {
 function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
 	const t = skipModifier(pointee);
 	if (t == null) return false;
+	if (isMaybeType(t)) return true;
 	if (t.kind == TypeKind.GenericInstance) {
 		const body = peelToStructOrUnion(t);
 		if (body != null && body.kind == TypeKind.Struct) return false;
