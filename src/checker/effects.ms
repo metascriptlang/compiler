@@ -1,0 +1,227 @@
+// Effects are read from checked bodies, and a callee later in the module is not
+// checked yet where its caller is: queue a check with deferEffectCheck.
+
+import { ArrowFunctionData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
+import { dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
+import { isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
+
+export enum Effect {
+	SideEffect,
+	SpawnUnsafe,
+}
+
+export interface EffectCause {
+	site: Node;
+	text: string;
+}
+
+interface EffectTable {
+	impure: HashMap<Symbol, EffectCause>;
+	pure: HashMap<Symbol, boolean>;
+	open: Symbol[];
+}
+
+function emptyTable(): EffectTable {
+	return { impure: new HashMap<Symbol, EffectCause>(), pure: new HashMap<Symbol, boolean>(), open: [] };
+}
+
+let sideTable: EffectTable = emptyTable();
+let spawnTable: EffectTable = emptyTable();
+let assumedOpen = false;
+interface DeferredCheck {
+	site: Node;
+	check: () => void;
+}
+
+let deferred: DeferredCheck[] = [];
+
+function tableFor(e: Effect): EffectTable {
+	return e == Effect.SideEffect ? sideTable : spawnTable;
+}
+
+export function deferEffectCheck(site: Node, check: () => void): void {
+	for (const d of deferred) {
+		if (d.site.kind == site.kind && d.site.location.line == site.location.line && d.site.location.column == site.location.column) return;
+	}
+	deferred.push({ site, check });
+}
+
+export function runDeferredEffectChecks(): void {
+	const checks = deferred;
+	deferred = [];
+	for (const d of checks) d.check();
+	sideTable = emptyTable();
+	spawnTable = emptyTable();
+}
+
+function cause(site: Node, what: string): EffectCause {
+	return { site, text: what + " at " + site.location.line + ":" + site.location.column };
+}
+
+export function routineBody(decl: Node | null): Node | null {
+	if (decl == null) return null;
+	return match (decl.kind) {
+		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).fnBody,
+		NodeKind.MethodDecl => (decl.data as MethodDeclData).methodBody,
+		NodeKind.ConstructorDecl => (decl.data as ConstructorDeclData).ctorBody,
+		NodeKind.ArrowFunction => (decl.data as ArrowFunctionData).arrowBody,
+		NodeKind.FunctionExpr => (decl.data as FunctionExprData).funcExprBody,
+		_ => null,
+	};
+}
+
+export function receiverOf(call: Node): Node | null {
+	const d = call.data as CallExprData;
+	if (d.callee == null || d.callee.kind != NodeKind.MemberExpr) return null;
+	if (call.flags.has(NodeFlag.ExtStatic)) return null;
+	const sym = call.resolvedSym;
+	if (call.flags.has(NodeFlag.ExtCall)) return (d.callee.data as MemberExprData).object;
+	if (sym != null && (sym.symbolKind == SymbolKind.Method || hasFlag(sym, SymbolFlag.NativeMethod))) {
+		return (d.callee.data as MemberExprData).object;
+	}
+	return null;
+}
+
+function isModuleState(sym: Symbol): boolean {
+	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Property) return false;
+	return hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || sym.staticOwner != null;
+}
+
+function isConstantValue(sym: Symbol, e: Effect): boolean {
+	const t = sym.symbolType;
+	if (hasFlag(sym, SymbolFlag.Mutable) || typeCarriesRef(t)) return false;
+	return e == Effect.SpawnUnsafe || !isAtomicRef(t);
+}
+
+function stateName(sym: Symbol): string {
+	if (sym.staticOwner != null) return "static '" + sym.staticOwner.name + "." + sym.name + "'";
+	return "module-level '" + sym.name + "'";
+}
+
+function unpackDecl(decl: Node | null): Node | null {
+	if (decl != null && decl.kind == NodeKind.DecoratedDecl) return (decl.data as DecoratedDeclData).decoratedNode;
+	return decl;
+}
+
+function isRoutine(sym: Symbol | null): boolean {
+	return sym != null && (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Method);
+}
+
+function through(site: Node, what: string, inner: EffectCause | null): EffectCause | null {
+	if (inner == null) return null;
+	const c = cause(site, what);
+	return { site, text: c.text + ", which " + inner.text };
+}
+
+function memo(sym: Symbol, e: Effect, compute: () => EffectCause | null): EffectCause | null {
+	const t = tableFor(e);
+	const known = t.impure.get(sym);
+	if (known != null) return known;
+	if (t.pure.get(sym) != null) return null;
+	if (t.open.includes(sym)) {
+		assumedOpen = true;
+		return null;
+	}
+	const outer = assumedOpen;
+	assumedOpen = false;
+	t.open.push(sym);
+	const c = compute();
+	t.open.pop();
+	if (c != null) t.impure.set(sym, c);
+	else if (!assumedOpen) t.pure.set(sym, true);
+	assumedOpen = outer || assumedOpen;
+	return c;
+}
+
+export function routineEffect(sym: Symbol, e: Effect): EffectCause | null {
+	return memo(sym, e, (): EffectCause | null => walkEffect(routineBody(unpackDecl(sym.declNode)), e));
+}
+
+export function constructionEffect(classSym: Symbol, e: Effect): EffectCause | null {
+	return memo(classSym, e, (): EffectCause | null => {
+		const decl = unpackDecl(classSym.declNode);
+		if (decl == null || decl.kind != NodeKind.ClassDecl) return null;
+		for (const m of (decl.data as ClassDeclData).classBody) {
+			const member = unpackDecl(m);
+			if (member == null) continue;
+			let c: EffectCause | null = null;
+			if (member.kind == NodeKind.PropertyDecl && !(member.data as PropertyDeclData).propIsStatic) {
+				c = walkEffect((member.data as PropertyDeclData).propInitializer, e);
+			} else if (member.kind == NodeKind.ConstructorDecl) {
+				c = walkEffect((member.data as ConstructorDeclData).ctorBody, e);
+			}
+			if (c != null) return c;
+		}
+		const parent = parentClassSymOf(classSym);
+		if (parent == null) return null;
+		return through(decl, "extends '" + parent.name + "'", constructionEffect(parent, e));
+	});
+}
+
+function dispatchedEffect(call: Node, sym: Symbol, e: Effect): EffectCause | null {
+	const entry = dispatchEntryFor(sym);
+	if (entry == null || entry.overloaded) return null;
+	for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) {
+		const what = "calls '" + entry.methodName + "' as overridden in '" + o.classSym.name + "'";
+		const c = through(call, what, routineEffect(o.sym, e));
+		if (c != null) return c;
+	}
+	return null;
+}
+
+function isSuperCall(callee: Node | null): boolean {
+	return callee != null && callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super";
+}
+
+export function callEffect(call: Node, e: Effect): EffectCause | null {
+	const callee = (call.data as CallExprData).callee;
+	if (isSuperCall(callee)) return null;
+	const sym = call.resolvedSym;
+	if (!isRoutine(sym)) {
+		const valueType: Type | null = callee != null ? callee.nodeType : null;
+		if (e == Effect.SpawnUnsafe && isSendableFunction(valueType)) return null;
+		return cause(call, "calls a function value");
+	}
+	if (hasFlag(sym!, SymbolFlag.GeneratedOp)) return null;
+	if (routineBody(unpackDecl(sym!.declNode)) == null) {
+		if (e == Effect.SpawnUnsafe || receiverOf(call) != null) return null;
+		return cause(call, "calls the external '" + sym!.name + "'");
+	}
+	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
+		: callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
+	const own = through(call, "calls '" + name + "'", routineEffect(sym!, e));
+	if (own != null) return own;
+	return dispatchedEffect(call, sym!, e);
+}
+
+export function newEffect(newNode: Node, e: Effect): EffectCause | null {
+	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
+	if (classSym == null || classSym.symbolKind != SymbolKind.Class) return null;
+	return through(newNode, "constructs '" + classSym.name + "'", constructionEffect(classSym, e));
+}
+
+function useEffect(node: Node, e: Effect): EffectCause | null {
+	const sym = node.resolvedSym;
+	if (sym == null) return null;
+	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
+	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
+	return null;
+}
+
+export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
+	if (node == null) return null;
+	const here: EffectCause | null = match (node.kind) {
+		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
+		NodeKind.CallExpr => callEffect(node, e),
+		NodeKind.NewExpr => newEffect(node, e),
+		_ => null,
+	};
+	if (here != null) return here;
+	const found: (EffectCause | null)[] = [null];
+	forEachChild(node, (child: Node): void => {
+		if (found[0] == null) found[0] = walkEffect(child, e);
+	});
+	return found[0];
+}

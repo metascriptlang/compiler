@@ -30,7 +30,8 @@ import { forEachChild } from "../ast/visitor";
 import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
-import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer, receiverOf } from "../checker/varPartitions";
+import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
+import { receiverOf } from "../checker/effects";
 
 // ===== VarFlag (per-variable analysis flags) =====
 

@@ -33,6 +33,7 @@ import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseName
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
+import { runDeferredEffectChecks } from "./effects";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, refuseBareAsyncReturn, formatTypeBrief, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
@@ -4171,6 +4172,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
+	runDeferredEffectChecks();
 	checkViewBorrows(ctx, program);
 	checkPointerEscapes(ctx, program);
 	// Register this module's ctx so later cross-module generic instantiation can

@@ -7,6 +7,7 @@ import {
 	ArrowFunctionData, FunctionExprData, TestDeclData, ProgramData, ReturnStmtData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { receiverOf, routineBody } from "./effects";
 import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -422,18 +423,6 @@ function effectKeys(available: HandleKey[], s: ResizeSummary): HandleKey[] {
 	return out;
 }
 
-function routineBody(decl: Node | null): Node | null {
-	if (decl == null) return null;
-	return match (decl.kind) {
-		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).fnBody,
-		NodeKind.MethodDecl => (decl.data as MethodDeclData).methodBody,
-		NodeKind.ConstructorDecl => (decl.data as ConstructorDeclData).ctorBody,
-		NodeKind.ArrowFunction => (decl.data as ArrowFunctionData).arrowBody,
-		NodeKind.FunctionExpr => (decl.data as FunctionExprData).funcExprBody,
-		_ => null,
-	};
-}
-
 function isDispatched(sym: Symbol): boolean {
 	const entry = dispatchEntryFor(sym);
 	if (entry == null) return false;
@@ -712,18 +701,6 @@ function rootsOf(node: Node | null, out: Symbol[]): void {
 		},
 		_ => {},
 	};
-}
-
-export function receiverOf(call: Node): Node | null {
-	const d = call.data as CallExprData;
-	if (d.callee == null || d.callee.kind != NodeKind.MemberExpr) return null;
-	if (call.flags.has(NodeFlag.ExtStatic)) return null;
-	const sym = call.resolvedSym;
-	if (call.flags.has(NodeFlag.ExtCall)) return (d.callee.data as MemberExprData).object;
-	if (sym != null && (sym.symbolKind == SymbolKind.Method || hasFlag(sym, SymbolFlag.NativeMethod))) {
-		return (d.callee.data as MemberExprData).object;
-	}
-	return null;
 }
 
 function supplies(t: Type | null): boolean {
