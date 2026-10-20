@@ -13,7 +13,7 @@ import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -1954,7 +1954,7 @@ test "a string a host function stores in the array it builds is held by that arr
 		assert heapArrayLen(vm.arrayHeap, argvArray) == 2;
 		for (let i = 0; i < 2; i++) {
 			const item = heapArrayGet(vm.arrayHeap, argvArray, i);
-			assert vm.arrayHeap.strings.rc[item.intVal] == 1, `${mode} ${i}`;
+			assert vm.arrayHeap.strings.rc[handleIndex(item.intVal)] == 1, `${mode} ${i}`;
 		}
 	}
 }

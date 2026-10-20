@@ -69,7 +69,7 @@ import { forEachChild } from "../../ast/visitor";
 import { int64Bits } from "../../utils/stdBackport";
 import {
 	RaiserValueKind, RaiserValue,
-	RaiserObjectHeap, RaiserArrayHeap,
+	RaiserObjectHeap, RaiserArrayHeap, handleIndex,
 	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserNil, raiserObject, raiserArray,
 	heapAllocObject, heapObjectSetField, heapObjectGetField, heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
 	createStructHeap, createArrayHeap,
@@ -1667,7 +1667,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 }
 
 function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
-	const obj = objHeap.objects[handle];
+	const obj = objHeap.objects[handleIndex(handle)];
 	const record = materialType(shape);
 	const keys: string[] = [];
 	const values: Node[] = [];
