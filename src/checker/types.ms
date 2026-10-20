@@ -527,8 +527,10 @@ export function createTypeRef(name: string): Type {
 export function nullableUnionOf(members: Type[]): Type {
 	let sawNull = false;
 	const parts: Type[] = [];
-	for (const m of members) {
-		if (m == null) continue;
+	for (const member of members) {
+		if (member == null) continue;
+		const nested = nestedUnionOf(member);
+		const m = nested != null ? nested : member;
 		if (m.kind == TypeKind.Null) { sawNull = true; continue; }
 		if (isMaybeType(m) && m.typeReturn != null) {
 			sawNull = true;
@@ -590,20 +592,30 @@ export function createUnionInOrder(types: Type[]): Type {
 	return buildUnion(types, false);
 }
 
+function nestedUnionOf(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind == TypeKind.Union) return t;
+	if (t.kind != TypeKind.GenericInstance || !aliasesUnion(t)) return null;
+	instantiateGenericBody(t, genericParamsOf(t));
+	const seen = peelTransparentInstance(t);
+	return seen.kind == TypeKind.Union ? seen : null;
+}
+
 function buildUnion(types: Type[], canonical: boolean): Type {
 	// Flatten nested unions — `Union(Null, Union(A, B))` becomes `Union(Null, A, B)`.
 	// Without flattening, downstream shape checks miss the canonical form and
 	// codegen falls back to a literal tagged union.
 	let needsFlatten = false;
 	for (const ut of types) {
-		if (ut != null && ut.kind == TypeKind.Union) { needsFlatten = true; break; }
+		if (nestedUnionOf(ut) != null) { needsFlatten = true; break; }
 	}
 	let flat: Type[] = types;
 	if (needsFlatten) {
 		flat = [];
 		for (const ut of types) {
-			if (ut != null && ut.kind == TypeKind.Union && ut.typeChildren != null) {
-				for (const inner of ut.typeChildren) {
+			const nested = nestedUnionOf(ut);
+			if (nested != null && nested.typeChildren != null) {
+				for (const inner of nested.typeChildren) {
 					if (inner != null) flat.push(inner);
 				}
 			} else if (ut != null) {
@@ -646,9 +658,9 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		let metaSrc: Type | null = null;
 		let metaCount = 0;
 		for (const ut of types) {
-			if (ut != null && ut.kind == TypeKind.Union
-				&& ut.typeNames != null && ut.typeNames.length >= 2) {
-				metaSrc = ut;
+			const nested = nestedUnionOf(ut);
+			if (nested != null && nested.typeNames != null && nested.typeNames.length >= 2) {
+				metaSrc = nested;
 				metaCount += 1;
 			}
 		}
@@ -1258,13 +1270,22 @@ export function matchUnionBehindInstance(t: Type): Type {
 	instantiateGenericBody(t, genericParamsOf(t));
 	if (t.typeReturn == null) return t;
 	const u = peelToStructOrUnion(t);
-	return isDiscriminatedUnion(u) ? u! : t;
+	return u != null && u.kind == TypeKind.Union ? u : t;
 }
 
 // A generic instantiation whose body has no nominal Struct/Union carries no
 // identity of its own: `type Brand<T> = T` means `Brand<number>` IS number.
 // Reference parity: ccgtypes.nim `irrelevantForBackend` + getSimpleTypeDesc
 // `of tyGenericInst: skipModifier typ`.
+function isUnionAlias(nominal: Type | null): boolean {
+	return nominal != null && nominal.kind == TypeKind.Union && !isDiscriminatedUnion(nominal)
+		&& nominal.sym != null && nominal.sym.symbolKind == SymbolKind.TypeAlias;
+}
+
+function aliasesUnion(gi: Type): boolean {
+	return isUnionAlias(peelToStructOrUnion(gi.typeExtra));
+}
+
 export function peelTransparentInstance(t: Type): Type {
 	let cur: Type = t;
 	let _g = 0;
@@ -1275,6 +1296,8 @@ export function peelTransparentInstance(t: Type): Type {
 		if (cur.typeReturn == null) return cur;
 		if (cur.typeExtra != null && cur.typeExtra.kind == TypeKind.Distinct) return cur;
 		const nominal = peelToStructOrUnion(cur.typeExtra);
+		if (aliasesUnion(cur)
+			&& ((cur.typeReturn.kind == TypeKind.Union && hasTypeIdentity(cur.typeReturn)) || isMaybeType(cur.typeReturn))) return cur.typeReturn;
 		if (nominal != null
 			&& (nominal.kind == TypeKind.Struct || nominal.kind == TypeKind.Union)) return cur;
 		cur = cur.typeReturn;
@@ -2163,6 +2186,20 @@ function bodyWouldShareTheDeclaration(base: Type, names: string[], args: Type[])
 // GenericInstance body. Uses explicit param names from the parser's generic declaration
 // store. Produces a fully concrete body
 // stored in typeReturn for direct field access — no lazy substitution at access time.
+const _instancesBuilding: Type[] = [];
+
+function instanceBeingBuilt(gi: Type): Type | null {
+	for (const building of _instancesBuilding) {
+		if (building.typeExtra != gi.typeExtra || building.typeChildren.length != gi.typeChildren.length) continue;
+		let same = true;
+		for (let i = 0; i < gi.typeChildren.length; i += 1) {
+			if (typeKey(building.typeChildren[i]) != typeKey(gi.typeChildren[i])) same = false;
+		}
+		if (same) return building;
+	}
+	return null;
+}
+
 export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	if (gi.kind != TypeKind.GenericInstance) return;
 	if (gi.typeReturn != null) return;
@@ -2184,8 +2221,12 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 		args.push(gi.typeChildren[pi]);
 		pi = pi + 1;
 	}
+	const tracked = !_queryCachesReadOnly;
+	if (tracked) _instancesBuilding.push(gi);
 	const body = substituteAllParams(innerBase, names, args);
+	if (tracked) _instancesBuilding.pop();
 	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
+	if (body != innerBase && body.kind == TypeKind.Union && isUnionAlias(innerBase)) body.typeInst = gi;
 	// Re-wrap in Ref if the base was Ref<Struct>
 	gi.typeReturn = isRefWrapped ? createRef(body) : body;
 	_instantiatedBodies = _instantiatedBodies + 1;
@@ -2943,13 +2984,14 @@ export function spelled(t: Type): Type {
 }
 
 export function hasTypeIdentity(t: Type): boolean {
-	return t.sym != null || t.typeFlags.has(TypeFlag.Spelled)
+	return t.sym != null || t.typeInst != null || t.typeFlags.has(TypeFlag.Spelled)
 		|| (t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden));
 }
 
 export function nominalTypeKey(t: Type): string {
 	const sym = t.sym;
 	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
+	if (t.typeInst != null) return typeKey(t.typeInst);
 	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
 	return t.typeName;
 }
@@ -3665,6 +3707,11 @@ function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Curs
 // Reference parity (instCopyType → newSons + dest[i] = src[i]):
 // Copy type with independent arrays. Children copied via push(null) + indexed
 // assignment so DRC generates =copy (incref) in C. JS gets independence from push.
+function nameInstanceBody(gi: Type, from: Type): void {
+	const body = gi.typeReturn;
+	if (body != null && body.kind == TypeKind.Union && body != from.typeReturn && from.typeReturn != null && from.typeReturn.typeInst != null) body.typeInst = gi;
+}
+
 function copyTypeForSubst(t: Type): Type {
 	const result = emptyType();
 	result.kind = t.kind;
@@ -3805,6 +3852,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				substituteChildrenInPlace(gi, paramName, concrete, active);
 				if (gi.typeReturn != null) {
 					gi.typeReturn = substituteTypeInner(gi.typeReturn, paramName, concrete, active);
+					nameInstanceBody(gi, t);
 				}
 				return gi;
 			},
@@ -3893,10 +3941,13 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				// substituteTypeInner (walking it cost ~20× compile time).
 				const gi = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(gi, names, concretes, active);
+				const building = instanceBeingBuilt(gi);
+				if (building != null) return building;
 				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
 					gi.typeReturn = null as unknown as Type;
 				} else if (gi.typeReturn != null) {
 					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, names, concretes, active);
+					nameInstanceBody(gi, t);
 				}
 				return gi;
 			},
@@ -4651,6 +4702,7 @@ export function typeDisplayName(t: Type | null): string {
 }
 function typeDisplayNameInner(t: Type | null): string {
 	if (t == null) return "<null>";
+	if (t.typeInst != null) return typeDisplayName(t.typeInst);
 	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);

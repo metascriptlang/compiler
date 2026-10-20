@@ -290,15 +290,6 @@ static inline void msFutureFailShared(void* fp, void* err) {
 	msFutureFail(fp, err);
 }
 
-/* The actor chain's source completes on a worker: moving its error keeps every
- * count of it on one thread (I17); a shared count would be dropped by two. */
-static inline void msFutureFailTaken(void* fp, msFutureBase* src) {
-	if (atomic_load_explicit(&((msFutureBase*)fp)->finished, memory_order_acquire)) return;
-	void* err = src->error;
-	src->error = NULL;
-	msFutureFail(fp, err);
-}
-
 /* Cancel a pending future — clears callbacks without firing, marks finished+cancelled. */
 static inline void msFutureCancel(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
@@ -404,75 +395,6 @@ static inline void msFutureComplete(void* fp, void* val) {
 	atomic_store_explicit(&f->base.finished, true, memory_order_release);
 	msFutureFireCallbacks(&f->base);
 }
-
-/* ===== Phase 5: Future Chaining (actor suspension) ===== */
-
-/* Chain src → dst: when src completes, copy its result into dst and fire dst's callbacks.
- * Used by actor dispatch to pipe async _impl's $retFut into CALL reply future.
- *
- * Generic untyped chain: used by combinators and as a fallback for struct returns.
- * Reads src as msFuture_ptr.value (8 bytes). Correct for ptr/double/int32/bool
- * (bit-level equivalent on 64-bit), incorrect for msString/structs > 8 bytes.
- * For typed chaining (correct for any T), use msFutureChain_<T> variants below. */
-typedef struct { void* src; void* dst; } msFutureChainPair;
-
-static inline void msFutureChainCb(void* raw, ...) {
-    msFutureChainPair* pair = (msFutureChainPair*)raw;
-    msFutureBase* src = (msFutureBase*)pair->src;
-    if (src->failed) {
-        msFutureFailTaken(pair->dst, src);
-    } else {
-        void* val = ((msFuture*)pair->src)->value;
-        msFutureComplete(pair->dst, val);
-    }
-    free(pair);
-}
-
-static inline void msFutureChain(void* src, void* dst) {
-    if (src == NULL || dst == NULL) return;
-    msFutureChainPair* pair = (msFutureChainPair*)malloc(sizeof(msFutureChainPair));
-    pair->src = src;
-    pair->dst = dst;
-    msFutureAddCallback(src, (msClosure){
-        .fn = (msClosureFn)msFutureChainCb,
-        .env = (void*)pair
-    });
-}
-
-/* ===== Typed Future Chain (per-T) =====
- * Reads src as msFuture_<T>* → T, writes dst as msFuture_<T>* via msFutureCompleteT.
- * Correct for ANY sizeof(T) up to MS_FUTURE_VALUE_MAX_SIZE (16 bytes).
- * Selected by actorLower based on the method's declared return type. */
-
-#define MS_DEFINE_FUTURE_CHAIN(name, fut_type) \
-static inline void name##_cb(void* raw, ...) { \
-    msFutureChainPair* pair = (msFutureChainPair*)raw; \
-    msFutureBase* srcBase = (msFutureBase*)pair->src; \
-    if (srcBase->failed) { \
-        msFutureFailTaken(pair->dst, srcBase); \
-    } else { \
-        fut_type* srcT = (fut_type*)pair->src; \
-        fut_type* dstT = (fut_type*)pair->dst; \
-        msFutureCompleteT(dstT, srcT->value); \
-    } \
-    free(pair); \
-} \
-static inline void name(void* src, void* dst) { \
-    if (src == NULL || dst == NULL) return; \
-    msFutureChainPair* pair = (msFutureChainPair*)malloc(sizeof(msFutureChainPair)); \
-    pair->src = src; \
-    pair->dst = dst; \
-    msFutureAddCallback(src, (msClosure){ \
-        .fn = (msClosureFn)name##_cb, \
-        .env = (void*)pair \
-    }); \
-}
-
-MS_DEFINE_FUTURE_CHAIN(msFutureChain_double, msFuture_double)
-MS_DEFINE_FUTURE_CHAIN(msFutureChain_int32, msFuture_int32)
-MS_DEFINE_FUTURE_CHAIN(msFutureChain_int64, msFuture_int64)
-MS_DEFINE_FUTURE_CHAIN(msFutureChain_bool, msFuture_bool)
-MS_DEFINE_FUTURE_CHAIN(msFutureChain_ptr, msFuture_ptr)
 
 /* ===== Error Re-raising (Standard reference read parity) ===== */
 

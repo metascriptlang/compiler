@@ -2054,6 +2054,13 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		const pt = resolveAnnotation(parentExpr, ctx, node.location.line, node.location.column);
 		parentTypes.push(pt);
 	}
+	const baseExprs: Node[] = [];
+	for (let i = 0; i < parentTypes.length; i += 1) {
+		const base = createNodeAt(NodeKind.Identifier, { name: d.interfaceExtends[i] } as IdentifierData, node.location);
+		base.nodeType = parentTypes[i];
+		baseExprs.push(base);
+	}
+	node.baseExprs = baseExprs;
 
 	if (hasGenerics) {
 		closeScope(ctx.table);
@@ -2913,7 +2920,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		for (let i = 0; i < fields.length; i += 1) {
 			body.push(createNodeAt(NodeKind.PropertyDecl, { propName: fields[i], propType: types[i], propIsStatic: false, propIsReadonly: false, propVisibility: "", propInitializer: null as unknown as Node }, zl));
 		}
-		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
+		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl, classImplements: [] }, zl);
 	} else {
 		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}

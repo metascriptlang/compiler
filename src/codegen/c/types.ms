@@ -46,6 +46,7 @@ export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<Che
 	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(t.sym, typeName) : typeName;
 	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
+	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
 	if (named && t.sym != null) return mangledTypeName(t.sym, typeName);
 	if (named) return resolvedTypeCName(t, cc != null);
 	return typeName;
@@ -376,6 +377,7 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0], open) : "varargs:empty",
 		TypeKind.Union => {
+			if (t.typeInst != null) return anonFieldKey(t.typeInst, open);
 			if (t.typeName.length > 0) return "union:" + structKeyIdentity(t);
 			let k = "union(";
 			let i = 0;
@@ -589,6 +591,8 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Var => { return "var:" + typeKey(t.typeReturn); },
 		TypeKind.Borrow => { return "borrow:" + typeKey(t.typeReturn); },
 		TypeKind.GenericInstance => {
+			const seen = peelTransparentInstance(t);
+			if (seen != t && seen.kind == TypeKind.Union && seen.typeInst == null) return typeKey(seen);
 			let giKey = `ginst:${monoInstanceName(t)}`;
 			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKey(arg)}`;
 			return giKey;
@@ -596,6 +600,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.TypeReference => { return "typeref:" + nominalTypeKey(t); },
 		TypeKind.Distinct => { return "distinct:" + nominalTypeKey(t); },
 		TypeKind.Union => {
+			if (t.typeInst != null) return typeKey(t.typeInst);
 			if (t.typeName.length > 0) {
 				return "union:" + structKeyIdentity(t);
 			} else {
@@ -1288,6 +1293,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// The null pointer is the natural sentinel — no Maybe wrapper needed.
 			const refMember = unwrapRefNullUnion(t);
 			if (refMember != null) return getTypeDesc(g, refMember);
+			if (t.typeInst != null) return genInstanceUnion(g, t.typeInst, t);
 			return genUnionType(g, t);
 		},
 		TypeKind.Tuple => genTupleType(g, t),
@@ -1316,6 +1322,10 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// `type UserId = distinct number` case handled above.
 			const instRepr = distinctInstanceRepr(t);
 			if (instRepr != null) return getTypeDesc(g, instRepr);
+			const sharedBody = t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
+			if (sharedBody != null && sharedBody.kind == TypeKind.Union && sharedBody == peelToStructOrUnion(t.typeExtra)) return getTypeDesc(g, sharedBody);
+			const instBody: Type | null = genericParamsOf(t) == "" && t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
+			if (instBody != null && instBody.kind == TypeKind.Union) return genInstanceUnion(g, t, instBody);
 			const instName = monoInstanceName(t);
 			const cacheKey = `object:${instName}`;
 			const cached = typeCacheGet(g.typeCache, cacheKey);
@@ -1325,20 +1335,12 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			// Peel Ref/GenericInstance to reach the underlying Struct/Union body
 			// (e.g. `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union).
 			const baseType: Type | null = peelToStructOrUnion(t.typeExtra);
-			const instBody: Type | null = genericParamsOf(t) == "" && t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : null;
 			if (instBody != null && instBody.kind == TypeKind.Struct) {
 				const bodyNames: string[] = [];
 				for (const n of instBody.typeNames) bodyNames.push(n);
 				const bodyChildren: Type[] = [];
 				for (const c of instBody.typeChildren) bodyChildren.push(c);
 				return genObjectType(g, spelled(createStruct(instName, bodyNames, bodyChildren, isStructType(instBody))));
-			}
-			if (instBody != null && instBody.kind == TypeKind.Union) {
-				const renamed = emptyType();
-				assignType(renamed, instBody);
-				renamed.typeName = instName;
-				spelled(renamed);
-				return genUnionType(g, renamed);
 			}
 			if (baseType != null && baseType.kind == TypeKind.Struct) {
 				// Substitute generic params in fields with concrete type args
@@ -1512,6 +1514,19 @@ function layoutAssert(g: CGen, t: Type, cType: string): string {
 // Standard reference pattern: union variant structs + wrapper struct with anonymous union.
 // Each variant Object type in typeChildren gets its own named struct.
 // The `as` cast maps to .vN member access at the codegen level.
+
+function genInstanceUnion(g: CGen, gi: Type, body: Type): string {
+	const instName = monoInstanceName(gi);
+	const cacheKey = `object:${instName}`;
+	const cached = typeCacheGet(g.typeCache, cacheKey);
+	if (cached != "") return cached;
+	typeCacheSet(g.typeCache, cacheKey, instName);
+	const renamed = emptyType();
+	assignType(renamed, body);
+	renamed.typeName = instName;
+	spelled(renamed);
+	return genUnionType(g, renamed);
+}
 
 function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);

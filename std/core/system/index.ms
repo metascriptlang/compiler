@@ -880,25 +880,22 @@ when (mscDeclaresRuntime) {
 	extern function msHcrVariableStorage(cell: Ptr<void>): Ptr<void>;
 
 	@compilerFunc
-	extern function msFutureChain(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainDouble(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_double(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainInt32(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_int32(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainInt64(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_int64(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainBool(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_bool(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainString(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msFutureChain_msString(src: Ptr<void>, dst: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msFutureChain_ptr(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msMsgReplyChainPtr(src: Ptr<void>, dst: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msFutureThen_double(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;

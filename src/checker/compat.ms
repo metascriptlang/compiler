@@ -399,6 +399,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		target = target.typeChildren[0];
 	}
 
+	if (source.kind == TypeKind.GenericInstance && target.kind == TypeKind.GenericInstance && sameType(source, target)) return true;
 	source = peelTransparentInstance(source);
 	target = peelTransparentInstance(target);
 	if (isReadonlyView(source) && !isReadonlyView(target)

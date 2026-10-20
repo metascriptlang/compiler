@@ -23,10 +23,11 @@ export class JSHelpers {
 	keyNames: string[];
 	keyRuntime: boolean;
 	classNameRuntime: boolean;
+	actorRuntime: boolean;
 }
 
 export function createJSHelpers(): JSHelpers {
-	return { copyKeys: [], copyNames: [], assignKeys: [], assignNames: [], keyKeys: [], keyNames: [], keyRuntime: false, classNameRuntime: false };
+	return { copyKeys: [], copyNames: [], assignKeys: [], assignNames: [], keyKeys: [], keyNames: [], keyRuntime: false, classNameRuntime: false, actorRuntime: false };
 }
 
 export class JSGenerator {

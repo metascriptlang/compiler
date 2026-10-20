@@ -208,7 +208,12 @@ static void* msPoolWorkerLoop(void* arg) {
 		/* Poll local actors (opportunistic between spawn tasks).
 		 * If actor work was found, loop back immediately to check for more
 		 * (actor re-enqueue may have added new work during processing). */
-		if (msPoolActorPollFn != NULL && msPoolActorPollFn()) continue;
+		if (msPoolActorPollFn != NULL) {
+			atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
+			bool polled = msPoolActorPollFn();
+			atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);
+			if (polled) continue;
+		}
 	}
 #ifdef _WIN32
 	return 0;

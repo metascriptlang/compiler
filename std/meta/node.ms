@@ -135,6 +135,7 @@ export enum AttachedOp {
 //                    null = absent). Populated by destructorLifting; see setAttachedOp /
 //                    getAttachedOp in src/checker/types.ms.
 //   sym            — back-pointer to the declaring Symbol (Class/Interface/Enum decls).
+//   typeInst       — a union built as a generic instance's body: that instance, which names it.
 export class Type {
 	kind: TypeKind;
 	typeName: string;
@@ -147,6 +148,7 @@ export class Type {
 	callConv: CallingConvention;
 	attachedOps: (Symbol | null)[];
 	sym: Symbol | null;
+	typeInst: Type | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;
 }
@@ -485,7 +487,7 @@ export type NodeData =
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // InterfaceDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // StructDecl
-	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
+	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] } // ConstructorDecl
@@ -626,6 +628,7 @@ export class Node {
 	comments: Token[]; // Added for comment preservation
 	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
+	baseExprs: Node[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	paramSyms: Symbol[] | null;
 	typeArg: string; // Use site: explicit generic args ("Person" from parse<Person>()); class/interface/struct/actor/extern decl: its generic params ("K,V")
@@ -713,7 +716,7 @@ export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsD
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
 export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
-export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
+export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] };
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
@@ -779,6 +782,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		comments: [],
 		typeExpr: null,
 		typeExprs: null,
+		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,
 		typeArg: "",
@@ -920,6 +924,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 		comments: [],
 		typeExpr: null,
 		typeExprs: null,
+		baseExprs: null,
 		paramLocations: null,
 		paramSyms: null,
 		typeArg: "",

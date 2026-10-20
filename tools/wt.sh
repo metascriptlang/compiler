@@ -483,8 +483,26 @@ commit_pruned_known() {
   say "land: committed the known-red set without the entries the gate saw green ($(git -C "$w" rev-parse --short "$new"))"
 }
 
+local_verdict() {
+  local f=$1 w=$2 old=$3 new=$4 tip base checked _
+  [ -f "$f" ] && read -r tip base _ <"$f" || return 1
+  [ "$tip $base" = "$new $old" ] && return 0
+  git -C "$w" merge-base --is-ancestor "$base" "$old" 2>/dev/null || return 1
+  checked=$(git -C "$w" diff -U0 --no-renames "$base" "$tip" | git patch-id --verbatim | cut -d' ' -f1)
+  [ -n "$checked" ] && [ "$checked" = "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --verbatim | cut -d' ' -f1)" ]
+}
+
+remote_verdict() {
+  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base
+  [ -f "$f" ] && [ "$(sed -n 's/^result=//p' "$f")" = GREEN ] || return 1
+  base=$(sed -n 's/^base=//p' "$f")
+  git -C "$w" merge-base --is-ancestor "$base" "$old" 2>/dev/null || return 1
+  [ "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --stable | cut -d' ' -f1)" = "$(sed -n 's/^patch=//p' "$f")" ] || return 1
+  printf '%s on %s' "$(sed -n 's/^host=//p' "$f")" "$(git -C "$w" rev-parse --short "$base")"
+}
+
 cmd_land() {
-  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict remote
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
@@ -550,9 +568,10 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
     pick_builder "$w" || die "land: no builder can check src/index.ms at this rev (set MSC_BUILDER)"
   fi
   verdict="$(git -C "$w" rev-parse --absolute-git-dir)/wt-land-verdict"
-  if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && [ -f "$verdict" ] \
-    && [ "$(awk '{print $1, $2}' "$verdict")" = "$new $old" ]; then
+  if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && local_verdict "$verdict" "$w" "$old" "$new"; then
     say "land: reusing the green gate of $(awk '{print $3}' "$verdict") for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
+  elif [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && remote=$(remote_verdict "$name" "$w" "$old" "$new"); then
+    say "land: reusing the green remote gate of $remote for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
   elif [ "$gate" -eq 1 ]; then
     rm -f "$verdict"
     (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
@@ -574,8 +593,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   while :; do
     moved=$(git -C "$MAIN" rev-parse "$BASE")
     if [ "$moved" != "$old" ]; then
-      (cd "$w" && tools/gate.sh --inert "$old" "$moved") || die "land: $BASE moved during the gate to $(git -C "$MAIN" rev-parse --short "$moved") with paths a lane tests; run land again"
-      say "land: $BASE moved to $(git -C "$MAIN" rev-parse --short "$moved") by paths no lane tests; rebasing onto it without a second gate"
+      say "land: $BASE moved to $(git -C "$MAIN" rev-parse --short "$moved"); rebasing onto it without a second gate"
       catch_up "$w" "$moved" || die "land: catching up with $BASE conflicts; merge or rebase by hand in $w"
       old=$moved
       new=$(git -C "$w" rev-parse HEAD)

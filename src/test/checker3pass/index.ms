@@ -55,4 +55,7 @@ import "./scenarios/methodOverrideSignature";
 import "./scenarios/functionReturnRepr";
 import "./scenarios/narrowedWriteTarget";
 import "./scenarios/nullableLiteralUnionTarget";
+import "./scenarios/literalEqualityNarrowsNullable";
 import "./scenarios/objectOnlyAfterExtends";
+import "./scenarios/objectViewMissingField";
+import "./scenarios/distinctClassFromValue";
