@@ -39,11 +39,11 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
-	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, raiserArray,
-	heapAllocObject, heapObjectSetField, raiserObject, raiserInt,
+	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
+	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap,
 } from "../../raiser/value";
 import {
-	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
+	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized, setActiveHostHeaps,
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
 } from "../../raiser/hostRegistry";
 import {
@@ -308,11 +308,11 @@ function _bridgeMsProcessArgv(args: RaiserValue[]): RaiserValue {
 	const program = activeProgramArgv();
 	if (program != null) {
 		for (const a of program) {
-			heapArrayPush(heap, h, boxString(a));
+			heapArrayPush(heap, h, heapAllocStoredString(heap, a));
 		}
 	} else {
 		for (const a of argv) {
-			heapArrayPush(heap, h, boxString(a));
+			heapArrayPush(heap, h, heapAllocStoredString(heap, a));
 		}
 	}
 	return raiserArray(h);
@@ -666,7 +666,7 @@ function _bridgeMsStringSplit(args: RaiserValue[]): RaiserValue {
 	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
 	const h = heapAllocArray(arrHeap);
 	for (let i = 0; i < parts.length; i = i + 1) {
-		heapArrayPush(arrHeap, h, boxString(parts[i]));
+		heapArrayPush(arrHeap, h, heapAllocStoredString(arrHeap, parts[i]));
 	}
 	return raiserArray(h);
 }
@@ -858,7 +858,7 @@ function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
 	const tag = heapObjectGetField(objHeap, u.intVal, "$tag").intVal;
 	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
 		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
-		raiseFromHost(unboxString(args[2]) + label.strVal + "'", true);
+		raiseFromHost(unboxString(args[2]) + unboxString(label) + "'", true);
 		return raiserNil();
 	}
 	return heapObjectGetField(objHeap, u.intVal, "$v");
@@ -904,6 +904,11 @@ function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
 	const handle = heapAllocObject(objHeap);
 	heapObjectSetField(objHeap, handle, "$tag", args[1]);
 	heapObjectSetField(objHeap, handle, "$v", args[0]);
+	const arrHeap = activeHostArrayHeap();
+	if (arrHeap != null) {
+		rcIncref(arrHeap, objHeap, args[0]);
+		rcIncref(arrHeap, objHeap, args[1]);
+	}
 	return raiserObject(handle);
 }
 
@@ -1048,7 +1053,7 @@ export function ensureHostTableLoaded(): void {
 
 // --- Tests ---
 
-import { raiserInt, raiserFloat, raiserString, RaiserValueKind } from "../../raiser/value";
+import { raiserInt, raiserFloat, raiserConstString, RaiserValueKind } from "../../raiser/value";
 import { lookupHostFn, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
 import { int64Bits } from "../../utils/stdBackport";
 
@@ -1072,12 +1077,13 @@ test "ensureHostTableLoaded registers process accessors" {
 
 test "string padding bridges preserve native semantics" {
 	ensureHostTableLoaded();
+	setActiveHostHeaps(createStructHeap(), createArrayHeap());
 	assert lookupHostFn("msStringPadStart") != null;
 	assert lookupHostFn("msStringPadEnd") != null;
-	assert _bridgeMsStringPadStart([boxString("42"), boxInt(6), boxString("0")]).strVal == "000042";
-	assert _bridgeMsStringPadEnd([boxString("42"), boxInt(5), boxString("ab")]).strVal == "42aba";
-	assert _bridgeMsStringPadStart([boxString("é"), boxInt(3), boxString("x")]).strVal == "xxé";
-	assert _bridgeMsStringPadEnd([boxString("same"), boxInt(7), boxString("")]).strVal == "same";
+	assert unboxString(_bridgeMsStringPadStart([boxString("42"), boxInt(6), boxString("0")])) == "000042";
+	assert unboxString(_bridgeMsStringPadEnd([boxString("42"), boxInt(5), boxString("ab")])) == "42aba";
+	assert unboxString(_bridgeMsStringPadStart([boxString("é"), boxInt(3), boxString("x")])) == "xxé";
+	assert unboxString(_bridgeMsStringPadEnd([boxString("same"), boxInt(7), boxString("")])) == "same";
 }
 
 test "the enum range bridge raises for a float outside the range without converting it" {
@@ -1117,9 +1123,9 @@ test "bridgeMsFsRealPath resolves the working directory to itself" {
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsRealPath");
 	assert fn != null;
-	const result = fn([raiserString(".")]);
+	const result = fn([raiserConstString(".")]);
 	assert result.kind == RaiserValueKind.String;
-	assert result.strVal == cwd();
+	assert unboxString(result) == cwd();
 }
 
 test "bridgeMsFsRealPath returns empty for a missing path" {
@@ -1127,9 +1133,9 @@ test "bridgeMsFsRealPath returns empty for a missing path" {
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsRealPath");
 	assert fn != null;
-	const result = fn([raiserString("/tmp/__nope_xyz__")]);
+	const result = fn([raiserConstString("/tmp/__nope_xyz__")]);
 	assert result.kind == RaiserValueKind.String;
-	assert result.strVal == "";
+	assert unboxString(result) == "";
 }
 
 test "bridgeMsFsExists returns 1 for present file" {
@@ -1138,7 +1144,7 @@ test "bridgeMsFsExists returns 1 for present file" {
 	const fn = lookupHostFn("msFsExists");
 	assert fn != null;
 	// README.md is in the project root, where tests run from.
-	const result = fn([raiserString("README.md")]);
+	const result = fn([raiserConstString("README.md")]);
 	assert result.kind == RaiserValueKind.Int;
 	assert result.intVal == 1;
 }
@@ -1147,7 +1153,7 @@ test "bridgeMsFsExists returns 0 for missing file" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsExists");
-	const result = fn([raiserString("/tmp/__definitely_does_not_exist_xyz123__")]);
+	const result = fn([raiserConstString("/tmp/__definitely_does_not_exist_xyz123__")]);
 	assert result.kind == RaiserValueKind.Int;
 	assert result.intVal == 0;
 }
@@ -1158,7 +1164,7 @@ test "bridgeMsProcessCwd returns non-empty string" {
 	const fn = lookupHostFn("msProcessCwd");
 	const result = fn([]);
 	assert result.kind == RaiserValueKind.String;
-	assert result.strVal.length > 0;
+	assert unboxString(result).length > 0;
 }
 
 test "bridgeMsProcessPlatform returns known platform" {
@@ -1168,16 +1174,16 @@ test "bridgeMsProcessPlatform returns known platform" {
 	const result = fn([]);
 	assert result.kind == RaiserValueKind.String;
 	// Platform is one of darwin/linux/windows in practice.
-	assert result.strVal.length > 0;
+	assert unboxString(result).length > 0;
 }
 
 test "bridgeMsProcessGetEnv missing var returns empty" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msProcessGetEnv");
-	const result = fn([raiserString("__NEVER_SET_VAR_QWXTY__")]);
+	const result = fn([raiserConstString("__NEVER_SET_VAR_QWXTY__")]);
 	assert result.kind == RaiserValueKind.String;
-	assert result.strVal == "";
+	assert unboxString(result) == "";
 }
 
 // --- Phase 7 bridges: errno-poll pattern ---
@@ -1187,9 +1193,9 @@ test "bridgeMsFsReadFile present file + errno 0" {
 	ensureHostTableLoaded();
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
-	const r = read([raiserString("README.md")]);
+	const r = read([raiserConstString("README.md")]);
 	assert r.kind == RaiserValueKind.String;
-	assert r.strVal.length > 0;
+	assert unboxString(r).length > 0;
 	const e = errno([]);
 	assert e.intVal == 0;
 }
@@ -1199,8 +1205,8 @@ test "bridgeMsFsReadFile missing file + non-zero errno" {
 	ensureHostTableLoaded();
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
-	const r = read([raiserString("/tmp/__missing_xyz__")]);
-	assert r.strVal == "";
+	const r = read([raiserConstString("/tmp/__missing_xyz__")]);
+	assert unboxString(r) == "";
 	const e = errno([]);
 	assert e.intVal != 0;
 }
@@ -1209,9 +1215,9 @@ test "bridgeMsFsReadDirEntries returns newline-separated entries" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
 	const fn = lookupHostFn("msFsReadDirEntries");
-	const r = fn([raiserString(".")]);
+	const r = fn([raiserConstString(".")]);
 	assert r.kind == RaiserValueKind.String;
-	assert r.strVal.length > 0;
+	assert unboxString(r).length > 0;
 }
 
 test "bridgeMsProcessSpawnSync registered" {
@@ -1241,9 +1247,9 @@ test "I4 regression: msFsReadDirEntries missing path sets errno" {
 	ensureHostTableLoaded();
 	const readDirFn = lookupHostFn("msFsReadDirEntries");
 	const errno = lookupHostFn("msFsLastErrno");
-	const r = readDirFn([raiserString("/tmp/__never_exists_qpqp__")]);
+	const r = readDirFn([raiserConstString("/tmp/__never_exists_qpqp__")]);
 	assert r.kind == RaiserValueKind.String;
-	assert r.strVal == "";
+	assert unboxString(r) == "";
 	// Bug pre-fix: errno would be 0 here, masking failure
 	assert errno([]).intVal != 0;
 }
@@ -1254,7 +1260,7 @@ test "I4 regression: msFsReadDirEntries on file (not dir) sets errno" {
 	ensureHostTableLoaded();
 	const readDirFn = lookupHostFn("msFsReadDirEntries");
 	const errno = lookupHostFn("msFsLastErrno");
-	readDirFn([raiserString("README.md")]);  // path exists but is a file
+	readDirFn([raiserConstString("README.md")]);  // path exists but is a file
 	assert errno([]).intVal != 0;
 }
 
@@ -1263,7 +1269,7 @@ test "I5 regression: bridge state reset clears errno" {
 	ensureHostTableLoaded();
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
-	read([raiserString("/tmp/__missing_yyy__")]);
+	read([raiserConstString("/tmp/__missing_yyy__")]);
 	assert errno([]).intVal != 0;
 	_resetBridgeStateForTests();
 	assert errno([]).intVal == 0;
@@ -1275,9 +1281,9 @@ test "errno cleared after successful read following failed read" {
 	ensureHostTableLoaded();
 	const read = lookupHostFn("msFsReadFile");
 	const errno = lookupHostFn("msFsLastErrno");
-	read([raiserString("/tmp/__missing_first__")]);
+	read([raiserConstString("/tmp/__missing_first__")]);
 	assert errno([]).intVal != 0;
-	read([raiserString("README.md")]);  // success — should clear errno
+	read([raiserConstString("README.md")]);  // success — should clear errno
 	assert errno([]).intVal == 0;
 }
 
@@ -1293,7 +1299,7 @@ test "spawn state preserved across getter calls" {
 	// Initial state after reset
 	assert okFn([]).intVal == 0;
 	assert exitFn([]).intVal == 0;
-	assert stderrFn([]).strVal == "";
+	assert unboxString(stderrFn([])) == "";
 }
 
 // --- .rms closure guard ---

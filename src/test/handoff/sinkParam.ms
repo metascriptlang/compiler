@@ -43,12 +43,11 @@ export function pick(sink: int32): int32 {
 	assert r.ok, r.ok ? "" : r.error;
 }
 
-test "a sink parameter on a function with a body is rejected" {
+test "a sink parameter on a function with a body compiles" {
 	const src = `
 class Pet { hunger: int32 = 3; }
-export function eat(sink p: Pet): int32 { return 1; }
+export function eat(sink p: Pet): int32 { return p.hunger; }
 `;
 	const r = compileToC(src);
-	assert !r.ok;
-	assert r.error.contains("only an extern declaration can take ownership");
+	assert r.ok, r.ok ? "" : r.error;
 }

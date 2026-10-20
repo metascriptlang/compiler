@@ -14,8 +14,8 @@ import { hasGenericParams, classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
-	RaiserValue, RaiserValueKind, raiserNil, raiserString,
-	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle,
+	RaiserValue, RaiserValueKind, raiserNil, raiserConstString,
+	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle, heapStringText,
 	heapArrayGet, heapArrayLen
 } from "../../raiser/value";
 import {
@@ -162,7 +162,7 @@ function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: stri
 		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
 		if (methodIdx < 0) continue;
 		const closureReg = emitClosurePair(s, methodIdx, -1);
-		const methodNameIdx = addConst(s, raiserString(md.methodName));
+		const methodNameIdx = addConst(s, raiserConstString(md.methodName));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
 	}
 }
@@ -182,7 +182,7 @@ function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]):
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
 			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
-			const nameIdx = addConst(s, raiserString(pd.propName));
+			const nameIdx = addConst(s, raiserConstString(pd.propName));
 			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, fieldReg));
 		}
 	}
@@ -800,7 +800,7 @@ test "multiple function calls" {
 
 test "string literal return" {
 	const ctx = evalRaiser("return \"hello\";");
-	assert ctx.lastResult.strVal == "hello";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello";
 }
 
 test "console.log string" {
@@ -810,17 +810,17 @@ test "console.log string" {
 
 test "number toString" {
 	const ctx = evalRaiser("const x = 42; return x.toString();");
-	assert ctx.lastResult.strVal == "42";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "42";
 }
 
 test "bool toString" {
 	const ctx = evalRaiser("const b = true; return b.toString();");
-	assert ctx.lastResult.strVal == "true";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "true";
 }
 
 test "toString in concat" {
 	const ctx = evalRaiser("const x = 7; return \"n=\" + x.toString();");
-	assert ctx.lastResult.strVal == "n=7";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "n=7";
 }
 
 test "true && value" {
@@ -1035,12 +1035,12 @@ test "array in object" {
 
 test "string concat" {
 	const ctx = evalRaiser("return \"hello\" + \" world\";");
-	assert ctx.lastResult.strVal == "hello world";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello world";
 }
 
 test "string concat with variable" {
 	const ctx = evalRaiser("const s = \"hi\"; return s + \"!\";");
-	assert ctx.lastResult.strVal == "hi!";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hi!";
 }
 
 test "string equality true" {
@@ -1060,17 +1060,17 @@ test "string inequality" {
 
 test "string + number coercion" {
 	const ctx = evalRaiser("return \"value: \" + 42;");
-	assert ctx.lastResult.strVal == "value: 42";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "value: 42";
 }
 
 test "function returning string" {
 	const ctx = evalRaiser("function greet(name) { return \"Hello, \" + name; } return greet(\"world\");");
-	assert ctx.lastResult.strVal == "Hello, world";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "Hello, world";
 }
 
 test "multi-concat chain" {
 	const ctx = evalRaiser("return \"a\" + \"b\" + \"c\";");
-	assert ctx.lastResult.strVal == "abc";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "abc";
 }
 
 test "console.log string concat" {
@@ -1165,7 +1165,7 @@ test "+= in loop" {
 
 test "+= string concat" {
 	const ctx = evalRaiser("let s = \"hello\"; s += \" world\"; return s;");
-	assert ctx.lastResult.strVal == "hello world";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello world";
 }
 
 test "enum member access" {
@@ -1220,22 +1220,22 @@ test "empty string .length" {
 
 test "charAt" {
 	const ctx = evalRaiser("return \"hello\".charAt(1);");
-	assert ctx.lastResult.strVal == "e";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "e";
 }
 
 test "charAt variable" {
 	const ctx = evalRaiser("const s = \"world\"; return s.charAt(0);");
-	assert ctx.lastResult.strVal == "w";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "w";
 }
 
 test "slice" {
 	const ctx = evalRaiser("return \"hello world\".slice(0, 5);");
-	assert ctx.lastResult.strVal == "hello";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello";
 }
 
 test "slice variable" {
 	const ctx = evalRaiser("const s = \"abcdef\"; return s.slice(2, 4);");
-	assert ctx.lastResult.strVal == "cd";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "cd";
 }
 
 test "string length in condition" {
@@ -1312,9 +1312,9 @@ test "non-capturing closure pair with -1 sentinel" {
 test "object as return value" {
 	const ctx = evalRaiser("return { root: \"src/main.ms\", target: \"native\" };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
-	const target = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "target");
 	assert target == "native";
 }
 
@@ -1323,9 +1323,9 @@ test "nested object config" {
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const target = heapObjectGetString(ctx.objectHeap, buildHandle, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
-	const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
+	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
 }
 
@@ -1337,36 +1337,36 @@ test "config with array of objects" {
 	assert heapArrayLen(ctx.arrayHeap, arrField.intVal) == 1;
 	const elem = heapArrayGet(ctx.arrayHeap, arrField.intVal, 0);
 	assert elem.kind == RaiserValueKind.Object;
-	const name = heapObjectGetString(ctx.objectHeap, elem.intVal, "name");
+	const name = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, elem.intVal, "name");
 	assert name == "var_hoist";
 }
 
 test "nested config object" {
 	const ctx = evalRaiser("return { root: \"src/main.ms\", build: { target: \"native\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const target = heapObjectGetString(ctx.objectHeap, buildHandle, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
 }
 
 test "export default object" {
 	const ctx = evalRaiser("export default { root: \"src/main.ms\" };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
 }
 
 test "export default nested object" {
 	const ctx = evalRaiser("export default { root: \"app.ms\", build: { target: \"native\", outDir: \"out\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "app.ms";
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
+	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
 }
 
@@ -1375,7 +1375,7 @@ test "real: neon/build.ms" {
 	const ctx = evalRaiser(src);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	// root
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// format.tabWidth
 	const fmtHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "format");
@@ -1390,12 +1390,12 @@ test "real: neon/build.ms" {
 	assert heapArrayLen(ctx.arrayHeap, targets.intVal) == 2;
 	// targets[0].target === "native"
 	const t0 = heapArrayGet(ctx.arrayHeap, targets.intVal, 0);
-	assert heapObjectGetString(ctx.objectHeap, t0.intVal, "target") == "native";
-	assert heapObjectGetString(ctx.objectHeap, t0.intVal, "outDir") == "build/c";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t0.intVal, "target") == "native";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t0.intVal, "outDir") == "build/c";
 	// targets[1].target === "js"
 	const t1 = heapArrayGet(ctx.arrayHeap, targets.intVal, 1);
-	assert heapObjectGetString(ctx.objectHeap, t1.intVal, "target") == "js";
-	assert heapObjectGetString(ctx.objectHeap, t1.intVal, "outDir") == "build/js";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t1.intVal, "target") == "js";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t1.intVal, "outDir") == "build/js";
 }
 
 test "float arithmetic: add" {
@@ -1445,21 +1445,21 @@ test "real: void/build.ms" {
 	const ctx = evalRaiser(src);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	// root
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// build.target
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const target = heapObjectGetString(ctx.objectHeap, buildHandle, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
 	// build.outDir
-	const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
+	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
 	// build.outFile
-	const outFile = heapObjectGetString(ctx.objectHeap, buildHandle, "outFile");
+	const outFile = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outFile");
 	assert outFile == "void";
 	// build.optimize
-	const optimize = heapObjectGetString(ctx.objectHeap, buildHandle, "optimize");
+	const optimize = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "optimize");
 	assert optimize == "debug";
 }
 

@@ -13,13 +13,13 @@ import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
-import { RaiserVM, execModule, createVM, vmReleaseHeaps } from "../../raiser/vm";
-import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
+import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
+import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -446,6 +446,10 @@ function compileForOrc(code: string): RaiserModule {
 // Full pipeline under ORC (gcMode=orc) — returns the VM so heap state is inspectable.
 function evalOrcVM(code: string): RaiserVM {
 	return execModule(compileForOrc(code), "orc");
+}
+
+function evalArenaVM(code: string): RaiserVM {
+	return execModule(compileForOrc(code), "arena");
 }
 
 test "engine: an enum converts to an integer type as its ordinal does, as on C and JS" {
@@ -1106,7 +1110,7 @@ test "existing arithmetic still works" {
 
 test "number toString through full pipeline" {
 	const ctx = evalFull("return (10).toString() + \"-\" + (20).toString();");
-	assert ctx.lastResult.strVal == "10-20";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "10-20";
 }
 
 // Enum member access through the FULL pipeline: the checker rewrites `Color.Green`
@@ -1147,7 +1151,7 @@ test "objects through transform" {
 test "build.ms pattern through transform" {
 	const ctx = evalFull("interface Config { root: string; } function defineConfig(config: Config): Config { return config; } export default defineConfig({ root: \"src/main.ms\" });");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
 }
 
@@ -1267,7 +1271,7 @@ test "a call through a closure parameter calls the closure, not a routine of the
 test "a closure made in a for-of reads the binding of its own iteration" {
 	const ctx = evalFull("function make(): string { const fs: (() => string)[] = []; for (const j of ['a', 'b']) { fs.push((): string => j); } let out = ''; for (const f of fs) { out = out + f(); } return out; } return make();");
 	assert ctx.lastError == "", ctx.lastError;
-	assert ctx.lastResult.strVal == "ab";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "ab";
 }
 
 test "a closure made in a for loop that continues reads the counter of its own iteration" {
@@ -1851,4 +1855,177 @@ test "engine: a branch over more than 32768 instructions keeps its target and a 
 	assert span > 32768, `${span}`;
 	const ctx = evalOrcVM(source);
 	assert ctx.error == "" && ctx.output == "20001 0 20\n", `${ctx.error} ${ctx.output}`;
+}
+
+// --- Strings on the string heap ---
+
+test "orc: strings built and dropped in a loop leave the string heap bounded" {
+	const vm = evalOrcVM("let n = 0; for (let i = 0; i < 300; i++) { const s = `item ${i}` + \"-\" + `${i}`; n = n + s.length; } console.log(`${n}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "3380\n";
+	assert vm.arrayHeap.strings.texts.length < 30;
+	assert heapStringLive(vm.arrayHeap) < 30;
+}
+
+test "orc: strings dropped with their array and overwritten in an object field are released" {
+	const vm = evalOrcVM("let a: string[] = []; const o = { s: \"\" }; for (let i = 0; i < 200; i++) { a.push(`v${i}`); o.s = `f${i}`; } a = []; console.log(o.s);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "f199\n";
+	assert heapStringLive(vm.arrayHeap) < 20;
+}
+
+test "orc: a string written into the register of its only source keeps its value" {
+	const vm = evalOrcVM("let s = \"\"; for (let i = 0; i < 50; i++) { s = s + \"x\"; } console.log(`${s.length}`);"
+		+ " let t = \"abcdefgh\"; while (t.length > 3) { t = t.slice(1); } console.log(t);"
+		+ " const o = { s: \"a\" }; for (let i = 0; i < 3; i++) { o.s = o.s + \"b\"; } console.log(o.s);"
+		+ " const arr = [\"wxyz\", \"k\"]; arr[0] = arr[0].slice(2); arr[1] = arr[1] + arr[1]; console.log(arr[0] + \",\" + arr[1]);"
+		+ " let c = \"q\"; c = c.charAt(0) + c; console.log(c);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "50\nfgh\nabbb\nyz,kk\nqq\n";
+}
+
+test "orc: non-ASCII strings keep their bytes through the string tier" {
+	const vm = evalOrcVM("console.log(\"é\".padStart(4, \"x\")); console.log(\"日本\".padEnd(5, \"·\"));"
+		+ " const m = \"naïve\".padStart(7, \"é\"); console.log(m + \"|\" + `${m.length}`);"
+		+ " for (const p of [\"a\", \"é\", \"日\"]) { console.log(p.padStart(3, \"-\")); }");
+	assert vm.error == "", vm.error;
+	assert vm.output == "xxxé\n日本···\néénaïve|7\n--a\n--é\n--日\n";
+}
+
+test "orc: a string a spawned strand extends leaves the sender's copy unchanged" {
+	const vm = evalOrcVM("const box = { text: \"abc\", tags: [\"é\", \"x\"] };"
+		+ " const f = spawn(() => { let t = box.text; t = t + \"Z\"; let u = box.tags[0]; u = u + \"日\"; return t + u + box.tags[1]; });"
+		+ " const r = await f; console.log(box.text + \"|\" + box.tags[0] + \"|\" + r);"
+		+ " const word = \"né\"; const g = spawn(() => { let w = word; for (let i = 0; i < 3; i++) { w = w + word; } return w; });"
+		+ " console.log((await g) + \"|\" + word);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "abc|é|abcZé日x\nnénénéné|né\n";
+}
+
+test "orc: string equality, ordering and switch are by text, not by handle" {
+	const vm = evalOrcVM("const a = \"ab\" + \"c\"; const b = \"abc\";"
+		+ " console.log(`${a == b} ${a != b} ${a < \"abd\"} ${a <= b} ${a > \"abb\"} ${a >= \"abd\"}`);"
+		+ " function kind(x: string): number { switch (x) { case \"abc\": return 1; case \"é\": return 2; default: return 3; } }"
+		+ " console.log(`${kind(a)} ${kind(\"é\")} ${kind(\"zz\")} ${kind(\"a\" + \"bc\")}`);"
+		+ " const k = [\"x\", \"y\"]; console.log(`${k[0] == \"x\"} ${k[1] == \"x\"}`);"
+		+ " const e = { n: \"x\" + \"y\" }; console.log(`${e.n == \"xy\"} ${e.n < \"xz\"}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "true false true true true false\n1 2 3 1\ntrue false\ntrue true\n";
+}
+
+// --- Run-time strings never enter the process-wide constant table ---
+
+test "arena: strings built and dropped in a loop leave the string heap bounded" {
+	const vm = evalArenaVM("let s = \"\"; let n = 0; for (let i = 0; i < 100000; i++) { s = `k${i}` + \"x\"; n = n + s.length; } console.log(`${n}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "688890\n", vm.output;
+	assert heapStringLive(vm.arrayHeap) < 30, `${heapStringLive(vm.arrayHeap)}`;
+	assert vm.arrayHeap.strings.texts.length < 30, `${vm.arrayHeap.strings.texts.length}`;
+}
+
+const heldByContainer = "const o = { s: `f${1}` }; const a = [`g${2}`];"
+	+ " let t = o.s; t = \"x\" + \"y\"; let u = a[0]; u = \"z\" + \"w\";"
+	+ " console.log(o.s + a[0] + t + u);";
+
+test "orc: a string a container holds survives the register that read it being overwritten" {
+	const vm = evalOrcVM(heldByContainer);
+	assert vm.error == "", vm.error;
+	assert vm.output == "f1g2xyzw\n", vm.output;
+}
+
+test "arena: a string a container holds survives the register that read it being overwritten" {
+	const vm = evalArenaVM(heldByContainer);
+	assert vm.error == "", vm.error;
+	assert vm.output == "f1g2xyzw\n", vm.output;
+}
+
+test "a string a host function stores in the array it builds is held by that array in either gc mode" {
+	ensureHostTableLoaded();
+	const mod = makeTestModule(
+		[raiserABC(RaiserOpcode.CallHost, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
+		[raiserConstString("msProcessArgv")]
+	);
+	for (const mode of ["orc", "arena"]) {
+		const vm = createVM(mod, mode);
+		vm.programArgv = ["a.ms", "b c"];
+		execLoop(vm);
+		assert vm.error == "", vm.error;
+		const argvArray = vm.exitValue.intVal;
+		assert heapArrayLen(vm.arrayHeap, argvArray) == 2;
+		for (let i = 0; i < 2; i++) {
+			const item = heapArrayGet(vm.arrayHeap, argvArray, i);
+			assert vm.arrayHeap.strings.rc[item.intVal] == 1, `${mode} ${i}`;
+		}
+	}
+}
+
+// --- A self-append extends the register's own string in place ---
+
+const selfAppend = "function grow(): number { let s = \"\"; for (let i = 0; i < 20000; i++) { s = s + \"ab\"; } return s.length; }"
+	+ " console.log(grow() == 40000 ? \"ok\" : \"bad\");";
+
+test "orc: appending to a string held once keeps one heap item" {
+	const vm = evalOrcVM(selfAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.arrayHeap.strings.texts.length == 1, `${vm.arrayHeap.strings.texts.length}`;
+}
+
+test "arena: appending to a string held once keeps one heap item" {
+	const vm = evalArenaVM(selfAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.arrayHeap.strings.texts.length == 1, `${vm.arrayHeap.strings.texts.length}`;
+}
+
+const sharedAppend = "function f(): string { let s = \"a\" + `${1}`; const t = s; s = s + \"x\"; s = s + s; const o = { v: s }; s = s + \"y\"; return t + \"|\" + s + \"|\" + o.v; }"
+	+ " console.log(f());";
+
+test "orc: appending to a string another holder shares leaves the holder unchanged" {
+	const vm = evalOrcVM(sharedAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "a1|a1xa1xy|a1xa1x\n", vm.output;
+}
+
+test "arena: appending to a string another holder shares leaves the holder unchanged" {
+	const vm = evalArenaVM(sharedAppend);
+	assert vm.error == "", vm.error;
+	assert vm.output == "a1|a1xa1xy|a1xa1x\n", vm.output;
+}
+
+test "orc: a bare return in a constructor still yields the object" {
+	const vm = evalOrcVM("class Early { f: string = 'none'; constructor(v: string, skip: boolean) { if (skip) return; this.f = v; } }"
+		+ " class Base { tag: string = 'b'; constructor(t: string) { if (t == '') return; this.tag = t; } }"
+		+ " class Kid extends Base { k: number = 0; constructor(t: string, skip: boolean) { super(t); if (skip) return; this.k = 2; } }"
+		+ " class Guarded { n: number = 0; constructor(skip: boolean) { try { if (skip) return; this.n = 1; } finally { this.n = this.n + 10; } } }"
+		+ " const a = new Early('x', true); const b = new Early('y', false); const c = new Kid('', true); const d = new Kid('t', false);"
+		+ " const g = new Guarded(true); const h = new Guarded(false);"
+		+ " console.log(`${a.f} ${b.f} ${c.tag}${c.k} ${d.tag}${d.k} ${g.n} ${h.n}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "none y b0 t2 10 11\n", vm.output;
+}
+
+
+const finallyInFlight = "let log = ''; function note(s: string): void { log = log + s + '|'; } function boom(m: number): void { throw m; }"
+	+ " function ownCatch(): void { try { boom(9); } catch (e) { note('own'); } }"
+	+ " function replaced(): void { try { try { boom(1); } finally { note('f'); boom(2); } } catch (e) { note(String(e as number)); } }"
+	+ " function viaCall(): void { try { try { boom(3); } finally { ownCatch(); } } catch (e) { note(String(e as number)); } }"
+	+ " function sameFrame(): void { try { try { boom(3); } finally { try { boom(9); } catch (e) { note('own'); } } } catch (e) { note(String(e as number)); } }"
+	+ " function returns(): number { try { return 7; } finally { ownCatch(); try { boom(8); } catch (e) { note('own2'); } } }"
+	+ " function normal(): void { try { note('body'); } finally { ownCatch(); note('fin'); } }"
+	+ " function twoLevels(): void { try { try { try { boom(4); } finally { ownCatch(); note('f1'); } } finally { ownCatch(); note('f2'); } } catch (e) { note(String(e as number)); } }"
+	+ " function cancelled(): number { try { try { boom(5); } finally { return 3; } } catch (e) { return 4; } }"
+	+ " replaced(); viaCall(); sameFrame(); note(`${returns()}`); normal(); twoLevels(); note(`${cancelled()}`); console.log(log);";
+const finallyInFlightOut = "f|2|own|3|own|3|own|own2|7|body|own|fin|own|f1|own|f2|4|3|\n";
+
+test "orc: a throw in a finally replaces the raise, and a catch inside it keeps the raise in flight" {
+	const vm = evalOrcVM(finallyInFlight);
+	assert vm.error == "", vm.error;
+	assert vm.output == finallyInFlightOut, vm.output;
+}
+
+test "arena: a throw in a finally replaces the raise, and a catch inside it keeps the raise in flight" {
+	const vm = evalArenaVM(finallyInFlight);
+	assert vm.error == "", vm.error;
+	assert vm.output == finallyInFlightOut, vm.output;
 }

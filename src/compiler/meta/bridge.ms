@@ -70,8 +70,8 @@ import { int64Bits } from "../../utils/stdBackport";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
-	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserString, raiserNil, raiserObject, raiserArray,
-	heapAllocObject, heapObjectSetField, heapObjectGetField, heapAllocArray, heapArrayPush,
+	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserNil, raiserObject, raiserArray,
+	heapAllocObject, heapObjectSetField, heapObjectGetField, heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
 	createStructHeap, createArrayHeap,
 } from "../../raiser/value";
 
@@ -597,7 +597,7 @@ export function attachFieldTypeNodes(impl: RaiserValue, decl: Node, shape: Type,
 		if (member.kind != RaiserValueKind.Object) continue;
 		const kind = heapObjectGetField(objHeap, member.intVal, "kind");
 		if (kind.kind != RaiserValueKind.Int || kind.intVal != NodeKind.PropertyDecl as int64) continue;
-		const node = fieldTypeNode(fieldTypeIn(shape, readStr(objHeap, member.intVal, "propName")), decl.location);
+		const node = fieldTypeNode(fieldTypeIn(shape, readStr(objHeap, arrHeap, member.intVal, "propName")), decl.location);
 		heapObjectSetField(objHeap, member.intVal, "typeExpr", nodeToValue(node, objHeap, arrHeap, false));
 	}
 }
@@ -616,8 +616,7 @@ function serializeNodes(nodes: Node[], objHeap: RaiserObjectHeap, arrHeap: Raise
 function serializeStrings(strs: string[], arrHeap: RaiserArrayHeap): RaiserValue {
 	const handle = heapAllocArray(arrHeap);
 	for (const s of strs) {
-		const v = raiserString(s);
-		heapArrayPush(arrHeap, handle, v);
+		heapArrayPush(arrHeap, handle, heapAllocStoredString(arrHeap, s));
 	}
 	return raiserArray(handle);
 }
@@ -628,9 +627,8 @@ function setNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, 
 	heapObjectSetField(objHeap, h, name, raiserArray(handle));
 }
 
-function setStr(objHeap: RaiserObjectHeap, h: int64, name: string, val: string): void {
-	const v = raiserString(val);
-	heapObjectSetField(objHeap, h, name, v);
+function setStr(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, val: string): void {
+	heapObjectSetField(objHeap, h, name, heapAllocStoredString(arrHeap, val));
 }
 
 function setBool(objHeap: RaiserObjectHeap, h: int64, name: string, val: boolean): void {
@@ -739,12 +737,12 @@ function calleeSymOf(call: Node, d: CallExprData): Symbol | null {
 }
 
 // `declNode` skipped to avoid Symbol↔Node cycle; reach it via getImpl.
-function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
+function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): RaiserValue {
 	const handle = heapAllocObject(objHeap);
-	setStr(objHeap, handle, "name", sym.name);
+	setStr(objHeap, arrHeap, handle, "name", sym.name);
 	heapObjectSetField(objHeap, handle, "symbolKind", raiserInt(sym.symbolKind as int64));
-	setStr(objHeap, handle, "modulePath", sym.modulePath);
-	setStr(objHeap, handle, "builtinKind", sym.builtinKind);
+	setStr(objHeap, arrHeap, handle, "modulePath", sym.modulePath);
+	setStr(objHeap, arrHeap, handle, "builtinKind", sym.builtinKind);
 	return raiserObject(handle);
 }
 
@@ -819,11 +817,11 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 				heapObjectSetField(objHeap, handle, "intVal", raiserInt(bits));
 			}
 			setBool(objHeap, handle, "isBitPattern", d.isBitPattern);
-			setStr(objHeap, handle, "outOfRangeText", d.outOfRangeText);
+			setStr(objHeap, arrHeap, handle, "outOfRangeText", d.outOfRangeText);
 		},
 		NodeKind.StringLiteral => {
 			const d = node.data as StringLiteralData;
-			setStr(objHeap, handle, "value", d.value);
+			setStr(objHeap, arrHeap, handle, "value", d.value);
 		},
 		NodeKind.BooleanLiteral => {
 			const d = node.data as BooleanLiteralData;
@@ -832,17 +830,17 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.NullLiteral => {},
 		NodeKind.BigIntLiteral => {
 			const d = node.data as BigIntLiteralData;
-			setStr(objHeap, handle, "bigintValue", d.bigintValue);
+			setStr(objHeap, arrHeap, handle, "bigintValue", d.bigintValue);
 		},
 		NodeKind.RegexLiteral => {
 			const d = node.data as RegexLiteralData;
-			setStr(objHeap, handle, "regexPattern", d.regexPattern);
+			setStr(objHeap, arrHeap, handle, "regexPattern", d.regexPattern);
 		},
 
 		// === Identifier ===
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
-			setStr(objHeap, handle, "name", d.name);
+			setStr(objHeap, arrHeap, handle, "name", d.name);
 			if (node.resolvedSym != null) {
 				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 			}
@@ -851,18 +849,18 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === Binary/Unary/Update ===
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			setStr(objHeap, handle, "operator", d.operator);
+			setStr(objHeap, arrHeap, handle, "operator", d.operator);
 			setNode(objHeap, arrHeap, handle, "left", d.left);
 			setNode(objHeap, arrHeap, handle, "right", d.right);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			setStr(objHeap, handle, "unaryOp", d.unaryOp);
+			setStr(objHeap, arrHeap, handle, "unaryOp", d.unaryOp);
 			setNode(objHeap, arrHeap, handle, "operand", d.operand);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			setStr(objHeap, handle, "updateOp", d.updateOp);
+			setStr(objHeap, arrHeap, handle, "updateOp", d.updateOp);
 			setNode(objHeap, arrHeap, handle, "updateArg", d.updateArg);
 			setBool(objHeap, handle, "isPrefix", d.isPrefix);
 		},
@@ -876,17 +874,17 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			if (winner != null && calleeVal.kind == RaiserValueKind.Object) {
 				if (winner != node.resolvedSym && winner.symbolType != null) {
 					setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
-					heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
+					heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap, arrHeap));
 				}
 				heapObjectSetField(objHeap, calleeVal.intVal, "symHandle", raiserInt(registerBoundSym(winner) as int64));
 			}
 			setNodes(objHeap, arrHeap, handle, "arguments", d.arguments);
-			setStr(objHeap, handle, "typeArg", node.typeArg);
+			setStr(objHeap, arrHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
 			setNode(objHeap, arrHeap, handle, "object", d.object);
-			setStr(objHeap, handle, "property", d.property);
+			setStr(objHeap, arrHeap, handle, "property", d.property);
 			setBool(objHeap, handle, "isOptional", d.isOptional);
 		},
 		NodeKind.ArrayAccess => {
@@ -915,23 +913,23 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStrs(objHeap, arrHeap, handle, "arrowParams", d.arrowParams);
 			setStrs(objHeap, arrHeap, handle, "arrowParamTypes", d.arrowParamTypes);
 			setNode(objHeap, arrHeap, handle, "arrowBody", d.arrowBody);
-			setStr(objHeap, handle, "arrowFlags", d.arrowFlags);
-			setStr(objHeap, handle, "arrowReturnType", d.arrowReturnType);
+			setStr(objHeap, arrHeap, handle, "arrowFlags", d.arrowFlags);
+			setStr(objHeap, arrHeap, handle, "arrowReturnType", d.arrowReturnType);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
 			setStrs(objHeap, arrHeap, handle, "funcExprParams", d.funcExprParams);
 			setStrs(objHeap, arrHeap, handle, "funcExprParamTypes", d.funcExprParamTypes);
 			setNode(objHeap, arrHeap, handle, "funcExprBody", d.funcExprBody);
-			setStr(objHeap, handle, "funcExprFlags", d.funcExprFlags);
-			setStr(objHeap, handle, "funcExprReturnType", d.funcExprReturnType);
+			setStr(objHeap, arrHeap, handle, "funcExprFlags", d.funcExprFlags);
+			setStr(objHeap, arrHeap, handle, "funcExprReturnType", d.funcExprReturnType);
 		},
 
 		// === Other expressions ===
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
 			setNode(objHeap, arrHeap, handle, "asExpr", d.asExpr);
-			setStr(objHeap, handle, "asType", d.asType);
+			setStr(objHeap, arrHeap, handle, "asType", d.asType);
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
@@ -947,7 +945,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as NewExprData;
 			setNode(objHeap, arrHeap, handle, "newCallee", d.newCallee);
 			setNodes(objHeap, arrHeap, handle, "newArguments", d.newArguments);
-			setStr(objHeap, handle, "typeArg", node.typeArg);
+			setStr(objHeap, arrHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
@@ -985,7 +983,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.SizeofExpr => {
 			const d = node.data as SizeofExprData;
-			setStr(objHeap, handle, "sizeofType", d.sizeofType);
+			setStr(objHeap, arrHeap, handle, "sizeofType", d.sizeofType);
 		},
 		NodeKind.HiddenDeref => {
 			const d = node.data as HiddenDerefData;
@@ -1001,7 +999,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.TypeAnnotation => {
 			const d = node.data as TypeAnnotationData;
-			setStr(objHeap, handle, "annotationType", d.annotationType);
+			setStr(objHeap, arrHeap, handle, "annotationType", d.annotationType);
 		},
 
 		// === Patterns ===
@@ -1018,7 +1016,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.ObjectPatternProp => {
 			const d = node.data as ObjectPatternPropData;
-			setStr(objHeap, handle, "propKey", d.propKey);
+			setStr(objHeap, arrHeap, handle, "propKey", d.propKey);
 			setNode(objHeap, arrHeap, handle, "propAlias", d.propAlias);
 			setNode(objHeap, arrHeap, handle, "propDefault", d.propDefault);
 		},
@@ -1052,8 +1050,8 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			setStr(objHeap, handle, "declName", d.declName);
-			setStr(objHeap, handle, "declType", d.declType);
+			setStr(objHeap, arrHeap, handle, "declName", d.declName);
+			setStr(objHeap, arrHeap, handle, "declType", d.declType);
 			setNode(objHeap, arrHeap, handle, "initializer", d.initializer);
 			const dk = raiserInt(d.declKind as int64);
 			heapObjectSetField(objHeap, handle, "declKind", dk);
@@ -1068,7 +1066,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as WhileStmtData;
 			setNode(objHeap, arrHeap, handle, "whileCondition", d.whileCondition);
 			setNode(objHeap, arrHeap, handle, "whileBody", d.whileBody);
-			setStr(objHeap, handle, "whileLabel", d.whileLabel);
+			setStr(objHeap, arrHeap, handle, "whileLabel", d.whileLabel);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
@@ -1084,7 +1082,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			setStr(objHeap, handle, "forOfBinding", d.forOfBinding);
+			setStr(objHeap, arrHeap, handle, "forOfBinding", d.forOfBinding);
 			setBool(objHeap, handle, "forOfIsConst", d.forOfIsConst);
 			setNode(objHeap, arrHeap, handle, "forOfIterable", d.forOfIterable);
 			setNode(objHeap, arrHeap, handle, "forOfBody", d.forOfBody);
@@ -1092,22 +1090,22 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
-			setStr(objHeap, handle, "forInBinding", d.forInBinding);
+			setStr(objHeap, arrHeap, handle, "forInBinding", d.forInBinding);
 			setBool(objHeap, handle, "forInIsConst", d.forInIsConst);
 			setNode(objHeap, arrHeap, handle, "forInObject", d.forInObject);
 			setNode(objHeap, arrHeap, handle, "forInBody", d.forInBody);
 		},
 		NodeKind.BreakStmt => {
 			const d = node.data as BreakStmtData;
-			setStr(objHeap, handle, "breakLabel", d.breakLabel);
+			setStr(objHeap, arrHeap, handle, "breakLabel", d.breakLabel);
 		},
 		NodeKind.ContinueStmt => {
 			const d = node.data as ContinueStmtData;
-			setStr(objHeap, handle, "continueLabel", d.continueLabel);
+			setStr(objHeap, arrHeap, handle, "continueLabel", d.continueLabel);
 		},
 		NodeKind.UnreachableStmt => {
 			const d = node.data as UnreachableStmtData;
-			setStr(objHeap, handle, "unreachableMsg", d.unreachableMsg);
+			setStr(objHeap, arrHeap, handle, "unreachableMsg", d.unreachableMsg);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
@@ -1128,7 +1126,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			setNode(objHeap, arrHeap, handle, "tryBody", d.tryBody);
-			setStr(objHeap, handle, "catchName", d.catchName);
+			setStr(objHeap, arrHeap, handle, "catchName", d.catchName);
 			setNode(objHeap, arrHeap, handle, "catchBody", d.catchBody);
 			setNode(objHeap, arrHeap, handle, "finallyBody", d.finallyBody);
 			setBool(objHeap, handle, "hasCatchClause", d.hasCatchClause);
@@ -1137,20 +1135,20 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === Declarations ===
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			setStr(objHeap, handle, "fnName", d.fnName);
+			setStr(objHeap, arrHeap, handle, "fnName", d.fnName);
 			setStrs(objHeap, arrHeap, handle, "params", d.params);
 			setStrs(objHeap, arrHeap, handle, "fnParamTypes", d.fnParamTypes);
 			setNode(objHeap, arrHeap, handle, "fnBody", d.fnBody);
-			setStr(objHeap, handle, "fnFlags", d.fnFlags);
-			setStr(objHeap, handle, "fnReturnType", d.fnReturnType);
+			setStr(objHeap, arrHeap, handle, "fnFlags", d.fnFlags);
+			setStr(objHeap, arrHeap, handle, "fnReturnType", d.fnReturnType);
 			setDefaults(objHeap, arrHeap, handle, "fnDefaults", d.fnDefaults, includeTypeAst);
-			setStr(objHeap, handle, "nativeName", d.nativeName);
+			setStr(objHeap, arrHeap, handle, "nativeName", d.nativeName);
 		},
 		NodeKind.ImportDecl => {
 			const d = node.data as ImportDeclData;
 			setStrs(objHeap, arrHeap, handle, "importNames", d.importNames);
 			setStrs(objHeap, arrHeap, handle, "importAliases", d.importAliases);
-			setStr(objHeap, handle, "importSource", d.importSource);
+			setStr(objHeap, arrHeap, handle, "importSource", d.importSource);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
@@ -1158,61 +1156,61 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.TypeAliasDecl => {
 			const d = node.data as TypeAliasDeclData;
-			setStr(objHeap, handle, "aliasName", d.aliasName);
-			setStr(objHeap, handle, "aliasType", d.aliasType);
+			setStr(objHeap, arrHeap, handle, "aliasName", d.aliasName);
+			setStr(objHeap, arrHeap, handle, "aliasType", d.aliasType);
 			setBool(objHeap, handle, "aliasIsDistinct", d.aliasIsDistinct);
-			setStr(objHeap, handle, "aliasGenericParams", d.aliasGenericParams);
+			setStr(objHeap, arrHeap, handle, "aliasGenericParams", d.aliasGenericParams);
 		},
 		NodeKind.EnumDecl => {
 			const d = node.data as EnumDeclData;
-			setStr(objHeap, handle, "enumName", d.enumName);
+			setStr(objHeap, arrHeap, handle, "enumName", d.enumName);
 			setStrs(objHeap, arrHeap, handle, "enumMembers", d.enumMembers);
 			setNums(objHeap, arrHeap, handle, "enumValues", d.enumValues != null ? d.enumValues : []);
 		},
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
-			setStr(objHeap, handle, "interfaceName", d.interfaceName);
+			setStr(objHeap, arrHeap, handle, "interfaceName", d.interfaceName);
 			setStrs(objHeap, arrHeap, handle, "interfaceFields", d.interfaceFields);
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldTypes", d.interfaceFieldTypes);
 			setStrs(objHeap, arrHeap, handle, "interfaceExtends", d.interfaceExtends);
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldVisibility", d.interfaceFieldVisibility != null ? d.interfaceFieldVisibility : []);
 			setNodeArrays(objHeap, arrHeap, handle, "interfaceFieldDecorators", d.interfaceFieldDecorators);
-			setStr(objHeap, handle, "typeArg", node.typeArg);
+			setStr(objHeap, arrHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
-			setStr(objHeap, handle, "className", d.className);
-			setStr(objHeap, handle, "classExtends", d.classExtends);
+			setStr(objHeap, arrHeap, handle, "className", d.className);
+			setStr(objHeap, arrHeap, handle, "classExtends", d.classExtends);
 			setNodes(objHeap, arrHeap, handle, "classBody", d.classBody);
 			setStrs(objHeap, arrHeap, handle, "classImplements", d.classImplements);
-			setStr(objHeap, handle, "typeArg", node.typeArg);
+			setStr(objHeap, arrHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ActorDecl => {
 			const d = node.data as ActorDeclData;
-			setStr(objHeap, handle, "actorName", d.actorName);
+			setStr(objHeap, arrHeap, handle, "actorName", d.actorName);
 			setNodes(objHeap, arrHeap, handle, "actorBody", d.actorBody);
-			setStr(objHeap, handle, "typeArg", node.typeArg);
+			setStr(objHeap, arrHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			setStr(objHeap, handle, "propName", d.propName);
-			setStr(objHeap, handle, "propType", d.propType);
+			setStr(objHeap, arrHeap, handle, "propName", d.propName);
+			setStr(objHeap, arrHeap, handle, "propType", d.propType);
 			setBool(objHeap, handle, "propIsStatic", d.propIsStatic);
 			setBool(objHeap, handle, "propIsReadonly", d.propIsReadonly);
-			setStr(objHeap, handle, "propVisibility", d.propVisibility);
+			setStr(objHeap, arrHeap, handle, "propVisibility", d.propVisibility);
 			setNode(objHeap, arrHeap, handle, "propInitializer", d.propInitializer);
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			setStr(objHeap, handle, "methodName", d.methodName);
+			setStr(objHeap, arrHeap, handle, "methodName", d.methodName);
 			setStrs(objHeap, arrHeap, handle, "methodParams", d.methodParams);
 			setStrs(objHeap, arrHeap, handle, "methodParamTypes", d.methodParamTypes);
 			setNode(objHeap, arrHeap, handle, "methodBody", d.methodBody);
 			setBool(objHeap, handle, "methodIsStatic", d.methodIsStatic);
-			setStr(objHeap, handle, "methodFlags", d.methodFlags);
-			setStr(objHeap, handle, "methodReturnType", d.methodReturnType);
+			setStr(objHeap, arrHeap, handle, "methodFlags", d.methodFlags);
+			setStr(objHeap, arrHeap, handle, "methodReturnType", d.methodReturnType);
 			setDefaults(objHeap, arrHeap, handle, "methodDefaults", d.methodDefaults, includeTypeAst);
-			setStr(objHeap, handle, "nativeName", d.nativeName);
+			setStr(objHeap, arrHeap, handle, "nativeName", d.nativeName);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -1224,16 +1222,16 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;
 			heapObjectSetField(objHeap, handle, "externKind", raiserInt(d.externKind as int64));
-			setStr(objHeap, handle, "externName", d.externName);
-			setStr(objHeap, handle, "nativeName", d.nativeName);
-			setStr(objHeap, handle, "externType", d.externType);
+			setStr(objHeap, arrHeap, handle, "externName", d.externName);
+			setStr(objHeap, arrHeap, handle, "nativeName", d.nativeName);
+			setStr(objHeap, arrHeap, handle, "externType", d.externType);
 		},
 		NodeKind.MacroDecl => {
 			const d = node.data as MacroDeclData;
-			setStr(objHeap, handle, "macroDeclName", d.macroDeclName);
+			setStr(objHeap, arrHeap, handle, "macroDeclName", d.macroDeclName);
 			setStrs(objHeap, arrHeap, handle, "macroDeclParams", d.macroDeclParams);
 			setStrs(objHeap, arrHeap, handle, "macroDeclParamTypes", d.macroDeclParamTypes);
-			setStr(objHeap, handle, "macroDeclReturnType", d.macroDeclReturnType);
+			setStr(objHeap, arrHeap, handle, "macroDeclReturnType", d.macroDeclReturnType);
 			setNode(objHeap, arrHeap, handle, "macroDeclBody", d.macroDeclBody);
 		},
 		NodeKind.DecoratedDecl => {
@@ -1243,7 +1241,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.MacroInvocation => {
 			const d = node.data as MacroInvocationData;
-			setStr(objHeap, handle, "macroName", d.macroName);
+			setStr(objHeap, arrHeap, handle, "macroName", d.macroName);
 			setNodes(objHeap, arrHeap, handle, "macroArgs", d.macroArgs);
 			setBool(objHeap, handle, "macroHasParens", d.macroHasParens);
 		},
@@ -1251,14 +1249,14 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === Testing ===
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
-			setStr(objHeap, handle, "testName", d.testName);
+			setStr(objHeap, arrHeap, handle, "testName", d.testName);
 			setNode(objHeap, arrHeap, handle, "testBody", d.testBody);
 		},
 		NodeKind.AssertStmt => {
 			const d = node.data as AssertStmtData;
 			setNode(objHeap, arrHeap, handle, "assertExpr", d.assertExpr);
-			setStr(objHeap, handle, "assertSource", d.assertSource);
-			setStr(objHeap, handle, "assertMessage", d.assertMessage);
+			setStr(objHeap, arrHeap, handle, "assertSource", d.assertSource);
+			setStr(objHeap, arrHeap, handle, "assertMessage", d.assertMessage);
 			setNode(objHeap, arrHeap, handle, "assertMessageExpr", d.assertMessageExpr);
 		},
 
@@ -1282,7 +1280,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setNode(objHeap, arrHeap, handle, "typExprIndexKey", d.typExprIndexKey, false);
 			setNode(objHeap, arrHeap, handle, "typExprIndexValue", d.typExprIndexValue, false);
 			setNodeArrays(objHeap, arrHeap, handle, "typExprFieldDecorators", d.typExprFieldDecorators);
-			setStr(objHeap, handle, "typExprTypeName", d.typExprTypeName);
+			setStr(objHeap, arrHeap, handle, "typExprTypeName", d.typExprTypeName);
 		},
 		NodeKind.TypeArray => {
 			const d = node.data as TypeArrayData;
@@ -1295,9 +1293,9 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			// Update all 3 sites together when adding fields.
 			const d = node.data as TypeUnionData;
 			setNodes(objHeap, arrHeap, handle, "typExprMembers", d.typExprMembers, false);
-			setStr(objHeap, handle, "discFieldName", d.discFieldName);
+			setStr(objHeap, arrHeap, handle, "discFieldName", d.discFieldName);
 			setStrs(objHeap, arrHeap, handle, "variantKeys", d.variantKeys);
-			setStr(objHeap, handle, "discKind", d.discKind);
+			setStr(objHeap, arrHeap, handle, "discKind", d.discKind);
 		},
 		NodeKind.TypeIntersection => {
 			const d = node.data as TypeIntersectionData;
@@ -1319,7 +1317,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === JSX (compile-time only — serialized for macro VM round-trip) ===
 		NodeKind.JSXElement => {
 			const d = node.data as JSXElementData;
-			setStr(objHeap, handle, "jsxTag", d.jsxTag);
+			setStr(objHeap, arrHeap, handle, "jsxTag", d.jsxTag);
 			setNodes(objHeap, arrHeap, handle, "jsxAttrs", d.jsxAttrs);
 			setNodes(objHeap, arrHeap, handle, "jsxChildren", d.jsxChildren);
 			setBool(objHeap, handle, "jsxSelfClosing", d.jsxSelfClosing);
@@ -1330,7 +1328,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.JSXText => {
 			const d = node.data as JSXTextData;
-			setStr(objHeap, handle, "jsxText", d.jsxText);
+			setStr(objHeap, arrHeap, handle, "jsxText", d.jsxText);
 		},
 		NodeKind.JSXExpressionContainer => {
 			const d = node.data as JSXExpressionContainerData;
@@ -1338,7 +1336,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 		NodeKind.JSXAttribute => {
 			const d = node.data as JSXAttributeData;
-			setStr(objHeap, handle, "jsxAttrName", d.jsxAttrName);
+			setStr(objHeap, arrHeap, handle, "jsxAttrName", d.jsxAttrName);
 			setNode(objHeap, arrHeap, handle, "jsxAttrValue", d.jsxAttrValue);
 		},
 		NodeKind.JSXSpreadAttribute => {
@@ -1370,7 +1368,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	//
 	// Forward-only like nodeType. valueToNode ignores `resolvedSym`.
 	if (node.resolvedSym != null) {
-		heapObjectSetField(objHeap, handle, "resolvedSym", symbolToValue(node.resolvedSym, objHeap));
+		heapObjectSetField(objHeap, handle, "resolvedSym", symbolToValue(node.resolvedSym, objHeap, arrHeap));
 	}
 
 	return raiserObject(handle);
@@ -1378,9 +1376,9 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 
 // ===== Deserialization helpers (read from RaiserValue) =====
 
-function readStr(objHeap: RaiserObjectHeap, h: int64, name: string): string {
+function readStr(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string): string {
 	const v = heapObjectGetField(objHeap, h, name);
-	if (v.kind == RaiserValueKind.String) return v.strVal;
+	if (v.kind == RaiserValueKind.String) return heapStringText(arrHeap, v);
 	return "";
 }
 
@@ -1466,7 +1464,7 @@ function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64,
 	while (i < len) {
 		const elem = heapArrayGet(arrHeap, handle, i);
 		if (elem.kind == RaiserValueKind.String) {
-			result.push(elem.strVal);
+			result.push(heapStringText(arrHeap, elem));
 		} else {
 			result.push("");
 		}
@@ -1606,7 +1604,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 		RaiserValueKind.Int => intValueToNode(val.intVal, t, fallbackLoc),
 		RaiserValueKind.Float => mkFloat(val.floatVal, fallbackLoc),
 		RaiserValueKind.Bool => mkBool(val.intVal != 0, fallbackLoc),
-		RaiserValueKind.String => mkString(val.strVal, fallbackLoc),
+		RaiserValueKind.String => mkString(heapStringText(arrHeap, val), fallbackLoc),
 		RaiserValueKind.Nil => mkNull(fallbackLoc),
 		RaiserValueKind.Array => {
 			const handle = val.intVal;
@@ -1758,10 +1756,10 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const contradiction = contradictoryNumber(isFloat, raw, exact, value);
 			if (contradiction != "") _wireRefusals.push({ message: contradiction, location: loc });
 			const intVal = isFloat || contradiction != "" ? 0 as int64 : wireInteger(raw, exact, value);
-			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat, intVal, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, h, "outOfRangeText") }, loc);
+			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat, intVal, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, arrHeap, h, "outOfRangeText") }, loc);
 		},
 		NodeKind.StringLiteral => {
-			return createNodeAt(NodeKind.StringLiteral, { value: readStr(objHeap, h, "value") }, loc);
+			return createNodeAt(NodeKind.StringLiteral, { value: readStr(objHeap, arrHeap, h, "value") }, loc);
 		},
 		NodeKind.BooleanLiteral => {
 			return createNodeAt(NodeKind.BooleanLiteral, { boolValue: readBool(objHeap, h, "boolValue") }, loc);
@@ -1770,15 +1768,15 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, loc);
 		},
 		NodeKind.BigIntLiteral => {
-			return createNodeAt(NodeKind.BigIntLiteral, { bigintValue: readStr(objHeap, h, "bigintValue") }, loc);
+			return createNodeAt(NodeKind.BigIntLiteral, { bigintValue: readStr(objHeap, arrHeap, h, "bigintValue") }, loc);
 		},
 		NodeKind.RegexLiteral => {
-			return createNodeAt(NodeKind.RegexLiteral, { regexPattern: readStr(objHeap, h, "regexPattern") }, loc);
+			return createNodeAt(NodeKind.RegexLiteral, { regexPattern: readStr(objHeap, arrHeap, h, "regexPattern") }, loc);
 		},
 
 		// === Identifier ===
 		NodeKind.Identifier => {
-			const n = createNodeAt(NodeKind.Identifier, { name: gensymName(objHeap, h, readStr(objHeap, h, "name")) }, loc);
+			const n = createNodeAt(NodeKind.Identifier, { name: gensymName(objHeap, h, readStr(objHeap, arrHeap, h, "name")) }, loc);
 			const hv = heapObjectGetField(objHeap, h, "symHandle");
 			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
 				n.resolvedSym = _boundSyms[hv.intVal];
@@ -1789,18 +1787,18 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === Binary/Unary/Update ===
 		NodeKind.BinaryExpr => {
-			const operator = readStr(objHeap, h, "operator");
+			const operator = readStr(objHeap, arrHeap, h, "operator");
 			const left = readNode(objHeap, arrHeap, h, "left", loc);
 			const right = readNode(objHeap, arrHeap, h, "right", loc);
 			return createNodeAt(NodeKind.BinaryExpr, { operator, left, right }, loc);
 		},
 		NodeKind.UnaryExpr => {
-			const unaryOp = readStr(objHeap, h, "unaryOp");
+			const unaryOp = readStr(objHeap, arrHeap, h, "unaryOp");
 			const operand = readNode(objHeap, arrHeap, h, "operand", loc);
 			return createNodeAt(NodeKind.UnaryExpr, { unaryOp, operand }, loc);
 		},
 		NodeKind.UpdateExpr => {
-			const updateOp = readStr(objHeap, h, "updateOp");
+			const updateOp = readStr(objHeap, arrHeap, h, "updateOp");
 			const updateArg = readNode(objHeap, arrHeap, h, "updateArg", loc);
 			const isPrefix = readBool(objHeap, h, "isPrefix");
 			return createNodeAt(NodeKind.UpdateExpr, { updateOp, updateArg, isPrefix }, loc);
@@ -1813,7 +1811,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const call = createNodeAt(NodeKind.CallExpr, {
 				callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: 0,
 			}, loc);
-			call.typeArg = readStr(objHeap, h, "typeArg");
+			call.typeArg = readStr(objHeap, arrHeap, h, "typeArg");
 			if (call.typeArg != "" && callee.kind == NodeKind.Identifier && callee.resolvedSym != null
 					&& callee.resolvedSym.instantiatedFrom != null) {
 				callee.resolvedSym = callee.resolvedSym.instantiatedFrom;
@@ -1822,7 +1820,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		},
 		NodeKind.MemberExpr => {
 			const object = readNode(objHeap, arrHeap, h, "object", loc);
-			const property = readStr(objHeap, h, "property");
+			const property = readStr(objHeap, arrHeap, h, "property");
 			const isOptional = readBool(objHeap, h, "isOptional");
 			return createNodeAt(NodeKind.MemberExpr, { object, property, isOptional }, loc);
 		},
@@ -1849,8 +1847,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const arrowParams = gensymNames(objHeap, h, readStrs(objHeap, arrHeap, h, "arrowParams"));
 			const arrowParamTypes = readStrs(objHeap, arrHeap, h, "arrowParamTypes");
 			const arrowBody = readNode(objHeap, arrHeap, h, "arrowBody", loc);
-			const arrowFlags = readStr(objHeap, h, "arrowFlags");
-			const arrowReturnType = readStr(objHeap, h, "arrowReturnType");
+			const arrowFlags = readStr(objHeap, arrHeap, h, "arrowFlags");
+			const arrowReturnType = readStr(objHeap, arrHeap, h, "arrowReturnType");
 			// Invariant: arrowDefaults.length === arrowParams.length. Macros emitting
 			// arrows can't (yet) carry defaults through serialization; pad with null
 			// per param to maintain the invariant for downstream consumers.
@@ -1870,8 +1868,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const funcExprParams = gensymNames(objHeap, h, readStrs(objHeap, arrHeap, h, "funcExprParams"));
 			const funcExprParamTypes = readStrs(objHeap, arrHeap, h, "funcExprParamTypes");
 			const funcExprBody = readNode(objHeap, arrHeap, h, "funcExprBody", loc);
-			const funcExprFlags = readStr(objHeap, h, "funcExprFlags");
-			const funcExprReturnType = readStr(objHeap, h, "funcExprReturnType");
+			const funcExprFlags = readStr(objHeap, arrHeap, h, "funcExprFlags");
+			const funcExprReturnType = readStr(objHeap, arrHeap, h, "funcExprReturnType");
 			rebindRedeclaredLocals(wireParamSyms(objHeap, arrHeap, h), funcExprBody);
 			return createNodeAt(NodeKind.FunctionExpr, {
 				funcExprParams, funcExprParamTypes, funcExprBody, funcExprFlags, funcExprReturnType,
@@ -1881,7 +1879,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		// === Other expressions ===
 		NodeKind.TypeAssertion => {
 			const asExpr = readNode(objHeap, arrHeap, h, "asExpr", loc);
-			const asType = readStr(objHeap, h, "asType");
+			const asType = readStr(objHeap, arrHeap, h, "asType");
 			return createNodeAt(NodeKind.TypeAssertion, { asExpr, asType }, loc);
 		},
 		NodeKind.ConditionalExpr => {
@@ -1900,7 +1898,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const newCallee = readNode(objHeap, arrHeap, h, "newCallee", loc);
 			const newArguments = readNodes(objHeap, arrHeap, h, "newArguments", loc);
 			const created = createNodeAt(NodeKind.NewExpr, { newCallee, newArguments }, loc);
-			created.typeArg = readStr(objHeap, h, "typeArg");
+			created.typeArg = readStr(objHeap, arrHeap, h, "typeArg");
 			return created;
 		},
 		NodeKind.TryExpr => {
@@ -1940,7 +1938,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.OutExpr, { outArg }, loc);
 		},
 		NodeKind.SizeofExpr => {
-			return createNodeAt(NodeKind.SizeofExpr, { sizeofType: readStr(objHeap, h, "sizeofType") }, loc);
+			return createNodeAt(NodeKind.SizeofExpr, { sizeofType: readStr(objHeap, arrHeap, h, "sizeofType") }, loc);
 		},
 		NodeKind.HiddenDeref => {
 			const expr = readNode(objHeap, arrHeap, h, "expr", loc);
@@ -1955,7 +1953,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.ComptimeBlock, { comptimeBody }, loc);
 		},
 		NodeKind.TypeAnnotation => {
-			return createNodeAt(NodeKind.TypeAnnotation, { annotationType: readStr(objHeap, h, "annotationType") }, loc);
+			return createNodeAt(NodeKind.TypeAnnotation, { annotationType: readStr(objHeap, arrHeap, h, "annotationType") }, loc);
 		},
 
 		// === Patterns ===
@@ -1971,7 +1969,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.ObjectPattern, { patternProps, hasRestProp }, loc);
 		},
 		NodeKind.ObjectPatternProp => {
-			const propKey = readStr(objHeap, h, "propKey");
+			const propKey = readStr(objHeap, arrHeap, h, "propKey");
 			const propAlias = readNode(objHeap, arrHeap, h, "propAlias", loc);
 			const propDefault = readNode(objHeap, arrHeap, h, "propDefault", loc);
 			return createNodeAt(NodeKind.ObjectPatternProp, { propKey, propAlias, propDefault }, loc);
@@ -2005,8 +2003,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.BlockStmt, { statements }, loc);
 		},
 		NodeKind.VariableDecl => {
-			const declName = gensymName(objHeap, h, readStr(objHeap, h, "declName"));
-			const declType = readStr(objHeap, h, "declType");
+			const declName = gensymName(objHeap, h, readStr(objHeap, arrHeap, h, "declName"));
+			const declType = readStr(objHeap, arrHeap, h, "declType");
 			const initializer = readNode(objHeap, arrHeap, h, "initializer", loc);
 			const declKind = readInt(objHeap, h, "declKind") as DeclKind;
 			return createNodeAt(NodeKind.VariableDecl, {
@@ -2025,7 +2023,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.WhileStmt => {
 			const whileCondition = readNode(objHeap, arrHeap, h, "whileCondition", loc);
 			const whileBody = readNode(objHeap, arrHeap, h, "whileBody", loc);
-			return createNodeAt(NodeKind.WhileStmt, { whileCondition, whileBody, whileLabel: readStr(objHeap, h, "whileLabel") }, loc);
+			return createNodeAt(NodeKind.WhileStmt, { whileCondition, whileBody, whileLabel: readStr(objHeap, arrHeap, h, "whileLabel") }, loc);
 		},
 		NodeKind.DoWhileStmt => {
 			const doBody = readNode(objHeap, arrHeap, h, "doBody", loc);
@@ -2040,7 +2038,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.ForStmt, { forInit, forCondition, forUpdate, forBody, forLabel: "" }, loc);
 		},
 		NodeKind.ForOfStmt => {
-			const forOfBinding = gensymName(objHeap, h, readStr(objHeap, h, "forOfBinding"));
+			const forOfBinding = gensymName(objHeap, h, readStr(objHeap, arrHeap, h, "forOfBinding"));
 			const forOfIsConst = readBool(objHeap, h, "forOfIsConst");
 			const forOfIterable = readNode(objHeap, arrHeap, h, "forOfIterable", loc);
 			const forOfBody = readNode(objHeap, arrHeap, h, "forOfBody", loc);
@@ -2051,20 +2049,20 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			}, loc);
 		},
 		NodeKind.ForInStmt => {
-			const forInBinding = gensymName(objHeap, h, readStr(objHeap, h, "forInBinding"));
+			const forInBinding = gensymName(objHeap, h, readStr(objHeap, arrHeap, h, "forInBinding"));
 			const forInIsConst = readBool(objHeap, h, "forInIsConst");
 			const forInObject = readNode(objHeap, arrHeap, h, "forInObject", loc);
 			const forInBody = readNode(objHeap, arrHeap, h, "forInBody", loc);
 			return createNodeAt(NodeKind.ForInStmt, { forInBinding, forInIsConst, forInObject, forInBody, forInLabel: "" }, loc);
 		},
 		NodeKind.BreakStmt => {
-			return createNodeAt(NodeKind.BreakStmt, { breakLabel: readStr(objHeap, h, "breakLabel") }, loc);
+			return createNodeAt(NodeKind.BreakStmt, { breakLabel: readStr(objHeap, arrHeap, h, "breakLabel") }, loc);
 		},
 		NodeKind.ContinueStmt => {
-			return createNodeAt(NodeKind.ContinueStmt, { continueLabel: readStr(objHeap, h, "continueLabel") }, loc);
+			return createNodeAt(NodeKind.ContinueStmt, { continueLabel: readStr(objHeap, arrHeap, h, "continueLabel") }, loc);
 		},
 		NodeKind.UnreachableStmt => {
-			return createNodeAt(NodeKind.UnreachableStmt, { unreachableMsg: readStr(objHeap, h, "unreachableMsg") }, loc);
+			return createNodeAt(NodeKind.UnreachableStmt, { unreachableMsg: readStr(objHeap, arrHeap, h, "unreachableMsg") }, loc);
 		},
 		NodeKind.SwitchStmt => {
 			const switchDisc = readNode(objHeap, arrHeap, h, "switchDisc", loc);
@@ -2084,7 +2082,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		},
 		NodeKind.TryCatchStmt => {
 			const tryBody = readNode(objHeap, arrHeap, h, "tryBody", loc);
-			const catchName = gensymName(objHeap, h, readStr(objHeap, h, "catchName"));
+			const catchName = gensymName(objHeap, h, readStr(objHeap, arrHeap, h, "catchName"));
 			const catchBody = readNode(objHeap, arrHeap, h, "catchBody", loc);
 			const finallyBody = readNode(objHeap, arrHeap, h, "finallyBody", loc);
 			return createNodeAt(NodeKind.TryCatchStmt, {
@@ -2096,23 +2094,23 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === Declarations ===
 		NodeKind.FunctionDecl => {
-			const fnName = readStr(objHeap, h, "fnName");
+			const fnName = readStr(objHeap, arrHeap, h, "fnName");
 			const params = gensymNames(objHeap, h, readStrs(objHeap, arrHeap, h, "params"));
 			const fnParamTypes = readStrs(objHeap, arrHeap, h, "fnParamTypes");
 			const fnBody = readNode(objHeap, arrHeap, h, "fnBody", loc);
-			const fnFlags = readStr(objHeap, h, "fnFlags");
-			const fnReturnType = readStr(objHeap, h, "fnReturnType");
+			const fnFlags = readStr(objHeap, arrHeap, h, "fnFlags");
+			const fnReturnType = readStr(objHeap, arrHeap, h, "fnReturnType");
 			rebindRedeclaredLocals(wireParamSyms(objHeap, arrHeap, h), fnBody);
 			const fnDefaults = readDefaults(objHeap, arrHeap, h, "fnDefaults", loc);
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
-				fnDefaults, nativeName: readStr(objHeap, h, "nativeName"), nameLocation: loc,
+				fnDefaults, nativeName: readStr(objHeap, arrHeap, h, "nativeName"), nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ImportDecl => {
 			const importNames = readStrs(objHeap, arrHeap, h, "importNames");
 			const importAliases = readStrs(objHeap, arrHeap, h, "importAliases");
-			const importSource = readStr(objHeap, h, "importSource");
+			const importSource = readStr(objHeap, arrHeap, h, "importSource");
 			return createNodeAt(NodeKind.ImportDecl, {
 				importNames, importAliases, importSource, nameLocations: [],
 			}, loc);
@@ -2122,25 +2120,25 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.ExportDecl, { exportedDecl }, loc);
 		},
 		NodeKind.TypeAliasDecl => {
-			const aliasName = readStr(objHeap, h, "aliasName");
-			const aliasType = readStr(objHeap, h, "aliasType");
+			const aliasName = readStr(objHeap, arrHeap, h, "aliasName");
+			const aliasType = readStr(objHeap, arrHeap, h, "aliasType");
 			const aliasIsDistinct = readBool(objHeap, h, "aliasIsDistinct");
 			return createNodeAt(NodeKind.TypeAliasDecl, {
 				aliasName, aliasType, aliasIsDistinct,
-				aliasGenericParams: readStr(objHeap, h, "aliasGenericParams"),
+				aliasGenericParams: readStr(objHeap, arrHeap, h, "aliasGenericParams"),
 				discriminantName: "", discriminantType: "",
 				variantKeys: [], variantTypes: [], nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.EnumDecl => {
-			const enumName = readStr(objHeap, h, "enumName");
+			const enumName = readStr(objHeap, arrHeap, h, "enumName");
 			const enumMembers = readStrs(objHeap, arrHeap, h, "enumMembers");
 			return createNodeAt(NodeKind.EnumDecl, {
 				enumName, enumMembers, enumValues: readNums(objHeap, arrHeap, h, "enumValues"), nameLocation: loc, memberLocations: [], enumInits: [] as Node[],
 			}, loc);
 		},
 		NodeKind.InterfaceDecl => {
-			const interfaceName = readStr(objHeap, h, "interfaceName");
+			const interfaceName = readStr(objHeap, arrHeap, h, "interfaceName");
 			const interfaceFields = readStrs(objHeap, arrHeap, h, "interfaceFields");
 			const interfaceFieldTypes = readStrs(objHeap, arrHeap, h, "interfaceFieldTypes");
 			const decl = createNodeAt(NodeKind.InterfaceDecl, {
@@ -2150,11 +2148,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
 				interfaceFieldDecorators: readFieldDecorators(objHeap, arrHeap, h, interfaceFields.length, loc),
 			}, loc);
-			decl.typeArg = readStr(objHeap, h, "typeArg");
+			decl.typeArg = readStr(objHeap, arrHeap, h, "typeArg");
 			return decl;
 		},
 		NodeKind.StructDecl => {
-			const interfaceName = readStr(objHeap, h, "interfaceName");
+			const interfaceName = readStr(objHeap, arrHeap, h, "interfaceName");
 			const interfaceFields = readStrs(objHeap, arrHeap, h, "interfaceFields");
 			const interfaceFieldTypes = readStrs(objHeap, arrHeap, h, "interfaceFieldTypes");
 			const decl = createNodeAt(NodeKind.StructDecl, {
@@ -2164,51 +2162,51 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
 				interfaceFieldDecorators: readFieldDecorators(objHeap, arrHeap, h, interfaceFields.length, loc),
 			}, loc);
-			decl.typeArg = readStr(objHeap, h, "typeArg");
+			decl.typeArg = readStr(objHeap, arrHeap, h, "typeArg");
 			return decl;
 		},
 		NodeKind.ClassDecl => {
-			const className = readStr(objHeap, h, "className");
-			const classExtends = readStr(objHeap, h, "classExtends");
+			const className = readStr(objHeap, arrHeap, h, "className");
+			const classExtends = readStr(objHeap, arrHeap, h, "classExtends");
 			const classBody = readNodes(objHeap, arrHeap, h, "classBody", loc);
 			const classImplements = readStrs(objHeap, arrHeap, h, "classImplements");
 			const decl = createNodeAt(NodeKind.ClassDecl, {
 				className, classExtends, classBody, nameLocation: loc, classImplements,
 			}, loc);
-			decl.typeArg = readStr(objHeap, h, "typeArg");
+			decl.typeArg = readStr(objHeap, arrHeap, h, "typeArg");
 			return decl;
 		},
 		NodeKind.ActorDecl => {
-			const actorName = readStr(objHeap, h, "actorName");
+			const actorName = readStr(objHeap, arrHeap, h, "actorName");
 			const actorBody = readNodes(objHeap, arrHeap, h, "actorBody", loc);
 			const decl = createNodeAt(NodeKind.ActorDecl, { actorName, actorBody, nameLocation: loc }, loc);
-			decl.typeArg = readStr(objHeap, h, "typeArg");
+			decl.typeArg = readStr(objHeap, arrHeap, h, "typeArg");
 			return decl;
 		},
 		NodeKind.PropertyDecl => {
-			const propName = readStr(objHeap, h, "propName");
-			const propType = readStr(objHeap, h, "propType");
+			const propName = readStr(objHeap, arrHeap, h, "propName");
+			const propType = readStr(objHeap, arrHeap, h, "propType");
 			const propIsStatic = readBool(objHeap, h, "propIsStatic");
 			const propIsReadonly = readBool(objHeap, h, "propIsReadonly");
-			const propVisibility = readStr(objHeap, h, "propVisibility");
+			const propVisibility = readStr(objHeap, arrHeap, h, "propVisibility");
 			const propInitializer = readNode(objHeap, arrHeap, h, "propInitializer", loc);
 			return createNodeAt(NodeKind.PropertyDecl, {
 				propName, propType, propIsStatic, propIsReadonly, propVisibility, propInitializer,
 			}, loc);
 		},
 		NodeKind.MethodDecl => {
-			const methodName = readStr(objHeap, h, "methodName");
+			const methodName = readStr(objHeap, arrHeap, h, "methodName");
 			const methodParams = readStrs(objHeap, arrHeap, h, "methodParams");
 			const methodParamTypes = readStrs(objHeap, arrHeap, h, "methodParamTypes");
 			const methodBody = readNode(objHeap, arrHeap, h, "methodBody", loc);
 			const methodIsStatic = readBool(objHeap, h, "methodIsStatic");
-			const methodFlags = readStr(objHeap, h, "methodFlags");
-			const methodVisibility = readStr(objHeap, h, "methodVisibility");
-			const methodReturnType = readStr(objHeap, h, "methodReturnType");
+			const methodFlags = readStr(objHeap, arrHeap, h, "methodFlags");
+			const methodVisibility = readStr(objHeap, arrHeap, h, "methodVisibility");
+			const methodReturnType = readStr(objHeap, arrHeap, h, "methodReturnType");
 			return createNodeAt(NodeKind.MethodDecl, {
 				methodName, methodParams, methodParamTypes, methodBody,
 				methodIsStatic, methodFlags, methodVisibility, methodReturnType,
-				methodDefaults: readDefaults(objHeap, arrHeap, h, "methodDefaults", loc), nativeName: readStr(objHeap, h, "nativeName"), nameLocation: loc,
+				methodDefaults: readDefaults(objHeap, arrHeap, h, "methodDefaults", loc), nativeName: readStr(objHeap, arrHeap, h, "nativeName"), nameLocation: loc,
 			}, loc);
 		},
 		NodeKind.ConstructorDecl => {
@@ -2221,16 +2219,16 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		},
 		NodeKind.ExternDecl => {
 			const externKind = readInt(objHeap, h, "externKind") as ExternKind;
-			const externName = readStr(objHeap, h, "externName");
-			const nativeName = readStr(objHeap, h, "nativeName");
-			const externType = readStr(objHeap, h, "externType");
+			const externName = readStr(objHeap, arrHeap, h, "externName");
+			const nativeName = readStr(objHeap, arrHeap, h, "nativeName");
+			const externType = readStr(objHeap, arrHeap, h, "externType");
 			return createNodeAt(NodeKind.ExternDecl, { externKind, externName, nativeName, externType }, loc);
 		},
 		NodeKind.MacroDecl => {
-			const macroDeclName = readStr(objHeap, h, "macroDeclName");
+			const macroDeclName = readStr(objHeap, arrHeap, h, "macroDeclName");
 			const macroDeclParams = readStrs(objHeap, arrHeap, h, "macroDeclParams");
 			const macroDeclParamTypes = readStrs(objHeap, arrHeap, h, "macroDeclParamTypes");
-			const macroDeclReturnType = readStr(objHeap, h, "macroDeclReturnType");
+			const macroDeclReturnType = readStr(objHeap, arrHeap, h, "macroDeclReturnType");
 			const macroDeclBody = readNode(objHeap, arrHeap, h, "macroDeclBody", loc);
 			return createNodeAt(NodeKind.MacroDecl, { macroDeclName, macroDeclParams, macroDeclParamTypes, macroDeclReturnType, macroDeclBody }, loc);
 		},
@@ -2240,7 +2238,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.DecoratedDecl, { decorators, decoratedNode }, loc);
 		},
 		NodeKind.MacroInvocation => {
-			const macroName = readStr(objHeap, h, "macroName");
+			const macroName = readStr(objHeap, arrHeap, h, "macroName");
 			const macroArgs = readNodes(objHeap, arrHeap, h, "macroArgs", loc);
 			const macroHasParens = readBool(objHeap, h, "macroHasParens");
 			return createNodeAt(NodeKind.MacroInvocation, { macroName, macroArgs, macroHasParens }, loc);
@@ -2248,14 +2246,14 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === Testing ===
 		NodeKind.TestDecl => {
-			const testName = readStr(objHeap, h, "testName");
+			const testName = readStr(objHeap, arrHeap, h, "testName");
 			const testBody = readNode(objHeap, arrHeap, h, "testBody", loc);
 			return createNodeAt(NodeKind.TestDecl, { testName, testBody }, loc);
 		},
 		NodeKind.AssertStmt => {
 			const assertExpr = readNode(objHeap, arrHeap, h, "assertExpr", loc);
-			const assertSource = readStr(objHeap, h, "assertSource");
-			const assertMessage = readStr(objHeap, h, "assertMessage");
+			const assertSource = readStr(objHeap, arrHeap, h, "assertSource");
+			const assertMessage = readStr(objHeap, arrHeap, h, "assertMessage");
 			const assertMessageExpr = readNode(objHeap, arrHeap, h, "assertMessageExpr", loc);
 			return createNodeAt(NodeKind.AssertStmt, { assertExpr, assertSource, assertMessage, assertMessageExpr }, loc);
 		},
@@ -2280,7 +2278,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const typExprIndexKey = readNode(objHeap, arrHeap, h, "typExprIndexKey", loc);
 			const typExprIndexValue = readNode(objHeap, arrHeap, h, "typExprIndexValue", loc);
 			const typExprFieldDecorators = readNodeArrays(objHeap, arrHeap, h, "typExprFieldDecorators", loc);
-			const typExprTypeName = readStr(objHeap, h, "typExprTypeName");
+			const typExprTypeName = readStr(objHeap, arrHeap, h, "typExprTypeName");
 			return createNodeAt(NodeKind.TypeObject, {
 				typExprFieldNames, typExprFieldTypes, typExprIndexKey, typExprIndexValue,
 				typExprFieldDecorators, typExprTypeName,
@@ -2304,9 +2302,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		},
 		NodeKind.TypeUnion => {
 			const typExprMembers = readNodes(objHeap, arrHeap, h, "typExprMembers", loc);
-			const discFieldName = readStr(objHeap, h, "discFieldName");
+			const discFieldName = readStr(objHeap, arrHeap, h, "discFieldName");
 			const variantKeys = readStrs(objHeap, arrHeap, h, "variantKeys");
-			const discKind = readStr(objHeap, h, "discKind");
+			const discKind = readStr(objHeap, arrHeap, h, "discKind");
 			return createNodeAt(NodeKind.TypeUnion, {
 				typExprMembers, discFieldName, variantKeys, discKind,
 			}, loc);
@@ -2318,7 +2316,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === JSX (compile-time only — reverse of nodeToValue JSX cases) ===
 		NodeKind.JSXElement => {
-			const jsxTag = readStr(objHeap, h, "jsxTag");
+			const jsxTag = readStr(objHeap, arrHeap, h, "jsxTag");
 			const jsxAttrs = readNodes(objHeap, arrHeap, h, "jsxAttrs", loc);
 			const jsxChildren = readNodes(objHeap, arrHeap, h, "jsxChildren", loc);
 			const jsxSelfClosing = readBool(objHeap, h, "jsxSelfClosing");
@@ -2329,7 +2327,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.JSXFragment, { jsxFragChildren }, loc);
 		},
 		NodeKind.JSXText => {
-			const jsxText = readStr(objHeap, h, "jsxText");
+			const jsxText = readStr(objHeap, arrHeap, h, "jsxText");
 			return createNodeAt(NodeKind.JSXText, { jsxText }, loc);
 		},
 		NodeKind.JSXExpressionContainer => {
@@ -2337,7 +2335,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.JSXExpressionContainer, { jsxExpr }, loc);
 		},
 		NodeKind.JSXAttribute => {
-			const jsxAttrName = readStr(objHeap, h, "jsxAttrName");
+			const jsxAttrName = readStr(objHeap, arrHeap, h, "jsxAttrName");
 			const jsxAttrValue = readNode(objHeap, arrHeap, h, "jsxAttrValue", loc);
 			return createNodeAt(NodeKind.JSXAttribute, { jsxAttrName, jsxAttrValue }, loc);
 		},
@@ -2406,7 +2404,7 @@ test "StringLiteral serialization" {
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
 	assert kindVal.intVal == (NodeKind.StringLiteral as int64);
 	const strVal = heapObjectGetField(objHeap, val.intVal, "value");
-	assert strVal.strVal == "hello";
+	assert heapStringText(arrHeap, strVal) == "hello";
 }
 
 test "BooleanLiteral serialization" {
@@ -2432,7 +2430,7 @@ test "Identifier serialization" {
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
 	assert kindVal.intVal == (NodeKind.Identifier as int64);
 	const nameVal = heapObjectGetField(objHeap, val.intVal, "name");
-	assert nameVal.strVal == "foo";
+	assert heapStringText(arrHeap, nameVal) == "foo";
 }
 
 test "BinaryExpr serialization" {
@@ -2447,7 +2445,7 @@ test "BinaryExpr serialization" {
 	const val = nodeToValue(binNode, objHeap, arrHeap);
 	assert val.kind == RaiserValueKind.Object;
 	const opVal = heapObjectGetField(objHeap, val.intVal, "operator");
-	assert opVal.strVal == "+";
+	assert heapStringText(arrHeap, opVal) == "+";
 	const leftVal = heapObjectGetField(objHeap, val.intVal, "left");
 	assert leftVal.kind == RaiserValueKind.Object;
 	const leftKind = heapObjectGetField(objHeap, leftVal.intVal, "kind");
@@ -3844,7 +3842,7 @@ test "nodeToValue — Node with primitive nodeType emits Identifier under \"node
 	// The serialized type-AST is an Identifier — read its "name" field.
 	const nameVal = heapObjectGetField(objH, typeFieldVal.intVal, "name");
 	assert nameVal.kind == RaiserValueKind.String;
-	assert nameVal.strVal == "int32";
+	assert heapStringText(arrH, nameVal) == "int32";
 	// And its kind is NodeKind.Identifier.
 	const kindVal = heapObjectGetField(objH, typeFieldVal.intVal, "kind");
 	assert kindVal.kind == RaiserValueKind.Int;
@@ -4064,7 +4062,7 @@ test "nodeToValue — Node with resolvedSym emits { name, symbolKind } object" {
 	assert symVal.kind == RaiserValueKind.Object;
 	const nameVal = heapObjectGetField(objH, symVal.intVal, "name");
 	assert nameVal.kind == RaiserValueKind.String;
-	assert nameVal.strVal == "myVar";
+	assert heapStringText(arrH, nameVal) == "myVar";
 	const kindVal = heapObjectGetField(objH, symVal.intVal, "symbolKind");
 	assert kindVal.kind == RaiserValueKind.Int;
 	assert kindVal.intVal == SymbolKind.Variable as int64;
@@ -4123,7 +4121,7 @@ test "nodeToValue — a call's callee shows the overload the call resolved to" {
 	assert heapArrayLen(arrH, params.intVal) == 2;
 	assert boundTypeOfObject(objH, calleeVal.intVal) == parts[0].resolvedSym.overloads[0].symbolType;
 	const symVal = heapObjectGetField(objH, calleeVal.intVal, "resolvedSym");
-	assert heapObjectGetField(objH, symVal.intVal, "modulePath").strVal == "other";
+	assert heapStringText(arrH, heapObjectGetField(objH, symVal.intVal, "modulePath")) == "other";
 }
 
 test "nodeToValue — a call that resolved to the first overload keeps its callee" {
@@ -4161,7 +4159,7 @@ test "nodeToValue — Symbol with empty name still emits object with empty strin
 	const v = nodeToValue(ident, objH, arrH);
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
 	const nameVal = heapObjectGetField(objH, symVal.intVal, "name");
-	assert nameVal.strVal == "";
+	assert heapStringText(arrH, nameVal) == "";
 }
 
 test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {

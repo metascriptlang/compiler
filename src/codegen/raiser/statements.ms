@@ -11,7 +11,7 @@ import {
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
-import { raiserNil, raiserInt, raiserString } from "../../raiser/value";
+import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declaredSymbol, regIsFixedLocal,
@@ -319,7 +319,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 		allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 1, headReg, 0));
 		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 2, idxReg, 0));
-		emitInst(s, raiserABC(RaiserOpcode.CallHost, callReg, addConst(s, raiserString("msStringByteAt")), 2));
+		emitInst(s, raiserABC(RaiserOpcode.CallHost, callReg, addConst(s, raiserConstString("msStringByteAt")), 2));
 		emitInst(s, raiserABC(RaiserOpcode.Move, elemReg, callReg, 0));
 	} else {
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, elemReg, arrReg, idxReg));
@@ -335,7 +335,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const messageReg = allocReg(s);
 	emitInst(s, raiserABC(lenOp, nowReg, tailReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.BeqI64, nowReg, lenReg, 2));
-	emitLoadConst(s, messageReg, raiserString(`the length of the ${isString ? "string" : "array"} changed while iterating over it`));
+	emitLoadConst(s, messageReg, raiserConstString(`the length of the ${isString ? "string" : "array"} changed while iterating over it`));
 	emitInst(s, raiserABC(RaiserOpcode.Throw, messageReg, 0, 0));
 
 	// Increment index: __i++

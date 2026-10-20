@@ -7,6 +7,7 @@
 //  4. rangeCheckInject    — insert runtime range checks for narrowing integer casts
 //  5. optionalCoercion    — wrap T returns for T|null return types
 //  6. builtinLower        — rewrite @builtin calls + extern extensions to C-compatible AST
+//  7. inductionPointer    — carry a Span index of a @computedGoto loop as a pointer under --danger (last: it reads the final shape of every access and call)
 //
 // NOTE: moveExprLower removed — MoveExpr survives to Phase 4 (analyzer) and Phase 5 (codegen).
 // Analyzer handles RC semantics (wasMoved, errFailedMove). Codegen unwraps to inner expression.
@@ -25,6 +26,7 @@ import { lowerStringOps } from "./stringOpLower";
 import { lowerEnumToString } from "./enumToStringLower";
 import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerDownConversions } from "./downConvLower";
+import { lowerInductionPointers } from "./inductionPointer";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
 	let result = markClosureCalls(program, ctx);
@@ -39,5 +41,6 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	result = lowerEnumToString(result, ctx);
 	result = lowerDownConversions(result, ctx);
 	result = insertVarParamDerefs(result, ctx);
+	result = lowerInductionPointers(result, ctx);
 	return result;
 }

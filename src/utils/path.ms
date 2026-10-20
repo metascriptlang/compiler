@@ -11,7 +11,7 @@ import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 export function findProjectRoot(entryFile: string = ""): string {
 	// Strategy 1: walk up from entry file's directory
 	if (entryFile != "") {
-		let dir = dirname(isAbsolute(entryFile) ? entryFile : normalize(join(cwd(), entryFile)));
+		let dir = dirname(normalize(isAbsolute(entryFile) ? entryFile : join(cwd(), entryFile)));
 		let depth = 0;
 		while (depth < 20) {
 			if (exists(join(dir, "build.ms"))) return dir;
@@ -21,16 +21,17 @@ export function findProjectRoot(entryFile: string = ""): string {
 		}
 	}
 	// Strategy 2: walk up from CWD
-	let dir = cwd();
+	const here = normalize(cwd());
+	let dir = here;
 	let depth = 0;
 	while (depth < 20) {
 		if (exists(join(dir, "build.ms"))) return dir;
 		const parent = dirname(dir);
-		if (parent == dir) return cwd();
+		if (parent == dir) return here;
 		dir = parent;
 		depth = depth + 1;
 	}
-	return cwd();
+	return here;
 }
 
 // Resolve bare argv[0] (e.g. "msc") to full path by searching $PATH.
@@ -172,6 +173,11 @@ test "findProjectRoot walks up from a relative entry's own directory" {
 	removeAll(join(cwd(), "out/findRootProbe"));
 	assert direct.endsWith("out/findRootProbe/app");
 	assert nested == direct;
+}
+
+test "findProjectRoot spells every root the way module paths are spelled" {
+	assert !findProjectRoot("out/noRootProbe/main.ms").includes("\\");
+	assert !findProjectRoot().includes("\\");
 }
 
 test "canonicalRootDir — an already-clean root is unchanged" {

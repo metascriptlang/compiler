@@ -25,7 +25,6 @@ export function copyTypedValue(
 	value: RaiserValue,
 	plans: RaiserCopyPlan[],
 	index: int32,
-	refcounted: boolean,
 ): RaiserValue {
 	if (index < 0) {
 		const copied = raiserNil();
@@ -37,9 +36,9 @@ export function copyTypedValue(
 		const handle = heapAllocArray(arrays);
 		const count = heapArrayLen(arrays, value.intVal);
 		for (let i = 0; i < count; i = i + 1) {
-			const copied = copyTypedValue(arrays, objects, heapArrayGet(arrays, value.intVal, i), plans, plan.children[0], refcounted);
+			const copied = copyTypedValue(arrays, objects, heapArrayGet(arrays, value.intVal, i), plans, plan.children[0]);
 			heapArrayPush(arrays, handle, copied);
-			if (refcounted) rcIncref(arrays, objects, copied);
+			rcIncref(arrays, objects, copied);
 		}
 		return raiserArray(handle);
 	}
@@ -52,12 +51,12 @@ export function copyTypedValue(
 			copyValueInto(copied, field.value);
 			for (let i = 0; i < plan.names.length; i += 1) {
 				if (plan.names[i] == field.name) {
-					copied = copyTypedValue(arrays, objects, field.value, plans, plan.children[i], refcounted);
+					copied = copyTypedValue(arrays, objects, field.value, plans, plan.children[i]);
 					break;
 				}
 			}
 			heapObjectSetField(objects, handle, field.name, copied);
-			if (refcounted) rcIncref(arrays, objects, copied);
+			rcIncref(arrays, objects, copied);
 		}
 		return raiserObject(handle);
 	}
@@ -66,7 +65,7 @@ export function copyTypedValue(
 		if (discriminant.kind != RaiserValueKind.Nil) {
 			for (let i = 0; i < plan.discriminants.length; i += 1) {
 				if (plan.discriminants[i] == discriminant.intVal) {
-					return copyTypedValue(arrays, objects, value, plans, plan.children[i], refcounted);
+					return copyTypedValue(arrays, objects, value, plans, plan.children[i]);
 				}
 			}
 		}
@@ -101,7 +100,7 @@ test "typed copy releases owned children and retained shared references" {
 		children: [1, 0],
 		discriminants: [],
 	};
-	const copied = copyTypedValue(arrays, objects, source, [preserve, sequence, plan], 2, true);
+	const copied = copyTypedValue(arrays, objects, source, [preserve, sequence, plan], 2);
 	rcIncref(arrays, objects, copied);
 	assert heapObjectGetField(objects, copied.intVal, "items").intVal != items.intVal;
 	assert heapObjectGetField(objects, copied.intVal, "shared").intVal == shared.intVal;
@@ -125,7 +124,7 @@ test "union plan copies the arm its discriminant selects" {
 	const right: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: ["kind", "side"], children: [0, 3], discriminants: [] };
 	const struct: RaiserCopyPlan = { kind: RaiserCopyKind.Object, names: [], children: [], discriminants: [] };
 	const union: RaiserCopyPlan = { kind: RaiserCopyKind.Union, names: ["kind"], children: [1, 2], discriminants: [5, 9] };
-	const copied = copyTypedValue(arrays, objects, source, [preserve, left, right, struct, union], 4, false);
+	const copied = copyTypedValue(arrays, objects, source, [preserve, left, right, struct, union], 4);
 	assert copied.intVal != source.intVal;
 	assert heapObjectGetField(objects, copied.intVal, "side").intVal != inner.intVal;
 }

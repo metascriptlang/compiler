@@ -7,7 +7,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 | File | Holds |
 |------|-------|
 | `bytecode.ms` | `RaiserOpcode`, `RaiserInstruction`, ABC / ABx / Ax operand helpers |
-| `value.ms` | `RaiserValue`, array and object heaps (rc, color, free list), `rcIncref` / `rcDecref`, `copyGraph` |
+| `value.ms` | `RaiserValue`, array, object and string heaps (rc, color, free list), `rcIncref` / `rcDecref`, `copyGraph` |
 | `valueCopy.ms` | `copyTypedValue`: runs the copy plans `CopyValue` carries |
 | `module.ms` | `RaiserFunction`, `RaiserModule` |
 | `vm.ms` | dispatch loop, strands and scheduler, futures, safepoints, loop budget |
@@ -23,6 +23,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 - **The VM knows no AST** — `src/raiser/` never imports a node type; codegen hands it a `RaiserModule`.
 - **Dispatch is one `match (op)` in `vm.ms`, one arm per opcode** — it compiles to a C `switch` over the opcode (a jump table); a `break` or `continue` in an arm still targets the dispatch loop, not the generated switch.
 - **`gcMode` picks the memory regime per VM** — `createVM` and `createContext` default to `"arena"` (no refcount); `cmdRunRaiser` sets `"orc"`. RC and the cycle collector run only under `"orc"`.
+- **A string is a handle on the strand's string heap** — text reaches a host function only through `unboxString` and returns through `boxString`, both on the active host heap; module constants and field names are interned handles below zero that every heap reads.
 - **Every value that crosses strand heaps goes through `copyGraph`** — `spawn` copies the closure env and the global slots into the new strand's heap, `futureComplete` copies the result into the future's own heap, the awaiting reader copies it out.
 - **A parked strand rewinds to its `Await` and runs it again on resume** — no partial-instruction state is saved anywhere.
 - **`Halt` with `b = 1` skips the strand drain** — that is `process.exit`; a plain `Halt` lets the remaining strands finish first.

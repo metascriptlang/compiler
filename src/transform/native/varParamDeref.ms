@@ -77,6 +77,7 @@ function visit(node: Node): Node {
 	if (node.kind == NodeKind.HiddenDeref) {
 		const d = node.data as HiddenDerefData;
 		if (d.expr == null) return node;
+		if (d.expr.kind == NodeKind.Identifier && d.expr.nodeType != null && d.expr.nodeType.kind == TypeKind.Borrow) return node;
 		d.expr = visit(d.expr);
 		return node;
 	}

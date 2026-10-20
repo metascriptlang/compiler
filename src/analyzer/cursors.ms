@@ -14,7 +14,7 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind, Symbol, Type,
+	Node, NodeKind, Symbol, Type, TypeKind,
 	VariableDeclData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
@@ -30,7 +30,7 @@ import { forEachChild } from "../ast/visitor";
 import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
-import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
+import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer, receiverOf } from "../checker/varPartitions";
 
 // ===== VarFlag (per-variable analysis flags) =====
 
@@ -52,27 +52,51 @@ function getIdentSym(node: Node): Symbol | null {
 	return null;
 }
 
-function allRoots(node: Node, result: Symbol[]): void {
+function lentSource(call: Node): Node | null {
+	const args = (call.data as CallExprData).arguments;
+	const recv = receiverOf(call);
+	return recv != null ? recv : (args.length > 0 ? args[0] : null);
+}
+
+function isLentCall(node: Node): boolean {
+	return node.kind == NodeKind.CallExpr && node.nodeType != null && node.nodeType.kind == TypeKind.Borrow;
+}
+
+function lentTempInit(p: Partitions, sym: Symbol | null): Node | null {
+	for (let i = 0; i < p.lentTemps.length; i += 1) {
+		if (p.lentTemps[i] == sym) return p.lentInits[i];
+	}
+	return null;
+}
+
+function allRoots(p: Partitions, node: Node, result: Symbol[]): void {
 	if (node == null) return;
 	match (node.kind) {
-		NodeKind.Identifier => { if (node.resolvedSym != null) result.push(node.resolvedSym); },
-		NodeKind.MemberExpr => allRoots((node.data as MemberExprData).object, result),
-		NodeKind.ArrayAccess => allRoots((node.data as ArrayAccessData).array, result),
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => allRoots((node.data as { expr: Node }).expr, result),
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => allRoots((node.data as HiddenStdConvData).convExpr, result),
-		NodeKind.TypeAssertion => allRoots((node.data as TypeAssertionData).asExpr, result),
+		NodeKind.Identifier => {
+			const lent = lentTempInit(p, node.resolvedSym);
+			if (lent != null) allRoots(p, lent, result);
+			else if (node.resolvedSym != null) result.push(node.resolvedSym);
+		},
+		NodeKind.MemberExpr => allRoots(p, (node.data as MemberExprData).object, result),
+		NodeKind.ArrayAccess => allRoots(p, (node.data as ArrayAccessData).array, result),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => allRoots(p, (node.data as { expr: Node }).expr, result),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => allRoots(p, (node.data as HiddenStdConvData).convExpr, result),
+		NodeKind.TypeAssertion => allRoots(p, (node.data as TypeAssertionData).asExpr, result),
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			allRoots(d.ternaryConsequent, result);
-			allRoots(d.ternaryAlternate, result);
+			allRoots(p, d.ternaryConsequent, result);
+			allRoots(p, d.ternaryAlternate, result);
 		},
-		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { allRoots(e, result); } },
-		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { allRoots(e, result); } },
-		NodeKind.SpreadExpr => allRoots((node.data as SpreadExprData).spreadArg, result),
-		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { allRoots(a, result); } },
+		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { allRoots(p, e, result); } },
+		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { allRoots(p, e, result); } },
+		NodeKind.SpreadExpr => allRoots(p, (node.data as SpreadExprData).spreadArg, result),
+		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { allRoots(p, a, result); } },
 		NodeKind.CallExpr => {
-			if (containsPointer(node.nodeType, 0)) {
-				for (const a of (node.data as CallExprData).arguments) { allRoots(a, result); }
+			if (isLentCall(node)) {
+				const first = lentSource(node);
+				if (first != null) allRoots(p, first, result);
+			} else if (containsPointer(node.nodeType, 0)) {
+				for (const a of (node.data as CallExprData).arguments) { allRoots(p, a, result); }
 			}
 		},
 		_ => {},
@@ -82,7 +106,7 @@ function allRoots(node: Node, result: Symbol[]): void {
 function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, src: Node): void {
 	if (!containsPointer(destType, 0)) return;
 	const sources: Symbol[] = [];
-	allRoots(src, sources);
+	allRoots(p, src, sources);
 	for (const t of targets) {
 		for (const s of sources) { ufConnect(p, t, s); }
 	}
@@ -92,7 +116,7 @@ function potentialMutationViaArg(p: Partitions, arg: Node): void {
 	if (arg == null || arg.kind == NodeKind.HiddenAddr) return;
 	if (!containsPointer(arg.nodeType, 0)) return;
 	const roots: Symbol[] = [];
-	allRoots(arg, roots);
+	allRoots(p, arg, roots);
 	for (const r of roots) { potentialMutation(p, r); }
 }
 
@@ -118,6 +142,11 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 
 		// Identifier: just a dependency (connect), unless in constructor context
 		NodeKind.Identifier => {
+			const lent = lentTempInit(p, src.resolvedSym);
+			if (lent != null) {
+				destMightOwn(p, destIdx, lent);
+				return;
+			}
 			const srcId = variableId(p, src.resolvedSym);
 			if (srcId < 0) {
 				// Unknown variable (module-level, imported) — unsafe to alias
@@ -169,7 +198,9 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 
 		// Calls: return value is constructed → dest owns data
 		NodeKind.CallExpr | NodeKind.NewExpr => {
-			p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+			const first = isLentCall(src) ? lentSource(src) : null;
+			if (first != null) destMightOwn(p, destIdx, first);
+			else p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 		},
 
 		// Move: explicit ownership transfer
@@ -208,6 +239,10 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			liveRanges(p, d.initializer);
+			if (d.initializer != null && node.resolvedSym != null && isLentCall(d.initializer) && hasFlag(node.resolvedSym, SymbolFlag.HoistedCall)) {
+				p.lentTemps.push(node.resolvedSym);
+				p.lentInits.push(d.initializer);
+			}
 			// A global is never a cursor candidate: the module owns it for the whole program.
 			if (node.resolvedSym != null && !hasFlag(node.resolvedSym, SymbolFlag.Global)) registerVariable(p, node.resolvedSym, false);
 			// Declared in loop body → effectively reassigned each iteration
@@ -400,7 +435,7 @@ function deps(p: Partitions, dest: Symbol | null, src: Node): void {
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
 	const srcRoots: Symbol[] = [];
-	allRoots(src, srcRoots);
+	allRoots(p, src, srcRoots);
 	for (const srcSym of srcRoots) {
 		if (srcSym == dest) continue; // self-assign ok (it = it.next)
 		if (hasFlag(srcSym, SymbolFlag.Global)) {
@@ -453,7 +488,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 				// Assignment to variable → mutation on LHS graph
 				const lhsRoots: Symbol[] = [];
-				allRoots(d.left, lhsRoots);
+				allRoots(p, d.left, lhsRoots);
 				for (const r of lhsRoots) { potentialMutation(p, r); }
 				connectStore(p, lhsRoots, d.left.nodeType, d.right);
 
@@ -477,7 +512,7 @@ function trav(p: Partitions, node: Node | null): void {
 			// Method call (obj.method(...)) → obj is potentially mutated
 			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr) {
 				const objRoots: Symbol[] = [];
-				allRoots((d.callee.data as MemberExprData).object, objRoots);
+				allRoots(p, (d.callee.data as MemberExprData).object, objRoots);
 				for (const r of objRoots) { potentialMutation(p, r); }
 			}
 
@@ -485,7 +520,7 @@ function trav(p: Partitions, node: Node | null): void {
 			for (const arg of d.arguments) {
 				if (arg != null && arg.kind == NodeKind.HiddenAddr) {
 					const addrRoots: Symbol[] = [];
-					allRoots((arg.data as { expr: Node }).expr, addrRoots);
+					allRoots(p, (arg.data as { expr: Node }).expr, addrRoots);
 					for (const r of addrRoots) {
 						potentialMutation(p, r);
 						// Also prevent cursor on the variable itself

@@ -86,7 +86,9 @@ corpus and san run on the programs whose emitted C or JS the change alters.
 Control compilers and matching successful program signatures are shared under
 ~/.metascript/cache/gate-ctl/v1; both sides emit from one fixed source/std workspace.
 Unsealed entries, changed program keys and failed emits are never reused; four
-published control entries are kept. --lanes, --release and blind paths run the lane whole.
+published control entries are kept. --lanes, --release and blind paths run the lane whole;
+such a gate still emits the candidate beside the tests lane and caches it, so the gate after
+its land finds a warm control.
 
 A known red that has turned green is named as known-now-green but does not fail
 the run: whether this change or an earlier commit on main fixed it, dropping the
@@ -119,7 +121,7 @@ env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
         GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select,
-        select-whole or select-off; select-off has zero seconds and empty counts
+        select-whole, select-off or adopt; select-off has zero seconds and empty counts, adopt only seconds and total
 USAGE
 }
 
@@ -134,6 +136,23 @@ cap_jobs() {
     [ "$jobs" -le "$cap" ] || jobs=$cap
   done
   printf '%s\n' "$((10#$jobs))"
+}
+slow_starts() {
+  local n=$1 slow=0 t
+  shift
+  while [ "$n" -gt 0 ]; do
+    t=${EPOCHREALTIME//[.,]/}
+    "$@" >/dev/null 2>&1
+    [ $((${EPOCHREALTIME//[.,]/} - t)) -le 500000 ] || slow=$((slow + 1))
+    n=$((n - 1))
+  done
+  echo "$slow"
+}
+warn_slow_starts() {
+  local slow
+  [ -n "${EPOCHREALTIME:-}" ] || return 0
+  slow=$(slow_starts 20 /usr/bin/true)
+  [ "$slow" -lt 5 ] || say "gate: WARNING this host is stalling on process start ($slow of 20 took over 0.5 s); every lane will run several times slower until a reboot clears it"
 }
 ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 ledger() {
@@ -664,7 +683,7 @@ stale_known_self_test() (
   w="$d/wt"
   mkdir -p "$w/tools" "$w/src/test" "$w/out/gate" "$d/home"
   cp "$GATE_SH" "$w/tools/gate.sh"
-  printf '#!/bin/sh\nexit 0\n' >"$w/msc"; chmod +x "$w/msc"; cp "$w/msc" "$w/out/gate/msc"
+  printf '#!/bin/sh\nexit 0\n' >"$w/msc"; chmod +x "$w/msc"; cp "$w/msc" "$w/out/gate/msc$EXE_SUFFIX"
   printf 'out/\nmsc\n' >"$w/.gitignore"
   printf '{"fmt":{"a.ms":{"since":"x","note":"n"},"b.ms":{"since":"x","note":"n"},"c.ms":{"since":"x","note":"n"}},"flaky":{"c.ms":{"since":"x","note":"n"}}}\n' >"$w/src/test/known-red.json"
   printf '{"fmt":{"d.ms":{"since":"y","note":"host"}}}\n' >"$d/local.json"
@@ -1152,6 +1171,21 @@ emit_sides() {
   trim_controls "$key" "$(control_key HEAD)"
 }
 
+adopt_whole() {
+  local key cand t0=$SECONDS
+  cand_proven && prepare_emit_workspace && CONTROL_SUPPORT=$(control_support "$CTL_WORK") \
+    && key=$(control_key HEAD) || return 0
+  ! control_ready "$(control_dir "$key")" "$key" || return 0
+  cand=$(stage_emit_compiler "$CAND" cand) || return 0
+  rm -rf "$EMIT" && mkdir -p "$EMIT" || return 0
+  stable_programs >"$EMIT/programs"
+  reusable_programs >"$EMIT/ctl.keys" || return 0
+  emit_side "$cand" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
+  adopt_candidate || return 0
+  say "gate: adopt $(fmt_secs $((SECONDS - t0))) · this tree's emits are cached for the next narrowed gate"
+  select_ledger adopt "$((SECONDS - t0))" "" "$(grep -c . "$EMIT/programs" | tr -d ' ')" "" "" ""
+}
+
 std_swap_self_test() (
   local d bad=0 whole="" sha fake TOP CTL_CACHE CTL_WORK EMIT OUT CAND cand_key="" CONTROL_SUPPORT="" EXE_SUFFIX="" g="git -c user.name=t -c user.email=t@t"
   d=$(mktemp -d) || return 1
@@ -1469,6 +1503,11 @@ FAKE
   return $bad
 )
 
+slow_starts_self_test() {
+  [ "$(slow_starts 2 sleep 0.6)" = 2 ] || { printf 'FAIL slow starts: two 0.6 s starts were not counted\n'; return 1; }
+  [ "$(slow_starts 2 :)" = 0 ] || { printf 'FAIL slow starts: an instant start was counted\n'; return 1; }
+}
+
 emit_width_self_test() (
   local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
@@ -1771,6 +1810,7 @@ CASES
   control_boot_self_test || bad=1
   emit_many_self_test || bad=1
   emit_width_self_test || bad=1
+  slow_starts_self_test || bad=1
   cand_reuse_self_test || bad=1
   resume_self_test || bad=1
   std_swap_self_test || bad=1
@@ -2257,7 +2297,7 @@ PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "sol
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
 trap queue_release EXIT
-[ "$lanes" = tools ] || queue_acquire
+[ "$lanes" = tools ] || { queue_acquire; warn_slow_starts; }
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 resume_open
@@ -2278,10 +2318,12 @@ for phase in "${PHASES[@]}"; do
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
   MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
-  select_pid=""
+  select_pid="" adopt_pid=""
   case " $todo " in *" suite "*|*" tests "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
       (with_slot select_programs; printf '%s %s\n' "$select" "$selected" >"$OUT/select.state") & select_pid=$!
+    elif [ "$select" -eq 0 ] && [ -n "$select_label" ] && [ -x "$CAND" ]; then
+      (with_slot adopt_whole) & adopt_pid=$!
     fi ;;
   esac
   pids="" launched=""
@@ -2303,6 +2345,7 @@ for phase in "${PHASES[@]}"; do
   done
   [ -z "$pids" ] || wait $pids
   if [ -n "$select_pid" ]; then wait "$select_pid"; read -r select selected <"$OUT/select.state"; fi
+  [ -z "$adopt_pid" ] || wait "$adopt_pid"
   for lane in $launched; do
   log="$OUT/$lane.log"
   rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); rc=${rc:-1}
@@ -2362,7 +2405,7 @@ resume_close
 if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   target="$KNOWN"
-  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$GATES_DIR" || die "--record --local: cannot create $GATES_DIR"; }
+  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$(dirname "$KNOWN_LOCAL")" || die "--record --local: cannot create the directory of $KNOWN_LOCAL"; }
   [ -f "$target" ] || echo '{}' >"$target.prev"
   [ -f "$target" ] && cp "$target" "$target.prev"
   merged="$OUT/known.merged"

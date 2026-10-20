@@ -22,7 +22,7 @@ import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/checkPass";
 import { evalASTFull, evalProgramViaEngine, releaseEngineHeaps } from "../../codegen/raiser/eval";
 import {
-	clearObjectHeap, clearArrayHeap, RaiserValueKind,
+	clearObjectHeap, clearArrayHeap, RaiserValueKind, heapStringText,
 } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { unboxFloat } from "../../raiser/marshal";
@@ -385,14 +385,14 @@ test "comptime CallHost msProcessPlatform" {
 	const ctx = _smokeCallHost("extern function msProcessPlatform(): string; return msProcessPlatform();");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.kind == RaiserValueKind.String;
-	assert ctx.lastResult.strVal.length > 0;
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult).length > 0;
 }
 
 test "comptime CallHost msProcessCwd" {
 	const ctx = _smokeCallHost("extern function msProcessCwd(): string; return msProcessCwd();");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.kind == RaiserValueKind.String;
-	assert ctx.lastResult.strVal.length > 0;
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult).length > 0;
 }
 
 test "comptime CallHost msFsExists present file" {
@@ -429,7 +429,7 @@ test "comptime CallHost msProcessGetEnv missing var" {
 	const ctx = _smokeCallHost("extern function msProcessGetEnv(name: string): string; return msProcessGetEnv(\"__NEVER_SET_ABCXYZ__\");");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.kind == RaiserValueKind.String;
-	assert ctx.lastResult.strVal == "";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "";
 }
 
 // Pure-MS test (no CallHost) — verifies the smoke harness compiles plain MS
@@ -457,7 +457,7 @@ test "comptime CallHost msFsReadFile reads README" {
 	);
 	assert ctx.lastError == "";
 	assert ctx.lastResult.kind == RaiserValueKind.String;
-	assert ctx.lastResult.strVal.length > 0;
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult).length > 0;
 }
 
 test "comptime CallHost msFsReadFile missing → empty + errno set" {
@@ -498,7 +498,7 @@ test "comptime CallHost msFsReadDirEntries non-empty" {
 	);
 	assert ctx.lastError == "";
 	assert ctx.lastResult.kind == RaiserValueKind.String;
-	assert ctx.lastResult.strVal.length > 0;
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult).length > 0;
 }
 
 // --- The real test: import std/fs.readFile (NOT an inline extern) ---

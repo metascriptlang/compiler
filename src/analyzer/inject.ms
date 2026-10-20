@@ -1781,7 +1781,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 			// Params are borrows registered as cursors: the caller owns the value and a
 			// store inside the callee copies at the assignment point. A constructor's
 			// parameters from `ownedFrom` on are owned: its callers sink them.
-			registerVar(dctx, pRcInfo, ownedFrom < 0 || pi < ownedFrom || paramTypes[pi].kind == TypeKind.Varargs, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
+			registerVar(dctx, pRcInfo, (paramTypes[pi].kind != TypeKind.Sink && (ownedFrom < 0 || pi < ownedFrom)) || paramTypes[pi].kind == TypeKind.Varargs, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 		}
 	}
 }
@@ -2332,6 +2332,11 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 	const d = stmt.data as ReturnStmtData;
 
 	setNeedsTryAll(dctx);
+
+	if (d.argument != null && d.argument.nodeType != null && d.argument.nodeType.kind == TypeKind.Borrow) {
+		d.argument = processNode(d.argument, dctx, DrcMode.Normal);
+		return stmt;
+	}
 
 	if (d.argument != null) {
 		// Capture the ORIGINAL argument shape before processNode can rewrite it.

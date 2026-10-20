@@ -4,7 +4,7 @@
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
 import { Node, NodeKind, NodeFlag, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData } from "../../ast/node";
-import { JSGenerator, JSHelpers, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier, collectDeclaredLocals } from "./emit";
+import { JSGenerator, JSHelpers, JsTreeLayout, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier, collectDeclaredLocals } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
 import { forEachChild } from "../../ast/visitor";
 import {
@@ -326,6 +326,7 @@ export interface JsModuleResult {
 	namespaceModules: string[];
 	namespaceNames: string[][];
 	exportedNames: string[];
+	declaredNames: string[];
 	testNames: string[];
 	testFuncs: string[];
 	smap: SourceInfo;
@@ -334,8 +335,8 @@ export interface JsModuleResult {
 
 export function generateJSModule(
 	program: Node, jsImports: JsImportEntry[], currentModulePath: string,
+	currentFile: string, layout: JsTreeLayout,
 	importSpecKeys: string[], importSpecVals: string[],
-	moduleSpecKeys: string[], moduleSpecVals: string[],
 	modExportKeys: string[], modExportVals: string[][], modFunctionOwnerNames: string[][],
 	isTestBuild: boolean, sourcemap: boolean,
 ): JsModuleResult {
@@ -343,12 +344,12 @@ export function generateJSModule(
 	gen.multiFile = true;
 	gen.isTestBuild = isTestBuild;
 	gen.currentModulePath = currentModulePath;
+	gen.currentFile = currentFile;
+	gen.layout = layout;
 	gen.smap = sourcemap;
 	gen.sourceFile = currentModulePath;
 	gen.importSpecKeys = importSpecKeys;
 	gen.importSpecVals = importSpecVals;
-	gen.moduleSpecKeys = moduleSpecKeys;
-	gen.moduleSpecVals = moduleSpecVals;
 	gen.modExportKeys = modExportKeys;
 	gen.modExportVals = modExportVals;
 	gen.modFunctionOwnerNames = modFunctionOwnerNames;
@@ -370,6 +371,9 @@ export function generateJSModule(
 		}
 	}
 	const headerChunks = gen.buf.length;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind == NodeKind.FunctionDecl && stmt.resolvedSym != null) gen.ownFunctions.add(stmt.resolvedSym);
+	}
 	emitNodeDispatch(gen, program);
 	let bindings = "";
 	for (let mi = 0; mi < gen.neededModules.length; mi += 1) {
@@ -381,7 +385,7 @@ export function generateJSModule(
 	}
 	if (bindings == "" && gen.moduleRequests == "" && !hasImport && hasTopLevelAwait(program)) bindings = "export {};\n";
 	insertAfterHeader(gen, headerChunks, gen.moduleRequests + bindings);
-	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, namespaceModules: gen.namespaceModules, namespaceNames: gen.namespaceNames, exportedNames: gen.exportedNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
+	return { code: finalize(gen), neededModules: gen.neededModules, neededNames: gen.neededNames, namespaceModules: gen.namespaceModules, namespaceNames: gen.namespaceNames, exportedNames: gen.exportedNames, declaredNames: gen.declaredNames, testNames: gen.testNames, testFuncs: gen.testFuncs, smap: gen.smapInfo };
 }
 
 export function hasTopLevelAwait(node: Node): boolean {
