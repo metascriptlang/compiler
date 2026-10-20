@@ -512,6 +512,7 @@ export function fitDistinctComparison(ctx: CheckerContext, node: Node, d: Binary
 	if (!ownDistinct(leftType) && !ownDistinct(rightType)) return DistinctComparison.None;
 	if (hasGenericParams(leftType) || hasGenericParams(rightType)) return DistinctComparison.None;
 	const op = d.operator;
+	if (primaryComparison(op) == "==" && (leftType.kind == TypeKind.Null || rightType.kind == TypeKind.Null || d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral)) return DistinctComparison.None;
 	const own = declaredComparison(ctx, op, [leftType, rightType]);
 	if (own != null && !comparesAtBase(ctx, own.sym)) return DistinctComparison.None;
 	const primary = primaryComparison(op);
