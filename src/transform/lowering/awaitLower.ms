@@ -30,13 +30,14 @@
 import {
 	Node, NodeKind, DeclKind, SourceLocation,
 	VariableDeclData, ExprStmtData, ReturnStmtData, AssertStmtData,
-	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData,
+	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
-import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn } from "../util";
+import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
+import { lowerDefer } from "./deferLower";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
@@ -47,9 +48,11 @@ import { Symbol } from "../../ast/node";
 // Tracks `const h = spawn(fn);` declarations. When `await h` is later found
 // in the same scope, rewrites to zero-alloc msAwaitSlot path instead of
 // heap-allocated msFuture. Cleared at function boundaries.
-struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type | null; }
+struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type | null; joined: Symbol | null; }
 let _spawnSlotMap: HashMap<Symbol, SpawnSlotEntry> = new HashMap<Symbol, SpawnSlotEntry>();
 let _awaitOnlyHandles: SymSet = createSymSet();
+let _moduleLevelHandles: SymSet = createSymSet();
+let _settleDeferred = false;
 interface SpawnSlotFrame { slots: HashMap<Symbol, SpawnSlotEntry>; handles: SymSet; }
 let _spawnSlotFrames: SpawnSlotFrame[] = [];
 
@@ -99,6 +102,23 @@ function exitSpawnSlotFrame(_fn: Node): void {
 	const frame = _spawnSlotFrames.pop();
 	_spawnSlotMap = frame.slots;
 	_awaitOnlyHandles = frame.handles;
+}
+
+function settleOnExit(slot: Symbol, joined: Symbol, loc: SourceLocation): Node {
+	const notJoined = makeUnary("!", makeIdentResolved(joined, loc), loc);
+	notJoined.nodeType = booleanType();
+	const settle = makeExprStmt(makeCall(runtimeRef("msAwaitSlotSettle", loc), [makeIdentResolved(slot, loc)], loc), loc);
+	const deferData: NodeData = { deferExpr: makeBlock([makeIf(notJoined, makeBlock([settle], loc), null, loc)], loc) };
+	_settleDeferred = true;
+	return createNodeAt(NodeKind.DeferStmt, deferData, loc);
+}
+
+function moduleLevelHandles(program: Node): SymSet {
+	const out = createSymSet();
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null) symSetAdd(out, stmt.resolvedSym!);
+	}
+	return out;
 }
 
 // Opaque pointer type → void* in C codegen. Used for AwaitGroup and result temps.
@@ -392,6 +412,9 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 			// msAwaitSlotWait($slot);
 			stmts.push(makeExprStmt(
 				makeCall(runtimeRef("msAwaitSlotWait", loc), [slotEntry.slotIdent], loc), loc));
+			if (slotEntry.joined != null) {
+				stmts.push(makeExprStmt(makeAssign(makeIdentResolved(slotEntry.joined!, loc), makeBool(true, loc), loc), loc));
+			}
 			// const $agr = msAwaitSlotResult($slot);
 			const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [slotEntry.slotIdent], loc), VOID_PTR_TYPE, loc);
 			stmts.push(agr.decl);
@@ -458,11 +481,19 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 					// const $slot = msAwaitSlotCreate(1);
 					const slot = makeTempDecl(ctx, "sl", makeCall(runtimeRef("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
 					stmts.push(slot.decl);
+					let joined: Symbol | null = null;
+					if (!symSetContains(_moduleLevelHandles, stmt.resolvedSym)) {
+						const flag = makeTempDecl(ctx, "joined", makeBool(false, loc), booleanType(), loc);
+						(flag.decl.data as VariableDeclData).declKind = DeclKind.Let;
+						stmts.push(flag.decl);
+						joined = flag.sym;
+					}
 					// msSpawnSlotSubmit($slot, 0, closure);
 					stmts.push(makeExprStmt(
 						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), si.closure], loc), loc));
+					if (joined != null) stmts.push(settleOnExit(slot.sym, joined!, loc));
 					// Register for later `await h` lookup
-					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, closureArg: si.closure, innerType });
+					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, closureArg: si.closure, innerType, joined });
 					return stmts;  // Original VarDecl is eliminated (h is never emitted)
 				}
 			}
@@ -560,7 +591,10 @@ export function lowerAwait(program: Node, ctx: TransformContext): Node {
 	blockifyAwaitingArrows(program);
 	_spawnSlotMap = new HashMap<Symbol, SpawnSlotEntry>();
 	_awaitOnlyHandles = awaitOnlyHandles(program);
+	_moduleLevelHandles = moduleLevelHandles(program);
+	_settleDeferred = false;
 	_spawnSlotFrames = [];
 	walkExpandBlocksHooked(program, expandStmt, ctx, enterSpawnSlotFrame, exitSpawnSlotFrame);
+	if (_settleDeferred) lowerDefer(program, ctx);
 	return program;
 }
