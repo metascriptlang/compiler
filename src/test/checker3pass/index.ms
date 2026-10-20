@@ -40,6 +40,7 @@ import "./scenarios/moduleForwardReferences";
 import "./scenarios/genericOperands";
 import "./scenarios/unionMemberOrder";
 import "./scenarios/unionConversion";
+import "./scenarios/interfaceDownConversion";
 import "./scenarios/selfRecursiveReturn";
 import "./scenarios/constructionFieldInit";
 import "./stress/deepNesting";
