@@ -54,6 +54,7 @@ import "./scenarios/bareReturnInValueFunction";
 import "./scenarios/textOfVoid";
 import "./scenarios/methodOverrideSignature";
 import "./scenarios/classRoutineMembers";
+import "./scenarios/classLineage";
 import "./scenarios/functionReturnRepr";
 import "./scenarios/narrowedWriteTarget";
 import "./scenarios/nullableLiteralUnionTarget";
