@@ -946,9 +946,10 @@ void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
 			}
 		}
 	}
-	msClosureArrayDestroy(dest);
+	msClosureArray old = *dest;
 	dest->len = len;
 	dest->p = newp;
+	msClosureArrayDestroy(&old);
 }
 
 void msClosureArrayWasMoved(msClosureArray* arr) {

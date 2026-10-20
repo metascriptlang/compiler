@@ -299,31 +299,12 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
 		return;
 	}
-	// Cyclic refs: Nim attachedAsgn isCyclic order (liftdestructors.nim:768-775) —
-	// incref new, assign, decref old last, so a collect triggered by the old value's
-	// destroy never traces a dest still pointing at the dying object.
-	if (isRuntimeProcSym(increfSym, "msIncrefCyclic")) {
-		genCall("msRefCopyCyclic", "copy", clonePath(x, loc), clonePath(y, loc), buf, loc);
-		return;
-	}
 	if (isRuntimeProcSym(increfSym, "msClosureCopy")) {
 		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc), [clonePath(y, loc)], loc), loc));
 		genCall("msClosureSink", "sink", clonePath(x, loc), clonePath(y, loc), buf, loc);
 		return;
 	}
-	// Unary incref types: Nim attachedAsgn non-cyclic order (liftdestructors.nim:776-779,
-	// bug #15753) — incref new FIRST so an rc==1 alias of dest's old value survives
-	// the decref; then decref old, then assign.
-	const decrefFn = isRuntimeProcSym(increfSym, "msIncref") ? "msDecref"
-		: isRuntimeProcSym(increfSym, "msAtomicIncref") ? "msAtomicDecref"
-		: isRuntimeProcSym(increfSym, "msClosureIncref") ? "msClosureDecref"
-		: isRuntimeProcSym(increfSym, "msMapIncref") ? "msMapDecref"
-		: "";
-	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc), [clonePath(y, loc)], loc), loc));
-	if (decrefFn != "") {
-		buf.items.push(makeExprStmt(makeCall(runtimeRef(decrefFn, loc), [clonePath(x, loc)], loc), loc));
-	}
-	buf.items.push(makeExprStmt(makeAssign(clonePath(x, loc), clonePath(y, loc), loc), loc));
+	throw new Error(`internal: genCopyRef has no copy for '${increfFn}'; refs copy through refOp`);
 }
 
 // Inline sink: destroy old value + raw assign (eliminates per-field function call)
@@ -360,6 +341,31 @@ function liftTempSym(lctx: LiftCtx, name: string, t: Type | null): Symbol {
 	return sym;
 }
 
+function storeThenDestroyWhole(objType: Type, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const dest = hookParamDeref(s1, loc);
+	dest.nodeType = objType;
+	const src = hookParamDeref(s2, loc);
+	src.nodeType = objType;
+	const old = storeKeepingOld(dest, src, lctx, buf, loc);
+	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(objType, AttachedOp.AttachedDestructor), null, loc),
+		[makeHiddenAddr(old, loc)], loc), loc));
+}
+
+function storeKeepingOld(xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): Node {
+	const ctr = lctx.tempCounter;
+	lctx.tempCounter = ctr + 1;
+	const oldName = "$old_" + ctr.toString();
+	const oldInit = clonePath(xf, loc);
+	if (oldInit.nodeType == null) oldInit.nodeType = xf.nodeType;
+	if (oldInit.nodeType == null) throw new Error(`internal: a hook store at ${loc.line}:${loc.column} has an untyped destination, so its old value cannot be kept`);
+	const oldSym = liftTempSym(lctx, oldName, oldInit.nodeType);
+	const oldDecl = makeVarDecl(oldName, oldInit, DeclKind.Let, loc);
+	oldDecl.resolvedSym = oldSym;
+	buf.items.push(oldDecl);
+	buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+	return makeTypedIdentResolved(oldSym, oldInit.nodeType, loc);
+}
+
 // --- Inline element loop (reference parity: unrolled loops for elements) ---
 // Generates: var $i = 0; while ($i < arr.length) { fillBody(elem, arr[$i], ...); $i = $i + 1; }
 function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
@@ -383,6 +389,7 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const cond = makeBinary(makeTypedIdentResolved(counterSym, null, loc), "<", lenAccess, loc);
 
 	const xi = makeArrayAccess(xClone, makeTypedIdentResolved(counterSym, null, loc), loc);
+	xi.nodeType = elemType;
 	const bodyBuf = newBuf();
 	const visited: NameSet = createNameSet();
 	const dropOwner = lctx.dropOwner;
@@ -504,17 +511,11 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 			}
 		},
 		"sink" => {
-			// reference parity: if (dest.p != src.p) { destroy(dest) }; dest = src
-			const guardCond = makeBinary(
-				makeMember(clonePath(xf, loc), "p", loc),
-				"!==",
-				makeMember(clonePath(yf, loc), "p", loc),
-				loc
-			);
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			const guardCond = makeBinary(makeMember(clonePath(old, loc), "p", loc), "!==", makeMember(clonePath(xf, loc), "p", loc), loc);
 			const destroyBuf = newBuf();
-			arrayOp("destroy", elem, clonePath(xf, loc), clonePath(xf, loc), lctx, destroyBuf, loc);
+			arrayOp("destroy", elem, clonePath(old, loc), clonePath(old, loc), lctx, destroyBuf, loc);
 			buf.items.push(makeIf(guardCond, makeBlock(destroyBuf.items, loc), null as unknown as Node, loc));
-			buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
 		},
 		"wasMoved" => { genCall("msArrayWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
@@ -545,25 +546,15 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 				genCall(decrefFn, hook, xf, yf, buf, loc);
 			}
 		},
-		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
+		"copy" => {
+			const incref = makeTypedIdentResolved(attachedOpSym(increfFn, AttachedOp.AttachedAsgn), null, loc);
+			buf.items.push(makeExprStmt(makeCall(incref, [clonePath(yf, loc)], loc), loc));
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			genCall(decrefFn, "destroy", old, old, buf, loc);
+		},
 		"sink" => {
-			if (isCyclic && !atomic) {
-				const ctr = lctx.tempCounter;
-				lctx.tempCounter = ctr + 1;
-				const oldName = "$old_" + ctr.toString();
-				const oldInit = clonePath(xf, loc);
-				if (oldInit.nodeType == null) oldInit.nodeType = xf.nodeType;
-				const oldSym = liftTempSym(lctx, oldName, oldInit.nodeType);
-				const oldDecl = makeVarDecl(oldName, oldInit, DeclKind.Let, loc);
-				oldDecl.resolvedSym = oldSym;
-				buf.items.push(oldDecl);
-				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
-				const oldRef = makeTypedIdentResolved(oldSym, oldInit.nodeType, loc);
-				genCall(decrefFn, "destroy", oldRef, oldRef, buf, loc);
-			} else {
-				genCall(decrefFn, "destroy", clonePath(xf, loc), yf, buf, loc);
-				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
-			}
+			const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+			genCall(decrefFn, "destroy", old, old, buf, loc);
 		},
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
@@ -582,11 +573,10 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 // --- Standard value-type object hook generator ---
 // Reference parity: Named-type hooks take pointer params (ccgIntroducedPtr).
 // Wrap field accesses in HiddenAddr so codegen emits &(self.field).
-function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
+function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "sink") {
-		// Inline sink: destroy(&xf) + assign(xf = yf)
-		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(t, AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(xf, loc)], loc), loc));
-		buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
+		const old = storeKeepingOld(xf, yf, lctx, buf, loc);
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(t, AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(old, loc)], loc), loc));
 		return;
 	}
 	const op = requireOpByKey(t, attachedOpOf(hook));
@@ -675,7 +665,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
-						namedObjOp(hook, fieldType, xf, yf, buf, loc);
+						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -736,7 +726,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				if (hook != "trace" || isCyclicType(unwrapped.body, lctx, visited)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(unwrapped.body, lctx)) {
-						namedObjOp(hook, fieldType, xf, yf, buf, loc);
+						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -765,7 +755,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
-						namedObjOp(hook, fieldType, xf, yf, buf, loc);
+						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 					} else {
 						defaultOp(hook, xf, yf, buf, loc);
 					}
@@ -774,14 +764,14 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
 			} else {
 				const anonName = ensureAnonUnionHooks(fieldType, lctx, loc);
-				if (anonName != "") namedObjOp(hook, fieldType, xf, yf, buf, loc);
+				if (anonName != "") namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
 			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType, lctx)) {
 				if (hook != "trace") {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
-					namedObjOp(hook, fieldType, xf, yf, buf, loc);
+					namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 				}
 			} else if (fieldType.typeReturn != null) {
 				fillBody(hook, x, y, fieldName, fieldType.typeReturn, lctx, buf, visited, loc);
@@ -1035,16 +1025,8 @@ function emitTagCopy(buf: NodeBuf, dest: Symbol, src: Symbol, loc: SourceLocatio
 function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const isUnary = hook == "destroy" || hook == "wasMoved" || hook == "trace";
 
-	// reference parity: sink must destroy old variant BEFORE reassigning _tag
 	if (hook == "sink") {
-		// 1. Destroy old fields (dispatch on dest._tag)
-		const destroyChain = buildVariantDispatch("destroy", typeName, objType, s1, s1, true, lctx, loc);
-		if (destroyChain != null) buf.items.push(destroyChain);
-		// 2. Assign _tag
-		emitTagCopy(buf, s1, s2, loc);
-		// 3. Assign new fields (dispatch on src._tag, simple assign only)
-		const assignChain = buildVariantChain("sinkAssign", objType, s1, s2, false, lctx, loc);
-		if (assignChain != null) buf.items.push(assignChain);
+		storeThenDestroyWhole(objType, s1, s2, lctx, buf, loc);
 		return;
 	}
 
@@ -1148,24 +1130,6 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 	return chain;
 }
 
-// Emit raw `dest.vN.field = src.vN.field` assignments for each variant field,
-// skipping void-typed slots (e.g. `Result<void, E>` v0 has no `value`). Used
-// for the `sinkAssign` hook by both inline and helper-extracted dispatch
-// patterns.
-function emitVariantSinkAssign(armBuf: NodeBuf, s1: Symbol, s2: Symbol, vName: string, variant: Type, loc: SourceLocation): void {
-	let fi = 0;
-	while (fi < variant.typeNames.length) {
-		const ft = fi < variant.typeChildren.length ? variant.typeChildren[fi] : null;
-		if (storesNothing(variant, ft)) { fi += 1; continue; }
-		const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
-		const yBase = makeMember(hookParamDeref(s2, loc), vName, loc);
-		armBuf.items.push(makeExprStmt(makeAssign(
-			makeMember(xBase, variant.typeNames[fi], loc),
-			makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
-		fi += 1;
-	}
-}
-
 function fieldStored(owner: Type, i: number): boolean {
 	return i >= owner.typeChildren.length || !storesNothing(owner, owner.typeChildren[i]);
 }
@@ -1176,12 +1140,6 @@ function isScalarVariant(member: Type | null, variant: Type | null): boolean {
 }
 
 function buildScalarArmBody(hook: string, s1: Symbol, s2: Symbol, vName: string, member: Type, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
-	if (hook == "sinkAssign") {
-		armBuf.items.push(makeExprStmt(makeAssign(
-			makeMember(hookParamDeref(s1, loc), vName, loc),
-			makeMember(hookParamDeref(s2, loc), vName, loc), loc), loc));
-		return;
-	}
 	const x = hookParamDeref(s1, loc);
 	const y = hook == "trace" ? makeIdentResolved(s2, loc)
 		: (hook == "destroy" || hook == "wasMoved") ? hookParamDeref(s1, loc)
@@ -1202,8 +1160,6 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 			fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
 			fi -= 1;
 		}
-	} else if (hook == "sinkAssign") {
-		emitVariantSinkAssign(armBuf, s1, s2, vName, variant, loc);
 	} else {
 		let fi = 0;
 		while (fi < variant.typeNames.length) {
@@ -1217,29 +1173,6 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 			fi += 1;
 		}
 	}
-}
-
-// Build if/else chain over variant arms, dispatching on s1._tag
-function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, isUnary: boolean, lctx: LiftCtx, loc: SourceLocation): Node {
-	let chain = null as unknown as Node;
-	let vi = objType.typeChildren.length - 1;
-	while (vi >= 0) {
-		const variant = inlineVariantStruct(objType.typeChildren[vi]);
-		const armBuf = newBuf();
-		if (isScalarVariant(objType.typeChildren[vi], variant)) {
-			buildScalarArmBody(hook, s1, s2, "v" + vi.toString(), objType.typeChildren[vi], lctx, armBuf, loc);
-		} else if (variant != null && variant.typeNames != null) {
-			const vName = "v" + vi.toString();
-			buildVariantArmBody(hook, objType, s1, s2, vi, vName, variant, isUnary, lctx, armBuf, loc);
-		}
-		if (armBuf.items.length > 0) {
-			const tagAccess = makeMember(hookParamDeref(s1, loc), "_tag", loc);
-			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
-			chain = makeIf(cond, makeBlock(armBuf.items, loc), chain, loc);
-		}
-		vi -= 1;
-	}
-	return chain;
 }
 
 // ===== Generate a single hook (Reference produceSym per op) =====
@@ -1314,8 +1247,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
 		}
 	} else if (hook == "sink" && hasUserDefinedHook(subject, "destroy", lctx)) {
-		genOpCall(requireOpByKey(objType, AttachedOp.AttachedDestructor), "destroy", makeIdentResolved(s1, loc), null as unknown as Node, buf, loc);
-		buf.items.push(makeExprStmt(makeAssign(hookParamDeref(s1, loc), hookParamDeref(s2, loc), loc), loc));
+		storeThenDestroyWhole(objType, s1, s2, lctx, buf, loc);
 	} else {
 		const base = baseClassOf(objType);
 		if (base != null) ensureClassHooks(base, lctx, loc);

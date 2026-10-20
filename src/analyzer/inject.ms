@@ -1176,18 +1176,14 @@ function genSink(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 		evalSourceFirst(stmt, dest, rhs, dctx);
 		return emitSaveAssignDestroySimple(stmt, dest, rcInfo, "oldField", dctx, loc);
 	}
-	// Identifier LHS: use sinkFn if available, else destroy-assign
 	if (destSym != null) {
-		if (deepAliases(dest, rhs)) {
-			clearPendingForVar(dctx, destSym);
-			evalSourceFirst(stmt, dest, rhs, dctx);
-			return emitSaveAssignDestroySimple(stmt, makeIdentResolved(destSym, loc), rcInfo, "old", dctx, loc);
-		}
-		if (rcInfo.sinkFn != null) {
+		const aliased = deepAliases(dest, rhs);
+		if (aliased) clearPendingForVar(dctx, destSym);
+		if (rcInfo.sinkFn != null && !aliased) {
 			return makeSinkCall(destSym, rhs, rcInfo, loc);
 		}
 		evalSourceFirst(stmt, dest, rhs, dctx);
-		return makeBlock([makeDestroyCall(destSym, rcInfo, loc), stmt], loc);
+		return emitSaveAssignDestroySimple(stmt, makeIdentResolved(destSym, loc), rcInfo, "old", dctx, loc);
 	}
 	return stmt;
 }

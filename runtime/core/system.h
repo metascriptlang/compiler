@@ -297,15 +297,17 @@ static inline void msStringCopy(msString* dest, msString src) {
 			if (_arc_newp->data[_arc_i]) msIncRef(_arc_newp->data[_arc_i]); \
 		} \
 	} \
-	msRefArrayDestroy((msRefArray*)&(d)); \
+	msRefArray _arc_old = *(msRefArray*)&(d); \
 	(d).len = _arc_len; \
 	(d).p = (void*)_arc_newp; \
+	msRefArrayDestroy(&_arc_old); \
 } while(0)
 #define msArrayRefSink(d, ...)         do { \
 	msRefArray _ars_src = (__VA_ARGS__); \
-	if ((void*)(d).p != (void*)_ars_src.p) msRefArrayDestroy((msRefArray*)&(d)); \
+	msRefArray _ars_old = *(msRefArray*)&(d); \
 	(d).len = _ars_src.len; \
 	(d).p = (void*)_ars_src.p; \
+	if (_ars_old.p != _ars_src.p) msRefArrayDestroy(&_ars_old); \
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \
@@ -330,9 +332,10 @@ static inline void msStringCopy(msString* dest, msString src) {
 			if (_aarc_newp->data[_aarc_i]) msAtomicIncRef(_aarc_newp->data[_aarc_i]); \
 		} \
 	} \
-	msAtomicRefArrayDestroy((msRefArray*)&(d)); \
+	msRefArray _aarc_old = *(msRefArray*)&(d); \
 	(d).len = _aarc_len; \
 	(d).p = (void*)_aarc_newp; \
+	msAtomicRefArrayDestroy(&_aarc_old); \
 } while(0)
 #define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
 #define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
@@ -367,7 +370,7 @@ static inline void msStringCopy(msString* dest, msString src) {
  * value layout is uniform. */
 #define msArrayClosureDestroy(arr)     msClosureArrayDestroy(&(arr))
 #define msArrayClosureCopy(d, s)       msClosureArrayCopy(&(d), &(s))
-#define msArrayClosureSink(d, ...)     do { msClosureArrayDestroy(&(d)); (d) = (__VA_ARGS__); } while(0)
+#define msArrayClosureSink(d, ...)     do { msClosureArray __caold = (d); (d) = (__VA_ARGS__); if (__caold.p != (d).p) msClosureArrayDestroy(&__caold); } while(0)
 #define msArrayClosureWasMoved(arr)    msArrayWasMoved(arr)
 
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
