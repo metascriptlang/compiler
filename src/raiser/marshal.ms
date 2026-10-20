@@ -251,3 +251,33 @@ test "boxVoid is nil" {
 	const v = boxVoid();
 	assert v.kind == RaiserValueKind.Nil;
 }
+
+test "a host value built from scalars crosses into a VM heap and back with its children counted" {
+	const keys = hostValue(boxString("ctrl+a"));
+	const bind = hostObject(["keys", "text"], [keys, hostValue(boxString("home"))]);
+	const binds = hostArray([bind, bind]);
+	const config = hostObject(["binds", "fontSize"], [binds, hostValue(boxVoid())]);
+	const vmArrays = createArrayHeap();
+	const vmObjects = createStructHeap();
+	const placed = copyToVm(vmArrays, vmObjects, config);
+	assert vmObjects.objects[placed.intVal].rc == 0;
+	const placedBinds = heapObjectGetField(vmObjects, placed.intVal, "binds");
+	assert vmArrays.arrays[placedBinds.intVal].rc == 1;
+	assert vmObjects.objects[heapArrayGet(vmArrays, placedBinds.intVal, 1).intVal].rc == 1;
+	const back = copyToHost(vmArrays, vmObjects, placed);
+	assert back.objectHeap != vmObjects;
+	assert back.field("binds").length() == 2;
+	assert unboxString(back.field("binds").at(1).field("text").root) == "home";
+	assert back.field("fontSize").root.kind == RaiserValueKind.Nil;
+	assert back.field("absent").root.kind == RaiserValueKind.Nil;
+}
+
+test "a host value refuses a walk its kind does not have" {
+	let refused = "";
+	try { hostValue(boxInt(1)).field("x"); } catch (e) { refused = e.message; }
+	assert refused == "field 'x' of a value of kind Int: only an object has fields";
+	try { hostArray([]).at(0); } catch (e) { refused = e.message; }
+	assert refused == "element 0 of an array of 0";
+	try { hostValue(raiserObject(0)); } catch (e) { refused = e.message; }
+	assert refused.startsWith("hostValue takes a boxed scalar, not a handle of kind Object");
+}
