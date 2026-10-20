@@ -275,8 +275,10 @@ static inline void msAwaitSlotSettle(void* sp) {
 	msException* exc = msCurrException;
 	msErr = false;
 	msCurrException = NULL;
-	atomic_store_explicit(&((msAwaitSlot*)sp)->cancelled, true, memory_order_release);
+	msAwaitSlot* s = (msAwaitSlot*)sp;
+	atomic_store_explicit(&s->cancelled, true, memory_order_release);
 	msAwaitSlotWait(sp);
+	if (atomic_load_explicit(&s->failed, memory_order_acquire)) msDecref(s->error);
 	msAwaitSlotRelease(sp);
 	msErr = err;
 	msCurrException = exc;
