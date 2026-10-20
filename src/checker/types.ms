@@ -2221,9 +2221,10 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 		args.push(gi.typeChildren[pi]);
 		pi = pi + 1;
 	}
-	_instancesBuilding.push(gi);
+	const tracked = !_queryCachesReadOnly;
+	if (tracked) _instancesBuilding.push(gi);
 	const body = substituteAllParams(innerBase, names, args);
-	_instancesBuilding.pop();
+	if (tracked) _instancesBuilding.pop();
 	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
 	if (body != innerBase && body.kind == TypeKind.Union && isUnionAlias(innerBase)) body.typeInst = gi;
 	// Re-wrap in Ref if the base was Ref<Struct>
