@@ -274,7 +274,7 @@ function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRe
 			| TypeKind.Char | TypeKind.Enum | TypeKind.EnumLiteral => RaiserRegClass.Word,
 		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => RaiserRegClass.Float,
 		TypeKind.Boolean | TypeKind.BooleanLiteral => RaiserRegClass.Bool,
-		TypeKind.String | TypeKind.StringLiteral | TypeKind.CString | TypeKind.Null | TypeKind.Never
+		TypeKind.String | TypeKind.StringLiteral | TypeKind.CString | TypeKind.Null
 			| TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Tuple | TypeKind.Varargs => RaiserRegClass.Ref,
 		TypeKind.Struct => {
 			if (!t.typeFlags.has(TypeFlag.IsMaybe) || t.typeReturn == null) return RaiserRegClass.Ref;
@@ -299,7 +299,7 @@ function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRe
 		TypeKind.Union => classOfUnion(s, t, depth),
 		TypeKind.Set => classOfType(s, setRepr(t), depth + 1),
 		TypeKind.Pending | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Result | TypeKind.Error
-			| TypeKind.Conditional | TypeKind.Void | TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.BigInt
+			| TypeKind.Conditional | TypeKind.Void | TypeKind.Unknown | TypeKind.Never | TypeKind.None | TypeKind.Inferred | TypeKind.BigInt
 			| TypeKind.Module | TypeKind.IndexedAccess | TypeKind.KeyOf => RaiserRegClass.Dyn,
 		_ => { throw new Error(`internal: type kind ${t.kind} has no register class`); },
 	};
