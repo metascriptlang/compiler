@@ -132,8 +132,8 @@ function scratchDir(): string {
 	return dir;
 }
 
-function testInterpreter(): Interpreter {
-	const created = createInterpreter(resolveRuntimeDir());
+function testInterpreter(searchPaths: string[] = []): Interpreter {
+	const created = createInterpreter(resolveRuntimeDir(), searchPaths);
 	if (!created.ok) throw new Error(created.error);
 	return created.value;
 }
@@ -225,6 +225,54 @@ test "evalModule returns a runtime error and an exit code without leaving the ho
 		assert exited.value.output == "bye\n";
 		assert exited.value.exitCode == 3;
 	}
+	removeAll(dir);
+}
+
+function writePackageShape(dir: string, fontField: string): void {
+	ensureDir(`${dir}/pkgs/haro`);
+	ensureDir(`${dir}/cfg`);
+	ensureDir(`${dir}/run`);
+	writeFile(`${dir}/pkgs/haro/index.ms`, `export interface HaroConfig {\n\tfontFamily?: string[];\n\tfontSize?: number;\n}\n`);
+	writeFile(`${dir}/pkgs/theme.ms`, `export const accent = "teal";\n`);
+	writeFile(`${dir}/cfg/config.ms`, `import { HaroConfig } from "haro";\nexport const config: HaroConfig = { fontFamily: ["Menlo"], ${fontField}: 13 };\n`);
+	writeFile(`${dir}/run/main.ms`, `import { config } from "../cfg/config";\nimport { accent } from "theme";\nconsole.log(\`\${JSON.stringify(config)} \${accent}\`);\n`);
+}
+
+test "evalModule resolves a bare import in the entry and in a nested module through a search path the host names" {
+	const dir = scratchDir();
+	writePackageShape(dir, "fontSize");
+	const interp = testInterpreter([`${dir}/pkgs`]);
+	assert outputOf(interp, `${dir}/run/main.ms`) == `{"fontFamily":["Menlo"],"fontSize":13} teal\n`;
+	removeAll(dir);
+}
+
+test "a misspelt field of a package's interface comes back with its file, line and column" {
+	const dir = scratchDir();
+	writePackageShape(dir, "fontSiz");
+	const r = evalModule(testInterpreter([`${dir}/pkgs`]), `${dir}/run/main.ms`);
+	assert !r.ok;
+	if (!r.ok) {
+		assert r.error.length == 1;
+		assert r.error[0].file.endsWith("/cfg/config.ms");
+		assert r.error[0].line == 2;
+		assert r.error[0].column > 0;
+		assert r.error[0].message.includes("'fontSiz' does not exist in type 'HaroConfig'");
+	}
+	removeAll(dir);
+}
+
+test "a package no search path holds is a diagnostic, and a search path that does not exist is refused" {
+	const dir = scratchDir();
+	writePackageShape(dir, "fontSize");
+	const interp = testInterpreter();
+	const r = evalModule(interp, `${dir}/run/main.ms`);
+	assert !r.ok;
+	if (!r.ok) assert r.error[0].message.includes("Cannot resolve module");
+	writeFile(`${dir}/run/main.ms`, `console.log("still here");\n`);
+	assert outputOf(interp, `${dir}/run/main.ms`) == "still here\n";
+	const missing = createInterpreter(resolveRuntimeDir(), [`${dir}/nowhere`]);
+	assert !missing.ok;
+	if (!missing.ok) assert missing.error.includes("no search path");
 	removeAll(dir);
 }
 
