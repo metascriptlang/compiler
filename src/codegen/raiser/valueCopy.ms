@@ -1,10 +1,10 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, isStructType, needsValueCopy, valueCopyRepr } from "../../checker/types";
-import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
+import { distinctBody, enumMemberValue, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable } from "../../checker/types";
+import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
-import { RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil } from "./context";
+import { RaiserCompState, emitInst, allocReg, allocWord, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	const base = distinctBody(valueType);
@@ -60,7 +60,7 @@ export function emitValueCopy(
 ): int32 {
 	const index = copyPlan(s, valueType);
 	if (index < 0 || s.copyPlans[index].kind == RaiserCopyKind.Preserve) return source;
-	const destination = allocReg(s);
+	const destination = allocReg(s, classOfReg(s, source));
 	emitInst(s, raiserABC(RaiserOpcode.CopyValue, destination, source, index));
 	return destination;
 }
@@ -86,15 +86,15 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	if (t == null) return source;
 	if (!needsValueAssign(s, t)) return emitValueCopy(s, source, t);
 	const index = copyPlan(s, t);
-	const result = allocReg(s);
+	const result = allocRef(s);
 	const toEnd: int32[] = [];
-	const sourceNil = allocReg(s);
+	const sourceNil = allocWord(s);
 	emitInst(s, raiserABC(RaiserOpcode.IsKind, sourceNil, source, RaiserValueKind.Nil as number));
 	const sourceHeld = emitBranchIfFalsy(s, sourceNil);
 	emitInst(s, raiserABC(RaiserOpcode.Move, result, source, 0));
 	toEnd.push(emitJumpPlaceholder(s));
 	patchJumpTo(s, sourceHeld, codeLen(s));
-	const destinationNil = allocReg(s);
+	const destinationNil = allocWord(s);
 	emitInst(s, raiserABC(RaiserOpcode.IsKind, destinationNil, destination, RaiserValueKind.Nil as number));
 	const destinationHeld = emitBranchIfFalsy(s, destinationNil);
 	emitInst(s, raiserABC(RaiserOpcode.CopyValue, result, source, index));
@@ -104,26 +104,26 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const name = addConst(s, raiserConstString(t.typeNames[i]));
 			const fieldType = i < t.typeChildren.length ? t.typeChildren[i] : null;
-			const held = allocReg(s);
+			const held = allocFor(s, fieldType);
 			emitInst(s, raiserABC(RaiserOpcode.LoadField, held, destination, name));
-			const next = allocReg(s);
+			const next = allocFor(s, fieldType);
 			emitInst(s, raiserABC(RaiserOpcode.LoadField, next, source, name));
 			emitInst(s, raiserABC(RaiserOpcode.StoreField, destination, name, emitValueAssign(s, held, next, fieldType)));
 		}
 	} else {
-		const nextLen = allocReg(s);
+		const nextLen = allocWord(s);
 		emitInst(s, raiserABC(RaiserOpcode.ArrayLen, nextLen, source, 0));
 		emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, destination, nextLen, 0));
-		const at = allocReg(s);
+		const at = allocWord(s);
 		emitLoadConst(s, at, raiserInt(0));
-		const one = allocReg(s);
+		const one = allocWord(s);
 		emitLoadConst(s, one, raiserInt(1));
 		const loopStart = codeLen(s);
 		emitInst(s, raiserABC(RaiserOpcode.BltI64, at, nextLen, 1));
 		const toDone = emitJumpPlaceholder(s);
-		const held = allocReg(s);
+		const held = allocDyn(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, held, destination, at));
-		const next = allocReg(s);
+		const next = allocFor(s, t.typeReturn);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, next, source, at));
 		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, destination, at, emitValueAssign(s, held, next, t.typeReturn)));
 		emitInst(s, raiserABC(RaiserOpcode.AddI64, at, at, one));
@@ -143,7 +143,7 @@ function zeroShape(t: Type | null): Type | null {
 	return zeroShape(repr);
 }
 
-function zeroScalar(t: Type | null): RaiserValue {
+export function zeroScalar(t: Type | null): RaiserValue {
 	if (t == null) return raiserNil();
 	return match (t.kind) {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 | TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Enum | TypeKind.Char => raiserInt(0),
@@ -161,10 +161,10 @@ function isValueStruct(t: Type | null): boolean {
 function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): int32 {
 	const t = zeroShape(valueType);
 	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) {
-		const array = allocReg(s);
+		const array = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.NewArray, array, 0, 0));
 		if (t.kind == TypeKind.SizedArray) {
-			const count = allocReg(s);
+			const count = allocWord(s);
 			emitLoadConst(s, count, raiserInt(t.typeValue as int64));
 			emitZeroElements(s, array, count, t.typeReturn, open);
 		}
@@ -178,7 +178,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 				return emitTrapNil(s, message);
 			}
 		}
-		const object = allocReg(s);
+		const object = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, 0, 0));
 		open.push(t);
 		for (let i = 0; i < t.typeNames.length; i += 1) {
@@ -188,15 +188,16 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 		open.pop();
 		return object;
 	}
-	const scalar = allocReg(s);
-	emitLoadConst(s, scalar, zeroScalar(t));
+	const zero = zeroScalar(t);
+	const scalar = allocReg(s, zero.kind == RaiserValueKind.Int || zero.kind == RaiserValueKind.Float || zero.kind == RaiserValueKind.Bool ? RaiserRegClass.Word : RaiserRegClass.Ref);
+	emitLoadConst(s, scalar, zero);
 	return scalar;
 }
 
 function emitZeroElements(s: RaiserCompState, array: int32, count: int32, elementType: Type | null, open: Type[]): void {
-	const at = allocReg(s);
+	const at = allocWord(s);
 	emitLoadConst(s, at, raiserInt(0));
-	const one = allocReg(s);
+	const one = allocWord(s);
 	emitLoadConst(s, one, raiserInt(1));
 	const loopStart = codeLen(s);
 	emitInst(s, raiserABC(RaiserOpcode.BltI64, at, count, 1));
@@ -230,4 +231,71 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 		const field = emitZeroValue(s, i < t.typeChildren.length ? t.typeChildren[i] : null);
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserConstString(name)), field));
 	}
+}
+
+const MAX_TYPE_DEPTH = 32;
+
+export function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
+	const t = skipModifier(pointee);
+	if (t == null) return false;
+	if (t.kind == TypeKind.GenericInstance) {
+		const body = peelToStructOrUnion(t);
+		if (body != null && body.kind == TypeKind.Struct) return false;
+	}
+	return !needsValueAssign(s, t);
+}
+
+export function joinClass(a: RaiserRegClass, b: RaiserRegClass): RaiserRegClass {
+	return a == b ? a : RaiserRegClass.Dyn;
+}
+
+export function regClassOf(s: RaiserCompState, t: Type | null): RaiserRegClass {
+	return classOfType(s, t, 0);
+}
+
+export function allocFor(s: RaiserCompState, t: Type | null): int32 {
+	return allocReg(s, regClassOf(s, t));
+}
+
+function classOfUnion(s: RaiserCompState, t: Type, depth: int32): RaiserRegClass {
+	if (t.typeChildren.length == 0) return RaiserRegClass.Dyn;
+	let joined = classOfType(s, t.typeChildren[0], depth + 1);
+	for (let i = 1; i < t.typeChildren.length; i += 1) joined = joinClass(joined, classOfType(s, t.typeChildren[i], depth + 1));
+	return joined == RaiserRegClass.Word && t.typeChildren.length > 1 ? RaiserRegClass.Dyn : joined;
+}
+
+function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRegClass {
+	if (t == null) return RaiserRegClass.Dyn;
+	if (depth > MAX_TYPE_DEPTH) throw new Error(`internal: a type nested deeper than ${MAX_TYPE_DEPTH} levels has no register class`);
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Float32 | TypeKind.Float64
+			| TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Enum | TypeKind.EnumLiteral => RaiserRegClass.Word,
+		TypeKind.String | TypeKind.StringLiteral | TypeKind.CString | TypeKind.Null | TypeKind.Never
+			| TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Tuple | TypeKind.Varargs => RaiserRegClass.Ref,
+		TypeKind.Struct => {
+			if (!t.typeFlags.has(TypeFlag.IsMaybe) || t.typeReturn == null) return RaiserRegClass.Ref;
+			const held = classOfType(s, t.typeReturn, depth + 1);
+			return held == RaiserRegClass.Ref ? RaiserRegClass.Ref : RaiserRegClass.Dyn;
+		},
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Var | TypeKind.Borrow => {
+			if (heldByLocation(s, t.typeReturn)) return RaiserRegClass.Dyn;
+			return classOfType(s, t.typeReturn, depth + 1);
+		},
+		TypeKind.Sink | TypeKind.Lent | TypeKind.Cursor | TypeKind.Alias | TypeKind.Distinct => classOfType(s, t.typeReturn, depth + 1),
+		TypeKind.GenericInstance => {
+			if (isAwaitable(t)) return RaiserRegClass.Dyn;
+			const repr = distinctBody(t);
+			if (repr != null) return classOfType(s, repr, depth + 1);
+			const body = peelToStructOrUnion(t);
+			if (body != null) return classOfType(s, body, depth + 1);
+			return t.typeReturn != null ? classOfType(s, t.typeReturn, depth + 1) : RaiserRegClass.Ref;
+		},
+		TypeKind.Union => classOfUnion(s, t, depth),
+		TypeKind.Set => classOfType(s, setRepr(t), depth + 1),
+		TypeKind.Pending | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Result | TypeKind.Error
+			| TypeKind.Conditional | TypeKind.Void | TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.BigInt
+			| TypeKind.Module | TypeKind.IndexedAccess | TypeKind.KeyOf => RaiserRegClass.Dyn,
+		_ => { throw new Error(`internal: type kind ${t.kind} has no register class`); },
+	};
 }

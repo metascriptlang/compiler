@@ -10,10 +10,10 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
-import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
-	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
+	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet,
 	declareLocal, declaredSymbol, regIsFixedLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
@@ -22,7 +22,7 @@ import {
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst,
 } from "./context";
 import { compileExpr, compileExprForEffect, condJumps, exprIsString } from "./expressions";
-import { emitValueCopy, emitZeroValue } from "./valueCopy";
+import { emitValueCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
 
 // --- Statement compilation ---
 
@@ -36,7 +36,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			} else if (s.receiverReg >= 0) {
 				emitRet(s, s.receiverReg);
 			} else {
-				const reg = allocReg(s);
+				const reg = allocRef(s);
 				emitLoadConst(s, reg, raiserNil());
 				emitRet(s, reg);
 			}
@@ -134,7 +134,7 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 		return;
 	}
 
-	const guardReg = allocReg(s);
+	const guardReg = allocDyn(s);
 	emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, guardReg, initGuard, 0));
 	const jumpToInit = emitBranchIfFalsy(s, guardReg);
 	const jumpPastInit = emitJumpPlaceholder(s);
@@ -146,7 +146,8 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 }
 
 function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
-	if (d.initializer != null) {
+	const placeholderNull = d.initializer != null && d.initializer.kind == NodeKind.NullLiteral && regClassOf(s, node.nodeType) == RaiserRegClass.Word;
+	if (d.initializer != null && !placeholderNull) {
 		if (d.initializer.kind == NodeKind.Identifier) {
 			const fIdx = resolveRoutine(s, d.initializer.resolvedSym);
 			if (fIdx >= 0) {
@@ -167,8 +168,9 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
 			return;
 		}
-		if (regIsFixedLocal(s, reg)) {
-			const slot = allocReg(s);
+		const declaredClass = node.nodeType == null ? classOfReg(s, reg) : regClassOf(s, node.nodeType);
+		if (regIsFixedLocal(s, reg) || classOfReg(s, reg) != declaredClass) {
+			const slot = allocReg(s, declaredClass);
 			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
 			declareLocal(s, declaredSymbol(node, d.declName), slot, isStr);
 			return;
@@ -179,6 +181,13 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 		const global = resolveGlobal(s, node.resolvedSym);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
+			return;
+		}
+		const declaredClass = regClassOf(s, node.nodeType);
+		if (classOfReg(s, reg) != declaredClass) {
+			const slot = allocReg(s, declaredClass);
+			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
+			declareLocal(s, declaredSymbol(node, d.declName), slot);
 			return;
 		}
 		declareLocal(s, declaredSymbol(node, d.declName), reg);
@@ -294,15 +303,16 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const readsLocation = isString && d.forOfIterable.kind == NodeKind.Identifier;
 
 	// Hidden index: __i = 0
-	const idxReg = allocReg(s);
+	const idxReg = allocWord(s);
 	emitLoadConst(s, idxReg, raiserInt(0));
 
 	// Length register (recomputed each iteration)
-	const lenReg = allocReg(s);
+	const lenReg = allocWord(s);
 
 	// Element register — declared as a local for the binding name
-	const elemReg = allocReg(s);
-	declareLocal(s, declaredSymbol(node, d.forOfBinding), elemReg);
+	const bindingSym = declaredSymbol(node, d.forOfBinding);
+	const elemReg = allocFor(s, bindingSym.symbolType);
+	declareLocal(s, bindingSym, elemReg);
 
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.forOfLabel);
@@ -314,9 +324,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const exitJump = emitJumpPlaceholder(s);
 
 	if (isString) {
-		const callReg = allocReg(s);
-		allocReg(s);
-		allocReg(s);
+		const callReg = allocBlock(s, [classOfReg(s, elemReg), RaiserRegClass.Ref, RaiserRegClass.Word]);
 		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 1, headReg, 0));
 		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 2, idxReg, 0));
 		emitInst(s, raiserABC(RaiserOpcode.CallHost, callReg, addConst(s, raiserConstString("msStringByteAt")), 2));
@@ -331,15 +339,15 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	patchLoopContinues(s);
 
 	const tailReg = readsLocation ? compileExpr(s, d.forOfIterable) : arrReg;
-	const nowReg = allocReg(s);
-	const messageReg = allocReg(s);
+	const nowReg = allocWord(s);
+	const messageReg = allocRef(s);
 	emitInst(s, raiserABC(lenOp, nowReg, tailReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.BeqI64, nowReg, lenReg, 2));
 	emitLoadConst(s, messageReg, raiserConstString(`the length of the ${isString ? "string" : "array"} changed while iterating over it`));
 	emitInst(s, raiserABC(RaiserOpcode.Throw, messageReg, 0, 0));
 
 	// Increment index: __i++
-	const oneReg = allocReg(s);
+	const oneReg = allocWord(s);
 	emitLoadConst(s, oneReg, raiserInt(1));
 	emitInst(s, raiserABC(RaiserOpcode.AddI64, idxReg, idxReg, oneReg));
 
@@ -375,8 +383,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 // FinallyEnd.
 function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as TryCatchStmtData;
-	const routeReg = allocReg(s);
-	allocReg(s);
+	const routeReg = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
 	s.tries.push({ finallyBody: d.finallyBody, routeReg });
 	compileStmt(s, d.tryBody);
@@ -389,7 +396,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	let catchReg = 0;
 	if (d.hasCatchClause) {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
-		catchReg = allocReg(s);
+		catchReg = allocDyn(s);
 		if (d.finallyBody != null) {
 			catchGuard = emitAbxPlaceholder(s, RaiserOpcode.Try);
 			s.tries.push({ finallyBody: d.finallyBody, routeReg });
@@ -464,7 +471,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 		} else {
 			// Multiple tests (or-pattern): check each, any match → body
 			// Use a matched flag register
-			const flagReg = allocReg(s);
+			const flagReg = allocWord(s);
 			emitLoadConst(s, flagReg, raiserInt(0));
 			for (const test of cd.caseTests) {
 				const testReg = compileExpr(s, test);
@@ -475,7 +482,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 				patchJumpTo(s, skipSet, codeLen(s));
 			}
 			// If flag == 0, skip body
-			const zeroReg = allocReg(s);
+			const zeroReg = allocWord(s);
 			emitLoadConst(s, zeroReg, raiserInt(0));
 			emitInst(s, raiserABC(RaiserOpcode.BneI64, flagReg, zeroReg, 1));
 			const skipBody = emitJumpPlaceholder(s);

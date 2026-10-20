@@ -15,7 +15,7 @@ import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
@@ -1868,7 +1868,7 @@ test "orc: strings built and dropped in a loop leave the string heap bounded" {
 }
 
 test "orc: strings dropped with their array and overwritten in an object field are released" {
-	const vm = evalOrcVM("let a: string[] = []; const o = { s: \"\" }; for (let i = 0; i < 200; i++) { a.push(`v${i}`); o.s = `f${i}`; } a = []; console.log(o.s);");
+	const vm = evalOrcVM("function run(): string { let a: string[] = []; const o = { s: \"\" }; for (let i = 0; i < 200; i++) { a.push(`v${i}`); o.s = `f${i}`; } a = []; return o.s; } console.log(run());");
 	assert vm.error == "", vm.error;
 	assert vm.output == "f199\n";
 	assert heapStringLive(vm.arrayHeap) < 20;
@@ -2028,4 +2028,84 @@ test "arena: a throw in a finally replaces the raise, and a catch inside it keep
 	const vm = evalArenaVM(finallyInFlight);
 	assert vm.error == "", vm.error;
 	assert vm.output == finallyInFlightOut, vm.output;
+}
+
+// --- Register classes: a slot's class is fixed by what its declared type holds ---
+
+function classTable(f: RaiserFunction): string {
+	let table = "";
+	for (const cls of f.regClasses) table = table + regClassLetter(cls);
+	return table;
+}
+
+function funcNamed(code: string, prefix: string): RaiserFunction {
+	const mod = compileForOrc(code);
+	for (const f of mod.functions) {
+		if (f.name.indexOf(prefix) == 0) return f;
+	}
+	unreachable;
+	return mod.functions[0];
+}
+
+test "register classes: a parameter takes the class of its declared type" {
+	const f = compiledFunc("function p(a: number, s: string, o: { x: number } | null, n: number | null, u: number | string, b: boolean, c: () => number): number { return a; }"
+		+ " console.log(`${p(1, \"s\", null, null, 1, true, (): number => 1)}`);", "p");
+	assert classTable(f) == "WRRDDWR", classTable(f);
+}
+
+test "register classes: a local takes the class of its declared type, not of its initializer" {
+	const code = "function l(): number { let k: number = 1; let s: string = \"a\"; let o: { x: number } | null = null; let n: number | null = null; let u: number | string = 1; return k + s.length; }"
+		+ " console.log(`${l()}`);";
+	const table = classTable(compiledFunc(code, "l"));
+	assert table.slice(0, 9) == "WRRRRDWDW", table;
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "2\n", vm.output;
+}
+
+test "register classes: a number local never assigned on the path read reads as zero" {
+	const code = "function u(k: number): number { let z: number; if (k > 5) { z = 2; } return z; } console.log(`${u(1)} ${u(9)}`);";
+	assert classTable(compiledFunc(code, "u")).slice(0, 2) == "WW", classTable(compiledFunc(code, "u"));
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "0 2\n", vm.output;
+}
+
+test "register classes: a for-of counter and length are words, its element takes the element class" {
+	const code = "function fo(xs: number[], ss: string[]): number { let t: number = 0; for (const v of xs) { t += v; } for (const w of ss) { t += w.length; } return t; } console.log(`${fo([1, 2], [\"ab\"])}`);";
+	const f = compiledFunc(code, "fo");
+	const table = classTable(f);
+	assert table.slice(0, 3) == "RRW", table;
+	for (let i = 0; i < f.code.length; i = i + 1) {
+		if (f.code[i].op == RaiserOpcode.AddI64Imm) assert regClassLetter(f.regClasses[f.code[i].a]) == "W", disasmFunc(f);
+	}
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "5\n", vm.output;
+}
+
+test "register classes: a try/finally route register is a word and its catch register is dyn" {
+	const code = "function tf(): number { let r = 0; try { r = 1; } finally { r = 2; } return r; } console.log(`${tf()}`);";
+	const table = classTable(compiledFunc(code, "tf"));
+	assert table.slice(0, 3) == "WWD", table;
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "2\n", vm.output;
+}
+
+test "register classes: this and the environment of a closure inside a loop inside a method" {
+	const code = "class C { n: number = 1; get(): number { return this.n; }"
+		+ " mk(): number { let t: number = 0; for (let i = 0; i < 3; i++) { const f = (): number => i + this.n; t += f(); } return t; } }"
+		+ " console.log(`${new C().get() + new C().mk()}`);";
+	assert classTable(compiledFunc(code, "C_get")).charAt(0) == "R", classTable(compiledFunc(code, "C_get"));
+	assert classTable(funcNamed(code, "$lifted_anon")).charAt(0) == "D", classTable(funcNamed(code, "$lifted_anon"));
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "7\n", vm.output;
+}
+
+test "register classes: a call through a closure whose environment is null passes no environment" {
+	const ctx = evalFull("const f = (x: number): number => x * 2; return f(21);");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 42;
 }
