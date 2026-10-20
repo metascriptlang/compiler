@@ -4210,7 +4210,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
-	if (formal.kind == TypeKind.Union || formal.kind == TypeKind.Struct) {
+	if (formal.kind == TypeKind.Union || formal.kind == TypeKind.Struct || formal.kind == TypeKind.Tuple) {
 		// Structs with field names on both sides unify BY NAME: an object literal's
 		// key order is the writer's choice (JSX attr order, etc.) and need not match
 		// the formal's declaration order — positional pairing would silently bind
