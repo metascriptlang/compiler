@@ -127,6 +127,28 @@ async function main(): Promise<void> {
 	assert text.contains("a '.then' callback returns 'Thing', a thenable the promise would adopt"), text;
 }
 
+test "a class is not a promise and a promise is not a class" {
+	const result = checkOnly(`
+class Plain { x: int32 = 1; }
+class Thing {
+	then(onFulfilled: (v: int32) => void): void { onFulfilled(1); }
+}
+class Empty {}
+async function main(): Promise<void> {
+	const a: Promise<int32> = new Plain();
+	const b: Promise<int32> = new Thing();
+	const c: Promise<int32> = new Empty();
+	const d: Empty = Promise.resolve(1);
+}
+`);
+	const text = result.errors.join("\n");
+	assert result.errors.length == 4, text;
+	assert text.contains("Type 'Plain' is not assignable to type 'Promise<int32>'"), text;
+	assert text.contains("Type 'Thing' is not assignable to type 'Promise<int32>'"), text;
+	assert text.contains("Type 'Empty' is not assignable to type 'Promise<int32>'"), text;
+	assert text.contains("Type 'Promise<int32>' is not assignable to type 'Empty'"), text;
+}
+
 test "a thenable returned inside a try with catch or finally is refused, return await is kept" {
 	const result = checkOnly(`
 class Thing {
