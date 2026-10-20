@@ -1000,7 +1000,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 					let baseType = baseSym.symbolType;
 					if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
 					const gi1 = createGenericInstance(baseType, resolvedArgs);
-					gi1.typeName = baseName;
+					gi1.typeName = baseSym.name;
 					instantiateGenericBody(gi1, genericParams);
 					return isRefBase ? createRef(gi1) : gi1;
 				}
@@ -1024,7 +1024,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				}
 				checkTypeArgConstraints(ctx, baseSym2, baseName, resolvedArgs, line, col);
 				const gi2 = createGenericInstance(baseType2, resolvedArgs);
-				gi2.typeName = baseName;
+				gi2.typeName = baseSym2.name;
 				instantiateGenericBody(gi2, genericParams);
 				typeInstanceHooksFn(gi2, ctx, line, col);
 				return isRefBase2 ? createRef(gi2) : gi2;
