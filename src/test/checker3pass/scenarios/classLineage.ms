@@ -33,6 +33,23 @@ test "an unrelated generic class instance is refused" {
 	assert text.contains("Crate<int32> is not a Box<int32>: classes convert only along `extends`"), "a generic class must be refused: " + text;
 }
 
+test "an object typed by an interface, a type alias or a frozen literal is refused in a class slot" {
+	const prelude = "class Dog { a: int32 = 1; }\n";
+	const viaInterface = checkOnly(prelude + "interface Shape { a: int32; }\nconst s: Shape = { a: 3 };\nconst d: Dog = s;\n").errors.join("\n");
+	assert viaInterface.contains("Shape is not a Dog: classes convert only along `extends`; type the slot with an interface"), "an interface value must be refused: " + viaInterface;
+	const privateField = checkOnly("class Dog { private n: int32 = 1; }\ninterface Shape { n: int32; }\nconst s: Shape = { n: 3 };\nconst d: Dog = s;\n").errors.join("\n");
+	assert privateField.contains("Shape is not a Dog"), "an interface value into a class with a private field must be refused: " + privateField;
+	const viaAlias = checkOnly(prelude + "type Shape = { a: int32 };\nconst s: Shape = { a: 3 };\nfunction one(d: Dog): int32 { return d.a; }\none(s);\n").errors.join("\n");
+	assert viaAlias.contains("is not a Dog: classes convert only along `extends`; type the slot with an interface"), "a type alias value must be refused: " + viaAlias;
+	const frozen = checkOnly(prelude + "const x = { a: 3 };\nconst d: Dog = x;\n").errors.join("\n");
+	assert frozen.contains("annotate the literal `const x: Dog = { ... }`"), "a frozen literal must be refused with the annotate hint: " + frozen;
+}
+
+test "an object literal written at a class slot builds that class" {
+	const text = checkOnly("class Dog { a: int32 = 1; }\nfunction one(d: Dog): int32 { return d.a; }\nconst d: Dog = { a: 2 };\none({ a: 3 });\nconst ds: Dog[] = [{ a: 4 }];\n").errors.join("\n");
+	assert text == "", "a literal at the slot must check: " + text;
+}
+
 test "a base instance where a subclass is expected names the run-time test" {
 	const text = errorsOf("class Pup extends Dog { }\nfunction one(p: Pup): string { return p.name; }\none(new Dog());\n");
 	assert text.contains("not every Dog is a Pup: test it with `instanceof Pup`, or convert it with `as Pup`"), "a downcast must name instanceof: " + text;

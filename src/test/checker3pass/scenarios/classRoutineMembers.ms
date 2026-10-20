@@ -27,7 +27,7 @@ test "an unrelated class lacking a method or an accessor of the target is refuse
 test "an interface value is refused where a class with a method is expected" {
 	const text = errorsOf("interface Named { name: string; }\nfunction one(d: Dog): string { return d.bark(); }\n"
 		+ "const n: Named = new Animal();\none(n);\n");
-	assert text.contains("property 'bark' is missing in type 'Named' but required in type 'Dog'"),
+	assert text.contains("Named is not a Dog: classes convert only along `extends`; type the slot with an interface"),
 		"an interface value must fail: " + text;
 }
 
