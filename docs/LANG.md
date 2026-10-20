@@ -4319,6 +4319,33 @@ generic distinct whose base does not depend on its type parameter can delegate;
 the concrete base function is still not generic.
 
 The public spelling is `@delegate`; `@borrow` is not a compatibility alias.
+
+#### Comparing a distinct
+
+A distinct type does not inherit its base's comparisons. `==`, `!=`, `===`, `!==`, `<`, `<=`,
+`>` and `>=` on two values of `type UserId = distinct int32` are refused until the program
+declares or delegates one, and the refusal names the line to write:
+
+```ms
+type UserId = distinct int32;
+@delegate function `==`(this a: UserId, b: UserId): boolean;
+@delegate function `<`(this a: UserId, b: UserId): boolean;
+```
+
+`==` gives `!=`, `===` and `!==`; `<` gives `>`; `<=` gives `>=`. Delegating `!=`, `>` or `>=`
+itself is refused (`no !=(int32, int32) to delegate to`). A delegated comparison is the
+base's own: built in for numbers, strings, enums and structs, or the routine the base declares.
+A distinct compared with its base, a literal or another distinct is refused with or without a
+delegate (`a distinct type compares only with itself — convert one side with as`). A brand
+(`int32 & { __brand: "Id" }`) compares as its base. A struct with a distinct field compares
+that field through the field type's comparison; the std routine that folds the fields sees the
+delegate only when it is exported.
+
+Measured 2026-10-21 on C, JS and the Raiser with the candidate of `wt/trace-distinct-compare`:
+corpus `distinctDelegatedComparison` (string, int32, struct, enum, phantom generic, distinct of a
+distinct, struct field, a declared routine and a delegate to the base's routine) prints the same
+on all three, and handoff `distinctComparison` pins the refusals. Not measured: a distinct of a
+class or of a nullable type.
 This does not rename `Handle.borrow` or other ownership-borrowing APIs.
 
 The intrinsic symbol is exported by the system prelude:
