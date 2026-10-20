@@ -396,9 +396,10 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
 static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
 
 #define MS_PROMISE_ALL_FOR(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrDestroyFn) \
+    static void elemFutType##_allArrRttiDestroy(void* dest) { arrDestroyFn(dest); } \
     static msTypeInfo elemFutType##_allArrTI = { \
         .name = #arrType "PallCell", \
-        .destroyFn = (msDestroyProc)(arrDestroyFn), \
+        .destroyFn = elemFutType##_allArrRttiDestroy, \
     }; \
     MS_PROMISE_ALL_FOR_TI(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, &elemFutType##_allArrTI)
 
