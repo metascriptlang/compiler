@@ -2,7 +2,7 @@
 // Register allocator, constant pool builder, instruction emitter.
 
 import {
-	RaiserOpcode, RaiserInstruction,
+	RaiserOpcode, RaiserInstruction, RaiserRegClass,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserConstString, raiserNil } from "../../raiser/value";
@@ -116,13 +116,7 @@ export interface RaiserCompState {
 	code: RaiserInstruction[];
 	constants: RaiserValue[];
 	nextReg: int32;
-	// High-water mark of registers ever allocated. resetTemps shrinks
-	// nextReg back to (max local reg + 1) between statements, so the
-	// final value of nextReg reflects only the live locals, NOT the peak
-	// register count needed at runtime. The VM uses this to size each
-	// function's call frame — without an accurate peak, it would either
-	// over-allocate (waste) or under-allocate (out-of-bounds on temp regs).
-	maxRegSeen: int32;
+	regClasses: RaiserRegClass[];
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
@@ -146,7 +140,7 @@ export function createCompState(): RaiserCompState {
 	const locals: RaiserLocals = { items: localItems };
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
-	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
+	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
 		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
 }
 
@@ -190,13 +184,46 @@ export function addConst(s: RaiserCompState, val: RaiserValue): int32 {
 	return idx;
 }
 
-export function allocReg(s: RaiserCompState): int32 {
-	const r = s.nextReg;
-	s.nextReg = s.nextReg + 1;
-	// Track high-water mark — resetTemps() will lower nextReg back, but the
-	// VM needs to know the peak we ever reached to size each call frame.
-	if (s.nextReg > s.maxRegSeen) s.maxRegSeen = s.nextReg;
+export function allocReg(s: RaiserCompState, cls: RaiserRegClass): int32 {
+	let r = s.nextReg;
+	while (r < s.regClasses.length && s.regClasses[r] != cls) r = r + 1;
+	if (r == s.regClasses.length) s.regClasses.push(cls);
+	s.nextReg = r + 1;
 	return r;
+}
+
+export function allocBlock(s: RaiserCompState, classes: RaiserRegClass[]): int32 {
+	let start = s.nextReg;
+	while (!blockFits(s, start, classes)) start = start + 1;
+	for (let i = 0; i < classes.length; i = i + 1) {
+		if (start + i == s.regClasses.length) s.regClasses.push(classes[i]);
+	}
+	s.nextReg = start + classes.length;
+	return start;
+}
+
+function blockFits(s: RaiserCompState, start: int32, classes: RaiserRegClass[]): boolean {
+	for (let i = 0; i < classes.length; i = i + 1) {
+		if (start + i < s.regClasses.length && s.regClasses[start + i] != classes[i]) return false;
+	}
+	return true;
+}
+
+export function allocWord(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Word);
+}
+
+export function allocRef(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Ref);
+}
+
+export function allocDyn(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Dyn);
+}
+
+export function classOfReg(s: RaiserCompState, reg: int32): RaiserRegClass {
+	if (reg < 0 || reg >= s.regClasses.length) throw new Error(`internal: register R${reg} was never allocated`);
+	return s.regClasses[reg];
 }
 
 // Reset temporary registers after each statement.
@@ -391,16 +418,16 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 // envVal = -1 sentinel means non-capturing (no env), otherwise envVal is a register holding the env.
 
 export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
-	const pairReg = allocReg(s);
+	const pairReg = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, 0, 0));
-	const fnReg = allocReg(s);
+	const fnReg = allocWord(s);
 	emitLoadConst(s, fnReg, raiserInt(funcIdx));
 	const fnConst = addConst(s, raiserConstString("fn"));
 	emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, fnConst, fnReg));
 	const envConst = addConst(s, raiserConstString("env"));
 	if (envReg < 0) {
 		// Non-capturing: store -1 sentinel
-		const sentinelReg = allocReg(s);
+		const sentinelReg = allocWord(s);
 		emitLoadConst(s, sentinelReg, raiserInt(-1));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, sentinelReg));
 	} else {
@@ -478,7 +505,7 @@ export function callRaiserStmtCompiler(s: RaiserCompState, stmt: Node): void {
 export function emitTrapNil(s: RaiserCompState, message: string): int32 {
 	const cIdx = addConst(s, raiserConstString(message));
 	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, cIdx));
-	const reg = allocReg(s);
+	const reg = allocRef(s);
 	emitLoadConst(s, reg, raiserNil());
 	return reg;
 }
@@ -554,7 +581,7 @@ function lastWriteTail(s: RaiserCompState, startPc: int32, reg: int32): int32 {
 // that expression could allocate: the value is moved to `target` unless its writer can aim there.
 export function landResult(s: RaiserCompState, target: number, startPc: int32, firstTemp: int32, reg: int32): void {
 	if (reg == target) return;
-	const tail = reg >= firstTemp ? lastWriteTail(s, startPc, reg) : 0;
+	const tail = reg >= firstTemp && classOfReg(s, reg) == classOfReg(s, target as int32) ? lastWriteTail(s, startPc, reg) : 0;
 	if (tail > 0) {
 		const end = s.code.length;
 		s.code[end - tail].a = target;
@@ -583,7 +610,7 @@ function endIsUnreachable(s: RaiserCompState): boolean {
 
 export function emitImplicitReturn(s: RaiserCompState): void {
 	if (endIsUnreachable(s)) return;
-	const nilReg = allocReg(s);
+	const nilReg = allocRef(s);
 	emitLoadConst(s, nilReg, raiserNil());
 	emitRet(s, nilReg);
 }
