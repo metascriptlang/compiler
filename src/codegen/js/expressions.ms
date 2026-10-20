@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess } from "./emit";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
@@ -229,7 +229,10 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 	const emitted = multiFileHomeName(gen, sym, name, declared);
 	if (emitted == "") return safeJsName(name);
 	const home = sym.modulePath != null && sym.modulePath != "" ? sym.modulePath : gen.currentModulePath;
-	return home != gen.currentModulePath ? recordNeededImport(gen, home, emitted) : emitted;
+	if (home == gen.currentModulePath && hasFlag(sym, SymbolFlag.ImportC)) return emitted;
+	if (gen.ownFunctions.has(sym)) return emitted;
+	const file = fileDeclaring(gen, home, emitted);
+	return file != gen.currentFile ? recordNeededImport(gen, file, emitted) : emitted;
 }
 
 // The binding name the symbol's home module declares, or "" for a symbol no module

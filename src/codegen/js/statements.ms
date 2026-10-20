@@ -9,7 +9,7 @@ import {
 	AssertStmtData, BlockStmtData, UnreachableStmtData, isEmptyBlock, Type,
 } from "../../ast/node";
 import { runtimeRef } from "../../transform/util";
-import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, escapeJSString } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, escapeJSString, declareBinding } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 import { emitCopyOnRead, jsDefaultValue } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -112,6 +112,7 @@ export function emitVariableDecl(gen: JSGenerator, node: Node): void {
 		emitStaticStorageDecl(gen, node);
 		return;
 	}
+	declareBinding(gen, jsSymbolName(gen, node.resolvedSym, (node.data as VariableDeclData).declName));
 	emitIndent(gen);
 	emitVariableDeclCore(gen, node);
 	emit(gen, ";\n");

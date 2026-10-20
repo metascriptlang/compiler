@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, ExprStmtData, createNodeAt, SymbolKind,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
@@ -25,6 +25,7 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		_ => { emit(gen, autoAsync ? "async function " : "function "); },
 	};
 	const fnEmitted = jsSymbolName(gen, node.resolvedSym, d.fnName);
+	declareBinding(gen, fnEmitted);
 	if (fnEmitted != d.fnName) markNamed(gen, node, d.fnName);
 	emit(gen, fnEmitted);
 	emit(gen, "(");
@@ -113,7 +114,9 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
-		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${enumMemberValue(d, i)};\n`);
+		const member = enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i]);
+		declareBinding(gen, member);
+		emit(gen, `var ${member} = ${enumMemberValue(d, i)};\n`);
 	}
 }
 
@@ -171,6 +174,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 	}
 	const generic = isGenericClass(node);
 	const name = jsSymbolName(gen, node.resolvedSym, d.className);
+	declareBinding(gen, name);
 	emit(gen, assigned ? `${name} = class ` : "class ");
 	emit(gen, name);
 	if (d.classExtends != "") {
@@ -282,7 +286,9 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, autoAsync ? "async function " : "function "); },
 	};
-	emit(gen, jsSymbolName(gen, member.resolvedSym, className + "_" + d.methodName));
+	const fnEmitted = jsSymbolName(gen, member.resolvedSym, className + "_" + d.methodName);
+	declareBinding(gen, fnEmitted);
+	emit(gen, fnEmitted);
 	emit(gen, "(");
 	emitJoinedSafeParams(gen, member, skipThisParams(d.methodParams), ", ", safeJsName);
 	emit(gen, ") ");

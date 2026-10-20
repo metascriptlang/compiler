@@ -185,3 +185,4 @@ import "./unclosedDelimiter";
 import "./keyedAccess";
 import "./literalTypeAssign";
 import "./proxyRefusals";
+import "./importAssign";

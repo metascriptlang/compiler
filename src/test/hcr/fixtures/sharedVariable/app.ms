@@ -1,9 +1,9 @@
 import { reloadKindName } from "std/hcr";
 import { change } from "./support";
-import { LIMIT, TITLE, bump, counter } from "./logic";
+import { LIMIT, TITLE, add, bump, counter } from "./logic";
 
 function show(label: string): void {
-	counter += 10;
+	add(10);
 	const advanced = bump();
 	console.log(`HCR-SHARED ${label}: ${LIMIT} ${TITLE} ${counter} ${advanced}`);
 }

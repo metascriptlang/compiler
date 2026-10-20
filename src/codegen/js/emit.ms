@@ -3,12 +3,13 @@
 // JSGenerator context, low-level emit functions.
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
-import { Node, NodeKind, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData } from "../../ast/node";
+import { Node, NodeKind, Symbol, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 import { mangleModuleName } from "../c/names";
 import { DynamicModulePlan } from "../../module/graph";
+import { dirname, relative } from "std/fs/path";
 
 
 // ===== JS Generator =====
@@ -44,10 +45,10 @@ export class JSGenerator {
 	// statements only contribute side-effect ordering.
 	multiFile: boolean;
 	currentModulePath: string;
+	currentFile: string;        // the module itself, or the instance file carved out of it
+	layout: JsTreeLayout;
 	importSpecKeys: string[];   // source import specifier → emitted specifier
 	importSpecVals: string[];
-	moduleSpecKeys: string[];   // absolute module path → emitted specifier
-	moduleSpecVals: string[];
 	modExportKeys: string[];    // absolute module path → source-level export names
 	modExportVals: string[][];
 	modFunctionOwnerNames: string[][];
@@ -58,6 +59,8 @@ export class JSGenerator {
 	moduleRequests: string;     // source imports and re-exports, in source order, hoisted in front of the body
 	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
 	namespaceNames: string[][];
+	declaredNames: string[];    // every module-level binding this file declares
+	ownFunctions: HashSet<Symbol>;  // the functions this file's program declares at module level
 	isTestBuild: boolean;
 	testNames: string[];        // parallel with testFuncs: declared name → wrapper fn
 	testFuncs: string[];
@@ -79,9 +82,18 @@ export class JSGenerator {
 	dynamicPlan: DynamicModulePlan;
 }
 
+export class JsTreeLayout {
+	outRelOf: HashMap<string, string>;        // file key → path under the out root
+	instanceFileOf: HashMap<string, string>;  // emitted instance name → file key
+}
+
+export function createJsTreeLayout(): JsTreeLayout {
+	return { outRelOf: new HashMap<string, string>(), instanceFileOf: new HashMap<string, string>() };
+}
+
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [],
+		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [], ownFunctions: new HashSet<Symbol>(),
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
@@ -167,6 +179,10 @@ export function collectDeclaredLocals(node: Node, out: HashSet<string>): void {
 	forEachChild(node, (c: Node): void => { if (c != null) collectDeclaredLocals(c, out); });
 }
 
+export function declareBinding(gen: JSGenerator, name: string): void {
+	if (gen.multiFile && gen.indentLevel == 0) gen.declaredNames.push(name);
+}
+
 export function importSpecifier(name: string, local: string): string {
 	return local == name ? name : `${name} as ${local}`;
 }
@@ -178,11 +194,23 @@ export function lookupImportSpec(gen: JSGenerator, specifier: string): string {
 	return "";
 }
 
-export function lookupModuleSpec(gen: JSGenerator, modulePath: string): string {
-	for (let i = 0; i < gen.moduleSpecKeys.length; i += 1) {
-		if (gen.moduleSpecKeys[i] == modulePath) return gen.moduleSpecVals[i];
-	}
-	return "";
+// Both arguments are '/'-separated paths relative to the same out root; the
+// result is a node-resolvable specifier (always ./ or ../ prefixed).
+export function relSpecBetween(fromRel: string, toRel: string): string {
+	const spec = relative(dirname(`/${fromRel}`), `/${toRel}`);
+	if (spec.startsWith(".")) return spec;
+	return `./${spec}`;
+}
+
+export function lookupModuleSpec(gen: JSGenerator, fileKey: string): string {
+	const from = gen.layout.outRelOf.get(gen.currentFile);
+	const to = gen.layout.outRelOf.get(fileKey);
+	if (from == null || to == null) return "";
+	return relSpecBetween(from, to);
+}
+
+export function fileDeclaring(gen: JSGenerator, ownerPath: string, emitted: string): string {
+	return gen.layout.instanceFileOf.get(emitted) ?? ownerPath;
 }
 
 export function moduleExportsName(gen: JSGenerator, modulePath: string, name: string): boolean {

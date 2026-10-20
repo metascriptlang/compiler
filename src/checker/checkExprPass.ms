@@ -145,6 +145,7 @@ function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 		if (target.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = target;
 		checkExpr(ctx, target, null);
 		ctx.initTracker.assignTarget = null;
+		refuseImportWrite(ctx, target);
 		const k = target.kind;
 		if (k != NodeKind.Identifier && k != NodeKind.MemberExpr && k != NodeKind.ArrayAccess && k != NodeKind.ObjectLiteral) {
 			addError(ctx, "a destructuring assignment target must be a variable, a field or an element", target.location.line, target.location.column);
@@ -182,6 +183,12 @@ function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 		addError(ctx, "a rest element in a destructuring assignment needs every other target to have its element type", target.location.line, target.location.column);
 		target.nodeType = errorType();
 	}
+}
+
+function refuseImportWrite(ctx: CheckerContext, target: Node): boolean {
+	if (target.kind != NodeKind.Identifier || target.resolvedSym == null || !ctx.importSet.has(target.resolvedSym)) return false;
+	addError(ctx, `Cannot assign to '${(target.data as IdentifierData).name}' because it is an import.`, target.location.line, target.location.column);
+	return true;
 }
 
 function reportArcWrite(ctx: CheckerContext, target: Node): void {
@@ -903,7 +910,7 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		if (updateThroughProxy(ctx, node)) return;
 	}
 	checkExpr(ctx, d.updateArg, null);
-	reportSharedWrite(ctx, d.updateArg);
+	if (!refuseImportWrite(ctx, d.updateArg)) reportSharedWrite(ctx, d.updateArg);
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
 		const umd = d.updateArg.data as MemberExprData;
 		refuseNamespaceWrite(ctx, d.updateArg);
@@ -1173,7 +1180,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (isAsgn) {
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 	}
-	if (isAsgn) { reportSharedWrite(ctx, d.left); }
+	if (isAsgn && !refuseImportWrite(ctx, d.left)) { reportSharedWrite(ctx, d.left); }
 	if (isAsgn && !isLocation(d.left) && d.left.kind != NodeKind.ArrayLiteral && d.left.kind != NodeKind.ObjectLiteral
 			&& d.left.nodeType != null && d.left.nodeType.kind != TypeKind.Error) {
 		addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", d.left.location.line, d.left.location.column);
