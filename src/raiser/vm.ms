@@ -962,16 +962,19 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
 	if (vm.current != 0) {
-		when (mode != "danger") { vmLedger(vm, vm.regs.slots, vm.globals, [], "strand"); }
+		when (mode != "danger") { vmLedger(vm, [vm.sched.strands.items[vm.current]], [], "strand"); }
 	}
 	return vm.current != 0;
 }
 
-function vmLedger(vm: RaiserVM, slots: RaiserValue[], globals: RaiserValue[], extra: RaiserValue[], where: string): void {
+function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], where: string): void {
 	if (!vm.orc || vm.error != "") return;
 	const roots: RaiserValue[] = [];
-	for (const slot of slots) roots.push(slot);
-	for (const g of globals) roots.push(g);
+	for (const s of held) {
+		for (const slot of s.regs.slots) roots.push(slot);
+		if (s.globals != held[0].globals) for (const g of s.globals) roots.push(g);
+	}
+	for (const g of held[0].globals) roots.push(g);
 	for (const e of extra) roots.push(e);
 	orcCollectCycles(vm.arrayHeap, vm.objectHeap);
 	const verdict = ledgerAudit(vm.arrayHeap, vm.objectHeap, roots, where);
@@ -984,7 +987,11 @@ function vmProgramLedger(vm: RaiserVM): void {
 	const extra: RaiserValue[] = [];
 	for (const st of ev.states) extra.push(st.error);
 	for (const job of ev.pending) extra.push(job.error);
-	vmLedger(vm, main.regs.slots, main.globals, extra, "program");
+	const sharing: RaiserStrand[] = [main];
+	for (const s of vm.sched.strands.items) {
+		if (s != main && s.arrayHeap == main.arrayHeap) sharing.push(s);
+	}
+	vmLedger(vm, sharing, extra, "program");
 }
 
 function vmHasRunnable(vm: RaiserVM): boolean {
@@ -1633,7 +1640,7 @@ function runStrandSlice(vm: RaiserVM): void {
 				setRegConform(vm, base + ia, vm.globals[ib]);
 			},
 			RaiserOpcode.StoreGlobal => {
-				const source = slots[base + ia];
+				const source = getDyn(vm, base + ia);
 				vmIncref(vm, source);
 				vmDecref(vm, vm.globals[ib]);
 				copyValueInto(vm.globals[ib], source);
@@ -1642,7 +1649,7 @@ function runStrandSlice(vm: RaiserVM): void {
 				const source = getDyn(vm, base + ib);
 				const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source,
 					func.copyPlans, ic as int32);
-				setReg(vm, base + ia, copied);
+				setRegConform(vm, base + ia, copied);
 				vmMaybeCollect(vm);
 			},
 			RaiserOpcode.Box => {
@@ -1656,7 +1663,10 @@ function runStrandSlice(vm: RaiserVM): void {
 			},
 			RaiserOpcode.Unbox => {
 				const source = slots[base + ib];
-				if (source.kind == RaiserValueKind.Box) {
+				if (ic == 1) {
+					const inner = readDyn(vm.arrayHeap, source);
+					setRegInt(vm, base + ia, inner.kind == RaiserValueKind.Float ? int64Bits(msFloat64Bits(inner.floatVal)) : inner.intVal);
+				} else if (source.kind == RaiserValueKind.Box) {
 					setReg(vm, base + ia, heapBoxValue(vm.arrayHeap, source.intVal));
 				} else if (source.kind == RaiserValueKind.Nil && func.regClasses[ia] == RaiserRegClass.Word) {
 					vm.ip = ip; vmError(vm, "internal: unbox of nil into the word register R" + ia + " of " + func.name); break;
@@ -2504,6 +2514,8 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot set the length of a slice"); return;
 	}
+	const held = vm.arrayHeap.arrays[handleIndex(handle)].items;
+	for (let i = lenVal.intVal < 0 ? 0 : lenVal.intVal; i < held.length; i += 1) vmDecref(vm, held[i]);
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
 }
 
@@ -5588,4 +5600,39 @@ test "ledger: a spawned strand that drops everything ends clean and a leak in it
 	rcIncref(own.arrayHeap, own.objectHeap, heapAllocString(own.arrayHeap, "leaked"));
 	execLoop(leaky);
 	assert leaky.error == "internal: 1 string items live after strand end", leaky.error;
+}
+
+test "ledger: ArraySetLen releases the strings it truncates" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),
+			raiserABC(RaiserOpcode.Move, 4, 2, 0),
+			raiserABC(RaiserOpcode.NewArray, 3, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 5, 1),
+			raiserABC(RaiserOpcode.ArraySetLen, 3, 5, 0),
+			raiserABC(RaiserOpcode.LoadNil, 2, 0, 0),
+			raiserABC(RaiserOpcode.LoadNil, 4, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 5, 0, 0),
+		],
+		[raiserConstString("ab"), raiserInt(0)]
+	), "orc");
+	assert vm.error == "", vm.error;
+	assert heapStringLive(vm.arrayHeap) == 0;
+}
+
+test "Unbox with the payload flag reads the word of any boxed kind" {
+	const vm = execModule(classedModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABx(RaiserOpcode.LoadConst, 1, 0), raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),
+			raiserABC(RaiserOpcode.Box, 3, 2, 0), raiserABC(RaiserOpcode.Unbox, 4, 3, 1), raiserABC(RaiserOpcode.LoadNil, 5, 0, 0),
+			raiserABC(RaiserOpcode.Unbox, 6, 5, 1), raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+		],
+		[raiserConstString("ab")],
+		[RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Dyn, RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word]
+	), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.exitValue.kind == RaiserValueKind.Int && vm.exitValue.intVal == vm.regs.slots[2].intVal;
+	assert vm.regs.slots[6].intVal == 0;
 }
