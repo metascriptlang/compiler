@@ -131,6 +131,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.BrLeI64Imm => "BrLeI64Imm",
 		RaiserOpcode.BrGtI64Imm => "BrGtI64Imm",
 		RaiserOpcode.BrGeI64Imm => "BrGeI64Imm",
+		RaiserOpcode.EqVal => "EqVal",
+		RaiserOpcode.NeVal => "NeVal",
 	};
 }
 

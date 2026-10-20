@@ -2029,3 +2029,19 @@ test "arena: a throw in a finally replaces the raise, and a catch inside it keep
 	assert vm.error == "", vm.error;
 	assert vm.output == finallyInFlightOut, vm.output;
 }
+
+test "engine: == and != on a union compare the held member with EqVal and NeVal, never the payload word" {
+	const eq = compiledFunc("function f(a: string | number, b: string | number): boolean { return a == b; } console.log(`${f('a', 1)}`);", "f");
+	assert countNamed(eq, "EqVal") == 1 && countNamed(eq, "BeqI64") == 0 && countNamed(eq, "BrNeI64") == 0, disasmFunc(eq);
+	const ne = compiledFunc("function f(a: string | number, b: string | number): boolean { return a !== b; } console.log(`${f('a', 1)}`);", "f");
+	assert countNamed(ne, "NeVal") == 1 && countNamed(ne, "BneI64") == 0 && countNamed(ne, "BrEqI64") == 0, disasmFunc(ne);
+	const mixed = compiledFunc("function f(a: string | number): int64 { if (a == 3) { return 1; } return 2; } console.log(`${f(3)}`);", "f");
+	assert countNamed(mixed, "EqVal") == 1 && countNamed(mixed, "BrNeI64Imm") == 0 && countNamed(mixed, "BrEqI64Imm") == 0, disasmFunc(mixed);
+}
+
+test "engine: two equal strings in a union are equal and two different floats in a union are not" {
+	const ctx = evalOrcVM("function t(s: string): string | number { return s + 'b'; } function r(n: number): string | number { return n * 1.5; }"
+		+ " console.log(`${t('a') == t('a')} ${t('a') == t('x')} ${r(2) == r(2)} ${r(2) == r(3)} ${t('a') == r(2)} ${r(2) == 3}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "true false true false false true\n", ctx.output;
+}

@@ -191,6 +191,8 @@ export enum RaiserOpcode {
 	BrLeI64Imm,       // ABC: if R[A] <= the immediate in B pc += branchOffset(C)
 	BrGtI64Imm,       // ABC: if R[A] >  the immediate in B pc += branchOffset(C)
 	BrGeI64Imm,       // ABC: if R[A] >= the immediate in B pc += branchOffset(C)
+	EqVal,            // ABC: if raiserEqual(R[A], R[B]) skip C: kind and payload, a string by text
+	NeVal,            // ABC: if !raiserEqual(R[A], R[B]) skip C
 }
 
 export enum RaiserConvClass {

@@ -11,7 +11,7 @@ import {
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive,
-	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, clearArrayHeap, clearObjectHeap,
+	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, clearArrayHeap, clearObjectHeap,
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -1923,6 +1923,12 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.ConcatStr => {
 			vmHandleConcatStr(vm, ia, ib, ic);
 		},
+		RaiserOpcode.EqVal => {
+			vmHandleEqVal(vm, ia, ib, ic, true);
+		},
+		RaiserOpcode.NeVal => {
+			vmHandleEqVal(vm, ia, ib, ic, false);
+		},
 		RaiserOpcode.EqStr => {
 			vmHandleEqStr(vm, ia, ib, ic);
 		},
@@ -2508,6 +2514,12 @@ function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 		return;
 	}
 	setRegString(vm, vm.baseReg + ia, raiserToString(vm.arrayHeap, lhs) + raiserToString(vm.arrayHeap, rhs));
+}
+
+function vmHandleEqVal(vm: RaiserVM, ia: int32, ib: int32, ic: int32, wanted: boolean): void {
+	if (raiserEqual(vm.arrayHeap, getReg(vm, vm.baseReg + ia), getReg(vm, vm.baseReg + ib)) == wanted) {
+		vm.ip = vm.ip + (ic as int32);
+	}
 }
 
 function vmHandleEqStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
@@ -3543,6 +3555,31 @@ test "NeStr: unequal strings skip" {
 		[raiserConstString("abc"), raiserConstString("def"), raiserInt(1), raiserInt(0)]
 	));
 	assert vm.exitValue.intVal == 1;
+}
+
+function eqValSkips(op: RaiserOpcode, a: RaiserValue, b: RaiserValue): boolean {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),
+			raiserABC(op, 0, 1, 1),
+			raiserABx(RaiserOpcode.LoadConst, 2, 3),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[a, b, raiserInt(1), raiserInt(0)]
+	));
+	return vm.exitValue.intVal == 1;
+}
+
+test "EqVal and NeVal compare by kind and payload, a string by its text" {
+	assert eqValSkips(RaiserOpcode.EqVal, raiserConstString("ab"), raiserConstString("ab"));
+	assert !eqValSkips(RaiserOpcode.EqVal, raiserConstString("ab"), raiserConstString("xy"));
+	assert eqValSkips(RaiserOpcode.NeVal, raiserConstString("ab"), raiserConstString("xy"));
+	assert !eqValSkips(RaiserOpcode.NeVal, raiserConstString("ab"), raiserConstString("ab"));
+	assert !eqValSkips(RaiserOpcode.EqVal, raiserFloat(3.5), raiserFloat(4.5));
+	assert eqValSkips(RaiserOpcode.EqVal, raiserFloat(3.5), raiserFloat(3.5));
+	assert !eqValSkips(RaiserOpcode.EqVal, raiserConstString("3"), raiserInt(3));
 }
 
 test "StrLen: string length" {
