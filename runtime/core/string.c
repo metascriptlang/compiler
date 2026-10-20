@@ -891,6 +891,7 @@ msString msStringReplace(msString s, msString search, msString replacement) {
 	}
 
 	int64_t newLen = s.len - search.len + replacement.len;
+	if (newLen == 0) return MS_EMPTY_STRING;
 	msString result = msStringNewCap(newLen);
 	/* Before match */
 	if (pos > 0) memcpy(result.p->data, s.p->data, pos);
@@ -925,6 +926,7 @@ msString msStringReplaceAll(msString s, msString search, msString replacement) {
 	if (count == 0) return msStringNew(s.p->data, s.len);
 
 	int64_t newLen = s.len + count * (replacement.len - search.len);
+	if (newLen == 0) return MS_EMPTY_STRING;
 	msString result = msStringNewCap(newLen);
 	int64_t srcPos = 0;
 	int64_t dstPos = 0;
