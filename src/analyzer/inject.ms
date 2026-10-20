@@ -9,7 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import { isBakeableAggregateConst } from "../checker/reachability";
+import { bakesIntoStaticCell } from "../checker/reachability";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
@@ -2613,13 +2613,7 @@ function destroyHcrCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): No
 	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
 }
 
-function isBakedArrayCell(decl: Node): boolean {
-	const t = decl.resolvedSym!.symbolType;
-	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array
-		&& isBakeableAggregateConst(decl);
-}
-
-function destroyBakedArrayCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
+function destroyBakedCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
 	const valueType = cell.symbolType!.typeReturn!;
 	const rcInfo = classifyRc(valueType, dctx);
 	if (!rcInfo.needsCleanup) return [];
@@ -2646,7 +2640,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	const baked: Symbol[] = [];
 	for (const s of d.programStmts) {
 		const decl = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
-		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && isBakedArrayCell(decl)) baked.push(decl.resolvedSym);
+		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && bakesIntoStaticCell(decl)) baked.push(decl.resolvedSym);
 	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
@@ -2662,7 +2656,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 		g -= 1;
 		const vi = dctx.globalsToDestroy[g];
 		if (baked.includes(vi.sym)) {
-			for (const s of destroyBakedArrayCell(vi.sym, program.location, dctx)) exits.push(s);
+			for (const s of destroyBakedCell(vi.sym, program.location, dctx)) exits.push(s);
 		} else if (!vi.isCursor && vi.rcInfo.destroyFn != null) {
 			exits.push(makeDestroyCall(vi.sym, vi.rcInfo, program.location));
 		}

@@ -20,7 +20,7 @@ import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
+import { bakesIntoStaticCell, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 
 // ===== genDecl — main declaration dispatcher =====
@@ -583,11 +583,11 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 				return;
 			}
 		}
-		if (init.kind == NodeKind.ObjectLiteral && node.nodeType != null && isBakeableAggregateConst(node)) {
-			if (genBakedConstCell(g, node, varName, staticPfx, cType)) return;
-		}
-		if ((init.kind == NodeKind.ArrayLiteral || init.kind == NodeKind.CallExpr) && node.nodeType != null && isBakeableAggregateConst(node)) {
-			if (genBakedConstArrayCell(g, node, varName, staticPfx, cType)) return;
+		if (bakesIntoStaticCell(node)) {
+			const baked = init.kind == NodeKind.ObjectLiteral
+				? genBakedConstCell(g, node, varName, staticPfx, cType)
+				: genBakedConstArrayCell(g, node, varName, staticPfx, cType);
+			if (baked) return;
 		}
 	}
 	// Always emit uninitialized declaration to GlobalVars

@@ -845,6 +845,13 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	return true;
 }
 
+export function bakesIntoStaticCell(node: Readonly<Node>): boolean {
+	const t = node.nodeType;
+	if (t == null || t.kind != TypeKind.Ref || !isBakeableAggregateConst(node)) return false;
+	const k = (node.data as VariableDeclData).initializer.kind;
+	return k == NodeKind.ObjectLiteral || k == NodeKind.ArrayLiteral || k == NodeKind.CallExpr;
+}
+
 function isExportedDecl(node: Node): boolean {
 	if (node.kind == NodeKind.ExportDecl) return true;
 	// DecoratedDecl wrapping an ExportDecl
