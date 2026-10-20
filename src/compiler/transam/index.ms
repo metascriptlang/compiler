@@ -10,7 +10,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, TypeKind } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
 import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
-import { CheckerContext, CancelCtx, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, CancelCtx, createContext } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -48,7 +48,7 @@ import {
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
 import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule } from "../../checker/checkPass";
-import { registerModuleProgram, lookupModuleProgram } from "../../checker/instantiate";
+import { registerModuleProgram, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
@@ -1630,4 +1630,46 @@ test "a user module's check keeps its file's durability" {
 	dbTypeCheck(db, "/durable/a.ms");
 	const entry = cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, "/durable/a.ms")));
 	assert entry.durability == TaDurability.Low;
+}
+
+const MAP_USE = "const m = new Map<string, int32>();\nm.set(\"k\", 1);\nconsole.log(m.get(\"k\"), [3, 4].findIndex((x: int32): boolean => x == 4));\n";
+
+function checkAfterOpening(stdFile: string): string[] {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	const std = resolveRuntimeDir() + "/std";
+	dbSetStdPath(db, std);
+	dbSetFileText(db, "/p/a.ms", MAP_USE);
+	const problems = dbTypeCheck(db, "/p/a.ms").errors.map((e: CheckerError): string => "before: " + e.message);
+	const opened = std + stdFile;
+	dbSetFileText(db, opened, try readStdFile(opened) catch "");
+	dbTypeCheck(db, opened);
+	if (lookupModuleCtx(opened) != null) problems.push(opened + " was registered over the prelude's copy");
+	dbSetFileText(db, "/p/a.ms", MAP_USE + "const n = 2;\n");
+	const after = dbTypeCheck(db, "/p/a.ms");
+	if (lookupModuleCtx("/p/a.ms") != after) problems.push("the edited module is not registered");
+	for (const e of after.errors) problems.push("after: " + e.message);
+	return problems;
+}
+
+test "opening a module the shared prelude loaded leaves its generics on the prelude's copy" {
+	const errors = checkAfterOpening("/core/struct.ms");
+	assert errors.length == 0, errors.join("\n");
+}
+
+test "opening a sub-module the shared prelude loaded leaves its generics on the prelude's copy" {
+	const errors = checkAfterOpening("/core/array/shared.ms");
+	assert errors.length == 0, errors.join("\n");
+}
+
+test "an edited module checks clean again and stays registered for its importers" {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	for (const tail of ["", "const n = 1;\n", "const n = 2;\n"]) {
+		dbSetFileText(db, "/p/b.ms", MAP_USE + tail);
+		const ctx = dbTypeCheck(db, "/p/b.ms");
+		assert ctx.errors.length == 0, ctx.errors.map((e: CheckerError): string => e.message).join("\n");
+		assert lookupModuleCtx("/p/b.ms") == ctx;
+	}
 }
