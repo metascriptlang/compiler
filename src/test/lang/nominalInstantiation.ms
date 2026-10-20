@@ -77,6 +77,12 @@ function pickSecond<T>(a: T, b: T) { return b; }
 
 import "./fixtures/explicitTypeArguments";
 
+import { fixtureShapeValue } from "./fixtures/sameNamedShape";
+
+interface WireCircle { kind: "circle"; r: float64; }
+interface WireSquare { kind: "square"; side: float64; }
+type WireShape = WireCircle | WireSquare;
+
 interface ModuleArgumentsErr { msg: string; }
 
 function moduleArgumentsFail(): Result<string, ModuleArgumentsErr> {
@@ -232,4 +238,11 @@ test "nominalInstantiation: caller values and outer type parameters cannot captu
 	const ModulePayload = 3;
 	assert moduleMake(2 as int16).n == 7;
 	assert moduleOuter("nested") == 4;
+}
+
+test "nominalInstantiation: a std generic instance keeps a type named like another module's type" {
+	assert fixtureShapeValue() == 5;
+	const parsed = JSON.parse<WireShape>(`{"kind":"square","side":3.0}`);
+	assert parsed.ok;
+	assert parsed.value.kind == "square";
 }
