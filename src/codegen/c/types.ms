@@ -10,6 +10,7 @@ import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
+import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner, mangleQualified, mangleModuleName } from "./names";
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
@@ -261,7 +262,7 @@ export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Read
 		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		const mut = (mutBits & (1 << (i as int32))) != 0;
-		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
+		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut, i == 0 && returnsBorrow(fnType)));
 		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}
@@ -743,7 +744,11 @@ export function openArrayLenName(param: string): string { return param + "Len_0"
 
 // Mutation forces T* for Struct, Function (msClosure 16B), and small Tuple.
 // Actor lowering sets mutation bits via markValueLayoutParamsAsMutated.
-export function shouldIndirectParam(tg: TargetInfo, paramType: Type, isMutated: boolean): boolean {
+export function returnsBorrow(fnType: Type | null): boolean {
+	return fnType != null && fnType.kind == TypeKind.Function && fnType.typeReturn != null && fnType.typeReturn.kind == TypeKind.Borrow;
+}
+
+export function shouldIndirectParam(tg: TargetInfo, paramType: Type, isMutated: boolean, lentFirst: boolean = false): boolean {
 	if (paramType == null) return false;
 	// Var params: the `*` is in the type (getTypeDesc); body derefs come from
 	// HiddenDeref nodes. Never indirect — not even when mutated (an out param
@@ -751,6 +756,7 @@ export function shouldIndirectParam(tg: TargetInfo, paramType: Type, isMutated: 
 	// through Var via skipModifier).
 	if (paramType.kind == TypeKind.Var) return false;
 	const inner = paramAbiType(paramType);
+	if (lentFirst && passedByValue(inner)) return true;
 	if (inner != null && isStructType(inner)) {
 		if (isMutated) return true;
 		return sizeOfType(tg, inner) > ptrThreshold(tg);

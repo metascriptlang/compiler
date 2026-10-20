@@ -916,6 +916,10 @@ function runtimeParams(fn: Type): Type[] {
 	return params;
 }
 
+export function sinkModeDiffers(a: Type, b: Type): boolean {
+	return (a.kind == TypeKind.Sink) != (b.kind == TypeKind.Sink);
+}
+
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
@@ -926,7 +930,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
 	for (const sourceParam of sourceParams) {
-		if (!isAssignable(targetParams[i], sourceParam)) return false;
+		if (sinkModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Repr invariance (Nim tyProc: params AND return invariant via
@@ -1462,6 +1466,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formalParams.length != actualParams.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
+					if (sinkModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					if (fnSlotReprMismatch(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					const paramRel = typeRelation(formalParams[pi], actualParams[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;

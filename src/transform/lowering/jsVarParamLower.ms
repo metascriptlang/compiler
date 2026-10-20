@@ -1,7 +1,7 @@
 import {
 	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
 	CallExprData, MemberExprData, ArrayAccessData, BinaryExprData,
-	OutExprData, HiddenDerefData, VariableDeclData, FunctionDeclData, BlockStmtData, ProgramData, SwitchCaseData,
+	OutExprData, HiddenDerefData, ReturnStmtData, VariableDeclData, FunctionDeclData, BlockStmtData, ProgramData, SwitchCaseData,
 	DeclKind, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
@@ -215,6 +215,12 @@ function rw(node: Node): Node {
 	if (node.kind == NodeKind.SwitchCase) {
 		const cd = node.data as SwitchCaseData;
 		cd.caseStmts = fillBoxes(cd.caseStmts);
+	}
+	if (node.kind == NodeKind.ReturnStmt) {
+		const rd = node.data as ReturnStmtData;
+		if (rd.argument != null && rd.argument.kind == NodeKind.HiddenAddr && isBorrowType(rd.argument.nodeType)) {
+			rd.argument = (rd.argument.data as HiddenDerefData).expr;
+		}
 	}
 	if (node.kind == NodeKind.HiddenAddr) {
 		const result = pairize(node);

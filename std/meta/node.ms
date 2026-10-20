@@ -229,6 +229,7 @@ export enum SymbolFlag {
 	Inline,
 	InheritsConstructor,
 	NoInline,
+	HoistedCall, // a `__call_N_` temp the conditional lowering binds to a raising call: the value is the call and nothing else
 	InitFlag, // a module binding's initialized flag (moduleTdz); HCR keeps it in step with the binding's state cell
 }
 

@@ -359,6 +359,25 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 	checkExprInner(ctx, node, slotType);
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
+	derefBorrowResult(node);
+}
+
+function derefBorrowResult(node: Node): void {
+	const view = node.nodeType;
+	if (node.kind != NodeKind.CallExpr || view == null || view.kind != TypeKind.Borrow || view.typeReturn == null) return;
+	const call = createNodeAt(NodeKind.CallExpr, node.data, node.location);
+	call.nodeType = view;
+	call.resolvedSym = node.resolvedSym;
+	call.flags = node.flags;
+	call.typeExpr = node.typeExpr;
+	call.typeArg = node.typeArg;
+	call.flowNode = node.flowNode;
+	node.kind = NodeKind.HiddenDeref;
+	node.data = { expr: call };
+	node.nodeType = view.typeReturn;
+	node.resolvedSym = null;
+	node.typeExpr = null;
+	node.flags = (0 as BitSet<NodeFlag>).incl(NodeFlag.Sem);
 }
 
 function viewThroughReadonlyBase(node: Node): void {
