@@ -1,8 +1,11 @@
 // LSP Lifecycle Handlers + Dispatch Router + Tests
 // handleInitialize, handleDidOpen, handleDidChange, handleDidClose, lspDispatch
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbForgetAllTypeChecks, getFileId, invalidateFile } from "../../transam/index";
-import { requestCancel } from "../../transam/cancel";
+import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent, dbForgetAllTypeChecks, getFileId, invalidateFile } from "../../transam/index";
+import { requestCancel, resetCancel } from "../../transam/cancel";
+import { parseJson } from "std/serialize/json/parser";
+import { JsonKind, JsonValue } from "std/serialize/json/types";
+import { getDynamicField, asString, asInt32 } from "std/serialize/json/accessors";
 import { writeStderr } from "std/io";
 import { readFile, writeFile, mkdir, remove } from "std/fs";
 import { env } from "std/process";
@@ -10,7 +13,7 @@ import { normalize } from "std/fs/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
-	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest,
+	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
 import {
@@ -972,34 +975,99 @@ test "didChange publishes diagnostics post-drain" {
 	assert diag.indexOf(uri) >= 0;
 }
 
+function testDiagnosticItems(json: string, uri: string): JsonValue[] {
+	const parsed = parseJson(json);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const message = parsed.value;
+	if (message.getDynamicField("jsonrpc").asString() != "2.0"
+		|| message.getDynamicField("method").asString() != "textDocument/publishDiagnostics") {
+		throw new Error("Expected publishDiagnostics: " + json);
+	}
+	const params = message.getDynamicField("params");
+	if (params.getDynamicField("uri").asString() != uri) throw new Error("Wrong diagnostics URI: " + json);
+	const diagnostics = params.getDynamicField("diagnostics");
+	if (diagnostics.kind != JsonKind.Array) throw new Error("Expected diagnostics array: " + json);
+	return diagnostics.items;
+}
+
+function testPublishedItems(wire: string, uri: string): JsonValue[] {
+	let remaining = wire;
+	let found = false;
+	let items: JsonValue[] = [];
+	while (remaining.byteLength > 0) {
+		const headerEnd = remaining.indexOf("\r\n\r\n");
+		if (headerEnd < 0) throw new Error("Missing diagnostics frame header");
+		const size = lspParseContentLength(remaining.byteSlice(0, headerEnd));
+		const bodyStart = headerEnd + 4;
+		if (size < 0 || bodyStart + size > remaining.byteLength) throw new Error("Invalid diagnostics frame length");
+		const json = remaining.byteSlice(bodyStart, bodyStart + size);
+		if (lspGetField(json, "uri") == uri) {
+			if (found) throw new Error("Duplicate diagnostics notification: " + uri);
+			items = testDiagnosticItems(json, uri);
+			found = true;
+		}
+		remaining = remaining.byteSlice(bodyStart + size, remaining.byteLength);
+	}
+	if (!found) throw new Error("Missing diagnostics notification: " + uri);
+	return items;
+}
+
 test "didChange with error then fix clears diagnostics" {
-	const uri = "file:///test.ms";
+	const uri = "file:///lsp-clear.ms";
 	const db = createTransAmDb(100);
-	handleDidOpen(didOpenParams(uri, "const x: number = \"wrong\";"), db);
-	// Edit to fix the error
-	handleDidChange(didChangeParams(uri, "const x: number = 42;"), db);
-	const diag = publishPendingDiagnostics(db);
-	assert diag.indexOf("diagnostics") >= 0;
+	const before = testDiagnosticItems(handleDidOpen(didOpenParams(uri, "export const value: int32 = \"wrong\";"), db), uri);
+	assert before.length == 1;
+	assert before[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert before[0].getDynamicField("severity").asInt32(-1) == 1;
+	assert before[0].getDynamicField("source").asString() == "metascript";
+	handleDidChange(didChangeParams(uri, "export const value: int32 = 42;"), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
+	assert publishPendingDiagnostics(db) == "";
+}
+
+test "didChange publishes a new error after clearing the previous one" {
+	const uri = "file:///lsp-clear-again.ms";
+	const db = createTransAmDb(100);
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, "export const value: int32 = true;"), db), uri).length == 1;
+	handleDidChange(didChangeParams(uri, "export const value: int32 = 42;"), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
+	handleDidChange(didChangeParams(uri, "export const value: int32 = \"wrong\";"), db);
+	const after = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert after.length == 1;
+	assert after[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
 }
 
 test "multi-file: edit B updates A diagnostics" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "/src/b.ms", "export function foo(): number { return 1; }");
-	dbParse(db, "/src/b.ms");
-	dbSetFileText(db, "/src/a.ms", "import { foo } from \"./b\";\nconst x = foo();");
-	const progA = dbParse(db, "/src/a.ms");
-	recordImportsForFile(db, "/src/a.ms", progA);
-	const ctx = dbTypeCheck(db, "/src/a.ms");
-	assert ctx != null;
+	const depUri = "file:///lsp-import/b.ms";
+	const uri = "file:///lsp-import/a.ms";
+	const good = "export function foo(): int32 { return 1; }";
+	handleDidOpen(didOpenParams(depUri, good), db);
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, "import { foo } from \"./b\";\nexport const x: int32 = foo();"), db), uri).length == 0;
+	handleDidChange(didChangeParams(depUri, "export function foo(): string { return \"wrong\"; }"), db);
+	const after = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert after.length == 1;
+	assert after[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert after[0].getDynamicField("severity").asInt32(-1) == 1;
+	handleDidChange(didChangeParams(depUri, good), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
 }
 
-test "cancelled type check returns without crash" {
+test "cancelled type check is not cached and retry checks the same text" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "/test.ms", "const x = 1;");
+	const path = "/lsp-cancel.ms";
+	const uri = "file:///lsp-cancel.ms";
+	dbSetFileText(db, path, "export const value: int32 = \"wrong\";");
 	requestCancel(db.cancelCtx);
-	const ctx = dbTypeCheck(db, "/test.ms");
-	// Should not crash — ctx may be null or partial
-	assert true;
+	dbTypeCheck(db, path);
+	assert !dbCheckIsCurrent(db, path);
+	assert db.depStack.frames.length == 0;
+	assert !db.checkInProgress.has(path);
+	resetCancel(db.cancelCtx);
+	const diagnostics = testDiagnosticItems(lspNotification("textDocument/publishDiagnostics", buildDiagnosticsJson(uri, db, path)), uri);
+	assert diagnostics.length == 1;
+	assert diagnostics[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert dbCheckIsCurrent(db, path);
 }
 
 test "first type check on a fresh db stays under 1500ms" {
