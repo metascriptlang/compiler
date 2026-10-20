@@ -217,19 +217,11 @@ function quickfixItems(source: string): string[] {
 	return formattingItems(handleCodeAction("1", params, formattingDb(source)));
 }
 
-function applyAsciiQuickfix(source: string, action: string): string {
-	if (source.length != source.byteLength) throw new Error("ASCII fixture required for this edit applicator");
+function quickfixEdit(action: string): string {
 	const changes = lspGetObjectField(lspGetObjectField(action, "edit"), "changes");
 	const edits = lspGetArrayItems(lspGetObjectField(changes, "file:///fmt/probe.ms"));
 	if (edits.length != 1) throw new Error("Expected one quickfix edit: " + action);
-	const range = lspGetObjectField(edits[0], "range");
-	const start = lspGetObjectField(range, "start");
-	const end = lspGetObjectField(range, "end");
-	return applyEdit(source, {
-		start: { line: (lspGetNumberField(start, "line") + 1) as int32, column: (lspGetNumberField(start, "character") + 1) as int32 },
-		end: { line: (lspGetNumberField(end, "line") + 1) as int32, column: (lspGetNumberField(end, "character") + 1) as int32 },
-		newText: lspGetField(edits[0], "newText"),
-	});
+	return edits[0];
 }
 
 test "indent quickfix refuses an edit that drops an adjacent statement" {
@@ -249,7 +241,7 @@ test "safe quickfix edits preserve surrounding text and still parse and check" {
 		const source = prefix + line + suffix;
 		const actions = quickfixItems(source);
 		assert actions.length == 1;
-		const result = applyAsciiQuickfix(source, actions[0]);
+		const result = applyClientUtf16Edit(source, quickfixEdit(actions[0]));
 		assert result != source;
 		assert result.startsWith(prefix);
 		assert result.endsWith(suffix);
@@ -259,13 +251,23 @@ test "safe quickfix edits preserve surrounding text and still parse and check" {
 	}
 }
 
-function applySingleLineUtf16Edit(source: string, edit: string): string {
+function clientUtf16Offset(source: string, line: int32, character: int32): int32 {
+	const lines = source.split("\n");
+	if (line < 0 || line >= lines.length || character < 0) throw new Error("Invalid client position");
+	const text = lines[line];
+	const length = text.endsWith("\r") ? text.length - 1 : text.length;
+	let offset = character > length ? length : character;
+	for (let i = 0; i < line; i += 1) offset += lines[i].length + 1;
+	return offset;
+}
+
+function applyClientUtf16Edit(source: string, edit: string): string {
 	const range = lspGetObjectField(edit, "range");
 	const start = lspGetObjectField(range, "start");
 	const end = lspGetObjectField(range, "end");
-	const from = lspGetNumberField(start, "character") as int32;
-	const to = lspGetNumberField(end, "character") as int32;
-	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(end, "line") != 0 || from < 0 || to < from || to > source.length) throw new Error("Invalid single-line edit: " + edit);
+	const from = clientUtf16Offset(source, lspGetNumberField(start, "line") as int32, lspGetNumberField(start, "character") as int32);
+	const to = clientUtf16Offset(source, lspGetNumberField(end, "line") as int32, lspGetNumberField(end, "character") as int32);
+	if (to < from) throw new Error("Reversed client edit: " + edit);
 	return source.slice(0, from) + lspGetField(edit, "newText") + source.slice(to, source.length);
 }
 
@@ -277,7 +279,7 @@ function assertDocumentUtf16(text: string, endCharacter: int32): void {
 	const start = lspGetObjectField(range, "start");
 	const end = lspGetObjectField(range, "end");
 	if (lspGetNumberField(start, "character") != 0 || lspGetNumberField(end, "character") != endCharacter) throw new Error("Wrong document UTF-16 range: " + edits[0]);
-	const result = applySingleLineUtf16Edit(source, edits[0]);
+	const result = applyClientUtf16Edit(source, edits[0]);
 	if (result != "export const s = \"" + text + "\";\n") throw new Error("Wrong formatted document: " + result);
 	if (!parseSource(result).ok || dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length != 0) throw new Error("Formatted document must parse and check");
 }
@@ -293,7 +295,7 @@ function assertRangeUtf16(text: string, startCharacter: int32, endCharacter: int
 	const start = lspGetObjectField(range, "start");
 	const end = lspGetObjectField(range, "end");
 	if (lspGetNumberField(start, "character") != startCharacter || lspGetNumberField(end, "character") != endCharacter) throw new Error("Wrong selected statement or UTF-16 range: " + edits[0]);
-	const result = applySingleLineUtf16Edit(source, edits[0]);
+	const result = applyClientUtf16Edit(source, edits[0]);
 	if (result != prefix + "export const n = 2;") throw new Error("Range edit changed surrounding text: " + result);
 	if (!checkLossless(source, result).ok || !parseSource(result).ok || dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length != 0) throw new Error("Range edit must preserve tokens, parse and check");
 }
@@ -350,4 +352,94 @@ test "range formatting selects and edits after BMP text" {
 
 test "range formatting selects and edits after astral text" {
 	assertRangeUtf16("😀😀😀", 25, 44);
+}
+
+function assertFormattedBuffer(source: string, result: string): void {
+	if (!checkLossless(source, result).ok || !parseSource(result).ok || dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length != 0) throw new Error("Applied edit must preserve tokens, parse and check");
+}
+
+function assertMultilineDocument(eol: string): void {
+	const source = "export const first=\"é😀\";" + eol + "export const last=\"日😀\";";
+	const edits = formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(source)));
+	if (edits.length != 1) throw new Error("Expected multiline document edit");
+	const range = lspGetObjectField(edits[0], "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(start, "character") != 0 || lspGetNumberField(end, "line") != 1 || lspGetNumberField(end, "character") != 24) throw new Error("Wrong multiline document range: " + edits[0]);
+	const result = applyClientUtf16Edit(source, edits[0]);
+	if (!result.contains("export const first = \"é😀\";") || !result.contains("export const last = \"日😀\";")) throw new Error("Missing formatted declarations");
+	assertFormattedBuffer(source, result);
+	if (formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(result))).length != 0) throw new Error("Document formatting is not idempotent");
+}
+
+function assertMultilineRange(eol: string): void {
+	const prefix = "export const first=\"é😀\";" + eol + "export const second=\"😀\"; ";
+	const suffix = eol + "export const last=\"日\";" + eol;
+	const source = prefix + "export const   n=2;" + suffix;
+	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":1,\"character\":27},\"end\":{\"line\":1,\"character\":27}}}";
+	const edits = formattingItems(handleRangeFormatting("1", params, formattingDb(source)));
+	if (edits.length != 1) throw new Error("Expected multiline range edit");
+	const range = lspGetObjectField(edits[0], "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != 1 || lspGetNumberField(start, "character") != 26 || lspGetNumberField(end, "line") != 1 || lspGetNumberField(end, "character") != 45) throw new Error("Wrong multiline statement range: " + edits[0]);
+	const result = applyClientUtf16Edit(source, edits[0]);
+	if (result != prefix + "export const n = 2;" + suffix) throw new Error("Multiline range edit changed surrounding text");
+	assertFormattedBuffer(source, result);
+	if (formattingItems(handleRangeFormatting("1", params, formattingDb(result))).length != 0) throw new Error("Range formatting is not idempotent");
+}
+
+function assertUnicodeQuickfix(eol: string, line: string, endCharacter: int32): void {
+	const prefix = "export function f(): string {" + eol;
+	const suffix = eol + "\treturn x;" + eol + "}" + eol;
+	const source = prefix + line + suffix;
+	const actions = quickfixItems(source);
+	if (actions.length != 1) throw new Error("Expected Unicode quickfix");
+	const edit = quickfixEdit(actions[0]);
+	const range = lspGetObjectField(edit, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != 1 || lspGetNumberField(start, "character") != 0 || lspGetNumberField(end, "line") != 1 || lspGetNumberField(end, "character") != endCharacter) throw new Error("Quickfix range must exclude the line ending: " + edit);
+	const result = applyClientUtf16Edit(source, edit);
+	if (!result.startsWith(prefix) || !result.endsWith(suffix) || lspGetField(edit, "newText").trim() != "const x = \"é😀\";") throw new Error("Quickfix changed surrounding text");
+	assertFormattedBuffer(source, result);
+	if (quickfixItems(result).length != 0) throw new Error("Quickfix is not idempotent");
+}
+
+test "client offsets count UTF-16 across LF and CRLF" {
+	assert clientUtf16Offset("é😀\n日", 1, 1) == 5;
+	assert clientUtf16Offset("é😀\r\n日", 1, 1) == 6;
+	assert clientUtf16Offset("é😀\r\n日", 0, 100) == 3;
+}
+
+test "document edits apply and stabilize across Unicode LF lines" {
+	assertMultilineDocument("\n");
+}
+
+test "document edits apply and stabilize across Unicode CRLF lines" {
+	assertMultilineDocument("\r\n");
+}
+
+test "range edits preserve Unicode LF lines outside the statement" {
+	assertMultilineRange("\n");
+}
+
+test "range edits preserve Unicode CRLF lines outside the statement" {
+	assertMultilineRange("\r\n");
+}
+
+test "mixed-indent Unicode quickfix preserves LF surroundings" {
+	assertUnicodeQuickfix("\n", " \tconst x = \"é😀\";", 18);
+}
+
+test "mixed-indent Unicode quickfix preserves CRLF surroundings" {
+	assertUnicodeQuickfix("\r\n", " \tconst x = \"é😀\";", 18);
+}
+
+test "trailing-space Unicode quickfix preserves LF surroundings" {
+	assertUnicodeQuickfix("\n", "const x = \"é😀\";   ", 19);
+}
+
+test "trailing-space Unicode quickfix preserves CRLF surroundings" {
+	assertUnicodeQuickfix("\r\n", "const x = \"é😀\";   ", 19);
 }

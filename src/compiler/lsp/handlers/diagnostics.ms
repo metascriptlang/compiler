@@ -1,14 +1,15 @@
 // LSP Handlers — Diagnostics, format violations, dependency recording, transitive diagnostics.
 
 import {
-	TransAmDb, dbParse, dbTypeCheck, dbGetCheckedProgram, getFileId, getFilePath,
+	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbGetCheckedProgram, getFileId, getFilePath,
 	clearImportsFor, getTransitiveDependents, recordModuleImport
 } from "../../transam/index";
 import { detectCycle } from "../../transam/moduleDeps";
 import { writeStderr } from "std/io";
 import { platform, env, cwd } from "std/process";
 import { mkdir, writeFile } from "std/fs";
-import { lspNotification, lspFormatMessage, lspPathToUri, dirname } from "../protocol";
+import { lspNotification, lspFormatMessage, lspPathToUri, lspGetField, lspGetObjectField, lspGetArrayItems, lspGetNumberField, dirname } from "../protocol";
+import { parseJson } from "std/serialize/json/parser";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
 import { sgCollectDiagnostics } from "../../../checker/suggest";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
@@ -97,7 +98,8 @@ export function splitLines(s: string): string[] {
 	let start = 0;
 	for (let i = 0; i < s.byteLength; i = i + 1) {
 		if (s[i] == "\n") {
-			lines.push(s.slice(start, i));
+			const end = i > start && s[i - 1] == "\r" ? i - 1 : i;
+			lines.push(s.slice(start, end));
 			start = i + 1;
 		}
 	}
@@ -457,4 +459,47 @@ test "getLspTarget defaults to host + orc without section" {
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == platform;
 	assert t.gc == "orc";
+}
+
+function assertTrailingWhitespaceDiagnostic(eol: string): void {
+	const path = "/fmt/diagnostic.ms";
+	const uri = "file:///fmt/diagnostic.ms";
+	const db = createTransAmDb(8);
+	dbSetFileText(db, path, "export const value = \"é😀\";   " + eol);
+	const response = buildDiagnosticsJson(uri, db, path);
+	if (!parseJson(response).ok || lspGetField(response, "uri") != uri) throw new Error("Invalid diagnostics envelope");
+	const items = lspGetArrayItems(lspGetObjectField(response, "diagnostics"));
+	if (items.length != 1) throw new Error("Expected one trailing-whitespace diagnostic: " + response);
+	const item = items[0];
+	if (lspGetField(item, "message") != "Remove trailing whitespace" || lspGetField(item, "source") != "metascript-fmt" || lspGetNumberField(item, "severity") != 4) throw new Error("Wrong formatting diagnostic: " + item);
+	const range = lspGetObjectField(item, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(start, "character") != 27 || lspGetNumberField(end, "line") != 0 || lspGetNumberField(end, "character") != 30) throw new Error("Wrong whitespace UTF-16 range: " + item);
+}
+
+test "LF line content preserves spaces and trailing blank lines" {
+	const lines = splitLines("é😀   \n日\n\n");
+	assert lines.length == 4;
+	assert lines[0] == "é😀   ";
+	assert lines[1] == "日";
+	assert lines[2] == "";
+	assert lines[3] == "";
+}
+
+test "CRLF line content excludes terminators but preserves spaces and blank lines" {
+	const lines = splitLines("é😀   \r\n日\r\n\r\n");
+	assert lines.length == 4;
+	assert lines[0] == "é😀   ";
+	assert lines[1] == "日";
+	assert lines[2] == "";
+	assert lines[3] == "";
+}
+
+test "LF trailing whitespace diagnostic excludes the line terminator" {
+	assertTrailingWhitespaceDiagnostic("\n");
+}
+
+test "CRLF trailing whitespace diagnostic excludes the line terminator" {
+	assertTrailingWhitespaceDiagnostic("\r\n");
 }
