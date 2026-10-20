@@ -1,8 +1,8 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention } from "../ast/node";
-import { makeSymbol } from "./symbol";
-import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type } from "./types";
+import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
+import { makeSymbol, classDeclNodeOf } from "./symbol";
+import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -424,6 +424,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	if (openNullableSource != null) return isAssignable(openNullableSource, target.typeReturn);
 	const openNullableTarget = openNullableUnionPayload(target, source);
 	if (openNullableTarget != null) return isAssignable(source.typeReturn, openNullableTarget);
+
+	if (missingRoutine(source, target) != "") return false;
 
 	// Same kind is always compatible
 	if (source.kind == target.kind) {
@@ -1059,6 +1061,55 @@ function objectLayoutFits(source: Type, target: Type): boolean {
 	return true;
 }
 
+// The property name an instance routine answers to (an accessor `get_x` is `x`);
+// empty for a field, a static member or a constructor.
+function routineName(raw: Node): string {
+	const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+	if (member == null || member.kind != NodeKind.MethodDecl) return "";
+	const md = member.data as MethodDeclData;
+	if (md.methodIsStatic) return "";
+	return member.flags.has(NodeFlag.Accessor) ? md.methodName.substring(4) : md.methodName;
+}
+
+function classMembers(cls: Type): Node[] {
+	const decl = classDeclNodeOf(cls.sym!);
+	return decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).classBody : [];
+}
+
+function answersTo(source: Type, fields: string[], name: string): boolean {
+	if (fields.includes(name)) return true;
+	let cls = classBodyOf(source);
+	for (let depth = 0; cls != null && depth < 64; depth += 1) {
+		for (const member of classMembers(cls)) {
+			if (routineName(member) == name) return true;
+		}
+		cls = classBodyOf(cls.typeExtra);
+	}
+	return false;
+}
+
+// A class instance answers to its methods and accessors as well as its fields:
+// the first routine of the target class the source has no member for, or empty.
+// An instantiated class body has no class of its own; its instance relates it.
+function missingRoutine(source: Type, target: Type): string {
+	let cls = classBodyOf(target);
+	if (cls == null) return "";
+	const sourceClass = classBodyOf(source);
+	const shape = unwrapRefBase(source);
+	if (sourceClass != null && derivesFromClass(source, cls.sym!)) return "";
+	if (sourceClass == null && (shape.kind != TypeKind.Struct || isMaybeType(shape)
+		|| (shape.sym == null && !isAnonLiteralName(shape.typeName)))) return "";
+	const fields = sourceClass != null ? sourceClass.typeNames : shape.typeNames;
+	for (let depth = 0; cls != null && depth < 64; depth += 1) {
+		for (const member of classMembers(cls)) {
+			const name = routineName(member);
+			if (name != "" && !answersTo(source, fields, name)) return name;
+		}
+		cls = classBodyOf(cls.typeExtra);
+	}
+	return "";
+}
+
 export function viewFieldNotHeld(source: Type, view: Type): string {
 	const sNames = source.typeNames;
 	const sChildren = source.typeChildren;
@@ -1113,7 +1164,7 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	if (s0 == null || t0 == null) return "";
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
-	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return "";
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return routineHint(s0, t0);
 	if (s.typeName == "" || t.typeName == "") return "";
 	if (sameNominal(s, t)) return "";
 	if (isAnonLiteralName(s.typeName) && !isAnonLiteralName(t.typeName)) {
@@ -1139,7 +1190,14 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		}
 		ti += 1;
 	}
-	return "";
+	return routineHint(s, t);
+}
+
+function routineHint(source: Type, target: Type): string {
+	const routine = missingRoutine(source, target);
+	if (routine == "") return "";
+	return " (property '" + routine + "' is missing in type '" + typeDisplayName(source)
+		+ "' but required in type '" + typeDisplayName(target) + "')";
 }
 
 // Duck-typed adoption boundary: a frozen anonymous-literal value may be
@@ -1410,7 +1468,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return match (formal.kind) {
 			TypeKind.Struct => {
 				if (formal == actual || sameStructType(formal, actual)) return TypeRelation.Exact;
-				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
+				if (isObjectAssignable(actual, formal) && missingRoutine(actual, formal) == "") return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
 			TypeKind.Enum => sameNominal(formal, actual) ? TypeRelation.Exact : TypeRelation.None,

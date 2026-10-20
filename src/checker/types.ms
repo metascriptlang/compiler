@@ -3307,7 +3307,7 @@ function classOrigin(sym: Symbol | null): Symbol | null {
 	return sym != null && sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
 }
 
-function classBodyOf(t: Type | null): Type | null {
+export function classBodyOf(t: Type | null): Type | null {
 	const body = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
 	const cls = body != null && body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : body;
 	return cls != null && cls.kind == TypeKind.Struct && cls.sym != null && cls.sym.symbolKind == SymbolKind.Class ? cls : null;
