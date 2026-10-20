@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #if !defined(__wasm32__) || !defined(MSOS_BARE) || !defined(MSGC_MANUAL)
-#error "std/arbitrum requires --os=bare --cpu=wasm32 --gc=manual"
+#error "std/arbitrum requires --os=bare --cpu=wasm32 --mm=manual"
 #endif
 
 uint32_t msArbCalldataAddress(void);

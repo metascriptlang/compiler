@@ -1,8 +1,8 @@
 /*
  * MetaScript DRC Runtime — ARC + ORC Cycle Collector
  *
- * ARC: refcount primitives (incref/decref). Active under --gc=drc and --gc=orc.
- * ORC: cycle collector (Bacon's trial deletion). Active under --gc=orc (MSGC_ORC defined).
+ * ARC: refcount primitives (incref/decref).
+ * ORC: cycle collector (Bacon's trial deletion), linked in every --mm=drc build.
  *
  * RefHeader prepended to all heap-allocated RC objects.
  * Layout: [rc:4][rootIdx:4][type:8] = 16 bytes on 64-bit
@@ -10,8 +10,6 @@
  * ORC supplements ARC for cyclic data structures. Non-cyclic objects
  * use plain ARC (zero overhead). Cyclic objects get registered in the
  * root set; periodically the collector runs a 3-phase mark-scan-collect.
- *
- * When MSGC_ORC is not defined (--gc=drc), ORC functions are no-ops.
  */
 
 #ifndef MSGC_DRC_H
@@ -27,17 +25,11 @@
 #include "runtime/hcrTls.h"
 
 /* ===== RC Encoding ===== */
-/* Under --gc=orc (MSGC_ORC), rc field = [count:28][flags:4].
+/* rc field = [count:28][flags:4].
  * Lower 4 bits reserved for ORC cycle collector (color + maybeCycle).
- * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits.
- * Under --gc=drc (plain ARC), rc is a simple counter. */
-#ifdef MSGC_ORC
+ * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits. */
 #define MS_RC_INCREMENT 16
 #define MS_RC_MASK      15   /* lower 4 bits: color + flags */
-#else
-#define MS_RC_INCREMENT 1
-#define MS_RC_MASK      0
-#endif
 
 /* ===== Reference Header ===== */
 
@@ -85,7 +77,7 @@ void msDrcStatCycle(const msTypeInfo* type);
 /* Built with -DMS_DRC_LEDGER (off by default → zero cost in normal builds).
  * Records alloc/destroy events to catch double-destroy (abort on the 2nd
  * finalize of a live pointer) and leaks (per-type alloc/destroy imbalance
- * dumped at exit). Present in BOTH --gc=drc and --gc=orc. Every last-ref
+ * dumped at exit). Every last-ref
  * destroyFn dispatch routes through MS_DESTROY_DISPATCH so the ledger sees
  * exactly one finalize per object; a second is the drift signal.
  * See src/test/guard/ and the /nim-guard skill. */
@@ -283,8 +275,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 }
 
 /* ===== ARC Operations ===== */
-/* All rc arithmetic uses MS_RC_INCREMENT to preserve ORC's lower bits.
- * Under --gc=drc, MS_RC_INCREMENT=1 and MS_RC_MASK=0 — same as plain rc++/rc--. */
+/* All rc arithmetic uses MS_RC_INCREMENT to preserve ORC's lower bits. */
 
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
@@ -302,26 +293,21 @@ static inline void msAtomicIncRef(void* p) {
 	}
 }
 
-#ifdef MSGC_ORC
 void msUnregisterCycle(void* p);
-#endif
 
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
-	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
-	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
+	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner. */
 	if ((h->rc & ~MS_RC_MASK) != 0) {
 		intptr_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
 		bool concurrentDecrefLeftUsLast = (before & ~MS_RC_MASK) == 0;
 		if (!concurrentDecrefLeftUsLast) return false;
 		h->rc += MS_RC_INCREMENT;
 	}
-#ifdef MSGC_ORC
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
-#endif
 	return true;
 }
 
@@ -329,7 +315,7 @@ static inline bool msDecRefIsLast(void* p) {
  * fetch_sub plus the Acquire fence before the caller destroys is the load-bearing
  * ordering (Rust Arc protocol) — it must not be weakened. fetch_sub by
  * MS_RC_INCREMENT preserves the ORC flag bits; Arc is acyclic so this never routes
- * through the cycle collector even under --gc=orc. */
+ * through the cycle collector. */
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
@@ -345,13 +331,11 @@ static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
 		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
-#ifdef MSGC_ORC
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
 		 * scrub it from msRoots — every free path, including codegen's sole-owner
 		 * direct dispose that bypasses msOrcDecRefIsLast. Else msOrcCollect later
 		 * walks a dangling root (UAF in markGray/getColor). */
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
-#endif
 		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
 	}
@@ -360,9 +344,7 @@ static inline void msDestroyAndDispose(void* p) {
 static inline void msDropDispose(msSlab* slab, void* p) {
 	msRefHeader* h = msHeader(p);
 	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
-#ifdef MSGC_ORC
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
-#endif
 	MS_HCR_COUNT(h->type, -1);
 	int b = msSlabBucket(h->allocSize);
 	if (b >= 0 && slab->count[b] < MS_SLAB_LIMIT) {
@@ -410,9 +392,6 @@ static inline bool msDropEdgeLast(void* owner, void* p) {
 #define msWasMoved(p) ((p) = NULL)
 
 /* ===== ORC Cycle Collector ===== */
-/* Enabled by --gc=orc (defines MSGC_ORC). --gc=drc uses plain ARC below. */
-
-#ifdef MSGC_ORC
 
 #define MS_COL_BLACK   0
 #define MS_COL_GRAY    1
@@ -504,12 +483,5 @@ void msOrcTraceRef(void* child, void* env);
 MS_TLS_EXTERN(int32_t, msFreedCyclicObjects);
 MS_TLS_EXTERN(int32_t, msOrcCollections);
 #endif
-
-#else /* !MSGC_ORC — plain ARC (--gc=drc) */
-
-static inline void msOrcCollect(void) {}
-static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
-
-#endif /* MSGC_ORC */
 
 #endif /* MSGC_DRC_H */

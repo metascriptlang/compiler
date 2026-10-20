@@ -672,7 +672,6 @@ export function cliCompileFlags(opts: CliOptions): string {
 	if (opts.targetOs == "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
 	}
-	if (opts.gcMode == "orc") flags = appendFlag(flags, "-DMSGC_ORC");
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");

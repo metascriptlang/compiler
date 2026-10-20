@@ -404,11 +404,7 @@ void msDropRestore(const msDropState* saved) {
 	d->len = saved->len;
 	d->base = saved->base;
 }
-#endif
 
-#ifdef MSGC_ORC
-
-#include "runtime/drc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -742,4 +738,4 @@ void msOrcCollect(void) {
 	}
 }
 
-#endif /* MSGC_ORC */
+#endif /* MSGC_MANUAL */

@@ -1,7 +1,7 @@
 /*
  * MetaScript Manual Runtime — No RC, Optional Freestanding
  *
- * --gc=manual mode. No reference counting, no DRC injection.
+ * --mm=manual mode. No reference counting, no DRC injection.
  *
  * Two sub-modes controlled by MSOS_BARE (set via --os=bare):
  *   Without MSOS_BARE: malloc-backed allocation (like drc.h minus RC). Desktop use.
@@ -659,7 +659,7 @@ static inline void* msBoxStruct(const void* val, size_t size) {
     return p;
 }
 
-/* ===== Locked<T> stubs (--gc=manual has no threading: the lock is a no-op) =====
+/* ===== Locked<T> stubs (--mm=manual has no threading: the lock is a no-op) =====
  * The cell itself is an ordinary allocation whose payload the backend reaches
  * through the generated struct's field, so only the lock ops need stubbing. */
 static inline void  msLockedAcquire(void* cell)              { (void)cell; }

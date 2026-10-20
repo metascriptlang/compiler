@@ -401,7 +401,6 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 
 /* --- ORC-aware ref lifecycle for cyclic types --- */
-#ifdef MSGC_ORC
 #define msIncrefCyclic(p)     do { if ((p) != NULL) msOrcIncRef(p); } while(0)
 #define msDecrefCyclic(p)     do { \
 	void* __msDecrefCyclicP = (void*)(p); \
@@ -415,10 +414,6 @@ static inline void msStringCopy(msString* dest, msString src) {
 		} \
 	} \
 } while(0)
-#else
-#define msIncrefCyclic(p)     msIncref(p)
-#define msDecrefCyclic(p)     msDecref(p)
-#endif
 
 #define MS_DECREF_EDGE(owner, p, isLast) ({ \
 	void* __msEdgeP = (void*)(p); \
@@ -434,11 +429,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	__msEdgeQueued; \
 })
 #define msDecrefEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
-#ifdef MSGC_ORC
 #define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msOrcDecRefIsLast)
-#else
-#define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
-#endif
 
 /* --- Cyclic ref =copy: incref new, assign, decref old AFTER assign (Nim attachedAsgn
  * isCyclic order — old's destroy may collect; dest must already hold the new value) --- */

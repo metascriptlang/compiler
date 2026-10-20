@@ -17,7 +17,7 @@
  *
  * The ticket lock below is the whole locking runtime — one fair FIFO spinlock
  * with an adaptive spin→park tail. It has exactly one consumer (this cell), so
- * it lives here rather than in a header of its own; the --gc=manual stubs in
+ * it lives here rather than in a header of its own; the --mm=manual stubs in
  * runtime/manual.h are single-threaded no-ops and do not need the layout.
  */
 #ifndef MS_LOCKED_H
