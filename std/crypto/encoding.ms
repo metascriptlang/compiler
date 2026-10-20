@@ -127,6 +127,19 @@ test "encoding output rejects negative lengths" {
 }
 
 when (c) {
+	test "encoding output rejects capacity metadata bits" {
+		for (const bit of [60, 61, 62]) {
+			const length = (1 as int64) << (bit as int64);
+			let rejected = false;
+			try {
+				newEncodingOutput(length);
+			} catch (error) {
+				rejected = error instanceof RangeError;
+			}
+			assert rejected;
+		}
+	}
+
 	test "encoding output prepares literal storage before writes" {
 		const original = "ab";
 		let output = original;

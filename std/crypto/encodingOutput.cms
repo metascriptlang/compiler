@@ -5,7 +5,7 @@ extern function newString(length: int64): string from "msStringNewLen";
 extern function stringCapacity(value: string): int64 from "msStringCapacity";
 extern function prepareStore(ref value: string): void from "msStringPrepareMutation";
 extern const nativeSizeMax: uint64 from "SIZE_MAX";
-extern const stringCapacityMax: uint64 from "MS_CAP_MASK";
+extern const stringCapacityMask: uint64 from "MS_CAP_MASK";
 
 export type EncodingIndex = int64;
 
@@ -14,7 +14,7 @@ const STRING_HEADER_AND_TERMINATOR_BYTES: uint64 = 9;
 export function newEncodingOutput(length: int64): string {
 	if (length < 0 ||
 		(length as uint64) > nativeSizeMax - STRING_HEADER_AND_TERMINATOR_BYTES ||
-		(length as uint64) > stringCapacityMax) {
+		((length as uint64) & ~stringCapacityMask) != 0) {
 		throw new RangeError("encoding output length exceeds native string capacity");
 	}
 	const result = newString(length);
