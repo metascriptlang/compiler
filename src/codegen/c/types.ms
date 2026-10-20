@@ -359,9 +359,9 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 	return match (t.kind) {
 		TypeKind.Struct => {
 			if (t.typeName.length == 0) return anonStructKeyIn(t, open);
-			return t.typeName;
+			return structKeyIdentity(t);
 		},
-		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.Enum => "enum:" + mangledTypeName(t.sym, t.typeName),
 		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
