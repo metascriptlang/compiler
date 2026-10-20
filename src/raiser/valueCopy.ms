@@ -1,6 +1,6 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
-	raiserNil, raiserArray, raiserObject, copyValueInto,
+	raiserNil, handleIndex, raiserArray, raiserObject, copyValueInto,
 	heapAllocArray, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
 	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref,
 } from "./value";
@@ -44,8 +44,8 @@ export function copyTypedValue(
 	}
 	if (plan.kind == RaiserCopyKind.Object && value.kind == RaiserValueKind.Object) {
 		const handle = heapAllocObject(objects);
-		objects.objects[handle].classType = objects.objects[value.intVal].classType;
-		const fields = objects.objects[value.intVal].fields;
+		objects.objects[handleIndex(handle)].classType = objects.objects[handleIndex(value.intVal)].classType;
+		const fields = objects.objects[handleIndex(value.intVal)].fields;
 		for (const field of fields) {
 			let copied = raiserNil();
 			copyValueInto(copied, field.value);
@@ -104,9 +104,9 @@ test "typed copy releases owned children and retained shared references" {
 	rcIncref(arrays, objects, copied);
 	assert heapObjectGetField(objects, copied.intVal, "items").intVal != items.intVal;
 	assert heapObjectGetField(objects, copied.intVal, "shared").intVal == shared.intVal;
-	assert objects.objects[shared.intVal].rc == 2;
+	assert objects.objects[handleIndex(shared.intVal)].rc == 2;
 	rcDecref(arrays, objects, copied);
-	assert objects.objects[shared.intVal].rc == 1;
+	assert objects.objects[handleIndex(shared.intVal)].rc == 1;
 	rcDecref(arrays, objects, source);
 	assert arrays.freeList.length == 2;
 	assert objects.freeList.length == 3;
