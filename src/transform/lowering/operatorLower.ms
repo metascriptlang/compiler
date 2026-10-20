@@ -277,7 +277,6 @@ function lowerClosureEquality(node: Node, ctx: TransformContext): Node {
 }
 
 export function lowerClosureEqualities(program: Node, ctx: TransformContext): Node {
-	if (ctx.jsBackend) return program;
 	return walkNode(program, (node: Node): Node => lowerClosureEquality(node, ctx));
 }
 
@@ -747,8 +746,9 @@ test "closure === compares the adaptees on C" {
 	assert isRuntimeProcCall((stmts[0].data as ExprStmtData).expr, "msClosureSame");
 }
 
-test "closure === is left to the JS backend" {
-	assert loweredOperator(lowerClosuresOf("a === b;", createClosureType([], [], numberType()), true)) == "===";
+test "closure === compares the adaptees on JS" {
+	const stmts = lowerClosuresOf("a === b;", createClosureType([], [], numberType()), true);
+	assert isRuntimeProcCall((stmts[0].data as ExprStmtData).expr, "msClosureSame");
 }
 
 test "two named functions compare as plain pointers" {

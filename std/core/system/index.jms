@@ -107,6 +107,12 @@ function msUnionWrapMaybe(v: unknown, tag: int32): unknown {
 }
 
 @compilerFunc
+function msClosureSame(a: unknown, b: unknown): boolean {
+	@emit(`let x = ${a}; let y = ${b}; while (typeof x === "function" && x.$adaptee !== undefined) x = x.$adaptee; while (typeof y === "function" && y.$adaptee !== undefined) y = y.$adaptee; return x === y;`);
+	unreachable;
+}
+
+@compilerFunc
 function msCharToString(c: char): string {
 	@emit(`return ${c} < 128 ? String.fromCharCode(${c}) : "\\uFFFD";`);
 	unreachable;
