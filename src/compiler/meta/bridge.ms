@@ -62,11 +62,12 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType } from "../../checker/types";
+import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType, numberLiteralBase } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
 import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { int64Bits } from "../../utils/stdBackport";
+import { parseIntegerLiteral, parseNumberLiteral } from "../../utils/string";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -385,6 +386,16 @@ function unionToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean
 	}, loc);
 }
 
+function numberLiteralTypeNode(t: Type, loc: SourceLocation): Node {
+	const base = numberLiteralBase(t);
+	if (isFloatType(base) || base.kind == TypeKind.Number) {
+		const value = parseNumberLiteral(t.typeName);
+		return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: true, intVal: 0 }, loc);
+	}
+	const v = parseIntegerLiteral(t.typeName);
+	return createNodeAt(NodeKind.NumberLiteral, { value: v as number, isFloat: false, intVal: v }, loc);
+}
+
 // Wrapper-style modifier name lookup: Ref<T>, Ptr<T>, Sink<T>, etc.
 // All 7 modifier kinds store the inner type in t.typeReturn (uniform shape).
 function modifierName(kind: TypeKind): string {
@@ -488,6 +499,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 		// (cast msString → int64). See bug028 for the regression test.
 		TypeKind.StringLiteral => createNodeAt(NodeKind.StringLiteral, { value: nameOrDefault(t, "") }, loc),
 		TypeKind.BooleanLiteral => createNodeAt(NodeKind.BooleanLiteral, { boolValue: nameOrDefault(t, "") == "true" }, loc),
+		TypeKind.NumberLiteral => numberLiteralTypeNode(t, loc),
 		TypeKind.EnumLiteral => enumLiteralToAst(t, loc),
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Distinct
 			=> modifierToAst(t, loc, visited, impl),
