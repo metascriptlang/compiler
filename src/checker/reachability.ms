@@ -1166,3 +1166,19 @@ test "side-effect import cycle terminates" {
 	assert moduleAlive(graph, "/a.ms");
 	assert moduleAlive(graph, "/b.ms");
 }
+
+function closureFieldConst(source: string, routineKind: SymbolKind): Node {
+	const decl = (allocationOf(source).data as ProgramData).programStmts[0];
+	decl.nodeType = createRef(createStruct("Cfg", ["name", "on"], [stringType(), stringType()], true));
+	const pair = ((decl.data as VariableDeclData).initializer.data as ObjectLiteralData).properties[1];
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
+	const fn = (pair.data as ObjectLiteralData).properties[0];
+	fn.resolvedSym = makeSymbol((fn.data as IdentifierData).name, routineKind, stringType(), false);
+	return decl;
+}
+
+test "a module constant bakes a closure field only when it names a routine and carries no environment" {
+	assert bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: zero, env: null } };", SymbolKind.Function));
+	assert !bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: zero, env: held } };", SymbolKind.Function));
+	assert !bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: pick, env: null } };", SymbolKind.Variable));
+}
