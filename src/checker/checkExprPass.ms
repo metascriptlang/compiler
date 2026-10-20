@@ -2219,18 +2219,28 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	const nullableMember = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : null;
 	const projectedMember = nullableMember != null ? nullableMember : targetType;
-	if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isLiteralSet(targetType) || nullableMember != null)
-		&& !isUnresolvedType(targetType) && (tagUnionMemberSlot(srcType, projectedMember) >= 0 || objectPathHolders(srcType, projectedMember).length > 0)) {
-		const projected = checkedProjection(d.asExpr, srcType, projectedMember);
+	const sliceMember = srcType != null && isSlotUnion(srcType) && !isUnresolvedType(targetType) ? unionSliceMember(srcType, projectedMember) : null;
+	if (srcType != null && sliceMember != null && (targetType.kind != TypeKind.Union || isLiteralSet(targetType) || nullableMember != null)) {
+		const projected = checkedProjection(d.asExpr, srcType, sliceMember);
+		const viaClass = sliceMember != projectedMember;
+		const slice = viaClass ? createNodeAt(NodeKind.TypeAssertion, { asExpr: d.asExpr, asType: typeDisplayName(sliceMember) } as TypeAssertionData, d.asExpr.location) : node;
+		const sliceAs = (slice.data as TypeAssertionData).asType;
 		if (projected.kind == NodeKind.TypeAssertion) {
-			node.data = { asExpr: (projected.data as TypeAssertionData).asExpr, asType: d.asType };
-			if (projected.flags.has(NodeFlag.ObjCheck)) node.flags = node.flags.incl(NodeFlag.ObjCheck);
+			slice.data = { asExpr: (projected.data as TypeAssertionData).asExpr, asType: sliceAs };
+			if (projected.flags.has(NodeFlag.ObjCheck)) slice.flags = slice.flags.incl(NodeFlag.ObjCheck);
 		} else {
-			node.data = { asExpr: projected, asType: d.asType };
+			slice.data = { asExpr: projected, asType: sliceAs };
+		}
+		slice.flags = slice.flags.incl(NodeFlag.ConvCheck);
+		if (viaClass) {
+			slice.nodeType = sliceMember;
+			slice.flags = slice.flags.incl(NodeFlag.Sem);
+			stampCheckedInstance(ctx, slice, sliceMember);
+			node.data = { asExpr: slice, asType: d.asType };
+		} else {
+			stampCheckedInstance(ctx, node, targetType);
 		}
 		node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
-		node.flags = node.flags.incl(NodeFlag.ConvCheck);
-		stampCheckedInstance(ctx, node, targetType);
 		return;
 	}
 	if (srcType != null && !reportedErrorSince(ctx, operandMark) && convertAsBetweenUnions(ctx, node, srcType, targetType, asLoc)) return;
@@ -3888,10 +3898,20 @@ function checkedDistinctBase(srcType: Type, targetType: Type): Type | null {
 	return base != null && objectConversion(srcType, base) == ObjConv.Checked ? base : null;
 }
 
-function distinctClassFromValue(srcType: Type, targetType: Type): boolean {
-	const held = skipModifier(targetType) ?? targetType;
+function unionSliceMember(srcType: Type, member: Type): Type | null {
+	if (tagUnionMemberSlot(srcType, member) >= 0 || objectPathHolders(srcType, member).length > 0) return member;
+	const base = distinctClassBase(member);
+	return base != null && (tagUnionMemberSlot(srcType, base) >= 0 || objectPathHolders(srcType, base).length > 0) ? base : null;
+}
+
+function distinctClassBase(t: Type): Type | null {
+	const held = skipModifier(t) ?? t;
 	const base = distinctBody(held) != null ? peelDistinct(held) : null;
-	if (base == null || base.kind != TypeKind.Ref || runtimeClassSym(base.typeReturn) == null) return false;
+	return base != null && base.kind == TypeKind.Ref && runtimeClassSym(base.typeReturn) != null ? base : null;
+}
+
+function distinctClassFromValue(srcType: Type, targetType: Type): boolean {
+	if (distinctClassBase(targetType) == null) return false;
 	const bare = skipModifier(srcType) ?? srcType;
 	const body = bare.kind == TypeKind.Ref && bare.typeReturn != null ? bare.typeReturn : bare;
 	return isNumeric(body) || NOT_AN_OBJECT.indexOf(body.kind) >= 0;
