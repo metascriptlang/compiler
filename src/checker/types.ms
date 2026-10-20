@@ -1679,7 +1679,7 @@ function isPodFieldType(t: Type | null, depth: int32): boolean {
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
 		TypeKind.Distinct | TypeKind.SizedArray => isPodFieldType(t.typeReturn, depth + 1),
 		TypeKind.Ref => isAtomicRef(t),
-		TypeKind.Struct => !structCarriesRef(t, depth + 1),
+		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1),
 		_ => false,
 	};
 }
