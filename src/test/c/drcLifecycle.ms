@@ -173,7 +173,7 @@ test "E2E C: a module-level interface value is released at module exit" {
 		const f = makeFoo();
 	`);
 	assert c.ok;
-	assert c.value.contains(".destroyFn = (msDestroyProc)Foo_");
+	assert c.value.contains("Destroy(Foo__");
 	assert c.value.contains("msDecref(f__");
 }
 
