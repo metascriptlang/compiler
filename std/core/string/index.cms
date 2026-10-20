@@ -62,6 +62,20 @@ export function substring(this s: string, start: int32, end: int32 = 2147483647)
 // ===== Transformation =====
 
 /**
+ * Replaces the first occurrence of a search string with a replacement string.
+ * @param search A string to search for.
+ * @param replacement A string containing the text to replace.
+ */
+export extern function replace(this s: string, search: string, replacement: string): string from "msStringReplace";
+
+/**
+ * Replaces all occurrences of a search string with a replacement string.
+ * @param search A string to search for.
+ * @param replacement A string containing the text to replace.
+ */
+export extern function replaceAll(this s: string, search: string, replacement: string): string from "msStringReplaceAll";
+
+/**
  * Pads the current string with a given string (possibly repeated) so that the resulting string reaches a given length.
  * The padding is applied from the start (left) of the current string.
  * @param targetLen The length of the resulting string once the current string has been padded.
@@ -78,6 +92,12 @@ export extern function padStart(this s: string, targetLen: int32, pad: string): 
 export extern function padEnd(this s: string, targetLen: int32, pad: string): string from "msStringPadEnd";
 
 // ===== Splitting =====
+
+/**
+ * Split a string into substrings using the specified separator and return them as an array.
+ * @param delimiter A string that identifies character or characters to use in separating the string.
+ */
+export extern function split(this s: string, delimiter: string): string[] from "msStringSplit";
 
 // ===== Parsing =====
 
@@ -133,4 +153,5 @@ export extern function String<T>(val: T): string;
 export { asBytes, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
 import { clampIndex } from "./shared";
 import { parseFloatPrefix, parseIntPrefix } from "../number/parse";
-export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { startsWith, endsWith, includes, contains, count } from "./search";

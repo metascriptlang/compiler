@@ -6,6 +6,7 @@
 import { Node, NodeKind, NodeFlag, ProgramData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData } from "../../ast/node";
 import { JSGenerator, JSHelpers, JsTreeLayout, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier, collectDeclaredLocals } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
+import { createNodeAt, makeLoc } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import {
 	emitNumberLiteral, emitStringLiteral, emitBooleanLiteral, emitNullLiteral,
@@ -589,6 +590,41 @@ test "unary not" {
 	// Constant folding turns !true → false
 	const js = genFromSource("!true;");
 	assert js == "false;\n";
+}
+
+function rawPrefixPair(outer: string, inner: string): string {
+	const loc = makeLoc(0, 0);
+	const value = createNodeAt(NodeKind.Identifier, { name: "value" }, loc);
+	const operand = createNodeAt(NodeKind.UnaryExpr, { unaryOp: inner, operand: value }, loc);
+	return generateJSRaw(createNodeAt(NodeKind.UnaryExpr, {
+		unaryOp: outer,
+		operand,
+	}, loc));
+}
+
+test "unary minus cannot become decrement" {
+	const js = rawPrefixPair("-", "-");
+	assert js != "--value", js;
+}
+
+test "unary plus cannot become increment" {
+	const js = rawPrefixPair("+", "+");
+	assert js != "++value", js;
+}
+
+test "unary minus keeps its prefix update operand grouped" {
+	const loc = makeLoc(0, 0);
+	const value = createNodeAt(NodeKind.Identifier, { name: "value" }, loc);
+	const operand = createNodeAt(NodeKind.UpdateExpr, {
+		updateOp: "--",
+		updateArg: value,
+		isPrefix: true,
+	}, loc);
+	const js = generateJSRaw(createNodeAt(NodeKind.UnaryExpr, {
+		unaryOp: "-",
+		operand,
+	}, loc));
+	assert js != "---value", js;
 }
 
 test "conditional expression" {

@@ -13,3 +13,7 @@ export extern function isArray<T>(): boolean;
 /** True when `T` is an object in the TypeScript sense, the question `T extends object` asks: a class, an interface, a struct, an array, a tuple or a function; false for numbers, booleans, strings, enums, literals and `null`. Answered while compiling, per instance. */
 @builtin("IsObject")
 export extern function isObject<T>(): boolean;
+
+/** True when `T` is a plain object: an interface, a struct, an object-literal type, an array or a tuple, holding data and no behaviour of its own; false for a class instance, a function or closure, a `Proxy`, and everything `isObject<T>()` is false for. A distinct answers as its base. Answered while compiling, per instance. */
+@builtin("IsPlainObject")
+export extern function isPlainObject<T>(): boolean;

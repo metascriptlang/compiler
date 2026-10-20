@@ -589,11 +589,11 @@ function resolveKeyOf(operand: string, ctx: CheckerContext, line: int32, col: in
 	return keys;
 }
 
-// `T[K]` where K is a string literal type, a union of them or a type parameter;
-// null when the brackets hold something else, so the sized-array path reports it.
 function resolveIndexedAccess(objectText: string, indexText: string, ctx: CheckerContext, line: int32, col: int32): Type | null {
+	const indexSym = lookupSymbol(ctx.table, indexText.trim());
+	if (indexSym != null && !isTypeSymbol(indexSym)) return null;
 	const indexType = resolveAnnotation(indexText, ctx, 0, 0);
-	const isKey = indexType.kind == TypeKind.GenericParam || isKeyConstraint(indexType);
+	const isKey = indexType.kind == TypeKind.GenericParam || isKeyConstraint(indexType) || isNumeric(indexType);
 	if (!isKey) return null;
 	const objectType = resolveAnnotation(objectText, ctx, line, col);
 	if (objectType.kind == TypeKind.Error) return objectType;

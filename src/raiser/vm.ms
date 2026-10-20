@@ -112,7 +112,7 @@ export interface RaiserFutures {
 }
 
 export interface RaiserTimer {
-	dueMs: int64;
+	dueMs: number;
 	future: int64;
 }
 
@@ -643,7 +643,7 @@ function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
 	let ms: int64 = 0;
 	if (delay.kind == RaiserValueKind.Float && delay.floatVal > 0) ms = delay.floatVal as int64;
 	if (delay.kind == RaiserValueKind.Int && delay.intVal > 0) ms = delay.intVal;
-	const timer: RaiserTimer = { dueMs: msMonoTimeMs() + ms, future: newFuture(vm) };
+	const timer: RaiserTimer = { dueMs: performance.now() + (ms as number), future: newFuture(vm) };
 	const items = vm.sched.timers.items;
 	items.push(timer);
 	let at = items.length - 1;
@@ -657,7 +657,7 @@ function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
 
 function vmFireDueTimer(vm: RaiserVM): void {
 	const items = vm.sched.timers.items;
-	if (items.length == 0 || items[0].dueMs > msMonoTimeMs()) return;
+	if (items.length == 0 || items[0].dueMs > performance.now()) return;
 	const timer = items[0];
 	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
 	items.shrink(items.length - 1);
@@ -665,9 +665,10 @@ function vmFireDueTimer(vm: RaiserVM): void {
 }
 
 function vmWaitForTimer(vm: RaiserVM): void {
-	const wait = vm.sched.timers.items[0].dueMs - msMonoTimeMs();
+	const wait = vm.sched.timers.items[0].dueMs - performance.now();
 	if (wait <= 0) return;
-	const capped: int64 = wait > 2147483647 ? 2147483647 : wait;
+	const wholeMs = (wait as int64) + 1;
+	const capped: int64 = wholeMs > 2147483647 ? 2147483647 : wholeMs;
 	msSleepMs(capped as int32);
 }
 
@@ -1777,7 +1778,7 @@ function runStrandSlice(vm: RaiserVM): void {
 				if (held.kind != RaiserValueKind.Nil) {
 					const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[held.intVal].classType : RAISER_NO_CLASS;
 					if (!raiserIsInstance(classType, constStringText(getFuncConst(func, ib)))) {
-						vm.ip = ip; vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic))); break;
+						vm.ip = ip; vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : held.kind == RaiserValueKind.Object ? "Object" : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic))); break;
 					}
 				}
 			},

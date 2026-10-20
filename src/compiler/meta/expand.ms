@@ -877,6 +877,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrArrayField(keys, values, "importNames", d.importNames, loc);
 		addStrArrayField(keys, values, "importAliases", d.importAliases, loc);
 		addStrField(keys, values, "importSource", d.importSource, loc);
+		addStrArrayField(keys, values, "importTypeNames", d.importTypeNames, loc);
 		return;
 	}
 	if (k == NodeKind.ExportDecl) {

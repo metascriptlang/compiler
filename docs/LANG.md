@@ -42,7 +42,8 @@ checker rejects it and names the alternative.
   cycle through an `unknown` field is collected under `--gc=orc`.
 - Reads need a cast. `u as C` for a class `C` is tested at run time on C and JS, and so is
   `base as Derived`: a wrong class stops the program with
-  `Error: invalid object conversion: <runtime class> is not C`, exit 1; `null` passes.
+  `Error: invalid object conversion: <runtime class> is not C`, exit 1, naming a value without a
+  class (an object literal) `Object` on C, JS and the Raiser; `null` passes.
   `--danger` drops this test, as it drops bound checks, and `--gc=manual` has no type
   header to test. `u as C` has no unchecked spelling and `--danger` is its only switch; a
   `Ptr<void>` read (`(u as Ptr<void>) as C`) is the one untested path, as below.

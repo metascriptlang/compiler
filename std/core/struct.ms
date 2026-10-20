@@ -13,6 +13,8 @@
 // slot, matching reference-compiler stdlib layout. This keeps memory cost minimal
 // and keeps each type independently optimizable.
 
+import { isArray, needsCopy } from "std/typetraits";
+
 // ===== Concurrent-access guard (Go writing-flag model) =====
 @builtin("MapFatal")
 extern function msMapFatal(msg: string): void;
@@ -107,6 +109,10 @@ export function hashNumber(n: number): int64 {
 	return hashWangYi1(msFloat64Bits(n + 0.0));
 }
 
+export function hashPointer(p: Ptr<void>): int64 {
+	return hashWangYi1(msPtrBits(p));
+}
+
 export function hashCombine(h: int64, v: int64): int64 {
 	let r = (h as uint64) + (v as uint64);
 	r = r + (r << (10 as uint64));
@@ -169,12 +175,20 @@ export function hash(this i: uint8): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint16): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
-export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u as Ptr<void>)); }
+export function hash(this u: unknown): int64 { return hashPointer(u as Ptr<void>); }
 
 function sameKey<T>(a: T, b: T): boolean { return a == b; }
 function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
+
+function keyHash<K>(key: K): int64 {
+	when (isArray<K>() && !needsCopy<K>()) {
+		return hashPointer(key as Ptr<void>);
+	} else {
+		return key.hash();
+	}
+}
 
 test "a NaN key is found and stored once, like a TypeScript Map" {
 	const zero: number = 0.0;
@@ -239,7 +253,7 @@ export class HashMap<K, V> {
 
 function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
 	if (m.data.length == 0) return -1;
-	const hc = key.hash();
+	const hc = keyHash(key);
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (m.data[h].hcode != 0) {
@@ -278,7 +292,7 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 		const init: Vec<HashMapEntry<K, V>> = new Array(INITIAL_CAPACITY);
 		m.data = init;
 	}
-	const hc = key.hash();
+	const hc = keyHash(key);
 	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) {
 		m.data[idx].value = value;
@@ -441,7 +455,7 @@ export class HashSet<T> {
 
 function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
 	if (s.data.length == 0) return -1;
-	const hc = key.hash();
+	const hc = keyHash(key);
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode != 0) {
@@ -478,7 +492,7 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	if (s.data.length == 0) { s.data = new Array(INITIAL_CAPACITY); }
 	const idx = hashSetRawGet(s, value);
 	if (idx >= 0) return;
-	const hc = value.hash();
+	const hc = keyHash(value);
 	if (s.data.length < (s.size + s.size / 2) || (s.data.length - s.size) < MIN_EMPTY_SLOTS) {
 		hashSetEnlarge(s);
 	}
@@ -650,7 +664,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	m.writing = true;
 	defer mapEndWrite(m);
 	if (m.indices.length == 0) { orderedMapInitIndices(m, INITIAL_CAPACITY); }
-	const hc = key.hash();
+	const hc = keyHash(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) {
 		const entryIdx = m.indices[slot];
@@ -681,7 +695,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 export function get<K, V>(this m: Map<K, V>, key: K): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return null;
-	const hc = key.hash();
+	const hc = keyHash(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) return m.entries[m.indices[slot]].value;
 	return null;
@@ -690,7 +704,7 @@ export function get<K, V>(this m: Map<K, V>, key: K): V | null {
 export function has<K, V>(this m: Map<K, V>, key: K): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return false;
-	const hc = key.hash();
+	const hc = keyHash(key);
 	return orderedMapRawGet(m, key, hc) >= 0;
 }
 
@@ -699,7 +713,7 @@ export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
 	m.writing = true;
 	defer mapEndWrite(m);
 	if (m.indices.length == 0) return false;
-	const hc = key.hash();
+	const hc = keyHash(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot < 0) return false;
 	const entryIdx = m.indices[slot];
@@ -900,7 +914,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 	s.writing = true;
 	defer setEndWrite(s);
 	if (s.indices.length == 0) { orderedSetInitIndices(s, INITIAL_CAPACITY); }
-	const hc = value.hash();
+	const hc = keyHash(value);
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot >= 0) return;
 	if (s.indices.length < (s.size + s.size / 2) || (s.indices.length - s.size - s.tombstones) < MIN_EMPTY_SLOTS) {
@@ -927,7 +941,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 export function has<T>(this s: Set<T>, value: T): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	if (s.indices.length == 0) return false;
-	const hc = value.hash();
+	const hc = keyHash(value);
 	return orderedSetRawGet(s, value, hc) >= 0;
 }
 
@@ -936,7 +950,7 @@ export function delete<T>(this s: Set<T>, value: T): boolean {
 	s.writing = true;
 	defer setEndWrite(s);
 	if (s.indices.length == 0) return false;
-	const hc = value.hash();
+	const hc = keyHash(value);
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot < 0) return false;
 	const entryIdx = s.indices[slot];

@@ -2333,6 +2333,26 @@ export function isNonPrimitiveType(t: Type | null): boolean {
 	};
 }
 
+export function isPlainObjectType(t: Type | null): boolean {
+	const s = skipModifier(t);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Union) {
+		for (const member of s.typeChildren) {
+			if (!isPlainObjectType(member)) return false;
+		}
+		return s.typeChildren.length > 0;
+	}
+	if (s.kind == TypeKind.Distinct) return isPlainObjectType(s.typeReturn);
+	if (isArrayShaped(s) || s.kind == TypeKind.Tuple) return true;
+	const held = s.kind == TypeKind.Ref && s.typeReturn != null ? s.typeReturn : s;
+	if (held.kind == TypeKind.GenericInstance && (held.typeName == "Proxy" || distinctBody(held) != null)) {
+		return held.typeName != "Proxy" && isPlainObjectType(distinctBody(held));
+	}
+	if (held.kind == TypeKind.Ptr || runtimeClassSym(held) != null) return false;
+	const body = peelToStructOrUnion(held);
+	return body != null && body.kind == TypeKind.Struct && !isMaybeType(body) && (body.sym == null || body.sym.symbolKind != SymbolKind.Class);
+}
+
 export function isUnresolvedType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Inferred;
 }
@@ -3418,7 +3438,8 @@ export function unwrapRef(t: Type): Type {
 }
 
 // If t is Union(Ref<T>, Null), Union(Ptr<T>, Null), Union(unknown, Null) or
-// Union(bigint, Null), return the pointer-shaped member. Otherwise return null.
+// Union(bigint, Null), or a distinct of one of them with Null, return the
+// pointer-shaped member. Otherwise return null.
 // Used by codegen to collapse nullable-pointer unions to bare pointer types (the
 // null pointer is the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
@@ -3427,12 +3448,13 @@ export function unwrapRefNullUnion(t: Type): Type | null {
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a == null || b == null) return null;
-	if (isNullablePointerKind(a.kind) && b.kind == TypeKind.Null) return a;
-	if (isNullablePointerKind(b.kind) && a.kind == TypeKind.Null) return b;
+	if (isNullablePointer(a) && b.kind == TypeKind.Null) return a;
+	if (isNullablePointer(b) && a.kind == TypeKind.Null) return b;
 	return null;
 }
 
-function isNullablePointerKind(k: TypeKind): boolean {
+function isNullablePointer(t: Type): boolean {
+	const k = (peelToRepr(t) ?? t).kind;
 	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
 }
 

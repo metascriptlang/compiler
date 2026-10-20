@@ -22,48 +22,39 @@ export function distinctMisplacedMessage(line: int32): string {
 
 // ===== Type Annotation Skipping =====
 
-// Skip the trailing `& T & U` of an intersection chain after an atom has already
-// been consumed. Reused by the top-level skipper and by each union member.
 // Erasure-tier — accepted by parser, collapsed by resolver to first operand.
-function skipIntersectionTail(state: ParserState): void {
+function skipIntersectionType(state: ParserState, leavesQuestion: boolean): void {
+	if (leavesQuestion) skipTypeAtomNoOptional(state); else skipTypeAtom(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 		advance(state);
-		skipTypeAtom(state);
+		if (leavesQuestion) skipTypeAtomNoOptional(state); else skipTypeAtom(state);
+	}
+}
+
+function skipUnionType(state: ParserState, leavesQuestion: boolean): void {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
+		advance(state);
+	}
+	skipIntersectionType(state, leavesQuestion);
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
+		advance(state);
+		skipIntersectionType(state, leavesQuestion);
 	}
 }
 
 export function skipTypeAnnotation(state: ParserState): void {
-	// Leading pipe for discriminated union types: | { ... } | { ... }
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
-		advance(state);
-	}
-	skipTypeAtom(state);
-
-	// Intersection: T & U & V (binds tighter than union and conditional)
-	skipIntersectionTail(state);
-
-	// Tier 3: Conditional type: T extends U ? A : B
-	// Must be checked BEFORE union pipe so `T extends U ? A : B` isn't split as `T extends U ? A` | `B`
+	skipUnionType(state, false);
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
-		advance(state); // consume 'extends'
-		// Skip constraint type WITHOUT consuming '?' (which skipTypeAtom would eat as optional marker)
-		skipTypeAtomNoOptional(state);
+		advance(state);
+		skipUnionType(state, true);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
-			advance(state); // consume '?'
-			skipTypeAnnotation(state); // skip true branch (recursive — handles nested conditionals)
+			advance(state);
+			skipTypeAnnotation(state);
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
-				advance(state); // consume ':'
-				skipTypeAnnotation(state); // skip false branch
+				advance(state);
+				skipTypeAnnotation(state);
 			}
 		}
-		return;
-	}
-
-	// Union types: T | U | V — each member may itself be an intersection (T & U).
-	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
-		advance(state);
-		skipTypeAtom(state);
-		skipIntersectionTail(state);
 	}
 }
 
@@ -222,15 +213,9 @@ function parseTypeAtom(state: ParserState): Node {
 function applyArraySuffix(state: ParserState, result: Node): Node {
 	while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 		const brackToken = current(state);
-		advance(state); // consume [
-		let size = -1;
-		if (!isAtEnd(state) && current(state).kind == TokenKind.Number) {
-			size = parseFloat(current(state).value) as int32;
-			advance(state);
-		}
-		if (!isAtEnd(state) && current(state).kind == TokenKind.RBracket) {
-			advance(state);
-		}
+		const literalSize = peek(state, 1).kind == TokenKind.Number && peek(state, 2).kind == TokenKind.RBracket;
+		const size = literalSize ? parseFloat(peek(state, 1).value) as int32 : -1;
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		result = createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken);
 	}
 	return result;
@@ -728,6 +713,14 @@ test "union of generics" { assert skipsType("Result<A, B> | Error"); }
 
 test "optional generic array" { assert skipsType("HashMap<string, number>[]?"); }
 
+test "a conditional type's check and extends types are unions" {
+	assert skipsType("V extends string | number ? \"leaf\" : \"node\"");
+	assert skipsType("V extends string | number | boolean ? 1 : 2");
+	assert skipsType("V extends (string | number) ? 1 : 2");
+	assert skipsType("V extends A & B | C[] ? 1 : V extends D ? 2 : 3");
+	assert skipsType("V | null extends string ? 1 : 2");
+}
+
 // ===== TypeAnnotation Node Tests =====
 
 function annotationKind(typeStr: string): NodeKind {
@@ -756,6 +749,13 @@ test "simple type text" { assert annotationText("number") == "number"; }
 test "generic type text" { assert annotationText("Result<Node, string>") != ""; }
 
 test "union type text" { assert annotationText("string | number") != ""; }
+
+test "a type operator keeps its space before a bracketed operand" {
+	assert annotationText("T extends (infer E)[] ? E : never").startsWith("T extends (infer E)[]?");
+	assert annotationText("T extends [int32, string] ? 1 : 2").startsWith("T extends [int32, string]?");
+	assert annotationText("keyof (Pair)") == "keyof (Pair)";
+	assert annotationText("Array<T>[]") == "Array<T>[]";
+}
 
 // ===== TypeExpr AST Tests =====
 
@@ -807,6 +807,22 @@ test "generic call lookahead consumes tuple array type arguments" {
 	const state = createState(lr.value);
 	assert isGenericCallAhead(state);
 	assert state.position == 0;
+}
+
+function genericCallAhead(typeArgsThenCall: string): boolean {
+	const lr = lex("f" + typeArgsThenCall);
+	if (!lr.ok) return false;
+	const state = createState(lr.value);
+	advance(state);
+	const ahead = isGenericCallAhead(state);
+	return ahead && state.position == 1;
+}
+
+test "generic call lookahead consumes an indexed access type argument" {
+	assert genericCallAhead("<T[K]>(t)");
+	assert genericCallAhead("<Box<T[K]>>(t)");
+	assert genericCallAhead("<T[\"a\" | \"b\"], int32[N + 1]>(t)");
+	assert !genericCallAhead("< b[k] && a > (y)");
 }
 
 test "typeExpr union" {

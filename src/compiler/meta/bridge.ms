@@ -1147,6 +1147,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStrs(objHeap, arrHeap, handle, "importNames", d.importNames);
 			setStrs(objHeap, arrHeap, handle, "importAliases", d.importAliases);
 			setStr(objHeap, arrHeap, handle, "importSource", d.importSource);
+			setStrs(objHeap, arrHeap, handle, "importTypeNames", d.importTypeNames);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
@@ -2109,8 +2110,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const importNames = readStrs(objHeap, arrHeap, h, "importNames");
 			const importAliases = readStrs(objHeap, arrHeap, h, "importAliases");
 			const importSource = readStr(objHeap, arrHeap, h, "importSource");
+			const importTypeNames = readStrs(objHeap, arrHeap, h, "importTypeNames");
 			return createNodeAt(NodeKind.ImportDecl, {
-				importNames, importAliases, importSource, nameLocations: [],
+				importNames, importAliases, importSource, nameLocations: [], importTypeNames,
 			}, loc);
 		},
 		NodeKind.ExportDecl => {
@@ -2889,7 +2891,7 @@ test "round-trip ImportDecl" {
 	const loc = makeLoc(1, 0);
 	const orig = createNode(NodeKind.ImportDecl, {
 		importNames: ["X", "Y"], importAliases: ["X", "Z"],
-		importSource: "./mod", nameLocations: [],
+		importSource: "./mod", nameLocations: [], importTypeNames: ["Y"],
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);
@@ -2898,6 +2900,7 @@ test "round-trip ImportDecl" {
 	assert d.importNames.length == 2;
 	assert d.importNames[0] == "X";
 	assert d.importAliases[1] == "Z";
+	assert d.importTypeNames.join(",") == "Y";
 	assert d.importSource == "./mod";
 }
 

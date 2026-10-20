@@ -44,6 +44,7 @@ export interface ImportEntry {
 	sourcePath: string;        // resolved absolute path of source module
 	sourceSpecifier: string;   // original import specifier (for diagnostics)
 	dynamic: boolean;
+	typeOnly: boolean;
 }
 
 // ===== Module =====
@@ -56,6 +57,7 @@ export class Module {
 	state: ModuleState;        // loading state machine
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
+	runtimeDeps: string[];
 	errors: ModuleError[];     // per-module errors (structured)
 	stdPrelude: boolean;
 	preludeSpecifier: string;
@@ -105,6 +107,7 @@ export function createModule(path: string): Module {
 		state: ModuleState.Unloaded,
 		exportNames: [],
 		imports: [],
+		runtimeDeps: [],
 		errors: [],
 		stdPrelude: false,
 		preludeSpecifier: "",
@@ -113,7 +116,7 @@ export function createModule(path: string): Module {
 }
 
 export function createImportEntry(names: string[], aliases: string[], sourcePath: string, sourceSpecifier: string, dynamic: boolean = false): ImportEntry {
-	return { names, aliases, sourcePath, sourceSpecifier, dynamic };
+	return { names, aliases, sourcePath, sourceSpecifier, dynamic, typeOnly: false };
 }
 
 // ===== Module Lookup =====
@@ -198,15 +201,38 @@ export class DynamicModulePlan {
 	topLevelAwait: HashSet<string> = new HashSet<string>();
 }
 
+function evaluates(imp: ImportEntry): boolean {
+	return !imp.dynamic && !imp.typeOnly;
+}
+
+function evaluationClosure(graph: ModuleGraph, roots: string[]): HashSet<string> {
+	const closed = new HashSet<string>();
+	const pending: string[] = [];
+	for (const root of roots) pending.push(root);
+	while (pending.length > 0) {
+		const path = pending.pop();
+		if (closed.has(path)) continue;
+		closed.add(path);
+		const mod = findModule(graph, path);
+		if (mod == null) continue;
+		for (const imp of mod.imports) if (evaluates(imp)) pending.push(imp.sourcePath);
+		for (const dep of mod.runtimeDeps) pending.push(dep);
+	}
+	return closed;
+}
+
 export function planDynamicModules(graph: ModuleGraph, entryPath: string, order: string[], stdPath: string): DynamicModulePlan {
 	const plan = new DynamicModulePlan();
-	const targets = new HashSet<string>();
+	const targets: string[] = [];
+	let typeOnlyEdges = false;
 	for (const mod of graph.modules) {
-		for (const imp of mod.imports) if (imp.dynamic) targets.add(imp.sourcePath);
+		for (const imp of mod.imports) {
+			if (imp.dynamic && !targets.includes(imp.sourcePath)) targets.push(imp.sourcePath);
+			if (imp.typeOnly) typeOnlyEdges = true;
+		}
 	}
-	if (targets.size == 0) return plan;
+	if (targets.length == 0 && !typeOnlyEdges) return plan;
 	const reached = new HashSet<string>();
-	const eager = new HashSet<string>();
 	const pending: string[] = [entryPath];
 	while (pending.length > 0) {
 		const path = pending.pop();
@@ -215,21 +241,19 @@ export function planDynamicModules(graph: ModuleGraph, entryPath: string, order:
 		const mod = findModule(graph, path);
 		if (mod != null) for (const imp of mod.imports) pending.push(imp.sourcePath);
 	}
-	pending.push(entryPath);
+	const roots: string[] = [entryPath];
 	for (const path of order) {
-		if (!reached.has(path) || (stdPath != "" && path.startsWith(stdPath))) pending.push(path);
+		if (!reached.has(path) || (stdPath != "" && path.startsWith(stdPath))) roots.push(path);
 	}
-	while (pending.length > 0) {
-		const path = pending.pop();
-		if (eager.has(path)) continue;
-		eager.add(path);
-		const mod = findModule(graph, path);
-		if (mod != null) for (const imp of mod.imports) if (!imp.dynamic) pending.push(imp.sourcePath);
-	}
+	const eager = evaluationClosure(graph, roots);
+	const importable = evaluationClosure(graph, targets);
 	const recordAt = new HashMap<string, int32>();
 	for (const path of order) {
-		if (!eager.has(path)) plan.lazy.add(path);
-		if (!eager.has(path) || targets.has(path)) {
+		if (eager.has(path)) continue;
+		plan.lazy.add(path);
+	}
+	for (const path of order) {
+		if (targets.includes(path) || (!eager.has(path) && importable.has(path))) {
 			recordAt.set(path, plan.records.length);
 			plan.records.push(path);
 		}
@@ -238,9 +262,12 @@ export function planDynamicModules(graph: ModuleGraph, entryPath: string, order:
 		const requested: int32[] = [];
 		const mod = findModule(graph, path);
 		if (plan.lazy.has(path) && mod != null) {
-			for (const imp of mod.imports) {
-				const at = recordAt.get(imp.sourcePath);
-				if (imp.dynamic || at == null || !plan.lazy.has(imp.sourcePath) || requested.includes(at)) continue;
+			const deps: string[] = [];
+			for (const imp of mod.imports) if (evaluates(imp)) deps.push(imp.sourcePath);
+			for (const dep of mod.runtimeDeps) deps.push(dep);
+			for (const dep of deps) {
+				const at = recordAt.get(dep);
+				if (at == null || !plan.lazy.has(dep) || requested.includes(at)) continue;
 				requested.push(at);
 			}
 		}
@@ -370,4 +397,20 @@ test "planDynamicModules is empty without import()" {
 	const g = createModuleGraph();
 	addModule(g, createModule("/main.ms"));
 	assert planDynamicModules(g, "/main.ms", ["/main.ms"], "").records.length == 0;
+}
+
+test "planDynamicModules leaves a module reached only through type-only imports unevaluated" {
+	const g = createModuleGraph();
+	const paths = ["/gpu.ms", "/types.ms", "/main.ms"];
+	for (const p of paths) addModule(g, createModule(p));
+	const typeOnly = createImportEntry(["Rgba"], ["Rgba"], "/types.ms", "./types");
+	typeOnly.typeOnly = true;
+	findModule(g, "/main.ms").imports.push(typeOnly);
+	findModule(g, "/types.ms").imports.push(createImportEntry(["slots"], ["slots"], "/gpu.ms", "./gpu"));
+	const plan = planDynamicModules(g, "/main.ms", paths, "");
+	assert plan.lazy.has("/types.ms") && plan.lazy.has("/gpu.ms") && plan.lazy.size == 2;
+	assert plan.records.length == 0;
+	findModule(g, "/main.ms").runtimeDeps.push("/gpu.ms");
+	const reached = planDynamicModules(g, "/main.ms", paths, "");
+	assert reached.lazy.has("/types.ms") && reached.lazy.size == 1;
 }

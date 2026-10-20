@@ -362,7 +362,7 @@ export function transAmHashNode(node: Node): number {
 		// === Declarations ===
 		NodeKind.ImportDecl => {
 			const d = node.data as ImportDeclData;
-			h = hStrings(h, d.importNames); h = hStrings(h, d.importAliases); h = hS(h, d.importSource);
+			h = hStrings(h, d.importNames); h = hStrings(h, d.importAliases); h = hS(h, d.importSource); h = hStrings(h, d.importTypeNames);
 		},
 		NodeKind.ExportDecl => {
 			h = hN(h, (node.data as ExportDeclData).exportedDecl);

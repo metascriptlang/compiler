@@ -26,7 +26,38 @@ import { setOpByKey, getOpByKey } from "../codegen/c/types";
 
 export function collectTopLevel(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
+	for (const stmt of stmts.programStmts) noteExplicitExportNames(ctx, stmt);
 	for (const stmt of stmts.programStmts) collectTopLevelStmt(ctx, stmt);
+}
+
+function noteExplicitExportNames(ctx: CheckerContext, stmt: Node): void {
+	let node = stmt;
+	while (node.kind == NodeKind.DecoratedDecl) {
+		node = (node.data as DecoratedDeclData).decoratedNode;
+	}
+	if (node.kind != NodeKind.ExportDecl) return;
+	const decl = (node.data as ExportDeclData).exportedDecl;
+	if (decl.kind == NodeKind.ImportDecl) {
+		const imp = decl.data as ImportDeclData;
+		if (imp.importNames.length == 1 && imp.importNames[0] == "*") return;
+		const source = findModuleExports(ctx.exportRegistry, resolveImportSourcePath(ctx, imp.importSource));
+		for (let i = 0; i < imp.importAliases.length; i++) {
+			if (source != null) {
+				let bindsName = false;
+				for (const info of source.symbols) {
+					if (info.name == imp.importNames[i] && !isStaticExtensionSym(info.sym)) bindsName = true;
+				}
+				if (!bindsName) continue;
+			}
+			ctx.explicitExportNames.add(imp.importAliases[i]);
+		}
+	} else {
+		const local = declOfStatement(decl);
+		if (local.kind == NodeKind.FunctionDecl
+			&& isStaticExtensionFlag((local.data as FunctionDeclData).fnFlags)) return;
+		const name = getDeclName(decl);
+		if (name != "") ctx.explicitExportNames.add(name);
+	}
 }
 
 export function collectTopLevelStmt(ctx: CheckerContext, stmt: Node): void {
@@ -236,7 +267,7 @@ export function isComptimeNodeAliasDecl(d: VariableDeclData): boolean {
 
 // ===== Decorator Handling =====
 
-function classMemberDecl(member: Node): Node {
+export function classMemberDecl(member: Node): Node {
 	if (member.kind == NodeKind.DecoratedDecl) {
 		const dd = member.data as DecoratedDeclData;
 		if (dd.decoratedNode != null) return dd.decoratedNode;
@@ -1165,6 +1196,7 @@ export function resolveImportSourcePath(ctx: CheckerContext, specifier: string):
 		// macro-based codecs). Without this, sourcePath is "" and the import
 		// falls back to creating a Variable symbol.
 		if (specifier.length > 4 && specifier.slice(0, 4) == "std/") {
+			if (ctx.modulePath.startsWith("std/")) return specifier;
 			const stdMarker = "/std/";
 			const idx = ctx.modulePath.indexOf(stdMarker, 0);
 			if (idx >= 0) {
@@ -1477,6 +1509,7 @@ function reexportPastBinding(ctx: CheckerContext, bound: Symbol, expInfo: Export
 }
 
 export function collectExport(ctx: CheckerContext, node: Node): void {
+	noteExplicitExportNames(ctx, node);
 	const d = node.data as ExportDeclData;
 
 	// Re-export case: export { X, Y } from "./mod" — exportedDecl is an ImportDecl
@@ -1500,6 +1533,8 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 					if (modExports != null) {
 						for (let si = 0; si < modExports.symbols.length; si += 1) {
 							const expInfo = modExports.symbols[si];
+							if (ctx.explicitExportNames.has(expInfo.name)
+								&& !isStaticExtensionSym(expInfo.sym)) continue;
 							const bound = lookupLocal(ctx.table, expInfo.name);
 							if (bound != null) {
 								reexportPastBinding(ctx, bound, expInfo, sourcePath, imp.importSource, node);

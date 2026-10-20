@@ -396,6 +396,51 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	return true;
 }
 
+function isMatchStruct(t: Type): boolean {
+	if (!isDiscriminatedUnion(t)) return false;
+	for (const arm of t.typeChildren) {
+		if (inlineVariantStruct(arm) != null) return true;
+	}
+	return false;
+}
+
+function unequalMatchStruct(ctx: CheckerContext, t: Type, seen: Type[]): Type | null {
+	const s = valueShape(t);
+	const body = s.kind == TypeKind.GenericInstance && s.typeReturn != null ? s.typeReturn : s;
+	const matched = !isResult(s) && isMatchStruct(body);
+	if ((!matched && !comparedByFields(s)) || hasGenericParams(s) || seen.indexOf(s) >= 0) return null;
+	seen.push(s);
+	if (resolveUserOperator(ctx, "==", [t, t]) != null) return null;
+	if (matched) return t;
+	if (body.kind == TypeKind.SizedArray) return body.typeReturn != null ? unequalMatchStruct(ctx, body.typeReturn, seen) : null;
+	for (const part of body.typeChildren) {
+		if (part == null) continue;
+		const found = unequalMatchStruct(ctx, part, seen);
+		if (found != null) return found;
+	}
+	return null;
+}
+
+function declaredName(t: Type): string {
+	return t.sym != null && t.sym.name != "" ? t.sym.name : typeDisplayName(t);
+}
+
+export function refuseMatchStructEquality(ctx: CheckerContext, node: Node, d: BinaryExprData, left: Type, right: Type): boolean {
+	if (left.kind == TypeKind.Null || right.kind == TypeKind.Null || d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral) return false;
+	const pair = [left, right];
+	if (resolveUserOperator(ctx, "==", pair) != null || resolveUserOperator(ctx, d.operator, pair) != null) return false;
+	const fromLeft = unequalMatchStruct(ctx, left, []);
+	const side = fromLeft != null ? left : right;
+	const found = fromLeft ?? unequalMatchStruct(ctx, right, []);
+	if (found == null) return false;
+	const named = declaredName(found);
+	const shown = declaredName(side);
+	const held = shown == named ? "" : "it holds '" + named + "', ";
+	addError(ctx, "cannot compare '" + shown + "' with '" + d.operator + "': " + held + "a match struct has no built-in equality; declare `==`(this a: "
+		+ named + ", b: " + named + "): boolean for it", node.location.line, node.location.column);
+	return true;
+}
+
 export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
 	if (expr.nodeType == null || expr.nodeType.kind != TypeKind.Module) return false;
 	addError(ctx, `a module namespace (${typeDisplayName(expr.nodeType)}) has no text form here; read one of its exports instead`, expr.location.line, expr.location.column);

@@ -315,6 +315,8 @@ export enum NodeFlag {
 	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
 	ValueUnion,    // parser: this TypeAliasDecl is a discriminated union written `struct X = match`
 	QuoteSplice,   // parser: this call is a quote's `${ }` interpolation, a splice by syntax whatever `splice` names in scope
+	TypeOnlyImport, // checker: every binding of this ImportDecl is used only as a type, so it does not evaluate its module
+	TypeModifier,   // parser: the declaration is spelled `import type` / `export type`; `importTypeNames` holds the specifiers spelled `type A`
 }
 
 // ===== Node Kind Enum =====
@@ -482,7 +484,7 @@ export type NodeData =
 	| { unreachableMsg: string }                                   // UnreachableStmt
 	| { matchStmtDisc: Node, matchStmtCases: Node[] }              // MatchStmt
 	// Declaration variants
-	| { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] }  // ImportDecl
+	| { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[], importTypeNames: string[] }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
@@ -711,7 +713,7 @@ export type UnreachableStmtData = { unreachableMsg: string };
 export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 
 // Declarations
-export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] };
+export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[], importTypeNames: string[] };
 export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
