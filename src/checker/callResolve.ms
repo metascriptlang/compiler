@@ -1157,12 +1157,18 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	const ctorRoutine = ctorOwner != null ? ctorRoutineFor(ctx, ctorOwner) : null;
 	const declaring = hasCtor && ctorOwner != null ? constructorDeclaringClass(ctorOwner) : null;
 	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : ctorRoutine;
-	if (classSym != null) checkNewArity(ctx, node, classSym, innerType, ctorRoutine, defaultsFrom);
-	if (hasCtor && ctorRoutine != null) {
-		const routineFormals = ctorFormalTypes(ctorRoutine);
-		if (routineFormals != null && defaultsFrom != null) {
-			fillDefaults(ctx, d.newArguments, defaultsFrom.defaultParams, routineFormals.length, 0, routineFormals, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
-		}
+	const routineFormals = hasCtor && ctorRoutine != null ? ctorFormalTypes(ctorRoutine) : null;
+	let ctorSpread: SpreadTake = { spread: null, at: -1, taken: false };
+	if (routineFormals != null && defaultsFrom != null) {
+		const pd: ParamDefaults = { defaults: defaultsFrom.defaultParams, names: defaultsFrom.symbolType.typeNames.slice(1), offset: 0 };
+		ctorSpread = takeOptionalSpread(ctx, d.newArguments, [], pd, routineFormals, firstDefaulted(pd, routineFormals));
+	}
+	if (classSym != null && (ctorSpread.spread == null || ctorSpread.taken)) {
+		checkNewArity(ctx, node, classSym, innerType, ctorRoutine, defaultsFrom);
+	}
+	if (routineFormals != null && defaultsFrom != null) {
+		fillDefaults(ctx, d.newArguments, defaultsFrom.defaultParams, routineFormals.length, 0, routineFormals, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
+		fillTakenSpread(ctx, d.newArguments, [], ctorSpread, routineFormals);
 	}
 	node.resolvedSym = ctorRoutine;
 	if (!hasCtor && d.newArguments.length == 0 && d.newCallee.resolvedSym != null) {
@@ -1277,48 +1283,104 @@ function indexLiteral(index: int32, loc: SourceLocation): Node {
 
 function optionalSpreadAt(args: Node[], formals: Type[], minArgs: number): int32 {
 	const at = args.length - 1;
-	if (at < minArgs || at >= formals.length || args[at].kind != NodeKind.SpreadExpr) return -1;
-	if (formals[formals.length - 1].kind == TypeKind.Varargs) return -1;
+	if (at < minArgs || at >= fixedCount(formals) || args[at].kind != NodeKind.SpreadExpr) return -1;
 	for (let i = 0; i < at; i += 1) { if (args[i].kind == NodeKind.SpreadExpr) return -1; }
 	const source = bareSpreadSource((args[at].data as SpreadExprData).spreadArg.nodeType);
 	return source != null && source.kind == TypeKind.Array ? at : -1;
 }
 
-function firstDefaulted(node: Node, formals: Type[], defaultOffset: int32): int32 {
+function fixedCount(formals: Type[]): int32 {
+	const n = formals.length;
+	return n > 0 && formals[n - 1].kind == TypeKind.Varargs ? n - 1 : n;
+}
+
+interface ParamDefaults { defaults: Node[] | null; names: string[]; offset: int32; }
+
+function calleeDefaults(node: Node, chosen: Symbol | null, offset: int32): ParamDefaults {
 	const d = node.data as CallExprData;
-	const defaults = declaredDefaults(d.callee.resolvedSym != null ? d.callee.resolvedSym : node.resolvedSym);
-	let from = formals.length;
-	while (defaults != null && from > 0 && from - 1 + defaultOffset < defaults.length
-		&& defaults[from - 1 + defaultOffset] != null) from -= 1;
+	const sym = chosen != null ? chosen : (d.callee.resolvedSym != null ? d.callee.resolvedSym : node.resolvedSym);
+	const names: string[] = [];
+	if (sym != null && sym.symbolType != null) { for (const n of sym.symbolType.typeNames) names.push(n); }
+	return { defaults: declaredDefaults(sym), names, offset };
+}
+
+function firstDefaulted(pd: ParamDefaults, formals: Type[]): int32 {
+	const defaults = pd.defaults;
+	let from = fixedCount(formals);
+	while (defaults != null && from > 0 && from - 1 + pd.offset < defaults.length
+		&& defaults[from - 1 + pd.offset] != null) from -= 1;
 	return from;
 }
 
-function defaultReadsSpreadSlot(ctx: CheckerContext, node: Node, at: int32, formals: Type[], defaultOffset: int32): boolean {
-	const d = node.data as CallExprData;
-	const sym = d.callee.resolvedSym != null ? d.callee.resolvedSym : node.resolvedSym;
-	const defaults = declaredDefaults(sym);
-	if (defaults == null || sym!.symbolType == null) return false;
-	const names = sym!.symbolType.typeNames;
-	for (let k = at + 1; k < formals.length; k += 1) {
-		const def = k + defaultOffset < defaults.length ? defaults[k + defaultOffset] : null;
-		if (def == null) continue;
-		const filled = names.slice(at + defaultOffset, k + defaultOffset);
+function defaultReadsSpreadSlot(ctx: CheckerContext, spread: Node, pd: ParamDefaults, at: int32, formals: Type[]): boolean {
+	const defaults = pd.defaults;
+	if (defaults == null) return false;
+	const names = pd.names;
+	const o = pd.offset;
+	for (let k = at + 1; k < fixedCount(formals); k += 1) {
+		const def = k + o < defaults.length ? defaults[k + o] : null;
+		if (def == null || k + o >= names.length) continue;
+		const filled = names.slice(at + o, k + o);
 		const used = referencedParams(def, filled);
 		for (let u = 0; u < used.length; u += 1) {
 			if (!used[u]) continue;
-			addError(ctx, `the default value of parameter '${names[k + defaultOffset]}' reads '${filled[u]}', which the spread argument fills: pass the arguments one by one`,
-				d.arguments[at].location.line, d.arguments[at].location.column);
+			addError(ctx, `the default value of parameter '${names[k + o]}' reads '${filled[u]}', which the spread argument fills: pass the arguments one by one`,
+				spread.location.line, spread.location.column);
 			return true;
 		}
 	}
 	return false;
 }
 
+function trailingArraySpread(args: Node[]): int32 {
+	const at = args.length - 1;
+	if (at < 0 || args[at].kind != NodeKind.SpreadExpr) return -1;
+	for (let i = 0; i < at; i += 1) { if (args[i].kind == NodeKind.SpreadExpr) return -1; }
+	const source = bareSpreadSource((args[at].data as SpreadExprData).spreadArg.nodeType);
+	return source != null && source.kind == TypeKind.Array ? at : -1;
+}
+
+function hasSpreadArg(args: Node[]): boolean {
+	for (const a of args) { if (a.kind == NodeKind.SpreadExpr) return true; }
+	return false;
+}
+
+function spreadElementType(spread: Node): Type {
+	return getElementType(bareSpreadSource((spread.data as SpreadExprData).spreadArg.nodeType)!);
+}
+
+function spreadFitsCandidate(candType: Type, at: int32, element: Type, minArgs: number): boolean {
+	const formals = candType.typeChildren;
+	if (at < minArgs || at >= fixedCount(formals) || fixedCount(formals) != formals.length) return false;
+	for (let k = at; k < formals.length; k += 1) {
+		if (typeRelation(formals[k], element) == TypeRelation.None) return false;
+	}
+	return true;
+}
+
+interface SpreadTake { spread: Node | null; at: int32; taken: boolean; }
+
+function takeOptionalSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], pd: ParamDefaults, formals: Type[], minArgs: number): SpreadTake {
+	const at = optionalSpreadAt(args, formals, minArgs);
+	if (at < 0) return { spread: null, at, taken: false };
+	const spread = args[at];
+	if (defaultReadsSpreadSlot(ctx, spread, pd, at, formals)) return { spread, at, taken: false };
+	args.shrink(at);
+	if (argTypes.length > at) argTypes.shrink(at);
+	return { spread, at, taken: true };
+}
+
+function fillTakenSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], take: SpreadTake, formals: Type[]): void {
+	if (take.taken) fillFromSpread(ctx, args, argTypes, take.at, take.spread!, formals);
+}
+
 function fillFromSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], at: int32, spread: Node, formals: Type[]): void {
+	const fixed = fixedCount(formals);
+	if (args.length < fixed) return;
 	const source = (spread.data as SpreadExprData).spreadArg;
 	const loc = spread.location;
 	const read = readSpreadSource(ctx, source);
-	for (let k = at; k < args.length && k < formals.length; k += 1) {
+	for (let k = at; k < fixed; k += 1) {
 		const i = k - at;
 		const array = k == at ? read.first : cloneNodeKeepSem(read.again);
 		const length = createNodeAt(NodeKind.MemberExpr, { object: array, property: "length", isOptional: false }, loc);
@@ -1332,6 +1394,17 @@ function fillFromSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], at:
 		args[k] = slot;
 		if (k < argTypes.length) argTypes[k] = slot.nodeType!; else argTypes.push(slot.nodeType!);
 	}
+	if (fixed == formals.length) return;
+	if (args.length > fixed) args.shrink(fixed);
+	if (argTypes.length > fixed) argTypes.shrink(fixed);
+	const remainder = fixed == at ? read.first : cloneNodeKeepSem(read.again);
+	const callee = createNodeAt(NodeKind.MemberExpr, { object: remainder, property: "slice", isOptional: false }, loc);
+	const slice = createNodeAt(NodeKind.CallExpr,
+		{ callee, arguments: [indexLiteral(fixed - at, loc)], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	const rest = createNodeAt(NodeKind.SpreadExpr, { spreadArg: slice }, loc);
+	callCheckExpr(ctx, rest, null);
+	args.push(rest);
+	argTypes.push(rest.nodeType!);
 }
 
 export function iterateSpreadSource(ctx: CheckerContext, spread: Node): void {
@@ -2184,13 +2257,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Fill default args (calleeType already has receiver stripped for non-static)
 		// defaultOffset = 1 for non-static (fnDefaults[0] is receiver slot), 0 for static (receiver stripped in parser)
 		const extDefaultOffset = node.flags.has(NodeFlag.ExtStatic) ? 0 : 1;
-		const extSpreadAt = optionalSpreadAt(d.arguments, calleeType.typeChildren,
-			firstDefaulted(node, calleeType.typeChildren, extDefaultOffset));
-		const extSpread = extSpreadAt >= 0 ? d.arguments[extSpreadAt] : null;
-		if (extSpread != null && !defaultReadsSpreadSlot(ctx, node, extSpreadAt, calleeType.typeChildren, extDefaultOffset)) {
-			d.arguments.shrink(extSpreadAt);
-			argTypes.shrink(extSpreadAt);
-		}
+		const extDefaults = calleeDefaults(node, null, extDefaultOffset);
+		const extSpread = takeOptionalSpread(ctx, d.arguments, argTypes, extDefaults, calleeType.typeChildren,
+			firstDefaulted(extDefaults, calleeType.typeChildren));
 		if (argTypes.length < calleeType.typeChildren.length) {
 			const me = d.callee.data as MemberExprData;
 			fillDefaultArgsForNode(ctx, node, me.property, calleeType.typeChildren.length, extDefaultOffset);
@@ -2202,9 +2271,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const extMinArDeclared = callMinArity(calleeType);
 		const extMinAr = extHasRest && extMinArDeclared >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : extMinArDeclared;
-		if (extSpread != null && d.arguments.length > extSpreadAt && d.arguments[extSpreadAt] != extSpread) {
-			fillFromSpread(ctx, d.arguments, argTypes, extSpreadAt, extSpread, calleeType.typeChildren);
-		} else if (extSpread != null && d.arguments.length > extSpreadAt) {
+		if (extSpread.taken) {
+			fillTakenSpread(ctx, d.arguments, argTypes, extSpread, calleeType.typeChildren);
+		} else if (extSpread.spread != null) {
 		} else if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, extMinAr)) {
 		} else if (d.arguments.length < extMinAr) {
 			const me = d.callee.data as MemberExprData;
@@ -2359,13 +2428,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Rest param is optional (accepts 0+ args), so effective min excludes it
 		const effectiveMin = hasRest && minAr >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : minAr;
-		const spreadAt = optionalSpreadAt(d.arguments, calleeType.typeChildren, effectiveMin);
-		const spread = spreadAt >= 0 ? d.arguments[spreadAt] : null;
-		if (spread != null && !defaultReadsSpreadSlot(ctx, node, spreadAt, calleeType.typeChildren, 0)) {
-			d.arguments.shrink(spreadAt);
-			argTypes.shrink(spreadAt);
-		}
-		if (spread != null && d.arguments.length > spreadAt) {
+		const spread = takeOptionalSpread(ctx, d.arguments, argTypes, calleeDefaults(node, null, 0), calleeType.typeChildren, effectiveMin);
+		if (spread.spread != null && !spread.taken) {
 		} else if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, effectiveMin)) {
 		} else if (argTypes.length < effectiveMin) {
 			addError(ctx, `Too few arguments: expected at least ${effectiveMin}, got ${argTypes.length}`, node.location.line, node.location.column);
@@ -2378,9 +2442,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 			fillNullableTail(ctx, d.arguments, calleeType.typeChildren, node.location);
 		}
-		if (spread != null && d.arguments.length > spreadAt && d.arguments[spreadAt] != spread) {
-			fillFromSpread(ctx, d.arguments, argTypes, spreadAt, spread, calleeType.typeChildren);
-		}
+		fillTakenSpread(ctx, d.arguments, argTypes, spread, calleeType.typeChildren);
 		relateCallArgs(ctx, node, calleeType!, argTypes, isActorMethodCall);
 		// On-demand generic instantiation for direct calls (transitive
 		// instantiation). Handles both regular FunctionDecl and STATIC class
@@ -3923,6 +3985,13 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		}
 	}
 
+	const spreadAt = trailingArraySpread(args);
+	if (spreadAt < 0 && hasSpreadArg(args)) {
+		refuseMisplacedSpread(ctx, args, [], 0);
+		return getReturnType(sym.symbolType);
+	}
+	if (spreadAt >= 0) argTypes[spreadAt] = spreadElementType(args[spreadAt]);
+
 	// Score each candidate using the shared priority machinery, detecting
 	// ambiguity (two candidates with equal top scores).
 	let bestIdx: int32 = -1;
@@ -3935,6 +4004,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		const candType = candidates[ci];
 		const score = candType == null || candType.kind != TypeKind.Function || (!implAsFallback && isHiddenImplementation(candSyms[ci], ci < ownCount ? sym : gathered!))
 			? noMatchScore()
+			: spreadAt >= 0 && !spreadFitsCandidate(candType, spreadAt, argTypes[spreadAt], getMinArity(candType)) ? noMatchScore()
 			: scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
 		scores.push(score);
 		const cmp = score.exactMatches < 0 ? -1 : bestIdx < 0 ? 1 : cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
@@ -4076,6 +4146,15 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// the winner sym to the body-bearing impl before mangling. Keeping
 	// the redirect localized to codegen avoids conflating "which overload
 	// matched" with "which symbol gets emitted".
+	if (spreadAt >= 0 && winnerType.kind == TypeKind.Function) {
+		const picked = candSyms[bestIdx];
+		const owner = hasFlag(picked, SymbolFlag.OverloadSig) && declaredDefaults(picked) == null ? impl : picked;
+		const take = takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, owner, 0), winnerType.typeChildren, spreadAt);
+		if (take.taken) {
+			fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, owner);
+			fillTakenSpread(ctx, args, argTypes, take, winnerType.typeChildren);
+		}
+	}
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
 		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
 	}
@@ -4438,10 +4517,20 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		di = di + 1;
 	}
 	const args = (callNode.data as CallExprData).arguments;
+	const spreadAt = trailingArraySpread(args);
+	if (spreadAt < 0 && hasSpreadArg(args)) {
+		refuseMisplacedSpread(ctx, args, [], 0);
+		return getReturnType(candidates[0]);
+	}
+	if (spreadAt >= 0) argTypes[spreadAt] = spreadElementType(args[spreadAt]);
 	const skipMask: boolean[] = [];
 	const rejected: boolean[] = [];
 	for (let ai = 0; ai < args.length; ai += 1) skipMask.push(ai < argTypes.length && argTypes[ai] == null && isContextSensitive(args[ai]));
-	for (let ci = 0; ci < candidates.length; ci += 1) rejected.push(false);
+	for (let ci = 0; ci < candidates.length; ci += 1) {
+		const offset: int32 = exts[ci].isStatic ? 0 : 1;
+		const minArgs = firstDefaulted(calleeDefaults(callNode, exts[ci].sym, offset), candidates[ci].typeChildren);
+		rejected.push(spreadAt >= 0 && !spreadFitsCandidate(candidates[ci], spreadAt, argTypes[spreadAt], minArgs));
+	}
 	let idx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
 	if (idx == -2) {
 		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
@@ -4496,10 +4585,14 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		}
 		argTypes[ai] = args[ai].nodeType!;
 	}
+	const ovDefaultOffset: int32 = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
+	const ovSpread = spreadAt >= 0 && winnerType.kind == TypeKind.Function
+		? takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, null, ovDefaultOffset), winnerType.typeChildren, spreadAt)
+		: { spread: null, at: -1, taken: false } as SpreadTake;
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
+	if (winnerType.kind == TypeKind.Function) fillTakenSpread(ctx, args, argTypes, ovSpread, winnerType.typeChildren);
 	if (winnerType.kind == TypeKind.Function) {
 		for (let ai = 0; ai < literalArgs.length && ai < winnerType.typeChildren.length; ai += 1) {
 			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], winnerType.typeChildren[ai]) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
