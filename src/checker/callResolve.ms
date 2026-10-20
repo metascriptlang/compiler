@@ -2691,7 +2691,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
-			const thunkArg = synthClosureThunk(args[pi], paramType, argTypes[pi]);
+			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi]);
 			if (thunkArg != null as unknown as Node) {
 				args[pi] = thunkArg;
 				argTypes[pi] = paramType;
