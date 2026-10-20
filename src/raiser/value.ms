@@ -156,7 +156,7 @@ export function constStringCount(): number {
 }
 
 export function heapAllocString(arr: RaiserArrayHeap, text: string): RaiserValue {
-	if (text.length == 0) return { kind: RaiserValueKind.String, intVal: -1, floatVal: 0.0 };
+	if (text.byteLength == 0) return { kind: RaiserValueKind.String, intVal: -1, floatVal: 0.0 };
 	const heap = arr.strings;
 	let handle: int64 = 0;
 	if (heap.freeList.length > 0) {
@@ -1180,6 +1180,16 @@ test "a constant string is shared by every heap and never freed" {
 	rcDecref(a, obj, c);
 	assert heapStringText(a, c) == "shared" && heapStringText(b, c) == "shared";
 	assert heapStringLive(a) == 0;
+}
+
+test "a string whose bytes are not a whole UTF-8 sequence is stored, not taken for empty" {
+	const heap = createArrayHeap();
+	for (const text of ["é".byteSlice(0, 1), "é".byteSlice(1, 2), "a€".byteSlice(1, 3)]) {
+		const v = heapAllocString(heap, text);
+		assert v.intVal >= 0;
+		assert heapStringText(heap, v).byteLength == text.byteLength;
+	}
+	assert heapAllocString(heap, "").intVal == -1;
 }
 
 test "destroying a container releases its strings" {
