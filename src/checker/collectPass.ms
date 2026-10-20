@@ -267,7 +267,7 @@ export function isComptimeNodeAliasDecl(d: VariableDeclData): boolean {
 
 // ===== Decorator Handling =====
 
-function classMemberDecl(member: Node): Node {
+export function classMemberDecl(member: Node): Node {
 	if (member.kind == NodeKind.DecoratedDecl) {
 		const dd = member.data as DecoratedDeclData;
 		if (dd.decoratedNode != null) return dd.decoratedNode;

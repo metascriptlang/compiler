@@ -280,7 +280,7 @@ export function unionOrderHint(source: Type | null, target: Type | null): string
 // Field-level repr gate for structurally-compatible objects. Lenient outside the
 // union/numeric classes — everything else is either caught by the recursive
 // isReinterpretUnsafe walk or is an intentional divergence (Ref→Ptr cursor).
-function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
+export function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;

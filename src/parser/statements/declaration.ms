@@ -1056,8 +1056,8 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		}
 	}
 
-	// Optional implements: class Foo implements Bar, Baz<T> — kept as written for the formatter;
-	// the checker relates a class to an interface by shape, not by this list.
+	// Optional implements: class Foo implements Bar, Baz<T> — kept as written; the checker
+	// resolves each entry in the class's scope.
 	const implementsNames: string[] = [];
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Implements) {
 		advance(state);

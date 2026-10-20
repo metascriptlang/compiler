@@ -10,7 +10,7 @@ import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charT
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
 import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
-import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName } from "./collectPass";
+import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { readFile } from "std/fs";
@@ -21,7 +21,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
-import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers } from "./compat";
+import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainStructuralPrefix } from "./compat";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
@@ -1541,6 +1541,9 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 		ctx.ctorExitsNext = null;
 	}
 	refuseUnassignedFields(ctx, d.classBody, ctorExits);
+	for (const written of d.classImplements) {
+		refuseUnimplemented(ctx, node, sym.symbolType, written);
+	}
 	if (hasGenerics) {
 		ctx.inGenericContext -= 1;
 		closeScope(ctx.table);
@@ -1548,6 +1551,82 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
+}
+
+function refuseUnimplemented(ctx: CheckerContext, node: Node, classType: Type, written: string): void {
+	const d = node.data as ClassDeclData;
+	const at = d.nameLocation;
+	const implemented = resolveAnnotation(written, ctx, at.line, at.column);
+	if (isUnresolvedType(implemented) || implemented.kind == TypeKind.Error) return;
+	const shape = peelToStructOrUnion(implemented);
+	if (shape == null || shape.kind != TypeKind.Struct) {
+		addError(ctx, `Class '${d.className}' can only implement an object type, and '${written}' is not one`,
+			at.line, at.column);
+		return;
+	}
+	if (isAssignable(classType, implemented)) return;
+	const role = shape.sym != null && shape.sym.symbolKind == SymbolKind.Class ? "class" : "interface";
+	const own = unwrapRef(classType);
+	let memberRefused = false;
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
+		if (member.kind != NodeKind.PropertyDecl || (member.data as PropertyDeclData).propIsStatic) continue;
+		const name = (member.data as PropertyDeclData).propName;
+		const si = own.typeNames.indexOf(name);
+		const ti = shape.typeNames.indexOf(name);
+		if (si < 0 || ti < 0) continue;
+		const why = fieldRefusal(own.typeChildren[si], shape.typeChildren[ti]);
+		if (why == "") continue;
+		addError(ctx, `Property '${name}' in class '${d.className}' is not assignable to the same property`
+			+ ` in ${role} '${written}': ${why}`, member.location.line, member.location.column);
+		memberRefused = true;
+	}
+	if (memberRefused) return;
+	addError(ctx, `Class '${d.className}' incorrectly implements ${role} '${written}'`
+		+ unimplementedReason(d, own, shape, classType, implemented), at.line, at.column);
+}
+
+function fieldRefusal(held: Type, wanted: Type): string {
+	const reprDiffers = fieldReprMismatch(held, wanted);
+	if (!reprDiffers && isAssignable(held, wanted)) return "";
+	const heldText = typeDisplayName(held);
+	const wantedText = typeDisplayName(wanted);
+	const payload = isMaybeType(wanted) && !isMaybeType(held) ? wanted.typeReturn : null;
+	if (reprDiffers || (payload != null && isAssignable(held, payload))) {
+		return `'${heldText}' and '${wantedText}' are stored differently, and a structural match is a pointer cast`;
+	}
+	return `type '${heldText}' is not assignable to type '${wantedText}'`;
+}
+
+function unimplementedReason(d: ClassDeclData, own: Type, shape: Type, classType: Type, implemented: Type): string {
+	const missing: string[] = [];
+	for (let ti = 0; ti < shape.typeNames.length; ti += 1) {
+		const name = shape.typeNames[ti];
+		const si = own.typeNames.indexOf(name);
+		if (si < 0) {
+			missing.push(name);
+			continue;
+		}
+		const why = fieldRefusal(own.typeChildren[si], shape.typeChildren[ti]);
+		if (why != "") return `: property '${name}' of '${d.className}': ${why}`;
+	}
+	if (missing.length == 0) return explainStructuralPrefix(classType, implemented);
+	const listed = "'" + missing.join("', '") + "'";
+	const routines: string[] = [];
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
+		if (member.kind != NodeKind.MethodDecl) continue;
+		const routine = (member.data as MethodDeclData).methodName;
+		for (const name of missing) {
+			const named = routine == name || routine == "get_" + name || routine == "set_" + name;
+			if (named && !routines.includes(name)) routines.push(name);
+		}
+	}
+	const asRoutine = routines.length == 0 ? ""
+		: ` ('${routines.join("', '")}' is declared there as a method or accessor, which is not a field of the instance)`;
+	return missing.length == 1
+		? `: property ${listed} is missing in '${d.className}'${asRoutine}`
+		: `: properties ${listed} are missing in '${d.className}'${asRoutine}`;
 }
 
 function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: string[][] | null): void {
