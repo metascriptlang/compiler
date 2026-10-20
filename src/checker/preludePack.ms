@@ -29,7 +29,7 @@ import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, 
 import { FieldSink, nodeFields, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension } from "./context";
 import { createIdentCache, getIdentId, identName } from "./idents";
-import { emptyType, noneType } from "./types";
+import { emptyType, noneType, createGenericParam, createKeyOfType } from "./types";
 import { makeSymbolState } from "./symbol";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { getParserDefines, setParserDefines } from "../parser/context";
@@ -1568,6 +1568,35 @@ test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
 		const md = got.declNode.data as MacroDeclData;
 		assert md.macroDeclName == "pkMacro";
 		assert md.macroDeclParams.length == 1;
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
+test "preludePack: a generic type keeps its declared parameters and their constraints" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const sym = makeSymbolState("pkAt", SymbolKind.TypeAlias, noneType(), false, SymbolState.Hollow);
+		sym.state = SymbolState.Checked;
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
+		const t = createGenericParam("T");
+		const k = createGenericParam("K");
+		k.typeExtra = createKeyOfType(t);
+		sym.typeParams = [t, k];
+		const key = preludePackKey("type-params", ".test");
+		writePreludePack(key, PK_STAMP, ctx);
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkAt"));
+		assert got != null;
+		assert got.typeParams.length == 2;
+		assert got.typeParams[0].typeName == "T" && got.typeParams[1].typeName == "K";
+		const constraint = got.typeParams[1].typeExtra;
+		assert constraint != null && constraint.kind == TypeKind.KeyOf;
+		assert constraint.typeChildren[0] == got.typeParams[0];
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);

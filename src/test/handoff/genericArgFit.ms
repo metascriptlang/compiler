@@ -308,6 +308,35 @@ test "a method's and a static method's own constraint is checked" {
 	assert strictErrorCount(src + "const c = new H().pick(dog);\nconst d = H.take(animal);") == 0;
 }
 
+const ROOT = "interface Root { user: string; n: int32; }\n";
+const AT = ROOT + "type At<T, K extends keyof T> = T[K];\n";
+
+test "a type reference checks a constraint naming a sibling parameter against the arguments" {
+	assert strictErrorCount(AT + "const x: At<Root, \"user\"> = \"u\";") == 0;
+	assert hasError(AT + "const x: At<Root, \"nope\"> = \"u\";", "Type '\"nope\"' does not satisfy constraint '\"user\" | \"n\"' for type parameter 'K' in 'At'");
+	const slot = ROOT + "interface Slot<T, K extends keyof T> { v: T[K]; }\n";
+	assert strictErrorCount(slot + "const s: Slot<Root, \"user\"> = { v: \"u\" };") == 0;
+	assert hasError(slot + "const s: Slot<Root, \"nope\"> = { v: \"u\" };", "for type parameter 'K' in 'Slot'");
+	const cell = ROOT + "class Cell<T, K extends keyof T> { v: T[K]; constructor(v: T[K]) { this.v = v; } }\n";
+	assert strictErrorCount(cell + "function f(c: Cell<Root, \"user\">): string { return c.v; }") == 0;
+	assert hasError(cell + "function f(c: Cell<Root, \"nope\">): int32 { return 0; }", "for type parameter 'K' in 'Cell'");
+	const sub = "type Sub<T, U extends T> = U;\n";
+	assert strictErrorCount(sub + "const x: Sub<int32, int32> = 3;") == 0;
+	assert hasError(sub + "const x: Sub<int32, string> = \"a\";", "Type 'string' does not satisfy constraint 'int32' for type parameter 'U' in 'Sub'");
+}
+
+test "a type reference's constraint binds its declaration's parameters, not the enclosing routine's" {
+	const outer = AT + "interface Other { zzz: int32; }\nfunction outer<T>(t: T, r: Root): int32 {\n\tconst x: At<Root, \"KEY\"> = r.n;\n\treturn x;\n}\nconst o: Other = { zzz: 1 };\nconst s = outer<Other>(o, { user: \"u\", n: 1 });\n";
+	assert strictErrorCount(outer.replace("KEY", "n")) == 0;
+	assert hasError(outer.replace("KEY", "zzz"), "Type '\"zzz\"' does not satisfy constraint '\"user\" | \"n\"' for type parameter 'K' in 'At'");
+}
+
+test "a constraint may name a type parameter declared after it" {
+	const rev = ROOT + "type Rev<K extends keyof T, T> = T[K];\n";
+	assert strictErrorCount(rev + "const x: Rev<\"user\", Root> = \"u\";") == 0;
+	assert hasError(rev + "const x: Rev<\"nope\", Root> = \"u\";", "for type parameter 'K' in 'Rev'");
+}
+
 // ===== One rule settles every candidate of a type parameter =====
 
 const PAIR = "interface Pair<A, B> { first: A; second: B; }\nfunction same<T>(p: Pair<T, T>): T { return p.first; }\n";
