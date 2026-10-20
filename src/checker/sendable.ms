@@ -1,8 +1,9 @@
-// Actor sendability + this-write isolation rules. Leaf module: no calls out.
+// Actor sendability + this-write isolation rules.
 
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
+import { Effect, callEffect, deferEffectCheck, newEffect } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
 import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, stringType, typeCarriesRef, typeDisplayName } from "./types";
@@ -565,6 +566,14 @@ function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
 	reportNotSoleOwner(w, what + " at " + rhs.location.line + ":" + rhs.location.column + " is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh)");
 }
 
+function requireNoSideEffect(site: Node, w: OwnerWalk): void {
+	deferEffectCheck(site, (): void => {
+		if (w.reported) return;
+		const c = site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect);
+		if (c != null) reportNotSoleOwner(w, "a call with side effects may keep an alias of it: " + c.text);
+	});
+}
+
 function isFreshValue(n: Node | null, w: OwnerWalk): boolean {
 	if (n == null) return true;
 	if (n.nodeType != null && !typeCarriesRef(n.nodeType)) return true;
@@ -594,6 +603,7 @@ function isFreshValue(n: Node | null, w: OwnerWalk): boolean {
 		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, w),
 		NodeKind.NewExpr => {
 			for (const a of (p.data as NewExprData).newArguments) { if (!isFreshValue(a, w)) return false; }
+			requireNoSideEffect(p, w);
 			return true;
 		},
 		NodeKind.CallExpr => {
@@ -601,6 +611,7 @@ function isFreshValue(n: Node | null, w: OwnerWalk): boolean {
 			const callee = peelView(d.callee);
 			if (callee != null && callee.kind == NodeKind.MemberExpr && !isFreshValue((callee.data as MemberExprData).object, w)) return false;
 			for (const a of d.arguments) { if (!isFreshValue(a, w)) return false; }
+			requireNoSideEffect(p, w);
 			return true;
 		},
 		NodeKind.AwaitExpr => isFreshValue((p.data as AwaitExprData).awaitArg, w),
@@ -702,6 +713,7 @@ function walkOwner(node: Node | null, w: OwnerWalk): void {
 				if (ownerIsReceiver) requireFresh(a, "the argument passed into '" + describeExpr(callee) + "'", w);
 				else if (escapesOwner(a, w)) reportEscape(a, "it is passed to '" + describeExpr(callee) + "'", w);
 			}
+			if (ownerIsReceiver && locBefore(node.location, w.site)) requireNoSideEffect(node, w);
 			walkOwner(d.callee, w);
 			for (const a of d.arguments) walkOwner(a, w);
 		},
