@@ -2184,7 +2184,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Fill default args (calleeType already has receiver stripped for non-static)
 		// defaultOffset = 1 for non-static (fnDefaults[0] is receiver slot), 0 for static (receiver stripped in parser)
 		const extDefaultOffset = node.flags.has(NodeFlag.ExtStatic) ? 0 : 1;
-		const extSpreadAt = _isGenericCall ? -1 : optionalSpreadAt(d.arguments, calleeType.typeChildren,
+		const extSpreadAt = optionalSpreadAt(d.arguments, calleeType.typeChildren,
 			firstDefaulted(node, calleeType.typeChildren, extDefaultOffset));
 		const extSpread = extSpreadAt >= 0 ? d.arguments[extSpreadAt] : null;
 		if (extSpread != null && !defaultReadsSpreadSlot(ctx, node, extSpreadAt, calleeType.typeChildren, extDefaultOffset)) {
@@ -2359,7 +2359,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Rest param is optional (accepts 0+ args), so effective min excludes it
 		const effectiveMin = hasRest && minAr >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : minAr;
-		const spreadAt = _isGenericCall ? -1 : optionalSpreadAt(d.arguments, calleeType.typeChildren, effectiveMin);
+		const spreadAt = optionalSpreadAt(d.arguments, calleeType.typeChildren, effectiveMin);
 		const spread = spreadAt >= 0 ? d.arguments[spreadAt] : null;
 		if (spread != null && !defaultReadsSpreadSlot(ctx, node, spreadAt, calleeType.typeChildren, 0)) {
 			d.arguments.shrink(spreadAt);
