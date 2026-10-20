@@ -880,22 +880,22 @@ when (mscDeclaresRuntime) {
 	extern function msHcrVariableStorage(cell: Ptr<void>): Ptr<void>;
 
 	@compilerFunc
-	extern function msMsgReplyChainDouble(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyDouble(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainInt32(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyInt32(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainInt64(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyInt64(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainBool(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyBool(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainString(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyString(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainPtr(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyPtr(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msFutureThen_double(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;

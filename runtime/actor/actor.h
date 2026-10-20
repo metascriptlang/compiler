@@ -105,7 +105,7 @@ typedef struct msActor {
      * suspendedFut != NULL also holds the I18 reap gate closed: the resume
      * callback's LAST shell store clears it (release), so the reaper's acquire
      * proves the callback is done with the shell. */
-    _Atomic(void*) suspendedFut;  /* msFuture* from async _impl (NULL = not suspended) */
+    _Atomic(void*) suspendedFut;  /* msFuture* from async _impl (NULL = not suspended); the resume releases it: never dereference */
     void* suspendedReplyFut;      /* CALL reply future (NULL for SEND). Used by R1 stop. */
     /* Phase 6 R1: out-of-band stop — supervisor can kill suspended actor without mailbox */
     _Atomic(bool) stopRequested;
@@ -522,28 +522,31 @@ static inline void msMsgReplyFail(void* fut) {
 
 /* ===== Phase 5: Cooperative Actor Suspension ===== */
 
-/* Resume callback: re-enqueues actor on scheduler after spawn completion.
+/* Resume callback: re-enqueues actor on scheduler once its suspended method has finished.
  * Signature matches msClosureFn (void*, ...) — called by msFutureFireCallbacks.
  * I18: the reap gate stays closed while suspendedFut is non-NULL, so every shell
  * dereference here happens-before any reap. On the stopped lane the LAST shell
- * store is the suspendedFut=NULL release; after it, only non-shell wakes. */
+ * store is the suspendedFut=NULL release; after it, only non-shell wakes.
+ * Both lanes release the dispatch's reference to implFut: this callback is its last reader. */
 static inline void msActorResumeFromFut(void* rawActor, ...) {
     msActor* a = (msActor*)rawActor;
     int sid = a->schedulerID;
+    void* implFut = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
     if (atomic_load_explicit(&a->stopRequested, memory_order_acquire)) {
         /* Stopped lane: MS_ACTOR_SUSPENDED stays SET. It is the latch that keeps
          * senders off the wasEmpty edge, so no run-queue entry can exist when the
          * reap scan frees this shell (scheduled alone can't prove that — a
          * markEmpty/push race can overwrite a sender's scheduled=true). */
-        /* R1: stop arrived during suspension — don't resume the method. Fail the
-         * CALL reply so callers unblock, open the reap gate, wake the owner's
-         * reap scan. Never reap here: a stale queue entry's visit may hold the
-         * shell, and the reaper must be the owner scheduler. */
+        /* R1 (Amendment S): stop arrived during suspension; the method has finished.
+         * Fail a reply it did not complete so callers unblock, open the reap gate,
+         * wake the owner's reap scan. Never reap here: a stale queue entry's visit
+         * may hold the shell, and the reaper must be the owner scheduler. */
         if (a->suspendedReplyFut != NULL) {
             msMsgReplyFail(a->suspendedReplyFut);
         }
         a->suspendedReplyFut = NULL;
         atomic_store_explicit(&a->suspendedFut, NULL, memory_order_release);
+        msFutureDeferredRelease(implFut);
         if (sid == 0) msActorWakeEventLoop();
         else msPoolWakeWorker(sid);
         return;
@@ -552,6 +555,7 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
     /* Normal resume: suspendedFut stays set — the visit clears it (gate stays
      * closed until the visit owns the shell under processing). */
     atomic_store_explicit(&a->scheduled, true, memory_order_release);
+    msFutureDeferredRelease(implFut);
     if (sid >= 0 && sid < msSchedulerCount) {
         msSchedRunPush(&msSchedulers[sid], a);
     }
@@ -559,9 +563,7 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
     else msPoolWakeWorker(sid);
 }
 
-/* Suspend actor: save async _impl future, register resume callback.
- * For CALL methods, replyFut is chained separately by the dispatch function. */
-static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
+static inline void msActorSuspendOn(msActor* a, void* implFut, void* replyFut, msClosureFn resume) {
     if (a == NULL) return;
     a->suspendedReplyFut = replyFut;
     atomic_store_explicit(&a->suspendedFut, implFut, memory_order_release);
@@ -569,10 +571,14 @@ static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
     /* When implFut completes, resume the actor on its scheduler. From here the
      * suspendedFut gate (I18) keeps the shell reachable-safe, not the pin. */
     msFutureAddCallback(implFut, (msClosure){
-        .fn = (msClosureFn)msActorResumeFromFut,
+        .fn = resume,
         .env = (void*)a
     });
     msHazardClear(a);
+}
+
+static inline void msActorSuspend(msActor* a, void* implFut, void* replyFut) {
+    msActorSuspendOn(a, implFut, replyFut, (msClosureFn)msActorResumeFromFut);
 }
 
 /* Name registry data (forward declaration — functions defined after monitors section) */
@@ -718,14 +724,13 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     {
         void* sfp = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
         if (sfp != NULL) {
-            msFutureBase* sf = (msFutureBase*)sfp;
-            if (!atomic_load_explicit(&sf->finished, memory_order_acquire)) {
+            if (msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
                 msCurrentActor = prevActor;
                 atomic_store_explicit(&a->processing, false, memory_order_release);
                 return 0;
             }
-            /* Resumed: _impl stepper already completed the reply future via
-             * its reply chain. Clear suspension state, fall through to mailbox drain. */
+            /* Resumed: the resume callback completed the reply and released implFut.
+             * Clear suspension state, fall through to mailbox drain. */
             atomic_store_explicit(&a->suspendedFut, NULL, memory_order_release);
             a->suspendedReplyFut = NULL;
         }
@@ -917,40 +922,36 @@ static inline void msMsgCompleteVoid(void* fut) {
     msMsgReplyDispatch(fut);
 }
 
-typedef struct { void* src; void* dst; } msMsgReplyChainPair;
-
-#define MS_DEFINE_REPLY_CHAIN(name, valueType) \
-static inline void name##_cb(void* raw, ...) { \
+#define MS_DEFINE_SUSPEND_REPLY(name, valueType) \
+static inline void name##_resume(void* raw, ...) { \
     typedef struct { msFutureBase base; valueType value; } layout; \
-    msMsgReplyChainPair* pair = (msMsgReplyChainPair*)raw; \
-    layout* src = (layout*)pair->src; \
-    layout* dst = (layout*)pair->dst; \
-    free(pair); \
-    if (atomic_load_explicit(&dst->base.finished, memory_order_acquire)) return; \
-    if (src->base.failed) { \
-        dst->base.error = src->base.error; \
-        src->base.error = NULL; \
-        dst->base.failed = true; \
-    } else { \
-        dst->value = src->value; \
+    msActor* a = (msActor*)raw; \
+    layout* src = (layout*)atomic_load_explicit(&a->suspendedFut, memory_order_acquire); \
+    layout* dst = (layout*)a->suspendedReplyFut; \
+    if (dst != NULL && !atomic_load_explicit(&dst->base.finished, memory_order_acquire)) { \
+        if (src->base.failed) { \
+            dst->base.error = src->base.error; \
+            src->base.error = NULL; \
+            dst->base.failed = true; \
+        } else { \
+            dst->value = src->value; \
+            memset(&src->value, 0, sizeof(valueType)); \
+        } \
+        atomic_store_explicit(&dst->base.finished, true, memory_order_release); \
+        msMsgReplyDispatch(dst); \
     } \
-    atomic_store_explicit(&dst->base.finished, true, memory_order_release); \
-    msMsgReplyDispatch(dst); \
+    msActorResumeFromFut(a); \
 } \
-static inline void name(void* src, void* dst) { \
-    if (src == NULL || dst == NULL) return; \
-    msMsgReplyChainPair* pair = (msMsgReplyChainPair*)malloc(sizeof(msMsgReplyChainPair)); \
-    pair->src = src; \
-    pair->dst = dst; \
-    msFutureAddCallback(src, (msClosure){ .fn = (msClosureFn)name##_cb, .env = (void*)pair }); \
+static inline void name(void* actor, void* implFut, void* replyFut) { \
+    msActorSuspendOn((msActor*)actor, implFut, replyFut, (msClosureFn)name##_resume); \
 }
 
-MS_DEFINE_REPLY_CHAIN(msMsgReplyChainDouble, double)
-MS_DEFINE_REPLY_CHAIN(msMsgReplyChainInt32, int32_t)
-MS_DEFINE_REPLY_CHAIN(msMsgReplyChainInt64, int64_t)
-MS_DEFINE_REPLY_CHAIN(msMsgReplyChainBool, bool)
-MS_DEFINE_REPLY_CHAIN(msMsgReplyChainString, msString)
-MS_DEFINE_REPLY_CHAIN(msMsgReplyChainPtr, void*)
+MS_DEFINE_SUSPEND_REPLY(msActorSuspendReplyDouble, double)
+MS_DEFINE_SUSPEND_REPLY(msActorSuspendReplyInt32, int32_t)
+MS_DEFINE_SUSPEND_REPLY(msActorSuspendReplyInt64, int64_t)
+MS_DEFINE_SUSPEND_REPLY(msActorSuspendReplyBool, bool)
+MS_DEFINE_SUSPEND_REPLY(msActorSuspendReplyString, msString)
+MS_DEFINE_SUSPEND_REPLY(msActorSuspendReplyPtr, void*)
 
 /* Set onTerminate callback (called by actorLower wiring).
  * Takes void* for fn to avoid function pointer type mismatch — _impl takes ActorType* not void*. */

@@ -106,21 +106,21 @@ function msgCompleteName(mk: string): string {
 	};
 }
 
-function replyChainFn(mk: string): string {
+function suspendReplyFn(mk: string): string {
 	return match (mk) {
-		"double" => "msMsgReplyChainDouble",
-		"int32"  => "msMsgReplyChainInt32",
-		"int64"  => "msMsgReplyChainInt64",
-		"bool"   => "msMsgReplyChainBool",
-		"string" => "msMsgReplyChainString",
-		_ => "msMsgReplyChainPtr",
+		"double" => "msActorSuspendReplyDouble",
+		"int32"  => "msActorSuspendReplyInt32",
+		"int64"  => "msActorSuspendReplyInt64",
+		"bool"   => "msActorSuspendReplyBool",
+		"string" => "msActorSuspendReplyString",
+		_ => "msActorSuspendReplyPtr",
 	};
 }
 
-function replyChainFnForReturn(retType: Type | null): string {
-	if (retType == null) return "msMsgReplyChainPtr";
+function suspendReplyFnForReturn(retType: Type | null): string {
+	if (retType == null) return "msActorSuspendReplyPtr";
 	const inner = retType.typeReturn != null ? retType.typeReturn : retType;
-	return replyChainFn(typeMsgKind(inner));
+	return suspendReplyFn(typeMsgKind(inner));
 }
 
 // "string" = 2 slots (16B inlined); "array"/"struct" = 1 slot (heap-boxed).
@@ -345,19 +345,18 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 			implFutDecl.resolvedSym = implFutSym;
 			bodyStmts.push(implFutDecl);
 			let replyFutArg: Node = makeNull(loc);
+			let suspendFn = "msActorSuspend";
 			if (!isVoid) {
-				// CALL: store reply future, chain _impl's future → reply future.
-				// Select typed chain variant based on method's declared return type
-				// so msString (16B) and other typed values are copied correctly.
-				const chainFn = replyChainFnForReturn(m.nodeType);
+				// CALL: the resume moves _impl's value into the reply future; the typed
+				// variant follows the declared return type so msString (16B) and other
+				// typed values are moved whole.
+				suspendFn = suspendReplyFnForReturn(m.nodeType);
 				const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
 				const replyFutSym = mintSym(ctx, SymbolKind.Variable, "_replyFut", VOID_PTR);
 				const replyDecl = makeVarDecl(replyFutSym.name, futAccessCall, DeclKind.Const, loc);
 				replyDecl.nodeType = VOID_PTR;
 				replyDecl.resolvedSym = replyFutSym;
 				bodyStmts.push(replyDecl);
-				bodyStmts.push(makeExprStmt(
-					makeCall(runtimeRef(chainFn, loc), [makeIdentResolved(implFutSym, loc), makeIdentResolved(replyFutSym, loc)], loc), loc));
 				replyFutArg = makeIdentResolved(replyFutSym, loc);
 			}
 			// Derive msActor* from _self.pid, pass reply future for R1 stop
@@ -367,7 +366,7 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 				selfPid,
 			], loc);
 			bodyStmts.push(makeExprStmt(
-				makeCall(runtimeRef("msActorSuspend", loc), [actorPtr, makeIdentResolved(implFutSym, loc), replyFutArg], loc), loc));
+				makeCall(runtimeRef(suspendFn, loc), [actorPtr, makeIdentResolved(implFutSym, loc), replyFutArg], loc), loc));
 			body = makeBlock(bodyStmts, loc);
 		} else if (isVoid) {
 			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
