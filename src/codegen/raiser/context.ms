@@ -464,8 +464,8 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 // --- Builtin helpers ---
 
 // --- Closure pair helpers ---
-// Emit a closure pair object { fn: funcIdx, env: envReg | -1 } into destReg.
-// envVal = -1 sentinel means non-capturing (no env), otherwise envVal is a register holding the env.
+// Emit a closure pair object { fn: funcIdx, env: envReg | nil } into destReg.
+// A negative envReg means non-capturing (a nil env), otherwise envReg is the register holding the env.
 
 export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
 	const pairReg = allocRef(s);
