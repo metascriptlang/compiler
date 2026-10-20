@@ -902,3 +902,11 @@ test "a graph check leaves the prelude every build shares as it found it" {
 	assert getPreludeContext().table == shared.table;
 	assert sharedPreludeShape(shared) == before;
 }
+
+test "a std module of the shared prelude reads the std modules it imports" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "interface Todo { title: string; }\nconst todo: Todo = { title: \"a\" };\nconsole.log(Reflect.has(todo, \"title\"), Reflect.has([1, 2], 0));\n" });
+	const graph = loadModuleGraph("/src/b.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	assert findModule(graph, "/src/b.ms")!.errors.length == 0;
+}
