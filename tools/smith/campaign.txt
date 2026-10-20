@@ -1,0 +1,71 @@
+iter|1|30|--features=fams=iter
+seq|1|30|--features=fams=seq
+gcls|1|30|--features=fams=gcls
+enum|1|30|--features=fams=enum
+exc|1|30|--features=fams=exc
+cls|1|30|--features=fams=cls
+conv|1|30|--features=fams=conv
+meta|1|30|--features=fams=meta
+native|1|30|--features=fams=native
+spawn|1|30|--features=fams=spawn
+actor|1|30|--features=fams=actor
+race|1|30|--features=fams=race
+async|1|30|--features=fams=async
+core|1|30|--features="types=int32,int8,uint8,uint32,int64,uint64,float64,float32,char,bigint,boolean fams=none w.core.expr=60 w.core.stmt=60 w.core.fn=60"
+mixed|201|30|
+swarm|301|30|--swarm
+mixed-async|401|20|--features=fams=closure,coll,str,exc,cls,async
+mixed-native|501|20|--features=fams=agg,own,conv,native
+proj|1|20|--features="modules=3"
+proj-cycle|21|20|--features="modules=5 modshapes=cycle,alias,ns,init"
+proj-hub|41|20|--features="modules=4 modshapes=reexport,star,alias,ns"
+plant-iter|1|2|--plant=backend --features=fams=iter
+plant-seq|1|2|--plant=backend --features=fams=seq
+plant-gcls|1|2|--plant=backend --features=fams=gcls
+plant-enum|1|2|--plant=backend --features=fams=enum
+plant-exc|1|2|--plant=backend --features=fams=exc
+plant-cls|1|2|--plant=backend --features=fams=cls
+plant-conv|1|2|--plant=backend --features=fams=conv
+plant-native|1|2|--plant=opt --features=fams=native
+plant-meta|1|2|--plant=meta --features=fams=meta
+plant-spawn|1|2|--plant=model --features=fams=spawn
+plant-actor|1|2|--plant=model --features=fams=actor
+plant-race|1|2|--plant=model --features=fams=race
+plant-async|1|2|--plant=backend --features=fams=async
+plant-core|1|2|--plant=backend --features="types=int32,int8,uint8,uint32,int64,uint64,float64,float32,char,bigint,boolean fams=none w.core.expr=60 w.core.stmt=60 w.core.fn=60"
+plant-proj|1|2|--plant=backend --features="modules=3"
+san-seq|1|5|--san --features=fams=seq
+san-gcls|1|5|--san --features=fams=gcls
+san-exc|1|5|--san --features=fams=exc
+san-cls|1|5|--san --features=fams=cls
+san-conv|1|5|--san --features=fams=conv
+san-native|1|5|--san --features=fams=native
+san-spawn|1|5|--san --features=fams=spawn
+san-actor|1|5|--san --features=fams=actor
+san-async|1|5|--san --features=fams=async
+san-core|1|5|--san --features="types=int32,int8,uint8,uint32,int64,uint64,float64,float32,char,bigint,boolean fams=none w.core.expr=60 w.core.stmt=60 w.core.fn=60"
+san-proj|1|5|--san --features="modules=3"
+closure|1|30|--features=fams=closure
+union|1|30|--features=fams=union
+generic|1|30|--features=fams=generic
+agg|1|30|--features=fams=agg
+coll|1|30|--features=fams=coll
+str|1|30|--features=fams=str
+own|1|30|--features=fams=own
+proj-fams|61|20|--features="modules=4 fams=cls,exc,iter,enum,conv"
+plant-closure|1|2|--plant=backend --features=fams=closure
+plant-union|1|2|--plant=backend --features=fams=union
+plant-generic|1|2|--plant=backend --features=fams=generic
+plant-agg|1|2|--plant=backend --features=fams=agg
+plant-coll|1|2|--plant=backend --features=fams=coll
+plant-str|1|2|--plant=backend --features=fams=str
+plant-own|1|2|--plant=backend --features=fams=own
+san-iter|1|5|--san --features=fams=iter
+san-enum|1|5|--san --features=fams=enum
+san-meta|1|5|--san --features=fams=meta
+san-race|1|5|--san --features=fams=race
+san-agg|1|5|--san --features=fams=agg
+san-coll|1|5|--san --features=fams=coll
+san-str|1|5|--san --features=fams=str
+san-own|1|5|--san --features=fams=own
+plant-san|1|3|--plant=san --san
