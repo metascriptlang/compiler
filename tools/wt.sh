@@ -483,8 +483,19 @@ commit_pruned_known() {
   say "land: committed the known-red set without the entries the gate saw green ($(git -C "$w" rev-parse --short "$new"))"
 }
 
+remote_verdict() {
+  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base shared
+  [ -f "$f" ] && [ "$(sed -n 's/^result=//p' "$f")" = GREEN ] || return 1
+  base=$(sed -n 's/^base=//p' "$f")
+  git -C "$w" merge-base --is-ancestor "$base" "$old" 2>/dev/null || return 1
+  [ "$(git -C "$w" diff --no-renames "$old" "$new" | git patch-id --stable | cut -d' ' -f1)" = "$(sed -n 's/^patch=//p' "$f")" ] || return 1
+  shared=$(comm -12 <(git -C "$w" diff --name-only --no-renames "$base" "$old" | sort) <(git -C "$w" diff --name-only --no-renames "$old" "$new" | sort))
+  [ -z "$shared" ] || { say "land: the remote gate ran on $(git -C "$w" rev-parse --short "$base"); $BASE has since changed files this slice changes ($(printf '%s' "$shared" | paste -sd' ' -)), so the land gates"; return 1; }
+  printf '%s on %s' "$(sed -n 's/^host=//p' "$f")" "$(git -C "$w" rev-parse --short "$base")"
+}
+
 cmd_land() {
-  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict remote
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
@@ -553,6 +564,8 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && [ -f "$verdict" ] \
     && [ "$(awk '{print $1, $2}' "$verdict")" = "$new $old" ]; then
     say "land: reusing the green gate of $(awk '{print $3}' "$verdict") for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
+  elif [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && remote=$(remote_verdict "$name" "$w" "$old" "$new"); then
+    say "land: reusing the green remote gate of $remote for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
   elif [ "$gate" -eq 1 ]; then
     rm -f "$verdict"
     (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"

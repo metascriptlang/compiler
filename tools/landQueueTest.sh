@@ -41,7 +41,7 @@ trap 'stop_runner; if [ "$FAIL" -eq 0 ]; then rm -rf "$T"; else printf "landQueu
 setup() {
   stop_runner
   rm -rf "$T/ws" "$T/ctl" "$T/fakebin" "$T/decoy" "$T/decoy-wt"; mkdir -p "$T/ws/.wt" "$T/ctl" "$T/fakebin"
-  export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT
+  export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT MSC_REMOTE_VERDICTS=$T/ws/verdicts
   export MSC_LAND_QUEUE_IDLE=${IDLE:-2} MSC_LAND_QUEUE_POLL=1 MSC_LAND_QUEUE_WAIT_POLL=1
   unset MSC_WT_ROOT WT_CARD_ROOT WT_WORKTREE_ROOT WT_BASE CLAUDE_PROJECT_DIR GATE_PAR MSCORPUS_BUILD_JOBS
   R=$T/ws/repo
@@ -78,6 +78,11 @@ mkwt() {
   git -C "$w" add -A; git -C "$w" commit -qm "add $n"
 }
 
+remotegreen() {
+  mkdir -p "$MSC_REMOTE_VERDICTS"
+  printf 'patch=%s\nbase=%s\nhost=test-host\nresult=GREEN\n' \
+    "$(git -C "$R" diff --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
+}
 setverdict() { printf '%s\n' "$2" >"$T/ws/.wt/wt-$1/verdict"; git -C "$T/ws/.wt/wt-$1" commit -qam "verdict $2"; }
 sbwt() { env -u WT_CWD -u CLAUDE_PROJECT_DIR bash "$WT" "$@"; }
 enqueue() { (cd "$T/ws/.wt/wt-$1" && sbwt land "$1" --async) >"$T/ctl/enq.$1" 2>&1; }
@@ -280,6 +285,42 @@ enqueue s
 rs=$(waitfor s 60)
 check "S21 s landed" '[ "$rs" = 0 ] && onmain s.txt'
 check "S21 the worktree builder is main's" 'grep -q "main builder" "$T/ws/.wt/wt-s/msc" && grep -q "picking a builder again" "$MSC_LAND_QUEUE/s.land.log"'
+
+echo "== S22 a remote GREEN for the same patch on the current main lands without a local gate"
+setup; mkwt rv red
+remotegreen rv
+enqueue rv
+rr=$(waitfor rv 60)
+check "S22 rv landed" '[ "$rr" = 0 ] && onmain rv.txt'
+check "S22 no local gate ran" '! grep -q "^wt/rv " "$T/ctl/gates.log" 2>/dev/null'
+check "S22 the land names the remote gate" 'grep -q "reusing the green remote gate of test-host" "$MSC_LAND_QUEUE/rv.land.log"'
+
+echo "== S23 main moved after the remote gate by files the slice leaves alone: still no local gate"
+setup; mkwt rm red
+remotegreen rm
+echo other >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main"
+enqueue rm
+rr=$(waitfor rm 60)
+check "S23 rm landed beside other.txt" '[ "$rr" = 0 ] && onmain rm.txt && onmain other.txt'
+check "S23 no local gate ran" '! grep -q "^wt/rm " "$T/ctl/gates.log" 2>/dev/null'
+
+echo "== S24 main moved after the remote gate through a file the slice changes: the land gates"
+setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+mkwt ro
+sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-ro/shared.txt"; rm -f "$T/ws/.wt/wt-ro/shared.txt.bak"; git -C "$T/ws/.wt/wt-ro" commit -qam "edit shared top"
+remotegreen ro
+sed -i.bak 's/^5$/five/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared bottom on main"
+enqueue ro
+rr=$(waitfor ro 60)
+check "S24 ro landed after a local gate" '[ "$rr" = 0 ] && onmain ro.txt && grep -q "^wt/ro " "$T/ctl/gates.log"'
+
+echo "== S25 the slice gained a commit after the remote gate: the land gates"
+setup; mkwt rp
+remotegreen rp
+echo more >"$T/ws/.wt/wt-rp/more.txt"; git -C "$T/ws/.wt/wt-rp" add more.txt; git -C "$T/ws/.wt/wt-rp" commit -qm "add more"
+enqueue rp
+rr=$(waitfor rp 60)
+check "S25 rp landed after a local gate" '[ "$rr" = 0 ] && onmain more.txt && grep -q "^wt/rp " "$T/ctl/gates.log"'
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
