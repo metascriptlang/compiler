@@ -2333,6 +2333,26 @@ export function isNonPrimitiveType(t: Type | null): boolean {
 	};
 }
 
+export function isPlainObjectType(t: Type | null): boolean {
+	const s = skipModifier(t);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Union) {
+		for (const member of s.typeChildren) {
+			if (!isPlainObjectType(member)) return false;
+		}
+		return s.typeChildren.length > 0;
+	}
+	if (s.kind == TypeKind.Distinct) return isPlainObjectType(s.typeReturn);
+	if (isArrayShaped(s) || s.kind == TypeKind.Tuple) return true;
+	const held = s.kind == TypeKind.Ref && s.typeReturn != null ? s.typeReturn : s;
+	if (held.kind == TypeKind.GenericInstance && (held.typeName == "Proxy" || distinctBody(held) != null)) {
+		return held.typeName != "Proxy" && isPlainObjectType(distinctBody(held));
+	}
+	if (held.kind == TypeKind.Ptr || runtimeClassSym(held) != null) return false;
+	const body = peelToStructOrUnion(held);
+	return body != null && body.kind == TypeKind.Struct && !isMaybeType(body) && (body.sym == null || body.sym.symbolKind != SymbolKind.Class);
+}
+
 export function isUnresolvedType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Inferred;
 }
