@@ -21,6 +21,8 @@ import { walkNode, walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "..
 import { makeVarDecl, makeIdentResolved, makeMember } from "../util";
 import { forEachChild } from "../../ast/visitor";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
+import { fitJoinedBranch } from "../../checker/fit";
+import { lowerImplicitConv } from "../coercion/implicitConvLower";
 
 export function spreadStructOf(t: Type | null): Type | null {
 	if (t == null) return null;
@@ -46,6 +48,12 @@ function structHasField(t: Type, name: string): boolean {
 		if (n == name) return true;
 	}
 	return false;
+}
+
+function fitIntoField(value: Node, target: Type, name: string, ctx: TransformContext): Node {
+	const at = target.typeNames.indexOf(name);
+	if (at < 0 || at >= target.typeChildren.length || ctx.checkerCtx == null) return value;
+	return lowerImplicitConv(fitJoinedBranch(ctx.checkerCtx, value, target.typeChildren[at]), ctx);
 }
 
 // ===== Stage 1: hoist non-identifier spread operands to peer temps =====
@@ -130,7 +138,7 @@ function providedLater(d: ObjectLiteralData, idx: int32, name: string): boolean 
 	return false;
 }
 
-export function expandObjectSpread(node: Node): Node {
+export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.ObjectLiteral) return node;
 	const d = node.data as ObjectLiteralData;
 	let hasSpread = false;
@@ -181,7 +189,7 @@ export function expandObjectSpread(node: Node): Node {
 				const mem = makeMember(ref, fname, sp.location);
 				mem.nodeType = src.typeChildren[fi];
 				newKeys.push(fname);
-				newProps.push(mem);
+				newProps.push(fitIntoField(mem, target, fname, ctx));
 				if (hasLocs) newLocs.push(d.keyLocations[i]);
 			}
 			fi += 1;
@@ -198,12 +206,12 @@ export function expandObjectSpread(node: Node): Node {
 
 export function lowerObjectSpread(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, hoistLeadingSpreadStmt, ctx);
-	return walkNode(program, expandObjectSpread);
+	return walkNode(program, (n: Node): Node => expandObjectSpread(n, ctx));
 }
 
 export function lowerObjectSpreadEager(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, hoistSpreadStmt, ctx);
-	return walkNode(program, expandObjectSpread);
+	return walkNode(program, (n: Node): Node => expandObjectSpread(n, ctx));
 }
 
 // ===== Tests =====

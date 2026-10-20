@@ -27,7 +27,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType } from "./types";
+import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -4790,7 +4790,7 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 
 // Validate object literal construction against a discriminated union type.
 // Finds the discriminant field in the literal, resolves the variant, and validates fields.
-export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null): Type {
+export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null, spreadDisc: Type | null): Type {
 	if (unionType == null) return inferredType();
 	const discName = unionType.typeNames[0]; // discriminant field name (e.g. "kind")
 
@@ -4805,7 +4805,7 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 		ki = ki + 1;
 	}
 
-	if (discIdx < 0) {
+	if (discIdx < 0 && spreadDisc == null) {
 		// No discriminant field — fall back to checking all properties without validation
 		for (const prop of d.properties) {
 			callCheckExpr(ctx, prop, null);
@@ -4815,23 +4815,32 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 		return node.nodeType;
 	}
 
-	// Check the discriminant expression first to get its value
-	const discExpr = d.properties[discIdx];
-	callCheckExpr(ctx, discExpr, unionType.typeExtra);
-
 	let variantIdx = -1;
-	if (discExpr.kind == NodeKind.BooleanLiteral) {
-		variantIdx = findVariantByBooleanDiscriminant(unionType, discName, (discExpr.data as BooleanLiteralData).boolValue);
+	let discExpr: Node | null = null;
+	if (spreadDisc != null) {
+		if (spreadDisc.kind == TypeKind.BooleanLiteral) variantIdx = findVariantByBooleanDiscriminant(unionType, discName, booleanLiteralValue(spreadDisc));
+		else if (spreadDisc.kind == TypeKind.EnumLiteral) variantIdx = findVariantByEnumMember(unionType, spreadDisc);
+		if (variantIdx < 0) {
+			addError(ctx, `the spread gives '${discName}' as ${typeDisplayName(spreadDisc)}, which names no member of '${unionType.typeName}': give '${discName}' after the spread`, node.location.line, node.location.column);
+		}
 	} else {
-		const lit = enumMemberLiteralOf(discExpr);
-		if (lit != null) variantIdx = findVariantByEnumMember(unionType, lit);
+		// Check the discriminant expression first to get its value
+		const written = d.properties[discIdx];
+		callCheckExpr(ctx, written, unionType.typeExtra);
+		discExpr = written;
+		if (written.kind == NodeKind.BooleanLiteral) {
+			variantIdx = findVariantByBooleanDiscriminant(unionType, discName, (written.data as BooleanLiteralData).boolValue);
+		} else {
+			const lit = enumMemberLiteralOf(written);
+			if (lit != null) variantIdx = findVariantByEnumMember(unionType, lit);
+		}
 	}
 
 	if (variantIdx >= 0 && variantIdx < unionType.typeChildren.length) {
 		const variant = unionType.typeChildren[variantIdx];
 		if (variant.kind == TypeKind.Ref) {
 			const discField = findFieldInVariant(variant, discName);
-			if (discField != null) discExpr.nodeType = discField;
+			if (discField != null && discExpr != null) discExpr.nodeType = discField;
 			rearmLiteralForRecheck(node, variant);
 			callCheckExpr(ctx, node, variant);
 			const retyped = node.nodeType as Type | null;
@@ -4843,7 +4852,7 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 		node.variantSlot = variantIdx + 1;
 		let fi = 0;
 		while (fi < d.keys.length) {
-			if (fi == discIdx) {
+			if (fi == discIdx && discExpr != null) {
 				// Discriminant already checked
 				fi = fi + 1;
 				continue;
@@ -4864,7 +4873,7 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 	// Could not resolve variant — check properties without validation
 	let pi = 0;
 	while (pi < d.properties.length) {
-		if (pi != discIdx) {
+		if (pi != discIdx || discExpr == null) {
 			callCheckExpr(ctx, d.properties[pi], null);
 		}
 		pi = pi + 1;

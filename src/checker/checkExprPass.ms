@@ -8,7 +8,7 @@ import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { genericParamsOf, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
+import { markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -1776,6 +1776,79 @@ function literalFields(ctx: CheckerContext, d: ObjectLiteralData, names: string[
 	}
 }
 
+function spreadFieldType(entry: Node, name: string): Type | null {
+	if (entry.kind != NodeKind.SpreadExpr) return null;
+	const fields = spreadFieldsOf((entry.data as SpreadExprData).spreadArg.nodeType);
+	if (fields == null) return null;
+	const at = fields.typeNames.indexOf(name);
+	return at >= 0 && at < fields.typeChildren.length ? fields.typeChildren[at] : null;
+}
+
+function spreadGivenLast(ctx: CheckerContext, d: ObjectLiteralData, name: string): Type | null {
+	let given: Type | null = null;
+	for (let i = 0; i < d.keys.length && i < d.properties.length; i += 1) {
+		if (d.keys[i] == name) {
+			given = null;
+		} else if (d.keys[i] == "..." && d.properties[i].kind == NodeKind.SpreadExpr) {
+			checkExpr(ctx, d.properties[i], null);
+			const t = spreadFieldType(d.properties[i], name);
+			if (t != null) given = t;
+		}
+	}
+	return given;
+}
+
+function givenAfter(d: ObjectLiteralData, at: int32, name: string): boolean {
+	for (let j = at + 1; j < d.keys.length && j < d.properties.length; j += 1) {
+		if (d.keys[j] == name || (d.keys[j] == "..." && spreadFieldType(d.properties[j], name) != null)) return true;
+	}
+	return false;
+}
+
+function refuseOverwrittenKeys(ctx: CheckerContext, d: ObjectLiteralData, spreadAt: int32, name: string): void {
+	for (let j = spreadAt - 1; j >= 0; j -= 1) {
+		if (j >= d.properties.length) continue;
+		if (d.keys[j] == "..." && spreadFieldType(d.properties[j], name) != null) return;
+		if (d.keys[j] != name) continue;
+		const at = d.keyLocations != null && j < d.keyLocations.length && d.keyLocations[j].line > 0 ? d.keyLocations[j] : d.properties[j].location;
+		addErrorRange(ctx, `'${name}' is specified more than once, so this usage will be overwritten: the spread after it gives '${name}'`,
+			at.line, at.column, at.column + name.length);
+	}
+}
+
+function fitSpreadField(ctx: CheckerContext, entry: Node, name: string, held: Type, slot: Type): void {
+	const read = createNodeAt(NodeKind.MemberExpr, { object: (entry.data as SpreadExprData).spreadArg, property: name, isOptional: false } as MemberExprData, entry.location);
+	read.nodeType = held;
+	read.flags = read.flags.incl(NodeFlag.Sem);
+	const mark = ctx.errors.length;
+	fitNode(ctx, read, slot, held);
+	if (!reportedErrorSince(ctx, mark)) return;
+	let why = "";
+	for (let i = mark; i < ctx.errors.length && why == ""; i += 1) {
+		if (ctx.errors[i].severity == Severity.Error) why = ctx.errors[i].message;
+	}
+	while (ctx.errors.length > mark) { ctx.errors.pop(); }
+	addError(ctx, `field '${name}' from the spread does not fit the literal's '${name}': ${why}; write '${name}' after the spread`,
+		entry.location.line, entry.location.column);
+}
+
+function judgeSpreadFields(ctx: CheckerContext, d: ObjectLiteralData, target: Type | null): void {
+	for (let i = 0; i < d.keys.length && i < d.properties.length; i += 1) {
+		const entry = d.properties[i];
+		if (d.keys[i] != "..." || entry.kind != NodeKind.SpreadExpr) continue;
+		const fields = spreadFieldsOf((entry.data as SpreadExprData).spreadArg.nodeType);
+		if (fields == null) continue;
+		for (let fi = 0; fi < fields.typeNames.length && fi < fields.typeChildren.length; fi += 1) {
+			const name = fields.typeNames[fi];
+			if (name.startsWith("__")) continue;
+			if (!isNullableShape([fields.typeChildren[fi]])) refuseOverwrittenKeys(ctx, d, i, name);
+			const at = target != null && target.typeNames != null ? target.typeNames.indexOf(name) : -1;
+			if (target == null || at < 0 || at >= target.typeChildren.length || givenAfter(d, i, name)) continue;
+			fitSpreadField(ctx, entry, name, fields.typeChildren[fi], target.typeChildren[at]);
+		}
+	}
+}
+
 function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as ObjectLiteralData;
 	// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
@@ -1967,6 +2040,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 			fi = fi + 1;
 		}
+		judgeSpreadFields(ctx, d, objE);
 		// Excess property + duplicate field check
 		if (objNames != null) {
 			let ki = 0;
@@ -2046,7 +2120,8 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	} else if (objExpected != null && objExpected.kind == TypeKind.Union
 		&& isDiscriminatedUnion(objExpected)) {
 		// Discriminated union construction validation
-		const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, literalStampType(expectedType, objExpected));
+		const spreadDisc = spreadGivenLast(ctx, d, getDiscriminantName(objExpected));
+		const constructed = checkDiscriminatedConstruction(ctx, node, d, objExpected, literalStampType(expectedType, objExpected), spreadDisc);
 		node.nodeType = constructed; return;
 	} else if (objExpected != null && objExpected.kind == TypeKind.Union) {
 		// Non-discriminated union: resolve variant, propagate field types.
@@ -2063,12 +2138,19 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		let varIdx = -1;
 		const stringDiscName = findSharedStringDiscriminant(objExpected);
 		if (stringDiscName != "") {
+			const spreadDisc = spreadGivenLast(ctx, d, stringDiscName);
 			// Look for the discriminant field in the literal
 			let litDiscIdx = -1;
 			for (let ki = 0; ki < d.keys.length; ki += 1) {
 				if (d.keys[ki] == stringDiscName) { litDiscIdx = ki; break; }
 			}
-			if (litDiscIdx >= 0 && litDiscIdx < d.properties.length) {
+			if (spreadDisc != null) {
+				if (spreadDisc.kind == TypeKind.StringLiteral) varIdx = findVariantByStringDiscriminant(objExpected, stringDiscName, spreadDisc.typeName);
+				if (varIdx < 0) {
+					addError(ctx, `the spread gives '${stringDiscName}' as ${typeDisplayName(spreadDisc)}, which names no member of the union: give '${stringDiscName}' after the spread`,
+						node.location.line, node.location.column);
+				}
+			} else if (litDiscIdx >= 0 && litDiscIdx < d.properties.length) {
 				const discProp = d.properties[litDiscIdx];
 				if (discProp.kind == NodeKind.StringLiteral) {
 					const sd = discProp.data as StringLiteralData;
@@ -2168,6 +2250,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			fieldTypes.push(ft!);
 			pi = pi + 1;
 		}
+		judgeSpreadFields(ctx, d, null);
 		const anonName = anonStructName(fieldNames, fieldTypes);
 				node.nodeType = createRef(spelled(createStruct(anonName, fieldNames, fieldTypes, false))); return;
 	}
