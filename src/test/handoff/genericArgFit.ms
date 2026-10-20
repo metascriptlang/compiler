@@ -293,6 +293,12 @@ test "a binding inside its constraint is accepted" {
 	assert strictErrorCount(BOXED + "const c = g(dog);\nconst d = g<Dog>(dog);\nconst e = g(animal);") == 0;
 }
 
+test "a method's constraint binds its own type parameter, not the class parameter it shadows" {
+	const src = CLASSES + "class Holder<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n\tkeep<T extends Animal>(a: T): T { return a; }\n}\nconst h = new Holder<int32>(1);\n";
+	assert hasError(src + "const c = h.keep(5);", "Type 'int32' does not satisfy constraint 'Animal' for type parameter 'T' in 'keep'");
+	assert strictErrorCount(src + "const c = h.keep(dog);\nconst d = h.keep<Dog>(dog);") == 0;
+}
+
 test "a numeric constraint rejects a string and accepts every number" {
 	const src = "function h<T extends number>(a: T): T { return a; }\n";
 	assert hasError(src + "const c = h(\"s\");", "does not satisfy constraint");
