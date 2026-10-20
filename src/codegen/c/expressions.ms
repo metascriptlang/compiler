@@ -2314,7 +2314,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				// Check if env is a pre-allocated named variable (lambda lifting env rewrite)
 				// vs inline ObjectLiteral (original pattern needing heap allocation)
 				const envNode = d.properties[1];
-				if (envNode != null && envNode.kind == NodeKind.Identifier) {
+				if (envNode != null && (envNode.kind == NodeKind.Identifier || (envNode.nodeType != null && envNode.nodeType.kind == TypeKind.Ref))) {
 					// Pre-allocated env: already a heap pointer, use directly
 					ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envExpr} }`);
 				} else {
