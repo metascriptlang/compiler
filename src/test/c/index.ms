@@ -11,7 +11,6 @@ import "./closures";
 import "./result";
 import "./jsx";
 import "./converter";
-import "./buffer";
 import "./httpServer";
 import "./actor";
 import "./json";
