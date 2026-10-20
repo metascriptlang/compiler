@@ -280,6 +280,7 @@ function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRe
 			return held == RaiserRegClass.Ref ? RaiserRegClass.Ref : RaiserRegClass.Dyn;
 		},
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Var | TypeKind.Borrow => {
+			if (t.kind == TypeKind.Ptr && skipModifier(t.typeReturn) != null && skipModifier(t.typeReturn)!.kind == TypeKind.Void) return RaiserRegClass.Ref;
 			if (heldByLocation(s, t.typeReturn)) return RaiserRegClass.Dyn;
 			return classOfType(s, t.typeReturn, depth + 1);
 		},

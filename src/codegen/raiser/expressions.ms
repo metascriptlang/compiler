@@ -446,7 +446,25 @@ function compileExprInto(s: RaiserCompState, node: Node, target: number): void {
 	landResult(s, target, startPc, firstTemp, compileExpr(s, node));
 }
 
+// A Dyn register holds a box, so an expression whose checked type has a plain class (a variable
+// narrowed from a union) is read out of it into a register of that class.
 export function compileExpr(s: RaiserCompState, node: Node): int32 {
+	const reg = compileExprRaw(s, node);
+	if (classOfReg(s, reg) != RaiserRegClass.Dyn || holdsLocation(node)) return reg;
+	const cls = regClassOf(s, node.nodeType);
+	if (cls == RaiserRegClass.Dyn) return reg;
+	const plain = allocReg(s, cls);
+	emitInst(s, raiserABC(RaiserOpcode.Move, plain, reg, 0));
+	return plain;
+}
+
+function holdsLocation(node: Node): boolean {
+	if (node.kind == NodeKind.HiddenAddr) return true;
+	const sym = node.resolvedSym;
+	return node.kind == NodeKind.Identifier && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Var;
+}
+
+function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 	if (carriesBigInt(node.nodeType)) return refuseBigInt(s, node);
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
@@ -1766,7 +1784,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const fnConstIdx = addConst(s, raiserConstString("fn"));
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnIdxReg, closureReg, fnConstIdx));
 
-	const envReg = allocDyn(s);
+	const envReg = allocRef(s);
 	const envConstIdx = addConst(s, raiserConstString("env"));
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, envReg, closureReg, envConstIdx));
 
@@ -1801,13 +1819,6 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	emitInst(s, raiserABC(RaiserOpcode.BeqI64Imm, envNilReg, immField(0), 1));
 	const jumpNilToNoEnv = emitJumpPlaceholder(s);
 
-	// Runtime check: if env is -1 (non-capturing sentinel), skip env passing
-	const sentinelReg = allocWord(s);
-	emitLoadConst(s, sentinelReg, raiserInt(-1));
-	// BneI64 envReg, sentinelReg, 1 → if env != -1, skip next instruction (jump past no-env path)
-	emitInst(s, raiserABC(RaiserOpcode.BneI64, envReg, sentinelReg, 1));
-	const jumpToNoEnv = emitJumpPlaceholder(s);
-
 	// WITH ENV path: real args first, then env LAST (Standard reference parity: closure calling convention)
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + argCount, envReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, totalArgs));
@@ -1815,7 +1826,6 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 
 	// NO ENV path: just real args, no env
 	patchJumpTo(s, jumpNilToNoEnv, codeLen(s));
-	patchJumpTo(s, jumpToNoEnv, codeLen(s));
 	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, argCount));
 
 	patchJumpTo(s, jumpPastNoEnv, codeLen(s));
