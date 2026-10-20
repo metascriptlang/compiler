@@ -406,6 +406,7 @@ typedef struct msSchedActors {
     _Atomic(int) count;           /* atomic: CD reads while main thread may register */
     int pollCount;                /* for periodic cycle detection (scheduler 0 only) */
     _Atomic(msActor*) runHead;    /* lock-free run queue: actors with pending messages */
+    _Atomic(int) runPopLock;
     msActor* deferredFree;        /* I19: hazard-pinned shells awaiting free (owner thread only) */
     _Atomic(bool) wakeAmortized;  /* amortize wakes: true = worker already woken, skip syscall.
                                    * Removed Apr 8 (5122d20) citing "missed wakes / 500ms stalls" but
@@ -426,18 +427,22 @@ static inline void msSchedRunPush(msSchedActors* sched, msActor* a) {
         memory_order_release, memory_order_relaxed));
 }
 
-/* Pop one actor from scheduler's run queue (any thread, lock-free CAS). O(1). */
+/* Pop one actor (any thread). O(1). Keep pops serialized: concurrent poppers hit the
+ * Treiber-stack ABA (a head popped and re-pushed under another pop's CAS). */
 static inline msActor* msSchedRunPop(msSchedActors* sched) {
+    while (atomic_exchange_explicit(&sched->runPopLock, 1, memory_order_acquire))
+        while (atomic_load_explicit(&sched->runPopLock, memory_order_relaxed)) {}
     msActor* head = atomic_load_explicit(&sched->runHead, memory_order_acquire);
     while (head != NULL) {
         msActor* next = atomic_load_explicit(&head->runNext, memory_order_relaxed);
         if (atomic_compare_exchange_weak_explicit(&sched->runHead, &head, next,
                 memory_order_acq_rel, memory_order_acquire)) {
             atomic_store_explicit(&head->runNext, NULL, memory_order_relaxed);
-            return head;
+            break;
         }
     }
-    return NULL;
+    atomic_store_explicit(&sched->runPopLock, 0, memory_order_release);
+    return head;
 }
 
 /* Global counter: number of actors with idle timeouts. Scan skipped when 0. */
