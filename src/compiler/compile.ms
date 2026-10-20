@@ -2745,7 +2745,7 @@ resetLiftedOps();
 		const ctx = cm.ctx;
 		const modPath = cm.modPath;
 		const nativeLowered = loweredByPath.get(modPath)!;
-		if (opts.targetOs == "solana" && !(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
+		if (opts.targetOs == "solana") {
 			for (const hitNode of collectWritableModuleBindings(nativeLowered)) {
 				const d = hitNode.data as VariableDeclData;
 				fsWritableHits.push({
