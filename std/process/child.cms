@@ -1,0 +1,227 @@
+// A long-lived child process with its three pipes, driven synchronously.
+//
+// Every blocking call takes a deadline in milliseconds; 0 polls once. A read, write or wait
+// also drains whichever other pipe is ready, so a child that floods stderr while the parent
+// reads stdout, or that echoes while the parent is still writing, cannot deadlock it.
+// Chunks are bytes: one can end inside a UTF-8 sequence, so concatenate before decoding.
+// The async names readAsync, writeAsync and waitAsync are reserved for the same handle.
+
+@include("runtime/process.h");
+
+import {
+	ProcessError,
+	ProcessErrorKind,
+	startFailed,
+	errnoName,
+	pipeError,
+	timedOut,
+	pipeClosed,
+	outputOverflow,
+} from "./errors";
+
+extern function msProcChildSpawn(
+	path: string,
+	args: string[],
+	cwd: string,
+	mergeStderr: int32,
+): int64;
+extern function msProcChildIsUnsupported(spawnResult: int64): int32;
+extern function msProcChildPid(h: int64): int32;
+extern function msProcChildErrno(h: int64): int32;
+extern function msProcChildWritten(h: int64): int64;
+extern function msProcChildWrite(h: int64, data: string, timeoutMs: int64): int32;
+extern function msProcChildCloseStdin(h: int64): void;
+extern function msProcChildRead(h: int64, stream: int32, timeoutMs: int64): int32;
+extern function msProcChildTake(h: int64, stream: int32): string;
+extern function msProcChildWait(h: int64, timeoutMs: int64): int32;
+extern function msProcChildKill(h: int64): int32;
+extern function msProcChildExitCode(h: int64): int32;
+extern function msProcChildSignal(h: int64): int32;
+extern function msProcChildClose(h: int64): void;
+extern function msProcChildFree(h: int64): void;
+
+const CHILD_OK = 0;
+const CHILD_ENDED = 1;
+const CHILD_TIMEOUT = 2;
+const CHILD_PIPE_CLOSED = 3;
+const CHILD_OVERFLOW = 4;
+
+const NO_SPAWN = "ENOSYS: process spawning is not supported on this target";
+
+export enum ChildStream {
+	Stdout,
+	Stderr,
+}
+
+export struct ExitStatus {
+	code: int32;
+	signal: int32;
+}
+
+export struct ReadChunk {
+	data: string;
+	ended: boolean;
+}
+
+export interface SpawnOptions {
+	cwd?: string;
+	mergeStderr?: boolean;
+}
+
+export class ChildProcess {
+	private handle: int64;
+	pid: int32;
+	command: string;
+
+	constructor(handle: int64, command: string) {
+		this.handle = handle;
+		this.pid = msProcChildPid(handle);
+		this.command = command;
+	}
+
+	// All bytes of `data`, or Timeout / PipeClosed naming how many were sent.
+	write(data: string, timeoutMs: int32): Result<void, ProcessError> {
+		const code = msProcChildWrite(this.handle, data, timeoutMs as int64);
+		if (code == CHILD_OK) return Result.ok(null);
+		const sent = `${msProcChildWritten(this.handle)} of ${data.byteLength} bytes`;
+		return Result.err(match (code) {
+			CHILD_TIMEOUT => timedOut(this.command, `write after ${timeoutMs} ms, sent ${sent}`),
+			CHILD_PIPE_CLOSED => pipeClosed(this.command, `stdin, sent ${sent}`),
+			_ => this.osError("write"),
+		});
+	}
+
+	closeStdin(): void {
+		msProcChildCloseStdin(this.handle);
+	}
+
+	// At least one byte, or `ended` at EOF. Timeout keeps whatever arrives later for the next read.
+	read(stream: ChildStream, timeoutMs: int32): Result<ReadChunk, ProcessError> {
+		const which = stream as int32;
+		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
+		const name = stream.toString().toLowerCase();
+		return match (code) {
+			CHILD_OK => Result.ok({ data: msProcChildTake(this.handle, which), ended: false }),
+			CHILD_ENDED => Result.ok({ data: "", ended: true }),
+			CHILD_TIMEOUT => Result.err(
+				timedOut(this.command, `read ${name} after ${timeoutMs} ms`),
+			),
+			CHILD_PIPE_CLOSED => Result.err(pipeClosed(this.command, `${name} of a closed handle`)),
+			CHILD_OVERFLOW => Result.err(outputOverflow(this.command, name)),
+			_ => Result.err(this.osError(`read ${name}`)),
+		};
+	}
+
+	// Whatever stderr the pump has drained so far; does not wait.
+	takeStderr(): string {
+		return msProcChildTake(this.handle, ChildStream.Stderr as int32);
+	}
+
+	// The exit status, or Timeout with the child still running.
+	wait(timeoutMs: int32): Result<ExitStatus, ProcessError> {
+		const code = msProcChildWait(this.handle, timeoutMs as int64);
+		if (code == CHILD_OK) return Result.ok(this.status());
+		if (code == CHILD_TIMEOUT) {
+			return Result.err(timedOut(this.command, `wait after ${timeoutMs} ms`));
+		}
+		return Result.err(this.osError("wait"));
+	}
+
+	// SIGKILL and reap; a child already reaped keeps its first status.
+	kill(): Result<ExitStatus, ProcessError> {
+		if (msProcChildKill(this.handle) == CHILD_OK) return Result.ok(this.status());
+		return Result.err(this.osError("kill"));
+	}
+
+	// Kills and reaps a child still running and closes every pipe. Idempotent.
+	close(): void {
+		msProcChildClose(this.handle);
+	}
+
+	private osError(what: string): ProcessError {
+		return pipeError(this.command, `${what}: ${errnoName(msProcChildErrno(this.handle))}`);
+	}
+
+	private status(): ExitStatus {
+		return { code: msProcChildExitCode(this.handle), signal: msProcChildSignal(this.handle) };
+	}
+
+	onDestroy(): void {
+		if (this.handle != 0) {
+			msProcChildFree(this.handle);
+			this.handle = 0;
+		}
+	}
+}
+
+// Starts `path` (searched on PATH when it has no slash) with stdin, stdout and stderr piped.
+export function spawn(
+	path: string,
+	args: string[] = [],
+	opts: SpawnOptions = {},
+): Result<ChildProcess, ProcessError> {
+	const merge = opts.mergeStderr ?? false;
+	const handle = msProcChildSpawn(path, args, opts.cwd ?? "", merge ? 1 : 0);
+	if (handle > 0) return Result.ok(new ChildProcess(handle, path));
+	if (msProcChildIsUnsupported(handle) != 0) return Result.err(startFailed(path, NO_SPAWN));
+	return Result.err(startFailed(path, errnoName(-handle as int32)));
+}
+
+// ===== Tests =====
+
+function readAll(child: ChildProcess, stream: ChildStream): string {
+	let text = "";
+	for (let i = 0; i < 10000; i++) {
+		const got = child.read(stream, 5000);
+		if (!got.ok || got.value.ended) return text;
+		text += got.value.data;
+	}
+	return text;
+}
+
+test "spawn of a missing program is NotFound naming ENOENT" {
+	const r = spawn("/nonexistent/msProcChildProbe", []);
+	assert !r.ok;
+	if (!r.ok) {
+		assert r.error.kind == ProcessErrorKind.NotFound;
+		assert r.error.message.contains("ENOENT");
+	}
+}
+
+test "cwd sets the child's working directory" {
+	const r = spawn("/bin/pwd", [], { cwd: "/" });
+	assert r.ok;
+	if (r.ok) {
+		assert readAll(r.value, ChildStream.Stdout) == "/\n";
+		r.value.close();
+	}
+}
+
+test "mergeStderr sends stderr down stdout and leaves stderr ended" {
+	const r = spawn("/bin/sh", ["-c", "echo out; echo err >&2"], { mergeStderr: true });
+	assert r.ok;
+	if (r.ok) {
+		const child = r.value;
+		assert readAll(child, ChildStream.Stdout) == "out\nerr\n";
+		const err = child.read(ChildStream.Stderr, 0);
+		assert err.ok && err.value.ended;
+		child.close();
+	}
+}
+
+test "a closed handle refuses reads and writes and keeps its status" {
+	const r = spawn("/bin/sh", ["-c", "exit 4"]);
+	assert r.ok;
+	if (r.ok) {
+		const child = r.value;
+		const status = child.wait(5000);
+		assert status.ok && status.value.code == 4;
+		child.close();
+		const read = child.read(ChildStream.Stdout, 0);
+		assert !read.ok && read.error.kind == ProcessErrorKind.PipeClosed;
+		const sent = child.write("x", 0);
+		assert !sent.ok && sent.error.kind == ProcessErrorKind.PipeClosed;
+		const again = child.wait(0);
+		assert again.ok && again.value.code == 4 && again.value.signal == 0;
+	}
+}

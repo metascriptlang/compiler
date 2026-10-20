@@ -19,6 +19,7 @@ import {
 // Re-export error types so callers do `import { exec, ProcessError } from "std/process"`.
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
+export { spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, SpawnOptions } from "./child";
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;
