@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "wasi-platform" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, wasi-platform, or all");
 	exit(2);
 }
 
@@ -741,6 +741,47 @@ function toolPresent(exe: string): boolean {
 	return execFileCapture(exe, ["--version"]).ok;
 }
 
+function runWasiPlatform(): void {
+	if (!toolPresent("node")) {
+		need(group != "wasi-platform", "wasi-platform requires node on PATH");
+		console.log("skip wasi-platform: node is required on PATH");
+		return;
+	}
+	const dir = `${root}/wasi-platform`;
+	const fixtures = absolute("src/test/fixtures/wasiPlatform");
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	for (const name of [
+		"minimal.ms",
+		"console.ms",
+		"hostCall.ms",
+		"hostCall.h",
+		"platform.ms",
+		"platformProbe.h",
+		"run.cjs",
+	]) {
+		need(copyFile(`${fixtures}/${name}`, `${dir}/${name}`).ok, `copy WASI fixture ${name}`);
+	}
+	for (const name of ["minimal", "console", "hostCall", "platform"]) {
+		const built = command(dir, `build-${name}`, compiler, [
+			"build",
+			`${name}.ms`,
+			"--os=wasm",
+			`--output=${name}.wasm`,
+		]);
+		need(built.code == 0, `WASI ${name} build`);
+	}
+	const names = ["minimal", "console", "hostCall", "platform", "platform"];
+	const modes = ["plain", "plain", "host", "platform", "clockFailure"];
+	const expected = ["", "7", "host=7", "1\n1234", "1\nclock failure trapped"];
+	for (let i = 0; i < names.length; i++) {
+		const label = `run-${names[i]}-${modes[i]}`;
+		const ran = command(dir, label, "node", ["run.cjs", `${names[i]}.wasm`, modes[i]]);
+		record(`${label} exit`, "0", `${ran.code}`);
+		record(label, expected[i], ran.stdout.trim());
+	}
+}
+
 function runEmccArgvFs(): void {
 	if (!toolPresent("emcc") || !toolPresent("node")) {
 		console.log("skip emcc-argv-fs: emcc and node are both required on PATH");
@@ -867,6 +908,7 @@ if (group == "upcast-cast" || group == "all") runUpcastCast();
 if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
 if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
 if (group == "emcc-jspi" || group == "all") runEmccJspi();
+if (group == "wasi-platform" || group == "all") runWasiPlatform();
 
 let failures = 0;
 console.log(`root ${root}`);

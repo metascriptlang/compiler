@@ -8,6 +8,10 @@ when (!bare && !solana) {
 	@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 	@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 	@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+	when (wasm) {
+		@passC("-DTF_PSA_CRYPTO_USER_CONFIG_FILE=\"<mbedtls/wasiConfig.h>\"");
+		@compile("runtime/crypto/mbedtls/wasiPlatform.c");
+	}
 	// bignum.h lives under mbedtls/private and only declares mbedtls_mpi_* when the
 	// consumer opts in to the private surface.
 	@passC("-DMBEDTLS_DECLARE_PRIVATE_IDENTIFIERS");
