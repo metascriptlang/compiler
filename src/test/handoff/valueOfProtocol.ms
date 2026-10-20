@@ -12,6 +12,7 @@ const ACC = ACC_TYPE + VALUE_OF + SIGNALS;
 const NO_PROTOCOL = ACC_TYPE + SIGNALS;
 const PROPS = "interface Props { count: Accessor<number>; items: Accessor<number[]>; }\n"
 	+ "const props: Props = { count: c, items: items };\n";
+const DELEGATE_EQ = "@delegate function `==`<T>(this a: Accessor<T>, b: Accessor<T>): boolean;\n";
 const NEEDS = "function needsStr(s: string): string { return s; }\nfunction needsNum(n: number): number { return n; }\n";
 const NUM_INTO_STRING = "got number, expected string";
 
@@ -64,7 +65,11 @@ test "an Accessor slot and a nullable Accessor slot receive the accessor" {
 }
 
 test "an unannotated alias, a generic parameter and an array element keep the accessor" {
-	assert strictErrorCount(ACC + NEEDS + "function id<T>(x: T): T { return x; }\nconst c2 = c;\nconst a3: Accessor<number> = c2;\nneedsNum(c2);\nconst a4: Accessor<number> = id(c);\nneedsNum(id(c));\nconst arr: Accessor<number>[] = [c];\nconst same: boolean = c2 === c;") == 0;
+	assert strictErrorCount(ACC + DELEGATE_EQ + NEEDS + "function id<T>(x: T): T { return x; }\nconst c2 = c;\nconst a3: Accessor<number> = c2;\nneedsNum(c2);\nconst a4: Accessor<number> = id(c);\nneedsNum(id(c));\nconst arr: Accessor<number>[] = [c];\nconst same: boolean = c2 === c;\nconst differs: boolean = c2 !== c;\nconst [d, setD] = makeSignal<number>(1);\nconst other: boolean = d === c;") == 0;
+}
+
+test "a null check on an accessor needs no declared equality" {
+	assert strictErrorCount(ACC + "function none(own: Accessor<number> | null): boolean { return own === null || null == own; }\nfunction some(own: Accessor<number> | null): boolean { if (own !== null) { return own != null && null !== own; } return false; }\nfunction held(own: Accessor<number>): boolean { return own !== null; }") == 0;
 }
 
 test "an arrow returning a bare accessor fits both a value thunk and an accessor thunk" {
