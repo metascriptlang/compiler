@@ -1077,7 +1077,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.SwitchCase) return { caseTests: parseNodeArr(f[0], nodes), caseStmts: parseNodeArr(f[1], nodes), isDefault: f[2] == "1" } as NodeData;
 	if (kind == NodeKind.UnreachableStmt) return { unreachableMsg: unescapeP(f[0]) } as NodeData;
 	if (kind == NodeKind.MatchStmt) return { matchStmtDisc: nd(f[0].parseInt() as int32, nodes) as Node, matchStmtCases: parseNodeArr(f[1], nodes) } as NodeData;
-	if (kind == NodeKind.ImportDecl) return { importNames: splitCsv(f[0]), importAliases: splitCsv(f[1]), importSource: unescapeP(f[2]), nameLocations: parseLocs(f[3]) } as NodeData;
+	if (kind == NodeKind.ImportDecl) return { importNames: splitCsv(f[0]), importAliases: splitCsv(f[1]), importSource: unescapeP(f[2]), nameLocations: parseLocs(f[3]), importTypeNames: splitCsv(f[4]) } as NodeData;
 	if (kind == NodeKind.ExportDecl) return { exportedDecl: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeAliasDecl) return { aliasName: unescapeP(f[0]), aliasType: unescapeP(f[1]), aliasIsDistinct: f[2] == "1", aliasGenericParams: unescapeP(f[3]), discriminantName: unescapeP(f[4]), discriminantType: unescapeP(f[5]), variantKeys: splitCsv(f[6]), variantTypes: splitCsv(f[7]), nameLocation: parseLoc(f[8]) } as NodeData;
 	if (kind == NodeKind.EnumDecl) return { enumName: unescapeP(f[0]), enumMembers: splitCsv(f[1]), enumValues: parseFloatsCsv(f[2]), nameLocation: parseLoc(f[3]), memberLocations: parseLocs(f[4]), enumInits: parseNodeArr(f[5], nodes) } as NodeData;

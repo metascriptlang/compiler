@@ -30,6 +30,23 @@ function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): 
 	return commentedList(names, locs, inner, "{", "}");
 }
 
+function typeModifier(node: Node): string {
+	return node.flags.has(NodeFlag.TypeModifier) ? "type " : "";
+}
+
+function specifierDocs(d: ImportDeclData): Doc[] {
+	const names: Doc[] = [];
+	for (let i = 0; i < d.importNames.length; i += 1) {
+		const name = d.importTypeNames.includes(d.importNames[i]) ? "type " + d.importNames[i] : d.importNames[i];
+		if (d.importAliases[i] != "" && d.importAliases[i] != d.importNames[i]) {
+			names.push(docText(name + " as " + d.importAliases[i]));
+		} else {
+			names.push(docText(name));
+		}
+	}
+	return names;
+}
+
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
 	// Namespace import: `import * as M from "..."` — single `*` specifier with alias.
@@ -37,20 +54,13 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 		let q = "\"";
 		if (options.singleQuote) q = "'";
 		const alias = d.importAliases[0];
-		const head = alias != "" && alias != "*" ? "import * as " + alias + " from " : "import * from ";
+		const head = "import " + typeModifier(node) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
 		const tail = options.semi ? ";" : "";
 		return docGroup([docText(head + q + d.importSource + q + tail)]);
 	}
-	const parts: Doc[] = [docText("import ")];
+	const parts: Doc[] = [docText("import " + typeModifier(node))];
 	if (d.importNames.length > 0) {
-		const names: Doc[] = [];
-		for (let i = 0; i < d.importNames.length; i += 1) {
-			if (d.importAliases[i] != "" && d.importAliases[i] != d.importNames[i]) {
-				names.push(docText(d.importNames[i] + " as " + d.importAliases[i]));
-			} else {
-				names.push(docText(d.importNames[i]));
-			}
-		}
+		const names = specifierDocs(d);
 		// Prettier pattern: single specifier stays inline, multiple use group + indent + line
 		const commented = commentedSpecifiers(names, d.nameLocations, node);
 		if (commented != null) {
@@ -135,20 +145,13 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 	// Star re-export: `export * from "..."` — single `*` specifier (no alias).
 	if (id.importNames.length == 1 && id.importNames[0] == "*") {
 		const alias = id.importAliases[0];
-		const head = alias != "" && alias != "*" ? "export * as " + alias + " from " : "export * from ";
+		const head = "export " + typeModifier(inner) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
 		const tail = options.semi ? ";" : "";
 		return docGroup([docText(head + q + id.importSource + q + tail)]);
 	}
-	const parts: Doc[] = [docText("export ")];
+	const parts: Doc[] = [docText("export " + typeModifier(inner))];
 	if (id.importNames.length > 0) {
-		const names: Doc[] = [];
-		for (let i = 0; i < id.importNames.length; i += 1) {
-			if (id.importAliases[i] != "" && id.importAliases[i] != id.importNames[i]) {
-				names.push(docText(id.importNames[i] + " as " + id.importAliases[i]));
-			} else {
-				names.push(docText(id.importNames[i]));
-			}
-		}
+		const names = specifierDocs(id);
 		const commented = commentedSpecifiers(names, id.nameLocations, outer);
 		if (commented != null) {
 			parts.push(commented);
