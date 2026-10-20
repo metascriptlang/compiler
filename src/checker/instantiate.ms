@@ -20,7 +20,7 @@ import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, regi
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
-import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
+import { callCheckFunctionBody, callCheckLocalInstance, registerInstantiateGeneric } from "./checkerCallbacks";
 import { checkRoutineBorrows } from "./varPartitions";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
@@ -42,6 +42,8 @@ import { sameType } from "./compat";
 // Populated by checkProgramCore (checkPass.ms) at the end of each module's check.
 // Looked up by instantiateGenericFunction / instantiateClassConstructor.
 let _moduleCtxMap: HashMap<string, CheckerContext> = new HashMap<string, CheckerContext>();
+let _localGenerics: HashMap<Symbol, Scope> = new HashMap<Symbol, Scope>();
+let _localInstances: HashMap<Symbol, Node[]> = new HashMap<Symbol, Node[]>();
 
 export function registerModuleCtx(modulePath: string, ctx: CheckerContext): void {
 	if (modulePath == "") return;
@@ -135,6 +137,8 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 }
 
 export function resetInstantiationState(): void {
+	_localGenerics = new HashMap<Symbol, Scope>();
+	_localInstances = new HashMap<Symbol, Node[]>();
 	_placedInstances = new HashMap<Symbol, Symbol>();
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
@@ -615,11 +619,11 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	}
 }
 
-function openInstanceScope(ctx: CheckerContext, names: string[], types: Type[], outer: int32 = -1): Scope {
+function openInstanceScope(ctx: CheckerContext, names: string[], types: Type[], outer: int32 = -1, declScope: Scope | null = null): Scope {
 	const callerScope = ctx.table.current;
 	let top = callerScope;
 	while (top.scopeKind != ScopeKind.Module && top.parent != null) top = top.parent;
-	ctx.table.current = top;
+	ctx.table.current = declScope ?? top;
 	openScope(ctx.table, ScopeKind.Block);
 	for (let i = 0; i < names.length && i < types.length; i += 1) {
 		if (i == outer) openScope(ctx.table, ScopeKind.Block);
@@ -834,6 +838,37 @@ export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes:
 
 // ===== On-Demand Instantiation =====
 
+export function declareLocalGeneric(sym: Symbol, declScope: Scope): void {
+	_localGenerics.set(sym, declScope);
+	_localInstances.set(sym, []);
+}
+
+export function takeLocalInstances(sym: Symbol): Node[] | null {
+	const placed = _localInstances.get(sym);
+	if (placed == null) return null;
+	_localGenerics.delete(sym);
+	_localInstances.delete(sym);
+	return placed;
+}
+
+function instantiateLocalGeneric(ctx: CheckerContext, sym: Symbol, name: string, routine: RoutineBindings, host: CheckerContext, declScope: Scope): Symbol {
+	const cloned = monoCloneNode(unwrapToFunctionDecl(sym.declNode)!);
+	const cd = cloned.data as FunctionDeclData;
+	cd.fnName = name;
+	cd.fnFlags = stripGenFlag(cd.fnFlags);
+	clearCheckerState(cd.fnBody);
+	bindFunctionFlow(cloned, cd.fnBody);
+	const callerScope = openInstanceScope(ctx, routine.b.names, routine.b.types, routine.outer, declScope);
+	const instSym = callCheckLocalInstance(ctx, cloned, (declared: Symbol): void => {
+		declared.instantiatedFrom = sym;
+		cacheInstance(host.procInstCache, sym, declared, routine.b.types);
+	});
+	ctx.table.current = callerScope;
+	if (instSym == null) throw new Error(`internal: the instance '${name}' of local generic '${sym.name}' declared no symbol`);
+	_localInstances.get(sym)!.push(cloned);
+	return instSym;
+}
+
 let _igfCalls: int64 = 0;
 let _igfHits: int64 = 0;
 let _igfMisses: int64 = 0;
@@ -897,6 +932,13 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	}
 	const mangledName = mangleMonoName(monoRoutineBaseName(mangleBase, sym.modulePath, sym.disamb), dedup.types);
 
+
+	const declScope = _localGenerics.get(sym);
+	if (declScope != null) {
+		const local = instantiateLocalGeneric(ctx, sym, mangledName, routine, host, declScope);
+		ctx.genericInstDepth = ctx.genericInstDepth - 1;
+		return local;
+	}
 
 	const bodyCtx = pickBodyCtx(sym.modulePath, ctx, sym);
 	const _ig0 = performance.now();

@@ -147,6 +147,7 @@ export function jsBundleReferenceName(sym: Symbol, text: string): string {
 
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
+	if (sym.symbolKind == SymbolKind.Variable && sym.instantiatedFrom != null) return safeJsName(sym.name);
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
 		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
 	}
