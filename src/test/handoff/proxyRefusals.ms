@@ -67,3 +67,10 @@ test "'in' on a Proxy and for-of over a Proxy of an object are refused" {
 	assert hasError(HEAD + "console.log(\"title\" in p);", "'in' on a Proxy<Todo, Traps> would skip its 'has' trap");
 	assert hasError(HEAD + "for (const x of p) {}", "for-of over a Proxy needs an array target; 'Todo' is not one");
 }
+
+const CACHED = HEAD + "const cache = new Map<Todo, Proxy<Todo, Traps> >();\ncache.set(todo, p);\n";
+
+test "a Proxy narrowed from a nullable reads and writes through its traps" {
+	assert strictErrorCount(CACHED + "const q = cache.get(todo);\nif (q !== null) { const s: string = q.title; q.title += \"b\"; q.done = true; }") == 0;
+	assert strictErrorCount(CACHED + "function first(): string {\n\tconst q = cache.get(todo);\n\tif (q === null) { return \"\"; }\n\treturn q.title;\n}") == 0;
+}
