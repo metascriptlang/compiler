@@ -226,6 +226,7 @@ export function at<T>(this arr: Vec<T>, idx: number): T {
 extern function raiseRange(value: int64, lo: int64, hi: int64): never from "msRaiseRangeError";
 
 /** Cuts the array to n elements and destroys every evicted one; an n outside 0..length is a range error. */
+@compilerFunc
 export function shrink<T>(this arr: T[], n: int64): void {
 	if (n < 0 || n > arr.length) raiseRange(n, 0, arr.length);
 	while (arr.length > n) {
@@ -234,6 +235,7 @@ export function shrink<T>(this arr: T[], n: int64): void {
 }
 
 /** Sets the length of the array. Shrinking destroys every evicted element; growing is refused when T has no default value. */
+@compilerFunc
 export function setLength<T>(this arr: T[], newLen: number): void {
 	const n = newLen < 0 ? 0 : newLen;
 	if (n <= arr.length) {

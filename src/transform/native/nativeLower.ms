@@ -14,7 +14,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, isUncountedPtrElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { makeCtx } from "../testUtil";
@@ -253,14 +253,8 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 // The counted-element test mirrors classify.ms classifyArray — Actor handles
 // and nested ref-arrays keep their own families.
 export function evictHelperName(nativeName: string, elemType: Type | null): string {
-	if (elemType == null) return "";
-	elemType = peelTransparentInstance(elemType);
-	if (isUncountedPtrElement(elemType)) return "";
-	const bare = elemType.kind == TypeKind.Union ? unwrapRefNullUnion(elemType) : elemType;
+	const bare = countedEvictElement(elemType);
 	if (bare == null) return "";
-	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr && !isUnknownType(bare)) return "";
-	if (bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor) return "";
-	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.Array) return "";
 	const atomic = isAtomicRef(bare);
 	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : "msRefArraySetLen";
 	if (nativeName == "msRefArraySplice") return atomic ? "msAtomicRefArraySplice" : "";

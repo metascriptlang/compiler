@@ -15,7 +15,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
-import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
+import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral, evictionNeedsElementHook } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -31,7 +31,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand } from "./fit";
+import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1175,10 +1175,27 @@ function checkHiddenDeref(ctx: CheckerContext, node: Node, expectedType: Type | 
 	return;
 }
 
-function refuseLengthGrowth(ctx: CheckerContext, d: BinaryExprData, arrType: Type): void {
-	if (arrType.kind != TypeKind.Array || !requiresInit(ctx, arrType.typeReturn)) return;
-	if (d.operator == "=" && d.right.kind == NodeKind.NumberLiteral && (d.right.data as NumberLiteralData).value == 0) return;
+function refuseLengthGrowth(ctx: CheckerContext, d: BinaryExprData, arrType: Type): boolean {
+	if (arrType.kind != TypeKind.Array || !requiresInit(ctx, arrType.typeReturn)) return false;
+	if (d.operator == "=" && d.right.kind == NodeKind.NumberLiteral && (d.right.data as NumberLiteralData).value == 0) return false;
 	addError(ctx, `'length' cannot be assigned on an array whose elements have no default value, because it could grow: ${noDefaultReason(ctx, arrType.typeReturn)} — push values to grow, shrink(n) to cut, or length = 0 to empty it`, d.left.location.line, d.left.location.column);
+	return true;
+}
+
+function lowerLengthAssignment(ctx: CheckerContext, node: Node, arr: Node, n: Node): boolean {
+	const toZero = n.kind == NodeKind.NumberLiteral && (n.data as NumberLiteralData).value == 0;
+	const name = toZero ? "shrink" : "setLength";
+	const routine = ctx.compilerFuncs.get(name);
+	if (routine == null) return false;
+	const inRoutine = ctx.currentFunction != null && ctx.currentFunction.instantiatedFrom == routine;
+	if (inRoutine) return false;
+	const method = createNodeAt(NodeKind.MemberExpr, { object: arr, property: name, isOptional: false }, node.location);
+	method.resolvedSym = routine;
+	method.flags = method.flags.incl(NodeFlag.BoundSym);
+	const call = createNodeAt(NodeKind.CallExpr, { callee: method, arguments: [n], isDirectCall: true, resolvedOverloadIdx: -1 }, node.location);
+	checkCallExpr(ctx, call, null);
+	replaceWithCall(node, call, false);
+	return true;
 }
 
 function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -1258,7 +1275,11 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 			} else if (md.object.nodeType.kind == TypeKind.Array && d.operator != "=") {
 				addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + d.operator.slice(0, d.operator.length - 1) + " n' instead", d.left.location.line, d.left.location.column);
 			}
-			refuseLengthGrowth(ctx, d, md.object.nodeType);
+			const refused = refuseLengthGrowth(ctx, d, md.object.nodeType);
+			if (!refused && d.operator == "=" && md.object.nodeType.kind == TypeKind.Array
+					&& evictionNeedsElementHook(md.object.nodeType.typeReturn) && lowerLengthAssignment(ctx, node, md.object, d.right)) {
+				return;
+			}
 		}
 		const discUnion = literalDiscriminantOwner(md);
 		if (discUnion != null) {

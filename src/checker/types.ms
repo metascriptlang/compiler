@@ -3909,6 +3909,23 @@ export function isUncountedPtrElement(elem: Type | null): boolean {
 	return bare != null && bare.kind == TypeKind.Ptr && !isCountedRef(bare.typeReturn);
 }
 
+export function countedEvictElement(elemType: Type | null): Type | null {
+	if (elemType == null) return null;
+	const peeled = peelTransparentInstance(elemType);
+	if (isUncountedPtrElement(peeled)) return null;
+	const bare = peeled.kind == TypeKind.Union ? unwrapRefNullUnion(peeled) : peeled;
+	if (bare == null) return null;
+	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr && !isUnknownType(bare)) return null;
+	if (bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor) return null;
+	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.Array) return null;
+	return bare;
+}
+
+export function evictionNeedsElementHook(elem: Type | null): boolean {
+	if (elem == null || elem.kind == TypeKind.String || !arrayElementNeedsCleanup(elem)) return false;
+	return countedEvictElement(elem) == null && !isUncountedPtrElement(peelTransparentInstance(elem));
+}
+
 export function propagateToOwner(parent: Type, child: Type): void {
 	if (child != null && (child.typeFlags.has(TypeFlag.HasAsgn) || isAwaitable(child))) {
 		parent.typeFlags = parent.typeFlags.incl(TypeFlag.HasAsgn);

@@ -3,14 +3,26 @@ import { checkProjectDiagnostics, MapEntry } from "../helpers";
 const lib = "export struct Proof { private id: int32; }\nexport function mint(id: int32): Proof { return { id: id }; }\n";
 const head = "import { Proof, mint } from \"./lib\";\nclass Holder { n: int32 = 0; }\nstruct Pt { x: int32; y: int32; }\n";
 
-function growthErrors(body: string): int32 {
+function diagnosticsOf(body: string): string[] {
 	const entries: MapEntry[] = [
 		{ entryPath: "src/lib.ms", entrySource: lib },
 		{ entryPath: "src/main.ms", entrySource: head + body },
 	];
+	return checkProjectDiagnostics(entries, "src/main.ms");
+}
+
+function growthErrors(body: string): int32 {
 	let n: int32 = 0;
-	for (const m of checkProjectDiagnostics(entries, "src/main.ms")) {
+	for (const m of diagnosticsOf(body)) {
 		if (m.indexOf("'length' cannot be assigned on an array whose elements have no default value") >= 0) n += 1;
+	}
+	return n;
+}
+
+function lengthDiagnostics(body: string): int32 {
+	let n: int32 = 0;
+	for (const m of diagnosticsOf(body)) {
+		if (m.indexOf("length") >= 0 || m.indexOf("Length") >= 0 || m.indexOf("shrink") >= 0) n += 1;
 	}
 	return n;
 }
@@ -51,6 +63,12 @@ test "arrayLengthGrowth: setLength and a generic helper are refused alike at ins
 	assert growthErrors("function g<T>(a: T[], n: int32): void { a.length = n; }\nfunction f(a: Proof[]): void { g(a, 3); }") >= 1;
 	assert growthErrors("function g<T>(a: T[], n: int32): void { a.length = n; }\nfunction f(a: int32[]): void { g(a, 3); }") == 0;
 	assert growthErrors("function f(a: int32[]): void { a.setLength(3); }") == 0;
+}
+
+test "arrayLengthGrowth: a length assignment that releases through std checks clean" {
+	assert lengthDiagnostics("function f(a: (() => void)[], b: Holder[][], c: Proof[]): void { a.length = 0; b.length = 0; c.length = 0; }") == 0;
+	assert lengthDiagnostics("struct Slot { h: Holder | null; }\nfunction f(a: Slot[], n: int32): void { a.length = n; }") == 0;
+	assert lengthDiagnostics("struct Slot { h: Holder | null; }\nfunction g<T>(a: T[], n: int32): void { a.length = n; }\nfunction f(a: Slot[]): void { g(a, 1); }") == 0;
 }
 
 test "arrayLengthGrowth: shrink is accepted for every element type" {

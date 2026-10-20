@@ -364,7 +364,7 @@ function boundCall(ctx: CheckerContext, entry: string, args: Node[], loc: Source
 	return boundCallOf(sym, args, loc);
 }
 
-function replaceWithCall(node: Node, call: Node, negated: boolean): void {
+export function replaceWithCall(node: Node, call: Node, negated: boolean): void {
 	if (negated) {
 		node.kind = NodeKind.UnaryExpr;
 		node.data = { unaryOp: "!", operand: call } as NodeData;
