@@ -359,6 +359,131 @@ function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
 }
 
 
+// --- std/process/child bridges ---
+// The VM sees an index into _children, never the native pointer, so a forged or
+// stale handle is refused instead of dereferenced. closeHostChildren kills and
+// reaps whatever the program left open when its run ends.
+
+@include("runtime/process.h");
+
+extern function msProcChildSpawn(path: string, args: string[], cwd: string, mergeStderr: int32): int64;
+extern function msProcChildIsUnsupported(spawnResult: int64): int32;
+extern function msProcChildPid(h: int64): int32;
+extern function msProcChildErrno(h: int64): int32;
+extern function msProcChildWritten(h: int64): int64;
+extern function msProcChildWrite(h: int64, data: string, timeoutMs: int64): int32;
+extern function msProcChildCloseStdin(h: int64): void;
+extern function msProcChildRead(h: int64, stream: int32, timeoutMs: int64): int32;
+extern function msProcChildTake(h: int64, stream: int32): string;
+extern function msProcChildWait(h: int64, timeoutMs: int64): int32;
+extern function msProcChildKill(h: int64): int32;
+extern function msProcChildExitCode(h: int64): int32;
+extern function msProcChildSignal(h: int64): int32;
+extern function msProcChildClose(h: int64): void;
+extern function msProcChildFree(h: int64): void;
+
+const _children: int64[] = [];
+
+function _childOf(v: RaiserValue): int64 {
+	const id = unboxInt(v) as int64;
+	if (id < 1 || id > _children.length || _children[id - 1] == 0) {
+		raiseFromHost(`ChildProcess handle ${id} is not a live child of this run`, true);
+		return 0;
+	}
+	return _children[id - 1];
+}
+
+export function closeHostChildren(): void {
+	for (const h of _children) {
+		if (h != 0) msProcChildFree(h);
+	}
+	_children.length = 0;
+}
+
+function _bridgeMsProcChildSpawn(args: RaiserValue[]): RaiserValue {
+	const r = msProcChildSpawn(
+		unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2]), unboxInt(args[3]) as int32,
+	);
+	if (r <= 0) return raiserInt(r);
+	_children.push(r);
+	return raiserInt(_children.length as int64);
+}
+
+function _bridgeMsProcChildIsUnsupported(args: RaiserValue[]): RaiserValue {
+	return boxInt(msProcChildIsUnsupported(unboxInt(args[0]) as int64));
+}
+
+function _bridgeMsProcChildPid(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildPid(h));
+}
+
+function _bridgeMsProcChildErrno(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildErrno(h));
+}
+
+function _bridgeMsProcChildWritten(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : raiserInt(msProcChildWritten(h));
+}
+
+function _bridgeMsProcChildWrite(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildWrite(h, unboxString(args[1]), unboxInt(args[2]) as int64));
+}
+
+function _bridgeMsProcChildCloseStdin(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	if (h != 0) msProcChildCloseStdin(h);
+	return raiserNil();
+}
+
+function _bridgeMsProcChildRead(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildRead(h, unboxInt(args[1]) as int32, unboxInt(args[2]) as int64));
+}
+
+function _bridgeMsProcChildTake(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxString(msProcChildTake(h, unboxInt(args[1]) as int32));
+}
+
+function _bridgeMsProcChildWait(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildWait(h, unboxInt(args[1]) as int64));
+}
+
+function _bridgeMsProcChildKill(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildKill(h));
+}
+
+function _bridgeMsProcChildExitCode(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildExitCode(h));
+}
+
+function _bridgeMsProcChildSignal(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildSignal(h));
+}
+
+function _bridgeMsProcChildClose(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	if (h != 0) msProcChildClose(h);
+	return raiserNil();
+}
+
+function _bridgeMsProcChildFree(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	if (h != 0) {
+		msProcChildFree(h);
+		_children[(unboxInt(args[0]) as int64) - 1] = 0;
+	}
+	return raiserNil();
+}
+
 // --- std/io bridges (standard streams) ---
 // Same static-inline shims the C tier links from runtime/io/streams.h,
 // reached through msc's own std/io import — writeStdout/Stderr flush
@@ -977,6 +1102,21 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
 	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
+	registerHostFn("msProcChildSpawn", _bridgeMsProcChildSpawn);
+	registerHostFn("msProcChildIsUnsupported", _bridgeMsProcChildIsUnsupported);
+	registerHostFn("msProcChildPid", _bridgeMsProcChildPid);
+	registerHostFn("msProcChildErrno", _bridgeMsProcChildErrno);
+	registerHostFn("msProcChildWritten", _bridgeMsProcChildWritten);
+	registerHostFn("msProcChildWrite", _bridgeMsProcChildWrite);
+	registerHostFn("msProcChildCloseStdin", _bridgeMsProcChildCloseStdin);
+	registerHostFn("msProcChildRead", _bridgeMsProcChildRead);
+	registerHostFn("msProcChildTake", _bridgeMsProcChildTake);
+	registerHostFn("msProcChildWait", _bridgeMsProcChildWait);
+	registerHostFn("msProcChildKill", _bridgeMsProcChildKill);
+	registerHostFn("msProcChildExitCode", _bridgeMsProcChildExitCode);
+	registerHostFn("msProcChildSignal", _bridgeMsProcChildSignal);
+	registerHostFn("msProcChildClose", _bridgeMsProcChildClose);
+	registerHostFn("msProcChildFree", _bridgeMsProcChildFree);
 	registerHostFn("msStdinDisableBuffering", _bridgeMsStdinDisableBuffering);
 	registerHostFn("msReadLine",            _bridgeMsReadLine);
 	registerHostFn("msReadBytes",           _bridgeMsReadBytes);
@@ -1302,6 +1442,27 @@ test "spawn state preserved across getter calls" {
 	assert unboxString(stderrFn([])) == "";
 }
 
+test "closeHostChildren ends every child left open and the table refuses handles it did not issue" {
+	_resetHostRegistryForTests();
+	ensureHostTableLoaded();
+	const spawnFn = lookupHostFn("msProcChildSpawn");
+	const pidFn = lookupHostFn("msProcChildPid");
+	const heap = activeHostArrayHeap()!;
+	const argv = heapAllocArray(heap);
+	heapArrayPush(heap, argv, heapAllocStoredString(heap, "1000"));
+	const id = spawnFn([raiserConstString("/bin/sleep"), raiserArray(argv), raiserConstString(""), raiserInt(0)]);
+	assert id.intVal == _children.length;
+	const pid = pidFn([id]).intVal;
+	assert pid > 0;
+	assert takeHostRaise() == null;
+	pidFn([raiserInt(id.intVal + 1)]);
+	assert takeHostRaise()!.contains("is not a live child");
+	closeHostChildren();
+	assert execFileResult("/bin/ps", ["-o", "stat=", "-p", `${pid}`]).output.trim() == "";
+	pidFn([id]);
+	assert takeHostRaise()!.contains("is not a live child");
+}
+
 // --- .rms closure guard ---
 // Every extern declared in a std .rms prelude must be executable when a
 // macro calls it: a host bridge in this table, an opcode-intercepted name
@@ -1340,6 +1501,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		join(stdPath, "core/string/index.rms"),
 		join(stdPath, "core/string/bytes.rms"),
 		join(stdPath, "core/array/index.rms"),
+		join(stdPath, "process/child.rms"),
 	];
 	// Names the Raiser codegen intercepts to opcodes before CallHost.
 	const intercepted: string[] = [

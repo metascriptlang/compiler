@@ -6,6 +6,7 @@
 
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
+export { spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, SpawnOptions } from "./child";
 
 import { isExecutable } from "../fs";
 import { startFailed, errnoName } from "./errors";
